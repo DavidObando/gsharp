@@ -2962,14 +2962,16 @@ partial class CSharpToGSharpTranslator {
             return this.EmittedValueIsNilableBeyondItsCSharpType(unwrapped)
         }
 
-        /// Issue #5627: whether the program text writes the G# type of the slot [`targetSymbol`](paramref): a field,
-        /// a property or indexer, or a parameter whose declared type mentions no type parameter, an explicitly
-        /// typed local, or the result of a method, a local function or a lambda whose delegate type is fixed. Only
-        /// such a slot can be non-null where the value is `T?` only in G#. G# can type every other slot from the
-        /// value: a `var` local, a slot typed by a type parameter (inferred for the call, or for the receiver's
-        /// own inferred type, as in `var b = Wrap(value); b.Value = …`) and the result of an inferred lambda. A
-        /// value with no slot symbol (an arm of a receiver or of a `var` initializer, a tuple element of `var`
-        /// storage, a reassigned `var` local) is left to the bridge of its whole value or to gsc.
+        /// Issue #5627: whether the program text writes the G# type of the slot [`targetSymbol`](paramref) that
+        /// [`value`](paramref) is stored into: a field, a property or indexer, or a parameter whose declared type
+        /// mentions no type parameter, a local whose storage a written type fixes (`LocalSlotIsDeclared`), the
+        /// result of a method or local function, or the result of a lambda that is itself stored into such a slot.
+        /// Only such a slot can be non-null where the value is `T?` only in G#. G# can type every other slot from
+        /// the value: a `var` or deconstructed local, a slot typed by a type parameter (inferred for the call, or
+        /// for the receiver's own inferred type, as in `var b = Wrap(value); b.Value = …`) and the result of a
+        /// lambda that such a slot receives. A value with no slot symbol (an arm of a receiver or of a `var`
+        /// initializer, a tuple element of `var` storage, a reassigned `var` local) is left to the bridge of its
+        /// whole value or to gsc.
         private func SlotTypeIsDeclared(
             targetSymbol ISymbol?,
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
@@ -2977,11 +2979,43 @@ partial class CSharpToGSharpTranslator {
             case field is IFieldSymbol: !ContainsTypeParameter(field.OriginalDefinition.Type)
             case property is IPropertySymbol: !ContainsTypeParameter(property.OriginalDefinition.Type)
             case parameter is IParameterSymbol: !ContainsTypeParameter(parameter.OriginalDefinition.Type)
-            case local is ILocalSymbol: !IsImplicitlyTypedLocal(local)
-            case method is IMethodSymbol: !(
-                this.ResultLambda(method, value) is {} lambda && this.LambdaTypeIsInferred(lambda)
-            )
+            case local is ILocalSymbol: this.LocalSlotIsDeclared(local)
+            case method is IMethodSymbol: if this.ResultLambda(method, value) is {} lambda {
+                this.SlotTypeIsDeclared(this.ResolveValueSink(lambda), lambda)
+            } else {
+                true
+            }
             default: false
+        }
+
+        // Issue #5627: whether a written type fixes the G# storage of [`local`](paramref). The declaration's own
+        // initializer meets the type that a declarator writes; a `var` declarator and a deconstruction write
+        // none. A later write meets the storage that the declaration emitted: a type clause fixes it, and without
+        // one G# inferred it from the initializer, which is certain when the bridge asserted that initializer or
+        // when it mentions no value that is `T?` only in G#.
+        private func LocalSlotIsDeclared(local ILocalSymbol) bool {
+            if local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is not VariableDeclaratorSyntax declarator ||
+                IsImplicitlyTypedLocal(local) {
+                return false
+            }
+            if !this.state.EmittedLocalStorageAcceptsNil.TryGetValue(local, out var acceptsNil) {
+                return true
+            }
+            return !acceptsNil &&
+                (
+                this
+                    .state
+                    .EmittedLocalTypeClauses
+                    .Contains(local) ||
+                    declarator
+                    .Initializer
+                    ?.Value is not{} initializer ||
+                    this.YieldsValueNilableBeyondItsCSharpType(initializer) ||
+                    !this.MentionsValueNilableOnlyInEmittedGSharp(initializer)
+            )
         }
 
         // The lambda whose result [`value`](paramref) is, when [`method`](paramref) is that result's slot: the

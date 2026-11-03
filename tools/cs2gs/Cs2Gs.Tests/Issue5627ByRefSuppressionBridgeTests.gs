@@ -21,9 +21,10 @@ import Xunit
 /// rows do not bind. Without its walk into the operands of a conditional, a switch expression or `??`, the
 /// composed receivers and the `??` return do not bind. Without the target check, the nullable control rows
 /// assert and throw `NullReferenceException`. `SlotTypeIsDeclared` limits the new `!!` to a slot whose type the
-/// program text writes: when it counts a slot typed by a type parameter, a `var` local, the result of an
-/// inferred lambda or a value with no slot symbol, the matching control rows assert and throw; when it drops a
-/// field, a property or a method result, the matching rows do not bind.
+/// program text writes: when it counts a slot typed by a type parameter, a `var` or deconstructed local, a
+/// reassigned local whose emitted storage is `T?`, the result of a lambda stored into an inferred slot or a
+/// value with no slot symbol, the matching control rows assert and throw; when it drops a field, a property,
+/// a method result or the storage of an asserted initializer, the matching rows do not bind.
 open class Issue5627ByRefSuppressionBridgeTests {
     /// The issue's repro: an argument, a return and a conditional receiver of a dropped by-ref suppression.
     @Fact
@@ -287,6 +288,52 @@ namespace Demo
         Assert.Contains("b.Prop = Volatile.Read(&cache)\n", printed)
         Assert.Contains("Take((Volatile.Read(&cache), 0))", printed)
         RunsAs(printed, "1 1 1")
+    }
+
+    /// A lambda result is declared exactly when the slot that receives the lambda is: a `var` local that an
+    /// earlier lambda typed and a `Func<T>` parameter of a receiver whose `T` G# infers take the null, and a
+    /// `Func<Dictionary<…>>` field keeps the `!!`. A reassigned local follows the storage that its declaration
+    /// emitted: a deconstruction and an initializer that is `T?` through generic inference leave it `T?`, and an
+    /// initializer that the bridge asserted leaves it non-null.
+    @Fact
+    func ALambdaOrLocalReassignment_FollowsTheEmittedSlot() {
+        let printed = Translate(`
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.Threading;
+namespace Demo
+{
+    public class Box<T>
+    {
+        public Box(T value) { Value = value; }
+        public T Value;
+        public int Use(Func<T> read) => read() == null ? 1 : 2;
+    }
+    public static class P
+    {
+        private static Dictionary<string, int>? cache;
+        private static Dictionary<string, int>? full = new Dictionary<string, int> { ["a"] = 1 };
+        private static Func<Dictionary<string, int>> fixedRead = () => new Dictionary<string, int>();
+        static T Id<T>(T value) => value;
+        static Box<T> Wrap<T>(T value) => new Box<T>(value);
+        static bool Reassign() { var read = () => Volatile.Read(ref cache!); read = () => { return Volatile.Read(ref cache!); }; return read() == null; }
+        static int Use() { var b = Wrap(Volatile.Read(ref cache!)); return b.Use(() => Volatile.Read(ref cache!)); }
+        static int UseBlock() { var b = Wrap(Volatile.Read(ref cache!)); return b.Use(() => { return Volatile.Read(ref cache!); }); }
+        static int Deconstruct() { (Dictionary<string, int> d, int n) = (Volatile.Read(ref cache!), 0); d = Volatile.Read(ref cache!); return 1; }
+        static int TypedThenGeneric() { Dictionary<string, int> d = Id(Volatile.Read(ref cache!)); d = Volatile.Read(ref cache!); return 1; }
+        static int FixedField() { fixedRead = () => { return Volatile.Read(ref full!); }; return fixedRead().Count; }
+        static int TypedReassign() { Dictionary<string, int> d = Volatile.Read(ref full!); d = Volatile.Read(ref full!); return d.Count; }
+        public static string Run() =>
+            Reassign() + " " + Use() + " " + UseBlock() + " " + Deconstruct() + " " + TypedThenGeneric() + " " + FixedField() + " " + TypedReassign();
+    }
+}`)
+        Assert.Contains("return b.Use(() -> Volatile.Read(&cache))", printed)
+        Assert.Contains("var (d, n) = (Volatile.Read(&cache), 0)\n        d = Volatile.Read(&cache)\n", printed)
+        Assert.Contains("var d = Id(Volatile.Read(&cache))\n        d = Volatile.Read(&cache)\n", printed)
+        Assert.Contains("return Volatile.Read(&full)!!\n", printed)
+        Assert.Contains("var d = Volatile.Read(&full)!!\n        d = Volatile.Read(&full)!!\n", printed)
+        RunsAs(printed, "True 1 1 1 1 1 1")
     }
 
     /// A null `cache` at a non-null slot. C# passes, returns or stores the null, and the first dereference
