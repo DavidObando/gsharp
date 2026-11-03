@@ -8,6 +8,7 @@ import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
 import System
+import System.Collections.Generic
 import System.IO
 import System.Runtime.Loader
 import Xunit
@@ -34,7 +35,9 @@ import Xunit
 /// narrowed stacked type labels by each label alone, the `case Circle: case Square:` row does not compile (GS0154).
 /// With a member-access constant in the native form, the `Inner.Code` row does not compile (GS0158). With the
 /// right side winning over a nil guard in a lowered `&&`, the mixed `or` row does not compile (GS0159). With the C#
-/// sealedness of a translated class, the `IMarker` arm row does not compile (GS0158).
+/// sealedness of a translated class, the `IMarker` arm row does not compile (GS0158). With the right operand of a
+/// lowered `&&` bound against the input type, the `Bound` row does not compile (GS0159). With `IsTypeEmittedOpen`
+/// for a gsgen semantic-only abstract stub, the stub row emits a bare `current.Visit()`.
 open class Issue5626ConstantPatternNarrowingTests {
     /// The issue's repro and each boolean `is` shape: the test keeps the native form, and gsc narrows the read.
     @Fact
@@ -175,6 +178,7 @@ namespace Demo
     func ASwitchArmThatGscDoesNotNarrow_KeepsTheAssertion() {
         let printed = AssertRunsLikeCSharp(`
 #nullable enable
+using System;
 using System.Diagnostics.CodeAnalysis;
 namespace Demo
 {
@@ -189,6 +193,7 @@ namespace Demo
     public static class P
     {
         static int Sealed(Plain? current) => current switch { IMarker => current.Value, _ => 0 };
+        static string Bound(object? current) { if (current is ((string and IComparable) or IComparable) and not string) { return current.ToString()!; } return "none"; }
         static string Mixed(object? current) { if (current is ((string and not null) or object) and not string) { return current.ToString()!; } return "none"; }
         static string Describe(Shape shape) => shape.GetType().Name;
         static string Stacked(Shape? current) { switch (current) { case Circle: case Square: return Describe(current); default: return "none"; } }
@@ -208,7 +213,7 @@ namespace Demo
         public static string Run() =>
             Merge(1) + " " + Merge(2) + " " + Merge(null) + " " + Supertype("ab") + " " + Supertype(null) + " " +
             Unrelated(new Derived()) + " " + Unrelated(null) + " " + Suppressed("a") + " " + Stacked(new Square()) + " " +
-            Stacked(null) + " " + Single(new Circle()) + " " + Sealed(new Plain()) + " " + Mixed(3) + " " + Mixed("s");
+            Stacked(null) + " " + Single(new Circle()) + " " + Sealed(new Plain()) + " " + Mixed(3) + " " + Mixed("s") + " " + Bound(3) + " " + Bound("s");
     }
 }`)
         Assert.Contains("current!!.ToString()", printed)
@@ -222,6 +227,7 @@ namespace Demo
         )
         Assert.Contains("case _ is IMarker: current!!.Value", printed)
         Assert.Contains("return current!!.ToString()", printed)
+        Assert.Equal(2, printed.Split("return current!!.ToString()").Length - 1)
     }
 
     /// Control: gsc cannot bind every constant pattern natively. A string constant on an interface input and a named
@@ -261,6 +267,32 @@ namespace Demo
             "if current != Inner.Code {\n            return 0\n        }\n        return current!!.Length\n",
             printed
         )
+    }
+
+    /// Control: gsgen renders a stub `abstract` only because it inherits unimplemented members (#5252), and the
+    /// printed G# class is sealed. An interface arm does not narrow such an input, so the read keeps its assertion.
+    @Fact
+    func AnInterfaceArmOnASemanticOnlyAbstractStub_KeepsTheAssertion() {
+        let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", `
+#nullable enable
+namespace Demo
+{
+    public interface IMarker { }
+    public abstract partial class Visitor { public abstract int Visit(); }
+    public static class P
+    {
+        static int Arm(Visitor? current) => current switch { IMarker => current.Visit(), _ => 0 };
+    }
+}`)})
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let visitor = project.Compilation.GetTypeByMetadataName("Demo.Visitor")!!
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let translator = CSharpToGSharpTranslator(){
+            SemanticOnlyAbstractTypes = Dictionary[string, bool]{[SemanticAbstractTypeKey.Of(visitor)] = false}
+        }
+        let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+        Assert.Contains("case _ is IMarker: current!!.Visit()", printed)
     }
 
     /// Control: a closure can clear a local when a call runs between the case and the read, and gsc does not narrow

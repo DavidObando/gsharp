@@ -446,13 +446,19 @@ partial class CSharpToGSharpTranslator {
             if pattern is BinaryPatternSyntax binary {
                 let conjunction = binary.IsKind(SyntaxKind.AndPattern)
                 let left ITypeSymbol? = this.GetGSharpPatternNarrowedType(binary.Left, underlyingType, whenTrue)
-                let right ITypeSymbol? = this.GetGSharpPatternNarrowedType(binary.Right, underlyingType, whenTrue)
+                // gsc binds the right operand of `&&` under the narrowing of its left operand.
+                let rightInput ITypeSymbol? = if conjunction && whenTrue {
+                    left ?? underlyingType
+                } else {
+                    underlyingType
+                }
+                let right ITypeSymbol? = this.GetGSharpPatternNarrowedType(binary.Right, rightInput, whenTrue)
                 let merge = conjunction == whenTrue
                 // gsc merges the nil guards of `&&` before its type tests, so a type test wins over a nil guard
                 // (MergeNarrowingFrames with the type-test frame as `b`); between two type tests the right one wins.
                 if merge {
                     return if left == nil ||
-                        (right != nil && !SymbolEqualityComparer.Default.Equals(right, underlyingType)) {
+                        (right != nil && !SymbolEqualityComparer.Default.Equals(right, rightInput)) {
                         right
                     } else {
                         left
@@ -557,7 +563,7 @@ partial class CSharpToGSharpTranslator {
         )
 
         // Whether gsc can see a subclass of a class input: an imported class that is not sealed, or a translated class
-        // that cs2gs emits `open` (IsTypeEmittedOpen). A translated class is sealed when its openness is unknown.
+        // that cs2gs prints `open` (IsPrintedTypeOpen). A translated class is sealed when its openness is unknown.
         private func IsEmittedOpenClass(type ITypeSymbol) bool {
             if type is not INamedTypeSymbol named {
                 return false
@@ -565,7 +571,7 @@ partial class CSharpToGSharpTranslator {
             if named.DeclaringSyntaxReferences.Length == 0 {
                 return !named.IsSealed
             }
-            return this.subclassedBases != nil && this.IsTypeEmittedOpen(named)
+            return this.subclassedBases != nil && this.IsPrintedTypeOpen(named)
         }
 
         // The mirror of gsc's SmartCastStability.IsTypeTestNarrowing: a type test narrows its input to the tested
