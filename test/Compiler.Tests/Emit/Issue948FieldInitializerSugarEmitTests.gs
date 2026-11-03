@@ -151,6 +151,92 @@ Console.WriteLine(p.x.ToString() + "," + p.y.ToString())`
     }
 
     @Fact
+    func Issue5596_EarlierFieldInitializer_RetainsLaterStructDefaults() {
+        let source = `package FieldInitializerRepro
+
+import System
+
+class InlineHistory {
+    var Value Report = Report{}
+    var DataValue DataReport = DataReport{}
+    var OuterValue OuterReport = OuterReport{}
+
+    shared {
+        var SharedValue Report = Report{}
+    }
+}
+
+class ConstructorHistory {
+    var Value Report
+    var DataValue DataReport
+
+    init() {
+        Value = Report{}
+        DataValue = DataReport{}
+    }
+}
+
+struct OuterReport {
+    var Inner Report = Report{}
+}
+
+struct Report {
+    var Samples []int32 = []int32{}
+    var Available bool = true
+    var Top int32 = 7
+
+    shared {
+        var Default Report = Report{}
+    }
+}
+
+data struct DataReport {
+    var Samples []int32 = []int32{}
+    var Available bool = true
+    var Top int32 = 7
+}
+
+func FormatReport(label string, report Report) string {
+    return label + ": samples-nil=" + Object.ReferenceEquals(report.Samples, nil).ToString() +
+        ", available=" + report.Available.ToString() + ", top=" + report.Top.ToString()
+}
+
+func FormatDataReport(label string, report DataReport) string {
+    return label + ": samples-nil=" + Object.ReferenceEquals(report.Samples, nil).ToString() +
+        ", available=" + report.Available.ToString() + ", top=" + report.Top.ToString()
+}
+
+func Main() {
+    let inlineHistory = InlineHistory()
+    let ctorHistory = ConstructorHistory()
+    Console.WriteLine(FormatReport("local", Report{}))
+    Console.WriteLine(FormatReport("inline field", inlineHistory.Value))
+    Console.WriteLine(FormatReport("constructor body", ctorHistory.Value))
+    Console.WriteLine(FormatReport("outer struct field", inlineHistory.OuterValue.Inner))
+    Console.WriteLine(FormatReport("shared field", InlineHistory.SharedValue))
+    Console.WriteLine(FormatReport("self shared field", Report.Default))
+    Console.WriteLine(FormatDataReport("data inline field", inlineHistory.DataValue))
+    Console.WriteLine(FormatDataReport("data constructor body", ctorHistory.DataValue))
+}`
+        let output = CompileAndRun(source)
+        let expected = string.Join(
+            Environment.NewLine,
+            []string{
+                "local: samples-nil=False, available=True, top=7",
+                "inline field: samples-nil=False, available=True, top=7",
+                "constructor body: samples-nil=False, available=True, top=7",
+                "outer struct field: samples-nil=False, available=True, top=7",
+                "shared field: samples-nil=False, available=True, top=7",
+                "self shared field: samples-nil=False, available=True, top=7",
+                "data inline field: samples-nil=False, available=True, top=7",
+                "data constructor body: samples-nil=False, available=True, top=7",
+                ""
+            }
+        )
+        Assert.Equal(expected, output)
+    }
+
+    @Fact
     func Issue948_Negative_InstanceInitializerReferencesInstanceMember() {
         let source = `package P
 import System

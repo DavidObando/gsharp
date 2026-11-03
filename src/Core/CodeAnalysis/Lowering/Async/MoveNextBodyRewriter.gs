@@ -334,14 +334,17 @@ shared class MoveNextBodyRewriter {
                 return node
             }
 
+            // GSA0005: The rebuild sits inside `node.Receiver is {}`, so this is the
+            // variable-receiver form; every other form falls through to base.
+            @SuppressDiagnostic("GSA0005")
             protected override func RewriteFieldAssignmentExpression(
                 node BoundFieldAssignmentExpression
             ) BoundExpression {
-                let rewrittenValue = RewriteExpression(node.Value)
                 // If the receiver is hoisted into a state-machine field, the
                 // BoundFieldAssignmentExpression node shape can't reference the
                 // field directly (Receiver is VariableSymbol).
                 if node.Receiver is {} receiver && TryGetHoistedField(receiver, out var recvField) {
+                    let rewrittenValue = RewriteExpression(node.Value)
                     if BoundNodeForm.DeclaringType(node).IsClass {
                         // Class receiver — reference type. Alias the hoisted field
                         // to a fresh local and store through it.
@@ -356,7 +359,8 @@ shared class MoveNextBodyRewriter {
                             aliasLocal,
                             BoundNodeForm.DeclaringType(node),
                             node.Field,
-                            rewrittenValue
+                            rewrittenValue,
+                            node.ResultType
                         )
                         return BoundBlockExpression(nil, ImmutableArray.Create[BoundStatement](decl), newAssign)
                     } else {
@@ -374,7 +378,8 @@ shared class MoveNextBodyRewriter {
                             copyLocal,
                             BoundNodeForm.DeclaringType(node),
                             node.Field,
-                            rewrittenValue
+                            rewrittenValue,
+                            node.ResultType
                         )
                         let writeBack = BoundExpressionStatement(
                             nil,
@@ -397,43 +402,8 @@ shared class MoveNextBodyRewriter {
                         )
                     }
                 }
-                if rewrittenValue != node.Value {
-                    // Issue #3333 / #1644: an interface static field write has a
-                    // null Receiver and StructType, and carries the owning
-                    // interface in InterfaceType. Rebuilding it through the
-                    // variable-receiver constructor drops that, and the emitter
-                    // parents the field at the open-generic TypeDef instead of a
-                    // TypeSpec. This override must carry the same guard the base
-                    // BoundTreeRewriter does.
-                    if node.InterfaceType != nil {
-                        return BoundFieldAssignmentExpression(
-                            nil,
-                            node.Field,
-                            node.InterfaceType,
-                            rewrittenValue,
-                            node.ResultType
-                        )
-                    }
-                    if node.ReceiverExpression != nil {
-                        return BoundFieldAssignmentExpression.WithExpressionReceiver(
-                            nil,
-                            node.ReceiverExpression,
-                            BoundNodeForm.DeclaringType(node),
-                            node.Field,
-                            rewrittenValue,
-                            node.ResultType
-                        )
-                    }
-                    return BoundFieldAssignmentExpression(
-                        nil,
-                        node.Receiver,
-                        BoundNodeForm.DeclaringType(node),
-                        node.Field,
-                        rewrittenValue,
-                        node.ResultType
-                    )
-                }
-                return node
+                // Issue #5594: delegate expression-receiver and interface-static field writes to the base rewriter.
+                return base.RewriteFieldAssignmentExpression(node)
             }
 
             protected override func RewriteIndexAssignmentExpression(

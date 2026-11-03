@@ -3791,6 +3791,7 @@ internal class ConversionClassifier {
                     initializedFields.Add(slot.TargetProperty!!.BackingField!!)
                 }
             }
+            binderCtx.EnsureStructFieldInitializersBound?.Invoke(userType)
             for field in userType.Fields {
                 if ownsDataInitialization || initializedFields.Contains(field) {
                     continue

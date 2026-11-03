@@ -2069,6 +2069,8 @@ internal partial class ExpressionBinder {
         if resolveTypeOnly {
             return BoundDefaultExpression(syntax, structSymbol!!)
         }
+        // Issue #5596: bind target struct field initializers before reading declaration defaults.
+        binderCtx.EnsureStructFieldInitializersBound?.Invoke(structSymbol)
         // ADR-0180: a bare content element or `...source` content spread
         // lowers to Add(...)/Add(item) on the constructed receiver, exactly
         // like ADR-0117's collection-initializer elements — so the same
