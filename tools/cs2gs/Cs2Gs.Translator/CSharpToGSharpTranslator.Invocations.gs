@@ -5345,12 +5345,14 @@ partial class CSharpToGSharpTranslator {
             if targetMember?.ContainingType == nil {
                 return false
             }
-            if receiver != nil &&
-                this
-                .context
-                .GetTypeInfo(receiver)
-                .Type is INamedTypeSymbol receiverNamed &&
-                ReceiverTypeHierarchy(receiverNamed).Any(
+            let receiverNamed INamedTypeSymbol? = if Unparenthesize(receiver) is BaseExpressionSyntax baseReceiver {
+                this.context.SemanticModel.GetEnclosingSymbol(baseReceiver.SpanStart)?.ContainingType
+            } else if receiver != nil {
+                this.context.GetTypeInfo(receiver).Type as INamedTypeSymbol
+            } else {
+                default(INamedTypeSymbol?)
+            }
+            if receiverNamed != nil && ReceiverTypeHierarchy(receiverNamed).Any(
                 (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
                     candidate.OriginalDefinition,
                     targetMember!!.ContainingType.OriginalDefinition
@@ -6182,7 +6184,7 @@ partial class CSharpToGSharpTranslator {
                 return if cachedReplacements == nil || typeSymbol.BaseType == nil {
                     default(INamedTypeSymbol?)
                 } else {
-                    ProjectNamedType(typeSymbol.BaseType, cachedReplacements)
+                    this.ResolveProjectedBaseForType(typeSymbol, definition, cachedReplacements)
                 }
             }
             if !this.state.ManagedReferenceArrayNullable.ProjectedBaseTypesInProgress.Add(definition) {
@@ -6270,6 +6272,15 @@ partial class CSharpToGSharpTranslator {
                                 Microsoft.CodeAnalysis.NullableAnnotation.Annotated
                             )
                         }
+                        if !this.ApplyProjectedNullabilityToOpenType(
+                            containingTypeArguments[i],
+                            effectiveProjectedArgument!!,
+                            out var openProjectedArgument
+                        ) {
+                            blockedParameter ??= containingTypeParameters[i]
+                            continue
+                        }
+                        effectiveProjectedArgument = openProjectedArgument
                         if observedContainingArguments.HasValue(i) && !SymbolEqualityComparer.IncludeNullability.Equals(
                             observedContainingArguments.GetValue(i),
                             effectiveProjectedArgument
@@ -6459,6 +6470,14 @@ partial class CSharpToGSharpTranslator {
                         }
                     }
                 }
+                let GetReceiverOwnerType = func (
+                    receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+                ) INamedTypeSymbol? {
+                    if Unparenthesize(receiver) is BaseExpressionSyntax baseReceiver {
+                        return this.context.SemanticModel.GetEnclosingSymbol(baseReceiver.SpanStart)?.ContainingType
+                    }
+                    return this.context.GetTypeInfo(receiver).Type as INamedTypeSymbol
+                }
                 let openDefinitionBase = definitionBase.OriginalDefinition
                 let previousBodyScope = this.state.CurrentBodyScope
                 try {
@@ -6472,7 +6491,7 @@ partial class CSharpToGSharpTranslator {
                                 .Symbol is IMethodSymbol invokedMethod &&
                                 invokedMethod.ContainingType != nil {
                                 let receiverType INamedTypeSymbol? = if invocation.Expression is MemberAccessExpressionSyntax memberAccess {
-                                    this.context.GetTypeInfo(memberAccess.Expression).Type as INamedTypeSymbol
+                                    GetReceiverOwnerType(memberAccess.Expression)
                                 } else if invocation.Expression is SimpleNameSyntax && !invokedMethod.IsStatic {
                                     this.context.SemanticModel.GetEnclosingSymbol(invocation.SpanStart)?.ContainingType
                                 } else {
@@ -6541,14 +6560,12 @@ partial class CSharpToGSharpTranslator {
                                 assignment
                                 .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) {
                                 let receiverType INamedTypeSymbol? = switch assignment.Left {
-                                    case memberLeft is MemberAccessExpressionSyntax: this
-                                        .context
-                                        .GetTypeInfo(memberLeft.Expression)
-                                        .Type as INamedTypeSymbol
-                                    case elementLeft is ElementAccessExpressionSyntax: this
-                                        .context
-                                        .GetTypeInfo(elementLeft.Expression)
-                                        .Type as INamedTypeSymbol
+                                    case memberLeft is MemberAccessExpressionSyntax: GetReceiverOwnerType(
+                                        memberLeft.Expression
+                                    )
+                                    case elementLeft is ElementAccessExpressionSyntax: GetReceiverOwnerType(
+                                        elementLeft.Expression
+                                    )
                                     case IdentifierNameSyntax: this
                                         .context
                                         .SemanticModel
@@ -6694,7 +6711,6 @@ partial class CSharpToGSharpTranslator {
                     this.state.ManagedReferenceArrayNullable.ProjectedBaseTypeReplacementsByType[definition] = nil
                     return nil
                 }
-                let projectedDefinitionBase = ProjectNamedType(definitionBase, replacements)
                 this.state.ManagedReferenceArrayNullable.ProjectedBaseTypeReplacementsByType[definition] = replacements
                 for tree in this.context.Compilation.SyntaxTrees {
                     using let _ = this.context.UseSemanticModelFor(tree)
@@ -6720,7 +6736,16 @@ partial class CSharpToGSharpTranslator {
                         ) {
                             continue
                         }
-                        if !this.ProjectedResultMatchesDestination(expression, projectedDefinitionBase, out _) {
+                        let projectedExpressionBase = this.ResolveProjectedBaseForType(
+                            expressionType,
+                            definition,
+                            replacements
+                        )
+                        if projectedExpressionBase == nil || !this.ExpressionFitsProjectedBaseDestination(
+                            expression,
+                            definitionBase,
+                            projectedExpressionBase
+                        ) {
                             DiscardSpeculativeProjections()
                             this
                                 .state
@@ -6733,11 +6758,390 @@ partial class CSharpToGSharpTranslator {
                 return if typeSymbol.BaseType == nil {
                     default(INamedTypeSymbol?)
                 } else {
-                    ProjectNamedType(typeSymbol.BaseType, replacements)
+                    this.ResolveProjectedBaseForType(typeSymbol, definition, replacements)
                 }
             } finally {
                 this.state.ManagedReferenceArrayNullable.ProjectedBaseTypesInProgress.Remove(definition)
             }
+        }
+
+        private func ResolveProjectedBaseForType(
+            typeSymbol INamedTypeSymbol,
+            definition INamedTypeSymbol,
+            replacements IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]
+        ) INamedTypeSymbol? {
+            var current INamedTypeSymbol? = typeSymbol
+            while current != nil && !SymbolEqualityComparer.Default.Equals(current.OriginalDefinition, definition) {
+                current = current.BaseType
+            }
+            if current?.BaseType == nil {
+                return nil
+            }
+            if SymbolEqualityComparer.Default.Equals(current, definition) {
+                return ProjectNamedType(current!!.BaseType, replacements)
+            }
+            let typeParameterMap = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
+            for owner in NamedTypeAndContainingTypes(current) {
+                for var i = 0;
+                    i < owner
+                    .OriginalDefinition
+                    .TypeParameters
+                    .Length &&
+                    i < owner
+                    .TypeArguments
+                    .Length;
+                    i++ {
+                    typeParameterMap[owner.OriginalDefinition.TypeParameters[i]] = owner.TypeArguments[i]
+                }
+            }
+            let closedReplacements = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
+            for entry in replacements {
+                closedReplacements[entry.Key] = this.SubstituteTypeParameters(entry.Value, typeParameterMap)
+            }
+            return ProjectNamedType(current!!.BaseType, closedReplacements)
+        }
+
+        private func SubstituteTypeParameters(
+            type ITypeSymbol,
+            typeParameterMap IReadOnlyDictionary[ITypeParameterSymbol, ITypeSymbol]
+        ) ITypeSymbol {
+            if type is ITypeParameterSymbol parameter {
+                if typeParameterMap.TryGetValue(parameter.OriginalDefinition, out var replacement) {
+                    return if type.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
+                        replacement.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+                    } else {
+                        replacement
+                    }
+                }
+                return type
+            }
+            if type is IArrayTypeSymbol array {
+                let element = this.SubstituteTypeParameters(array.ElementType, typeParameterMap)
+                return this
+                    .context
+                    .Compilation
+                    .CreateArrayTypeSymbol(element, array.Rank, element.NullableAnnotation)
+                    .WithNullableAnnotation(array.NullableAnnotation)
+            }
+            if type is INamedTypeSymbol{IsTupleType: true} tuple {
+                let elements = tuple
+                    .TupleElements
+                    .Select((element IFieldSymbol) -> this.SubstituteTypeParameters(element.Type, typeParameterMap))
+                    .ToImmutableArray()
+                return this
+                    .context
+                    .Compilation
+                    .CreateTupleTypeSymbol(
+                    elements,
+                    tuple
+                        .TupleElements
+                        .Select(
+                        (element IFieldSymbol) -> if element.IsImplicitlyDeclared {
+                            default(string?)
+                        } else {
+                            element.Name
+                        }
+                    )
+                        .ToImmutableArray(),
+                    default(ImmutableArray[Location?]),
+                    elements.Select((element ITypeSymbol) -> element.NullableAnnotation).ToImmutableArray()
+                )
+                    .WithNullableAnnotation(tuple.NullableAnnotation)
+            }
+            if type is INamedTypeSymbol named && (named.Arity > 0 || named.ContainingType != nil) {
+                var definition = named.ConstructedFrom
+                if named.ContainingType != nil && this.SubstituteTypeParameters(
+                    named.ContainingType,
+                    typeParameterMap
+                ) is INamedTypeSymbol containing {
+                    definition = containing.GetTypeMembers(named.Name, named.Arity).FirstOrDefault(
+                        (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
+                            candidate.OriginalDefinition,
+                            named.OriginalDefinition
+                        )
+                    ) ??
+                        definition
+                }
+                if named.Arity == 0 {
+                    return definition.WithNullableAnnotation(named.NullableAnnotation)
+                }
+                let arguments = named
+                    .TypeArguments
+                    .Select((argument ITypeSymbol) -> this.SubstituteTypeParameters(argument, typeParameterMap))
+                    .ToImmutableArray()
+                return definition.Construct(
+                    arguments,
+                    arguments.Select((argument ITypeSymbol) -> argument.NullableAnnotation).ToImmutableArray()
+                )
+                    .WithNullableAnnotation(named.NullableAnnotation)
+            }
+            return type
+        }
+
+        private func ApplyProjectedNullabilityToOpenType(
+            openType ITypeSymbol,
+            projectedClosedType ITypeSymbol,
+            out applied ITypeSymbol?
+        ) bool {
+            applied = nil
+            if openType is ITypeParameterSymbol {
+                if CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                    projectedClosedType,
+                    this.context.Compilation
+                ) {
+                    return false
+                }
+                applied = openType.WithNullableAnnotation(projectedClosedType.NullableAnnotation)
+                return true
+            }
+            if openType is IArrayTypeSymbol openArray &&
+                projectedClosedType is IArrayTypeSymbol closedArray &&
+                openArray.Rank == closedArray
+                .Rank {
+                if !this.ApplyProjectedNullabilityToOpenType(
+                    openArray.ElementType,
+                    closedArray.ElementType,
+                    out var projectedElement
+                ) {
+                    return false
+                }
+                applied = this
+                    .context
+                    .Compilation
+                    .CreateArrayTypeSymbol(projectedElement!!, openArray.Rank, projectedElement!!.NullableAnnotation)
+                    .WithNullableAnnotation(closedArray.NullableAnnotation)
+                return true
+            }
+            if openType is INamedTypeSymbol{IsTupleType: true} openTuple &&
+                projectedClosedType is INamedTypeSymbol{IsTupleType: true} closedTuple &&
+                openTuple
+                .TupleElements
+                .Length == closedTuple
+                .TupleElements
+                .Length {
+                let elements = List[ITypeSymbol](openTuple.TupleElements.Length)
+                for var i = 0; i < openTuple.TupleElements.Length; i++ {
+                    if !this.ApplyProjectedNullabilityToOpenType(
+                        openTuple.TupleElements[i].Type,
+                        closedTuple.TupleElements[i].Type,
+                        out var projectedElement
+                    ) {
+                        return false
+                    }
+                    elements.Add(projectedElement!!)
+                }
+                let immutableElements = elements.ToImmutableArray()
+                applied = this
+                    .context
+                    .Compilation
+                    .CreateTupleTypeSymbol(
+                    immutableElements,
+                    openTuple
+                        .TupleElements
+                        .Select(
+                        (element IFieldSymbol) -> if element.IsImplicitlyDeclared {
+                            default(string?)
+                        } else {
+                            element.Name
+                        }
+                    )
+                        .ToImmutableArray(),
+                    default(ImmutableArray[Location?]),
+                    immutableElements.Select((element ITypeSymbol) -> element.NullableAnnotation).ToImmutableArray()
+                )
+                    .WithNullableAnnotation(closedTuple.NullableAnnotation)
+                return true
+            }
+            if openType is INamedTypeSymbol openNamed &&
+                projectedClosedType is INamedTypeSymbol closedNamed &&
+                SymbolEqualityComparer
+                .Default
+                .Equals(openNamed.OriginalDefinition, closedNamed.OriginalDefinition) {
+                if CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(openNamed, this.context.Compilation) {
+                    applied = openNamed.WithNullableAnnotation(closedNamed.NullableAnnotation)
+                    return true
+                }
+                var definition = openNamed.ConstructedFrom
+                if openNamed.ContainingType != nil && closedNamed.ContainingType != nil {
+                    if !this.ApplyProjectedNullabilityToOpenType(
+                        openNamed.ContainingType,
+                        closedNamed.ContainingType,
+                        out var projectedContaining
+                    ) ||
+                        projectedContaining is not INamedTypeSymbol projectedContainingNamed {
+                        return false
+                    }
+                    definition = projectedContainingNamed.GetTypeMembers(openNamed.Name, openNamed.Arity)
+                        .FirstOrDefault(
+                        (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
+                            candidate.OriginalDefinition,
+                            openNamed.OriginalDefinition
+                        )
+                    ) ??
+                        definition
+                }
+                if openNamed.Arity == 0 {
+                    applied = definition.WithNullableAnnotation(closedNamed.NullableAnnotation)
+                    return true
+                }
+                if openNamed.TypeArguments.Length != closedNamed.TypeArguments.Length {
+                    return false
+                }
+                let arguments = List[ITypeSymbol](openNamed.TypeArguments.Length)
+                for var i = 0; i < openNamed.TypeArguments.Length; i++ {
+                    if !this.ApplyProjectedNullabilityToOpenType(
+                        openNamed.TypeArguments[i],
+                        closedNamed.TypeArguments[i],
+                        out var projectedArgument
+                    ) {
+                        return false
+                    }
+                    arguments.Add(projectedArgument!!)
+                }
+                let immutableArguments = arguments.ToImmutableArray()
+                applied = definition.Construct(
+                    immutableArguments,
+                    immutableArguments.Select((argument ITypeSymbol) -> argument.NullableAnnotation).ToImmutableArray()
+                )
+                    .WithNullableAnnotation(closedNamed.NullableAnnotation)
+                return true
+            }
+            if SymbolEqualityComparer.Default.Equals(openType, projectedClosedType) {
+                applied = openType.WithNullableAnnotation(projectedClosedType.NullableAnnotation)
+                return true
+            }
+            return false
+        }
+
+        private func ExpressionFitsProjectedBaseDestination(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            definitionBase INamedTypeSymbol,
+            projectedExpressionBase INamedTypeSymbol
+        ) bool {
+            var current Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax = expression
+            while true {
+                if current.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
+                    current = parenthesized
+                    continue
+                }
+                if current.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ConditionalExpressionSyntax conditional &&
+                    (conditional.WhenTrue == current || conditional.WhenFalse == current) {
+                    for arm in[]Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ExpressionSyntax{conditional.WhenTrue, conditional.WhenFalse} {
+                        if arm == current {
+                            continue
+                        }
+                        let effectiveArm ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(arm) ??
+                            this
+                            .context
+                            .GetTypeInfo(arm)
+                            .Type ??
+                            this
+                            .context
+                            .GetTypeInfo(arm)
+                            .ConvertedType
+                        if effectiveArm != nil && !this.CompositeArmFitsProjectedDestination(
+                            arm,
+                            effectiveArm,
+                            projectedExpressionBase
+                        ) {
+                            return false
+                        }
+                    }
+                    current = conditional
+                    continue
+                }
+                if current.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchExpressionArmSyntax switchArm &&
+                    switchArm.Expression == current &&
+                    switchArm.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchExpressionSyntax switchExpression {
+                    for arm in switchExpression.Arms {
+                        if arm.Expression == current {
+                            continue
+                        }
+                        let effectiveArm ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(
+                            arm.Expression
+                        ) ??
+                            this
+                            .context
+                            .GetTypeInfo(arm.Expression)
+                            .Type ??
+                            this
+                            .context
+                            .GetTypeInfo(arm.Expression)
+                            .ConvertedType
+                        if effectiveArm != nil && !this.CompositeArmFitsProjectedDestination(
+                            arm.Expression,
+                            effectiveArm,
+                            projectedExpressionBase
+                        ) {
+                            return false
+                        }
+                    }
+                    current = switchExpression
+                    continue
+                }
+                if current.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .BinaryExpressionSyntax coalesce &&
+                    coalesce
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression) {
+                    let otherArm = if coalesce.Left == current {
+                        coalesce.Right
+                    } else {
+                        coalesce.Left
+                    }
+                    let effectiveOther ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(otherArm) ??
+                        this
+                        .context
+                        .GetTypeInfo(otherArm)
+                        .Type ??
+                        this
+                        .context
+                        .GetTypeInfo(otherArm)
+                        .ConvertedType
+                    if effectiveOther != nil && !this.CompositeArmFitsProjectedDestination(
+                        otherArm,
+                        effectiveOther,
+                        projectedExpressionBase
+                    ) {
+                        return false
+                    }
+                    current = coalesce
+                    continue
+                }
+                break
+            }
+            if this
+                .context
+                .GetTypeInfo(current)
+                .ConvertedType is INamedTypeSymbol convertedType &&
+                ReceiverTypeHierarchy(definitionBase).Any(
+                (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
+                    candidate.OriginalDefinition,
+                    convertedType.OriginalDefinition
+                )
+            ) &&
+                !this.ProjectedResultMatchesDestination(current, projectedExpressionBase, out _) {
+                return false
+            }
+            return this.ProjectedResultMatchesDestination(expression, projectedExpressionBase, out _)
         }
 
         private func OverrideUsesReplacedTypeParameter(

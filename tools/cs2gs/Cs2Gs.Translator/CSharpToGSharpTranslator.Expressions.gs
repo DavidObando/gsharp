@@ -1621,6 +1621,7 @@ partial class CSharpToGSharpTranslator {
                     return projectedReceiver.ElementType
                 }
                 if invokedMethod != nil &&
+                    !invokedMethod.IsGenericMethod &&
                     invocation.Expression is MemberAccessExpressionSyntax calledMember &&
                     this.GetProjectedReceiverType(calledMember.Expression) is INamedTypeSymbol projectedOwner &&
                     this.GetProjectedMember(projectedOwner, invokedMethod) is IMethodSymbol projectedCalledMethod {
@@ -2174,6 +2175,15 @@ partial class CSharpToGSharpTranslator {
         ) INamedTypeSymbol? {
             if this.GetManagedReferenceArrayProjectedExpressionType(expression) is INamedTypeSymbol projected {
                 return projected
+            }
+            if Unparenthesize(expression) is BaseExpressionSyntax baseExpression &&
+                this
+                .context
+                .SemanticModel
+                .GetEnclosingSymbol(baseExpression.SpanStart)
+                ?.ContainingType is INamedTypeSymbol enclosingBaseOwner &&
+                this.HasProjectedBaseType(enclosingBaseOwner) {
+                return this.GetEffectiveBaseType(enclosingBaseOwner)
             }
             if expression != nil &&
                 this

@@ -7313,25 +7313,38 @@ public class Base<T> {
     private T stored;
     public void Add(T value) { this.stored = value; }
     public T Get() => this.stored;
+    public U Echo<U>(U value) => value;
 }
-public class Derived : Base<ManagedRef<int>> { }
+public class Derived : Base<ManagedRef<int>> {
+    public void BaseAdd(ManagedRef<int>[] items) => base.Add(items[0]);
+    public int BaseRead() => base.Get().Borrow();
+}
 public class SubDerived : Derived { }
 public class GenericDerived<T> : Base<T> { }
+public class OpenDerived<U> : Base<ManagedRef<U>> { }
+public class TupleDerived<U> : Base<(ManagedRef<U> Reference, U Value)> { }
 public class Probe {
     public static int Run() {
         var emptySource = new ManagedRef<int>[1];
-        new Derived().Add(emptySource[0]);
+        new Derived().BaseAdd(emptySource);
         new SubDerived().Add(emptySource[0]);
         new GenericDerived<ManagedRef<int>>().Add(emptySource[0]);
         var genericLocal = new GenericDerived<ManagedRef<int>>();
         genericLocal.Add(emptySource[0]);
+        new OpenDerived<int>().Add(emptySource[0]);
+        var emptyLongSource = new ManagedRef<long>[1];
+        new OpenDerived<long>().Add(emptyLongSource[0]);
+        var emptyTuples = new (ManagedRef<int> Reference, int Value)[1];
+        new TupleDerived<int>().Add(emptyTuples[0]);
 
-        int[] values = { 42 };
+        int[] values = { 20, 22 };
         var populatedSource = new ManagedRef<int>[1];
         populatedSource[0] = ManagedRef<int>.FromArray(values, 0);
         var populated = new SubDerived();
         populated.Add(populatedSource[0]);
-        return populated.Get().Borrow();
+        var secondSource = new ManagedRef<int>[1];
+        secondSource[0] = ManagedRef<int>.FromArray(values, 1);
+        return populated.BaseRead() + populated.Echo(secondSource[0]).Borrow();
     }
 }`
         let references = List[MetadataReference](
@@ -7348,11 +7361,21 @@ public class Probe {
         Assert.Empty(context.Diagnostics)
         Assert.Contains("open class Derived : Base[managed[int32]?]", text, StringComparison.Ordinal)
         Assert.Contains("open class SubDerived : Derived", text, StringComparison.Ordinal)
-        Assert.Contains("Derived().Add(emptySource[0])", text, StringComparison.Ordinal)
+        Assert.Contains("open class OpenDerived[U] : Base[managed[U]?]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class TupleDerived[U] : Base[(Reference managed[U]?, Value U)]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("base.Add(items[0])", text, StringComparison.Ordinal)
+        Assert.Contains("base.Get()!!.Borrow()", text, StringComparison.Ordinal)
         Assert.Contains("SubDerived().Add(emptySource[0])", text, StringComparison.Ordinal)
         Assert.Contains("GenericDerived[managed[int32]?]().Add(emptySource[0])", text, StringComparison.Ordinal)
+        Assert.Contains("OpenDerived[int32]().Add(emptySource[0])", text, StringComparison.Ordinal)
+        Assert.Contains("OpenDerived[int64]().Add(emptyLongSource[0])", text, StringComparison.Ordinal)
+        Assert.Contains("TupleDerived[int32]().Add(emptyTuples[0])", text, StringComparison.Ordinal)
         Assert.DoesNotContain("emptySource[0]!!", text, StringComparison.Ordinal)
-        Assert.Contains("populated.Get()!!.Borrow()", text, StringComparison.Ordinal)
+        Assert.Contains("populated.Echo(secondSource[0])!!.Borrow()", text, StringComparison.Ordinal)
         let result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
             []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
@@ -7370,14 +7393,27 @@ public class Base<T> {
     public void Add(T value) { }
 }
 public class Derived : Base<ManagedRef<int>> { }
+public class ConditionalDerived : Base<ManagedRef<int>> { }
+public class SwitchDerived : Base<ManagedRef<int>> { }
 public class Probe {
     private static void AcceptFixed(Base<ManagedRef<int>> value) { }
 
-    public static void Run() {
+    public static void Run(bool flag) {
         var source = new ManagedRef<int>[1];
         var derived = new Derived();
         AcceptFixed(derived);
         derived.Add(source[0]);
+
+        Base<ManagedRef<int>> conditionalFixed = flag
+            ? new ConditionalDerived()
+            : new Base<ManagedRef<int>>();
+        new ConditionalDerived().Add(source[0]);
+
+        Base<ManagedRef<int>> switchFixed = flag switch {
+            true => new SwitchDerived(),
+            false => new Base<ManagedRef<int>>(),
+        };
+        new SwitchDerived().Add(source[0]);
     }
 }`
         let references = List[MetadataReference](
@@ -7391,12 +7427,16 @@ public class Probe {
         let document = Assert.Single(project.Documents)
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
-        Assert.Contains(
-            context.Diagnostics,
-            (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
-                diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
+        Assert.Equal(
+            3,
+            context.Diagnostics.Count(
+                (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
+                    diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
+            )
         )
         Assert.Contains("open class Derived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class ConditionalDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class SwitchDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
     }
 
     shared {
