@@ -3277,10 +3277,12 @@ partial class CSharpToGSharpTranslator {
                 !inferredSink &&
                 !(targetSymbol is ILocalSymbol typedByValue && IsImplicitlyTypedLocal(typedByValue))
             // Issue #5627: a value that is `T?` only in G# (`Volatile.Read(ref cache!)`) reaches a non-null slot.
-            // A generic parameter that G# infers from the value takes its `T?`. An arm with no sink of its own
-            // (the arm of a receiver or of a `var` initializer) flows into its whole value, which its own bridge
-            // decides.
-            let valueTypedSink = inferredSink || (targetSymbol == nil && IsBranchArm(value))
+            // A sink that G# types from the value takes its `T?`: a generic parameter that G# infers, or the result
+            // of a lambda whose type G# infers (`var read = () => …`). An arm with no sink of its own (the arm of a
+            // receiver or of a `var` initializer) flows into its whole value, which its own bridge decides.
+            let valueTypedSink = inferredSink ||
+                (targetSymbol == nil && IsBranchArm(value)) ||
+                (this.FindResultLambda(value) is {} resultLambda && this.LambdaTypeIsInferred(resultLambda))
             let emittedNilableValue = !valueTypedSink && this.YieldsValueNilableBeyondItsCSharpType(value)
             if !flowRequiresAssertion && !emittedNilableValue && !this.NullableReferenceValueMayBeNull(
                 value,

@@ -21,8 +21,9 @@ import Xunit
 /// rows do not bind. Without its walk into the operands of a conditional, a switch expression or `??`, the
 /// composed receivers and the `??` return do not bind. Without the target check, the control row asserts and
 /// throws `NullReferenceException`. Without the check for an inferred generic parameter, the control row
-/// asserts `Id(…)`. Without the check for an arm with no sink of its own, a `var` initializer asserts its arms
-/// and a composed receiver asserts an arm instead of its whole value.
+/// asserts `Id(…)`. Without the check for an inferred lambda result, the lambda control row throws. Without
+/// the check for an arm with no sink of its own, a `var` initializer asserts its arms and a composed receiver
+/// asserts an arm instead of its whole value.
 open class Issue5627ByRefSuppressionBridgeTests {
     /// The issue's repro: an argument, a return and a conditional receiver of a dropped by-ref suppression.
     @Fact
@@ -142,6 +143,35 @@ namespace Demo
 }`)
         Assert.DoesNotContain("!!", printed)
         RunsAs(printed, "-1 True True True True -1")
+    }
+
+    /// Control: the result of a lambda whose type G# infers from its body (`var read = () => …`), in block and
+    /// expression form, takes the null as C# does. A block lambda whose delegate type fixes a non-null result
+    /// keeps the `!!`. The expression form at a fixed delegate binds without it (#5686).
+    @Fact
+    func AnInferredLambdaResult_TakesTheNullUnasserted() {
+        let printed = Translate(`
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.Threading;
+namespace Demo
+{
+    public static class P
+    {
+        private static Dictionary<string, int>? cache;
+        private static Dictionary<string, int>? full = new Dictionary<string, int> { ["a"] = 1 };
+        static bool Block() { var read = () => { return Volatile.Read(ref cache!); }; return read() == null; }
+        static bool Expression() { var read = () => Volatile.Read(ref cache!); return read() == null; }
+        static int Fixed() { Func<Dictionary<string, int>> read = () => Volatile.Read(ref full!); return read().Count; }
+        static int FixedBlock() { Func<Dictionary<string, int>> read = () => { return Volatile.Read(ref full!); }; return read().Count; }
+        public static string Run() => Block() + " " + Expression() + " " + Fixed() + " " + FixedBlock();
+    }
+}`)
+        Assert.Contains("return Volatile.Read(&cache)\n", printed)
+        Assert.Contains("let read = () -> Volatile.Read(&cache)\n", printed)
+        Assert.Contains("return Volatile.Read(&full)!!\n", printed)
+        RunsAs(printed, "True True 1 1")
     }
 
     /// A null `cache` at a non-null slot. C# passes, returns or stores the null, and the first dereference
