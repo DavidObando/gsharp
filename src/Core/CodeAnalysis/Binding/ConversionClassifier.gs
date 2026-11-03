@@ -842,8 +842,15 @@ internal class ConversionClassifier {
         }
         var conversion = Conversion.Classify(expression.Type, type!!)
         conversion = ClassifyConvertedDelegate(expression, type!!, conversion)
-        if !conversion.Exists && allowExplicit && Conversion.HasCheckedReferenceConversion(expression.Type, type) &&
-            Conversion.ChecksFunctionValueDelegate(expression.Type, type!!) {
+        if !conversion.Exists &&
+            allowExplicit &&
+            (
+            (
+                Conversion.HasCheckedReferenceConversion(expression.Type, type) &&
+                    Conversion.ChecksFunctionValueDelegate(expression.Type, type!!)
+            ) ||
+                Conversion.HasExplicitNullableValueUnwrap(expression.Type, type)
+        ) {
             conversion = Conversion.Explicit
         }
         // Issue #1183: C# §10.2.11 implicit constant expression conversion.
