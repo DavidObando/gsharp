@@ -170,6 +170,12 @@ struct OuterResult5594 {
     var Inner Result5594
 }
 
+class State5594 {
+    shared {
+        var Current Result5594 = Result5594{}
+    }
+}
+
 async func ReadStructSingle() int64 {
     var result = Result5594{}
     let value int64 = 5
@@ -210,7 +216,8 @@ async func ReadNestedAndPostfixAndAwaitRhs() int64 {
     let prev = outer.Inner.Size++
     await Task.Delay(1)
     outer.Inner.Size += await Task.FromResult(int64(4))
-    return prev * 10 + outer.Inner.Size
+    State5594.Current.Size += await Task.FromResult(int64(5))
+    return prev * 100 + outer.Inner.Size * 10 + State5594.Current.Size
 }
 
 func Main() {
@@ -221,7 +228,7 @@ func Main() {
     Console.WriteLine(ReadNestedAndPostfixAndAwaitRhs().Result)
 }`
         let output = CompileAndRun(source)
-        let expected = string.Join(Environment.NewLine, []string{"5", "5", "5", "5", "27", ""})
+        let expected = string.Join(Environment.NewLine, []string{"5", "5", "5", "5", "275", ""})
         Assert.Equal(expected, output)
     }
 

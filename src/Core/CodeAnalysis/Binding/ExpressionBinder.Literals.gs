@@ -2069,8 +2069,6 @@ internal partial class ExpressionBinder {
         if resolveTypeOnly {
             return BoundDefaultExpression(syntax, structSymbol!!)
         }
-        // Issue #5596: bind target struct field initializers before reading declaration defaults.
-        binderCtx.EnsureStructFieldInitializersBound?.Invoke(structSymbol)
         // ADR-0180: a bare content element or `...source` content spread
         // lowers to Add(...)/Add(item) on the constructed receiver, exactly
         // like ADR-0117's collection-initializer elements — so the same
@@ -2360,6 +2358,9 @@ internal partial class ExpressionBinder {
                     // A later explicit write must not leave an earlier Add
                     // observing a raw null. Seed only mandatory zero values,
                     // not a skipped, possibly effectful field initializer.
+                    if hasContentElement {
+                        binderCtx.EnsureStructFieldInitializerBound?.Invoke(structSymbol, nil)
+                    }
                     if hasContentElement &&
                         !(structSymbol!!.Definition ?? structSymbol)!!
                         .NeedsSynthesizedValueStructDefaultCtor {
@@ -2370,6 +2371,8 @@ internal partial class ExpressionBinder {
                     }
                     continue
                 }
+                // Issue #5596: bind each omitted field's default initializer on demand.
+                binderCtx.EnsureStructFieldInitializerBound?.Invoke(structSymbol, field)
                 if structSymbol!!.InstanceFieldInitializers.TryGetValue(field, out var initExpr) {
                     inits.Add(BoundFieldInitializer(field, initExpr){IsDeclarationInitializer = true})
                     seenFieldNames.Add(field.Name)

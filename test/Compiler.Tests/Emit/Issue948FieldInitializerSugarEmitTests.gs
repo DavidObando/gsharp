@@ -196,6 +196,38 @@ data struct DataReport {
     var Top int32 = 7
 }
 
+struct SnapshotA {
+    var Value SnapshotB = SnapshotB{}
+}
+
+struct SnapshotB {
+    var Count int32 = 7
+
+    shared {
+        var Snapshot SnapshotA = SnapshotA{}
+    }
+}
+
+struct MutualA {
+    var Value MutualB = MutualB{}
+    var Base int32 = 11
+}
+
+struct MutualB {
+    var Override int32 = MutualA{Value: MutualB{Override: 0, Extra: 2}}.Base
+    var Extra int32 = 13
+}
+
+struct PeerA {
+    var Peers []PeerB = []PeerB{PeerB{Peers: []PeerA{}}}
+    var Tag int32 = 17
+}
+
+struct PeerB {
+    var Peers []PeerA = []PeerA{PeerA{Peers: []PeerB{}}}
+    var Scale int32 = 19
+}
+
 func FormatReport(label string, report Report) string {
     return label + ": samples-nil=" + Object.ReferenceEquals(report.Samples, nil).ToString() +
         ", available=" + report.Available.ToString() + ", top=" + report.Top.ToString()
@@ -217,6 +249,18 @@ func Main() {
     Console.WriteLine(FormatReport("self shared field", Report.Default))
     Console.WriteLine(FormatDataReport("data inline field", inlineHistory.DataValue))
     Console.WriteLine(FormatDataReport("data constructor body", ctorHistory.DataValue))
+    Console.WriteLine("snapshot=" + SnapshotB.Snapshot.Value.Count.ToString())
+    let mutual = MutualA{}
+    Console.WriteLine(
+        "mutual=" + mutual.Base.ToString() + "," + mutual.Value.Override.ToString() + "," +
+            mutual.Value.Extra.ToString()
+    )
+    let peerA = PeerA{}
+    let peerB = PeerB{}
+    Console.WriteLine(
+        "peers=" + peerA.Tag.ToString() + "," + peerA.Peers[0].Scale.ToString() + "," +
+            peerB.Scale.ToString() + "," + peerB.Peers[0].Tag.ToString()
+    )
 }`
         let output = CompileAndRun(source)
         let expected = string.Join(
@@ -230,6 +274,9 @@ func Main() {
                 "self shared field: samples-nil=False, available=True, top=7",
                 "data inline field: samples-nil=False, available=True, top=7",
                 "data constructor body: samples-nil=False, available=True, top=7",
+                "snapshot=7",
+                "mutual=11,11,13",
+                "peers=17,19,19,17",
                 ""
             }
         )

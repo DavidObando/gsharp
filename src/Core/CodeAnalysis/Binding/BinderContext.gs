@@ -81,7 +81,7 @@ internal class BinderContext {
     var ConstructorInitializerDepth int32
 
     /// Issue #5596: binds a struct's deferred field initializers on demand before a composite literal reads them.
-    var EnsureStructFieldInitializersBound((StructSymbol?) -> void)?
+    var EnsureStructFieldInitializerBound((StructSymbol?, FieldSymbol?) -> void)?
 
     private let narrowingProofGenerations Dictionary[NarrowingFrame, (Generation int32, Depth int32)] = Dictionary[
         NarrowingFrame,
