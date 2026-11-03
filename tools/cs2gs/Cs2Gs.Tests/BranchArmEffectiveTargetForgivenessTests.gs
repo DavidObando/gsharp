@@ -297,6 +297,13 @@ namespace App
         public static string MapWithNullableParameterAllowsInference(Model.Arg argument, int i) =>
             MapParams(Normalize, i > 0 ? argument.Value : argument.Name, "tail");
 
+        public static T NestedActionParams<T>(System.Action<ObLib.Outer<T>.Inner<int>> consume, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static void ConsumeNullableOuterInner(ObLib.Outer<string?>.Inner<int> item) { }
+
+        public static string NestedActionWithNullableContainingTypeAllowsInference(Model.Arg argument, int i) =>
+            NestedActionParams(ConsumeNullableOuterInner, i > 0 ? argument.Value : argument.Name, "tail");
+
 #nullable enable
         public static string? ExplicitNullableParams(Model.Arg argument, int i) => ParamsId<string?>(i > 0 ? argument.Value : argument.Name);
 
@@ -392,13 +399,23 @@ namespace App
 
         public static T SpanParamsId<T>(params System.ReadOnlySpan<T> values) => values[0];
 
+        public static T FixedByListOrNullParams<T>(System.Collections.Generic.List<T> fixedValues, params System.ReadOnlySpan<T> values) => values[0];
+
         public static string InferredSpanParams(Arg a, int i) =>
             SpanParamsId(i > 0 ? a.Value : a.Name, "tail") ?? "span-null";
+
+#nullable enable annotations
+        public static string PlatformListAllowsInference(Arg a, int i) =>
+            FixedByListOrNullParams(ObLib.Node.HoleList(), i > 0 ? a.Value : a.Name, "tail") ?? "hole-null";
+#nullable restore
+
+        public static string ReferencedEnumerableParams(Arg a, int i) =>
+            ObLib.Node.JoinEnumerableParams(i > 0 ? a.Value : a.Name, "tail");
 
         public static string Run()
         {
             var a = new Arg("v");
-            return Interpolated(a, true) + Concatenated(a, true) + Cast(a, true) + Switched(a, true) + Appended(a, true) + SwitchStatement(a, true) + ParamsJoined(a, 0) + ObjectsJoined(a, a, true) + CastObjectsJoined(a, true) + InferredSpanParams(a, 0);
+            return Interpolated(a, true) + Concatenated(a, true) + Cast(a, true) + Switched(a, true) + Appended(a, true) + SwitchStatement(a, true) + ParamsJoined(a, 0) + ObjectsJoined(a, a, true) + CastObjectsJoined(a, true) + InferredSpanParams(a, 0) + ":" + PlatformListAllowsInference(a, 0) + ":" + ReferencedEnumerableParams(a, 0);
         }
     }
 }`
@@ -408,7 +425,7 @@ namespace App
         Assert.DoesNotContain("b.Objects!!", consumer)
         Assert.DoesNotContain("a.Name })!!", consumer)
         Assert.Equal(
-            "[]<>nonenull{}N0:10:tail0:tailspan-null",
+            "[]<>nonenull{}N0:10:tail0:tailspan-null:hole-null:null,tail",
             CompileAndRun([]string{library, consumer}, "App.Use.Run()").Trim()
         )
     }
@@ -490,6 +507,13 @@ namespace App
 
         public static T FixedByMapParams<T>(MapDelegate<T> f, params System.ReadOnlySpan<T> values) => values[0];
 
+        public static T ReconciledNestedPairParams<T>(PairConsumer<ObLib.Outer<T>.Inner<int>> consume, params System.ReadOnlySpan<T> values) => values[0];
+
+        public sealed class ListSeed
+        {
+            public static implicit operator System.Collections.Generic.List<string>(ListSeed seed) => new System.Collections.Generic.List<string>();
+        }
+
         public static void Consume(string s) { }
 
         public static void Consume(int n) { }
@@ -500,6 +524,8 @@ namespace App
         public static void ConsumeJaggedPair(string?[][] first, string[][] second) { }
 
         public static string? BadMap(string x) => null;
+
+        public static void ConsumeNestedPair(ObLib.Outer<string?>.Inner<int> first, ObLib.Outer<string>.Inner<int> second) { }
 #nullable restore
 
         public static int CountAll<T>(params System.Collections.Generic.IEnumerable<T> values) => 0;
@@ -568,6 +594,12 @@ namespace App
         public static string FixedByNonNullInputMapParamsCall(Model.Arg argument, int i) =>
             FixedByMapParams(BadMap, i > 22 ? "v" : argument.Name, "tail");
 
+        public static string FixedByConvertedSeedParamsCall(ListSeed seed, Model.Arg argument, int i) =>
+            FixedByListParams(seed, i > 23 ? "w" : argument.Name, "tail");
+
+        public static string FixedByReconciledNestedContainingTypeParamsCall(Model.Arg argument, int i) =>
+            ReconciledNestedPairParams(ConsumeNestedPair, i > 24 ? "y" : argument.Name, "tail");
+
         public static string Explicit(Model.Arg argument, int i) => Id<string>(i > 0 ? argument.Value : argument.Name);
 
         public static string ExplicitParams(Model.Arg argument, int i) => ParamsId<string>(i > 0 ? argument.Value : argument.Name);
@@ -618,6 +650,8 @@ namespace App
         Assert.Contains("if i > 20 { \"t\" } else { argument.Name!! }", printed)
         Assert.Contains("if i > 21 { \"u\" } else { argument.Name!! }", printed)
         Assert.Contains("if i > 22 { \"v\" } else { argument.Name!! }", printed)
+        Assert.Contains("if i > 23 { \"w\" } else { argument.Name!! }", printed)
+        Assert.Contains("if i > 24 { \"y\" } else { argument.Name!! }", printed)
         Assert.Contains("Id[string](if i > 0 {", printed)
         Assert.Contains("ParamsId[string](if i > 0 {", printed)
         Assert.Contains("SpanParamsId[string](", printed)
@@ -759,10 +793,17 @@ namespace ObLib
     public static class Node
     {
         public static string[] Holes() => new string[] { null };
+        public static System.Collections.Generic.List<string> HoleList() => new System.Collections.Generic.List<string> { null };
         public static Outer<int>.Inner<string> NestedInner() => new Outer<int>.Inner<string>();
 #nullable enable
         public static T ImportedListParams<T>(System.Collections.Generic.List<T> fixedValues, params T[] values) => values[0];
         public static T FixedByReceiverParams<T>(this System.Collections.Generic.List<T> receiver, params T[] values) => values[0];
+        public static string JoinEnumerableParams<T>(params System.Collections.Generic.IEnumerable<T> values)
+        {
+            var parts = new System.Collections.Generic.List<string>();
+            foreach (var value in values) { parts.Add(value == null ? "null" : value.ToString()!); }
+            return string.Join(",", parts);
+        }
 #nullable restore
     }
 }`

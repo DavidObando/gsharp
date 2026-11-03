@@ -1232,17 +1232,41 @@ partial class CSharpToGSharpTranslator {
                 out var consumedSyntaxArguments
             )
             let callLocation = callSyntax!!.GetLocation()
-            let paramsCollectionType GTypeReference? = this.typeMapper.Map(
-                paramsCollectionArg.Parameter!!.Type,
-                this.context,
-                callLocation
+            let rawParamsElementType = (cast[INamedTypeSymbol](paramsCollectionArg.Parameter!!.Type)).TypeArguments[0]
+            let paramsArguments = arguments.Skip(consumedSyntaxArguments).ToList()
+            let widenPackedElement = rawParamsElementType.IsReferenceType &&
+                rawParamsElementType.NullableAnnotation != Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated &&
+                paramsArguments
+                .Any(
+                (a ArgumentSyntax) -> this.SinkInfersTypeFromValue(paramsCollectionArg.Parameter, a.Expression) &&
+                    this.EmittedExpandedParamsElementMayBeNull(a.Expression)
             )
-            let paramsElementType = (cast[INamedTypeSymbol](paramsCollectionArg.Parameter!!.Type)).TypeArguments[0]
-            let elementType GTypeReference? = this.typeMapper.Map(paramsElementType, this.context, callLocation)
-            let paramsValues = arguments
-                .Skip(consumedSyntaxArguments)
-                .Select((a ArgumentSyntax) -> this.TranslateArgument(a)!!)
-                .ToList()
+            let paramsElementType = if widenPackedElement {
+                rawParamsElementType.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+            } else {
+                rawParamsElementType
+            }
+            let WidenCollectionTypeArgument = func (typeRef GTypeReference?) GTypeReference? {
+                if widenPackedElement && typeRef is NamedTypeReference namedRef && namedRef.TypeArguments.Count == 1 {
+                    return NamedTypeReference(
+                        namedRef.Name,
+                        List[GTypeReference]{MakeNullable(namedRef.TypeArguments[0])!!},
+                        namedRef.ContainingType
+                    ){IsNullable = namedRef.IsNullable}
+                }
+                return typeRef
+            }
+            let paramsCollectionType GTypeReference? = WidenCollectionTypeArgument(
+                this.typeMapper.Map(paramsCollectionArg.Parameter!!.Type, this.context, callLocation)
+            )
+            var elementType GTypeReference? = this.typeMapper.Map(paramsElementType, this.context, callLocation)
+            if widenPackedElement {
+                elementType = MakeNullable(elementType)
+            }
+            let paramsValues = paramsArguments.Select((a ArgumentSyntax) -> this.TranslateArgument(a)!!).ToList()
             if spanObjectCreation {
                 translatedArguments.Add(
                     this.CoerceMaterializedArgument(
@@ -1264,14 +1288,16 @@ partial class CSharpToGSharpTranslator {
             let listType GTypeReference? = if exactListParameter {
                 paramsCollectionType
             } else {
-                this.typeMapper.Map(
-                    this
-                        .context
-                        .Compilation
-                        .GetTypeByMetadataName("System.Collections.Generic.List`1")
-                        ?.Construct(paramsElementType),
-                    this.context,
-                    callLocation
+                WidenCollectionTypeArgument(
+                    this.typeMapper.Map(
+                        this
+                            .context
+                            .Compilation
+                            .GetTypeByMetadataName("System.Collections.Generic.List`1")
+                            ?.Construct(paramsElementType),
+                        this.context,
+                        callLocation
+                    )
                 )
             }
             let construction = BuildConstruction(listType, List[GExpression]())
@@ -1288,12 +1314,16 @@ partial class CSharpToGSharpTranslator {
             translatedArguments.Add(
                 if exactListParameter {
                     collectionArgument
+                } else if widenPackedElement {
+                    cast[GExpression](
+                        ConversionExpression(paramsCollectionType, collectionArgument, isCheckedReferenceCast: true)
+                    )
                 } else {
                     this.CoerceMaterializedArgument(
                         collectionArgument,
                         paramsCollectionArg.Parameter!!.Type,
                         callLocation
-                    )
+                    )!!
                 }
             )
             return translatedArguments

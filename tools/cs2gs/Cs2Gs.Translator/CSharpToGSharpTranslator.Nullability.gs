@@ -1261,6 +1261,71 @@ partial class CSharpToGSharpTranslator {
                 !this.OtherArgumentFixesTypeParameterToNonNull(value, parameter, typeParameter)
         }
 
+        private func EmittedExpandedParamsElementMayBeNull(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            var current = expression
+            while (
+                current is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .CheckedExpressionSyntax
+            ) {
+                current = switch current {
+                    case parenthesized is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax: parenthesized.Expression
+                    case checkedExpression is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CheckedExpressionSyntax: checkedExpression.Expression
+                    default: current
+                }
+            }
+            if current == nil || IsNullOrSuppressedNull(current) || current.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.DefaultLiteralExpression
+            ) ||
+                current is DefaultExpressionSyntax {
+                return true
+            }
+            if current is CastExpressionSyntax castExpression && this.IsNullPreservingReferenceCast(castExpression) {
+                return this.EmittedExpandedParamsElementMayBeNull(castExpression.Expression)
+            }
+            if current is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax conditional {
+                return this.EmittedExpandedParamsElementMayBeNull(conditional.WhenTrue) ||
+                    this.EmittedExpandedParamsElementMayBeNull(conditional.WhenFalse)
+            }
+            if current is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression {
+                return switchExpression.Arms.Any(
+                    (arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax) ->
+                    this.EmittedExpandedParamsElementMayBeNull(arm.Expression)
+                )
+            }
+            if current is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax coalesce && coalesce.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+            ) {
+                return this.EmittedExpandedParamsElementMayBeNull(coalesce.Right)
+            }
+            if this.GetExpressionNullablePositions(current) is {} positions &&
+                (positions.Nullable.Contains("") || positions.Platform.Contains("")) {
+                return true
+            }
+            return this.NullableReferenceValueMayBeNull(
+                current,
+                respectDeclaredAnnotations: true,
+                respectDeclaredCallResults: true
+            )
+        }
+
         private func OtherArgumentFixesTypeParameterToNonNull(
             callSite Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             parameter IParameterSymbol,
@@ -1434,9 +1499,29 @@ partial class CSharpToGSharpTranslator {
                 return this.ProjectCallableNullablePositions(unwrapped, callableMethod)
             }
             var result ObliviousPositionSet? = nil
-            if this.ObliviousValuePositions(unwrapped) is {} valuePositions {
+            if this.ConvertedObliviousPositionsOf(
+                unwrapped,
+                this.context.SemanticModel,
+                this.ObliviousContainerFlowState()
+            ) is {} valuePositions {
                 result = ObliviousPositionSet()
                 result.UnionWith(valuePositions)
+            }
+            if this.UserDefinedConversionOperator(unwrapped, this.context.SemanticModel) is {} conversionOperator {
+                if !suppressedTopLevel &&
+                    (
+                    this.ShouldPromoteToNullableReference(conversionOperator) || this.IsTranslatorWidenedDeclaration(
+                        conversionOperator
+                    )
+                ) {
+                    result ??= ObliviousPositionSet()
+                    result!!.Nullable.Add("")
+                }
+                if suppressedTopLevel && result != nil {
+                    result.Nullable.Remove("")
+                    result.Platform.Remove("")
+                }
+                return result
             }
             if !suppressedTopLevel &&
                 symbol != nil &&
@@ -1621,6 +1706,17 @@ partial class CSharpToGSharpTranslator {
                     )
                 } else {
                     default(ITypeSymbol?)
+                }
+            }
+            if this.UserDefinedConversionOperator(current, this.context.SemanticModel) is {} conversionOperator {
+                return if this.ShouldPromoteToNullableReference(conversionOperator) ||
+                    this
+                    .IsTranslatorWidenedDeclaration(conversionOperator) {
+                    conversionOperator.ReturnType.WithNullableAnnotation(
+                        Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                    )
+                } else {
+                    conversionOperator.ReturnType
                 }
             }
             let typeInfo = this.context.GetTypeInfo(current)
@@ -2883,10 +2979,16 @@ partial class CSharpToGSharpTranslator {
                     .TypeArguments
                     .Length == namedType
                     .TypeParameters
-                    .Length &&
-                    namedType
-                    .TypeArguments
-                    .Length > 0 {
+                    .Length {
+                    let rebuiltContaining = if namedType.ContainingType != nil {
+                        ToCallableBoundType(
+                            namedType.ContainingType,
+                            VarianceKind.None,
+                            compilation
+                        ) as INamedTypeSymbol
+                    } else {
+                        default(INamedTypeSymbol?)
+                    }
                     let typeArguments = List[ITypeSymbol](namedType.TypeArguments.Length)
                     for var i = 0; i < namedType.TypeArguments.Length; i++ {
                         let parameterVariance = if namedType.IsTupleType {
@@ -2906,10 +3008,12 @@ partial class CSharpToGSharpTranslator {
                             ToCallableBoundType(namedType.TypeArguments[i], composedVariance, compilation)
                         )
                     }
-                    result = namedType
-                        .OriginalDefinition
-                        .Construct(typeArguments.ToArray())
-                        .WithNullableAnnotation(namedType.NullableAnnotation)
+                    result = ConstructNamedTypeWithContaining(
+                        namedType,
+                        rebuiltContaining,
+                        typeArguments,
+                        namedType.NullableAnnotation
+                    )
                 }
                 return if variance == VarianceKind.Out && result.IsReferenceType {
                     result.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
@@ -2953,6 +3057,16 @@ partial class CSharpToGSharpTranslator {
                     .Length == candidateNamed
                     .TypeArguments
                     .Length {
+                    let rebuiltContaining = if existingNamed.ContainingType != nil &&
+                        candidateNamed.ContainingType != nil {
+                        ReconcileCallableBoundType(
+                            existingNamed.ContainingType,
+                            candidateNamed.ContainingType,
+                            compilation
+                        ) as INamedTypeSymbol
+                    } else {
+                        existingNamed.ContainingType
+                    }
                     let typeArguments = List[ITypeSymbol](existingNamed.TypeArguments.Length)
                     for var i = 0; i < existingNamed.TypeArguments.Length; i++ {
                         typeArguments.Add(
@@ -2963,12 +3077,37 @@ partial class CSharpToGSharpTranslator {
                             )
                         )
                     }
-                    return existingNamed
-                        .OriginalDefinition
-                        .Construct(typeArguments.ToArray())
-                        .WithNullableAnnotation(reconciledAnnotation)
+                    return ConstructNamedTypeWithContaining(
+                        existingNamed,
+                        rebuiltContaining,
+                        typeArguments,
+                        reconciledAnnotation
+                    )
                 }
                 return existing.WithNullableAnnotation(reconciledAnnotation)
+            }
+
+            private func ConstructNamedTypeWithContaining(
+                template INamedTypeSymbol,
+                rebuiltContaining INamedTypeSymbol?,
+                typeArguments List[ITypeSymbol],
+                annotation Microsoft.CodeAnalysis.NullableAnnotation
+            ) ITypeSymbol {
+                var definition INamedTypeSymbol = template.ConstructedFrom
+                if rebuiltContaining != nil && !SymbolEqualityComparer.IncludeNullability.Equals(
+                    rebuiltContaining,
+                    template.ContainingType
+                ) &&
+                    rebuiltContaining
+                    .GetTypeMembers(template.Name, template.Arity).FirstOrDefault() is {} nestedDefinition {
+                    definition = nestedDefinition
+                }
+                let constructed INamedTypeSymbol = if typeArguments.Count > 0 {
+                    definition.Construct(typeArguments.ToArray())
+                } else {
+                    definition
+                }
+                return constructed.WithNullableAnnotation(annotation)
             }
 
             private func FindMatchingNamedTypeInHierarchy(
