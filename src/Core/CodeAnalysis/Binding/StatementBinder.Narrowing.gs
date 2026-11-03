@@ -4052,6 +4052,20 @@ internal partial class StatementBinder {
                             )
                         }
                     )
+                } else if type is {} declaredType && declaredType != TypeSymbol.Error {
+                    // Issue #5635: a block value converts to the declared type below, so the narrowed read that it
+                    // yields is decided for that type, as a branch value is for the common type.
+                    var blockRead NarrowedBranchValue? = nil
+                    initializer = binderCtx.BindWithBlockValueCapture(
+                        syntax.Initializer!!,
+                        (read NarrowedBranchValue) -> {
+                            blockRead = read
+                        },
+                        () -> bindExpression(syntax.Initializer!!, false)
+                    )
+                    if blockRead is {} read {
+                        initializer = conversions.ResolveNarrowedValue(initializer, read, declaredType)
+                    }
                 } else {
                     initializer = bindExpression(syntax.Initializer!!, false)
                 }

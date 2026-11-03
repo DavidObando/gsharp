@@ -346,7 +346,12 @@ internal class ConversionClassifier {
         // target is, as a constrained-call argument does. Then the cast or unwrap to the narrowed type is the use.
         if read.Use is {} use && ConstrainedArgumentNeedsNarrowedSource(read.Path, read.NarrowedType, target) {
             binderCtx.RecordBackwardGotoNarrowingUse(
-                use,
+                BackwardGotoNarrowingCapture(
+                    use.Path,
+                    use.NarrowedType,
+                    use.Labels,
+                    binderCtx.DeferredReturnNarrowingOwner ?? use.Owner
+                ),
                 read.Location,
                 string.Empty,
                 BackwardGotoNarrowingUseKind.Conversion,
@@ -362,6 +367,91 @@ internal class ConversionClassifier {
             )
         }
         return value
+    }
+
+    /// Decides the backward `goto` check of a narrowed read that converts to [`target`](paramref) where the read
+    /// binds (issue #5603), with the decision of every other conversion (cref:ConversionNeedsNarrowedSource). The
+    /// declared read replaces the narrowed read when the target takes it (cref:TryRecoverDeclaredMemberRead). Issue
+    /// #5635: a value that goes into a slot of its own type with no conversion uses this decision too. A tuple
+    /// literal that converts to a tuple type decides its elements for the target element types.
+    /// @param diagnosticLocation The location of the use.
+    /// @param expression The value.
+    /// @param target The conversion target.
+    /// @returns The value, with the declared read when it replaces the narrowed read.
+    func DecideNarrowedConversion(
+        diagnosticLocation TextLocation,
+        expression BoundExpression,
+        target TypeSymbol?
+    ) BoundExpression {
+        if target is TupleTypeSymbol || target is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol} {
+            let targetTuple = if target is TupleTypeSymbol directTuple {
+                directTuple
+            } else {
+                cast[TupleTypeSymbol](cast[NullableTypeSymbol](target).UnderlyingType)
+            }
+            if expression is BoundTupleLiteralExpression || expression is BoundBlockExpression {
+                return ResolveTupleLiteralNarrowing(expression, targetTuple)
+            }
+        }
+        // Issue #5635: a read captured where it binds keeps those facts, so a value that binds between the read and
+        // this decision (such as a later argument) does not change them.
+        var capture BackwardGotoNarrowingCapture? = nil
+        var path AccessPath? = nil
+        var narrowedType TypeSymbol? = nil
+        let captured = binderCtx.TryGetCapturedNarrowedRead(expression, out var read)
+        if captured {
+            let capturedRead = read!!
+            path = capturedRead.Path
+            narrowedType = capturedRead.NarrowedType
+            capture = capturedRead.Use
+        } else if !binderCtx.TryGetBackwardGotoNarrowingPath(expression, out path, out narrowedType) {
+            return expression
+        }
+        let narrowedPath = Invariant.Required(path, "a narrowed conversion has an access path", expression: "path")
+        let narrowedSourceType = Invariant.Required(
+            narrowedType,
+            "a narrowed conversion has a narrowed type",
+            expression: "narrowedType"
+        )
+        if TryRecoverDeclaredMemberRead(expression, narrowedPath, narrowedSourceType, target, out var declaredRead) {
+            return declaredRead
+        }
+        if (
+            narrowedPath.HasMembers || !BinderContext.NarrowedReadChangesRuntimeType(
+                narrowedPath.Root.Type,
+                narrowedSourceType
+            )
+        ) &&
+            ConversionNeedsNarrowedSource(
+            MemberLookup.GetDeclaredAccessPathType(narrowedPath, narrowedSourceType),
+            narrowedSourceType,
+            target
+        ) {
+            if !captured {
+                binderCtx.TrackBackwardGotoNarrowingUse(
+                    narrowedPath,
+                    diagnosticLocation,
+                    string.Empty,
+                    BackwardGotoNarrowingUseKind.Conversion,
+                    target
+                )
+            } else if capture is {} use {
+                // The use belongs to the conversion that runs now, as an uncaptured read's use does.
+                binderCtx.RecordBackwardGotoNarrowingUse(
+                    BackwardGotoNarrowingCapture(
+                        use.Path,
+                        use.NarrowedType,
+                        use.Labels,
+                        binderCtx.DeferredReturnNarrowingOwner
+                    ),
+                    diagnosticLocation,
+                    string.Empty,
+                    BackwardGotoNarrowingUseKind.Conversion,
+                    target
+                )
+            }
+        }
+        return expression
     }
 
     // Issue #5613: replaces the narrowed read that a value yields (the value, or a block's trailing value).
@@ -380,6 +470,67 @@ internal class ConversionClassifier {
         return nil
     }
 
+    // Issue #5635: decides the captured narrowed reads in a tuple literal for the target tuple's element types.
+    // This replaces the element-type decision from where the literal bound.
+    private func ResolveTupleLiteralNarrowing(expression BoundExpression, targetTuple TupleTypeSymbol) BoundExpression {
+        if expression is BoundBlockExpression block {
+            let resolvedTrailing = ResolveTupleLiteralNarrowing(block.Expression, targetTuple)
+            return if object.ReferenceEquals(resolvedTrailing, block.Expression) {
+                expression
+            } else {
+                cast[BoundExpression](BoundBlockExpression(block.Syntax, block.Statements, resolvedTrailing))
+            }
+        }
+        if expression is not BoundTupleLiteralExpression literal || literal.Elements.Length != targetTuple.Arity {
+            return expression
+        }
+        var builder ImmutableArray[BoundExpression].Builder? = nil
+        for var i = 0; i < literal.Elements.Length; i++ {
+            let element = literal.Elements[i]
+            let targetElement = targetTuple.ElementTypes[i]
+            var resolved = element
+            if (
+                targetElement is TupleTypeSymbol || targetElement is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol}
+            ) &&
+                (element is BoundTupleLiteralExpression || element is BoundBlockExpression) {
+                let nestedTarget = if targetElement is TupleTypeSymbol directNested {
+                    directNested
+                } else {
+                    cast[TupleTypeSymbol](cast[NullableTypeSymbol](targetElement).UnderlyingType)
+                }
+                resolved = ResolveTupleLiteralNarrowing(element, nestedTarget)
+            }
+            if object.ReferenceEquals(resolved, element) && binderCtx.TryGetCapturedNarrowedRead(
+                element,
+                out var read
+            ) {
+                let capturedRead = read!!
+                binderCtx.UntrackBackwardGotoNarrowingConversion(capturedRead.Path, capturedRead.Location)
+                resolved = ResolveNarrowedValue(element, capturedRead, targetElement)
+            }
+            if !object.ReferenceEquals(resolved, element) && builder == nil {
+                builder = ImmutableArray.CreateBuilder[BoundExpression](literal.Elements.Length)
+                for var j = 0; j < i; j++ {
+                    builder.Add(literal.Elements[j])
+                }
+            }
+            builder?.Add(resolved)
+        }
+        if builder == nil {
+            return literal
+        }
+        let elements = builder.MoveToImmutable()
+        let elementTypes = ImmutableArray.CreateBuilder[TypeSymbol](elements.Length)
+        for element in elements {
+            elementTypes.Add(element.Type)
+        }
+        return BoundTupleLiteralExpression(
+            literal.Syntax,
+            TupleTypeSymbol.Get(elementTypes.MoveToImmutable(), literal.TupleType.ElementNames),
+            elements
+        )
+    }
+
     private func BindConversionCore(
         diagnosticLocation TextLocation,
         expression BoundExpression,
@@ -396,34 +547,8 @@ internal class ConversionClassifier {
         }
         // Issue #5603: the decision is shared with the deferred conversion of an inferred lambda result. Issue #5613:
         // a branch value converts to the common type without it, because the branch decided it where the read binds.
-        if trackNarrowing && binderCtx.TryGetBackwardGotoNarrowingPath(expression, out var path, out var narrowedType) {
-            let narrowedPath = Invariant.Required(path, "a narrowed conversion has an access path", expression: "path")
-            let narrowedSourceType = Invariant.Required(
-                narrowedType,
-                "a narrowed conversion has a narrowed type",
-                expression: "narrowedType"
-            )
-            if TryRecoverDeclaredMemberRead(expression, narrowedPath, narrowedSourceType, type, out var declaredRead) {
-                expression = declaredRead
-            } else if (
-                narrowedPath.HasMembers || !BinderContext.NarrowedReadChangesRuntimeType(
-                    narrowedPath.Root.Type,
-                    narrowedSourceType
-                )
-            ) &&
-                ConversionNeedsNarrowedSource(
-                MemberLookup.GetDeclaredAccessPathType(narrowedPath, narrowedSourceType),
-                narrowedSourceType,
-                type
-            ) {
-                binderCtx.TrackBackwardGotoNarrowingUse(
-                    narrowedPath,
-                    diagnosticLocation,
-                    string.Empty,
-                    BackwardGotoNarrowingUseKind.Conversion,
-                    type
-                )
-            }
+        if trackNarrowing {
+            expression = DecideNarrowedConversion(diagnosticLocation, expression, type)
         }
         if NativeSliceTypes.HaveIncompatibleElements(expression.Type, type) ||
             ManagedReferenceTypes
@@ -1188,7 +1313,53 @@ internal class ConversionClassifier {
             } else {
                 parameterMapping[i]
             }
-            let argument = arguments[i]
+            var argument = arguments[i]
+            // Issue #5635: a method type argument that inference reads from the argument at a bare type-parameter
+            // slot can take the narrowed type of a narrowed read. The read is decided for the slot under the inferred
+            // type arguments, with the slot's declared `?` applied, as `let t = s` is. The imported slot itself takes
+            // nil, so its conversion does not decide the read. A null default (`T value = default`) does not make the
+            // slot nullable. The declared read replaces the narrowed read when the slot takes it.
+            if paramIndex < parameters.Length &&
+                call?.TypeArgumentList == nil &&
+                method is {IsGenericMethod: true} genericMethod &&
+                !parameters[paramIndex]
+                .ParameterType
+                .IsByRef &&
+                (
+                if genericMethod.IsGenericMethodDefinition {
+                    genericMethod
+                } else {
+                    genericMethod.GetGenericMethodDefinition()
+                }
+            ).GetParameters()[paramIndex] is {} openParameter &&
+                openParameter
+                .ParameterType
+                .IsGenericMethodParameter {
+                let sourceIndex = i - receiverArgCount
+                let slotType = TrySubstituteParameterTypeFromMethodTypeArgs(
+                    method,
+                    paramIndex,
+                    symbolicMethodTypeArgs,
+                    allowConcreteSymbolic: true
+                ) ??
+                    argument.Type
+                argument = DecideNarrowedConversion(
+                    if !parameterArgumentLocations.IsDefault &&
+                        paramIndex < parameterArgumentLocations.Length &&
+                        parameterArgumentLocations[paramIndex] is {} inferredLocation {
+                        inferredLocation
+                    } else if call != nil && sourceIndex >= 0 && sourceIndex < call.Arguments.Count {
+                        call.Arguments[sourceIndex].Location
+                    } else {
+                        argument.Syntax?.Location ?? call?.Location ?? default(TextLocation)
+                    },
+                    argument,
+                    NullabilityImportRule.ApplyOpenSlot(
+                        slotType,
+                        ClrNullability.GetParameterDeclaredState(openParameter)
+                    )
+                )
+            }
             var rebound = argument
             if paramIndex < parameters.Length {
                 let parameterType = parameters[paramIndex].ParameterType
@@ -1614,6 +1785,10 @@ internal class ConversionClassifier {
                             }
                         )
                     }
+                    if argument is BoundTupleLiteralExpression || argument is BoundBlockExpression {
+                        argument = DecideNarrowedConversion(rejectionLocation, argument, rejectionTargetType)
+                        rebound = argument
+                    }
                     if substituted != nil && TypeSymbol.ContainsNullLiteralType(argument.Type) &&
                         argument is BoundTupleLiteralExpression &&
                         targetType is TupleTypeSymbol {
@@ -1765,7 +1940,7 @@ internal class ConversionClassifier {
                     }
                 }
             }
-            if rebound != argument && builder == nil {
+            if rebound != arguments[i] && builder == nil {
                 builder = ImmutableArray.CreateBuilder[BoundExpression](arguments.Length)
                 for var j = 0; j < i; j++ {
                     builder.Add(arguments[j])
@@ -2877,27 +3052,25 @@ internal class ConversionClassifier {
             } else {
                 default(TypeSymbol?)
             }
-            if parameterType != nil && binderCtx.TryGetBackwardGotoNarrowingPath(
-                arguments[i],
-                out var path,
-                out var narrowedType
-            ) &&
+            // Issue #5635: the argument keeps the backward `goto` facts where it binds (a later argument can assign
+            // the variable), as every other conversion of a captured read does (cref:DecideNarrowedConversion).
+            if parameterType != nil &&
                 (
-                Invariant.Required(path, "a narrowed constrained-call argument has an access path", expression: "path")
-                    .HasMembers ||
-                    !BinderContext
-                    .NarrowedReadChangesRuntimeType(
-                    path!!.Root.Type,
-                    Invariant.Required(
-                        narrowedType,
-                        "a narrowed constrained-call argument has a narrowed type",
-                        expression: "narrowedType"
-                    )
+                binderCtx.TryGetCapturedNarrowedRead(arguments[i], out var read) || binderCtx.TryCaptureNarrowedRead(
+                    arguments[i],
+                    location,
+                    out read
                 )
             ) &&
-                ConstrainedArgumentNeedsNarrowedSource(path!!, narrowedType!!, parameterType) {
-                binderCtx.TrackBackwardGotoNarrowingUse(
-                    path!!,
+                ConstrainedArgumentNeedsNarrowedSource(read!!.Path, read!!.NarrowedType, parameterType) &&
+                read!!.Use is {} use {
+                binderCtx.RecordBackwardGotoNarrowingUse(
+                    BackwardGotoNarrowingCapture(
+                        use.Path,
+                        use.NarrowedType,
+                        use.Labels,
+                        binderCtx.DeferredReturnNarrowingOwner
+                    ),
                     location,
                     string.Empty,
                     BackwardGotoNarrowingUseKind.Conversion,
@@ -3319,7 +3492,8 @@ internal class ConversionClassifier {
                         diagnosticLocation,
                         literalSource.Elements[i],
                         targetTuple.ElementTypes[i],
-                        allowExplicit
+                        allowExplicit,
+                        trackNarrowing: false
                     )
                 )
             }
