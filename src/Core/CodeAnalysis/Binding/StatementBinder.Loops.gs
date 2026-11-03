@@ -200,9 +200,13 @@ internal partial class StatementBinder {
                 // with the array's actual element type — same lowering C#'s
                 // `foreach (T x in arr)` produces.
                 if annotated.ClrType!!.IsArray && annotated.ClrType!!.GetArrayRank() == 1 {
-                    iterationKind = ForRangeKind.Indexed
+                    iterationKind = if annotated.ClrType!!.IsSZArray {
+                        ForRangeKind.Indexed
+                    } else {
+                        ForRangeKind.PatternEnumerator
+                    }
                     keyType = TypeSymbol.Int32
-                    valueType = ExpressionBinder.GetArraySliceElementType(annotated) ??
+                    valueType = ExpressionBinder.GetIndexElementType(annotated) ??
                         annotated
                         .GetTypeArgumentSymbolForClrType(
                         Invariant.Required(
@@ -329,11 +333,13 @@ internal partial class StatementBinder {
                 // route to the Indexed path so iteration emits `ldelem <T>`
                 // (type-aware) rather than walking a boxing IEnumerator.
                 if imp.ClrType!!.IsArray && imp.ClrType!!.GetArrayRank() == 1 {
-                    iterationKind = ForRangeKind.Indexed
+                    iterationKind = if imp.ClrType!!.IsSZArray {
+                        ForRangeKind.Indexed
+                    } else {
+                        ForRangeKind.PatternEnumerator
+                    }
                     keyType = TypeSymbol.Int32
-                    valueType = ExpressionBinder.GetArraySliceElementType(imp) ??
-                        TypeSymbol
-                        .FromClrTypeWithoutNullability(
+                    valueType = ExpressionBinder.GetIndexElementType(imp) ?? TypeSymbol.FromClrTypeWithoutNullability(
                         Invariant.Required(
                             imp.ClrType!!.GetElementType(),
                             "a single-dimensional CLR array has an element type",

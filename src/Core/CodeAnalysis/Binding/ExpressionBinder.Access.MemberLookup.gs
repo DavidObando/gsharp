@@ -3423,7 +3423,7 @@ internal partial class ExpressionBinder {
         indexValue BoundExpression,
         targetLocation TextLocation
     ) BoundExpression {
-        let element TypeSymbol? = GetIndexElementType(target.Type)
+        let element TypeSymbol? = GetArraySliceElementType(target.Type)
         if element != nil {
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
             let srcLocal = DeclareRangeTemp("src", target.Type, target, statements)
@@ -3504,7 +3504,7 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         var target = target
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-        let element TypeSymbol? = GetIndexElementType(targetType)
+        let element TypeSymbol? = GetArraySliceElementType(targetType)
         if element != nil {
             let idx = BuildSystemIndexOffset(indexValue, BoundLenExpression(nil, target), statements)
             let assignment = if hasNarrowedTarget {
@@ -6082,10 +6082,7 @@ internal partial class ExpressionBinder {
             return switch type {
                 case arr is ArrayTypeSymbol: arr.ElementType
                 case slice is SliceTypeSymbol: slice.ElementType
-                case imp is ImportedTypeSymbol when imp
-                    .ClrType
-                    ?.IsArray == true &&
-                    imp.ClrType!!.GetArrayRank() == 1: if imp.TypeArguments.Length == 1 {
+                case imp is ImportedTypeSymbol when imp.ClrType?.IsSZArray == true: if imp.TypeArguments.Length == 1 {
                     imp.TypeArguments[0]
                 } else {
                     ByRefStorageMatching.PreserveReferenceTupleIdentity(
@@ -6098,8 +6095,8 @@ internal partial class ExpressionBinder {
                 }
                 case annot is NullabilityAnnotatedTypeSymbol when annot
                     .ClrType
-                    ?.IsArray == true &&
-                    annot.ClrType!!.GetArrayRank() == 1: ByRefStorageMatching.PreserveReferenceTupleIdentity(
+                    ?.IsSZArray == true: ByRefStorageMatching
+                    .PreserveReferenceTupleIdentity(
                     annot.ClrType!!.GetElementType(),
                     annot.GetTypeArgumentSymbolForClrType(annot.ClrType!!.GetElementType())
                 )
@@ -6300,7 +6297,34 @@ internal partial class ExpressionBinder {
             type == TypeSymbol.NInt ||
             type == TypeSymbol.NUInt
 
-        private func GetIndexElementType(type TypeSymbol) TypeSymbol? -> GetArraySliceElementType(type)
+        internal func GetIndexElementType(type TypeSymbol) TypeSymbol? {
+            return switch type {
+                case arr is ArrayTypeSymbol: arr.ElementType
+                case slice is SliceTypeSymbol: slice.ElementType
+                case imp is ImportedTypeSymbol when imp
+                    .ClrType
+                    ?.IsArray == true &&
+                    imp.ClrType!!.GetArrayRank() == 1: if imp.TypeArguments.Length == 1 {
+                    imp.TypeArguments[0]
+                } else {
+                    ByRefStorageMatching.PreserveReferenceTupleIdentity(
+                        imp.ClrType!!.GetElementType(),
+                        TypeSymbol.FromClrTypeWithoutNullability(
+                            imp.ClrType!!.GetElementType(),
+                            NullabilityFreeReason.TypeStructure
+                        )
+                    )
+                }
+                case annot is NullabilityAnnotatedTypeSymbol when annot
+                    .ClrType
+                    ?.IsArray == true &&
+                    annot.ClrType!!.GetArrayRank() == 1: ByRefStorageMatching.PreserveReferenceTupleIdentity(
+                    annot.ClrType!!.GetElementType(),
+                    annot.GetTypeArgumentSymbolForClrType(annot.ClrType!!.GetElementType())
+                )
+                default: default(TypeSymbol?)
+            }
+        }
 
         /// ADR-0089: substitute a type that may mention the constructed
         /// interface's open type parameter with the corresponding type

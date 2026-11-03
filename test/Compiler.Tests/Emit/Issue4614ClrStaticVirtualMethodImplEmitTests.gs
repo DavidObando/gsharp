@@ -292,11 +292,29 @@ Console.WriteLine("ran")`, appPath, "/target:exe")
                 -1,
                 nullableReturnParam
             )
+            let runtimeAsmRef = metadata.AddAssemblyReference(
+                metadata.GetOrAddString("System.Runtime"),
+                Version(10, 0, 0, 0),
+                default(StringHandle),
+                metadata.GetOrAddBlob([]uint8{0xB0, 0x3F, 0x5F, 0x7F, 0x11, 0xD5, 0x0A, 0x3A}),
+                default(AssemblyFlags),
+                default(BlobHandle)
+            )
+            let systemObjectRef = metadata.AddTypeReference(
+                runtimeAsmRef,
+                metadata.GetOrAddString("System"),
+                metadata.GetOrAddString("Object")
+            )
+            let systemArrayRef = metadata.AddTypeReference(
+                runtimeAsmRef,
+                metadata.GetOrAddString("System"),
+                metadata.GetOrAddString("Array")
+            )
             let nullableContextType = metadata.AddTypeDefinition(
                 TypeAttributes.NotPublic,
                 metadata.GetOrAddString("System.Runtime.CompilerServices"),
                 metadata.GetOrAddString("NullableContextAttribute"),
-                EntityHandle(),
+                systemObjectRef,
                 MetadataTokens.FieldDefinitionHandle(1),
                 MetadataTokens.MethodDefinitionHandle(7)
             )
@@ -310,7 +328,7 @@ Console.WriteLine("ran")`, appPath, "/target:exe")
                 TypeAttributes.NotPublic,
                 metadata.GetOrAddString("System.Runtime.CompilerServices"),
                 metadata.GetOrAddString("NullableAttribute"),
-                EntityHandle(),
+                systemObjectRef,
                 MetadataTokens.FieldDefinitionHandle(1),
                 MetadataTokens.MethodDefinitionHandle(7)
             )
@@ -324,12 +342,184 @@ Console.WriteLine("ran")`, appPath, "/target:exe")
                 nullableAttrBytesCtor,
                 metadata.GetOrAddBlob([]uint8{1, 0, 2, 0, 0, 0, 1, 2, 0, 0})
             )
+            let boxTypeHandle = metadata.AddTypeDefinition(
+                TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.BeforeFieldInit,
+                metadata.GetOrAddString("NonSzLib"),
+                metadata.GetOrAddString("NonSzBox`1"),
+                systemObjectRef,
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(7)
+            )
+            metadata.AddGenericParameter(
+                boxTypeHandle,
+                GenericParameterAttributes.None,
+                metadata.GetOrAddString("T"),
+                0
+            )
+            let ifaceTypeSpecBlob = BlobBuilder()
+            BlobEncoder(ifaceTypeSpecBlob)
+                .TypeSpecificationSignature()
+                .GenericInstantiation(ifaceHandle, 1, isValueType: false)
+                .AddArgument()
+                .GenericTypeParameter(0)
+            let ifaceTypeSpec = metadata.AddTypeSpecification(metadata.GetOrAddBlob(ifaceTypeSpecBlob))
+            metadata.AddInterfaceImplementation(boxTypeHandle, ifaceTypeSpec)
+            let backingFieldSig = BlobBuilder()
+            encodeRankOneNonSzArray(BlobEncoder(backingFieldSig).FieldSignature())
+            metadata.AddFieldDefinition(
+                FieldAttributes.Public,
+                metadata.GetOrAddString("Backing"),
+                metadata.GetOrAddBlob(backingFieldSig)
+            )
+            let backingNestedFieldSig = BlobBuilder()
+            encodeNestedRankOneNonSzArray(BlobEncoder(backingNestedFieldSig).FieldSignature())
+            metadata.AddFieldDefinition(
+                FieldAttributes.Public,
+                metadata.GetOrAddString("BackingNested"),
+                metadata.GetOrAddBlob(backingNestedFieldSig)
+            )
+            let boxTypeSpecBlob = BlobBuilder()
+            BlobEncoder(boxTypeSpecBlob)
+                .TypeSpecificationSignature()
+                .GenericInstantiation(boxTypeHandle, 1, isValueType: false)
+                .AddArgument()
+                .GenericTypeParameter(0)
+            let boxTypeSpec = metadata.AddTypeSpecification(metadata.GetOrAddBlob(boxTypeSpecBlob))
+            let backingFieldRef = metadata.AddMemberReference(
+                boxTypeSpec,
+                metadata.GetOrAddString("Backing"),
+                metadata.GetOrAddBlob(backingFieldSig)
+            )
+            let backingNestedFieldRef = metadata.AddMemberReference(
+                boxTypeSpec,
+                metadata.GetOrAddString("BackingNested"),
+                metadata.GetOrAddBlob(backingNestedFieldSig)
+            )
+            let voidInstanceSig = BlobBuilder()
+            BlobEncoder(voidInstanceSig).MethodSignature(isInstanceMethod: true).Parameters(
+                0,
+                (ret ReturnTypeEncoder) -> ret.Void(),
+                (pars ParametersEncoder) -> { }
+            )
+            let objectCtorRef = metadata.AddMemberReference(
+                systemObjectRef,
+                metadata.GetOrAddString(".ctor"),
+                metadata.GetOrAddBlob(voidInstanceSig)
+            )
+            let intInstanceSig = BlobBuilder()
+            BlobEncoder(intInstanceSig).MethodSignature(isInstanceMethod: true).Parameters(
+                0,
+                (ret ReturnTypeEncoder) -> ret.Type().Int32(),
+                (pars ParametersEncoder) -> { }
+            )
+            let arrayGetLengthRef = metadata.AddMemberReference(
+                systemArrayRef,
+                metadata.GetOrAddString("get_Length"),
+                metadata.GetOrAddBlob(intInstanceSig)
+            )
+            let ilBuilder = BlobBuilder()
+            let bodyStream = MethodBodyStreamEncoder(ilBuilder)
+            let ctorCode = BlobBuilder()
+            let ctorIl = InstructionEncoder(ctorCode)
+            ctorIl.OpCode(ILOpCode.Ldarg_0)
+            ctorIl.Call(objectCtorRef)
+            ctorIl.OpCode(ILOpCode.Ret)
+            let ctorRva = bodyStream.AddMethodBody(ctorIl)
+            let lenMethodCode = BlobBuilder()
+            let lenMethodIl = InstructionEncoder(lenMethodCode)
+            lenMethodIl.OpCode(ILOpCode.Ldarg_1)
+            lenMethodIl.OpCode(ILOpCode.Callvirt)
+            lenMethodIl.Token(arrayGetLengthRef)
+            lenMethodIl.OpCode(ILOpCode.Ret)
+            let lenMethodRva = bodyStream.AddMethodBody(lenMethodIl)
+            let getBackingCode = BlobBuilder()
+            let getBackingIl = InstructionEncoder(getBackingCode)
+            getBackingIl.OpCode(ILOpCode.Ldarg_0)
+            getBackingIl.OpCode(ILOpCode.Ldfld)
+            getBackingIl.Token(backingFieldRef)
+            getBackingIl.OpCode(ILOpCode.Ret)
+            let getBackingRva = bodyStream.AddMethodBody(getBackingIl)
+            let staticLenCode = BlobBuilder()
+            let staticLenIl = InstructionEncoder(staticLenCode)
+            staticLenIl.OpCode(ILOpCode.Ldarg_0)
+            staticLenIl.OpCode(ILOpCode.Callvirt)
+            staticLenIl.Token(arrayGetLengthRef)
+            staticLenIl.OpCode(ILOpCode.Ret)
+            let staticLenRva = bodyStream.AddMethodBody(staticLenIl)
+            let getNestedCode = BlobBuilder()
+            let getNestedIl = InstructionEncoder(getNestedCode)
+            getNestedIl.OpCode(ILOpCode.Ldarg_0)
+            getNestedIl.OpCode(ILOpCode.Ldfld)
+            getNestedIl.Token(backingNestedFieldRef)
+            getNestedIl.OpCode(ILOpCode.Ret)
+            let getNestedRva = bodyStream.AddMethodBody(getNestedIl)
+            metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString(".ctor"),
+                metadata.GetOrAddBlob(voidInstanceSig),
+                ctorRva,
+                MetadataTokens.ParameterHandle(2)
+            )
+            let implMethodAttrs = MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Final | MethodAttributes.HideBySig | MethodAttributes.NewSlot
+            metadata.AddMethodDefinition(
+                implMethodAttrs,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("M"),
+                metadata.GetOrAddBlob(instanceSig),
+                lenMethodRva,
+                MetadataTokens.ParameterHandle(2)
+            )
+            metadata.AddMethodDefinition(
+                implMethodAttrs,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("R"),
+                metadata.GetOrAddBlob(returnSig),
+                getBackingRva,
+                MetadataTokens.ParameterHandle(2)
+            )
+            let boxMsMethodDef = metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("MS"),
+                metadata.GetOrAddBlob(staticSig),
+                staticLenRva,
+                MetadataTokens.ParameterHandle(2)
+            )
+            metadata.AddMethodDefinition(
+                implMethodAttrs,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("MNested"),
+                metadata.GetOrAddBlob(nestedInstanceSig),
+                lenMethodRva,
+                MetadataTokens.ParameterHandle(2)
+            )
+            metadata.AddMethodDefinition(
+                implMethodAttrs,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("RNested"),
+                metadata.GetOrAddBlob(nestedReturnSig),
+                getNestedRva,
+                MetadataTokens.ParameterHandle(2)
+            )
+            metadata.AddMethodDefinition(
+                implMethodAttrs,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("RNullable"),
+                metadata.GetOrAddBlob(returnSig),
+                getBackingRva,
+                MetadataTokens.ParameterHandle(2)
+            )
+            let ifaceMsRef = metadata.AddMemberReference(
+                ifaceTypeSpec,
+                metadata.GetOrAddString("MS"),
+                metadata.GetOrAddBlob(staticSig)
+            )
+            metadata.AddMethodImplementation(boxTypeHandle, boxMsMethodDef, ifaceMsRef)
             let peBlob = BlobBuilder()
-            ManagedPEBuilder(
-                PEHeaderBuilder.CreateLibraryHeader(),
-                MetadataRootBuilder(metadata),
-                BlobBuilder()
-            ).Serialize(peBlob)
+            ManagedPEBuilder(PEHeaderBuilder.CreateLibraryHeader(), MetadataRootBuilder(metadata), ilBuilder).Serialize(
+                peBlob
+            )
             File.WriteAllBytes(libPath, peBlob.ToArray())
 
             let appPath = Path.Combine(tempDir, "App.dll")
@@ -477,6 +667,40 @@ Console.WriteLine("x")`, nullableElementMismatchPath, "/target:exe", "/reference
             Assert.Contains(" error GS", nullableElementMismatchLog, StringComparison.Ordinal)
             Assert.Contains("Shape?", nullableElementMismatchLog, StringComparison.Ordinal)
 
+            let listPatternMismatchPath = Path.Combine(tempDir, "ListPatternMismatch.dll")
+            let listPatternMismatchLog = Compile(tempDir, "ListPatternMismatch.gs", `package P
+import System
+import NonSzLib
+
+func CheckListPattern(x INonSz[int32]) bool {
+    return x.R() is [1]
+}
+Console.WriteLine("x")`, listPatternMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(listPatternMismatchPath),
+                "List pattern over rank-1 non-SZ array T[*] must be rejected before emission. Log:\n" +
+                    listPatternMismatchLog
+            )
+            Assert.Contains(" error GS", listPatternMismatchLog, StringComparison.Ordinal)
+
+            let fixedMismatchPath = Path.Combine(tempDir, "FixedMismatch.dll")
+            let fixedMismatchLog = Compile(tempDir, "FixedMismatch.gs", `package P
+import System
+import NonSzLib
+
+unsafe func CheckFixed(x INonSz[int32]) int32 {
+    fixed p *int32 = x.R() {
+        return 0
+    }
+}
+Console.WriteLine("x")`, fixedMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(fixedMismatchPath),
+                "fixed statement over rank-1 non-SZ array T[*] must be rejected before emission. Log:\n" +
+                    fixedMismatchLog
+            )
+            Assert.Contains(" error GS", fixedMismatchLog, StringComparison.Ordinal)
+
             let validPath = Path.Combine(tempDir, "ValidNonSz.dll")
             let validLog = Compile(tempDir, "ValidNonSz.gs", `package P
 import System
@@ -500,18 +724,24 @@ public func ForwardNullable(x INonSz[int32?]) int32 {
 public func First(x INonSz[Shape]) Shape {
     return x.R()[0]
 }
+public func AtIndex(x INonSz[Shape], idx int32) Shape {
+    return x.R()[idx]
+}
 public func TakeRef(ref s Shape) Shape {
     return s
 }
-public func Mutate(x INonSz[Shape], v Shape) Shape {
+public func SetAtZero(x INonSz[Shape], v Shape) Shape {
     let arr = x.R()
     arr[0] = v
-    let byRef = TakeRef(&arr[0])
-    let sub []Shape = arr[0..1]
-    return if sub.Length == 1 { byRef } else { arr[^1] }
+    return arr[0]
 }
-public func ReadNullableElement(x INonSz[Shape]) Shape? {
-    return x.RNullable()[0]
+public func MutateAt(x INonSz[Shape], idx int32, v Shape) Shape {
+    let arr = x.R()
+    arr[idx] = v
+    return TakeRef(&arr[idx])
+}
+public func ReadNullableElement(x INonSz[Shape], idx int32) Shape? {
+    return x.RNullable()[idx]
 }
 public func ForwardNullableArray(x INonSz[Shape]) -> x.RNullable()
 public func CountLoop(x INonSz[Shape]) int32 {
@@ -521,7 +751,28 @@ public func CountLoop(x INonSz[Shape]) int32 {
     }
     return sum
 }
-Console.WriteLine("ok")`, validPath, "/target:exe", "/reference:" + libPath)
+let box = NonSzBox[Shape]()
+let nonSzShapeType = typeof(Shape).MakeArrayType(1)
+let zeroArr = cast[Array](Activator.CreateInstance(nonSzShapeType, []object?{0, 2})!!)
+zeroArr.SetValue(Shape{Tag: 42}, []int32{0})
+zeroArr.SetValue(Shape{Tag: 10}, []int32{1})
+typeof(NonSzBox[Shape]).GetField("Backing")!!.SetValue(box, zeroArr)
+let nestedArr = cast[Array](Activator.CreateInstance(nonSzShapeType.MakeArrayType(1), []object?{0, 1})!!)
+nestedArr.SetValue(zeroArr, []int32{0})
+typeof(NonSzBox[Shape]).GetField("BackingNested")!!.SetValue(box, nestedArr)
+Console.WriteLine(First(box).Tag)
+Console.WriteLine(SetAtZero(box, Shape{Tag: 99}).Tag)
+Console.WriteLine(ReadNullableElement(box, 0)?.Tag ?? -1)
+Console.WriteLine(Forward(box))
+Console.WriteLine(ForwardNested(box))
+Console.WriteLine(CountLoop(box))
+let offsetArr = Array.CreateInstance(typeof(Shape), []int32{2}, []int32{5})
+offsetArr.SetValue(Shape{Tag: 7}, []int32{5})
+offsetArr.SetValue(Shape{Tag: 8}, []int32{6})
+typeof(NonSzBox[Shape]).GetField("Backing")!!.SetValue(box, offsetArr)
+Console.WriteLine(AtIndex(box, 5).Tag)
+Console.WriteLine(MutateAt(box, 5, Shape{Tag: 30}).Tag)
+Console.WriteLine(CountLoop(box))`, validPath, "/target:exe", "/reference:" + libPath)
             Assert.DoesNotContain(" error ", validLog, StringComparison.Ordinal)
             Assert.True(
                 File.Exists(validPath),
@@ -530,7 +781,12 @@ Console.WriteLine("ok")`, validPath, "/target:exe", "/reference:" + libPath)
             IlVerifier.Verify(validPath, []string{libPath})
             let (exit, output) = RunDotnet(validPath)
             Assert.True(exit == 0, "ValidNonSz must run. Output:\n" + output)
-            Assert.Equal("ok", output.Trim())
+            let lines = output
+                .Split('\n')
+                .Select((line string) -> line.TrimEnd('\r'))
+                .Where((line string) -> line.Length > 0)
+                .ToArray()
+            Assert.Equal([]string{"42", "99", "99", "2", "1", "109", "7", "30", "38"}, lines)
         } finally {
             Directory.Delete(tempDir, recursive: true)
         }
