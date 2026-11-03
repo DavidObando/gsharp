@@ -319,7 +319,7 @@ abstract class BoundTreeRewriter {
             return sharedReceiverReplacement!!
         }
         switch node.Kind {
-            case BoundNodeKind.Utf8StringExpression {
+            case BoundNodeKind.Utf8StringExpression, BoundNodeKind.PatternOperandExpression {
                 return node
             }
             case BoundNodeKind.ErrorExpression {
@@ -887,6 +887,24 @@ abstract class BoundTreeRewriter {
             }
             case BoundNodeKind.RelationalPattern {
                 let relational = cast[BoundRelationalPattern](node)
+                // Issue #5688: the test contains the value of a `==` or `!=` pattern, so only the test is rewritten.
+                if relational.Test is {} test {
+                    let relTest = RewriteExpression(test)
+                    return if relTest == test {
+                        node
+                    } else {
+                        cast[BoundPattern](
+                            BoundRelationalPattern(
+                                node.Syntax,
+                                node.Type,
+                                relational.Op,
+                                relational.Value,
+                                relational.InputVariable!!,
+                                relTest
+                            )
+                        )
+                    }
+                }
                 let relValue = RewriteExpression(relational.Value)
                 return if relValue == relational.Value {
                     node

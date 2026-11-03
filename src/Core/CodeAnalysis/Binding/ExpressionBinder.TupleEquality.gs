@@ -31,18 +31,23 @@ import System.Threading
 /// ```
 internal partial class ExpressionBinder {
     /// Binds `==` / `!=` whose operands are both tuple-typed.
-    /// @param syntax The binary expression syntax.
+    /// @param syntax The syntax of the operation.
+    /// @param operatorKind The operator token kind.
+    /// @param opLocation The operator location.
+    /// @param operatorText The operator text.
     /// @param left The bound left tuple operand.
     /// @param right The bound right tuple operand.
     /// @returns The desugared block expression, or a (cref:BoundErrorExpression) after reporting.
     private func BindTupleEquality(
-        syntax BinaryExpressionSyntax,
+        syntax SyntaxNode,
+        operatorKind SyntaxKind,
+        opLocation TextLocation,
+        operatorText string,
         left BoundExpression,
         right BoundExpression
     ) BoundExpression {
         let leftTuple = cast[TupleTypeSymbol](left.Type)
         let rightTuple = cast[TupleTypeSymbol](right.Type)
-        let opLocation = syntax.OperatorToken.Location
         if leftTuple.Arity != rightTuple.Arity {
             Diagnostics.ReportTupleEqualityArityMismatch(
                 opLocation,
@@ -57,13 +62,13 @@ internal partial class ExpressionBinder {
         let leftReceiver = SpillTupleOperand(syntax, left, leftTuple, statements)
         let rightReceiver = SpillTupleOperand(syntax, right, rightTuple, statements)
         let comparison BoundExpression? = BindTupleElementwiseComparison(
-            syntax.OperatorToken.Kind,
+            operatorKind,
             leftReceiver,
             leftTuple,
             rightReceiver,
             rightTuple,
             opLocation,
-            syntax.OperatorToken.Text,
+            operatorText,
             left,
             right
         )
