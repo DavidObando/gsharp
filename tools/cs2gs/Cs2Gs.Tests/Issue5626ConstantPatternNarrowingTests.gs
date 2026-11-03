@@ -37,7 +37,10 @@ import Xunit
 /// right side winning over a nil guard in a lowered `&&`, the mixed `or` row does not compile (GS0159). With the C#
 /// sealedness of a translated class, the `IMarker` arm row does not compile (GS0158). With the right operand of a
 /// lowered `&&` bound against the input type, the `Bound` row does not compile (GS0159). With `IsTypeEmittedOpen`
-/// for a gsgen semantic-only abstract stub, the stub row emits a bare `current.Visit()`.
+/// for a gsgen semantic-only abstract stub, the stub row emits a bare `current.Visit()`. On 0cc904eb5 the `goto case`,
+/// `not (Base and Derived)`, nested-`||` and `IBox<string?>` rows of the last control do not compile; with the goto
+/// rule, the namesake rule, the dropped `&&` false path, the `||` operand input or nested nullability removed, one of
+/// them fails (GS0158 or GS0159).
 open class Issue5626ConstantPatternNarrowingTests {
     /// The issue's repro and each boolean `is` shape: the test keeps the native form, and gsc narrows the read.
     @Fact
@@ -267,6 +270,57 @@ namespace Demo
             "if current != Inner.Code {\n            return 0\n        }\n        return current!!.Length\n",
             printed
         )
+    }
+
+    /// Control: gsc does not narrow a section that a `goto case` enters, discards the narrowing of a local when a
+    /// closure assigns another local of the same name, keeps no narrowing where a lowered `&&` fails, binds the right
+    /// operand of `||` where its left operand fails, and keeps nested nullability when it intersects alternatives.
+    /// Each read keeps its assertion.
+    @Fact
+    func AShapeThatGscDoesNotNarrow_KeepsTheAssertion() {
+        let printed = AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public class Base { }
+    public class Derived : Base { }
+    public interface IBox<T> { }
+    public class First { }
+    public class Second { }
+    public class StringBox : IBox<string> { }
+    public static class P
+    {
+        static void Touch() { }
+        static int Jump(string? current, bool jump)
+        {
+            switch (current) { case not null when jump: goto case "a"; case "b": return 0; case "a": return current.Length; default: return 0; }
+        }
+        static int Namesake(bool flag)
+        {
+            if (flag) { string? current = "zz"; Action clear = () => current = null; clear(); }
+            {
+                string? current = "b";
+                if (flag) { current = "a"; }
+                switch (current) { case "a": Touch(); return current.Length; }
+            }
+            return 0;
+        }
+        static string NotBoth(object? current) { if (current is not (Base and Derived) and not Derived) { return ""; } return current.ToString()!; }
+        static string Either(object? current)
+        {
+            if (current is ((not (not string or not IComparable)) or IComparable) and not string) { return current.ToString()!; }
+            return "none";
+        }
+        static string Boxes(object? current) => current switch { (IBox<string> and not First) or (IBox<string?> and not Second) => current.ToString()!, _ => "none" };
+        public static string Run() =>
+            Jump("xyz", true) + " " + Jump("a", false) + " " + Namesake(true) + " " + NotBoth(new Derived()) + " " + NotBoth(null) + " " +
+            Either(4) + " " + Either("s") + " " + Boxes(new StringBox()) + " " + Boxes(null);
+    }
+}`)
+        Assert.Contains("return current!!.Length", printed)
+        Assert.Contains("return current!!.ToString()", printed)
+        Assert.Contains(": current!!.ToString()", printed)
     }
 
     /// Control: gsgen renders a stub `abstract` only because it inherits unimplemented members (#5252), and the

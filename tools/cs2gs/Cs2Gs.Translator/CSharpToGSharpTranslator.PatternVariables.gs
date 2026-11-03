@@ -780,66 +780,88 @@ partial class CSharpToGSharpTranslator {
         /// The narrowed type of the lowered test of [`pattern`](paramref) (cref:TranslatePatternTest) where it is
         /// [`whenTrue`](paramref), or `nil`. The lowering emits `== nil` for `null`, an `is` type test for a type,
         /// and `&&`, `||` and `!` for `and`, `or` and `not`. It emits an equality for any other constant, which
-        /// does not narrow, except on an `object` input, where it keeps the `is` test.
+        /// does not narrow, except on an `object` input, where it keeps the `is` test. gsc classifies the nil guards
+        /// and the type tests of the condition separately and merges them with the type test winning
+        /// (ClassifyIfConditionNarrowing).
         private func GetGSharpPatternNarrowedType(
             pattern PatternSyntax,
             underlyingType ITypeSymbol?,
             whenTrue bool
         ) ITypeSymbol? {
+            let frames = this.ClassifyLoweredPatternNarrowing(pattern, underlyingType, underlyingType)
+            return if whenTrue {
+                frames.TypeThen ?? frames.NilThen
+            } else {
+                frames.TypeElse ?? frames.NilElse
+            }
+        }
+
+        // The mirror of gsc's TryClassifyTypeTestNarrowing and TryClassifyNilGuard for the lowered test, with the
+        // narrowing of each branch. `&&` narrows only where it holds, and gsc binds its right operand under the left
+        // operand's narrowing; `||` binds its right operand where the left operand fails, keeps a narrowing that
+        // both operands prove where it holds, and both narrowings where it fails. [`inputType`](paramref) is the type
+        // that the operand is bound at.
+        private func ClassifyLoweredPatternNarrowing(
+            pattern PatternSyntax,
+            inputType ITypeSymbol?,
+            underlyingType ITypeSymbol?
+        )(TypeThen ITypeSymbol?, TypeElse ITypeSymbol?, NilThen ITypeSymbol?, NilElse ITypeSymbol?) {
             var pattern = pattern
             while pattern is ParenthesizedPatternSyntax parenthesized {
                 pattern = parenthesized.Pattern
             }
             if pattern is UnaryPatternSyntax unary && unary.IsKind(SyntaxKind.NotPattern) {
-                return this.GetGSharpPatternNarrowedType(unary.Pattern, underlyingType, !whenTrue)
+                let inner = this.ClassifyLoweredPatternNarrowing(unary.Pattern, inputType, underlyingType)
+                return (inner.TypeElse, inner.TypeThen, inner.NilElse, inner.NilThen)
             }
             if pattern is BinaryPatternSyntax binary {
-                let conjunction = binary.IsKind(SyntaxKind.AndPattern)
-                let left ITypeSymbol? = this.GetGSharpPatternNarrowedType(binary.Left, underlyingType, whenTrue)
-                // gsc binds the right operand of `&&` under the narrowing of its left operand.
-                let rightInput ITypeSymbol? = if conjunction && whenTrue {
-                    left ?? underlyingType
-                } else {
+                let left = this.ClassifyLoweredPatternNarrowing(binary.Left, inputType, underlyingType)
+                if binary.IsKind(SyntaxKind.AndPattern) {
+                    let right = this.ClassifyLoweredPatternNarrowing(
+                        binary.Right,
+                        left.TypeThen ?? left.NilThen ?? inputType,
+                        underlyingType
+                    )
+                    return (right.TypeThen ?? left.TypeThen, nil, right.NilThen ?? left.NilThen, nil)
+                }
+                let right = this.ClassifyLoweredPatternNarrowing(
+                    binary.Right,
+                    left.TypeElse ?? left.NilElse ?? inputType,
                     underlyingType
-                }
-                let right ITypeSymbol? = this.GetGSharpPatternNarrowedType(binary.Right, rightInput, whenTrue)
-                let merge = conjunction == whenTrue
-                // gsc merges the nil guards of `&&` before its type tests, so a type test wins over a nil guard
-                // (MergeNarrowingFrames with the type-test frame as `b`); between two type tests the right one wins.
-                if merge {
-                    return if left == nil ||
-                        (right != nil && !SymbolEqualityComparer.Default.Equals(right, rightInput)) {
-                        right
-                    } else {
-                        left
-                    }
-                }
-                return if left != nil && right != nil && SymbolEqualityComparer.Default.Equals(left, right) {
-                    left
-                } else {
-                    default(ITypeSymbol?)
-                }
+                )
+                return (
+                    this.IntersectNarrowedTypes(left.TypeThen, right.TypeThen),
+                    right.TypeElse ?? left.TypeElse,
+                    this.IntersectNarrowedTypes(left.NilThen, right.NilThen),
+                    right.NilElse ?? left.NilElse
+                )
             }
             if pattern is ConstantPatternSyntax constant {
                 if this.context.GetSymbolInfo(constant.Expression).Symbol is ITypeSymbol constantType {
-                    return if whenTrue {
-                        this.TypeTestNarrowing(constantType, underlyingType)
-                    } else {
-                        default(ITypeSymbol?)
-                    }
+                    return (this.TypeTestNarrowing(constantType, inputType), nil, nil, nil)
                 }
-                let isNull = IsNullLiteral(constant.Expression)
-                let narrows = isNull || underlyingType?.SpecialType == SpecialType.System_Object
-                return if narrows && whenTrue != isNull {
-                    underlyingType
+                if IsNullLiteral(constant.Expression) {
+                    return (nil, nil, nil, underlyingType)
+                }
+                return if underlyingType?.SpecialType == SpecialType.System_Object {
+                    (underlyingType, nil, nil, nil)
                 } else {
-                    default(ITypeSymbol?)
+                    (nil, nil, nil, nil)
                 }
             }
-            if !whenTrue {
-                return nil
-            }
-            return this.GetTypeTestNarrowedType(pattern, underlyingType)
+            return (this.GetTypeTestNarrowedType(pattern, inputType), nil, nil, nil)
+        }
+
+        // gsc's IntersectNarrowingFrames: a narrowing that both sides prove to the same type, nested nullable
+        // annotations included.
+        private func IntersectNarrowedTypes(left ITypeSymbol?, right ITypeSymbol?) ITypeSymbol? -> if left != nil &&
+            right != nil &&
+            SymbolEqualityComparer
+            .IncludeNullability
+            .Equals(left, right) {
+            left
+        } else {
+            default(ITypeSymbol?)
         }
 
         /// The narrowed type of the native G# test of [`pattern`](paramref) where it is [`whenTrue`](paramref),
@@ -882,11 +904,7 @@ partial class CSharpToGSharpTranslator {
                 if binary.IsKind(SyntaxKind.AndPattern) {
                     return right ?? left
                 }
-                return if left != nil && right != nil && SymbolEqualityComparer.Default.Equals(left, right) {
-                    left
-                } else {
-                    default(ITypeSymbol?)
-                }
+                return this.IntersectNarrowedTypes(left, right)
             }
             if pattern is ConstantPatternSyntax constant {
                 if this.context.GetSymbolInfo(constant.Expression).Symbol is ITypeSymbol constantType {

@@ -4598,6 +4598,24 @@ partial class CSharpToGSharpTranslator {
             return this.IsGSharpSwitchNarrowedLocal(expression, symbol, scope_)
         }
 
+        // A `goto case` or `goto default` enters a section without its case test, and gsc does not narrow there.
+        private func HasGotoIntoSwitchSection(
+            switchStatement Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax
+        ) bool -> switchStatement
+            .DescendantNodes()
+            .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.GotoStatementSyntax]()
+            .Any(
+            (jump Microsoft.CodeAnalysis.CSharp.Syntax.GotoStatementSyntax) -> (
+                jump.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.GotoCaseStatement) || jump.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.GotoDefaultStatement
+                )
+            ) &&
+                jump
+                .Ancestors()
+                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax]()
+                .First() == switchStatement
+        )
+
         /// Issue #5626: gsc narrows the switched local in the guard and the body of a switch section or arm, by
         /// the native pattern of its case (cref:GetNativePatternNarrowedType). A section with more than one label
         /// narrows its body only when each label narrows, and stacked constants only to a type that each proves. A test or guard of a closure-assigned or by-reference
@@ -4681,7 +4699,9 @@ partial class CSharpToGSharpTranslator {
                             .CSharp
                             .Syntax
                             .SwitchStatementSyntax switchStatement &&
-                            IsSwitchedLocal(switchStatement.Expression) {
+                            IsSwitchedLocal(switchStatement.Expression) &&
+                            !this
+                            .HasGotoIntoSwitchSection(switchStatement) {
                             let label = section.Labels.FirstOrDefault(
                                 (candidate Microsoft.CodeAnalysis.CSharp.Syntax.SwitchLabelSyntax) -> candidate
                                     .Span
@@ -5149,28 +5169,74 @@ partial class CSharpToGSharpTranslator {
             if symbol is ILocalSymbol{RefKind: not RefKind.None} {
                 return true
             }
+            // gsc records closure-assigned variables by name (EnsureClosureAssignedNames), so a write to another
+            // variable of the same name in the function (a sibling block's local) counts too. The C# name stands for
+            // the emitted name: a renamed namesake only adds an assertion that the polish pass removes.
+            let symbolName = symbol!!.Name
+            let namesakes = List[ISymbol]{symbol!!}
             for node in declaringFunction.DescendantNodes() {
-                if this.SyntaxNodeWritesSymbol(node, symbol) && NearestFunctionBoundary(node) != declaringFunction {
-                    return true
+                let declaredName string? = switch node {
+                    case declarator is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .VariableDeclaratorSyntax: declarator
+                        .Identifier
+                        .ValueText
+                    case designation is SingleVariableDesignationSyntax: designation.Identifier.ValueText
+                    case loop is Microsoft.CodeAnalysis.CSharp.Syntax.ForEachStatementSyntax: loop.Identifier.ValueText
+                    case caught is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CatchDeclarationSyntax: caught
+                        .Identifier
+                        .ValueText
+                    case parameter is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParameterSyntax: parameter
+                        .Identifier
+                        .ValueText
+                    default: default(string?)
                 }
-                // A `ref` alias or an address-of keeps the variable's storage reachable after a call
-                // (gsc's CollectAddressTakenNames), which ends its narrowing the same way.
-                if node is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .RefExpressionSyntax refExpression &&
-                    this.OperandNamesVariable(refExpression.Expression, symbol) {
-                    return true
+                if declaredName != symbolName {
+                    continue
                 }
-                if node is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .PrefixUnaryExpressionSyntax addressOf &&
-                    addressOf.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddressOfExpression) &&
-                    this.OperandNamesVariable(addressOf.Operand, symbol) {
-                    return true
+                let declared ISymbol? = this.context.SemanticModel.GetDeclaredSymbol(node)
+                if (declared is ILocalSymbol || declared is IParameterSymbol) && !SymbolEqualityComparer.Default.Equals(
+                    declared,
+                    symbol
+                ) {
+                    namesakes.Add(declared!!)
+                }
+            }
+            for node in declaringFunction.DescendantNodes() {
+                for variable in namesakes {
+                    if this.SyntaxNodeWritesSymbol(node, variable) &&
+                        NearestFunctionBoundary(node) != declaringFunction {
+                        return true
+                    }
+                    // A `ref` alias or an address-of keeps the variable's storage reachable after a call
+                    // (gsc's CollectAddressTakenNames), which ends its narrowing the same way.
+                    if node is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .RefExpressionSyntax refExpression &&
+                        this.OperandNamesVariable(refExpression.Expression, variable) {
+                        return true
+                    }
+                    if node is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .PrefixUnaryExpressionSyntax addressOf &&
+                        addressOf.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddressOfExpression) &&
+                        this.OperandNamesVariable(addressOf.Operand, variable) {
+                        return true
+                    }
                 }
             }
             return false
