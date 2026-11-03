@@ -1468,9 +1468,11 @@ internal class UserTokenResolver {
                 },
                 (ps ParametersEncoder) -> {
                     for p in indexParams {
-                        this.signatures.EncodeTypeSymbol(
-                            ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None),
-                            p.Type
+                        TypeDefEmitter.EncodeParameterSignature(
+                            ps,
+                            p,
+                            this.signatures.EncodeTypeSymbol,
+                            this.outer.wellKnown
                         )
                     }
                     this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(), property.Type)
@@ -1482,9 +1484,11 @@ internal class UserTokenResolver {
                 (r ReturnTypeEncoder) -> this.signatures.EncodeReturnSymbol(r, property.Type, property.ReturnRefKind),
                 (ps ParametersEncoder) -> {
                     for p in indexParams {
-                        this.signatures.EncodeTypeSymbol(
-                            ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None),
-                            p.Type
+                        TypeDefEmitter.EncodeParameterSignature(
+                            ps,
+                            p,
+                            this.signatures.EncodeTypeSymbol,
+                            this.outer.wellKnown
                         )
                     }
                 }
