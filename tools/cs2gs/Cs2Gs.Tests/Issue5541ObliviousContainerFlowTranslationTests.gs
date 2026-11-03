@@ -882,9 +882,10 @@ public static class Use
             }, []string{"Jagged", "12", "Scalar", "12"})
     }
 
-    /// Review of 286a895b5 (#5571): the implicit `value` parameter of a property or
-    /// indexer setter shares the property's positions, for element reads and for
-    /// forwarding assignments.
+    /// Review of 286a895b5 and e2069117b (#5571): the implicit `value` parameter of a
+    /// property or indexer setter shares the property's positions, while an indexer's
+    /// key parameters map to their own parameter declarations rather than the
+    /// property's value storage.
     @Fact
     func A_Property_Or_Indexer_Setter_Value_Shares_The_Property_Positions() {
         this.Check("Review26", `using ObLib;
@@ -896,6 +897,8 @@ public class Holder
     public string[] P { get => Node.Lines("ab"); set { N = value[0].Length; backing = value; } }
     public string[] Forward { get => backing; set { backing = value; N += value[0].Length; } }
     public string[] this[int i] { get => Node.Holes("ab"); set { N = value[0].Length + (value[1] == null ? 10 : 0); } }
+    public string[] this[string[] key] { get => Node.Holes(key[0]); set { N = key[0].Length + value[0].Length; } }
+    public string[] this[string[] key, int tag] { get => Node.Lines("ab"); set { N = key[0].Length + value[0].Length + tag; } }
     public string[] Check { get => Node.Holes("ab"); set { N = value[1].Length; } }
 }
 
@@ -903,19 +906,23 @@ public static class Use
 {
     public static int Prop(string p) { var h = new Holder(); h.P = Node.Lines(p); h.Forward = Node.Lines(p); return h.N + h.Forward[0].Length; }
     public static int Indexer(string p) { var h = new Holder(); h[0] = Node.Holes(p); return h.N; }
+    public static int Keyed(string p) { var h = new Holder(); var k = new[] { "abc" }; h[k] = Node.Holes(p); return h.N + h[k][0].Length; }
+    public static int PromotedKey(string p) { var h = new Holder(); h[Node.Holes(p), 5] = Node.Lines(p); return h.N; }
     public static int Throws(string p) { var h = new Holder(); try { h.Check = Node.Holes(p); return h.N; } catch (System.NullReferenceException) { return -1; } }
 }`, []string{
                 "N = value[0]!!.Length",
                 "N += value[0]!!.Length",
                 "N = value[0]!!.Length + (if value[1] == nil { 10 } else { 0 })",
+                "N = key[0].Length + value[0]!!.Length",
+                "N = key[0]!!.Length + value[0]!!.Length + tag",
                 "N = value[1]!!.Length"
-            }, []string{"Prop", "6", "Indexer", "12", "Throws", "-1"})
+            }, []string{"Prop", "6", "Indexer", "12", "Keyed", "8", "PromotedKey", "9", "Throws", "-1"})
     }
 
-    /// Review of 286a895b5 (#5571): nested deconstruction designations and tuple
-    /// targets carry their dotted element prefix, and tuples with eight or more
-    /// elements map positions through the CLR `Rest` chain for declarations,
-    /// deconstructions and element reads.
+    /// Review of 286a895b5 and e2069117b (#5571): nested deconstruction designations
+    /// and tuple targets carry their dotted element prefix, nested typed declarations
+    /// assert their leaf elements, and tuples with eight or more elements map
+    /// positions through the CLR `Rest` chain.
     @Fact
     func Nested_Deconstructions_And_Long_Tuples_Carry_Positions() {
         this.Check("Review27", `using ObLib;
@@ -923,6 +930,8 @@ public static class Use
 public static class Use
 {
     public static int Nested(string p) { string[] lines; lines = Node.Holes(p); var ((a, b), n) = ((lines[0], lines[1]), 3); ((var c, var d), var m) = ((lines[0], lines[1]), 4); return a.Length + c.Length + (b == null ? 10 : 0) + (d == null ? 100 : 0) + n + m; }
+    public static int NestedTyped(string p) { string[] lines; lines = Node.Lines(p); ((string a, string b), int n) = ((lines[0], lines[1]), 3); string c; string d; int m; ((c, d), m) = ((lines[0], lines[1]), 4); return a.Length + b.Length + c.Length + d.Length + n + m; }
+    public static int NestedTypedThrows(string p) { string[] lines; lines = Node.Holes(p); try { ((string a, string b), int n) = ((lines[0], lines[1]), 3); return a.Length + b.Length + n; } catch (System.NullReferenceException) { return -1; } }
     public static int NestedDisabled(string p)
     {
         string[] lines;
@@ -938,6 +947,8 @@ public static class Use
     public static int LongThrows(string p) { string[] lines; lines = Node.Holes(p); var t = (1, 2, 3, 4, 5, 6, 7, lines[1]); try { return t.Item8.Length; } catch (System.NullReferenceException) { return -1; } }
 }`, []string{
                 "return a!!.Length + c!!.Length",
+                "((lines[0]!!, lines[1]!!), 3)",
+                "return a.Length + b.Length + c.Length + d.Length + n + m",
                 "return a!!.Length + (if b == nil { 10 } else { 0 }) + n",
                 "let t (a string?, b int32, c int32, d int32, e int32, f int32, g int32, h string?) = (lines[0], 1, 2, 3, 4, 5, 6, lines[1])",
                 "return t.a!!.Length + (if t.h == nil { 10 } else { 0 }) + t.g",
@@ -947,6 +958,10 @@ public static class Use
             }, []string{
                 "Nested",
                 "121",
+                "NestedTyped",
+                "15",
+                "NestedTypedThrows",
+                "-1",
                 "NestedDisabled",
                 "17",
                 "LongDeclared",
@@ -957,6 +972,45 @@ public static class Use
                 "13",
                 "LongThrows",
                 "-1"
+            })
+    }
+
+    /// Review of e2069117b (#5571): a `foreach` binding with a non-identity conversion
+    /// records its nested declared positions, a rectangular array initializer flattens
+    /// its leaf elements for both flow and emission, and a promoted collection
+    /// expression coerces its elements against its promoted element contract.
+    @Fact
+    func Typed_ForEach_Range_Rectangular_Arrays_And_Collection_Coercion_Carry_Positions() {
+        this.Check("Review28", `using System.Collections.Generic;
+using System.Linq;
+using ObLib;
+
+public static class Use
+{
+    public static int ForEachRange(string p) { string[] lines; lines = Node.Holes(p); int n = 0; foreach (IEnumerable<string> row in new[] { lines }) { n += row.First().Length + (row.Last() == null ? 10 : 0); } return n; }
+    public static int GridInferred(string p) { string[] lines; lines = Node.Holes(p); var grid = new string[,] { { lines[0], lines[1] } }; var imp = new[,] { { lines[0], lines[1] } }; return grid[0, 0].Length + imp[0, 0].Length + (grid[0, 1] == null ? 10 : 0); }
+    public static int GridDeclared(string p) { string[] lines; lines = Node.Holes(p); string[,] grid; grid = new string[,] { { lines[0], lines[1] } }; return grid[0, 0].Length + (grid[0, 1] == null ? 10 : 0); }
+    public static int GridThrows(string p) { string[] lines; lines = Node.Holes(p); var grid = new string[,] { { lines[0], lines[1] } }; try { return grid[0, 1].Length; } catch (System.NullReferenceException) { return -1; } }
+    public static int CollectionCoercion(string p) { string[] lines; lines = Node.Holes(p); string? s = null; List<string> copy = [lines[0], s]; return copy[0].Length + (copy[1] == null ? 10 : 0); }
+}`, []string{
+                "for row IEnumerable[string?] in [][]string?{lines}",
+                "row.First()!!.Length",
+                "let grid = [1, 2]string?{lines[0], lines[1]}",
+                "return grid[0, 0]!!.Length + imp[0, 0]!!.Length + (if grid[0, 1] == nil { 10 } else { 0 })",
+                "var grid [,]string?",
+                "grid = [1, 2]string?{lines[0], lines[1]}",
+                "let copy List[string?] = List[string?]{ lines[0], s }"
+            }, []string{
+                "ForEachRange",
+                "12",
+                "GridInferred",
+                "14",
+                "GridDeclared",
+                "12",
+                "GridThrows",
+                "-1",
+                "CollectionCoercion",
+                "12"
             })
     }
 

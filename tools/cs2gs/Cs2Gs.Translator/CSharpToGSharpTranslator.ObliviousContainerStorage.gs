@@ -397,12 +397,7 @@ partial class CSharpToGSharpTranslator {
             if parent is InitializerExpressionSyntax arrayInitializer && arrayInitializer.IsKind(
                 SyntaxKind.ArrayInitializerExpression
             ) {
-                let enclosing ExpressionSyntax = if arrayInitializer.Parent is ArrayCreationExpressionSyntax ||
-                    arrayInitializer.Parent is ImplicitArrayCreationExpressionSyntax {
-                    cast[ExpressionSyntax](arrayInitializer.Parent)
-                } else {
-                    arrayInitializer
-                }
+                let enclosing ExpressionSyntax = EnclosingArrayLiteral(arrayInitializer, 1, activeModel)
                 SubtreeInto(this.ObliviousArrayLiteralPositions(enclosing, activeModel, activeFlow), "0", positions)
                 positions.Remove("")
                 return positions
@@ -872,28 +867,32 @@ partial class CSharpToGSharpTranslator {
         // Whether element [`index`](paramref) of a tuple literal goes into a slot
         // that is proven non-null: an element of a declared tuple local, field,
         // parameter or return, or a deconstruction target that is declared with a
-        // type or is existing storage. An implicitly typed (`var`) target, a nested
-        // tuple, a discard and a slot that the run widens are not proven.
+        // type or is existing storage. An implicitly typed (`var`) target, a discard
+        // and a slot that the run widens are not proven.
         private func TupleElementSlotProvesNonNull(tuple TupleExpressionSyntax, index int32) bool {
             let model = this.context.SemanticModel
+            let indices = List[int32]{index}
+            let rootTuple TupleExpressionSyntax = CollectTupleAncestors(tuple, indices)
             var storage ISymbol? = nil
             var slotType ITypeSymbol? = nil
-            var position = TupleElementPosition(index)
-            switch tuple.Parent {
+            var position = ""
+            for step in indices {
+                position = JoinPosition(position, TupleElementPosition(step))
+            }
+            switch rootTuple.Parent {
                 case EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declarator} {
                     storage = model.GetDeclaredSymbol(declarator)
                     if storage is ILocalSymbol local && IsImplicitlyTypedLocal(local) {
                         return false
                     }
-                    slotType = TupleElementType(StorageType(storage?.OriginalDefinition), index)
+                    slotType = NestedTupleElementType(StorageType(storage?.OriginalDefinition), indices)
                 }
-                case assignment is AssignmentExpressionSyntax when assignment.Right == tuple {
+                case assignment is AssignmentExpressionSyntax when assignment.Right == rootTuple {
                     if assignment.Left is TupleExpressionSyntax targets {
                         // A deconstruction writes each element into its own target.
-                        if index >= targets.Arguments.Count {
+                        if ResolveDeconstructedTupleTarget(targets, indices, 0) is not{} target {
                             return false
                         }
-                        let target = targets.Arguments[index].Expression
                         if target is not DeclarationExpressionSyntax declaration {
                             // Existing storage, an element or a member is the target of a
                             // plain store (`target = value`) and is decided as one.
@@ -915,20 +914,20 @@ partial class CSharpToGSharpTranslator {
                         return false
                     } else {
                         storage = model.GetSymbolInfo(assignment.Left).Symbol
-                        slotType = TupleElementType(StorageType(storage?.OriginalDefinition), index)
+                        slotType = NestedTupleElementType(StorageType(storage?.OriginalDefinition), indices)
                     }
                 }
                 case result is SyntaxNode when result is ReturnStatementSyntax ||
                     result is ArrowExpressionClauseSyntax {
-                    if !this.ResultSlotProvesNonNull(tuple) || model.GetEnclosingSymbol(
-                        tuple.SpanStart
+                    if !this.ResultSlotProvesNonNull(rootTuple) || model.GetEnclosingSymbol(
+                        rootTuple.SpanStart
                     ) is not IMethodSymbol method ||
                         method.IsAsync ||
                         method.MethodKind == MethodKind.AnonymousFunction {
                         return false
                     }
                     storage = AccessorStorage(method)
-                    slotType = TupleElementType(StorageType(storage?.OriginalDefinition), index)
+                    slotType = NestedTupleElementType(StorageType(storage?.OriginalDefinition), indices)
                 }
                 case argument is ArgumentSyntax {
                     let (parameter, prefix) = ArgumentDestination(argument, model)
@@ -936,7 +935,7 @@ partial class CSharpToGSharpTranslator {
                         return false
                     }
                     storage = parameter
-                    slotType = TupleElementType(parameter.OriginalDefinition.Type, index)
+                    slotType = NestedTupleElementType(parameter.OriginalDefinition.Type, indices)
                 }
                 default {
                     return false
@@ -2007,6 +2006,11 @@ partial class CSharpToGSharpTranslator {
                             WithoutTopLevel(source)
                         }
                         changed |= AddInferredPositions(flow, original, Filtered(destinationType, stored))
+                        if kind == 2 &&
+                            destination is ILocalSymbol loopLocal &&
+                            ForEachStatesRangeType(loopLocal, model) {
+                            changed |= AddDeclaredPositions(flow, original, destinationType, stored)
+                        }
                         // Arms that give different positions have no common G# type,
                         // so the local states the merged type and each arm converts to it.
                         if kind == 1 && this.MergedArmsDiffer(value, model, flow) {
@@ -2156,7 +2160,7 @@ partial class CSharpToGSharpTranslator {
                     default: default(InitializerExpressionSyntax?)
                 }
                 if initializer != nil {
-                    for item in initializer.Expressions {
+                    for item in ArrayInitializerLeaves(initializer, destinationType) {
                         literalChanged |= this.AddAliasedSourcePositions(
                             flow,
                             item,
@@ -2370,7 +2374,7 @@ partial class CSharpToGSharpTranslator {
             }
             let positions = ObliviousPositionSet()
             if initializer != nil {
-                for element in initializer.Expressions {
+                for element in ArrayInitializerLeaves(initializer, literalType) {
                     this.AddLiteralElementPositions(element, false, model, flow, positions)
                 }
             }
@@ -2517,20 +2521,29 @@ partial class CSharpToGSharpTranslator {
             }
 
             // The generic definition of a member: an extension method's unreduced form,
-            // a setter or init accessor's implicit `value` parameter mapped to its
-            // property, and a named tuple element's `ItemN` field.
-            private func UnreducedDefinition(symbol ISymbol) ISymbol -> if symbol is IMethodSymbol method {
-                method.ReducedFrom?.OriginalDefinition ?? method.OriginalDefinition
-            } else if symbol is IParameterSymbol parameter &&
-                parameter.IsImplicitlyDeclared &&
-                parameter.ContainingSymbol is IMethodSymbol setter &&
-                setter.MethodKind == MethodKind.PropertySet &&
-                setter.AssociatedSymbol is IPropertySymbol property {
-                property.OriginalDefinition
-            } else if symbol is IFieldSymbol{CorrespondingTupleField: {} tupleField} {
-                tupleField.OriginalDefinition
-            } else {
-                symbol.OriginalDefinition
+            // an indexer accessor's implicit key parameter mapped to the property's
+            // parameter, a setter or init accessor's implicit `value` parameter mapped
+            // to its property, and a named tuple element's `ItemN` field.
+            private func UnreducedDefinition(symbol ISymbol) ISymbol {
+                if symbol is IMethodSymbol method {
+                    return method.ReducedFrom?.OriginalDefinition ?? method.OriginalDefinition
+                }
+                if symbol is IParameterSymbol parameter &&
+                    parameter.IsImplicitlyDeclared &&
+                    parameter.ContainingSymbol is IMethodSymbol accessor &&
+                    accessor.AssociatedSymbol is IPropertySymbol property {
+                    let parameters = property.OriginalDefinition.Parameters
+                    if parameter.Ordinal < parameters.Length {
+                        return parameters[parameter.Ordinal]
+                    }
+                    if accessor.MethodKind == MethodKind.PropertySet {
+                        return property.OriginalDefinition
+                    }
+                }
+                if symbol is IFieldSymbol{CorrespondingTupleField: {} tupleField} {
+                    return tupleField.OriginalDefinition
+                }
+                return symbol.OriginalDefinition
             }
 
             private func TypeParameterMap() Dictionary[ITypeParameterSymbol, ObliviousPositionSet] -> Dictionary[
@@ -2699,6 +2712,119 @@ partial class CSharpToGSharpTranslator {
                 tupleType.TupleElements[index].Type
             } else {
                 nil
+            }
+
+            // The type at the nested tuple element path [`indices`](paramref), or nil.
+            private func NestedTupleElementType(type ITypeSymbol?, indices List[int32]) ITypeSymbol? {
+                var current ITypeSymbol? = type
+                for step in indices {
+                    current = TupleElementType(current, step)
+                    if current == nil {
+                        return nil
+                    }
+                }
+                return current
+            }
+
+            // The target expression at the nested tuple element path [`indices`](paramref),
+            // or nil.
+            private func ResolveDeconstructedTupleTarget(
+                target ExpressionSyntax,
+                indices List[int32],
+                depth int32
+            ) ExpressionSyntax? {
+                if depth >= indices.Count {
+                    return target
+                }
+                if target is not TupleExpressionSyntax tupleTargets {
+                    return nil
+                }
+                let arguments = tupleTargets.Arguments
+                let step = indices[depth]
+                if step < 0 || step >= arguments.Count {
+                    return nil
+                }
+                return ResolveDeconstructedTupleTarget(arguments[step].Expression, indices, depth + 1)
+            }
+
+            private func CollectTupleAncestors(tuple TupleExpressionSyntax, indices List[int32]) TupleExpressionSyntax {
+                if tuple.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax outerTuple} outerArgument {
+                    indices.Insert(0, outerTuple.Arguments.IndexOf(outerArgument))
+                    return CollectTupleAncestors(outerTuple, indices)
+                }
+                return tuple
+            }
+
+            private func EnclosingArrayLiteral(
+                initializer InitializerExpressionSyntax,
+                depth int32,
+                model SemanticModel
+            ) ExpressionSyntax {
+                if initializer.Parent is InitializerExpressionSyntax outerInitializer && outerInitializer.IsKind(
+                    SyntaxKind.ArrayInitializerExpression
+                ) {
+                    var outerEnclosing ExpressionSyntax = outerInitializer
+                    if outerInitializer.Parent is ArrayCreationExpressionSyntax ||
+                        outerInitializer.Parent is ImplicitArrayCreationExpressionSyntax {
+                        outerEnclosing = cast[ExpressionSyntax](outerInitializer.Parent)
+                    }
+                    if ElementLiteralType(outerEnclosing, model) is IArrayTypeSymbol outerArray &&
+                        outerArray.Rank > depth {
+                        return EnclosingArrayLiteral(outerInitializer, depth + 1, model)
+                    }
+                }
+                if initializer.Parent is ArrayCreationExpressionSyntax ||
+                    initializer.Parent is ImplicitArrayCreationExpressionSyntax {
+                    return cast[ExpressionSyntax](initializer.Parent)
+                }
+                return initializer
+            }
+
+            // The scalar leaf expressions of an array initializer, flattened across all
+            // dimensions of a rectangular array.
+            private func ArrayInitializerLeaves(
+                initializer InitializerExpressionSyntax,
+                arrayOrCollectionType ITypeSymbol?
+            ) List[ExpressionSyntax] {
+                let rank = if arrayOrCollectionType is IArrayTypeSymbol arrayType && arrayType.Rank > 1 {
+                    arrayType.Rank
+                } else {
+                    1
+                }
+                let leaves = List[ExpressionSyntax]()
+                CollectArrayInitializerLeaves(initializer, 0, rank, leaves)
+                return leaves
+            }
+
+            private func CollectArrayInitializerLeaves(
+                initializer InitializerExpressionSyntax,
+                level int32,
+                rank int32,
+                leaves List[ExpressionSyntax]
+            ) {
+                if level + 1 >= rank {
+                    for expression in initializer.Expressions {
+                        leaves.Add(expression)
+                    }
+                    return
+                }
+                for child in initializer.Expressions {
+                    if child is InitializerExpressionSyntax childInitializer {
+                        CollectArrayInitializerLeaves(childInitializer, level + 1, rank, leaves)
+                    }
+                }
+            }
+
+            // Whether a `foreach` statement emits an explicit range type for its loop
+            // variable (`!forEach.Type.IsVar && !forEachInfo.ElementConversion.IsIdentity`).
+            private func ForEachStatesRangeType(local ILocalSymbol, model SemanticModel) bool {
+                for reference in local.DeclaringSyntaxReferences {
+                    if reference.GetSyntax() is ForEachStatementSyntax forEach {
+                        let forEachInfo = model.GetForEachStatementInfo(forEach)
+                        return !forEach.Type.IsVar && !forEachInfo.ElementConversion.IsIdentity
+                    }
+                }
+                return false
             }
 
             // Issue #5541: an array literal (explicit, implicit or a bare array

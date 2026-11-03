@@ -3018,7 +3018,8 @@ partial class CSharpToGSharpTranslator {
                     let leafElementType GTypeReference? = this.PromoteElementTypeForNullElements(
                         elementType,
                         elementTypeSymbol,
-                        leaves
+                        leaves,
+                        creation
                     )
                     let leafAcceptsNil = leafElementType!!.IsNullable
                     return ArrayAllocationExpression(
@@ -3034,6 +3035,7 @@ partial class CSharpToGSharpTranslator {
                             .ToList()
                     )
                 }
+                elementType = this.PromoteObliviousArrayElement(elementType, elementTypeSymbol, creation)
                 return ArrayAllocationExpression(
                     elementType,
                     creation
@@ -4190,11 +4192,16 @@ partial class CSharpToGSharpTranslator {
                                 elementTypeSymbol ??
                                 operationElementType
                         }
-                        let boundElementRef GTypeReference? = if boundElementType != nil {
+                        var boundElementRef GTypeReference? = if boundElementType != nil {
                             this.typeMapper.Map(boundElementType, this.context, element.GetLocation())
                         } else {
                             elementType
                         }
+                        boundElementRef = this.PromoteObliviousArrayElement(
+                            boundElementRef,
+                            boundElementType,
+                            collection
+                        )
                         initElements.Add(
                             CollectionInitializerElement(
                                 this.CoerceCollectionElement(
@@ -4295,6 +4302,14 @@ partial class CSharpToGSharpTranslator {
             elementType GTypeReference?,
             targetElementSymbol ITypeSymbol?
         ) GExpression? {
+            var targetElementSymbol = targetElementSymbol
+            if elementType?.IsNullable == true &&
+                targetElementSymbol != nil &&
+                targetElementSymbol.IsReferenceType == true {
+                targetElementSymbol = targetElementSymbol.WithNullableAnnotation(
+                    Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                )
+            }
             if targetElementSymbol != nil {
                 this.state.CollectionElementSlots[element] = targetElementSymbol
             }
@@ -4322,7 +4337,8 @@ partial class CSharpToGSharpTranslator {
                 reportedSlotType: targetElementSymbol
             )
             translated = this.AssertFlowNarrowedNullableReference(element, translated, elementType)
-            if IsNullOrSuppressedNull(element) &&
+            if elementType?.IsNullable != true &&
+                IsNullOrSuppressedNull(element) &&
                 targetElementSymbol?.IsReferenceType == true &&
                 targetElementSymbol!!.NullableAnnotation != Microsoft
                 .CodeAnalysis
@@ -4332,7 +4348,9 @@ partial class CSharpToGSharpTranslator {
                 // the target's static type and the nil value without `!!`.
                 return DefaultValueExpression(elementType)
             }
-            if !IsNullOrSuppressedNull(element) && !this.IsWithinExpressionTreeLambda(element) &&
+            if elementType?.IsNullable != true &&
+                !IsNullOrSuppressedNull(element) &&
+                !this.IsWithinExpressionTreeLambda(element) &&
                 targetElementSymbol?.IsReferenceType == true &&
                 targetElementSymbol!!.NullableAnnotation != Microsoft
                 .CodeAnalysis
