@@ -3909,7 +3909,8 @@ partial class CSharpToGSharpTranslator {
 
         /// Issue #5582: whether the emitted G# value of [`expression`](paramref) can be nil although its C#
         /// type is non-null. A dropped by-ref suppression (`Volatile.Read(ref cache!)`, issue #4287), a
-        /// widened managed-reference array element and an imported generic tuple element are such values.
+        /// by-ref argument of widened storage, a widened managed-reference array element and an imported
+        /// generic tuple element are such values.
         /// The receiver bridge asserts each of them. (cref:GSharpExpressionIsStaticallyNonNull) asks it for each
         /// operand, so a `var` capture of such a value, or of a composed value with such an operand, is `T?`.
         private func EmittedValueIsNilableBeyondItsCSharpType(
@@ -3917,15 +3918,14 @@ partial class CSharpToGSharpTranslator {
         ) bool -> this.GenericResultInfersNilableThroughDroppedByRefSuppression(expression) ||
             this.ManagedReferenceArrayWidenedExpressionMayBeNull(expression) ||
             this.ImportedGenericTupleElementRequiresAssertion(expression) ||
-            this.GenericResultInfersNilableFromItsArgument(expression)
+            this.GenericResultInfersNilableThroughWidenedByRefArgument(expression)
 
-        // Issue #5582: a call whose result is its own method type parameter, without explicit type arguments.
-        // G# infers that parameter from the emitted arguments whose parameter types mention it: a `T` argument,
-        // an expanded `params T[]` element, the result of a `Func<T>` lambda, an element of a `T[]` or
-        // `IEnumerable<T>` argument, and the receiver of a reduced `this T` extension. When a value in such an
-        // argument is `T?` only in G#, the emitted result can be `T?`, although C# infers it non-null. The
-        // query fails closed: any such value in the argument counts, so the capture keeps its bridge.
-        private func GenericResultInfersNilableFromItsArgument(
+        // Issue #5582: a generic call whose result is its own method type parameter, without explicit type
+        // arguments, with a by-reference argument for that parameter whose storage cs2gs widens (an
+        // `[AllowNull]` field, for example). G# infers the type argument from the emitted `T?` storage, so
+        // the result is `T?`, although C# infers it from the declared non-null type. Other generic flows are
+        // not projected; a capture over them keeps its previous translation (#5656).
+        private func GenericResultInfersNilableThroughWidenedByRefArgument(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
         ) bool {
             if Unparenthesize(expression) is not InvocationExpressionSyntax invocation ||
@@ -3935,213 +3935,36 @@ partial class CSharpToGSharpTranslator {
                 .Symbol is not IMethodSymbol method ||
                 !method.IsGenericMethod ||
                 method
-                .ReturnType
-                .IsReferenceType != true {
-                return false
-            }
-            var callee = invocation.Expression
-            if callee is MemberAccessExpressionSyntax calleeAccess {
-                callee = calleeAccess.Name
-            } else if callee is MemberBindingExpressionSyntax calleeBinding {
-                callee = calleeBinding.Name
-            }
-            if callee is GenericNameSyntax {
-                return false
-            }
-            let definition = (method.ReducedFrom ?? method).OriginalDefinition
-            if definition.ReturnType is not ITypeParameterSymbol returnParameter ||
+                .OriginalDefinition
+                .ReturnType is not ITypeParameterSymbol returnParameter ||
                 returnParameter.TypeParameterKind != TypeParameterKind.Method {
                 return false
             }
-            if method.ReducedFrom != nil && definition.Parameters.Length > 0 && this.TypeMentionsTypeParameter(
-                definition.Parameters[0].Type,
-                returnParameter
-            ) &&
-                invocation.Expression is MemberAccessExpressionSyntax receiverAccess &&
-                this.FlowsValueNilableOnlyInEmittedGSharp(receiverAccess.Expression) {
-                return true
-            }
-            let offset = if method.ReducedFrom != nil {
-                1
-            } else {
-                0
-            }
             for argument in invocation.ArgumentList.Arguments {
-                let parameter IParameterSymbol? = DetermineParameter(argument, this.context)
-                if parameter == nil {
+                if argument
+                    .RefKindKeyword
+                    .RawKind == 0 ||
+                    this
+                    .context
+                    .GetSymbolInfo(argument.Expression)
+                    .Symbol is not{} storage ||
+                    !this.IsTranslatorWidenedDeclaration(storage) {
                     continue
                 }
-                let ordinal = parameter.Ordinal + offset
-                if ordinal < definition.Parameters.Length && this.TypeMentionsTypeParameter(
-                    definition.Parameters[ordinal].Type,
-                    returnParameter
-                ) &&
-                    this.FlowsValueNilableOnlyInEmittedGSharp(argument.Expression) {
-                    return true
-                }
-            }
-            return false
-        }
-
-        // Issue #5582: whether a value that is `T?` only in G# can flow into the value of `expression`: through
-        // a generic call that infers its result (an argument, a lambda result, an array element, an extension
-        // receiver), a member whose type follows its receiver's type arguments (`task.Result`, `box.Value`,
-        // `list[i]`), `await`, or a composed value. The search fails closed: it does not decide which
-        // argument supplies a type parameter.
-        private func FlowsValueNilableOnlyInEmittedGSharp(
-            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
-        ) bool {
-            if expression == nil {
-                return false
-            }
-            if this.IsNilableOnlyInEmittedGSharp(expression) {
-                return true
-            }
-            switch expression {
-                case parenthesized is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax {
-                    return this.FlowsValueNilableOnlyInEmittedGSharp(parenthesized.Expression)
-                }
-                case conditional is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax {
-                    return this.FlowsValueNilableOnlyInEmittedGSharp(conditional.WhenTrue) ||
-                        this.FlowsValueNilableOnlyInEmittedGSharp(conditional.WhenFalse)
-                }
-                case switchExpression is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax {
-                    // The governing expression is matched, not returned.
-                    for arm in switchExpression.Arms {
-                        if this.FlowsValueNilableOnlyInEmittedGSharp(arm.Expression) {
-                            return true
-                        }
-                    }
-                    return false
-                }
-                case coalesce is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when coalesce.IsKind(
-                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
-                ) {
-                    // `??` removes the nil of its left operand.
-                    return this.FlowsValueNilableOnlyInEmittedGSharp(coalesce.Right)
-                }
-                case awaited is Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax {
-                    return this.FlowsValueNilableOnlyInEmittedGSharp(awaited.Expression)
-                }
-                case lambda is AnonymousFunctionExpressionSyntax {
-                    return GetLambdaResultExpressions(lambda).Any(
-                        (
-                            result Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
-                        ) -> this.FlowsValueNilableOnlyInEmittedGSharp(result)
-                    )
-                }
-                case array is Microsoft.CodeAnalysis.CSharp.Syntax.ArrayCreationExpressionSyntax {
-                    return array.Initializer is {} initializer && this.AnyFlowsValueNilableOnlyInEmittedGSharp(
-                        initializer.Expressions
-                    )
-                }
-                case implicitArray is ImplicitArrayCreationExpressionSyntax {
-                    return this.AnyFlowsValueNilableOnlyInEmittedGSharp(implicitArray.Initializer.Expressions)
-                }
-                case collection is Microsoft.CodeAnalysis.CSharp.Syntax.CollectionExpressionSyntax {
-                    return collection
-                        .Elements
-                        .OfType[ExpressionElementSyntax]()
-                        .Any(
-                        (element ExpressionElementSyntax) -> this.FlowsValueNilableOnlyInEmittedGSharp(
-                            element.Expression
-                        )
-                    )
-                }
-                case access is MemberAccessExpressionSyntax {
-                    return this.MemberTypeFollowsItsReceiver(this.context.GetSymbolInfo(access).Symbol) &&
-                        this.FlowsValueNilableOnlyInEmittedGSharp(access.Expression)
-                }
-                case element is ElementAccessExpressionSyntax {
-                    return this.MemberTypeFollowsItsReceiver(this.context.GetSymbolInfo(element).Symbol) &&
-                        this.FlowsValueNilableOnlyInEmittedGSharp(element.Expression)
-                }
-                case invocation is InvocationExpressionSyntax {
-                    return this.InvocationResultFlowsValueNilableOnlyInEmittedGSharp(invocation)
-                }
-                default {
-                    return false
-                }
-            }
-        }
-
-        // A call's result follows only the inputs that supply a type parameter its declared result mentions:
-        // an argument whose parameter type mentions such a method type parameter, the receiver of a reduced
-        // extension whose `this` parameter does, and the receiver when the result mentions a type parameter of
-        // the containing type (`box.Get()`, `awaiter.GetResult()`).
-        private func InvocationResultFlowsValueNilableOnlyInEmittedGSharp(invocation InvocationExpressionSyntax) bool {
-            if this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method {
-                return false
-            }
-            let definition = (method.ReducedFrom ?? method).OriginalDefinition
-            let resultType = definition.ReturnType
-            let receiver Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .ExpressionSyntax? = if invocation.Expression is MemberAccessExpressionSyntax callee {
-                callee.Expression
-            } else {
-                default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
-            }
-            if receiver != nil &&
-                definition
-                .ContainingType
-                .TypeParameters
-                .Any((parameter ITypeParameterSymbol) -> this.TypeMentionsTypeParameter(resultType, parameter)) &&
-                this.FlowsValueNilableOnlyInEmittedGSharp(receiver) {
-                return true
-            }
-            if !method.IsGenericMethod || !this.InvocationInfersItsResultType(invocation) {
-                return false
-            }
-            let supplied = definition
-                .TypeParameters
-                .Where((parameter ITypeParameterSymbol) -> this.TypeMentionsTypeParameter(resultType, parameter))
-                .ToList()
-            let SuppliesResult = func (declared ITypeSymbol) bool {
-                return supplied.Any(
-                    (parameter ITypeParameterSymbol) -> this.TypeMentionsTypeParameter(declared, parameter)
-                )
-            }
-            if method.ReducedFrom != nil &&
-                definition
-                .Parameters
-                .Length > 0 &&
-                SuppliesResult(definition.Parameters[0].Type) &&
-                this.FlowsValueNilableOnlyInEmittedGSharp(receiver) {
-                return true
-            }
-            let offset = if method.ReducedFrom != nil {
-                1
-            } else {
-                0
-            }
-            for argument in invocation.ArgumentList.Arguments {
                 let parameter IParameterSymbol? = DetermineParameter(argument, this.context)
-                if parameter == nil {
-                    continue
-                }
-                let ordinal = parameter.Ordinal + offset
-                if ordinal < definition
+                if parameter != nil &&
+                    parameter.Ordinal < method
+                    .OriginalDefinition
                     .Parameters
                     .Length &&
-                    SuppliesResult(definition.Parameters[ordinal].Type) &&
-                    this.FlowsValueNilableOnlyInEmittedGSharp(argument.Expression) {
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(method.OriginalDefinition.Parameters[parameter.Ordinal].Type, returnParameter) {
                     return true
                 }
             }
             return false
         }
-
-        private func AnyFlowsValueNilableOnlyInEmittedGSharp(
-            expressions IEnumerable[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]
-        ) bool -> expressions
-            .Any(
-            (
-                candidate Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
-            ) -> this.FlowsValueNilableOnlyInEmittedGSharp(candidate)
-        )
 
         // Issue #5582: whether `expression` mentions anywhere (an operand, an argument, a lambda body at any
         // depth, the initializer of a local that it reads, or the scrutinee of a pattern variable that it reads)
@@ -4189,22 +4012,6 @@ partial class CSharpToGSharpTranslator {
             return answer
         }
 
-        // A generic call without type arguments whose result type mentions one of its method type parameters.
-        private func InvocationInfersItsResultType(invocation InvocationExpressionSyntax) bool {
-            if this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method || !method.IsGenericMethod {
-                return false
-            }
-            var callee = invocation.Expression
-            if callee is MemberAccessExpressionSyntax calleeAccess {
-                callee = calleeAccess.Name
-            } else if callee is MemberBindingExpressionSyntax calleeBinding {
-                callee = calleeBinding.Name
-            }
-            return !(callee is GenericNameSyntax) && this.TypeMentionsAnyTypeParameter(
-                (method.ReducedFrom ?? method).OriginalDefinition.ReturnType
-            )
-        }
-
         // A field, property or indexer whose declared type mentions a type parameter of its containing type, or
         // a reduced extension whose `this` parameter mentions a method type parameter.
         private func MemberTypeFollowsItsReceiver(member ISymbol?) bool -> switch member {
@@ -4222,18 +4029,6 @@ partial class CSharpToGSharpTranslator {
             case array is IArrayTypeSymbol: this.TypeMentionsAnyTypeParameter(array.ElementType)
             case named is INamedTypeSymbol: named.TypeArguments.Any(
                 (argument ITypeSymbol) -> this.TypeMentionsAnyTypeParameter(argument)
-            )
-            default: false
-        }
-
-        // Whether `type` is `parameter` or contains it as an array element or a type argument (`T[]`,
-        // `Func<T>`, `IEnumerable<T>`).
-        private func TypeMentionsTypeParameter(type ITypeSymbol?, parameter ITypeParameterSymbol) bool ->
-        switch type {
-            case typeParameter is ITypeParameterSymbol: SymbolEqualityComparer.Default.Equals(typeParameter, parameter)
-            case array is IArrayTypeSymbol: this.TypeMentionsTypeParameter(array.ElementType, parameter)
-            case named is INamedTypeSymbol: named.TypeArguments.Any(
-                (argument ITypeSymbol) -> this.TypeMentionsTypeParameter(argument, parameter)
             )
             default: false
         }

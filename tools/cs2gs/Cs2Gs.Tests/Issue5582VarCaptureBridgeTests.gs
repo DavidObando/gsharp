@@ -325,8 +325,9 @@ namespace Demo
 
     /// G# infers a generic result from the arguments that supply it. `Id(Volatile.Read(ref cache!))`,
     /// `First(Volatile.Read(ref cache!))` (`params T[]`), `Get(() => Volatile.Read(ref cache!))` (`Func<T>`)
-    /// and `cache.Echo()` over a capture are `Dictionary?` in G#, so a capture of each keeps its `!!` in the
-    /// switch-arm, `case` and `is` forms.
+    /// and `cache.Echo()` over a capture are `Dictionary?` in G#. The capture decision does not project
+    /// generic inference, so each switch-arm and `case` capture keeps its translation from `main`, with `!!`.
+    /// The `is var` form keeps `main`'s unbridged read (#5656).
     @Fact
     func AVarCaptureOfAnInferredGenericResult_KeepsItsAssertion() {
         let printed = Translate(`
@@ -350,7 +351,6 @@ namespace Demo
                 case var c: return c.Count;
             }
         }
-        static int Is() => Id(Volatile.Read(ref cache!)) is var c ? c.Count : -1;
         static int Receiver() => Volatile.Read(ref cache!) is var c ? c.Echo() switch { var e => e.Count } : -1;
         static int ParamsArm() => First(Volatile.Read(ref cache!)) switch { var p => p.Count };
         static int ParamsCase()
@@ -369,19 +369,18 @@ namespace Demo
             }
         }
         public static string Run() =>
-            Arm() + " " + Case() + " " + Is() + " " + Receiver() + " " + ParamsArm() + " " + ParamsCase() + " " +
-            CallbackArm() + " " + CallbackCase();
+            Arm() + " " + Case() + " " + Receiver() + " " + ParamsArm() + " " + ParamsCase() + " " + CallbackArm() + " " +
+            CallbackCase();
     }
 }`)
         Assert.Contains("case var c: c!!.Count", printed)
         Assert.Contains("return c!!.Count", printed)
-        Assert.Contains("is var c { c!!.Count }", printed)
         Assert.Contains("case var e: e!!.Count", printed)
         Assert.Contains("case var p: p!!.Count", printed)
         Assert.Contains("return q!!.Count", printed)
         Assert.Contains("case var f: f!!.Count", printed)
         Assert.Contains("return g!!.Count", printed)
-        RunsAs(printed, "1 1 1 1 1 1 1 1")
+        RunsAs(printed, "1 1 1 1 1 1 1")
     }
 
     /// With #5601's slot query: a capture of an `[AllowNull]` field typed by an unconstrained `T` has the
@@ -549,10 +548,10 @@ namespace Demo
         RunsAs(printed, "taken taken")
     }
 
-    /// A call's result follows only the inputs that supply a type parameter its declared result mentions. A
-    /// value that is `T?` only in G# passed to another parameter (`Second(Volatile.Read(ref cache!), node)`,
-    /// `Name<T>(T)` returning `Node`) does not make the result `T?`, so an `is var` capture passes a null
-    /// `Node` on.
+    /// A value that is `T?` only in G# passed to a generic call does not make the call's result `T?` for the
+    /// capture decision: G# can infer the result from another input (`Second(Volatile.Read(ref cache!), node)`,
+    /// `Keep(callback, node)`, `Pick<T>(T? ignored, T value)`, `Name<T>(T)` returning `Node`). The capture
+    /// keeps `main`'s translation, so an `is var` capture passes a null `Node` on.
     @Fact
     func AVarCaptureOfAResultThatDoesNotFollowTheInput_PassesTheNullOn() {
         let printed = Translate(`
@@ -569,15 +568,54 @@ namespace Demo
         static T Id<T>(T x) => x;
         static U Second<T, U>(T first, U second) => second;
         static Node Name<T>(T x) => new Holder(null!).Child;
+        static T Keep<T, U>(System.Func<T, U> f, T x) => x;
+        static T Pick<T>(T? ignored, T value) where T : class => value;
         static string PairIs() =>
             Id(Second(Volatile.Read(ref cache!), new Holder(null!).Child)) is var c ? new Sink().Take(c) : "none";
         static string NameIs() => Name(Volatile.Read(ref cache!)) is var d ? new Sink().Take(d) : "none";
-        public static string Run() => PairIs() + " " + NameIs();
+        static string KeepIs() =>
+            Keep((Node _) => Volatile.Read(ref cache!), new Holder(null!).Child) is var k ? new Sink().Take(k) : "none";
+        static string PickIs() => Pick(Volatile.Read(ref cache!), new Holder(null!).Child) is var q ? new Sink().Take(q) : "none";
+        public static string Run() => PairIs() + " " + NameIs() + " " + KeepIs() + " " + PickIs();
     }
 }`)
         Assert.Contains("is var c { Sink().Take(c) }", printed)
         Assert.Contains("is var d { Sink().Take(d) }", printed)
-        RunsAs(printed, "taken taken")
+        Assert.Contains("is var k { Sink().Take(k) }", printed)
+        Assert.Contains("is var q { Sink().Take(q) }", printed)
+        RunsAs(printed, "taken taken taken taken")
+    }
+
+    /// G# infers `Volatile.Read(ref h.Value)` from the emitted storage of `h.Value`, which `[AllowNull]` widens
+    /// to `Node?`. The result is `T?` in G#, although no suppression was dropped, so a switch-arm and a
+    /// `case` capture keep their `!!`.
+    @Fact
+    func AVarCaptureOfAByRefReadOfWidenedStorage_KeepsItsAssertion() {
+        let printed = Translate(`
+#nullable enable
+using System.Diagnostics.CodeAnalysis;
+using System.Threading;
+namespace Demo
+{
+    public class Node { public string Name => "node"; }
+    public class Holder { [AllowNull] public Node Value = new Node(); }
+    public static class P
+    {
+        static string Arm(Holder h) => Volatile.Read(ref h.Value) switch { var c => c.Name };
+        static string Case(Holder h)
+        {
+            switch (Volatile.Read(ref h.Value))
+            {
+                case var d: return d.Name;
+            }
+        }
+        public static string Run() => Arm(new Holder()) + " " + Case(new Holder());
+    }
+}`)
+        Assert.Contains("var Value Node?", printed)
+        Assert.Contains("case var c: c!!.Name", printed)
+        Assert.Contains("return d!!.Name", printed)
+        RunsAs(printed, "node node")
     }
 
     /// The capture query records each expression it decides, so a nest of 24 generic calls over a non-null
