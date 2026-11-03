@@ -614,18 +614,100 @@ namespace Demo
             return "skipped/" + matched;
         }
 
+        public sealed class Box
+        {
+            public string Name { get; set; }
+        }
+
+        public static string NestedPropertyPatternInHoistedLoop(Box box)
+        {
+            step = 0;
+            while (Next(out string x) && box is { Name: string name })
+            {
+                x = null;
+                return RequireNonNull(name) + ":" + (x ?? "nil");
+            }
+
+            return "no-match";
+        }
+
+        private static void ThrowIncrementor() => throw new InvalidOperationException("inc");
+
+        public static string ForContinueTryCatchDoesNotCatchIncrementorException()
+        {
+            step = 0;
+            try
+            {
+                for (; Next(out string value); ThrowIncrementor())
+                {
+                    value = null;
+                    try
+                    {
+                        continue;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        return "caught";
+                    }
+                }
+            }
+            catch (InvalidOperationException ex)
+            {
+                return ex.Message;
+            }
+
+            return "missed";
+        }
+
+        public static string ForContinueUsingDisposesBeforeIncrementor()
+        {
+            step = 0;
+            var log = new List<string>();
+            for (; Next(out string value); _ = LogCond(log, out string inc) && (inc = null) == null)
+            {
+                value = null;
+                using (new ScopeTracker(log))
+                {
+                    if (step == 1)
+                    {
+                        continue;
+                    }
+                }
+            }
+
+            return string.Join(">", log);
+        }
+
+        public static bool GenericTypeParameterPatternInHoistedLoop<T>(T value)
+        {
+            step = 0;
+            while (Next(out string x) && value is T y)
+            {
+                x = null;
+                return y != null;
+            }
+
+            return false;
+        }
+
         public static string MainEntry() =>
             DoContinueTryCatchDoesNotCatchConditionException() + "|" +
             DoContinueUsingDisposesBeforeCondition() + "|" +
             DoContinuePreservesCatchFilter() + "|" +
             DoContinueInsideSwitchExitsLoop() + "|" +
-            HoistedPatternChecksPromotedNullability();
+            HoistedPatternChecksPromotedNullability() + "|" +
+            NestedPropertyPatternInHoistedLoop(new Box { Name = "ok" }) + ":" +
+            NestedPropertyPatternInHoistedLoop(new Box { Name = null }) + "|" +
+            ForContinueTryCatchDoesNotCatchIncrementorException() + "|" +
+            ForContinueUsingDisposesBeforeIncrementor() + "|" +
+            GenericTypeParameterPatternInHoistedLoop<string>(null) + ":" +
+            GenericTypeParameterPatternInHoistedLoop<string>("hi");
     }
 }`)
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "System.Console.WriteLine(Demo.C.MainEntry())",
-            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil"
+            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil|OK:nil:no-match|inc|enter>dispose>cond:2|False:True"
         )
     }
 
