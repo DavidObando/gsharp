@@ -258,6 +258,7 @@ class PropertySymbol : Symbol {
             IsIndexer = IsIndexer,
             Parameters = parameters,
             BackingField = BackingField,
+            BackingFieldDeclaringType = BackingFieldDeclaringType,
             GetterSymbol = GetterSymbol,
             SetterSymbol = SetterSymbol,
             OverriddenProperty = OverriddenProperty,

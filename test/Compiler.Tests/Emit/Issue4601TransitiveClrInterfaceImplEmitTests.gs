@@ -354,6 +354,20 @@ open class Base[T] {
 class Impl : Base[Shape], IFProp[Shape] {
 }
 
+data class GenericImpl[T] : Base[T], IFProp[T] {
+    var Extra int32
+    var Extra2 int32
+}
+
+data struct Pair[T] : IFProp[T] {
+    var Value T
+    var Count int32
+}
+
+func BumpShape(ref s Shape) {
+    s = Shape{Tag: s.Tag + 10}
+}
+
 Console.WriteLine(Probe.F[Shape](W2(), Shape{Tag: 4}))
 let wp = WProp()
 Console.WriteLine(Probe.GetValue[Shape](wp).Tag)
@@ -365,7 +379,12 @@ let impl = Impl()
 impl.SetFromBase(Shape{Tag: 33})
 Console.WriteLine(Probe.GetValue[Shape](impl).Tag)
 Probe.SetValue[Shape](impl, Shape{Tag: 44})
-Console.WriteLine(impl.GetFromBase().Tag)`, []string{"5", "9", "12", "33", "44"}}
+Console.WriteLine(impl.GetFromBase().Tag)
+BumpShape(ref impl.Value)
+Console.WriteLine(Probe.GetValue[Shape](impl).Tag)
+let (extra, extra2) = GenericImpl[Shape]{Extra: 7, Extra2: 8}
+let (pairVal, pairCount) = Pair[Shape]{Value: Shape{Tag: 21}, Count: 22}
+Console.WriteLine(extra + extra2 + pairVal.Tag + pairCount)`, []string{"5", "9", "12", "33", "44", "54", "58"}}
         }
 
         /// Neighbours whose dispatch was already right and must stay so.

@@ -32,10 +32,16 @@ shared class TypeMemberModel {
         }
         var selected PropertySymbol? = nil
         for owner in GetHierarchy(type) {
+            let definitionField = owner.GetDefinitionField(field) ?? field
             for property in owner.Properties {
-                if !property.IsAutoProperty || property.IsStatic || property.IsIndexer || !object.ReferenceEquals(
-                    property.BackingField,
-                    field
+                if !property.IsAutoProperty ||
+                    property.IsStatic ||
+                    property.IsIndexer ||
+                    (
+                    !object.ReferenceEquals(property.BackingField, field) && !object.ReferenceEquals(
+                        property.BackingField,
+                        definitionField
+                    )
                 ) {
                     continue
                 }
@@ -73,6 +79,7 @@ shared class TypeMemberModel {
             }
             return members.ToImmutable()
         }
+        let declaredFields = (type.Definition ?? type).Fields
         for field in type.Fields {
             members.Add(field)
         }
@@ -80,7 +87,7 @@ shared class TypeMemberModel {
             if !property.IsStatic && !property.IsIndexer && property.BackingField != nil && property.OwnsBackingField(
                 type
             ) &&
-                !members.Contains(property.BackingField!!) {
+                !members.Contains(property.BackingField!!) && !declaredFields.Contains(property.BackingField!!) {
                 members.Add(property)
             }
         }
