@@ -770,10 +770,7 @@ internal class InterfaceImplEmitter {
             let bridgeParameters = ImmutableArray.CreateBuilder[ParameterSymbol](parameterCount)
             for parameter in bridge.Property.Parameters {
                 bridgeParameters.Add(
-                    ParameterSymbol(
-                        parameter.Name,
-                        DeclarationBinder.GetInterfacePropertySlotType(parameter.Type, typeMap)
-                    )
+                    ParameterSymbol(parameter, DeclarationBinder.GetInterfacePropertySlotType(parameter.Type, typeMap))
                 )
             }
             if bridge.IsSetter {
@@ -789,6 +786,11 @@ internal class InterfaceImplEmitter {
                 RefKind.None,
                 bridgeParameters.MoveToImmutable()
             )
+            for var i = 0; i < bridgeRows.Rows.Length; i++ {
+                if bridgeRows.Parameters[i].RefKind == RefKind.In {
+                    this.outer.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter(bridgeRows.Rows[i])
+                }
+            }
             let firstParameter = bridgeRows.First
             let emittedHandle = this
                 .emitCtx
