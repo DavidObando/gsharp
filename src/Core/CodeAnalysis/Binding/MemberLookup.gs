@@ -1676,14 +1676,35 @@ internal class MemberLookup {
         /// @param structSymbol The user struct symbol to inspect.
         /// @param clrProp The CLR property whose contract to check.
         /// @returns The matching (cref:FieldSymbol), or `null`.
-        func FindMatchingFieldForPropertyContract(structSymbol StructSymbol, clrProp PropertyInfo) FieldSymbol? {
-            if !structSymbol.TryGetFieldIncludingInherited(clrProp.Name, out var field, out _) {
+        func FindMatchingFieldForPropertyContract(
+            structSymbol StructSymbol,
+            clrProp PropertyInfo,
+            symbolicArgs ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
+        ) FieldSymbol? -> FindMatchingFieldForPropertyContract(structSymbol, clrProp, symbolicArgs, out _)
+
+        func FindMatchingFieldForPropertyContract(
+            structSymbol StructSymbol,
+            clrProp PropertyInfo,
+            symbolicArgs ImmutableArray[TypeSymbol],
+            out declaringType StructSymbol?
+        ) FieldSymbol? {
+            declaringType = nil
+            if clrProp.GetIndexParameters().Length != 0 || !structSymbol.TryGetFieldIncludingInherited(
+                clrProp.Name,
+                out var field,
+                out declaringType
+            ) {
                 return nil
             }
             if field!!.Accessibility != Accessibility.Public {
                 return nil
             }
-            if !ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(field!!.Type), clrProp.PropertyType) {
+            let typeMatches = if symbolicArgs.IsDefaultOrEmpty {
+                ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(field!!.Type), clrProp.PropertyType)
+            } else {
+                ParameterTypeMatchesSubstituted(field!!.Type, clrProp.PropertyType, symbolicArgs)
+            }
+            if !typeMatches {
                 return nil
             }
             // A read-only field cannot satisfy a read-write property contract.

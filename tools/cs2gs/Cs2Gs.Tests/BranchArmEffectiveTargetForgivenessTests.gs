@@ -132,6 +132,41 @@ namespace App
         public static bool Tested(Model.Arg argument, int i) => (i switch { 0 => argument.Value, _ => argument.Name }) is null;
 
         public static bool ComparedWrapped(Model.Arg argument, int i) => (i >= 0 ? argument.Value : argument.Name) == (null!);
+
+        public static void Params(params string[] values) { }
+
+        public static void ParamsSeed() => Params("head", null);
+
+        public static void ParamsConditional(Model.Arg argument, int i) => Params(i >= 0 ? argument.Value : argument.Name);
+
+        public static void ParamsSwitch(Model.Arg argument, int i) => Params("head", i switch { 0 => argument.Value, _ => argument.Name });
+
+        public static void ParamsNested(Model.Arg argument, int i) => Params(i >= 0 ? (i > 1 ? argument.Value : argument.Name) : "x");
+
+        public static void ObjectParams(params object[] values) { }
+
+        public static void ObjectParamsSeed() => ObjectParams("head", null);
+
+        public static void ObjectParamsConditional(Model.Arg a, Model.Arg b, bool flag) => ObjectParams(flag ? a.Objects : b.Objects, "tail");
+
+        public static void ObjectParamsCastConditional(Model.Arg argument, int i) => ObjectParams((object)(i >= 0 ? argument.Value : argument.Name), "tail");
+
+        public static void ExtensionParams(this Model.Arg receiver, params string[] values) { }
+
+        public static void ExtensionParamsSeed(Model.Arg receiver) => receiver.ExtensionParams("head", null);
+
+        public static void ExtensionParamsConditional(Model.Arg argument, int i) => argument.ExtensionParams(i >= 0 ? argument.Value : argument.Name, argument.Name);
+
+        public static void ExtensionParamsSwitch(Model.Arg argument, int i) => argument.ExtensionParams("head", i switch { 0 => argument.Value, _ => argument.Name });
+
+        public sealed class TaintedBag
+        {
+            public int this[params string[] keys] => 0;
+        }
+
+        public static int BagSeed(TaintedBag bag) => bag["head", null];
+
+        public static int BagConditional(TaintedBag bag, Model.Arg argument, int i) => bag[i >= 0 ? argument.Value : argument.Name, i switch { 0 => argument.Name, _ => argument.Value }];
     }
 }`
         let printed = TranslateCrossProject(app)
@@ -154,7 +189,147 @@ namespace App
     {
         public static T Id<T>(T value) => value;
 
+        public static T ParamsId<T>(params T[] values) => values[0];
+
+        public static T SpanParamsId<T>(params System.ReadOnlySpan<T> values) => values[0];
+
         public static string Inferred(Model.Arg argument, int i) => Id(i > 0 ? argument.Value : argument.Name);
+
+        public static string InferredParams(Model.Arg argument, int i) => ParamsId(i > 0 ? argument.Value : argument.Name);
+
+        public static string InferredParamsSwitch(Model.Arg argument, int i) => ParamsId("head", i switch { 0 => argument.Value, _ => argument.Name });
+
+        public static string InferredSpanParams(Model.Arg argument, int i) => SpanParamsId(i > 0 ? argument.Value : argument.Name, "tail");
+
+        public static string InferredSpanParamsSwitch(Model.Arg argument, int i) => SpanParamsId("head", i switch { 0 => argument.Value, _ => argument.Name });
+
+        public static T FixedByListOrNullParams<T>(System.Collections.Generic.List<T> fixedValues, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static T PromotedReceiverParams<T>(this System.Collections.Generic.List<T> receiver, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static string NullListAllowsInference(Model.Arg argument, int i) => FixedByListOrNullParams(null, i > 0 ? argument.Value : argument.Name, "tail");
+
+#nullable enable annotations
+        public static T NestedInnerParams<T>(ObLib.Outer<int>.Inner<T> inner, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static string PromotedListArgumentAllowsInference(Model.Arg argument, int i)
+        {
+            string[] lines;
+            lines = ObLib.Node.Holes();
+            var list = new System.Collections.Generic.List<string>(lines);
+            return FixedByListOrNullParams(list, i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
+        public static string PromotedCheckedListArgumentAllowsInference(Model.Arg argument, int i)
+        {
+            string[] lines;
+            lines = ObLib.Node.Holes();
+            var list = new System.Collections.Generic.List<string>(lines);
+            return FixedByListOrNullParams(checked(list), i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
+        public static string PromotedReceiverAllowsInference(Model.Arg argument, int i)
+        {
+            string[] lines;
+            lines = ObLib.Node.Holes();
+            var list = new System.Collections.Generic.List<string>(lines);
+            return list.PromotedReceiverParams(i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
+        public static string PromotedCheckedReceiverAllowsInference(Model.Arg argument, int i)
+        {
+            string[] lines;
+            lines = ObLib.Node.Holes();
+            var list = new System.Collections.Generic.List<string>(lines);
+            return unchecked(list).PromotedReceiverParams(i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
+        public static string PromotedNestedInnerArgumentAllowsInference(Model.Arg argument, int i)
+        {
+            ObLib.Outer<int>.Inner<string> inner;
+            inner = ObLib.Node.NestedInner();
+            return NestedInnerParams(inner, i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
+        public static T TakeFromGetterParams<T>(System.Func<T[]> get, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static T TakeFromAsyncGetterParams<T>(System.Func<System.Threading.Tasks.Task<T[]>> get, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static string[] GetPromotedArray() => ObLib.Node.Holes();
+
+        public static string PromotedMethodGroupReturnAllowsInference(Model.Arg argument, int i) =>
+            TakeFromGetterParams(GetPromotedArray, i > 0 ? argument.Value : argument.Name, "tail");
+
+        public static string PromotedBlockLambdaReturnAllowsInference(Model.Arg argument, int i)
+        {
+            string[] lines;
+            lines = ObLib.Node.Holes();
+            return TakeFromGetterParams(() => { return lines; }, i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
+        public static string PromotedAsyncLambdaReturnAllowsInference(Model.Arg argument, int i)
+        {
+            string[] lines;
+            lines = ObLib.Node.Holes();
+            return TakeFromAsyncGetterParams(async () => { await System.Threading.Tasks.Task.Yield(); return lines; }, i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
+        public static string PromotedDirectConstructionArgumentAllowsInference(Model.Arg argument, int i)
+        {
+            string[] lines;
+            lines = ObLib.Node.Holes();
+            return FixedByListOrNullParams(new System.Collections.Generic.List<string>(lines), i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
+        public static string PromotedDirectConstructionReceiverAllowsInference(Model.Arg argument, int i)
+        {
+            string[] lines;
+            lines = ObLib.Node.Holes();
+            return new System.Collections.Generic.List<string>(lines).PromotedReceiverParams(i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
+        public delegate T MapDelegate<T>(T x);
+
+        public static T MapParams<T>(MapDelegate<T> f, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static string Normalize(string? x) => x ?? "";
+
+        public static string MapWithNullableParameterAllowsInference(Model.Arg argument, int i) =>
+            MapParams(Normalize, i > 0 ? argument.Value : argument.Name, "tail");
+
+        public static T NestedActionParams<T>(System.Action<ObLib.Outer<T>.Inner<int>> consume, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static void ConsumeNullableOuterInner(ObLib.Outer<string?>.Inner<int> item) { }
+
+        public static string NestedActionWithNullableContainingTypeAllowsInference(Model.Arg argument, int i) =>
+            NestedActionParams(ConsumeNullableOuterInner, i > 0 ? argument.Value : argument.Name, "tail");
+
+        public static T InParams<T>(in T value, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static string SuppressedInPromotedLocalAllowsInference(Model.Arg argument, int i)
+        {
+            string x = null;
+            return InParams(in x!, i > 0 ? argument.Value : argument.Name, "tail");
+        }
+
+#nullable enable
+        public static string? ExplicitNullableParams(Model.Arg argument, int i) => ParamsId<string?>(i > 0 ? argument.Value : argument.Name);
+
+        public static string? ExplicitNullableParamsSwitch(Model.Arg argument, int i) => ParamsId<string?>("head", i switch { 0 => argument.Value, _ => argument.Name });
+
+        public static void JoinExtension(this Model.Arg receiver, params string?[] values) { }
+
+        public static void ExtensionJoined(Model.Arg argument, int i) =>
+            argument.JoinExtension(i == 0 ? argument.Name : argument.Value, argument.Name);
+
+        public sealed class Bag
+        {
+            public string? this[params string?[] keys] => keys[0];
+        }
+
+        public static string? IndexerJoined(Bag bag, Model.Arg argument, int i) =>
+            bag[i == 0 ? argument.Name : argument.Value, i switch { 0 => argument.Name, _ => argument.Value }];
+#nullable restore
 
         public static int Suppressed(Model.Arg argument, bool flag)
         {
@@ -166,6 +341,9 @@ namespace App
     }
 }`
         let printed = TranslateCrossProject(app)
+        Assert.Contains("List[string?](lines)", printed)
+        Assert.Contains("ParamsId(if i > 0 { argument.Value } else { argument.Name })", printed)
+        Assert.Contains("SpanParamsId(if i > 0 { argument.Value } else { argument.Name }, \"tail\")", printed)
         Assert.DoesNotContain("argument.Name!!", printed)
         Assert.DoesNotContain("argument.Value!!", printed)
         // Issue #4452: the translated C# `!` into the widened `chosen` is erased
@@ -212,16 +390,52 @@ namespace App
             }
         }
 
+#nullable enable
+        public static string JoinParams(params string?[] values) => (values[0] ?? "0") + ":" + (values[1] ?? "1");
+
+        public static string ParamsJoined(Arg a, int i) =>
+            JoinParams(i == 0 ? a.Name : a.Value, i switch { 0 => a.Name, _ => a.Value });
+
+        public static string JoinObjects(params object?[] values) => (values[0] == null ? "0" : "1") + ":" + values[1];
+
+        public static string ObjectsJoined(Arg a, Arg b, bool flag) =>
+            JoinObjects(flag ? a.Objects : b.Objects, "tail");
+
+        public static string CastObjectsJoined(Arg a, bool flag) =>
+            JoinObjects((object?)(flag ? a.Name : a.Value), "tail");
+#nullable restore
+
+        public static T SpanParamsId<T>(params System.ReadOnlySpan<T> values) => values[0];
+
+        public static T FixedByListOrNullParams<T>(System.Collections.Generic.List<T> fixedValues, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static string InferredSpanParams(Arg a, int i) =>
+            SpanParamsId(i > 0 ? a.Value : a.Name, "tail") ?? "span-null";
+
+#nullable enable annotations
+        public static string PlatformListAllowsInference(Arg a, int i) =>
+            FixedByListOrNullParams(ObLib.Node.HoleList(), i > 0 ? a.Value : a.Name, "tail") ?? "hole-null";
+#nullable restore
+
+        public static string ReferencedEnumerableParams(Arg a, int i) =>
+            ObLib.Node.JoinEnumerableParams(i > 0 ? a.Value : a.Name, "tail");
+
         public static string Run()
         {
             var a = new Arg("v");
-            return Interpolated(a, true) + Concatenated(a, true) + Cast(a, true) + Switched(a, true) + Appended(a, true) + SwitchStatement(a, true);
+            return Interpolated(a, true) + Concatenated(a, true) + Cast(a, true) + Switched(a, true) + Appended(a, true) + SwitchStatement(a, true) + ParamsJoined(a, 0) + ObjectsJoined(a, a, true) + CastObjectsJoined(a, true) + InferredSpanParams(a, 0) + ":" + PlatformListAllowsInference(a, 0) + ":" + ReferencedEnumerableParams(a, 0);
         }
     }
 }`
         let (library, consumer) = TranslateBothProjects(app)
         Assert.DoesNotContain("a.Name!!", consumer)
-        Assert.Equal("[]<>nonenull{}N", CompileAndRun([]string{library, consumer}, "App.Use.Run()").Trim())
+        Assert.DoesNotContain("a.Objects!!", consumer)
+        Assert.DoesNotContain("b.Objects!!", consumer)
+        Assert.DoesNotContain("a.Name })!!", consumer)
+        Assert.Equal(
+            "[]<>nonenull{}N0:10:tail0:tailspan-null:hole-null:null,tail",
+            CompileAndRun([]string{library, consumer}, "App.Use.Run()").Trim()
+        )
     }
 
     /// Precision: an arm whose whole-expression target is a non-null
@@ -236,13 +450,169 @@ namespace App
     {
         public static int Index(string name) => name == "x" ? 0 : -1;
 
+#nullable enable
+        public static int ParamsIndex(params string[] names) => names[0] == "x" ? 0 : -1;
+
+        public static int ObjectParamsCount(params object?[] values) => values.Length;
+
+        public sealed class NonNullBag
+        {
+            public int this[params string[] keys] => keys.Length;
+
+            public int this[int tag, params object?[] values] => values.Length;
+        }
+#nullable restore
+
         public static int Conditional(Model.Arg argument, int i) => Index(i > 0 ? argument.Name : "x");
 
         public static int Switch(Model.Arg argument, int i) => Index(i switch { 0 => argument.Name, _ => "y" });
 
+        public static int ParamsConditional(Model.Arg argument, int i) => ParamsIndex(i > 0 ? argument.Name : "x");
+
+        public static int ParamsSwitch(Model.Arg argument, int i) => ParamsIndex("head", i switch { 1 => argument.Name, _ => "y" });
+
+        public static int ObjectParamsDirect(Model.Arg a, Model.Arg b, bool flag) => ObjectParamsCount(flag ? a.Objects : b.Objects);
+
+        public static int BagNonNullExpanded(NonNullBag bag, Model.Arg argument, int i) =>
+            bag[i > 2 ? argument.Name : "z", "tail"];
+
+        public static int BagNormalForm(NonNullBag bag, Model.Arg a, Model.Arg b, bool flag) =>
+            bag[0, flag ? a.Objects : b.Objects];
+
         public static T Id<T>(T value) => value;
 
+        public static T ParamsId<T>(params T[] values) => values[0];
+
+        public static T SpanParamsId<T>(params System.ReadOnlySpan<T> values) => values[0];
+
+        public static T ConstrainedSpanParams<T>(params System.ReadOnlySpan<T> values) where T : class => values[0];
+
+        public static T FixedByListParams<T>(System.Collections.Generic.List<T> fixedValues, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static T FixedByReceiverParams<T>(this System.Collections.Generic.List<T> receiver, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static T FixedByActionParams<T>(System.Action<T> consume, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static T FixedByListArrayParams<T>(System.Collections.Generic.List<T>[] lists, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static T FixedByInParams<T>(in T fixedValue, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static T FixedByIListParams<T>(System.Collections.Generic.IList<T> fixedValues, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static T FixedByArrayParams<T>(T[] fixedValues, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static T FixedByActionIListParams<T>(System.Action<System.Collections.Generic.IList<T>> action, params System.ReadOnlySpan<T> values) => values[0];
+
+        public delegate void PairConsumer<T>(T first, T second);
+
+        public static T FixedByPairConsumerParams<T>(PairConsumer<T> consume, params System.ReadOnlySpan<T> values) => values[0];
+
+        public delegate void JaggedPairConsumer<T>(T[][] first, T[][] second);
+
+        public static T FixedByJaggedPairConsumerParams<T>(JaggedPairConsumer<T> consume, params System.ReadOnlySpan<T> values) => values[0];
+
+        public delegate T MapDelegate<T>(T x);
+
+        public static T FixedByMapParams<T>(MapDelegate<T> f, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static T ReconciledNestedPairParams<T>(PairConsumer<ObLib.Outer<T>.Inner<int>> consume, params System.ReadOnlySpan<T> values) => values[0];
+
+        public sealed class ListSeed
+        {
+            public static implicit operator System.Collections.Generic.List<string>(ListSeed seed) => new System.Collections.Generic.List<string>();
+        }
+
+        public static void Consume(string s) { }
+
+        public static void Consume(int n) { }
+
+#nullable enable
+        public static void ConsumePair(string? first, string second) { }
+
+        public static void ConsumeJaggedPair(string?[][] first, string[][] second) { }
+
+        public static string? BadMap(string x) => null;
+
+        public static void ConsumeNestedPair(ObLib.Outer<string?>.Inner<int> first, ObLib.Outer<string>.Inner<int> second) { }
+#nullable restore
+
+        public static int CountAll<T>(params System.Collections.Generic.IEnumerable<T> values) => 0;
+
+        public static int NormalFormGenericParams(Model.Arg a, Model.Arg b, bool flag) =>
+            CountAll(flag ? a.Objects : b.Objects);
+
+        public static string ConstrainedSpanParamsCall(Model.Arg argument, int i) =>
+            ConstrainedSpanParams(i > 4 ? "a" : argument.Name, "tail");
+
+        public static string FixedByListParamsCall(System.Collections.Generic.List<string> list, Model.Arg argument, int i) =>
+            FixedByListParams(list, i > 5 ? "b" : argument.Name, "tail");
+
+        public static string FixedByReceiverParamsCall(System.Collections.Generic.List<string> list, Model.Arg argument, int i) =>
+            list.FixedByReceiverParams(i > 6 ? "c" : argument.Name, "tail");
+
+        public static string FixedByActionParamsCall(System.Action<string> consume, Model.Arg argument, int i) =>
+            FixedByActionParams(consume, i > 7 ? "d" : argument.Name, "tail");
+
+        public static string FixedByListArrayParamsCall(System.Collections.Generic.List<string>[] lists, Model.Arg argument, int i) =>
+            FixedByListArrayParams(lists, i > 8 ? "e" : argument.Name, "tail");
+
+        public static string FixedByExplicitInParamsCall(string text, Model.Arg argument, int i) =>
+            FixedByInParams(in text, i > 9 ? "f" : argument.Name, "tail");
+
+        public static string FixedByImplicitInParamsCall(string text, Model.Arg argument, int i) =>
+            FixedByInParams(text, i > 10 ? "g" : argument.Name, "tail");
+
+        public static string FixedByDefaultListParamsCall(Model.Arg argument, int i) =>
+            FixedByListParams(default, i > 11 ? "h" : argument.Name, "tail");
+
+        public static string FixedByAnonymousMethodParamsCall(Model.Arg argument, int i) =>
+            FixedByActionParams(delegate (string s) { }, i > 12 ? "j" : argument.Name, "tail");
+
+        public static string FixedByMethodGroupParamsCall(Model.Arg argument, int i) =>
+            FixedByActionParams(Consume, i > 13 ? "k" : argument.Name, "tail");
+
+        public static string FixedByConstrainedTypeParameterCall<U>(U list, Model.Arg argument, int i) where U : System.Collections.Generic.IList<string> =>
+            FixedByIListParams(list, i > 14 ? "m" : argument.Name, "tail");
+
+        public static string FixedByTypedNullImportedListParamsCall(Model.Arg argument, int i) =>
+            ObLib.Node.ImportedListParams(null!, i > 15 ? "n" : argument.Name, "tail");
+
+        public static string FixedByArrayParamsCall(string[] array, Model.Arg argument, int i) =>
+            FixedByArrayParams(array, i > 16 ? "p" : argument.Name, "tail");
+
+        public static string FixedByContravariantHierarchyParamsCall(System.Action<System.Collections.Generic.IEnumerable<string>> action, Model.Arg argument, int i) =>
+            FixedByActionIListParams(action, i > 17 ? "q" : argument.Name, "tail");
+
+        public static string FixedByReconciledMethodGroupParamsCall(Model.Arg argument, int i) =>
+            FixedByPairConsumerParams(ConsumePair, i > 18 ? "r" : argument.Name, "tail");
+
+        public static T TakeFromGetterParams<T>(System.Func<T[]> get, params System.ReadOnlySpan<T> values) => values[0];
+
+        public static string[] GetNonNullArray() => new string[] { "a" };
+
+        public static string FixedByNonNullArrayMethodGroupParamsCall(Model.Arg argument, int i) =>
+            TakeFromGetterParams(GetNonNullArray, i > 19 ? "s" : argument.Name, "tail");
+
+        public static string FixedByImplicitLambdaParamsCall(Model.Arg argument, int i) =>
+            FixedByActionParams(s => { }, i > 20 ? "t" : argument.Name, "tail");
+
+        public static string FixedByReconciledJaggedMethodGroupParamsCall(Model.Arg argument, int i) =>
+            FixedByJaggedPairConsumerParams(ConsumeJaggedPair, i > 21 ? "u" : argument.Name, "tail");
+
+        public static string FixedByNonNullInputMapParamsCall(Model.Arg argument, int i) =>
+            FixedByMapParams(BadMap, i > 22 ? "v" : argument.Name, "tail");
+
+        public static string FixedByConvertedSeedParamsCall(ListSeed seed, Model.Arg argument, int i) =>
+            FixedByListParams(seed, i > 23 ? "w" : argument.Name, "tail");
+
+        public static string FixedByReconciledNestedContainingTypeParamsCall(Model.Arg argument, int i) =>
+            ReconciledNestedPairParams(ConsumeNestedPair, i > 24 ? "y" : argument.Name, "tail");
+
         public static string Explicit(Model.Arg argument, int i) => Id<string>(i > 0 ? argument.Value : argument.Name);
+
+        public static string ExplicitParams(Model.Arg argument, int i) => ParamsId<string>(i > 0 ? argument.Value : argument.Name);
+
+        public static string ExplicitSpanParams(Model.Arg argument, int i) => SpanParamsId<string>(i > 3 ? argument.Value : argument.Name, "tail");
 
         public sealed class Dest
         {
@@ -258,13 +628,90 @@ namespace App
     }
 }`
         let printed = TranslateCrossProject(app)
-        Assert.Contains("if i > 0 { argument.Name!! } else { \"x\" }", printed)
+        Assert.Contains("Index(if i > 0 { argument.Name!! } else { \"x\" })", printed)
         Assert.Contains("case 0: argument.Name!!", printed)
+        Assert.Contains("ParamsIndex(if i > 0 { argument.Name!! } else { \"x\" })", printed)
+        Assert.Contains("case 1: argument.Name!!", printed)
+        Assert.Contains("ObjectParamsCount(if flag { a.Objects!! } else { b.Objects!! })", printed)
+        Assert.Contains("bag[if i > 2 { argument.Name!! } else { \"z\" }, \"tail\"]", printed)
+        Assert.Contains("bag[0, if flag { a.Objects!! } else { b.Objects!! }]", printed)
+        Assert.Contains("CountAll(if flag { a.Objects!! } else { b.Objects!! })", printed)
+        Assert.Contains("ConstrainedSpanParams(if i > 4 { \"a\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains("FixedByListParams(list, if i > 5 { \"b\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains("list.FixedByReceiverParams(if i > 6 { \"c\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains("FixedByActionParams(consume, if i > 7 { \"d\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains("FixedByListArrayParams(lists, if i > 8 { \"e\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains("FixedByInParams(in text, if i > 9 { \"f\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains("FixedByInParams(in text, if i > 10 { \"g\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains("if i > 11 { \"h\" } else { argument.Name!! }", printed)
+        Assert.Contains("if i > 12 { \"j\" } else { argument.Name!! }", printed)
+        Assert.Contains("if i > 13 { \"k\" } else { argument.Name!! }", printed)
+        Assert.Contains("FixedByIListParams(list, if i > 14 { \"m\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains("if i > 15 { \"n\" } else { argument.Name!! }", printed)
+        Assert.Contains("FixedByArrayParams(array, if i > 16 { \"p\" } else { argument.Name!! }, \"tail\")", printed)
+        Assert.Contains(
+            "FixedByActionIListParams(action, if i > 17 { \"q\" } else { argument.Name!! }, \"tail\")",
+            printed
+        )
+        Assert.Contains("if i > 18 { \"r\" } else { argument.Name!! }", printed)
+        Assert.Contains("if i > 19 { \"s\" } else { argument.Name!! }", printed)
+        Assert.Contains("if i > 20 { \"t\" } else { argument.Name!! }", printed)
+        Assert.Contains("if i > 21 { \"u\" } else { argument.Name!! }", printed)
+        Assert.Contains("if i > 22 { \"v\" } else { argument.Name!! }", printed)
+        Assert.Contains("if i > 23 { \"w\" } else { argument.Name!! }", printed)
+        Assert.Contains("if i > 24 { \"y\" } else { argument.Name!! }", printed)
         Assert.Contains("Id[string](if i > 0 {", printed)
+        Assert.Contains("ParamsId[string](if i > 0 {", printed)
+        Assert.Contains("SpanParamsId[string](", printed)
+        Assert.Contains("if i > 3 {", printed)
         Assert.Contains("else { argument.Name!! })", printed)
         // A user-defined conversion is an invocation boundary: the arm feeds
         // the operator's non-null parameter, not the widened local `d`.
         Assert.Contains("if flag { argument.Name!! } else { \"x\" }", printed)
+    }
+
+    @Fact
+    func FixedGenericParamsBounds_CompileAndRun() {
+        const app = `
+using System;
+using System.Collections.Generic;
+using Model;
+using ObLib;
+
+namespace App
+{
+    public static class Use
+    {
+        public static T FixedByListParams<T>(List<T> fixedValues, params ReadOnlySpan<T> values) => values[0];
+
+        public static T FixedByActionParams<T>(Action<T> consume, params ReadOnlySpan<T> values) => values[0];
+
+        public static void Consume(string s) { }
+
+        public static void Consume(int n) { }
+
+        public static string Run()
+        {
+            var list = new List<string> { "x" };
+            var present = new Arg("v", "named");
+            var missing = new Arg("v");
+            string ok = FixedByListParams(list, 0 > 1 ? "b" : present.Name, "tail") + ":" +
+                list.FixedByReceiverParams(0 > 1 ? "c" : present.Name, "tail") + ":" +
+                FixedByActionParams(Consume, 0 > 1 ? "d" : present.Name, "tail") + ":" +
+                FixedByActionParams(s => { }, 0 > 1 ? "e" : present.Name, "tail");
+            int throwsCount = 0;
+            try { FixedByListParams(list, 0 > 1 ? "b" : missing.Name, "tail"); } catch (NullReferenceException) { throwsCount++; }
+            try { list.FixedByReceiverParams(0 > 1 ? "c" : missing.Name, "tail"); } catch (NullReferenceException) { throwsCount++; }
+            try { FixedByActionParams(Consume, 0 > 1 ? "d" : missing.Name, "tail"); } catch (NullReferenceException) { throwsCount++; }
+            try { FixedByActionParams(s => { }, 0 > 1 ? "e" : missing.Name, "tail"); } catch (NullReferenceException) { throwsCount++; }
+            return ok + ":" + throwsCount;
+        }
+    }
+}`
+        let (library, consumer) = TranslateBothProjects(app)
+        Assert.Contains("present.Name!!", consumer)
+        Assert.Contains("missing.Name!!", consumer)
+        Assert.Equal("named:named:named:named:4", CompileAndRun([]string{library, consumer}, "App.Use.Run()").Trim())
     }
 
     /// A `var` local is not a nil-accepting target, even though
@@ -289,6 +736,26 @@ public static class C
             : name ?? id;
         return new Session { Alias = alias };
     }
+
+#nullable enable annotations
+    public static IEnumerable<string>? Maybe() => null;
+
+    public static IEnumerable<string> Fallback() => System.Array.Empty<string>();
+
+    public static int Count<T>(params IEnumerable<T> xs) => 0;
+
+    public static int CallDirect() => Count(Maybe());
+
+    public static int CallConditional(bool flag) => Count(flag ? Maybe() : Fallback());
+
+    public static int UseSpan<T>(params System.ReadOnlySpan<T> xs) => xs.Length;
+
+    public static int CallExplicitSpanConditional(bool flag)
+    {
+        var p = default(string);
+        return UseSpan<string>(flag ? p : "a");
+    }
+#nullable restore
 }`
         let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
@@ -296,6 +763,9 @@ public static class C
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Contains("{ a!! } else { name ?? id }", printed)
+        Assert.Contains("Count(Maybe()!!)", printed)
+        Assert.Contains("Count(if flag { Maybe()!! } else { Fallback() })", printed)
+        Assert.Contains("UseSpan[string](if flag { p!! } else { \"a\" })", printed)
         let result RoundTripResult? = TranslationTestValidation.AssertBinds(printed)
         Assert.True(result!!.Success, string.Join("\n", result!!.Errors) + `
 
@@ -308,9 +778,10 @@ namespace Model
 {
     public sealed class Arg
     {
-        public Arg(string value, string name = null) { Value = value; Name = name; }
+        public Arg(string value, string name = null, object[] objects = null) { Value = value; Name = name; Objects = objects; }
         public string Name { get; }
         public string Value { get; }
+        public object[] Objects { get; }
     }
 
     public static class Printer
@@ -319,11 +790,38 @@ namespace Model
     }
 }`
 
+        private const ObLibSource string = `
+namespace ObLib
+{
+    public sealed class Outer<TOuter>
+    {
+        public sealed class Inner<TInner> { }
+    }
+
+    public static class Node
+    {
+        public static string[] Holes() => new string[] { null };
+        public static System.Collections.Generic.List<string> HoleList() => new System.Collections.Generic.List<string> { null };
+        public static Outer<int>.Inner<string> NestedInner() => new Outer<int>.Inner<string>();
+#nullable enable
+        public static T ImportedListParams<T>(System.Collections.Generic.List<T> fixedValues, params T[] values) => values[0];
+        public static T FixedByReceiverParams<T>(this System.Collections.Generic.List<T> receiver, params T[] values) => values[0];
+        public static string JoinEnumerableParams<T>(params System.Collections.Generic.IEnumerable<T> values)
+        {
+            var parts = new System.Collections.Generic.List<string>();
+            foreach (var value in values) { parts.Add(value == null ? "null" : value.ToString()!); }
+            return string.Join(",", parts);
+        }
+#nullable restore
+    }
+}`
+
         private func TranslateCrossProject(app string) string -> TranslateBothProjects(app).Consumer
 
         private func TranslateBothProjects(app string)(Library string, Consumer string) {
+            let (_, obImage) = Compile(ObLibSource, "ObLib", Array.Empty[MetadataReference]())
             let (library, image) = Compile(Model, "Model", Array.Empty[MetadataReference]())
-            let (consumer, _) = Compile(app, "App", []MetadataReference{image})
+            let (consumer, _) = Compile(app, "App", []MetadataReference{image, obImage})
             let repository = []CSharpCompilation{library, consumer}
             return (Translate(library, repository), Translate(consumer, repository))
         }
@@ -374,8 +872,12 @@ namespace Model
             )
             Directory.CreateDirectory(workDir)
             try {
+                let obLibPath = Path.Combine(workDir, "ObLib.dll")
+                let (obCompilation, _) = Compile(ObLibSource, "ObLib", Array.Empty[MetadataReference]())
+                let obEmit = obCompilation.Emit(obLibPath)
+                Assert.True(obEmit.Success, string.Join(Environment.NewLine, obEmit.Diagnostics))
                 let dllPath = Path.Combine(workDir, "Snippet.dll")
-                let arguments = List[string]{compiler!!, "/target:exe", "/out:$dllPath"}
+                let arguments = List[string]{compiler!!, "/target:exe", "/out:$dllPath", "/reference:$obLibPath"}
                 for var i = 0; i < printedFiles.Count; i++ {
                     let gsPath = Path.Combine(workDir, "Unit$i.gs")
                     File.WriteAllText(gsPath, printedFiles[i])

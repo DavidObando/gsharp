@@ -5057,10 +5057,17 @@ internal partial class ExpressionBinder {
             // Interface-field adapters are emitted on the implementing type but
             // represent the backing field's declaration for source lookup.
             if property.Declaration == nil && property.BackingField is {} backingField {
-                for candidate in receiver.GetHierarchy() {
-                    if candidate.Fields.Any((field FieldSymbol) -> object.ReferenceEquals(field, backingField)) {
-                        propertyOwner = candidate
-                        break
+                if property.BackingFieldDeclaringType is {} backingOwner {
+                    propertyOwner = backingOwner
+                } else {
+                    for candidate in receiver.GetHierarchy() {
+                        if candidate.Fields.Any((field FieldSymbol) -> object.ReferenceEquals(field, backingField)) ||
+                            (candidate.Definition ?? candidate)
+                            .Fields
+                            .Any((field FieldSymbol) -> object.ReferenceEquals(field, backingField)) {
+                            propertyOwner = candidate
+                            break
+                        }
                     }
                 }
             }

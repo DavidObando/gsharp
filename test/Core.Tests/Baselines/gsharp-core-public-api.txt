@@ -3452,6 +3452,7 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportEnumMemberValueNotConstant(GSharp.Core.CodeAnalysis.Text.TextLocation location, String memberName, String enumName)
   method public Void ReportEnumeratorCancellationNotAsyncSequence(GSharp.Core.CodeAnalysis.Text.TextLocation location, String parameterName)
   method public Void ReportEnumeratorCancellationWrongType(GSharp.Core.CodeAnalysis.Text.TextLocation location, String parameterName, String actualTypeName)
+  method public Void ReportExecutableWithoutEntryPoint(GSharp.Core.CodeAnalysis.Text.TextLocation location, String nearMissName)
   method public Void ReportExplicitInterfaceClauseMemberNotFound(GSharp.Core.CodeAnalysis.Text.TextLocation location, String interfaceName, String memberName)
   method public Void ReportExplicitInterfaceClauseNotImplemented(GSharp.Core.CodeAnalysis.Text.TextLocation location, String containingTypeName, String interfaceName, String memberName)
   method public Void ReportExplicitInterfaceClauseTypeNotInterface(GSharp.Core.CodeAnalysis.Text.TextLocation location, String typeName, String memberName)

@@ -746,7 +746,7 @@ internal partial class StatementBinder {
                 // the persistent frame, so subsequent reads see the non-nullable
                 // type. Runs after invalidation for the same reason as the
                 // assignment narrowing above.
-                ApplyIfJoinNarrowings(statement, memberNotNullFrame)
+                ApplyIfJoinNarrowings(statement, memberNotNullFrame, externalCallableAliasesAtEntry)
                 // ADR-0208: lift what the join of the branch exits proves, for an
                 // `if` and for a bare block. It runs after the invalidation, which
                 // owns every kill that a write causes, and after the legacy lifts,

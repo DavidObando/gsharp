@@ -80,7 +80,7 @@ func Run() string {
         Api.Sum($scope: []int32{2, 3}).ToString() + "," +
         Api.Map(value: 6, $scope: x -> x + 1).ToString()
 }`
-                let output = Compile(directory, source, libraryPath)
+                let output = Compile(directory, source, true, libraryPath)
                 Assert.True(output.Exit == 0, output.Diagnostics)
                 Assert.DoesNotContain("GS0246", output.Diagnostics, StringComparison.Ordinal)
                 Assert.DoesNotContain("GS0159", output.Diagnostics, StringComparison.Ordinal)
@@ -114,7 +114,7 @@ func Run() string {
     trace = ""
     return first + "|" + consume($scope: mark("S", 3), value: mark("V", 4))
 }`
-                let output = Compile(directory, source)
+                let output = Compile(directory, source, false)
                 Assert.True(output.Exit == 0, output.Diagnostics)
                 IlVerifier.Verify(output.Path)
                 let assembly = EmittedFixture.Load(output.Path)
@@ -158,7 +158,7 @@ func Run() string {
         InDirectory(
             (directory string) -> {
                 let source = "func consume(value int32) int32 -> value\nlet result = consume(" + arguments + ")\n"
-                let output = Compile(directory, source)
+                let output = Compile(directory, source, false)
                 Assert.NotEqual(0, output.Exit)
                 Assert.False(File.Exists(output.Path))
                 Assert.Contains(id, output.Diagnostics, StringComparison.Ordinal)
@@ -173,7 +173,7 @@ func Run() string {
     }
 
     shared {
-        private func Compile(directory string, source string, references ...string)(
+        private func Compile(directory string, source string, library bool, references ...string)(
             Exit int32,
             Diagnostics string,
             Path string
@@ -181,7 +181,12 @@ func Run() string {
             let sourcePath = Path.Combine(directory, "Fixture.gs")
             let assemblyPath = Path.Combine(directory, "Fixture.dll")
             File.WriteAllText(sourcePath, source)
-            let arguments = []string{"/target:exe", "/out:" + assemblyPath, "/targetframework:net10.0"}
+            let target = if library {
+                "/target:library"
+            } else {
+                "/target:exe"
+            }
+            let arguments = []string{target, "/out:" + assemblyPath, "/targetframework:net10.0"}
                 .Concat(RuntimeReferences().Concat(references).Select((path string) -> ("/reference:" + path)))
                 .Append(sourcePath)
                 .ToArray()

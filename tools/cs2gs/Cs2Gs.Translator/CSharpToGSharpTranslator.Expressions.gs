@@ -2902,8 +2902,10 @@ partial class CSharpToGSharpTranslator {
                     value
                 ) ||
                     (
-                    targetSymbol is IParameterSymbol parameterTarget &&
-                        IsInferredGenericParameterTarget(parameterTarget, branch)
+                    targetSymbol is IParameterSymbol parameterTarget && this.IsInferredGenericParameterTarget(
+                        parameterTarget,
+                        branch
+                    )
                 )
             ) {
                 return translated
@@ -3152,9 +3154,10 @@ partial class CSharpToGSharpTranslator {
                     respectNullGuards: true
                 )
             )
+            // Issue #5602: the receiver and value rules ask `LocalHoldsPromotedValue` too.
             let emittedNullablePromotedLocal = !isFlowNarrowedLocal &&
                 valueSymbol is ILocalSymbol local &&
-                (this.ShouldPromoteToNullableReference(local) || this.LocalInitializerMakesStorageNullable(local))
+                (this.LocalHoldsPromotedValue(local) || this.LocalInitializerMakesStorageNullable(local))
             let emittedNullablePromotedStorage = !isFlowNarrowedLocal &&
                 (valueSymbol is IFieldSymbol || valueSymbol is IPropertySymbol || valueSymbol is IParameterSymbol) &&
                 this.ShouldPromoteToNullableReference(valueSymbol)
@@ -3269,14 +3272,23 @@ partial class CSharpToGSharpTranslator {
             let declaredSink = (targetSymbol != nil || fixedSink) &&
                 !inferredSink &&
                 !(targetSymbol is ILocalSymbol typedByValue && IsImplicitlyTypedLocal(typedByValue))
-            if !flowRequiresAssertion && !this.NullableReferenceValueMayBeNull(
-                value,
-                respectDeclaredAnnotations: targetSymbol != nil,
-                respectDeclaredCallResults: declaredSink
+            let inferredExpandedParamsElement = inferredSink &&
+                targetSymbol is IParameterSymbol expandedParam &&
+                this.IsExpandedParamsArgument(value, expandedParam)
+            if !flowRequiresAssertion &&
+                (
+                inferredExpandedParamsElement ||
+                    (
+                    !this.NullableReferenceValueMayBeNull(
+                        value,
+                        respectDeclaredAnnotations: targetSymbol != nil,
+                        respectDeclaredCallResults: declaredSink
+                    ) &&
+                        !(includePromotedValue && this.IsObliviousCompilation() && strictUseMayBeNullable)
+                )
             ) &&
                 !directlyNullableResult &&
-                !generatedPromotedValue &&
-                !(includePromotedValue && this.IsObliviousCompilation() && strictUseMayBeNullable) {
+                !generatedPromotedValue {
                 return translated
             }
             let operand GExpression? = if value is Microsoft
@@ -6604,27 +6616,38 @@ partial class CSharpToGSharpTranslator {
             // so leaving the arm bare would make the local `T?` and move the
             // failure to its next use. It is a target only when cs2gs itself
             // widens it (it then emits the `T?` clause).
-            if target == nil && isBranchArm && !this.FlowsThroughUserDefinedConversion(current) &&
-                this.ResolveValueSink(
-                cast[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax](current)
-            ) is {} sink &&
-                !(
-                sink is ILocalSymbol inferredLocal &&
-                    IsImplicitlyTypedLocal(inferredLocal) &&
-                    !this.ShouldPromoteToNullableReference(inferredLocal) && !this.IsUsedAsNullable(
-                    inferredLocal,
-                    this.GetNullabilityScope(inferredLocal)
-                )
-            ) {
-                let sinkType ITypeSymbol? = switch sink {
-                    case local is ILocalSymbol: local.Type
-                    case field is IFieldSymbol: field.Type
-                    case property is IPropertySymbol: property.Type
-                    case parameter is IParameterSymbol: parameter.Type
-                    default: default(ITypeSymbol?)
+            if target == nil && isBranchArm && !this.FlowsThroughUserDefinedConversion(current) {
+                if this.FindEnclosingArgumentThroughReferenceCasts(current) is {} argument &&
+                    this
+                    .TryGetExpandedParamsElementTarget(
+                    argument,
+                    this.GetArgumentParameter(argument),
+                    out var paramsElementType,
+                    out var paramsParameter
+                ) {
+                    return (paramsElementType, paramsParameter)
                 }
-                if sinkType != nil {
-                    return (sinkType, sink)
+                if this.ResolveValueSink(
+                    cast[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax](current)
+                ) is {} sink &&
+                    !(
+                    sink is ILocalSymbol inferredLocal &&
+                        IsImplicitlyTypedLocal(inferredLocal) &&
+                        !this.ShouldPromoteToNullableReference(inferredLocal) && !this.IsUsedAsNullable(
+                        inferredLocal,
+                        this.GetNullabilityScope(inferredLocal)
+                    )
+                ) {
+                    let sinkType ITypeSymbol? = switch sink {
+                        case local is ILocalSymbol: local.Type
+                        case field is IFieldSymbol: field.Type
+                        case property is IPropertySymbol: property.Type
+                        case parameter is IParameterSymbol: parameter.Type
+                        default: default(ITypeSymbol?)
+                    }
+                    if sinkType != nil {
+                        return (sinkType, sink)
+                    }
                 }
             }
             // Issue #4356: an async LAMBDA's target is its delegate's Invoke, which
@@ -6674,10 +6697,127 @@ partial class CSharpToGSharpTranslator {
             .CodeAnalysis
             .NullableAnnotation
             .Annotated &&
-            !(targetSymbol is IParameterSymbol parameter && IsInferredGenericParameterTarget(parameter, callSite)) &&
+            !(
+            targetSymbol is IParameterSymbol parameter && this.IsInferredGenericParameterTarget(parameter, callSite)
+        ) &&
             (
             !targetType.IsReferenceType || this.TargetWillRemainNonNullableReference(targetType, targetSymbol, callSite)
         )
+
+        /// Issue #4356: whether an argument's target parameter is generic in a way
+        /// G# will RE-INFER from the emitted argument — a parameter declared
+        /// `T` or `params T[]` on a call whose type arguments are
+        /// inferred. Then the emitted argument's own type decides `T`, so a
+        /// `T?` value makes `T` nullable and must not be asserted.
+        /// With EXPLICIT type arguments (`Identity<SyntaxNode>(x)`) the
+        /// substituted parameter type is the real target, so this answers false
+        /// and the ordinary nullability of that type decides. When the call site
+        /// cannot be found, the target is treated as inferred (no assertion).
+        /// @param parameter The (constructed) target parameter.
+        /// @param callSite The argument expression, if known.
+        /// @returns True when the target is an inferred generic parameter.
+        private func IsInferredGenericParameterTarget(
+            parameter IParameterSymbol,
+            callSite Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            let declared = parameter.OriginalDefinition.Type
+            // Only a METHOD type parameter is re-inferred from the argument. A
+            // containing-type parameter is already fixed by the receiver
+            // (`Box[C].Use(x)`), so its substituted type is the real target.
+            let IsMethodTypeParameter = func (candidate ITypeSymbol?) bool {
+                return candidate is ITypeParameterSymbol methodParameter &&
+                    methodParameter.TypeParameterKind == TypeParameterKind.Method
+            }
+            let generic = IsMethodTypeParameter(declared) ||
+                (
+                this.IsExpandedParamsArgument(callSite, parameter) &&
+                    GetParamsElementType(parameter.OriginalDefinition) is ITypeParameterSymbol elementParameter &&
+                    elementParameter.TypeParameterKind == TypeParameterKind.Method &&
+                    !NullableTypeArgumentViolatesTranslatedConstraints(elementParameter) &&
+                    !this.OtherArgumentFixesTypeParameterToNonNull(callSite, parameter, elementParameter)
+            )
+            return generic && !ValueFeedsExplicitTypeArguments(callSite)
+        }
+
+        private func IsExpandedParamsArgument(
+            callSite Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            parameter IParameterSymbol
+        ) bool {
+            if !parameter.IsParams {
+                return false
+            }
+            if callSite == nil {
+                return true
+            }
+            return this.FindEnclosingArgumentThroughReferenceCasts(callSite) is {} argument &&
+                this.TryGetExpandedParamsElementTarget(argument, parameter, out _, out _)
+        }
+
+        private func FindEnclosingArgumentThroughReferenceCasts(
+            node Microsoft.CodeAnalysis.SyntaxNode?
+        ) ArgumentSyntax? {
+            var current Microsoft.CodeAnalysis.SyntaxNode? = node
+            while (
+                current!!.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .CheckedExpressionSyntax or
+                    PostfixUnaryExpressionSyntax and
+                    {RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)}
+            ) ||
+                this.IsNullPreservingReferenceCast(current!!.Parent) ||
+                (
+                current!!.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ConditionalExpressionSyntax conditional &&
+                    (conditional.WhenTrue == current || conditional.WhenFalse == current)
+            ) ||
+                (
+                current!!.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchExpressionArmSyntax{
+                    Parent: Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax
+                } arm &&
+                    arm.Expression == current
+            ) {
+                current = if current!!.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchExpressionArmSyntax switchArm {
+                    switchArm.Parent
+                } else {
+                    current!!.Parent
+                }
+            }
+            return current!!.Parent as ArgumentSyntax
+        }
+
+        private func IsNullPreservingReferenceCast(
+            node Microsoft.CodeAnalysis.SyntaxNode?
+        ) bool -> node is CastExpressionSyntax cast &&
+            this
+            .context
+            .SemanticModel
+            .GetOperation(cast) is IConversionOperation{OperatorMethod: nil} conversion &&
+            conversion
+            .Type
+            ?.IsReferenceType == true &&
+            conversion
+            .Operand
+            .Type
+            ?.IsReferenceType == true &&
+            (conversion.Conversion.IsReference || conversion.Conversion.IsIdentity)
 
         private func FindNullForgivingTarget(value PostfixUnaryExpressionSyntax)(Type ITypeSymbol?, Symbol ISymbol?) {
             let ExplicitLocalTypeIsNullable = func (local ILocalSymbol) bool {
@@ -7003,8 +7143,21 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IndexArgumentTargetsNonNullableReference(argument ArgumentSyntax) bool {
-            if !(this.context.SemanticModel.GetOperation(argument) is IArgumentOperation{Parameter: {} parameter}) {
+            let parameter IParameterSymbol? = this.GetArgumentParameter(argument)
+            if parameter == nil {
                 return false
+            }
+            if this.TryGetExpandedParamsElementTarget(
+                argument,
+                parameter,
+                out var paramsElementType,
+                out var paramsParameter
+            ) {
+                return this.TargetWillRemainNonNullableReference(
+                    paramsElementType,
+                    paramsParameter,
+                    argument.Expression
+                )
             }
             return this.ParameterWillRemainNonNullableReference(parameter, argument.Expression)
         }
@@ -7517,17 +7670,8 @@ partial class CSharpToGSharpTranslator {
                         return true
                     }
                     let symbol ISymbol? = this.context.GetSymbolInfo(expression).Symbol
-                    if symbol is ILocalSymbol local && !this.ShouldPromoteToNullableReference(local) &&
-                        local
-                        .DeclaringSyntaxReferences
-                        .FirstOrDefault()
-                        ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} {
-                        return this.IsNullablePromotedValue(initializer)
-                    }
-                    // Issue #5561: a local that a deconstruction or an `out` argument declares holds
-                    // the widened declaration it receives.
-                    if symbol is ILocalSymbol deconstructedLocal {
-                        return this.IsTranslatorWidenedDeclaration(deconstructedLocal)
+                    if symbol is ILocalSymbol local {
+                        return this.LocalHoldsPromotedValue(local)
                     }
                     return (symbol is IFieldSymbol || symbol is IPropertySymbol || symbol is IParameterSymbol) &&
                         this.ShouldPromoteToNullableReference(symbol)
@@ -9309,37 +9453,6 @@ partial class CSharpToGSharpTranslator {
                         .SwitchExpressionArmSyntax: arm.Expression == current
                     default: false
                 }
-            }
-
-            /// Issue #4356: whether an argument's target parameter is generic in a way
-            /// G# will RE-INFER from the emitted argument — a parameter declared
-            /// `T` or `params T[]` on a call whose type arguments are
-            /// inferred. Then the emitted argument's own type decides `T`, so a
-            /// `T?` value makes `T` nullable and must not be asserted.
-            /// With EXPLICIT type arguments (`Identity<SyntaxNode>(x)`) the
-            /// substituted parameter type is the real target, so this answers false
-            /// and the ordinary nullability of that type decides. When the call site
-            /// cannot be found, the target is treated as inferred (no assertion).
-            /// @param parameter The (constructed) target parameter.
-            /// @param callSite The argument expression, if known.
-            /// @returns True when the target is an inferred generic parameter.
-            private func IsInferredGenericParameterTarget(
-                parameter IParameterSymbol,
-                callSite Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
-            ) bool {
-                let declared = parameter.OriginalDefinition.Type
-                // Only a METHOD type parameter is re-inferred from the argument. A
-                // containing-type parameter is already fixed by the receiver
-                // (`Box[C].Use(x)`), so its substituted type is the real target.
-                let IsMethodTypeParameter = func (candidate ITypeSymbol?) bool {
-                    return candidate is ITypeParameterSymbol methodParameter &&
-                        methodParameter.TypeParameterKind == TypeParameterKind.Method
-                }
-                let generic = IsMethodTypeParameter(declared) ||
-                    (
-                    parameter.IsParams && (declared is IArrayTypeSymbol && IsMethodTypeParameter(declared.ElementType))
-                )
-                return generic && !CallHasExplicitTypeArguments(callSite)
             }
 
             // Issue #4356: whether the invocation an argument belongs to spells its
