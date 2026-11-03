@@ -291,8 +291,8 @@ namespace Demo
     }
 
     /// A lambda result is declared exactly when the slot that receives the lambda is: a `var` local that an
-    /// earlier lambda typed and a `Func<T>` parameter of a receiver whose `T` G# infers take the null, and a
-    /// `Func<Dictionary<…>>` field keeps the `!!`. A reassigned local follows the storage that its declaration
+    /// earlier lambda typed, a `Func<T>` parameter of a receiver whose `T` G# infers and a `Delegate` local
+    /// take the null, and a `Func<Dictionary<…>>` field keeps the `!!`. A reassigned local follows the storage that its declaration
     /// emitted: a deconstruction and an initializer that is `T?` through generic inference leave it `T?`, and an
     /// initializer that the bridge asserted leaves it non-null.
     @Fact
@@ -323,9 +323,10 @@ namespace Demo
         static int Deconstruct() { (Dictionary<string, int> d, int n) = (Volatile.Read(ref cache!), 0); d = Volatile.Read(ref cache!); return 1; }
         static int TypedThenGeneric() { Dictionary<string, int> d = Id(Volatile.Read(ref cache!)); d = Volatile.Read(ref cache!); return 1; }
         static int FixedField() { fixedRead = () => { return Volatile.Read(ref full!); }; return fixedRead().Count; }
+        static bool AsDelegate() { Delegate read = () => { return Volatile.Read(ref cache!); }; return read.DynamicInvoke() == null; }
         static int TypedReassign() { Dictionary<string, int> d = Volatile.Read(ref full!); d = Volatile.Read(ref full!); return d.Count; }
         public static string Run() =>
-            Reassign() + " " + Use() + " " + UseBlock() + " " + Deconstruct() + " " + TypedThenGeneric() + " " + FixedField() + " " + TypedReassign();
+            Reassign() + " " + Use() + " " + UseBlock() + " " + Deconstruct() + " " + TypedThenGeneric() + " " + FixedField() + " " + TypedReassign() + " " + AsDelegate();
     }
 }`)
         Assert.Contains("return b.Use(() -> Volatile.Read(&cache))", printed)
@@ -333,7 +334,8 @@ namespace Demo
         Assert.Contains("var d = Id(Volatile.Read(&cache))\n        d = Volatile.Read(&cache)\n", printed)
         Assert.Contains("return Volatile.Read(&full)!!\n", printed)
         Assert.Contains("var d = Volatile.Read(&full)!!\n        d = Volatile.Read(&full)!!\n", printed)
-        RunsAs(printed, "True 1 1 1 1 1 1")
+        Assert.Contains("let read Delegate = () -> {\n            return Volatile.Read(&cache)\n", printed)
+        RunsAs(printed, "True 1 1 1 1 1 1 True")
     }
 
     /// A null `cache` at a non-null slot. C# passes, returns or stores the null, and the first dereference

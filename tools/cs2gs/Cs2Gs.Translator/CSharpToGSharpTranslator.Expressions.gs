@@ -2965,7 +2965,8 @@ partial class CSharpToGSharpTranslator {
         /// Issue #5627: whether the program text writes the G# type of the slot [`targetSymbol`](paramref) that
         /// [`value`](paramref) is stored into: a field, a property or indexer, or a parameter whose declared type
         /// mentions no type parameter, a local whose storage a written type fixes (`LocalSlotIsDeclared`), the
-        /// result of a method or local function, or the result of a lambda that is itself stored into such a slot.
+        /// result of a method or local function, or the result of a lambda that converts to a concrete delegate
+        /// type (not `Delegate`) and is itself stored into such a slot.
         /// Only such a slot can be non-null where the value is `T?` only in G#. G# can type every other slot from
         /// the value: a `var` or deconstructed local, a slot typed by a type parameter (inferred for the call, or
         /// for the receiver's own inferred type, as in `var b = Wrap(value); b.Value = …`) and the result of a
@@ -2981,7 +2982,11 @@ partial class CSharpToGSharpTranslator {
             case parameter is IParameterSymbol: !ContainsTypeParameter(parameter.OriginalDefinition.Type)
             case local is ILocalSymbol: this.LocalSlotIsDeclared(local)
             case method is IMethodSymbol: if this.ResultLambda(method, value) is {} lambda {
-                this.SlotTypeIsDeclared(this.ResolveValueSink(lambda), lambda)
+                this
+                    .context
+                    .GetTypeInfo(lambda)
+                    .ConvertedType is INamedTypeSymbol{DelegateInvokeMethod: {}} &&
+                    this.SlotTypeIsDeclared(this.ResolveValueSink(lambda), lambda)
             } else {
                 true
             }
