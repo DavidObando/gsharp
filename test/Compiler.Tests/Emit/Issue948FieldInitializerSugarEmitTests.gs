@@ -284,6 +284,25 @@ func Main() {
     }
 
     @Fact
+    func Issue5596_InferredConstructorProbe_PreservesLaterStructFieldInitializerDiagnostic() {
+        let source = `package FieldInitializerProbeDiagRepro
+
+class Box[T](var Item T) {}
+
+class Holder {
+    var Wrapped Box[Payload] = Box(Payload{})
+}
+
+struct Payload {
+    var Count int32 = "bad"
+}
+
+func Main() {}`
+        let diagnostics = CompileExpectingFailure(source)
+        Assert.Contains("GS0155", diagnostics)
+    }
+
+    @Fact
     func Issue948_Negative_InstanceInitializerReferencesInstanceMember() {
         let source = `package P
 import System

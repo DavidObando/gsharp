@@ -91,6 +91,8 @@ internal partial class DeclarationBinder {
 
     private let pendingStaticFieldInitializerBindings List[() -> void] = List[() -> void]()
 
+    private let deferredInitializerDiagnostics List[Diagnostic] = List[Diagnostic]()
+
     // Issue #4183: default-parameter-value expressions (`func M(x T = expr)`,
     // including on primary/explicit constructors and static methods) are
     // deferred for the SAME forward-reference reason field/const initializers

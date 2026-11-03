@@ -3524,6 +3524,7 @@ internal partial class DeclarationBinder {
         let savedFieldInitScope = $scope
         let savedFieldInitTypeParameters = binderCtx.CurrentTypeParameters
         let savedFieldInitFunction = getCurrentFunction()
+        let diagnosticMark = Diagnostics.Count
         $scope = fieldInitScope
         // Issue #2342: re-establish this type's owning package and syntax tree for deferred binding.
         let savedFieldInitPackage = $scope.SetCurrentDeclaringPackage(fieldInitPackageName)
@@ -3549,6 +3550,7 @@ internal partial class DeclarationBinder {
             using let _ = PushStaticMemberScope(structSymbol)
             action()
         } finally {
+            Diagnostics.DrainSince(diagnosticMark, deferredInitializerDiagnostics)
             $scope.SetCurrentDeclaringPackage(savedFieldInitPackage)
             $scope.SetCurrentReferencingSyntaxTree(savedFieldInitTree)
             $scope = savedFieldInitScope
@@ -4089,6 +4091,8 @@ internal partial class DeclarationBinder {
             bindStatic()
         }
         pendingStaticFieldInitializerBindings.Clear()
+        Diagnostics.AddRange(deferredInitializerDiagnostics)
+        deferredInitializerDiagnostics.Clear()
     }
 
     private func EnsurePendingConstInitializersBound() {
