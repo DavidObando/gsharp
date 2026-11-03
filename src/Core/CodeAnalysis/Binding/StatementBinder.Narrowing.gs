@@ -1387,7 +1387,11 @@ internal partial class StatementBinder {
     /// fresh join narrowing supersedes the clearing pass; a later statement that
     /// reassigns the local to a nullable value re-nullable-izes it through its
     /// own invalidation pass.
-    private func ApplyIfJoinNarrowings(statement BoundStatement?, persistentFrame NarrowingFrame) {
+    private func ApplyIfJoinNarrowings(
+        statement BoundStatement?,
+        persistentFrame NarrowingFrame,
+        callableAliases IReadOnlyCollection[VariableSymbol]? = nil
+    ) {
         // Issues #4285 and #4290: arbitrary user jumps invalidate the
         // dominance assumptions behind branch-exit narrowing.
         if binderCtx.FunctionContainsUserGotoOrLabel {
@@ -1406,7 +1410,7 @@ internal partial class StatementBinder {
         if ifStmt.ElseStatement != nil && EndsInUnconditionalExit(ifStmt.ElseStatement) {
             return
         }
-        let joined Dictionary[AccessPath, TypeSymbol]? = ComputeIfJoinNonNull(ifStmt, entry: nil)
+        let joined Dictionary[AccessPath, TypeSymbol]? = ComputeIfJoinNonNull(ifStmt, entry: nil, callableAliases)
         if joined == nil || joined.Count == 0 {
             return
         }
@@ -1700,7 +1704,7 @@ internal partial class StatementBinder {
         if thenNarrow == nil && elseNarrow == nil {
             thenNarrow, elseNarrow = TryClassifyBoolCallNarrowing(condition)
         }
-        let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition)
+        let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition, removedFacts: nil, beforeAliases)
         thenNarrow = MergeNarrowingFrames(thenNarrow, typeThen)
         elseNarrow = MergeNarrowingFrames(elseNarrow, typeElse)
         let afterAliases = AliasesAfter(condition, beforeAliases)
@@ -2936,13 +2940,17 @@ internal partial class StatementBinder {
             tryAssignedVariables = outerTryAssignments
             outerTryAssignments?.UnionWith(assignedInTry)
             let tryState = CaptureCallableState()
-            let exceptionalSingle = branchStart.AllEntry.Clone()
+            let exceptionalNormal = branchStart.Normal.Clone()
+            let exceptionalAllEntry = branchStart.AllEntry.Clone()
             for variable in assignedInTry {
-                exceptionalSingle.Literals.Remove(variable)
-                exceptionalSingle.External.Remove(variable)
-                exceptionalSingle.Unknown.Add(variable)
+                exceptionalNormal.Literals.Remove(variable)
+                exceptionalNormal.External.Remove(variable)
+                exceptionalNormal.Unknown.Add(variable)
+                exceptionalAllEntry.Literals.Remove(variable)
+                exceptionalAllEntry.External.Remove(variable)
+                exceptionalAllEntry.Unknown.Add(variable)
             }
-            var exceptionalState = (Normal: exceptionalSingle.Clone(), AllEntry: exceptionalSingle)
+            var exceptionalState = (Normal: exceptionalNormal, AllEntry: exceptionalAllEntry)
             // ADR-0208 R10 (#5168): a replacement exception reaches a clause after the filters of
             // all clauses ran, so every handler starts from the state with their effects.
             for clause in node.CatchClauses {

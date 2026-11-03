@@ -6711,6 +6711,94 @@ Run(func() { }, true)`)
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
+    @Fact
+    func IfJoinConditionCallableAliasUsesStatementEntryState_ReportsNullableReceiver() {
+        let result = Evaluate(`import System
+
+func Run(callback (() -> bool)) int32 {
+    var text string? = "seed"
+    let clear = func() bool {
+        text = nil
+        return true
+    }
+    var action = clear
+    if !String.IsNullOrEmpty(text) && action() {
+        action = callback
+    } else {
+        action = callback
+        text = "safe"
+    }
+    return text.Length
+}
+
+Run(func() bool { return true })`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func FinallyTypeTestPatternUsesPreTestCallableAliases_ReportsNullableReceiver() {
+        let result = Evaluate(`func Run(callback (() -> string), seed bool) int32 {
+    var text string? = nil
+    if seed {
+        text = "seed"
+    }
+    let clear = func() string {
+        text = nil
+        return "seed"
+    }
+    var action = callback
+    try {
+    } finally {
+        action = clear
+        if text is action() {
+        } else {
+            text = "safe"
+        }
+        action = callback
+    }
+    return text.Length
+}
+
+Run(func() string { return "seed" }, true)`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func ForwardGoto_TryWithNestedTryCatchInFinallyIgnoresExceptionalOnlyCallableAssignment() {
+        AssertRuns(`import System
+
+func Run(callback (() -> void), fail bool) int32 {
+    let failure = Exception()
+    var text string? = nil
+    text = "safe"
+    let clear = func() { text = nil }
+    var action = callback
+    try {
+        if fail {
+            action = clear
+            throw failure
+        }
+    } finally {
+        try {
+        } catch {
+        }
+    }
+    try {
+        goto Done
+    } finally {
+        action()
+    }
+Done:
+    return text.Length
+}
+
+Console.WriteLine(Run(func() { }, false))`, "4")
+    }
+
     shared {
         private func Evaluate(source string) EmittedOracleResult -> EmittedOracle.Evaluate(source)
 
