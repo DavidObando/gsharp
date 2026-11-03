@@ -1563,7 +1563,9 @@ internal partial class StatementBinder {
         let otherArity = HashSet[List[TypeSymbol]]()
         if call.Kind == RegionCallKind.NamedInvocation {
             for function in $scope.TryLookupFunctions(name) {
-                AddFunctionParameterList(function, nil, lists, otherArity)
+                if !AddFunctionParameterList(function, nil, lists, otherArity) {
+                    return nil
+                }
             }
         } else {
             var receivers List[ReceiverType]? = nil
@@ -1607,24 +1609,26 @@ internal partial class StatementBinder {
         return candidates
     }
 
-    // Adds a source function's parameter list; one with a default value or a variadic parameter can also take another
-    // number of arguments.
+    // Adds a source function's parameter list; one with a default value can also take fewer arguments. Returns
+    // `false` for a variadic function: its expanded form converts each argument to the element type, at any arity.
     private func AddFunctionParameterList(
         function FunctionSymbol,
         level StructSymbol?,
         lists List[List[TypeSymbol]],
         otherArity HashSet[List[TypeSymbol]]
-    ) {
+    ) bool {
+        if function.Parameters.Any((parameter ParameterSymbol) -> parameter.IsVariadic) {
+            return false
+        }
         let types = List[TypeSymbol]()
         for parameter in function.Parameters {
             types.Add(PassedType(parameter, level?.SubstituteMemberType(parameter.Type) ?? parameter.Type))
         }
         lists.Add(types)
-        if function.Parameters.Any(
-            (parameter ParameterSymbol) -> parameter.IsVariadic || parameter.HasExplicitDefaultValue
-        ) {
+        if function.Parameters.Any((parameter ParameterSymbol) -> parameter.HasExplicitDefaultValue) {
             otherArity.Add(types)
         }
+        return true
     }
 
     private func ReceiverNamesType(call RegionCall) bool {
@@ -1668,8 +1672,9 @@ internal partial class StatementBinder {
                     for candidate in level.GetMembers() {
                         if candidate is FunctionSymbol function &&
                             function.Name == name &&
-                            function.IsStatic == staticAccess {
-                            AddFunctionParameterList(function, level, lists, otherArity)
+                            function.IsStatic == staticAccess &&
+                            !AddFunctionParameterList(function, level, lists, otherArity) {
+                            return false
                         }
                     }
                 }
@@ -1687,14 +1692,15 @@ internal partial class StatementBinder {
                         level.GetMethods(name)
                     }
                     for function in functions {
+                        if function.Parameters.Any((parameter ParameterSymbol) -> parameter.IsVariadic) {
+                            return false
+                        }
                         let types = List[TypeSymbol]()
                         for parameter in function.Parameters {
                             types.Add(PassedType(parameter, level.SubstituteMemberType(parameter.Type)))
                         }
                         lists.Add(types)
-                        if function.Parameters.Any(
-                            (parameter ParameterSymbol) -> parameter.IsVariadic || parameter.HasExplicitDefaultValue
-                        ) {
+                        if function.Parameters.Any((parameter ParameterSymbol) -> parameter.HasExplicitDefaultValue) {
                             otherArity.Add(types)
                         }
                     }
@@ -1734,13 +1740,21 @@ internal partial class StatementBinder {
                     let methodParameters = method.GetParameters()
                     let types = ClrParameterTypes(symbolic, method, methodParameters)
                     lists.Add(types)
-                    // The CLR resolver also takes a candidate with omitted optional parameters, or in expanded form.
-                    if methodParameters.Any((parameter ParameterInfo) -> parameter.IsOptional) ||
-                        methodParameters.Length > 0 &&
+                    // The CLR resolver also takes a candidate in expanded form, which converts each argument to the
+                    // element type at any arity, or with omitted optional parameters.
+                    if methodParameters.Length > 0 &&
                         methodParameters[methodParameters.Length - 1]
                         .GetCustomAttributesData().Any(
-                        (data CustomAttributeData) -> data.AttributeType.FullName == "System.ParamArrayAttribute"
+                        (data CustomAttributeData) -> data
+                            .AttributeType
+                            .FullName == "System.ParamArrayAttribute" ||
+                            data
+                            .AttributeType
+                            .FullName == "System.Runtime.CompilerServices.ParamCollectionAttribute"
                     ) {
+                        return false
+                    }
+                    if methodParameters.Any((parameter ParameterInfo) -> parameter.IsOptional) {
                         otherArity.Add(types)
                     }
                 }

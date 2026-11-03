@@ -27,6 +27,41 @@ public class S {
     public void Use(Payload p, int extra = 0) { }
 }`
 
+    private const ParamsLibrarySource string = `namespace ParamsLib;
+public struct Token { public int Raw; }
+public struct Payload {
+    public int Raw;
+    public static implicit operator Payload(Token t) => new Payload { Raw = t.Raw };
+}
+public class S {
+    public void Use(params Payload[] values) { }
+}`
+
+    @Fact
+    func ImportedParamsOverloadInExpandedForm_RemovesAByReferenceFact() {
+        let source = `package T
+import System
+import ParamsLib
+func Run(ref text string?, s S, tok Token) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        s.Use(tok)
+    }
+    return n
+}
+func Main() { }`
+        using let fixture = CSharpFixture(ParamsLibrarySource, assemblyName: "ParamsLib")
+        let errors = GsCompilation(fixture.RuntimeReferences(), GsSyntaxTree.Parse(SourceText.From(source)))
+            .BoundProgram
+            .Diagnostics
+            .Where((diagnostic GsDiagnostic) -> diagnostic.IsError)
+            .Select((d GsDiagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("GS0158@7:16", string.Join(" ", errors))
+    }
+
     @Fact
     func ImportedOptionalOverloadWithAConversion_RemovesAByReferenceFact() {
         let source = `package T
