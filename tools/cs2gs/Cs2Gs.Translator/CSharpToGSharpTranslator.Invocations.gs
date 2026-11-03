@@ -7536,12 +7536,36 @@ partial class CSharpToGSharpTranslator {
                 refArgument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RefKeyword) ||
                     refArgument
                     .RefKindKeyword
-                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword)
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.OutKeyword) || refArgument.RefKindKeyword.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.InKeyword
+                )
             ) {
                 let parameter IParameterSymbol? = this.GetArgumentParameter(refArgument)
                 return parameter == nil || SymbolEqualityComparer.IncludeNullability.Equals(
                     projectedType,
                     parameter.Type
+                )
+            }
+            if directParent!!.AncestorsAndSelf().OfType[RefExpressionSyntax]().FirstOrDefault() is {} refExpression {
+                let refSink ISymbol? = this.ResolveValueSink(refExpression)
+                let refDestinationType ITypeSymbol? = switch refSink {
+                    case local is ILocalSymbol: local.Type
+                    case field is IFieldSymbol: field.Type
+                    case property is IPropertySymbol: property.Type
+                    case method is IMethodSymbol: method.ReturnType
+                    case parameter is IParameterSymbol: parameter.Type
+                    default: this
+                        .context
+                        .GetTypeInfo(refExpression)
+                        .ConvertedType ??
+                        this
+                        .context
+                        .GetTypeInfo(refExpression)
+                        .Type
+                }
+                return refDestinationType != nil && SymbolEqualityComparer.IncludeNullability.Equals(
+                    projectedType,
+                    refDestinationType
                 )
             }
             if CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(projectedType, this.context.Compilation) {

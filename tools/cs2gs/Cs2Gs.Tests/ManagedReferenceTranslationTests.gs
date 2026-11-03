@@ -7437,6 +7437,7 @@ public class Box<T> {
     public void Add(T value) { }
 }
 public class Base<T> {
+    public T ScalarValue;
     public Box<T> Value = new();
     public T PropValue { get; set; }
     public virtual event Action<T> Changed;
@@ -7483,10 +7484,13 @@ public class MultiLevelBoxDerived : Mid<ManagedRef<int>> { }
 public class LambdaMemberDerived : Base<ManagedRef<int>> { }
 public class MemberReadDerived : Base<ManagedRef<int>> { }
 public class ConditionalAccessDerived : Base<ManagedRef<int>> { }
+public class RefLocalDerived : Base<ManagedRef<int>> { }
+public class RefReturnDerived : Base<ManagedRef<int>> { }
 public class Probe {
     private static readonly Box<ManagedRef<int>> FixedBox = new();
     private static void AcceptFixed(Base<ManagedRef<int>> value) { }
     private static void AcceptBox(Box<ManagedRef<int>> value) { }
+    private static ref ManagedRef<int> BorrowScalar(RefReturnDerived value) => ref value.ScalarValue;
 
     public static void Run(
         bool flag,
@@ -7564,6 +7568,14 @@ public class Probe {
         ConditionalAccessDerived conditionalAccess = new();
         conditionalAccess?.Use(FixedBox);
         conditionalAccess.Add(source[0]);
+
+        var refLocalDerived = new RefLocalDerived();
+        ref ManagedRef<int> alias = ref refLocalDerived.ScalarValue;
+        refLocalDerived.Add(source[0]);
+
+        var refReturnDerived = new RefReturnDerived();
+        _ = BorrowScalar(refReturnDerived);
+        refReturnDerived.Add(source[0]);
     }
 }`
         let references = List[MetadataReference](
@@ -7578,7 +7590,7 @@ public class Probe {
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Equal(
-            21,
+            23,
             context.Diagnostics.Count(
                 (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
                     diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
@@ -7623,6 +7635,8 @@ public class Probe {
         Assert.Contains("open class LambdaMemberDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class MemberReadDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
         Assert.Contains("open class ConditionalAccessDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class RefLocalDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class RefReturnDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
     }
 
     shared {
