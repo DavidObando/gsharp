@@ -28,6 +28,8 @@ class TranslationContext {
         (Id string?, Tree SyntaxTree?, Start int32, Length int32, Discriminator string?, Message string?)
     ] = HashSet[(Id string?, Tree SyntaxTree?, Start int32, Length int32, Discriminator string?, Message string?)]()
 
+    private var suppressDiagnosticsDepth int32
+
     // Issue #1910: a partial type's other declarations live in different
     // `SyntaxTree`s than the one this context was created for, so resolving a
     // symbol on one of their members requires a `SemanticModel` bound to THAT
@@ -48,6 +50,8 @@ class TranslationContext {
     private let siblingCompilations IReadOnlyList[CSharpCompilation]?
 
     private let repositoryCompilations IReadOnlyList[CSharpCompilation]?
+
+    private let rootCompilation CSharpCompilation
 
     /// Initializes a new instance of the (cref:TranslationContext) class.
     /// @param compilation The owning C# compilation.
@@ -84,15 +88,25 @@ class TranslationContext {
         repositoryCompilations IReadOnlyList[CSharpCompilation]? = nil
     ) {
         this.Compilation = compilation ?? throw ArgumentNullException("compilation")
+        this.rootCompilation = this.Compilation
         this.SemanticModel = semanticModel ?? throw ArgumentNullException("semanticModel")
+        this.modelsByTree[this.SemanticModel.SyntaxTree] = this.SemanticModel
         this.FilePath = filePath
         this.siblingCompilations = siblingCompilations
         this.repositoryCompilations = repositoryCompilations
+        ObliviousNullabilityAnalyzer.RegisterSourceAssemblies(
+            this.Compilation,
+            this.repositoryCompilations ?? this.siblingCompilations
+        )
     }
+
+    /// Gets the root C# compilation this context was created for.
+    prop RootCompilation CSharpCompilation -> this.rootCompilation
 
     /// Gets the owning C# compilation.
     prop Compilation CSharpCompilation {
         get;
+        private set;
     }
 
     /// Gets every project's own (cref:CSharpCompilation) loaded
@@ -143,13 +157,33 @@ class TranslationContext {
         if tree == nil || tree == this.SemanticModel.SyntaxTree {
             return NoOpScope.Instance
         }
-        if !this.modelsByTree.TryGetValue(tree, out var model) {
-            model = this.Compilation.GetSemanticModel(tree)
+        this.modelsByTree.TryAdd(this.SemanticModel.SyntaxTree, this.SemanticModel)
+        var ownerCompilation CSharpCompilation = this.Compilation
+        if this.modelsByTree.TryGetValue(tree, out var model) {
+            ownerCompilation = (model.Compilation as CSharpCompilation) ?? ownerCompilation
+        } else {
+            if !ownerCompilation.ContainsSyntaxTree(tree) {
+                if this.rootCompilation.ContainsSyntaxTree(tree) {
+                    ownerCompilation = this.rootCompilation
+                } else {
+                    for candidate in(this.repositoryCompilations ?? Array.Empty[CSharpCompilation]()).Concat(
+                        this.siblingCompilations ?? Array.Empty[CSharpCompilation]()
+                    ) {
+                        if candidate != nil && candidate.ContainsSyntaxTree(tree) {
+                            ownerCompilation = candidate
+                            break
+                        }
+                    }
+                }
+            }
+            model = ownerCompilation.GetSemanticModel(tree)
             this.modelsByTree[tree] = model
         }
-        let previous = this.SemanticModel
+        let previousCompilation = this.Compilation
+        let previousModel = this.SemanticModel
+        this.Compilation = ownerCompilation
         this.SemanticModel = model
-        return RestoreModelScope(this, previous)
+        return RestoreModelScope(this, previousCompilation, previousModel)
     }
 
     /// Resolves the declared symbol for a declaration node via the active model.
@@ -184,6 +218,9 @@ class TranslationContext {
         if diagnostic == nil {
             throw ArgumentNullException("diagnostic")
         }
+        if this.suppressDiagnosticsDepth > 0 {
+            return
+        }
         let location Location? = diagnostic.Location
         if location?.SourceTree == nil || diagnostic.DiagnosticId == nil {
             this.diagnostics.Add(diagnostic)
@@ -212,6 +249,9 @@ class TranslationContext {
         if diagnostic == nil {
             throw ArgumentNullException("diagnostic")
         }
+        if this.suppressDiagnosticsDepth > 0 {
+            return
+        }
         this.diagnostics.Add(diagnostic)
     }
 
@@ -226,6 +266,9 @@ class TranslationContext {
     func ReportUnsupported(node SyntaxNode?, message string?, diagnosticId string? = nil) {
         if node == nil {
             throw ArgumentNullException("node")
+        }
+        if this.suppressDiagnosticsDepth > 0 {
+            return
         }
         // The exhaustiveness choke point (ADR-0138): a kind registered in
         // UnsupportedByDesign is a recorded design decision; anything else is
@@ -245,16 +288,42 @@ class TranslationContext {
         this.diagnostics.Add(diagnostic)
     }
 
-    private class RestoreModelScope : IDisposable {
-        private let owner TranslationContext
-        private let previous SemanticModel
+    internal func SuspendDiagnostics() IDisposable {
+        this.suppressDiagnosticsDepth++
+        return RestoreDiagnosticsScope(this)
+    }
 
-        init(owner TranslationContext, previous SemanticModel) {
+    private class RestoreDiagnosticsScope : IDisposable {
+        private let owner TranslationContext
+        private var disposed bool
+
+        init(owner TranslationContext) {
             this.owner = owner
-            this.previous = previous
         }
 
-        func Dispose() -> this.owner.SemanticModel = this.previous
+        func Dispose() {
+            if !this.disposed {
+                this.disposed = true
+                this.owner.suppressDiagnosticsDepth--
+            }
+        }
+    }
+
+    private class RestoreModelScope : IDisposable {
+        private let owner TranslationContext
+        private let previousCompilation CSharpCompilation
+        private let previousModel SemanticModel
+
+        init(owner TranslationContext, previousCompilation CSharpCompilation, previousModel SemanticModel) {
+            this.owner = owner
+            this.previousCompilation = previousCompilation
+            this.previousModel = previousModel
+        }
+
+        func Dispose() {
+            this.owner.Compilation = this.previousCompilation
+            this.owner.SemanticModel = this.previousModel
+        }
     }
 
     private class NoOpScope : IDisposable {

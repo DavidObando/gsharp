@@ -24,6 +24,16 @@ partial class CSharpToGSharpTranslator {
             string,
             (Source ExpressionSyntax?, Path IReadOnlyList[int32])
         ] = Dictionary[string, (Source ExpressionSyntax, Path IReadOnlyList[int32])]()
+        private let predeclaredOutLocalNames Dictionary[ILocalSymbol, string] = Dictionary[ILocalSymbol, string](
+            SymbolEqualityComparer.Default
+        )
+        private let predeclaredOutLocalInProgress HashSet[ILocalSymbol] = HashSet[ILocalSymbol](
+            SymbolEqualityComparer.Default
+        )
+        private let claimedPredeclaredOutNamesByBody Dictionary[SyntaxNode, HashSet[string]] = Dictionary[
+            SyntaxNode,
+            HashSet[string]
+        ]()
         private enum DelegateArgumentBehavior {
             NotObserved,
             InvokedDuringCall,
@@ -47,6 +57,8 @@ partial class CSharpToGSharpTranslator {
             let hasExplicitType = !declaration!!.Type.IsVar
             for declarator in declaration!!.Variables {
                 var localAcceptsNil = false
+                var bridgeTarget ILocalSymbol? = nil
+                var bridgeTargetType ITypeSymbol? = nil
                 var initializer GExpression?
                 if declarator.Initializer == nil {
                     initializer = nil
@@ -116,12 +128,8 @@ partial class CSharpToGSharpTranslator {
                             )
                         }
                     }
-                    initializer = this.ForgiveNullableReferenceValue(
-                        initializerSyntax,
-                        initializer,
-                        targetType,
-                        localTarget
-                    )
+                    bridgeTarget = localTarget
+                    bridgeTargetType = targetType
                 }
                 var binding BindingKind
                 if isConst {
@@ -353,6 +361,34 @@ partial class CSharpToGSharpTranslator {
                         this.context,
                         declaration!!.Type.GetLocation()
                     )
+                }
+                // Issue #5602: the initializer is a store into the storage that the
+                // declaration emits. A type clause fixes that storage, so a promoted
+                // value gets the bridge that an assignment to the local gets. Without
+                // a clause, G# infers the storage from the initializer.
+                if bridgeTarget != nil {
+                    initializer = this.ForgiveNullableReferenceValue(
+                        declarator.Initializer!!.Value,
+                        initializer,
+                        bridgeTargetType,
+                        bridgeTarget,
+                        includePromotedValue: type != nil
+                    )
+                }
+                // Issue #5561: record whether the emitted storage accepts nil.
+                if this.context.GetDeclaredSymbol(declarator) is ILocalSymbol storageLocal &&
+                    (type != nil || initializer != nil) {
+                    this.state.LocalHoldsPromotedValueAnswers.Clear()
+                    if type != nil {
+                        this.state.EmittedLocalTypeClauses.Add(storageLocal)
+                    }
+                    this.state.EmittedLocalStorageAcceptsNil[storageLocal] = if type != nil {
+                        type.IsNullable
+                    } else {
+                        // G# infers the type from the emitted initializer; only an
+                        // initializer that is certainly non-null fixes non-null storage.
+                        !this.GSharpExpressionIsStaticallyNonNull(declarator.Initializer?.Value, initializer)
+                    }
                 }
                 // Issue #4356: record the emitted G# nullability of this local
                 // (analyzer mode), for every later read of it.
@@ -2612,19 +2648,16 @@ partial class CSharpToGSharpTranslator {
                 if !preserveExistingValues {
                     values.Clear()
                 }
-                if !assignedValues.TryGetValue(assignment, out var value) {
+                var value ExpressionSyntax?
+                if !assignedValues.TryGetValue(assignment, out value) {
                     let aliasPath HashSet[ISymbol]? = if visited == nil {
                         default(HashSet[ISymbol]?)
                     } else {
                         HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
                     }
-                    // ResolveStableTupleAlias returns its input or a reaching value, never null;
-                    // self-migration types that result as nullable (issue #4598).
-                    let source ExpressionSyntax? = this.ResolveStableTupleAlias(assignment.Right, aliasPath)!!
-                    // ProjectTupleElement never returns null; self-migration types
-                    // the result as nullable (issue #4598).
-                    value = ProjectTupleElement(source, path)!!
-                    assignedValues.Add(assignment, value)
+                    let source ExpressionSyntax? = this.ResolveStableTupleAlias(assignment.Right, aliasPath)
+                    value = ProjectTupleElement(source, path)
+                    assignedValues.Add(assignment, value!!)
                 }
                 if preserveDelegateCompoundAssignments && assignment.IsKind(SyntaxKind.SubtractAssignmentExpression) {
                     let priorAddition = FindEnclosingExecutable(assignment)
@@ -2636,13 +2669,13 @@ partial class CSharpToGSharpTranslator {
                     )
                     if !priorAddition && values.Count == 1 {
                         let existing = this.ResolveStableTupleAlias(values.Single()) ?? values.Single()
-                        if SyntaxFactory.AreEquivalent(existing, value) {
+                        if SyntaxFactory.AreEquivalent(existing, value!!) {
                             values.Clear()
                         }
                     }
                     continue
                 }
-                values.Add(value)
+                values.Add(value!!)
             }
         }
 
@@ -2685,9 +2718,7 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
                 }
-                // ResolveStableTupleAlias returns its input or a reaching value, never null;
-                // self-migration types that result as nullable (issue #4598).
-                let source ExpressionSyntax? = this.ResolveStableTupleAlias(writtenValue, aliasPath)!!
+                let source ExpressionSyntax? = this.ResolveStableTupleAlias(writtenValue, aliasPath)
                 if elementPath.Count == 0 {
                     values.Clear()
                     values.Add(source!!)
@@ -2703,13 +2734,12 @@ partial class CSharpToGSharpTranslator {
                 }
                 for previous in previousValues {
                     let key = (write, TupleReachingStateKey(previous))
-                    if !elementAssignedValues.TryGetValue(key, out var updated) {
-                        // ReplaceTupleElement never returns null; self-migration types
-                        // the result as nullable (issue #4598).
-                        updated = this.ReplaceTupleElement(previous, local.Type, elementPath, 0, source!!)!!
-                        elementAssignedValues.Add(key, updated)
+                    var updated ExpressionSyntax?
+                    if !elementAssignedValues.TryGetValue(key, out updated) {
+                        updated = this.ReplaceTupleElement(previous, local.Type, elementPath, 0, source!!)
+                        elementAssignedValues.Add(key, updated!!)
                     }
-                    values.Add(updated)
+                    values.Add(updated!!)
                 }
             }
         }
@@ -3462,19 +3492,25 @@ partial class CSharpToGSharpTranslator {
         // indexer (arrays resolve to no symbol at all) is not itself promoted to
         // `T?` by the taint fixpoint. An already-nullable sink has nothing to
         // forgive, and a compound assignment is a different shape entirely.
-        private func ElementAccessAssignmentRequiresNonNullReference(assignment AssignmentExpressionSyntax?) bool {
-            if !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) ||
-                !(assignment!!.Left is ElementAccessExpressionSyntax) ||
-                this.IsNullableArrayElementAccess(assignment!!.Left) ||
+        private func ElementAccessAssignmentRequiresNonNullReference(
+            assignment AssignmentExpressionSyntax?
+        ) bool -> assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+            this.ElementAccessStoreRequiresNonNullReference(assignment!!.Left)
+
+        // Issue #5595: the target half of the rule above. A deconstruction into an
+        // element-access target (`(arr[0], i) = entry`) has no right-hand side per
+        // element, so its store bridge asks this with the target alone.
+        private func ElementAccessStoreRequiresNonNullReference(target ExpressionSyntax) bool {
+            if !(target is ElementAccessExpressionSyntax) || this.ElementStoreSlotAcceptsNil(target) ||
                 // Issue #5537: the element of oblivious container storage is `T?`.
-            this.WritesObliviousContainerStorageElement(assignment!!.Right) {
+            this.StoreTargetIsObliviousContainerElement(target) {
                 return false
             }
             let leftSymbol ISymbol? = this.GetProjectedAssignmentTarget(
-                assignment!!.Left,
-                this.context.GetSymbolInfo(assignment!!.Left).Symbol
+                target,
+                this.context.GetSymbolInfo(target).Symbol
             )
-            let leftType ITypeSymbol? = this.GetAssignmentTargetType(assignment!!.Left, leftSymbol)
+            let leftType ITypeSymbol? = this.GetAssignmentTargetType(target, leftSymbol)
             if !(leftType != nil && leftType.IsReferenceType == true) ||
                 leftType.NullableAnnotation == Microsoft
                 .CodeAnalysis
@@ -3482,7 +3518,174 @@ partial class CSharpToGSharpTranslator {
                 .Annotated {
                 return false
             }
+            // An `[AllowNull]` indexer, also one that another project of the run
+            // emits (#4356), is promoted, so it takes a nullable value.
             return leftSymbol is not IPropertySymbol indexer || !this.ShouldPromoteToNullableReference(indexer)
+        }
+
+        // Issues #4500, #4525 and #5595: whether the slot that an element-access
+        // store target writes accepts nil: an array element that cs2gs emits `T?`,
+        // or a slot that a prebuilt oblivious library declares. No bridge asserts a
+        // value stored there, in a plain assignment or in a deconstruction.
+        private func ElementStoreSlotAcceptsNil(target ExpressionSyntax?) bool {
+            if this.IsNullableArrayElementAccess(target) {
+                return true
+            }
+            if target is not ElementAccessExpressionSyntax access {
+                return false
+            }
+            return this.ElementStoreSlotIsImportedOblivious(
+                access,
+                this.GetProjectedAssignmentTarget(access, this.context.GetSymbolInfo(access).Symbol)
+            )
+        }
+
+        // Issue #3865: gsc imports the value of an oblivious indexer, and the
+        // element of an oblivious array, that a prebuilt library declares as a
+        // platform type, which takes a nullable value. An array element has no
+        // symbol: its contract is the position of the declaration that
+        // `ArrayElementStorage` resolves, read on the original definition, so a
+        // `T[]` whose `T` the consumer substitutes keeps that type argument's
+        // contract, and an annotated position keeps its annotation.
+        private func ElementStoreSlotIsImportedOblivious(target ElementAccessExpressionSyntax, slot ISymbol?) bool {
+            if slot != nil {
+                return this.IsImportedObliviousNullableTarget(slot)
+            }
+            let (root, depth) = this.ArrayElementStorage(target)
+            if root == nil || !this.TargetContractIsFrozenInMetadata(root) {
+                return false
+            }
+            var position ITypeSymbol? = switch root.OriginalDefinition {
+                case field is IFieldSymbol: field.Type
+                case property is IPropertySymbol: property.Type
+                case method is IMethodSymbol: method.ReturnType
+                default: default(ITypeSymbol?)
+            }
+            for var level = 0; level < depth; level++ {
+                position = (position as IArrayTypeSymbol)?.ElementType
+            }
+            return ObliviousNullabilityAnalyzer.IsObliviousConcreteReferencePosition(position)
+        }
+
+        /// Issue #5595: the declaration whose declared type holds the slot of an array
+        /// element store, and the number of array levels from that type to the slot.
+        /// The walk goes through parentheses, nested array accesses (`grid[0][1]`),
+        /// slices (`grid[1..]`), `var` locals that G# infers from their initializer
+        /// (`var row = grid[0]`), and loop variables that G# infers from an array
+        /// (`foreach (var row in grid)`).
+        /// @param target The array element store target.
+        /// @returns The field, property, method, parameter, indexer or explicitly typed
+        /// local, or a nil root when the storage is not a declaration (a cast, a
+        /// conditional receiver, or a `foreach` or pattern variable that G# infers).
+        private func ArrayElementStorage(target ElementAccessExpressionSyntax)(Root ISymbol?, Depth int32) {
+            var receiver ExpressionSyntax? = target.Expression
+            var depth = 1
+            for var step = 0; step < 16; step++ {
+                receiver = Unparenthesize(receiver)
+                let symbol ISymbol? = this.context.GetSymbolInfo(receiver).Symbol
+                if receiver is ElementAccessExpressionSyntax inner && symbol == nil {
+                    // A `System.Range` access is a slice of the same array type.
+                    if !this.IsRangeElementAccess(inner) {
+                        depth++
+                    }
+                    receiver = inner.Expression
+                    continue
+                }
+                if symbol is ILocalSymbol local {
+                    let initializer ExpressionSyntax? = this.InferredLocalInitializer(local)
+                    if initializer != nil {
+                        receiver = initializer
+                        continue
+                    }
+                    // A loop variable without a type clause is an element of its array.
+                    let collection ExpressionSyntax? = this.InferredForEachArray(local)
+                    if collection != nil {
+                        receiver = collection
+                        depth++
+                        continue
+                    }
+                    return if this.LocalDeclarationHasTypeClause(local) {
+                        (cast[ISymbol](local), depth)
+                    } else {
+                        (default(ISymbol?), 0)
+                    }
+                }
+                if symbol is IFieldSymbol ||
+                    symbol is IPropertySymbol ||
+                    symbol is IMethodSymbol ||
+                    symbol is IParameterSymbol {
+                    return (symbol, depth)
+                }
+                return (nil, 0)
+            }
+            return (nil, 0)
+        }
+
+        // Whether the emitted declaration of a local states its type: a C# type clause,
+        // or the `T?` clause that `InferredLocalDeclarationIsNullable` adds to a `var` local.
+        private func LocalDeclarationHasTypeClause(local ILocalSymbol) bool {
+            return switch local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() {
+                case declarator is VariableDeclaratorSyntax: declarator.Parent is VariableDeclarationSyntax{
+                    Type: {IsVar: false}
+                } ||
+                    this.InferredLocalDeclarationIsNullable(local)
+                case single is SingleVariableDesignationSyntax: this.OutDeclarationRequiresPredeclaration(single, local)
+                case forEach is ForEachStatementSyntax: this.ForEachHasTypeClause(forEach)
+                default: false
+            }
+        }
+
+        // The loop emitter states the loop variable's type only for a non-identity
+        // element conversion (#3935); otherwise G# infers it from the sequence.
+        private func ForEachHasTypeClause(forEach ForEachStatementSyntax) bool {
+            let conversion = this.context.SemanticModel.GetForEachStatementInfo(forEach).ElementConversion
+            return !forEach.Type.IsVar && !conversion.IsIdentity
+        }
+
+        // The array that a loop variable without a type clause iterates.
+        private func InferredForEachArray(local ILocalSymbol) ExpressionSyntax? {
+            return if local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is ForEachStatementSyntax forEach &&
+                !this.ForEachHasTypeClause(forEach) &&
+                this
+                .context
+                .GetTypeInfo(forEach.Expression)
+                .Type is IArrayTypeSymbol {
+                forEach.Expression
+            } else {
+                nil
+            }
+        }
+
+        private func IsRangeElementAccess(access ElementAccessExpressionSyntax) bool {
+            let rangeType ITypeSymbol? = this.context.Compilation.GetTypeByMetadataName("System.Range")
+            return rangeType != nil &&
+                access
+                .ArgumentList
+                .Arguments
+                .Count == 1 &&
+                SymbolEqualityComparer
+                .Default
+                .Equals(this.context.GetTypeInfo(access.ArgumentList.Arguments[0].Expression).Type, rangeType)
+        }
+
+        // The initializer of a `var` local whose emitted declaration has no type
+        // clause (see `InferredLocalDeclarationIsNullable`), so G# infers the local
+        // from that initializer.
+        private func InferredLocalInitializer(local ILocalSymbol) ExpressionSyntax? {
+            if this.InferredLocalDeclarationIsNullable(local) {
+                return nil
+            }
+            if local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} declarator &&
+                declarator.Parent is VariableDeclarationSyntax{Type: {IsVar: true}} {
+                return initializer
+            }
+            return nil
         }
 
         // Issue #2427 (oblivious sink): a plain REASSIGNMENT (`path = (pathStub +
@@ -3633,7 +3836,234 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateOutVarDesignation(single SingleVariableDesignationSyntax) GExpression {
-            return OutArgumentExpression("out var", this.EmittedName(single, single.Identifier))
+            let name = this.EmittedName(single, single.Identifier)!!
+            if this.context.GetDeclaredSymbol(single) is ILocalSymbol local &&
+                this
+                .OutDeclarationRequiresNullablePredeclaration(single, local) {
+                let ctorInit = single.Ancestors().OfType[ConstructorInitializerSyntax]().FirstOrDefault()
+                let escapesCtorInit = ctorInit?.Parent is ConstructorDeclarationSyntax ctor &&
+                    (
+                    this.ScopeReferencesLocal(ctor.Body, local) || this.ScopeReferencesLocal(ctor.ExpressionBody, local)
+                )
+                if (
+                    this.state.FunctionArgumentOutDeclarations ?? this.state.PendingSpillPrologue
+                ) is not{} declarations ||
+                    escapesCtorInit {
+                    this.context.ReportUnsupported(
+                        single,
+                        "a constructor-initializer 'out' variable requiring nullable pre-declaration has no enclosing declaration seam in G# (issue #4598)."
+                    )
+                    return OutArgumentExpression("out var", name)
+                }
+                if !(
+                    single.Parent is DeclarationExpressionSyntax{
+                        Parent: ArgumentSyntax{
+                            Parent: ArgumentListSyntax{Parent: InvocationExpressionSyntax invocation}
+                        }
+                    } &&
+                        this.RequiresFunctionArgumentSpillSeam(invocation)
+                ) {
+                    let type = this.PromoteIfUsedAsNullable(
+                        this.typeMapper.MapExplicitType(local.Type, this.context, single.GetLocation()),
+                        local
+                    )
+                    this.state.LocalHoldsPromotedValueAnswers.Clear()
+                    if type != nil {
+                        this.state.EmittedLocalTypeClauses.Add(local)
+                    }
+                    this.state.EmittedLocalStorageAcceptsNil[local] = type != nil && type.IsNullable
+                    this.RecordEmittedLocalNullability(local, type, nil, nil)
+                    if !declarations.Any(
+                        (statement GStatement) -> statement is LocalDeclarationStatement existing &&
+                            existing.Name == name
+                    ) {
+                        declarations.Add(LocalDeclarationStatement(BindingKind.Var, name, type))
+                    }
+                }
+                return OutArgumentExpression("out", name)
+            }
+            return OutArgumentExpression("out var", name)
+        }
+
+        private func ScopeReferencesLocal(scope_ SyntaxNode?, local ILocalSymbol) bool {
+            if scope_ == nil {
+                return false
+            }
+            for identifier in scope_.DescendantNodes().OfType[IdentifierNameSyntax]() {
+                if identifier.Identifier.ValueText == local.Name && SymbolEqualityComparer.Default.Equals(
+                    this.context.GetSymbolInfo(identifier).Symbol,
+                    local
+                ) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func OutDeclarationRequiresPredeclaration(
+            single SingleVariableDesignationSyntax,
+            local ILocalSymbol
+        ) bool {
+            if single.Parent is DeclarationExpressionSyntax{Parent: ArgumentSyntax argument} &&
+                argument
+                .RefKindKeyword
+                .IsKind(SyntaxKind.OutKeyword) {
+                if argument.Parent is ArgumentListSyntax{Parent: InvocationExpressionSyntax invocation} &&
+                    this.RequiresFunctionArgumentSpillSeam(invocation) {
+                    return true
+                }
+                return this.OutDeclarationRequiresNullablePredeclaration(single, local)
+            }
+            return false
+        }
+
+        // Issue #4598: G# types `out var x` from the callee's `out` parameter.
+        // When the local is promoted to `T?` and that parameter does not
+        // already supply `T?` in this compilation, pre-declare `var x T?` and
+        // pass `out x` so a nullable write to `x` binds without a throwing `!!`.
+        private func OutDeclarationRequiresNullablePredeclaration(
+            single SingleVariableDesignationSyntax,
+            local ILocalSymbol
+        ) bool {
+            if single.Parent is DeclarationExpressionSyntax{Parent: ArgumentSyntax argument} &&
+                argument
+                .RefKindKeyword
+                .IsKind(SyntaxKind.OutKeyword) && this.ShouldPromoteToNullableReference(local) {
+                return !(
+                    this
+                        .context
+                        .SemanticModel
+                        .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
+                        parameter
+                        .OriginalDefinition
+                        .DeclaringSyntaxReferences
+                        .Any(
+                        (reference SyntaxReference) -> this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)
+                    ) &&
+                        this.ShouldPromoteToNullableReference(parameter.OriginalDefinition)
+                )
+            }
+            return false
+        }
+
+        private func GetPredeclaredOutBodyScope(node SyntaxNode) SyntaxNode -> node.Ancestors().FirstOrDefault(
+            (ancestor SyntaxNode) -> ancestor is BaseMethodDeclarationSyntax ||
+                ancestor is AccessorDeclarationSyntax ||
+                ancestor is BasePropertyDeclarationSyntax ||
+                ancestor is LocalFunctionStatementSyntax ||
+                ancestor is AnonymousFunctionExpressionSyntax
+        ) ??
+            this
+            .state
+            .CurrentBodyScope ??
+            node
+            .SyntaxTree
+            .GetRoot()
+
+        private func GetPredeclaredOutLocalName(
+            single SingleVariableDesignationSyntax,
+            local ILocalSymbol,
+            context GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext
+        ) string {
+            if this.predeclaredOutLocalNames.TryGetValue(local, out var existing) {
+                return existing
+            }
+            let body SyntaxNode = this.GetPredeclaredOutBodyScope(single)
+            if !this.claimedPredeclaredOutNamesByBody.TryGetValue(body, out var claimed) {
+                claimed = HashSet[string](StringComparer.Ordinal)
+                this.claimedPredeclaredOutNamesByBody.Add(body, claimed)
+            }
+            let stem = this.nameAllocator.GetName(local, context)!!
+            if !this.predeclaredOutLocalInProgress.Add(local) {
+                return stem
+            }
+            try {
+                let occupied = this.CollectOccupiedSynthesizedLocalNames(body)
+                var candidate = stem
+                for var suffix = 2; claimed.Contains(candidate) || this.BodyHasConflictingLocalName(
+                    body,
+                    local,
+                    candidate,
+                    isOriginalStem: candidate == stem
+                ) ||
+                    (candidate != stem && !this.TryClaimSynthesizedLocalName(candidate, single));
+                    suffix++ {
+                    candidate = "${stem}_$suffix"
+                }
+                if candidate == stem {
+                    this.ReserveSynthesizedLocalName(candidate, single)
+                }
+                claimed.Add(candidate)
+                occupied.Add(candidate)
+                this.predeclaredOutLocalNames.Add(local, candidate)
+                return candidate
+            } finally {
+                this.predeclaredOutLocalInProgress.Remove(local)
+            }
+        }
+
+        private func BodyHasConflictingLocalName(
+            body SyntaxNode,
+            local ILocalSymbol,
+            candidate string,
+            isOriginalStem bool
+        ) bool {
+            using let modelScope = this.context.UseSemanticModelFor(body.SyntaxTree)
+            for token in body.DescendantTokens() {
+                if !token.IsKind(SyntaxKind.IdentifierToken) {
+                    continue
+                }
+                if !isOriginalStem &&
+                    (token.ValueText == candidate || this.nameAllocator.GetName(token.ValueText) == candidate) {
+                    return true
+                }
+                if token.Parent == nil {
+                    continue
+                }
+                let symbol ISymbol? = this.context.GetDeclaredSymbol(token.Parent) ??
+                    this
+                    .context
+                    .GetSymbolInfo(token.Parent)
+                    .Symbol
+                if symbol == nil || SymbolEqualityComparer.Default.Equals(symbol, local) {
+                    continue
+                }
+                let isLocalScopeSymbol = symbol is ILocalSymbol ||
+                    symbol is IParameterSymbol ||
+                    symbol is IRangeVariableSymbol ||
+                    symbol is ILabelSymbol ||
+                    (symbol is IMethodSymbol method && method.MethodKind == MethodKind.LocalFunction)
+                let isUnqualifiedMemberReference = !isLocalScopeSymbol &&
+                    token.Parent is SimpleNameSyntax simple &&
+                    (simple.Parent is not MemberAccessExpressionSyntax access || access.Name != simple) &&
+                    !(simple.Parent is MemberBindingExpressionSyntax)
+                if !isLocalScopeSymbol && !isUnqualifiedMemberReference {
+                    continue
+                }
+                if symbol is ILocalSymbol otherLocal &&
+                    otherLocal
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax() is SingleVariableDesignationSyntax otherSingle &&
+                    this
+                    .OutDeclarationRequiresPredeclaration(otherSingle, otherLocal) {
+                    if !object.ReferenceEquals(this.GetPredeclaredOutBodyScope(otherSingle), body) &&
+                        !body
+                        .Span
+                        .Contains(otherSingle.Span) && this.GetPredeclaredOutLocalName(
+                        otherSingle,
+                        otherLocal,
+                        GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.General
+                    ) == candidate {
+                        return true
+                    }
+                    continue
+                }
+                if this.nameAllocator.GetName(symbol) == candidate {
+                    return true
+                }
+            }
+            return false
         }
 
         // Reports whether the element-access target indexes by `int32`: a C# array,
@@ -4425,8 +4855,17 @@ partial class CSharpToGSharpTranslator {
             // Issues #4500 and #4525: a write into an element of an array
             // cs2gs emits as `T?` accepts nil, so none of the null-forgiveness
             // bridges below may assert the value. The coercions above still apply.
-            if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && this.IsNullableArrayElementAccess(
-                assignment.Left
+            // Issue #5595: the same holds for a slot of a prebuilt oblivious library,
+            // unless a user-defined conversion converts the value: the bridges below
+            // decide the operator's input.
+            if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                (
+                this.IsNullableArrayElementAccess(assignment.Left) ||
+                    (
+                    this.ElementStoreSlotAcceptsNil(assignment.Left) && !this.FlowsThroughUserDefinedConversion(
+                        assignment.Right
+                    )
+                )
             ) {
                 return value
             }
@@ -4473,7 +4912,11 @@ partial class CSharpToGSharpTranslator {
             // Issue #5516: G# infers a `var` local from its initializer, so the storage is fixed
             // non-null only when that initializer is not nullable by declaration.
             var inferredStorageIsNonNull = false
-            if assignmentTarget is ILocalSymbol inferredAssignmentLocal &&
+            if this.LocalStoreAcceptsNil(assignmentTarget) {
+                assignmentTargetType = assignmentTargetType?.WithNullableAnnotation(
+                    Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                )
+            } else if assignmentTarget is ILocalSymbol inferredAssignmentLocal &&
                 inferredAssignmentLocal
                 .DeclaringSyntaxReferences
                 .FirstOrDefault()
@@ -4541,10 +4984,20 @@ partial class CSharpToGSharpTranslator {
                 case element is ElementAccessExpressionSyntax: element.Expression
                 default: default(ExpressionSyntax?)
             }
-            return if receiver != nil && target != nil && this.GetManagedReferenceArrayProjectedExpressionType(
+            return if receiver != nil && target != nil && this.GetProjectedReceiverType(
                 receiver
             ) is INamedTypeSymbol projectedReceiver {
                 this.GetProjectedMember(projectedReceiver, target) ?? target
+            } else if receiver == nil &&
+                left is IdentifierNameSyntax &&
+                target is {IsStatic: false} &&
+                this
+                .context
+                .SemanticModel
+                .GetEnclosingSymbol(left.SpanStart)
+                ?.ContainingType is INamedTypeSymbol enclosingType &&
+                this.HasProjectedBaseType(enclosingType) {
+                this.GetProjectedMember(enclosingType, target) ?? target
             } else {
                 target
             }
@@ -4723,6 +5176,7 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 if this.TryGetDeconstructionTargets(assignment.Left, out var binding, out var names) {
+                    this.RegisterProjectedDeconstructionBindings(assignment.Left, assignment.Right)
                     return []GStatement{
                         cast[GStatement](
                             TupleDeconstructionStatement(binding, names, this.TranslateExpression(assignment.Right))
@@ -4751,6 +5205,7 @@ partial class CSharpToGSharpTranslator {
                 // RHS by `LowerTupleAssignment`, preserving issue #2234 order.
                 if assignment.Left is DeclarationExpressionSyntax nestedDeclarationExpression &&
                     nestedDeclarationExpression.Designation is ParenthesizedVariableDesignationSyntax nestedDeclaration {
+                    this.RegisterProjectedDeconstructionBindings(assignment.Left, assignment.Right)
                     return this.LowerTupleDeclaration(
                         nestedDeclaration,
                         assignment.Right,
@@ -4758,6 +5213,7 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 if assignment.Left is TupleExpressionSyntax leftTuple {
+                    this.RegisterProjectedDeconstructionBindings(assignment.Left, assignment.Right)
                     return this.LowerTupleAssignment(leftTuple, assignment.Right)
                 }
             }

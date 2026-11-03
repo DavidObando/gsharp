@@ -69,7 +69,16 @@ internal class DocumentTranslationState {
         CollectionElementSlots = Dictionary[SyntaxNode, ITypeSymbol]()
         StoredPatternCaptures = HashSet[GExpression](ReferenceEqualityComparer.Instance)
         EmittedLocalGSharpNullability = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        EmittedLocalStorageAcceptsNil = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        LocalHoldsPromotedValueAnswers = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        LocalHoldsPromotedValueInProgress = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+        EmittedLocalTypeClauses = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
         InferredLocalDefaultTypedDeclarations = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        VarCaptureInputNonNull = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        NilableOnlyInEmittedGSharpLocals = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        NilableOnlyInEmittedGSharpNodes = Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool]()
+        VarCaptureUndecided = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+        LocalsMentioningNilableOnlyValues = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         ConditionalElementReceivers = Dictionary[ElementBindingExpressionSyntax, GExpression]()
         ConditionalElementBindingReplacements = Dictionary[ElementBindingExpressionSyntax, GExpression]()
         LiftedStaticLocalFunctions = Dictionary[IMethodSymbol, string](SymbolEqualityComparer.Default)
@@ -417,9 +426,64 @@ internal class DocumentTranslationState {
         get;
     }
 
+    // Issue #5561: for each local cs2gs EMITTED, whether its G# storage accepts
+    // nil: its type clause, or else whether the initializer that was actually
+    // emitted is not certainly non-null (`GSharpExpressionIsStaticallyNonNull`).
+    // A deconstruction into the local stores its element as is when it does,
+    // and bridges it when it does not.
+    prop EmittedLocalStorageAcceptsNil Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5602: the answers of `LocalHoldsPromotedValue`. An answer depends only on the
+    // emitted-storage records and on the declarations, so a new record clears the answers.
+    prop LocalHoldsPromotedValueAnswers Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5602: the locals whose `LocalHoldsPromotedValue` question is being answered.
+    prop LocalHoldsPromotedValueInProgress HashSet[ILocalSymbol] {
+        get;
+    }
+
+    // Issue #5602: the locals whose declaration emitted a type clause. Their record in
+    // `EmittedLocalStorageAcceptsNil` is the clause's nullability, so it is exact both ways.
+    prop EmittedLocalTypeClauses HashSet[ILocalSymbol] {
+        get;
+    }
+
     // Issue #4445: semantic/CFG default provenance is invariant per local and
     // can be queried repeatedly while lowering one declaration.
     prop InferredLocalDefaultTypedDeclarations Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5582: whether the input of a `var` pattern capture is non-null in G#. The answer is invariant
+    // per capture and each read asks it. A capture whose input is another capture asks again, so the cache
+    // keeps a chain of captures linear.
+    prop VarCaptureInputNonNull Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5582: whether a `var` local is `T?` only in the emitted G#, because its initializer is. The
+    // answer is invariant per local, and the cache keeps a chain of locals linear.
+    prop NilableOnlyInEmittedGSharpLocals Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5582: the same answer for an expression node, so that nested generic calls stay linear.
+    prop NilableOnlyInEmittedGSharpNodes Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool] {
+        get;
+    }
+
+    // Issue #5582: `var` captures whose emitted type the capture decision cannot name. Each form keeps its
+    // previous translation for them.
+    prop VarCaptureUndecided HashSet[ILocalSymbol] {
+        get;
+    }
+
+    // Issue #5582: whether a local's initializer mentions a value that is `T?` only in G#.
+    prop LocalsMentioningNilableOnlyValues Dictionary[ILocalSymbol, bool] {
         get;
     }
 

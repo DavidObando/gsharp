@@ -175,7 +175,7 @@ partial class Binder {
                 returnType TypeSymbol
             ) -> if method.IsAsyncOrSuspending &&
                 !method.IsAsyncVoid &&
-                !IsAsyncIteratorReturnType(returnType) {
+                !IsAsyncIteratorReturnType(method.Type) {
                 Lambdas.WrapAsTask(returnType, method.AsyncReturnsValueTask)
             } else {
                 returnType
@@ -528,7 +528,20 @@ partial class Binder {
             bindRichAnonymousObject: BindRichAnonymousObject,
             bindStructuralAdaptation: BindStructuralAdaptation,
             bindNativeProtocolProbe: (location TextLocation, source BoundExpression, target TypeSymbol) ->
-            BindNativeProtocolConversion(location, source, target, testOnly: true)
+            BindNativeProtocolConversion(location, source, target, testOnly: true),
+            bindSwitchArmHeader: (
+                valueSyntax PatternSyntax,
+                guardSyntax ExpressionSyntax?,
+                discriminant BoundExpression,
+                discriminantStale bool
+            ) -> Statements.BindSwitchArmHeader(valueSyntax, guardSyntax, discriminant, discriminantStale),
+            reapplySwitchArmHeaderEffects: (
+                valueSyntax PatternSyntax,
+                guardSyntax ExpressionSyntax?,
+                header StatementBinder.SwitchArmHeader
+            ) -> Statements.ReapplySwitchArmHeaderEffects(valueSyntax, guardSyntax, header),
+            bindAfterLaterArmTests: (bindLaterTests() -> void, fallsThrough bool, bind() -> BoundNode) ->
+            Statements.BindAfterLaterArmTests(bindLaterTests, fallsThrough, bind)
         )
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor
@@ -3103,9 +3116,7 @@ partial class Binder {
             nil,
             receiver,
             sourceMethod,
-            parameters.Select(
-                (parameter ParameterSymbol) -> cast[BoundExpression](BoundVariableExpression(nil, parameter))
-            )
+            parameters.Select((parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil))
                 .ToImmutableArray(),
             contract.Type
         ){MethodTypeArguments = method.TypeParameters.Cast[TypeSymbol]().ToImmutableArray()}
@@ -3346,9 +3357,7 @@ partial class Binder {
                             expression: "sourceProperty.GetterSymbol"
                         ),
                         indexParameters.Select(
-                            (parameter ParameterSymbol) -> cast[BoundExpression](
-                                BoundVariableExpression(nil, parameter)
-                            )
+                            (parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil)
                         )
                             .ToImmutableArray(),
                         contract.Type
@@ -3393,11 +3402,7 @@ partial class Binder {
                             expression: "sourceProperty.SetterSymbol"
                         ),
                         indexParameters
-                            .Select(
-                            (parameter ParameterSymbol) -> cast[BoundExpression](
-                                BoundVariableExpression(nil, parameter)
-                            )
-                        )
+                            .Select((parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil))
                             .Append(BoundVariableExpression(nil, value))
                             .ToImmutableArray(),
                         TypeSymbol.Void
@@ -4951,6 +4956,7 @@ partial class Binder {
             -1
         }
         let definitions = [segmentTexts.Length]TypeSymbol?
+        let inheritedDeclaringContainers = [segmentTexts.Length]StructSymbol?
         definitions[0] = LookupType(
             segmentTexts[0],
             if headArity > 0 {
@@ -4962,10 +4968,6 @@ partial class Binder {
         if definitions[0] == nil {
             return nil
         }
-        // Every entry from here on is set to a non-null value in the loop
-        // below, or the loop returns null (unresolved segment) before this
-        // method uses definitions[] again — so once execution reaches the
-        // construction pass past the loop, every entry is populated.
         let ResolvedDefinition = func (index int32) TypeSymbol {
             return Invariant.Required(
                 definitions[index],
@@ -4986,7 +4988,8 @@ partial class Binder {
                 -1
             }
             let previousDefinition = ResolvedDefinition(i - 1)
-            if $scope.TryLookupNestedTypeAlias(previousDefinition, segmentTexts[i], preferredArity, out var nested) {
+            let lookupDefinition = (previousDefinition as StructSymbol)?.Definition ?? previousDefinition
+            if $scope.TryLookupNestedTypeAlias(lookupDefinition, segmentTexts[i], preferredArity, out var nested) {
                 definitions[i] = nested
                 continue
             }
@@ -4998,7 +5001,7 @@ partial class Binder {
                 out var inheritedNested,
                 out var declaringContainer
             ) {
-                definitions[i - 1] = declaringContainer
+                inheritedDeclaringContainers[i - 1] = declaringContainer
                 definitions[i] = inheritedNested
                 continue
             }
@@ -5009,43 +5012,70 @@ partial class Binder {
         // closed type; every earlier (outer) generic segment is bound and
         // validated so a malformed `Outer[bad].Inner` is diagnosed here rather
         // than falling through to a confusing CLR-path error.
+        let headIdentifier = Invariant.Required(
+            syntax.Identifier,
+            "a dotted-qualifier type-clause chain has a head Identifier",
+            expression: "syntax.Identifier"
+        )
         var deepest = ResolvedDefinition(segmentTexts.Length - 1)
         let constructedSegments = [segmentTexts.Length]TypeSymbol
         for var i = 0; i < segmentTexts.Length; i++ {
             constructedSegments[i] = ResolvedDefinition(i)
-            if !syntax.SegmentHasTypeArguments(i) {
-                continue
+            if syntax.SegmentHasTypeArguments(i) {
+                let segmentName = if i == 0 {
+                    headIdentifier.ValueText
+                } else {
+                    string.Join(".", segmentTexts, 0, i + 1)
+                }
+                let segmentLocation = if i == 0 {
+                    headIdentifier.Location
+                } else {
+                    syntax.QualifierIdentifierTokens[i - 1].Location
+                }
+                let constructed TypeSymbol? = BindAndConstructUserGenericSegment(
+                    syntax,
+                    ResolvedDefinition(i),
+                    SegmentTypeArguments(i),
+                    segmentLocation,
+                    segmentName
+                )
+                if constructed == nil {
+                    return nil
+                }
+                constructedSegments[i] = constructed
+                if i == segmentTexts.Length - 1 {
+                    deepest = constructed
+                }
             }
-            // This method resolves a dotted-qualifier chain, so its head
-            // segment always has an Identifier token.
-            let headIdentifier = Invariant.Required(
-                syntax.Identifier,
-                "a dotted-qualifier type-clause chain has a head Identifier",
-                expression: "syntax.Identifier"
-            )
-            let segmentName = if i == 0 {
-                headIdentifier.ValueText
-            } else {
-                string.Join(".", segmentTexts, 0, i + 1)
-            }
-            let segmentLocation = if i == 0 {
-                headIdentifier.Location
-            } else {
-                syntax.QualifierIdentifierTokens[i - 1].Location
-            }
-            let constructed TypeSymbol? = BindAndConstructUserGenericSegment(
-                syntax,
-                ResolvedDefinition(i),
-                SegmentTypeArguments(i),
-                segmentLocation,
-                segmentName
-            )
-            if constructed == nil {
-                return nil
-            }
-            constructedSegments[i] = constructed
-            if i == segmentTexts.Length - 1 {
-                deepest = constructed
+            if inheritedDeclaringContainers[i] is {} declaredOwner &&
+                constructedSegments[i] is StructSymbol constructedContainer {
+                var resolvedContainer = constructedContainer
+                if i > 0 {
+                    let precedingEnclosingArgs = CollectConstructedEnclosingArguments(
+                        constructedSegments,
+                        inheritedDeclaringContainers,
+                        0,
+                        i
+                    )
+                    if !precedingEnclosingArgs.IsDefaultOrEmpty {
+                        let ownArgs = resolvedContainer.TypeArguments
+                        resolvedContainer = if ownArgs.IsDefaultOrEmpty {
+                            StructSymbol.ConstructNested(
+                                resolvedContainer.Definition ?? resolvedContainer,
+                                precedingEnclosingArgs,
+                                $scope.References!!.MapClrTypeToReferences
+                            )!!
+                        } else {
+                            StructSymbol.ConstructNestedGeneric(
+                                resolvedContainer.Definition ?? resolvedContainer,
+                                precedingEnclosingArgs,
+                                ownArgs,
+                                $scope.References!!.MapClrTypeToReferences
+                            )!!
+                        }
+                    }
+                }
+                constructedSegments[i] = TypeMemberModel.ResolveStaticMemberOwner(resolvedContainer, declaredOwner)
             }
         }
         // Issue #1521: when the deepest segment is a type nested inside one or
@@ -5063,7 +5093,12 @@ partial class Binder {
         // construction's arguments and the nested type's own arguments so member
         // lookup substitutes both levels and the emitter encodes
         // `Outer`1+Middle`2<int32, string>`.
-        let enclosingArgs = CollectConstructedEnclosingArguments(constructedSegments, segmentTexts.Length - 1)
+        let enclosingArgs = CollectConstructedEnclosingArguments(
+            constructedSegments,
+            inheritedDeclaringContainers,
+            0,
+            segmentTexts.Length - 1
+        )
         if deepest is StructSymbol deepestStruct {
             if !enclosingArgs.IsDefaultOrEmpty {
                 let ownArgs = deepestStruct.TypeArguments
@@ -5470,10 +5505,8 @@ partial class Binder {
         }
         try {
             let closed = clrType.MakeGenericType(clrArgs)
-            if hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(
-                closed,
-                out _
-            ) {
+            if hasSymbolicArg || clrType.FullName?.StartsWith("System.Tuple`", StringComparison.Ordinal) == true ||
+                NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(closed, out _) {
                 return ImportedTypeSymbol.GetConstructed(closed, clrType, symbolicArgs.MoveToImmutable())
             }
             return ResolveClrTypeClauseSymbol(closed)
@@ -9516,7 +9549,7 @@ partial class Binder {
             method.TypeParameters = slot.TypeParameters
             let receiver = AdapterSourceReceiver(adapter, method, sourceField, sourceMemberType, handleMode)
             let arguments = parameters.Select(
-                (parameter ParameterSymbol) -> cast[BoundExpression](BoundVariableExpression(syntax, parameter))
+                (parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, syntax)
             )
                 .ToImmutableArray()
             let call = BoundUserInstanceCallExpression(syntax, receiver, sourceMethod, arguments, slot.Type){
@@ -9567,9 +9600,7 @@ partial class Binder {
                 receiver,
                 callableSourceMethod,
                 slot.Type,
-                parameters.Select(
-                    (parameter ParameterSymbol) -> cast[BoundExpression](BoundVariableExpression(syntax, parameter))
-                )
+                parameters.Select((parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, syntax))
                     .ToImmutableArray(),
                 callableSourceMethod.GetParameters().Select(GetAdapterRefKind).ToImmutableArray(),
                 typeArgumentSymbols: slot.TypeParameters.Cast[TypeSymbol?]().ToImmutableArray()
@@ -9671,9 +9702,7 @@ partial class Binder {
                                 expression: "sourceProperty.GetterSymbol"
                             ),
                             indexParameters.Select(
-                                (parameter ParameterSymbol) -> cast[BoundExpression](
-                                    BoundVariableExpression(nil, parameter)
-                                )
+                                (parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil)
                             )
                                 .ToImmutableArray(),
                             slot.Type
@@ -9719,11 +9748,7 @@ partial class Binder {
                                 expression: "sourceProperty.SetterSymbol"
                             ),
                             indexParameters
-                                .Select(
-                                (parameter ParameterSymbol) -> cast[BoundExpression](
-                                    BoundVariableExpression(nil, parameter)
-                                )
-                            )
+                                .Select((parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil))
                                 .Append(BoundVariableExpression(nil, value))
                                 .ToImmutableArray(),
                             TypeSymbol.Void
@@ -9798,9 +9823,7 @@ partial class Binder {
                             receiver,
                             sourceProperty,
                             indexParameters.Select(
-                                (parameter ParameterSymbol) -> cast[BoundExpression](
-                                    BoundVariableExpression(nil, parameter)
-                                )
+                                (parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil)
                             )
                                 .ToImmutableArray(),
                             slot.Type
@@ -9839,9 +9862,7 @@ partial class Binder {
                             receiver,
                             sourceProperty,
                             indexParameters.Select(
-                                (parameter ParameterSymbol) -> cast[BoundExpression](
-                                    BoundVariableExpression(nil, parameter)
-                                )
+                                (parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil)
                             )
                                 .ToImmutableArray(),
                             BoundVariableExpression(nil, value),
@@ -9932,9 +9953,7 @@ partial class Binder {
                             receiver,
                             sourceProperty,
                             indexParameters.Select(
-                                (parameter ParameterSymbol) -> cast[BoundExpression](
-                                    BoundVariableExpression(nil, parameter)
-                                )
+                                (parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil)
                             )
                                 .ToImmutableArray(),
                             propertyType
@@ -9973,9 +9992,7 @@ partial class Binder {
                             receiver,
                             sourceProperty,
                             indexParameters.Select(
-                                (parameter ParameterSymbol) -> cast[BoundExpression](
-                                    BoundVariableExpression(nil, parameter)
-                                )
+                                (parameter ParameterSymbol) -> Binder.ForwardAdapterParameter(parameter, nil)
                             )
                                 .ToImmutableArray(),
                             BoundVariableExpression(nil, value),
@@ -10205,6 +10222,18 @@ partial class Binder {
                 bodies[remove] = AdapterMethodBody(call, TypeSymbol.Void)
             }
             return (eventSymbol, bodies)
+        }
+
+        private func ForwardAdapterParameter(parameter ParameterSymbol, syntax SyntaxNode?) BoundExpression {
+            if parameter.RefKind == RefKind.None {
+                return BoundVariableExpression(syntax, parameter)
+            }
+            return BoundAddressOfExpression(
+                syntax,
+                BoundVariableExpression(syntax, parameter),
+                unmanaged: false,
+                isReadOnly: parameter.RefKind == RefKind.In
+            )
         }
 
         private func AdapterSourceReceiver(
@@ -10804,8 +10833,14 @@ partial class Binder {
                 return false
             }
             for var i = 0; i < targetParameters.Length; i++ {
-                let targetType = MemberLookup.GetIndexerParameterTypeSymbol(targetOwner, target, i)
-                let sourceType = MemberLookup.GetIndexerParameterTypeSymbol(sourceOwner, source, i)
+                var targetType = MemberLookup.GetIndexerParameterTypeSymbol(targetOwner, target, i)
+                if targetType is ByRefTypeSymbol targetByRef {
+                    targetType = targetByRef.PointeeType
+                }
+                var sourceType = MemberLookup.GetIndexerParameterTypeSymbol(sourceOwner, source, i)
+                if sourceType is ByRefTypeSymbol sourceByRef {
+                    sourceType = sourceByRef.PointeeType
+                }
                 if !RefCapabilities.ImportedParameterContractsMatch(
                     targetParameters[i],
                     targetType,
@@ -11576,18 +11611,33 @@ partial class Binder {
         /// @returns The flattened enclosing type-argument vector, or `default`.
         private func CollectConstructedEnclosingArguments(
             constructedSegments[]TypeSymbol,
+            inheritedDeclaringContainers[]StructSymbol?,
+            startIndex int32,
             deepestIndex int32
         ) ImmutableArray[TypeSymbol] {
             var builder ImmutableArray[TypeSymbol].Builder? = nil
-            for var i = 0; i < deepestIndex; i++ {
+            for var i = startIndex; i < deepestIndex; i++ {
                 let seg = constructedSegments[i]
+                if seg is StructSymbol nestedConstruction &&
+                    (
+                    inheritedDeclaringContainers[i] != nil ||
+                        !nestedConstruction
+                        .EnclosingTypeArguments
+                        .IsDefaultOrEmpty
+                ) {
+                    builder?.Clear()
+                    if !nestedConstruction.EnclosingTypeArguments.IsDefaultOrEmpty {
+                        builder ??= ImmutableArray.CreateBuilder[TypeSymbol]()
+                        builder!!.AddRange(nestedConstruction.EnclosingTypeArguments)
+                    }
+                }
                 let ownParams = switch seg {
-                    case s is StructSymbol: (s.Definition ?? s).TypeParameters
+                    case s is StructSymbol: (s.Definition ?? s).DeclaredTypeParameters
                     case iface is InterfaceSymbol: (iface.Definition ?? iface).TypeParameters
                     default: ImmutableArray[TypeParameterSymbol].Empty
                 }
                 if ownParams.IsDefaultOrEmpty {
-                    // Non-generic enclosing segment contributes no enclosing params.
+                    // Non-generic enclosing segment contributes no own params.
                     continue
                 }
                 let ownArgs = switch seg {
@@ -11603,7 +11653,11 @@ partial class Binder {
                 builder ??= ImmutableArray.CreateBuilder[TypeSymbol]()
                 builder!!.AddRange(ownArgs)
             }
-            return builder?.ToImmutable() ?? default(ImmutableArray[TypeSymbol])
+            return if builder != nil && builder.Count > 0 {
+                builder.ToImmutable()
+            } else {
+                default(ImmutableArray[TypeSymbol])
+            }
         }
 
         /// Issue #4032: reports `GS0152` when a closed generic TYPE clause
@@ -12530,7 +12584,7 @@ partial class Binder {
         /// ADR-0060: human-readable label for a (cref:RefKind).
         /// @param kind The ref-kind value.
         /// @returns "none", "ref", "out", or "in".
-        private func RefKindToString(kind RefKind) string -> switch kind {
+        internal func RefKindToString(kind RefKind) string -> switch kind {
             case RefKind.Ref: "ref"
             case RefKind.Out: "out"
             case RefKind.In: "in"
@@ -12624,7 +12678,7 @@ partial class Binder {
         /// ADR-0060: maps a ref-kind modifier syntax token to a (cref:RefKind) value.
         /// @param modifier The `ref`/`out`/`in` contextual-keyword token (`null` for none).
         /// @returns The corresponding (cref:RefKind) value.
-        private func GetRefKindFromModifier(modifier SyntaxToken?) RefKind {
+        internal func GetRefKindFromModifier(modifier SyntaxToken?) RefKind {
             if modifier == nil {
                 return RefKind.None
             }
@@ -12846,7 +12900,10 @@ partial class Binder {
                     userParamArgs.Length == userArgArgs
                     .Length {
                     let parameters = switch userParamDef {
-                        case structure is StructSymbol: structure.TypeParameters
+                        case structure is StructSymbol: StructSymbol.CollectEnclosingTypeParameters(structure).AddRange(
+                            structure.DeclaredTypeParameters
+                        )
+                        case enumSym is EnumSymbol: StructSymbol.CollectEnclosingTypeParameters(enumSym)
                         case iface is InterfaceSymbol: iface.TypeParameters
                         default: ImmutableArray[TypeParameterSymbol].Empty
                     }
@@ -13054,9 +13111,19 @@ partial class Binder {
             out typeArguments ImmutableArray[TypeSymbol]
         ) bool {
             switch type {
-                case s is StructSymbol when !s.TypeArguments.IsDefaultOrEmpty {
-                    definition = s.Definition
-                    typeArguments = s.TypeArguments
+                case s is StructSymbol when !s
+                    .EnclosingTypeArguments
+                    .IsDefaultOrEmpty ||
+                    !s
+                    .TypeArguments
+                    .IsDefaultOrEmpty {
+                    definition = s.Definition ?? s
+                    typeArguments = Conversion.GetEffectiveStructTypeArguments(s)
+                    return !typeArguments.IsDefaultOrEmpty
+                }
+                case e is EnumSymbol when !e.EnclosingTypeArguments.IsDefaultOrEmpty {
+                    definition = e.Definition ?? e
+                    typeArguments = e.EnclosingTypeArguments
                     return true
                 }
                 case i is InterfaceSymbol when !i.TypeArguments.IsDefaultOrEmpty {

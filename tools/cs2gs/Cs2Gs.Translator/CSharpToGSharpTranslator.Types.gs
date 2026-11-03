@@ -467,11 +467,26 @@ partial class CSharpToGSharpTranslator {
                 // target, so `.Where((d T?) -> d != nil)` infers the whole
                 // sequence as `sequence[T?]` and every downstream member
                 // access runs on a nullable receiver.
-                return this.MapParameter(
+                let mapped = this.MapParameter(
                     symbol,
                     parameter,
                     promoteNullability: !this.LambdaParameterAnnotationFeedsTypeInference(parameter)
                 )
+                // Issue #5541: a lambda parameter that receives an element of oblivious
+                // container storage states the element's nullable positions.
+                let promoted = this.PromoteObliviousContainerStorage(mapped.Type, symbol)
+                return if object.ReferenceEquals(promoted, mapped.Type) {
+                    mapped
+                } else {
+                    Parameter(
+                        mapped.Name,
+                        promoted!!,
+                        mapped.IsVariadic,
+                        mapped.RefKind,
+                        mapped.DefaultValue,
+                        mapped.Attributes
+                    )
+                }
             }
             let type GTypeReference? = if parameter.Type != nil {
                 this.MapTypeSyntax(parameter.Type)
@@ -589,11 +604,14 @@ partial class CSharpToGSharpTranslator {
             if this.TryGetManagedReferenceArrayProjectedMethod(creation, out var projectedConstructor) {
                 typeSymbol = projectedConstructor!!.ContainingType
             }
-            let type GTypeReference? = if typeSymbol != nil {
+            var type GTypeReference? = if typeSymbol != nil {
                 this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
             } else {
                 cast[GTypeReference](NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType))
             }
+            // Issue #5541: a target-typed construction states the same nullable
+            // positions as an explicit one.
+            type = this.PromoteObliviousContainerCreation(type, typeSymbol, creation)
             let arguments = this.TranslateCallArguments(
                 creation,
                 creation.ArgumentList?.Arguments ?? default(Microsoft.CodeAnalysis.SeparatedSyntaxList[ArgumentSyntax])
@@ -2703,16 +2721,20 @@ partial class CSharpToGSharpTranslator {
                     .Values
                     .Select((lift LiftedRecursiveLocalFunction) -> lift.Name!!)
             )
-            occupied.UnionWith(
-                arm!!
-                    .DescendantTokens()
-                    .Where(
-                    (token Microsoft.CodeAnalysis.SyntaxToken) -> token.IsKind(
-                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.IdentifierToken
-                    )
-                )
-                    .Select((token Microsoft.CodeAnalysis.SyntaxToken) -> this.nameAllocator.GetName(token.ValueText))
-            )
+            occupied.UnionWith(this.predeclaredOutLocalNames.Values)
+            let body Microsoft.CodeAnalysis.SyntaxNode? = this.state.CurrentBodyScope ?? recursive?.SyntaxTree.GetRoot()
+            if body != nil {
+                occupied.UnionWith(this.CollectOccupiedSynthesizedLocalNames(body))
+            }
+            for token in arm!!.DescendantTokens() {
+                if !token.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IdentifierToken) {
+                    continue
+                }
+                occupied.Add(this.nameAllocator.GetName(token.ValueText))
+                if token.Parent != nil {
+                    occupied.Add(this.EmittedName(token.Parent, token)!!)
+                }
+            }
             let owner INamedTypeSymbol? = this
                 .state
                 .CurrentEmittedAggregate ??
@@ -2727,6 +2749,13 @@ partial class CSharpToGSharpTranslator {
                 occupied.Contains
             )
             usedDesignators!!.Add(designator)
+            if body != nil &&
+                this
+                .state
+                .SynthesizedLocalOccupiedNamesByBody
+                .TryGetValue(body, out var updatedOccupied) {
+                updatedOccupied.Add(designator)
+            }
             return designator
         }
 
@@ -2896,6 +2925,65 @@ partial class CSharpToGSharpTranslator {
         private func RecordProjectedQueryBinding(symbol ISymbol?, effectiveType ITypeSymbol?) {
             if symbol != nil && effectiveType != nil {
                 this.state.ProjectedQueryBindingType[symbol] = effectiveType
+            }
+        }
+
+        private func ResolveRangeVariableTypeSymbol(
+            explicitType TypeSyntax?,
+            source Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            anchor Microsoft.CodeAnalysis.SyntaxNode
+        ) ITypeSymbol? {
+            let elementType ITypeSymbol? = this.ResolveRangeVariableElementTypeSymbol(source, anchor)
+            if explicitType != nil {
+                let explicitTypeSymbol ITypeSymbol? = this.context.GetTypeInfo(explicitType).Type
+                if elementType != nil && explicitTypeSymbol != nil && this.GetProjectedBindingType(
+                    elementType,
+                    explicitTypeSymbol,
+                    this.context.Compilation.ClassifyConversion(elementType, explicitTypeSymbol)
+                ) is {} projectedBinding {
+                    return projectedBinding
+                }
+                return explicitTypeSymbol
+            }
+            return elementType
+        }
+
+        private func TryGetProjectedRangeVariableType(rangeVariable IRangeVariableSymbol) ITypeSymbol? {
+            return switch rangeVariable.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() {
+                case fromClause is FromClauseSyntax: this.ResolveRangeVariableTypeSymbol(
+                    fromClause.Type,
+                    fromClause.Expression,
+                    fromClause
+                )
+                case letClause is LetClauseSyntax: this.GetManagedReferenceArrayProjectedExpressionType(
+                    letClause.Expression
+                )
+                case joinClause is JoinClauseSyntax: this.ResolveRangeVariableTypeSymbol(
+                    joinClause.Type,
+                    joinClause.InExpression,
+                    joinClause
+                )
+                case joinInto is JoinIntoClauseSyntax when joinInto.Parent is JoinClauseSyntax parentJoin: if this.ResolveRangeVariableTypeSymbol(
+                    parentJoin.Type,
+                    parentJoin.InExpression,
+                    parentJoin
+                ) is {} innerType &&
+                    this
+                    .context
+                    .Compilation
+                    .GetTypeByMetadataName("System.Collections.Generic.IEnumerable`1") is {} enumerableType {
+                    cast[ITypeSymbol](enumerableType.Construct(innerType))
+                } else {
+                    default(ITypeSymbol?)
+                }
+                case continuation is QueryContinuationSyntax when continuation.Parent is QueryBodySyntax body: switch body
+                    .SelectOrGroup {
+                    case selectClause is SelectClauseSyntax: this.GetManagedReferenceArrayProjectedExpressionType(
+                        selectClause.Expression
+                    )
+                    default: default(ITypeSymbol?)
+                }
+                default: default(ITypeSymbol?)
             }
         }
 
@@ -3459,11 +3547,14 @@ partial class CSharpToGSharpTranslator {
                     addedNullableBindings.Add(symbol)
                 }
             }
+            let outerOutDeclarations List[GStatement]? = this.state.FunctionArgumentOutDeclarations
+            this.state.FunctionArgumentOutDeclarations = prologue
             try {
                 let result GExpression? = this.TranslateConditionWithHoist(lambdaBody, prologue)
                 effectiveType = this.GetManagedReferenceArrayProjectedArgumentType(lambdaBody)
                 return result
             } finally {
+                this.state.FunctionArgumentOutDeclarations = outerOutDeclarations
                 for symbol in addedNullableBindings {
                     this.state.NullableForEachBindings.Remove(symbol)
                 }

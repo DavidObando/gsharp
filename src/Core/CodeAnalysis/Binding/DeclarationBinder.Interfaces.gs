@@ -518,32 +518,7 @@ internal partial class DeclarationBinder {
                         )
                         continue
                     }
-                    let indexerParamBuilder = ImmutableArray.CreateBuilder[ParameterSymbol]()
-                    let seenIndexParamNames = HashSet[string]()
-                    for indexParamSyntax in propSyntax.Parameters {
-                        // ADR-0185: an indexer's parameters never come from
-                        // the destructured arrow-lambda path.
-                        let indexParamName = indexParamSyntax.Identifier!!.ValueText
-                        let indexParamType = if indexParamSyntax.Type is {} indexParamTypeSyntax {
-                            bindTypeClause(indexParamTypeSyntax) ?? TypeSymbol.Error
-                        } else {
-                            TypeSymbol.Error
-                        }
-                        if !seenIndexParamNames.Add(indexParamName) {
-                            Diagnostics.ReportParameterAlreadyDeclared(indexParamSyntax.Location, indexParamName)
-                        }
-                        let indexerParam = ParameterSymbol(
-                            indexParamName,
-                            indexParamType,
-                            declaringSyntax: indexParamSyntax.Identifier
-                        )
-                        // Issue #1913: indexer parameters can carry `@Attr`
-                        // annotations same as any other parameter list.
-                        BindAndAttachParameterAttributes(indexParamSyntax, indexerParam)
-                        conversions.BindAndAttachParameterDefaultValue(indexParamSyntax, indexerParam)
-                        indexerParamBuilder.Add(indexerParam)
-                    }
-                    indexerParameters = indexerParamBuilder.ToImmutable()
+                    indexerParameters = BindIndexerParameters(propSyntax)
                 }
                 let propName = if isIndexer {
                     "Item"

@@ -643,7 +643,7 @@ partial class CSharpToGSharpTranslator {
                 return (nil, interfaces)
             }
             let location = node.GetLocation()
-            let csBase INamedTypeSymbol? = symbol.BaseType
+            let csBase INamedTypeSymbol? = this.GetProjectedBaseType(symbol) ?? symbol.BaseType
             if csBase != nil &&
                 csBase.SpecialType != SpecialType.System_Object &&
                 csBase.SpecialType != SpecialType.System_ValueType &&
@@ -1342,9 +1342,10 @@ partial class CSharpToGSharpTranslator {
             return attributes
         }
 
-        /// ADR-0184/#4294: maps a property/indexer's own attribute lists,
-        /// hoists an accessor-level `[UnscopedRef]` when equivalent, and
-        /// reports every other accessor attribute that cannot be represented.
+        /// ADR-0184/#4294/#4523: maps a property, indexer, or explicit-event
+        /// declaration's own attribute lists, hoists an accessor-level
+        /// `[UnscopedRef]` when equivalent, and reports every other accessor
+        /// attribute that cannot be represented.
         /// @remarks C# accepts `[UnscopedRef]` on either the property/indexer
         /// or its `get` accessor and treats the two identically — an
         /// expression-bodied indexer emits it on the property row, an
@@ -1359,7 +1360,7 @@ partial class CSharpToGSharpTranslator {
         /// `[UnscopedRef]` is hoisted: for any other accessor attribute
         /// (say `[MethodImpl]`) moving it to the property would change what
         /// it means, so it is dropped with a visible warning.
-        /// @param node The property or indexer declaration.
+        /// @param node The property, indexer, or explicit-event declaration.
         /// @returns The member's attribute list, including any hoisted `@UnscopedRef`.
         private func MapPropertyAttributes(node BasePropertyDeclarationSyntax) List[AttributeUse] {
             let attributes = this.MapAttributes(node.AttributeLists)
@@ -1394,14 +1395,14 @@ partial class CSharpToGSharpTranslator {
                             continue
                         }
                         let attributeName = attributeType?.ToDisplayString() ?? attribute.Name.ToString()
-                        let member = if node is Microsoft
-                            .CodeAnalysis
-                            .CSharp
-                            .Syntax
-                            .PropertyDeclarationSyntax property {
-                            "property '${property.Identifier.ValueText}'"
-                        } else {
-                            "indexer"
+                        let member = switch node {
+                            case property is Microsoft
+                                .CodeAnalysis
+                                .CSharp
+                                .Syntax
+                                .PropertyDeclarationSyntax: "property '${property.Identifier.ValueText}'"
+                            case eventDeclaration is EventDeclarationSyntax: "event '${eventDeclaration.Identifier.ValueText}'"
+                            default: "indexer"
                         }
                         let reason = if isUnscopedRef && hasUnscopedRef {
                             "the $member already has @UnscopedRef, so another member annotation cannot preserve this '${accessor.Keyword.ValueText}'-specific placement"
@@ -1813,7 +1814,14 @@ partial class CSharpToGSharpTranslator {
                 .SemanticModel
                 .GetEnclosingSymbol(site?.SpanStart ?? this.state.CurrentBodyScope?.SpanStart ?? 0)
                 ?.ContainingType
-            return LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryClaimLocalName(owner, name)
+            if !LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryClaimLocalName(owner, name) {
+                return false
+            }
+            let body Microsoft.CodeAnalysis.SyntaxNode? = this.state.CurrentBodyScope ?? site?.SyntaxTree.GetRoot()
+            if body != nil && this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(body, out var occupied) {
+                occupied.Add(name!!)
+            }
+            return true
         }
 
         private func SourceIdentifierClaimsSynthesizedLocalName(
@@ -1825,10 +1833,7 @@ partial class CSharpToGSharpTranslator {
             if body == nil {
                 return false
             }
-            if !this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(body, out var occupied) {
-                occupied = this.CollectOccupiedSynthesizedLocalNames(body)
-                this.state.SynthesizedLocalOccupiedNamesByBody.Add(body, occupied)
-            }
+            let occupied = this.CollectOccupiedSynthesizedLocalNames(body)
             if !occupied.Contains(name!!) || allowedSourceSymbol == nil {
                 return occupied.Contains(name!!)
             }
@@ -3968,7 +3973,8 @@ partial class CSharpToGSharpTranslator {
                             declaredBindingType
                         )
                     )
-                    let nullableElement = (
+                    let nullableElement = !this.ForEachBindingHasObliviousContainerElements(loopSymbol) &&
+                        (
                         projectedBindingType &&
                             (
                             this.ArrayExpressionHasNullableReferenceLikeElement(forEach.Expression) ||
@@ -4099,11 +4105,13 @@ partial class CSharpToGSharpTranslator {
             }
             let projectedCollection ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(
                 forEach.Expression
-            )
+            ) ??
+                this.GetProjectedReceiverType(forEach.Expression)
             if !CSharpToGSharpTranslator.TypeContainsRecognizedManagedReferenceConsumer(
                 projectedCollection,
                 this.context.Compilation
-            ) {
+            ) &&
+                !(projectedCollection is INamedTypeSymbol projectedOwner && this.HasProjectedBaseType(projectedOwner)) {
                 return nil
             }
             if projectedCollection is INamedTypeSymbol projectedNamed {
@@ -4117,7 +4125,7 @@ partial class CSharpToGSharpTranslator {
                     return projectedCurrent.Type
                 }
             }
-            return GetEnumerableElementType(projectedCollection, forEach.AwaitKeyword.RawKind != 0)
+            return this.GetProjectedEnumerableElementType(projectedCollection, forEach.AwaitKeyword.RawKind != 0)
         }
 
         private func GetProjectedBindingType(

@@ -1222,6 +1222,216 @@ remove for R7 (f) on the measured code.
 **Spans.** Core, Core.Tests, gsc and the Oahu cells that compile have no
 backward `goto`, so no span.
 
+### 20b. Findings of slice L1
+
+Slice L1 (issue [#5317](https://github.com/DavidObando/gsharp/issues/5317), which also
+closes [#5315](https://github.com/DavidObando/gsharp/issues/5315)) replaced the snapshot and
+the second bind of `BindLoopBody` with the lower bound of section 6, applied to the frames
+before the header and the body are bound once. Each loop that is entered with a fact or an external
+callable alias in force runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0
+(`DecideRegionKill`).
+
+**Divergences from the text above.**
+
+- *Deletions.* `CollectLoopBackEdgeMutations`, `LoopBackEdgeMutationCollector`,
+  `CollectInheritedNarrowingInvalidations`, `ComputeLoopEntryExternalCallableAliases`,
+  `MarkIterationRunsUserCode`, `NarrowingComparison.BeginSpeculation`/`EndSpeculation`, the
+  `inheritedNarrowingFrameCount`, `backEdgeTail` and `backEdgeCondition` parameters and the
+  `bindIteration` tuple are gone. `AssignmentPreservesNarrowing`, `IsDefinitelyNonNullValue`,
+  `FunctionReturnsDefinitelyNonNull` and `IsDefinitelyNonNullSyntax` stay: the `finally` summaries
+  and the backward-`goto` checker still call them, and L2 deletes them with the checker.
+  `narrowing.loop-rebinds` is no longer counted (it reads 0; L3 removes the name).
+- *Iteration.* `iterationRunsUserCode` stays, as an argument of `BindLoopBody` and of
+  `RegionEffectScanner.ScanLoop`: whether a `for ... in` header runs user code is a property of the
+  collection's type, which syntax does not show. An array, a slice or a string iteration is not a
+  call (the `indexed-for-in` row of #5170 keeps its result). A nested loop is still a call.
+- *Literal types.* A non-nil literal proves a type-test fact only when it is a string literal whose type
+  converts to the fact's type. Slice L0 took every literal for a string, so `value = 42` kept a
+  `value is string` fact. A literal proves a nullability fact only when the target's declared type is the
+  literal's type, a base class of it or a non-generic interface of it (`o = 5` into `object?`). Otherwise a
+  conversion operator converts it (`b = 5` into `Box?` through `operator implicit (i int32) Box`), which can
+  return nil, as the binder also assumes after the assignment.
+- *Member reads and by-reference parameters.* A member read keeps member-bearing paths, mutable
+  globals, closure-assigned locals and the facts of an alias of an element or a member out
+  (W5, no exemption). It does not remove the fact of a by-reference parameter, as a plain call does not
+  (amendment A3, #5292); only a member, index or pointer write, an indirect call, an iteration or a
+  suspension does. Slice L0 removed it on any read, which rejected the A3 rows `h1`,
+  `out-parameter-survives-calls-in-a-loop` and `out-parameters-of-different-types-do-not-overlap`.
+- *No back edge.* A loop whose condition is the literal `false` (`while false`, `do { } while false`)
+  is bound under its entry state.
+- *Closure-assigned names.* They are computed on first use. `ApplyLoopEntryLowerBound` computes them
+  before it decides, because until then the shared predicate assumes that every name is assigned.
+- *Exit state (R7 (f)).* Break states are not recorded, so the join of table 9 cannot be taken. A loop
+  without a `break` in its body, in a function without a user label, adds the facts of the header's false
+  state to the block after the loop, minus the facts that the condition itself can remove
+  (`RecordLoopExitFacts`). A loop with a `break` keeps today's exit. The row `g1`-with-`break` and the
+  join of break states wait for the slice that records them.
+- *External callable aliases.* A function value that the region assigns, or that shares storage with one
+  that it assigns, leaves the set at the loop entry; a region with a pointer write or an unknown syntax
+  kind empties the set. The set is part of the entry state (section 13), so a loop entered with an alias and
+  no fact also applies the lower bound ([#5461](https://github.com/DavidObando/gsharp/issues/5461)).
+  Otherwise `var g = cb` reassigned to a closure later in the body kept `g` external, and a fact proven
+  in the body survived the call `g()` (corpus rows `d01` to `d06`).
+- *R16 in loops (documented cost of row R7 (e)).* ADR-0208 R16 keeps a fact across a read of a stable imported
+  getter (`string.Length`) and a field read is no call, in straight-line code. The walker sees only syntax, so it
+  cannot tell them from a user getter, and Q7 (decided) allows no exemption: the corpus row
+  `t09_5231_string_length_in_a_loop_R16_loop_is_stricter` (`x.Value + s.Length` with a closure-assigned `x`) is
+  rejected in a loop. A resolved-member exemption (a plain-name receiver resolved at the entry scope whose member is
+  on the R16 list, or a field of a class whose hierarchy cannot hide it) is a later slice; it would accept q5c, q5d
+  would stay rejected, and it needs its own rows and mutants.
+- *Switch arms and hidden `continue` (#5629, #5642).* The walker classifies a case or arm test with R19
+  (`PatternTestRunsUserCode`) in a loop as `if x is P` is classified outside one. #5642's back-edge seeds for a
+  `continue` inside a `switch`, `try` or `fixed` are not needed, because the lower bound counts every write of the
+  body at entry. Four of #5642's corpus rows are stricter here: a22, a23 and a32 (a write before a `break`, or under
+  a literal `false` guard; R7 (a)) and a09 (an assignment and a field read count as calls for a mutable global; R7 (c),
+  W4 and W5). Row b07 keeps a global's fact across a `continue` in an `int32` case.
+- *Conversion sites.* A user-defined conversion is a call (W4), and the walker cannot see types, so every place
+  where the binder converts a value is a candidate: a declared, assigned, multi-assigned, deconstructed or bound
+  (`if let`) value, both operands of `??`, a returned value, and a condition or guard (`if`, the loops, `if let`, `while let`, `guard let`, switch and select
+  guards, `catch ... when`, `?:`) unless it is `bool` by its form (a `true` or `false` literal, `is`, a comparison,
+  `!`, `&&` or `||`). The conversion of a typed `for ... in` variable and the `Deconstruct` call or getter of a
+  tuple-target `for ... in` run before every body run, so an indexed iteration with such a prelude runs user code.
+- *Function values.* A call whose callee name the region declares (`let Invoke = callback; Invoke()`) calls a function
+  value, which is an indirect call (A3), also when a nested loop's record is composed. A member call whose receiver is
+  a plain name of the entry scope (a variable or a type) is resolved on the receiver's declared type, on the type its
+  entry fact narrows it to, and on each type that a type test of the region (`is`, a `switch` case or arm) applies to
+  that name itself (not a property or list subpattern, which tests a member), because the binder looks up the member
+  on the tested type where the test holds (`if o is Holder { o.Count() }`). Each type counts with its base types, base
+  interfaces (source and imported), constraints and `object` members. A tested type is resolved by its name and arity
+  (a source or an imported type); a name-shaped pattern whose name is a constant (`case Kind.A`) tests no type, and a
+  tested type without a name (an array, tuple or function type) or that the entry scope does not resolve can have any
+  member. The call invokes a function value, which is indirect, when it calls `Invoke`, `BeginInvoke` or
+  `DynamicInvoke` on a receiver of function or delegate type (`callback.Invoke()`), or when one of the types has a
+  field, a property or an event of that name (a function-typed member of a class, an interface or a tuple element).
+  Another method of a delegate (`callback.GetHashCode()`) is a method. The call is a plain call (A3) when the types
+  have only methods of that name, or none and an extension method of that name is visible (`values.Count()`);
+  otherwise it is indirect. Any other receiver is followed as a path from a root that the entry scope resolves: a
+  member chain (`holder.Inner.Cb()`), an element (`frames[i].TryGetValue(path, out found)`), a call result
+  (`Make().Cb()`, `s.Trim().Length`), and a local of the region, which stands for its declared type, its initializer
+  (`let local = holder`) or the element of the collection that a `for ... in` iterates. Each step takes the type of
+  the field, property, event, method result, indexer or element that it names; a type parameter of an imported generic
+  type is its type argument. The call is decided on the types at the end of the path as above. A path that does not
+  resolve (a type parameter that a member returns, an unknown root, a local without such an origin or one that the
+  region type-tests), and a path with steps in a region that type-tests a member or an element, can reach a function
+  value, so the call is indirect; `Invoke`, `BeginInvoke` and `DynamicInvoke` (`holder.Cb.Invoke()`) are always
+  indirect.
+- *User code on by-reference storage (maintainer decision 2026-11-02; the more permissive A3-wide alternative is
+  not adopted and can be revisited separately).* User code that ADR-0208 amendment A3 does not exempt removes the fact of a `ref` or `out`
+  parameter, a `ref` local or an external-storage alias, as on main, because a `ref` parameter can alias storage that
+  the code writes (`Foo(ref s_field)`). A3 exempts only a plain call to a method; a source operator (of a type of the
+  package, or an extension operator) is one. The rest uses the classifications of the straight-line pass: a member or
+  index read runs user code unless it is a field, a tuple element, an array or slice element or length, an enum
+  member, a source auto property (R14) or an imported property or indexer that `IsStableClrAccessor` lists (R16, R17);
+  an imported operator runs user code; a conversion site (an assigned or typed value, a non-`bool` condition, a
+  returned value, a by-value argument against the parameter at its position) runs a conversion operator when the
+  conversion classifier finds one between the types of its value and its target (`HasUserDefinedImplicitConversion`).
+  *Call and index arguments: one conservative rule (coordinator decision 2026-11-02, after review rounds 30 to 36).*
+  The walker does not model overload resolution. A call or an index access keeps a `ref` or `out` fact only when, for
+  every candidate of the name with as many parameters as arguments, on every type the receiver can have (with the
+  receiver's type arguments substituted), every by-value argument reaches the parameter at its position without a
+  conversion operator; which candidate the binder selects does not matter. An argument passed by reference and an
+  inline declaration (typed or not) convert nothing, a function literal converts nothing only into a delegate or
+  function type (any other parameter type can take it through a conversion operator, #5663), and a value does not bind
+  a `ref` or `out` parameter. A parameter that names a type parameter counts, since the walker does not infer type arguments. A callee
+  whose candidates the walker cannot list (a receiver that it does not resolve, an imported base interface with a
+  method of the name, a method that only an extension can supply), a variadic or `params` candidate (its expanded
+  form converts each argument to the element type, at any arity), a candidate with an optional parameter at another
+  arity, and a call that no candidate takes, all count. This is stricter than
+  main where the binder selects a candidate that converts nothing while another candidate of the name could convert:
+  `Console.WriteLine("ab")` (a `ReadOnlySpan[char]` candidate and `params` overloads), `Math.Max(n, 1)` and
+  `Keep(dt)` for a generic `Keep[T]`. The PR lists those rows. It replaced a model of candidate selection (identity
+  candidates, passing modes, type inference, lookup precedence) whose differences from the binder review found
+  again and again. A concatenation of string literals or an
+  interpolated string has the type `string`; a concatenation with another operand has it only when the operators
+  of the region are predefined (`token + "x"` can call a user `+`). The arms of a conditional, `if` or switch expression meet in
+  one type, so each arm is a conversion site against each other arm that is not an operator (`flag ? dt : dto`,
+  `flag ? nf : 1.0`); a literal arm is a target of its literal type, and two operator arms meet without an
+  operator only when the operators of the region are predefined. The arms of `if let` expressions merge the same
+  way. Each arm's path is taken where its names are in scope (`if var x = dt; flag { x } else { dto }`), nested
+  arms merge into the outermost expression, and an expression with more than eight arms is one site that can run
+  code. An index in a constant pattern of a variable (`n is xs[key]`) is an index access, and a base call (`base.Touch()`) is a call that the walker does not resolve. A typed
+  binding of `if let`, `guard let` or `while let` (`if let b DateTimeOffset = maybe`) is a conversion site against its
+  type, and the initializers of a `while let` see the enclosing names, not its own bindings, as its binder does. A call
+  through a type name (`Sink.Use(dt)`) takes only the static candidates, and a call through a value only the instance
+  candidates. A loop in the then-branch of a condition removes facts that the else-branch still has, so its entry
+  removals go into the R18 condition journal and come back for the else-branch, as a condition's removals do
+  (`if flag { while flag { } } else { return s.Length }`).
+  The pattern tests of ADR-0208 R19 (#5593) are effects inside a loop too. The walker records each constant pattern
+  (`o is 1`, `case 1`, a switch arm) with the paths of its subject and value. The consumer applies the one R19
+  decision (`ConstantPatternTestRunsUserCode` on `BoundConstantPattern.ClassifyTestOf`, which the bound pattern
+  also uses) to the types that it resolves. A name that is a type tests the type, and a subject that does not resolve
+  can call `Equals`. The call is a plain call (A3): it removes the facts that a call removes, such as a package variable
+  `n int32?` that a predefined operator reads in the header (`while n > 0 { if o is 1 { } }`), and it keeps a `ref`
+  or `out` fact, as on main. The walker counts every list pattern as a read that can run user code, including for a
+  `ref` or `out` fact. This is a superset of R19, whose getter and indexer rule (R16, R17) keeps the fact for
+  `List[T]`, arrays and spans. The difference is listed in the PR with its row; a syntax-level copy of the binder's
+  indexable lookup would be a second calculation.
+  The argument at a conversion site keeps the `?` of a nullable value
+  type that is not narrowed (`Use(dt)` with `dt DateTime?` does not take `Use(DateTime)`). Types are compared by their
+  effective CLR type (`Nullable<T>`), and the classifier is also asked for the lifted conversion between the value
+  types, so no conversion operator is missed. A typed range loop variable converts each element. A predefined
+  conversion (`for n int64 in values` over `[]int32`) runs no user code, as on main; a user-defined one binds as a call
+  and counts.
+  A name in a pattern is a value when the region declares it or the entry scope has a variable of that name, since a
+  switch case resolves a value before a type (`let One = 1; switch o { case One { } }` calls `Equals`). A constant
+  pattern's `Equals` is code that runs in the region for the enclosing `when` filters (W8) too. A `with` update is a
+  member write through a setter (W4), as a member assignment is. A typed local keeps the
+  `?` of a nullable value type (`let local DateTime? = dt`). A narrowed variable has its narrowed type at a conversion
+  site only when the region cannot remove the narrowing (no write to it and no writer that the walker cannot see);
+  otherwise the declared type with its `?` counts as well. This is stricter than main, whose second pass does not
+  check a `ref` fact again after an argument loses its narrowing.
+  A call that the walker cannot check runs one (a callee or an argument that does not
+  resolve, a callee whose candidates the walker cannot list, a named argument, an extension receiver, an argument
+  without a path such as `Use(if flag { a } else { "x" })`); an operator whose operands do not all resolve to
+  built-in types can return a value of another type, so its converted result runs one (`n = n + Pick(m)` with a
+  generic `Pick`), and the operator itself can be an imported one (`Pick(token) == Pick(token)`); an index argument is checked the same way against `int32` (or a `System.Index`) for an array, a
+  slice or a string and against the indexers of an imported type, an element of an array, a stack allocation or a map
+  literal against its element, key or value type (a nested array literal stored into an array element is not,
+  since no conversion operator converts between array types), an allocation length and a range bound or `^`
+  operand against `int32`; `nil` runs one when its
+  target or parameter is a non-nullable value type; the parameter types of a candidate have the receiver's type
+  arguments substituted (`Add(T)` on `Dictionary[Token, DateTimeOffset]`), and a parameter that names a type
+  parameter counts (`Keep(dt)`); a conversion between
+  built-in types is predefined, and a value of another type converted to a generic type, a `??`, a deconstruction or a
+  multiple assignment can run one; `^n` and a range value construct a `System.Index` or `System.Range` (a
+  constructor, which A3 does not exempt), while a range index slices its target and the read classification decides,
+  as on main; a read inside a constant pattern (`key is holder.P`) is a read unless the name is a type, a namespace on the way
+  to one, or a constant or an enum member of a type; a member or an element compared with `nil` runs the `==` of an
+  imported value type that takes a reference; a bare static field (not a constant) or static property of a type whose initializer
+  runs user code runs it (R11, #5520). The walker records each read, operator and conversion site with paths for its
+  operands; a path that does not resolve can run user code. So `Environment.CurrentDirectory`, `dict["a"]` and `let s
+  ReadOnlySpan[char] = "ab"` remove the fact, and `list[i]`, `text.Length`, an auto property, a constant, `let d
+  decimal = k` and an extension operator keep it. Separately, a unary operator that is not predefined for its operand,
+  a literal included (`-"x"` with an extension operator), is a call for every fact (W4).
+- *Enclosing filters (W8).* The `when` filters of the enclosing `try` statements apply when the region has a handler
+  or runs code that it does not show (a call, a getter, an operator or a conversion), because a handler in a callee
+  can catch the exception after the filter has written the root.
+- *Scopes of expressions.* An `if` expression scopes its initializer and condition like an `if` statement
+  (`BindIfExpression`), so a name that it declares does not hide a later write to an outer variable of that name.
+- *Pattern variables (question 4).* The walker gives a type-pattern variable its type only where the binder
+  scopes it (ADR-0166); see question 4 of section 23 for the rule and what stays out of L1.
+- *A loop the walker cannot name* (the synthetic loop of a collection spread) removes every fact.
+
+**Measurements** (candidate compiler, the cells of slice L0, compare mode on). Facts of the loops that
+inherit a fact; "removed" is the walker's decision, which the binder now applies.
+
+| Input | Loops with live facts | Facts | Removed | Kept | Compile of the cell |
+| --- | --- | --- | --- | --- | --- |
+| Core | 1494 | 2089 | 59 | 2030 | 33 errors, listed below |
+| Core.Tests | 30 | 32 | 0 | 32 | clean |
+| gsc | 4 | 4 | 0 | 4 | clean |
+| Oahu, 12 cells that compile | 50 | 63 | 6 | 57 | clean (`Oahu.Cli.Tui` has the same 8 errors with the main compiler) |
+| Cs2Gs.Translator | 335 | 431 | 9 | 422 | 4 errors at one site |
+
+The 33 errors of Core are the sites of rows R7 (b) and R7 (c): `ExpressionBinder.Assignments.gs:5452-5501`
+(`access = inner`, a pattern variable; question 4), and `MemberLookup.gs:1213` with `3319-3379` (a
+closure-assigned local read in a loop that calls). Cs2Gs.Translator has `Deconstruction.gs:111-125`
+(a reassignment from a pattern variable). No diagnostic falls outside a row of
+section 16. The pin-move PR restructures these sites (section 18). After the clause of question 4 and a
+merge of main that changed the `MemberLookup` sites, Core, Core.Tests, gsc, LanguageServer,
+Compiler.Tests, Cs2Gs.Translator and the Oahu cells give the same diagnostics with the candidate as with the main
+compiler.
+
 ### 21. Mutation-evidence plan (ADR-0154)
 
 Each rule has a named, hand-applied mutant that is run red and then
@@ -1325,7 +1535,27 @@ question is the one that first depends on it.
    (`is T name`, `if let`/`guard let`/`while let` binding, a `case T name`
    arm)?** Such a variable is immutable and non-null by the construct that
    bound it, and it is the one Core site R7 (b) rejects (`access = inner`).
-   Recommendation: **not in L1**, *provisional*: the site costs one `let`
+   **Decided for slice L1 (maintainer, 2026-10-30): add the clause.** The reason is the nightly's
+   `gsharp-csharp` leg, not Oahu: its frozen C# corpus translates to the same `access = inner` shape in Core
+   (`ExpressionBinder.Assignments.gs`) and in `Cs2Gs.Translator` (`CSharpToGSharpTranslator.Deconstruction.gs`),
+   and no restructuring of `src/Core` reaches that corpus, so without the clause 24 of the 58 apps went red.
+   The clause: a loop write whose right side names a variable that a `TypePattern` with a plain type name
+   declares in the region is a P7 proof when the type converts to the root's declared type (and to the fact's
+   type for a type-test fact) by `Conversion.IsRepresentationPreservingImplicit`, so no conversion operator runs.
+   The walker gives the name the pattern's type only where the binder scopes the variable (ADR-0166): the then
+   branch of an `if` and the body of a `while`, `for` condition or `for` clause for the variables the condition
+   assigns when true, and the statements after `if c { exit }` (a direct statement of a block, with no
+   initializer and no `else`, its then branch ending in `return`, `throw`, `break` or `continue`) for the
+   variables `c` assigns when false. Its classification of `!`, `&&`, `||`, `not`, `and` and `or` is a subset of
+   `PatternVariables.Classify`. Anywhere else the name may denote another variable, a property or an imported
+   member, so it is no proof: a pattern variable of a closed scope, a when-false variable inside the then branch,
+   a guard whose then branch does not exit, and every guard of a function with a user label (the binder drops
+   that scope). Where the walker does not give a pattern variable its type, a write to its name or a bare read
+   of its name is taken to name other storage (W1, W5): the variable is read-only, and the name may denote an
+   entry-scope variable or a property there. Not in L1: a variable that the region declares with `var`, `if let`, `guard let`
+   or `while let`, and a pattern variable of the loop's entry scope; each is still no proof (a `var` pattern can
+   bind `nil`). An ordinary `let` or `var` copy is no proof. Original recommendation, superseded:
+   **not in L1**, *provisional*: the site costs one `let`
    copy; L0 reports how many such sites Oahu has; if L0 finds any, L1 adds
    the clause (the symbol must record that it was bound by a non-null
    producing pattern, which the slice confirms or adds) with a corpus row

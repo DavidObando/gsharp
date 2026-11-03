@@ -108,6 +108,22 @@ open partial class Target : Base { override func Visit() int32 { return 1 } }`, 
         MethodAttributes(6),
         false
     )
+    @InlineData(
+        "open class Base {}\nabstract partial data class Target : Base {}",
+        "",
+        true,
+        false,
+        MethodAttributes(4),
+        false
+    )
+    @InlineData(
+        "open class Base { open func Visit() int32; }\nopen partial data class Target : Base {}",
+        "",
+        true,
+        false,
+        MethodAttributes(6),
+        false
+    )
     func LoadedGenerator_ObservesSemanticAbstractness_AndGeneratedPartPreservesEmittedShape(
         declaration string,
         secondPart string,
@@ -172,7 +188,7 @@ open partial class Target : Base { override func Visit() int32 { return 1 } }`, 
             } else {
                 ConstructorAccessName(expectedConstructorAccess) + "()"
             }
-            if target.IsData && native.GetTypeByMetadataName("App.Target")!!.IsRecord {
+            if target.IsData {
                 expectedConstructors = string.Join(
                     ";",
                     []string{expectedConstructors, "Protected(Target)"}.OrderBy(
@@ -293,6 +309,72 @@ open partial class Target : Base { override func Visit() int32 { return 1 } }`, 
     )
     @InlineData(`open class Base(N int32) {}
 open partial class Target(N int32) : Base(N) { convenience init() { init(1) } open func Visit(); }`, "App.Target", true, "Public();Public(Int32)")
+    @InlineData(
+        "open class Base {}\nopen partial data class Target : Base {}",
+        "App.Target",
+        false,
+        "Protected(Target);Public()"
+    )
+    @InlineData(
+        "open class Base {}\nabstract partial data class Target : Base {}",
+        "App.Target",
+        true,
+        "Protected();Protected(Target)"
+    )
+    @InlineData(
+        "open class Base {}\nopen partial data class Target(N int32) : Base {}",
+        "App.Target",
+        false,
+        "Protected(Target);Public(Int32)"
+    )
+    @InlineData(
+        "open class Base {}\nabstract partial data class Target(N int32) : Base {}",
+        "App.Target",
+        true,
+        "Protected(Int32);Protected(Target)"
+    )
+    @InlineData(
+        "open class Base(N int32) {}\nopen partial data class Target(N int32) : Base(N) {}",
+        "App.Target",
+        false,
+        "Protected(Target);Public(Int32)"
+    )
+    @InlineData(
+        "open class Base {}\nsealed partial data class Target(N int32) : Base {}",
+        "App.Target",
+        false,
+        "Protected(Target);Public(Int32)"
+    )
+    @InlineData(
+        "open class Base {}\npartial data class Target(N int32) : Base {}",
+        "App.Target",
+        false,
+        "Private(Target);Public(Int32)"
+    )
+    @InlineData(
+        "open class Base {}\nopen partial data class Target[T](Value T) : Base {}",
+        "App.Target`1",
+        false,
+        "Protected(Target);Public(T)"
+    )
+    @InlineData(
+        "open data class Base(N int32) {}\nopen partial data class Target(N int32) : Base(N) {}\nclass Leaf : Target(1) {}",
+        "App.Target",
+        false,
+        "Protected(Target);Public(Int32)"
+    )
+    @InlineData(
+        "open partial class Target(N int32) {}\ndata class Leaf(N int32) : Target(N) {}",
+        "App.Target",
+        false,
+        "Internal();Protected(Target);Public(Int32)"
+    )
+    @InlineData(
+        "open class Base {}\nopen partial data class Target : Base { public init(n int32) {} }",
+        "App.Target",
+        false,
+        "Protected(Target);Public(Int32)"
+    )
     func LoadedGenerator_ObservesExactlyTheEmittedConstructorSignaturesAndAccess(
         declaration string,
         metadataName string,
@@ -387,6 +469,159 @@ class Plain {
         Assert.False(plain.IsStatic)
     }
 
+    @Theory
+    @InlineData(
+        "open partial class Base { public init() {} }\nopen partial data class Target : Base {}",
+        "open partial class Base { protected init(other Base) {} }",
+        "App.Target",
+        "Protected(Base);Public()",
+        "Protected(Target);Public()"
+    )
+    @InlineData(
+        "open class Base {}\nopen partial data class Target : Base { public init() {} }",
+        "open partial data class Target { protected init(other Target) {} }",
+        "App.Target",
+        "Protected(Base);Public()",
+        "Protected(Target);Public()"
+    )
+    @InlineData(
+        "open class Base {}\nopen partial data class Target[T] : Base { public init() {} }",
+        "open partial data class Target[T] { protected init(other Target[T]) {} }",
+        "App.Target`1",
+        "Protected(Base);Public()",
+        "Protected(Target);Public()"
+    )
+    @InlineData(
+        "open class Base {}\nopen partial data class Target[T] : Base { public init() {} }",
+        "open partial data class Target[T] { protected init(other Target[T?]) {} }",
+        "App.Target`1",
+        "Protected(Base);Public()",
+        "Protected(Target);Public()"
+    )
+    @InlineData(
+        "open class Base {}\nopen partial data class Target[T] : Base { public init() {} }",
+        "open partial data class Target[T] { public init(other Target[int32?]) {} }",
+        "App.Target`1",
+        "Protected(Base);Public()",
+        "Protected(Target);Public();Public(Target)"
+    )
+    @InlineData(
+        "interface I {}\nopen class Base { public init() {} public init(value I) {} }",
+        "open partial data class Target : Base, I {}",
+        "App.Target",
+        "Protected(Base);Public();Public(I)",
+        "Protected(Target);Public()"
+    )
+    @InlineData(
+        "open class Base { public init() {} private init(other Base) {} }",
+        "open partial data class Target : Base {}",
+        "App.Target",
+        "Private(Base);Public()",
+        "Protected(Target);Public()"
+    )
+    @InlineData(
+        "open class Base { public init(n int32) {} private init(other Base) {} }",
+        "open partial data class Target(N int32) : Base(N) {}",
+        "App.Target",
+        "Private(Base);Public(Int32)",
+        "Protected(Target);Public(Int32)"
+    )
+    @InlineData(
+        "open class Base[T, U] { public init() {} public init(other Base[U, T]) {} }",
+        "open partial data class Target : Base[int32, int32] {}",
+        "App.Target",
+        "Protected(Base);Public();Public(Base)",
+        "Protected(Target);Public()"
+    )
+    @InlineData(
+        "open data class Base[T, U] { public init() {} public init(other Base[U, T]) {} }",
+        "open partial data class Target : Base[int32, int32] {}\nclass Leaf : Target {}",
+        "App.Target",
+        "Protected(Base);Public();Public(Base)",
+        "Protected(Target);Public()"
+    )
+    @InlineData(
+        "open class Base[T, U] { public init() {} public init(other Base[U, T]) {} }",
+        "open partial data class Target : Base[[3]int32, [4]int32] {}",
+        "App.Target",
+        "Protected(Base);Public();Public(Base)",
+        "Protected(Target);Public()"
+    )
+    @InlineData(
+        "open data class Base[T, U] { public init() {} public init(other Base[U, T]) {} }",
+        "open partial data class Target : Base[[3]int32, [4]int32] {}\nclass Leaf : Target {}",
+        "App.Target",
+        "Protected(Base);Public();Public(Base)",
+        "Protected(Target);Public()"
+    )
+    @InlineData(
+        "open class Base[T, U] { public init() {} public init(other Base[U, T]) {} }",
+        "open partial data class Target[V] : Base[(V, int32), System.ValueTuple[V, int32]] {}",
+        "App.Target`1",
+        "Protected(Base);Public();Public(Base)",
+        "Protected(Target);Public()"
+    )
+    func ClassFallbackCopyConstructor_DoesNotDuplicateExplicitCopyConstructorAcrossPartialDeclarations(
+        firstPart string,
+        secondPart string,
+        metadataName string,
+        expectedBaseConstructors string,
+        expectedTargetConstructors string
+    ) {
+        let trees = []string{firstPart, secondPart}.Select(
+            (source string) -> GsSyntaxTree.Parse(SourceText.From("package App\n" + source))
+        )
+            .ToArray()
+        let gs = Compilation(trees){IsLibrary = true}
+        Assert.DoesNotContain(
+            gs.GlobalScope.Diagnostics.Concat(gs.BoundProgram.Diagnostics),
+            (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.IsError
+        )
+        let stub = GsToCSharpProjection.ProjectToCSharp(gs)
+        let compilation = BindStub(stub)
+        Assert.DoesNotContain(
+            compilation.GetDiagnostics(),
+            (diagnostic Microsoft.CodeAnalysis.Diagnostic) -> diagnostic.Severity == Microsoft
+                .CodeAnalysis
+                .DiagnosticSeverity
+                .Error
+        )
+        let baseSymbol = compilation.GetTypeByMetadataName("App.Base") ?? compilation.GetTypeByMetadataName(
+            "App.Base`2"
+        )
+        Assert.NotNull(baseSymbol)
+        let actualBaseConstructors = string.Join(
+            ";",
+            baseSymbol!!
+                .InstanceConstructors
+                .Select(
+                (constructor IMethodSymbol) -> constructor.DeclaredAccessibility.ToString() + "(" + string.Join(
+                    ",",
+                    constructor.Parameters.Select((parameter IParameterSymbol) -> parameter.Type.Name)
+                ) +
+                    ")"
+            )
+                .OrderBy((signature string) -> signature, StringComparer.Ordinal)
+        )
+        Assert.Equal(expectedBaseConstructors, actualBaseConstructors)
+        let symbol = compilation.GetTypeByMetadataName(metadataName)
+        Assert.NotNull(symbol)
+        let actualConstructors = string.Join(
+            ";",
+            symbol!!
+                .InstanceConstructors
+                .Select(
+                (constructor IMethodSymbol) -> constructor.DeclaredAccessibility.ToString() + "(" + string.Join(
+                    ",",
+                    constructor.Parameters.Select((parameter IParameterSymbol) -> parameter.Type.Name)
+                ) +
+                    ")"
+            )
+                .OrderBy((signature string) -> signature, StringComparer.Ordinal)
+        )
+        Assert.Equal(expectedTargetConstructors, actualConstructors)
+    }
+
     shared {
         private func AssertEmittedShape(
             compilation Compilation,
@@ -472,7 +707,10 @@ class Plain {
                 let type Type? = loadContext.LoadFromStream(pe).GetType(metadataName)
                 Assert.NotNull(type)
                 Assert.Equal(expectedAbstract, type!!.IsAbstract)
-                Assert.False(type!!.IsSealed)
+                Assert.Equal(
+                    expectedConstructors.Contains("Private(Target)", StringComparison.Ordinal),
+                    type!!.IsSealed
+                )
                 let actualConstructors = string.Join(
                     ";",
                     type!!
@@ -480,10 +718,11 @@ class Plain {
                         .Select(
                         (constructor ConstructorInfo) -> ConstructorAccessName(constructor.Attributes) +
                             "(" +
-                            string.Join(
+                            string
+                            .Join(
                             ",",
                             constructor.GetParameters().Select(
-                                (parameter ParameterInfo) -> parameter.ParameterType.Name
+                                (parameter ParameterInfo) -> parameter.ParameterType.Name.Split('`')[0]
                             )
                         ) +
                             ")"

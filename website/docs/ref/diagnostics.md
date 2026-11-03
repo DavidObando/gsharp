@@ -43,6 +43,7 @@ value lowering of ordinary source `[N]T`.
 | --- | --- | --- | --- |
 | GS0631 | Error | Invalid native CLR span alias: wrong arity or element type, a shadowed readonly form, unavailable core-library span types, a nullable constructor target, or an unsupported allocation literal. | Use one heap-storable element type and a target core library providing CLR spans. If `span` is shadowed, use `System.ReadOnlySpan[T]` explicitly. Construct a non-nullable CLR span; use existing CLR span constructors, not native collection allocation syntax. |
 | GS0632 | Error | Invalid UTF-8 span literal, unsupported literal form, invalid decoded Unicode scalar, lossy source decoding, unavailable target span helpers, or a constant initializer. | Use adjacent lowercase `u8"..."`, valid text escapes, and a target core library with `RuntimeHelpers.CreateSpan` and readonly span slicing. Use literal-only `+` explicitly; the span value is not a metadata constant. |
+| GS0633 | Error | `'ref'` or `'out'` modifier on an indexer parameter. | Use `'in'` for a readonly-by-reference indexer parameter, or pass the parameter by value; `'ref'` and `'out'` are not valid on indexer parameters. |
 
 ## Severity levels
 
@@ -680,6 +681,14 @@ entry point depends on.
 | GS0285 | Error | Top-level statements are not allowed in a library project. | A `.gsproj` with `<OutputType>Library</OutputType>` whose `.gs` source contains statements at the file root. Set `<OutputType>Exe</OutputType>` or move the statements into an explicit `func Main()`. Mirrors C# CS8805. |
 | GS0286 | Warning | Top-level statements should form a single contiguous block within a file. | A `.gs` file that interleaves declarations between top-level statements, e.g. `var x = 1; func helper() {}; var y = 2`. Both the C# style (TLS first, then decls) and the Go style (decls first, then TLS) are accepted; only interleaved layouts trigger the warning. |
 | GS0287 | Error | Top-level statements mix bare `return;` and `return <expr>;`. | TLS that contains both `return` (no value) and `return 0` — the synthesized `<Main>$` must have a single return type, so choose one shape. |
+
+## Entry-point diagnostics (GS0634)
+
+`gsc` reports this error only when it writes an executable with `/out:` and no other error stops the output. A `/gsdiag` severity override changes only the display; gsc still writes no executable. The language server does not know the project output type, so it does not report it. See issue #5623.
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0634 | Error | An executable (`/target:exe`, `<OutputType>Exe</OutputType>`) has no entry point: no `Main` function and no top-level statements. Mirrors C# CS5001. When a function differs from `Main` only in case, such as Go-style `func main()`, the message adds "Did you mean 'Main'?" and the diagnostic is on that function. | Rename `func main()` to `func Main()`, write top-level statements, or set `<OutputType>Library</OutputType>`. A test project gets an empty generated entry point from the SDK; set `<GenerateProgramFile>false</GenerateProgramFile>` if it declares its own. |
 
 ## Field declaration `var` / `let` requirement (GS0288)
 

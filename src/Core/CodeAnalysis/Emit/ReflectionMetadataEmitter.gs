@@ -640,7 +640,7 @@ internal class ReflectionMetadataEmitter {
             let combinedList = combined.ToImmutable()
             // Issue #1499: remap self-/cross-referential constraints onto the
             // nested type's cloned combined-parameter set.
-            s.SetTypeParameters(SynthesizedClosureReifier.CloneWithRemappedConstraints(combinedList))
+            s.SetReifiedTypeParameters(SynthesizedClosureReifier.CloneWithRemappedConstraints(combinedList))
             // Record the enclosing arity so a use site can split its combined
             // type-argument vector into enclosing/own halves.
             this.remaps.SetNestedTypeEnclosingArity(def, enclosing.Length)
@@ -1293,6 +1293,9 @@ internal class ReflectionMetadataEmitter {
         // callee would miss the requirement entirely. Iterate to a fixed
         // point instead: keep re-running the promotion over every literal
         // until a full pass promotes nothing further.
+        if hostPackageGuess != nil {
+            this.closures.SynthesizeGoClosures(goStatements, hostPackageGuess)
+        }
         var promotedAnyThisPass bool
         do {
             promotedAnyThisPass = false
@@ -1303,10 +1306,14 @@ internal class ReflectionMetadataEmitter {
                     promotedAnyThisPass = true
                 }
             }
+            if hostPackageGuess != nil && this.closures.ReconcileClosureTypeParameters(
+                this.userTokens.GetPromotedOrClosureExtras
+            ) {
+                promotedAnyThisPass = true
+            }
         } while promotedAnyThisPass
         this.RetargetIteratorPlans(lambdaLiterals)
         if hostPackageGuess != nil {
-            this.closures.SynthesizeGoClosures(goStatements, hostPackageGuess)
             this.stateMachines.SynthesizeIteratorStateMachines(hostPackageGuess)
             this.stateMachines.SynthesizeAsyncIteratorStateMachines(hostPackageGuess)
             this.stateMachines.SynthesizeAsyncLambdaStateMachines(lambdaLiterals, hostPackageGuess)
@@ -1602,8 +1609,7 @@ internal class ReflectionMetadataEmitter {
             // ADR-0051 Phase 6: backing fields for auto-properties.
             // Match emitted-field deduplication, including storage declared on earlier base types.
             for p in s.Properties {
-                if p.IsAutoProperty &&
-                    p.BackingField != nil &&
+                if p.IsAutoProperty && p.BackingField != nil && p.OwnsBackingField(s) &&
                     !this
                     .cache
                     .DeclaredFieldDefs
@@ -2028,6 +2034,7 @@ internal class ReflectionMetadataEmitter {
             }
             methodRow += this.interfaceImpls.PlanInheritedEventBridges(c, methodRow)
             methodRow += this.interfaceImpls.PlanImportedAccessorBridges(c, methodRow)
+            methodRow += this.interfaceImpls.PlanInheritedStaticVirtualBridges(c, methodRow)
             // ADR-0053: plan method rows for static methods on classes.
             if !c.StaticMethods.IsDefaultOrEmpty {
                 for m in c.StaticMethods {
@@ -2414,43 +2421,19 @@ internal class ReflectionMetadataEmitter {
             // resolves against a declared interface.
             if !c.Methods.IsDefaultOrEmpty {
                 for method in c.Methods {
-                    let declaringIface Type? = method.ExplicitInterfaceSlot?.DeclaringType
-                    if declaringIface == nil {
+                    if method.ExplicitInterfaceSlot is not{} explicitSlot ||
+                        explicitSlot.DeclaringType is not{} declaringIface {
                         continue
                     }
-                    var alreadyDeclared = false
-                    for implemented in c.ImplementedClrInterfaces {
-                        if implemented?.ClrType != nil && ClrTypeUtilities.AreSame(
-                            implemented.ClrType,
-                            declaringIface
-                        ) {
-                            alreadyDeclared = true
-                            break
+                    if method.ExplicitInterfaceSlotContainingType is {} slotContainingType {
+                        let declaringOwner = MemberLookup.GetClrMemberDeclaringTypeSymbol(
+                            slotContainingType,
+                            explicitSlot
+                        )
+                        if MemberLookup.TryGetSymbolicClrGenericInterface(declaringOwner, out _, out _) {
+                            EmitSymbolicInterfaceRow(declaringOwner)
+                            continue
                         }
-                        if implemented != nil && MemberLookup.TryGetSymbolicClrGenericInterface(
-                            implemented,
-                            out var openImplemented,
-                            out _
-                        ) &&
-                            openImplemented != nil &&
-                            ClrTypeUtilities.AreSame(openImplemented, declaringIface) {
-                            alreadyDeclared = true
-                            break
-                        }
-                    }
-                    if alreadyDeclared {
-                        continue
-                    }
-                    if method.ExplicitInterfaceSlotContainingType is {} symbolicDeclaring &&
-                        MemberLookup.TryGetSymbolicClrGenericInterface(
-                        symbolicDeclaring,
-                        out var openDeclaring,
-                        out _
-                    ) &&
-                        openDeclaring != nil &&
-                        ClrTypeUtilities.AreSame(openDeclaring, declaringIface) {
-                        EmitSymbolicInterfaceRow(symbolicDeclaring)
-                        continue
                     }
                     EmitClrInterfaceRow(declaringIface)
                 }
@@ -3419,6 +3402,7 @@ internal class ReflectionMetadataEmitter {
             this.memberDefEmitter.EmitEventAccessors(c)
             this.interfaceImpls.EmitInheritedEventBridges(c)
             this.interfaceImpls.EmitImportedAccessorBridges(c)
+            this.interfaceImpls.EmitInheritedStaticVirtualBridges(c)
             // ADR-0053: emit static methods for classes.
             if !c.StaticMethods.IsDefaultOrEmpty {
                 for m in c.StaticMethods {
@@ -3692,10 +3676,10 @@ internal class ReflectionMetadataEmitter {
                     this.functions.EmitFunction(fn, body, isEntryPoint: false)
                 }
             }
-            if this.emitCtx.Program.EntryPoint != nil && pkg == entryPointPackage && !entryPointIsClassOwned {
-                let entryBody = this.emitCtx.Program.Functions[this.emitCtx.Program.EntryPoint]
+            if this.emitCtx.Program.EntryPoint is {} entryPoint && pkg == entryPointPackage && !entryPointIsClassOwned {
+                let entryBody = this.emitCtx.Program.Functions[entryPoint]
                 this.functions.EmitFunction(
-                    this.emitCtx.Program.EntryPoint,
+                    entryPoint,
                     entryBody,
                     isEntryPoint: true,
                     isSynthesizedEntryPointStub: this.EntryPointNeedsSeparateStub

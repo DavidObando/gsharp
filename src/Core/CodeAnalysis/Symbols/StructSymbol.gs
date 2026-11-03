@@ -651,9 +651,19 @@ class StructSymbol : TypeSymbol {
     /// so a body that is bound earlier reads the same answer as one bound later.
     internal prop DeclaresStaticInitializerBlock bool -> StaticInitializerFunction != nil
 
+    /// Gets a value indicating whether a `shared` block field has an initializer that is not a literal (#5520).
+    /// Such a type initializer is `beforefieldinit` and runs at the first static member access. Like
+    /// (cref:DeclaresStaticInitializerBlock), it is set from the syntax in the declaration pass, before any body
+    /// is bound, so every body reads the same answer. A `const` and a field with no initializer do not count.
+    internal prop DeclaresNonLiteralSharedFieldInitializer bool
+
     /// Gets the type parameters when this is a generic definition (Phase 4.3 / ADR-0020). Empty for
     /// non-generic types and for constructed instances.
     private var _typeParameters ImmutableArray[TypeParameterSymbol] = ImmutableArray[TypeParameterSymbol].Empty
+
+    private var _declaredTypeParameters ImmutableArray[TypeParameterSymbol] = ImmutableArray[TypeParameterSymbol].Empty
+
+    private var _hasReifiedTypeParameters bool
 
     prop TypeParameters ImmutableArray[TypeParameterSymbol] {
         get {
@@ -662,6 +672,13 @@ class StructSymbol : TypeSymbol {
         private set {
             _typeParameters = value
         }
+    }
+
+    /// Gets the declared own type parameters of this type.
+    internal prop DeclaredTypeParameters ImmutableArray[TypeParameterSymbol] -> if _hasReifiedTypeParameters {
+        _declaredTypeParameters
+    } else {
+        _typeParameters
     }
 
     /// Gets the type arguments when this is a constructed instance of a generic definition (Phase 4.3 /
@@ -1452,6 +1469,19 @@ class StructSymbol : TypeSymbol {
     /// @param typeParameters The bound type parameters in declared order.
     func SetTypeParameters(typeParameters ImmutableArray[TypeParameterSymbol]) {
         TypeParameters = typeParameters
+        _declaredTypeParameters = typeParameters
+        _hasReifiedTypeParameters = false
+    }
+
+    /// Sets the reified type parameters for a nested type inside a generic enclosing type
+    /// and keeps (cref:DeclaredTypeParameters).
+    /// @param typeParameters The reified enclosing-plus-own type parameters.
+    internal func SetReifiedTypeParameters(typeParameters ImmutableArray[TypeParameterSymbol]) {
+        if !_hasReifiedTypeParameters {
+            _declaredTypeParameters = _typeParameters
+            _hasReifiedTypeParameters = true
+        }
+        TypeParameters = typeParameters
     }
 
     /// Issue #1477: records the ordered original enclosing type parameters that
@@ -1979,7 +2009,7 @@ class StructSymbol : TypeSymbol {
         let ownParams = if !nestedOwnTypeParameters.IsDefaultOrEmpty {
             nestedOwnTypeParameters
         } else {
-            def!!.TypeParameters
+            def!!.DeclaredTypeParameters
         }
         if !ownParams.IsDefaultOrEmpty && !TypeArguments.IsDefaultOrEmpty {
             let count = Math.Min(ownParams.Length, TypeArguments.Length)
@@ -2617,7 +2647,7 @@ class StructSymbol : TypeSymbol {
         }
 
         private func EnclosingTypeParametersOf(type TypeSymbol) ImmutableArray[TypeParameterSymbol] -> switch type {
-            case s is StructSymbol: (s.Definition ?? s).TypeParameters
+            case s is StructSymbol: (s.Definition ?? s).DeclaredTypeParameters
             case i is InterfaceSymbol: (i.Definition ?? i).TypeParameters
             default: ImmutableArray[TypeParameterSymbol].Empty
         }
@@ -2662,6 +2692,7 @@ class StructSymbol : TypeSymbol {
             constructed.Definition = definition
             constructed.TypeArguments = typeArguments
             constructed.mapClrType = mapClrType
+            constructed.SetContainingTypeCore(definition.ContainingType)
             // Issue #1341: Methods and the static-member tables below are
             // generically erased (ADR-0004) and shared with the definition by
             // identity (no per-construction substitution). They are NOT snapshotted
@@ -2818,6 +2849,11 @@ class StructSymbol : TypeSymbol {
             let builder = ImmutableArray.CreateBuilder[PropertySymbol](properties.Length)
             for p in properties {
                 let newType = SubstituteTypeForConstruction(p.Type, subst, mapClrType)
+                let newBackingOwner = if p.BackingFieldDeclaringType is {} backingOwner {
+                    SubstituteTypeForConstruction(backingOwner, subst, mapClrType) as StructSymbol ?? backingOwner
+                } else {
+                    default(StructSymbol?)
+                }
                 var newParams = p.Parameters
                 var paramsChanged = false
                 if !p.Parameters.IsDefaultOrEmpty {
@@ -2831,11 +2867,16 @@ class StructSymbol : TypeSymbol {
                         newParams = pb.MoveToImmutable()
                     }
                 }
-                if object.ReferenceEquals(newType, p.Type) && !paramsChanged {
+                if object.ReferenceEquals(newType, p.Type) && object.ReferenceEquals(
+                    newBackingOwner,
+                    p.BackingFieldDeclaringType
+                ) &&
+                    !paramsChanged {
                     builder.Add(p)
                     continue
                 }
                 let substituted = p.WithSignature(newType, newParams)
+                substituted.BackingFieldDeclaringType = newBackingOwner
                 builder.Add(substituted)
             }
             return builder.MoveToImmutable()

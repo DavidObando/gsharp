@@ -186,13 +186,15 @@ internal partial class MethodBodyEmitter {
         valueType TypeSymbol,
         failLabel LabelHandle
     ) {
+        // ADR-0208 (#5593): the narrowing effect collector reads the same classification.
+        let test = BoundConstantPattern.ClassifyTest(valueType, cp.Value)
         // Special-case `nil`: compare against null reference.
-        if cp.Value is BoundLiteralExpression lit && lit.Value == nil {
+        if test == ConstantPatternTestKind.NullCheck {
             loadValue()
             this.il.Branch(ILOpCode.Brtrue, failLabel)
             return
         }
-        if IsStringOrNullableStringEmit(valueType) {
+        if test == ConstantPatternTestKind.StringEquals {
             loadValue()
             this.EmitExpression(cp.Value)
             this.il.Call(this.outer.wellKnown.GetStringEqualsReference())
@@ -202,26 +204,21 @@ internal partial class MethodBodyEmitter {
         // Issue #421 (P2-3): `decimal` is a struct; per ECMA-335 §III.4
         // `ceq` is undefined on struct operands. Route through
         // `decimal.op_Equality` to produce verifiable IL.
-        if valueType == TypeSymbol.Decimal {
+        if test == ConstantPatternTestKind.DecimalEquals {
             loadValue()
             this.EmitExpression(cp.Value)
             this.TryEmitDecimalBinary(BoundBinaryOperatorKind.Equals)
             this.il.Branch(ILOpCode.Brfalse, failLabel)
             return
         }
-        let isObject = valueType.ClrType?.IsSameAs(typeof(object)) == true
         let isValueNullable = valueType is NullableTypeSymbol nullable && ReflectionMetadataEmitter.IsValueTypeNullable(
             nullable
         )
-        if isObject || isValueNullable {
+        if test == ConstantPatternTestKind.BoxedFloatEquals || test == ConstantPatternTestKind.ObjectEquals {
             // PatternBinder adds at most one conversion to the discriminant type.
             // Strip only that carrier; inner conversions determine the runtime value type.
-            let patternValue = if cp.Value is BoundConversionExpression conversion && conversion.Type == valueType {
-                conversion.Expression
-            } else {
-                cp.Value
-            }
-            if patternValue.Type == TypeSymbol.Float32 || patternValue.Type == TypeSymbol.Float64 {
+            let patternValue = BoundConstantPattern.UnwrapInputConversion(valueType, cp.Value)
+            if test == ConstantPatternTestKind.BoxedFloatEquals {
                 loadValue()
                 if isValueNullable {
                     this.il.OpCode(ILOpCode.Box)
@@ -366,10 +363,10 @@ internal partial class MethodBodyEmitter {
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(tp.TargetType))
         }
         this.EmitStoreVariable(tp.Variable)
-        if tp.PropertyPattern != nil {
+        if tp.PropertyPattern is {} propertyPattern {
             let variableSlot = this.locals[tp.Variable]
             this.EmitPropertyPattern(
-                tp.PropertyPattern,
+                propertyPattern,
                 loadValue: () -> this.il.LoadLocal(variableSlot),
                 valueType: tp.TargetType,
                 failLabel
@@ -617,76 +614,128 @@ internal partial class MethodBodyEmitter {
     }
 
     private func EmitRelationalPattern(rp BoundRelationalPattern, loadValue() -> void, failLabel LabelHandle) {
+        if rp.InputVariable is {} inputVariable {
+            this.EmitNullableRelationalPattern(rp, inputVariable, loadValue, failLabel)
+            return
+        }
         loadValue()
         this.EmitExpression(rp.Value)
-        // For unsigned/char discriminants the signed opcodes mis-order
-        // values whose high bit is set (e.g. uint.MaxValue would compare
-        // as -1 under Clt). Always use the *_un variants.
-        //
-        // For float/double, match the IEEE-aware lowering Roslyn uses
-        // for C# relational operators: NaN must compare unordered with
-        // every value, so strict `<`/`>` keep the signed Clt/Cgt (which
-        // return 0 when an operand is NaN), but `<=`/`>=` — which we
-        // synthesize as `!(a > b)` / `!(a < b)` — must use the _un
-        // forms so the negation produces false for NaN instead of true.
-        let isUnsigned = IsUnsignedOrChar(rp.Type)
-        let isFloat = rp.Type == TypeSymbol.Float32 || rp.Type == TypeSymbol.Float64
-        switch rp.Op.Kind {
+        this.EmitRelationalComparison(rp.Op.Kind, rp.Type)
+        this.il.Branch(ILOpCode.Brfalse, failLabel)
+    }
+
+    // Issue #5681: a relational pattern on a value-type `T?` input has the lifted operator result.
+    // Ordering fails when an operand is nil. `==` matches two nils. `!=` matches when exactly one operand is nil.
+    // Both operands are evaluated once, in source order, before the `HasValue` tests. A literal value stays inline.
+    private func EmitNullableRelationalPattern(
+        rp BoundRelationalPattern,
+        inputVariable LocalVariableSymbol,
+        loadValue() -> void,
+        failLabel LabelHandle
+    ) {
+        if rp.Value.Type == TypeSymbol.Never {
+            // The value does not return, so no comparison follows.
+            loadValue()
+            this.il.OpCode(ILOpCode.Pop)
+            this.EmitExpression(rp.Value)
+            return
+        }
+        let nullableInput = cast[NullableTypeSymbol](rp.Type)
+        let getHasValue = this.GetNullableHasValueRef(nullableInput)
+        let getValue = this.GetNullableValueRef(nullableInput)
+        let kind = rp.Op.Kind
+        let isEquality = kind == BoundBinaryOperatorKind.Equals || kind == BoundBinaryOperatorKind.NotEquals
+        // The binder gives the value the type `T` when only the input can be nil.
+        let valueIsNullable = rp.Value.Type != nullableInput.UnderlyingType
+        let matchLabel = this.il.DefineLabel()
+        let inputSlot = this.locals[inputVariable]
+        loadValue()
+        this.il.StoreLocal(inputSlot)
+        var valueSlot = -1
+        if rp.ValueVariable is {} valueVariable {
+            valueSlot = this.locals[valueVariable]
+            this.EmitExpression(rp.Value)
+            this.il.StoreLocal(valueSlot)
+        }
+        this.il.LoadLocalAddress(inputSlot)
+        this.il.OpCode(ILOpCode.Call)
+        this.il.Token(getHasValue)
+        if valueIsNullable {
+            this.il.LoadLocalAddress(valueSlot)
+            this.il.OpCode(ILOpCode.Call)
+            this.il.Token(getHasValue)
+            if isEquality {
+                this.il.Branch(
+                    ILOpCode.Bne_un,
+                    if kind == BoundBinaryOperatorKind.NotEquals {
+                        matchLabel
+                    } else {
+                        failLabel
+                    }
+                )
+                this.il.LoadLocalAddress(inputSlot)
+                this.il.OpCode(ILOpCode.Call)
+                this.il.Token(getHasValue)
+                this.il.Branch(
+                    ILOpCode.Brfalse,
+                    if kind == BoundBinaryOperatorKind.Equals {
+                        matchLabel
+                    } else {
+                        failLabel
+                    }
+                )
+            } else {
+                this.il.OpCode(ILOpCode.And)
+                this.il.Branch(ILOpCode.Brfalse, failLabel)
+            }
+        } else {
+            this.il.Branch(
+                ILOpCode.Brfalse,
+                if kind == BoundBinaryOperatorKind.NotEquals {
+                    matchLabel
+                } else {
+                    failLabel
+                }
+            )
+        }
+        this.il.LoadLocalAddress(inputSlot)
+        this.il.OpCode(ILOpCode.Call)
+        this.il.Token(getValue)
+        if valueIsNullable {
+            this.il.LoadLocalAddress(valueSlot)
+            this.il.OpCode(ILOpCode.Call)
+            this.il.Token(getValue)
+        } else if valueSlot >= 0 {
+            this.il.LoadLocal(valueSlot)
+        } else {
+            this.EmitExpression(rp.Value)
+        }
+        this.EmitRelationalComparison(kind, nullableInput.UnderlyingType)
+        this.il.Branch(ILOpCode.Brfalse, failLabel)
+        this.il.MarkLabel(matchLabel)
+    }
+
+    // Leaves the bool result of comparing the two `operandType` values on the stack.
+    private func EmitRelationalComparison(kind BoundBinaryOperatorKind, operandType TypeSymbol) {
+        switch kind {
             case BoundBinaryOperatorKind.Equals {
-                this.il.OpCode(ILOpCode.Ceq)
+                this.EmitUnderlyingEqualityCeq(operandType)
             }
             case BoundBinaryOperatorKind.NotEquals {
-                this.il.OpCode(ILOpCode.Ceq)
+                this.EmitUnderlyingEqualityCeq(operandType)
                 this.il.LoadConstantI4(0)
                 this.il.OpCode(ILOpCode.Ceq)
             }
-            case BoundBinaryOperatorKind.Less {
-                this.il.OpCode(
-                    if isUnsigned {
-                        ILOpCode.Clt_un
-                    } else {
-                        ILOpCode.Clt
-                    }
-                )
-            }
-            case BoundBinaryOperatorKind.LessOrEquals {
-                this.il.OpCode(
-                    if isUnsigned || isFloat {
-                        ILOpCode.Cgt_un
-                    } else {
-                        ILOpCode.Cgt
-                    }
-                )
-                this.il.LoadConstantI4(0)
-                this.il.OpCode(ILOpCode.Ceq)
-            }
-            case BoundBinaryOperatorKind.Greater {
-                this.il.OpCode(
-                    if isUnsigned {
-                        ILOpCode.Cgt_un
-                    } else {
-                        ILOpCode.Cgt
-                    }
-                )
-            }
-            case BoundBinaryOperatorKind.GreaterOrEquals {
-                this.il.OpCode(
-                    if isUnsigned || isFloat {
-                        ILOpCode.Clt_un
-                    } else {
-                        ILOpCode.Clt
-                    }
-                )
-                this.il.LoadConstantI4(0)
-                this.il.OpCode(ILOpCode.Ceq)
+            case BoundBinaryOperatorKind.Less,
+            BoundBinaryOperatorKind.LessOrEquals,
+            BoundBinaryOperatorKind.Greater,
+            BoundBinaryOperatorKind.GreaterOrEquals {
+                this.EmitUnderlyingOrdering(kind, operandType)
             }
             default {
-                throw NotSupportedException(
-                    "Relational pattern operator '${rp.Op.Kind}' is not supported by the emitter."
-                )
+                throw NotSupportedException("Relational pattern operator '$kind' is not supported by the emitter.")
             }
         }
-        this.il.Branch(ILOpCode.Brfalse, failLabel)
     }
 
     private func EmitListPattern(lp BoundListPattern, loadValue() -> void, failLabel LabelHandle) {
@@ -954,12 +1003,12 @@ internal partial class MethodBodyEmitter {
     ) {
         if bp.IsConjunction {
             this.EmitPattern(bp.Left, loadValue, valueType, failLabel)
-            if bp.RightInputVariable != nil {
-                let rightInputSlot = this.locals[bp.RightInputVariable]
+            if bp.RightInputVariable is {} rightInput {
+                let rightInputSlot = this.locals[rightInput]
                 this.EmitPattern(
                     bp.Right,
                     loadValue: () -> this.il.LoadLocal(rightInputSlot),
-                    valueType: bp.RightInputVariable.Type,
+                    valueType: rightInput.Type,
                     failLabel
                 )
             } else {

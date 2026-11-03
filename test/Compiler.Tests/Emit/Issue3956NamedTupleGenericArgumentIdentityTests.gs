@@ -43,20 +43,14 @@ class Issue3956NamedTupleGenericArgumentIdentityTests {
     @InlineData(true, true)
     func ImportedSymbolicValueTuple_IdentityPreservesContractsAndStorage(referenceAssembly bool, platform bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
-        let references = ReferenceResolver
-            .HostTrustedPlatformAssemblyPaths()
-            .Where(
-            (path string) -> Path.GetDirectoryName(path) == Path.GetDirectoryName(typeof(object).Assembly.Location)
-        )
-            .OrderBy((path string) -> path, StringComparer.Ordinal)
-            .ToArray()
+        let references = TupleDriverReferences()
         Assert.NotEmpty(references)
         let contract = Path.Combine(fixture.Directory, "TupleAssessment.dll")
         let contractReference = Path.Combine(fixture.Directory, "TupleAssessment.ref.dll")
         let producer = CSharpCompilation.Create(
             "TupleAssessment",
             []SyntaxTree{CSharpSyntaxTree.ParseText(TupleProducer)},
-            references.Select((path string) -> MetadataReference.CreateFromFile(path)),
+            TupleDriverMetadataReferences.Value,
             CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, deterministic: true)
         )
         {
@@ -198,7 +192,7 @@ return view
 }
 } }
 `
-        let image = CompileTupleDriver(fixture.Directory, "Deep", source, contract, references, nil)
+        let image = CompileTupleDriver(fixture.Directory, "Deep", source, contract, references, nil, library: true)
         let verification = List[string]{"tool", "run", "ilverify", "--", image, "-s", "System.Private.CoreLib"}
         for path in references.Concat([]string{contract}) {
             verification.Add("-r")
@@ -232,7 +226,15 @@ public func Reject(view IView[string, ` + imported + `]) IView[string?, ` + reje
 return view
 }
 `
-            CompileTupleDriver(fixture.Directory, "DeepRejected", rejected, contract, references, "6,8,6,12")
+            CompileTupleDriver(
+                fixture.Directory,
+                "DeepRejected",
+                rejected,
+                contract,
+                references,
+                "6,8,6,12",
+                library: true
+            )
         }
     }
 
@@ -247,7 +249,7 @@ return view
         let producer = CSharpCompilation.Create(
             "TupleAssessment",
             []SyntaxTree{CSharpSyntaxTree.ParseText(TupleProducer)},
-            references.Select((path string) -> MetadataReference.CreateFromFile(path)),
+            TupleDriverMetadataReferences.Value,
             CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, deterministic: true)
         )
         {
@@ -276,7 +278,7 @@ return view
 }
 } }
 `
-        let image = CompileTupleDriver(fixture.Directory, "SameOwner", source, selected, references, nil)
+        let image = CompileTupleDriver(fixture.Directory, "SameOwner", source, selected, references, nil, library: true)
         VerifyTupleDriver(image, contract, references)
         let assembly = EmittedFixture.LoadTogether(contract, image)[1]
         let method = assembly.GetType("NestedSourceIdentity.Exports", throwOnError: true)!!.GetMethod("Adapt")!!
@@ -291,7 +293,15 @@ return view
             tuple.GetGenericArguments()[0]
         )
         let rejected = source.Replace("IView[string?, (A.Item, int32)]", "IView[string?, (B.Item, int32)]")
-        CompileTupleDriver(fixture.Directory, "DifferentOwner", rejected, selected, references, "8,8,8,12")
+        CompileTupleDriver(
+            fixture.Directory,
+            "DifferentOwner",
+            rejected,
+            selected,
+            references,
+            "8,8,8,12",
+            library: true
+        )
     }
 
     @Fact
@@ -318,7 +328,7 @@ return view
 }
 } }
 `
-        let image = CompileTupleDriver(fixture.Directory, "DeepMixed", source, contract, references, nil)
+        let image = CompileTupleDriver(fixture.Directory, "DeepMixed", source, contract, references, nil, library: true)
         VerifyTupleDriver(image, contract, references)
         let assembly = EmittedFixture.LoadTogether(contract, image)[1]
         let method = assembly.GetType("DeepMixedTupleIdentity.Exports", throwOnError: true)!!.GetMethod("Adapt")!!
@@ -406,7 +416,7 @@ return view
         let producer = CSharpCompilation.Create(
             "TupleRestAssessment",
             []SyntaxTree{CSharpSyntaxTree.ParseText(TupleRestProducer)},
-            references.Select((path string) -> MetadataReference.CreateFromFile(path)),
+            TupleDriverMetadataReferences.Value,
             CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, deterministic: true)
         )
         {
@@ -435,7 +445,15 @@ return view
 }
 } }
 `
-        let image = CompileTupleDriver(fixture.Directory, "MatchingRest", source, selected, references, nil)
+        let image = CompileTupleDriver(
+            fixture.Directory,
+            "MatchingRest",
+            source,
+            selected,
+            references,
+            nil,
+            library: true
+        )
         VerifyTupleDriver(image, contract, references)
         let assembly = EmittedFixture.LoadTogether(contract, image)[1]
         let method = assembly.GetType("PhysicalTupleRest.Exports", throwOnError: true)!!.GetMethod("Lift")!!
@@ -462,7 +480,15 @@ return view
         Assert.Equal(NullabilityState.NotNull, tupleMetadata.GenericTypeArguments[7].ReadState)
         Assert.Equal(NullabilityState.NotNull, tupleMetadata.GenericTypeArguments[7].GenericTypeArguments[0].ReadState)
         let rejected = source.Replace("System.Tuple[C, int32]", "System.ValueTuple[C, int32]")
-        CompileTupleDriver(fixture.Directory, "DifferentRestFamily", rejected, selected, references, "8,8,8,12")
+        CompileTupleDriver(
+            fixture.Directory,
+            "DifferentRestFamily",
+            rejected,
+            selected,
+            references,
+            "8,8,8,12",
+            library: true
+        )
     }
 
     @Theory
@@ -709,6 +735,8 @@ public static class ArgumentMaker<U> {
             contract string,
             references[]string,
             rejectedSpan string?
+            ,
+            library bool = false
         ) string {
             let source = Path.Combine(directory, name + ".gs")
             let image = Path.Combine(directory, name + ".dll")
@@ -718,7 +746,11 @@ public static class ArgumentMaker<U> {
             let arguments = List[string]{
                 typeof(Program).Assembly.Location,
                 source,
-                "/target:exe",
+                if library {
+                    "/target:library"
+                } else {
+                    "/target:exe"
+                },
                 "/targetframework:net10.0",
                 "--nullability=platform-types",
                 "/deterministic+",
@@ -798,13 +830,26 @@ public static class ArgumentMaker<U> {
             return errors
         }
 
-        private func TupleDriverReferences()[]string -> ReferenceResolver
-            .HostTrustedPlatformAssemblyPaths()
-            .Where(
-            (path string) -> Path.GetDirectoryName(path) == Path.GetDirectoryName(typeof(object).Assembly.Location)
+        private let CachedTupleDriverReferences Lazy[[]string] = Lazy[[]string](
+            () -> ReferenceResolver
+                .HostTrustedPlatformAssemblyPaths()
+                .Where(
+                (path string) -> Path.GetDirectoryName(path) == Path.GetDirectoryName(typeof(object).Assembly.Location)
+            )
+                .OrderBy((path string) -> path, StringComparer.Ordinal)
+                .ToArray()
         )
-            .OrderBy((path string) -> path, StringComparer.Ordinal)
-            .ToArray()
+
+        private let TupleDriverMetadataReferences Lazy[IReadOnlyList[MetadataReference]] = Lazy[
+            IReadOnlyList[MetadataReference]
+        ](
+            () -> CachedTupleDriverReferences
+                .Value
+                .Select((path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path)))
+                .ToArray()
+        )
+
+        private func TupleDriverReferences()[]string -> CachedTupleDriverReferences.Value
 
         private func VerifyTupleDriver(image string, contract string, references[]string) {
             let arguments = List[string]{"tool", "run", "ilverify", "--", image, "-s", "System.Private.CoreLib"}

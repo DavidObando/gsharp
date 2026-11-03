@@ -47,12 +47,7 @@ internal partial class ExpressionBinder {
         // The enum-member folder (DeclarationBinder.TryFoldEnumMemberValue,
         // issue #1912) already carried this rule; mirror it for the general
         // expression position so the two agree.
-        if syntax
-            .OperatorToken
-            .Kind == SyntaxKind.MinusToken &&
-            syntax.Operand is LiteralExpressionSyntax{Value: uint32 negatedMagnitude} &&
-            negatedMagnitude == uint32(int32.MaxValue) +
-            uint32(1) {
+        if IsNegatedInt32MinValueLiteral(syntax.OperatorToken.Kind, syntax.Operand) {
             return BoundLiteralExpression(nil, int32.MinValue, TypeSymbol.Int32)
         }
         var boundOperand = BindExpression(syntax.Operand)
@@ -684,11 +679,21 @@ internal partial class ExpressionBinder {
         // ADR-0166: each branch sees the pattern variables the condition
         // definitely assigns on that branch (`x is T t ? t.Name : "none"`).
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
+        // Issue #5613: a narrowed read that a branch yields is captured where it binds.
+        var whenTrueRead NarrowedBranchValue? = nil
+        var whenFalseRead NarrowedBranchValue? = nil
         let bindWhenTrue = func (branchTargetType TypeSymbol?) BoundExpression {
             return BindWithPatternVariables(
                 patternWhenTrue,
                 () -> {
-                    return BindExpressionWithNarrowing(syntax.WhenTrue, whenTrueNarrowing, branchTargetType)
+                    return BindBranchValue(
+                        syntax.WhenTrue,
+                        whenTrueNarrowing,
+                        branchTargetType,
+                        (read NarrowedBranchValue) -> {
+                            whenTrueRead = read
+                        }
+                    )
                 }
             )
         }
@@ -696,7 +701,14 @@ internal partial class ExpressionBinder {
             return BindWithPatternVariables(
                 patternWhenFalse,
                 () -> {
-                    return BindExpressionWithNarrowing(syntax.WhenFalse, whenFalseNarrowing, branchTargetType)
+                    return BindBranchValue(
+                        syntax.WhenFalse,
+                        whenFalseNarrowing,
+                        branchTargetType,
+                        (read NarrowedBranchValue) -> {
+                            whenFalseRead = read
+                        }
+                    )
                 }
             )
         }
@@ -743,8 +755,8 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        let convertedTrue = ConvertConditionalBranch(syntax.WhenTrue.Location, whenTrue, resultType)
-        let convertedFalse = ConvertConditionalBranch(syntax.WhenFalse.Location, whenFalse, resultType)
+        let convertedTrue = ConvertConditionalBranch(syntax.WhenTrue.Location, whenTrue, resultType, whenTrueRead)
+        let convertedFalse = ConvertConditionalBranch(syntax.WhenFalse.Location, whenFalse, resultType, whenFalseRead)
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
@@ -802,7 +814,13 @@ internal partial class ExpressionBinder {
                 let (statements, value) = BindStatementsBeforeValue(
                     ImmutableArray.Create[StatementSyntax](initializer),
                     syntax,
-                    () -> BindIfExpressionBranches(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
+                    (capture((NarrowedBranchValue) -> void)?) -> BindIfExpressionBranches(
+                        syntax,
+                        targetType,
+                        canBeVoid,
+                        deferOnFailure,
+                        diagMark
+                    )
                 )
                 if value is BoundErrorExpression {
                     return value
@@ -836,14 +854,31 @@ internal partial class ExpressionBinder {
         // ADR-0166: each arm also sees the pattern variables the condition
         // definitely assigns on that arm.
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
+        // Issue #5613: a narrowed read that a branch yields is captured where it binds.
+        var whenTrueRead NarrowedBranchValue? = nil
+        var whenFalseRead NarrowedBranchValue? = nil
         let bindWhenTrue() -> BoundExpression = () -> {
-            return BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
+            return BindBlockExpressionValue(
+                syntax.ThenBlock,
+                canBeVoid,
+                targetType,
+                captureValue: (read NarrowedBranchValue) -> {
+                    whenTrueRead = read
+                }
+            )
         }
         let bindWhenFalse() -> BoundExpression = () -> {
             return if elseSyntax == nil {
                 cast[BoundExpression](BoundLiteralExpression(syntax, value: 0, TypeSymbol.Void))
             } else {
-                BindIfExpressionElseBranch(elseSyntax, canBeVoid, targetType)
+                BindIfExpressionElseBranch(
+                    elseSyntax,
+                    canBeVoid,
+                    targetType,
+                    (read NarrowedBranchValue) -> {
+                        whenFalseRead = read
+                    }
+                )
             }
         }
         let bindWhenTrueNarrowed() -> BoundExpression = () -> {
@@ -882,8 +917,18 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        let convertedTrue = ConvertConditionalBranch(syntax.ThenBlock.Location, whenTrue, resultType)
-        let convertedFalse = ConvertConditionalBranch(elseSyntax.Location, whenFalse, resultType)
+        let convertedTrue = ConvertConditionalBranch(
+            BranchValueLocation(syntax.ThenBlock),
+            whenTrue,
+            resultType,
+            whenTrueRead
+        )
+        let convertedFalse = ConvertConditionalBranch(
+            BranchValueLocation(elseSyntax),
+            whenFalse,
+            resultType,
+            whenFalseRead
+        )
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
@@ -982,7 +1027,8 @@ internal partial class ExpressionBinder {
     private func BindIfExpressionElseBranch(
         elseSyntax ExpressionSyntax,
         canBeVoid bool = false,
-        targetType TypeSymbol? = nil
+        targetType TypeSymbol? = nil,
+        captureValue((NarrowedBranchValue) -> void)? = nil
     ) BoundExpression {
         if elseSyntax is IfExpressionSyntax nestedIf {
             return BindIfExpression(nestedIf, targetType, canBeVoid)
@@ -994,7 +1040,7 @@ internal partial class ExpressionBinder {
             return BindIfLetExpression(nestedIfLet, targetType, canBeVoid)
         }
         if elseSyntax is BlockExpressionSyntax block {
-            return BindBlockExpressionValue(block, canBeVoid, targetType)
+            return BindBlockExpressionValue(block, canBeVoid, targetType, captureValue: captureValue)
         }
         // Should not happen from well-formed parse trees.
         return BoundErrorExpression(nil)
@@ -1024,16 +1070,13 @@ internal partial class ExpressionBinder {
         statements ImmutableArray[StatementSyntax],
         expression ExpressionSyntax,
         canBeVoid bool,
-        targetType TypeSymbol? = nil
+        targetType TypeSymbol? = nil,
+        captureValue((NarrowedBranchValue) -> void)? = nil
     )(Statements ImmutableArray[BoundStatement], Expression BoundExpression) {
-        let BindTrailingExpression = func () BoundExpression {
-            return if targetType == nil {
-                BindExpression(expression, canBeVoid)
-            } else {
-                BindExpression(expression, targetType)
-            }
+        let BindTrailingExpression = func (capture((NarrowedBranchValue) -> void)?) BoundExpression {
+            return BindBranchValue(expression, nil, targetType, capture, canBeVoid)
         }
-        return BindStatementsBeforeValue(statements, expression, BindTrailingExpression)
+        return BindStatementsBeforeValue(statements, expression, BindTrailingExpression, captureValue)
     }
 
     /// Binds [`statements`](paramref) in order and then, with their
@@ -1043,12 +1086,15 @@ internal partial class ExpressionBinder {
     /// statements of either bind exactly like the statements of a block.
     /// @param statements The prefix statements.
     /// @param valueSyntax The syntax the synthesized nodes for the value are attributed to.
-    /// @param bindValue Binds the value after the prefix statements.
+    /// @param bindValue Binds the value after the prefix statements, with the capture of its narrowed read.
+    /// @param captureValue Receives a narrowed read that is the value, captured in the narrowing of the statements
+    /// (issue #5613), or `nil`. A value that goes into a cleanup result local is checked at its own type instead.
     /// @returns The bound prefix statements and the bound value.
     private func BindStatementsBeforeValue(
         statements ImmutableArray[StatementSyntax],
         valueSyntax ExpressionSyntax,
-        bindValue() -> BoundExpression
+        bindValue(((NarrowedBranchValue) -> void)?) -> BoundExpression,
+        captureValue((NarrowedBranchValue) -> void)? = nil
     )(Statements ImmutableArray[BoundStatement], Expression BoundExpression) {
         if !statements.Any(
             (statement StatementSyntax) -> statement is UsingStatementSyntax ||
@@ -1060,7 +1106,7 @@ internal partial class ExpressionBinder {
             var fastBoundStatements = bindStatementList(
                 statements,
                 () -> {
-                    fastBoundExpression = bindValue()
+                    fastBoundExpression = bindValue(captureValue)
                     sentinel = BoundExpressionStatement(nil, BoundLiteralExpression(nil, value: 0, TypeSymbol.Void))
                     return sentinel
                 }
@@ -1083,7 +1129,15 @@ internal partial class ExpressionBinder {
         var boundExpression BoundExpression? = nil
         var result VariableSymbol? = nil
         let bindTrailingStatement() -> BoundStatement = () -> {
-            var value = bindValue()
+            // Issue #5613: the result local takes the type of the value, as `let t = s` does. In a branch, a narrowed
+            // read that the value yields is recorded at that type where it binds, before the common type is known.
+            var value = bindValue(
+                if captureValue != nil {
+                    (read NarrowedBranchValue) -> RecordNarrowedValueAtItsType(read)
+                } else {
+                    default(((NarrowedBranchValue) -> void)?)
+                }
+            )
             // Cleanup replaces a tail with a result-local read. Diagnose an
             // unresolved value before that replacement hides its defaults.
             if value.Type == TypeSymbol.Error && ReportUnresolvedBareDefaults(value) {
@@ -1127,10 +1181,11 @@ internal partial class ExpressionBinder {
         syntax BlockExpressionSyntax,
         canBeVoid bool = false,
         targetType TypeSymbol? = nil,
-        preserveEmptyBlock bool = false
+        preserveEmptyBlock bool = false,
+        captureValue((NarrowedBranchValue) -> void)? = nil
     ) BoundExpression -> BindInBlockExpressionScope(
         () -> {
-            return BindBlockExpressionValueCore(syntax, canBeVoid, targetType, preserveEmptyBlock)
+            return BindBlockExpressionValueCore(syntax, canBeVoid, targetType, preserveEmptyBlock, captureValue)
         }
     )
 
@@ -1138,18 +1193,22 @@ internal partial class ExpressionBinder {
         syntax BlockExpressionSyntax,
         canBeVoid bool,
         targetType TypeSymbol?,
-        preserveEmptyBlock bool
+        preserveEmptyBlock bool,
+        captureValue((NarrowedBranchValue) -> void)?
     ) BoundExpression {
         if syntax.Expression == nil {
             return BindValuelessBlockExpression(syntax, canBeVoid)
         }
+        // Issue #5635: a block value without a target gives the narrowed read that it yields its own type, as
+        // `let t = s` does, unless its consumer captures the read and decides it for the type that it converts to
+        // (cref:BinderContext.BindWithBlockValueCapture). So the read is checked where it binds.
+        var captureValue = captureValue
+        if captureValue == nil && targetType == nil {
+            captureValue = (read NarrowedBranchValue) -> RecordNarrowedValueAtItsType(read)
+        }
         // If there are no prefix statements, just bind the expression directly.
         if syntax.Statements.IsDefaultOrEmpty {
-            let expression = if targetType == nil {
-                BindExpression(syntax.Expression!!, canBeVoid)
-            } else {
-                BindExpression(syntax.Expression!!, targetType)
-            }
+            let expression = BindBranchValue(syntax.Expression!!, nil, targetType, captureValue, canBeVoid)
             return if preserveEmptyBlock && !(expression is BoundErrorExpression) {
                 cast[BoundExpression](BoundBlockExpression(syntax, ImmutableArray[BoundStatement].Empty, expression))
             } else {
@@ -1165,7 +1224,8 @@ internal partial class ExpressionBinder {
                 expression: "syntax.Expression"
             ),
             canBeVoid,
-            targetType
+            targetType,
+            captureValue
         )
         if IsDeferredBranchyArgumentPlaceholder(boundExpression, out _) {
             return BoundErrorExpression(syntax)
@@ -1312,7 +1372,8 @@ internal partial class ExpressionBinder {
     private func ConvertConditionalBranch(
         location TextLocation,
         branch BoundExpression,
-        target TypeSymbol?
+        target TypeSymbol?,
+        narrowedRead NarrowedBranchValue? = nil
     ) BoundExpression {
         // Issue #1496: a bare `default` arm is bound to a placeholder
         // `BoundDefaultExpression(syntax, TypeSymbol.Error)` (see
@@ -1343,14 +1404,102 @@ internal partial class ExpressionBinder {
         if branch.Type == TypeSymbol.Never {
             return branch
         }
-        if object.ReferenceEquals(branch.Type, target) {
-            return branch
+        let commonType = Invariant.Required(target, "a conditional branch has a result type", expression: "target")
+        let value = if narrowedRead is {} read {
+            conversions.ResolveNarrowedValue(branch, read, commonType)
+        } else {
+            branch
         }
-        return conversions.BindConversion(
-            location,
-            branch,
-            Invariant.Required(target, "a conditional branch has a result type", expression: "target")
-        )
+        if object.ReferenceEquals(value.Type, commonType) {
+            return value
+        }
+        return conversions.BindConversion(location, value, commonType, trackNarrowing: narrowedRead == nil)
+    }
+
+    /// Issue #5613: binds the value of a branch in its narrowing frame. A narrowed read that the value yields (the
+    /// value, or the trailing value of a block, also of a nested block in parentheses) is captured there
+    /// (cref:CaptureBranchValue).
+    /// @param syntax The branch syntax.
+    /// @param narrowing The narrowing frame of the branch, or `nil`.
+    /// @param targetType The target type of the branch, or `nil`.
+    /// @param captureValue Receives the captured narrowed read, or `nil` for no capture.
+    /// @param canBeVoid Whether the branch value may be void.
+    /// @returns The bound branch value.
+    private func BindBranchValue(
+        syntax ExpressionSyntax,
+        narrowing Dictionary[AccessPath, TypeSymbol]?,
+        targetType TypeSymbol?,
+        captureValue((NarrowedBranchValue) -> void)?,
+        canBeVoid bool = false
+    ) BoundExpression -> BindWithNarrowing(
+        narrowing,
+        () -> {
+            // A block value, also in parentheses or `checked`/`unchecked`, captures its trailing value in the
+            // narrowing of its statements.
+            let isBlock = IsBlockValueSyntax(syntax)
+            let bind = () -> if targetType == nil {
+                BindExpression(syntax, canBeVoid)
+            } else {
+                BindExpression(syntax, targetType)
+            }
+            if isBlock && captureValue is {} blockCapture {
+                return binderCtx.BindWithBlockValueCapture(syntax, blockCapture, bind)
+            }
+            let value = bind()
+            if !isBlock {
+                CaptureBranchValue(value, syntax.Location, captureValue)
+            }
+            return value
+        }
+    )
+
+    /// Issue #5613: takes the capture of a block value that (cref:BinderContext.BindWithBlockValueCapture) gives, so a
+    /// nested block does not receive it.
+    /// @returns The capture, or `nil`.
+    private func TakeBlockValueCapture()((NarrowedBranchValue) -> void)? {
+        let capture = binderCtx.PendingBlockValueCapture
+        binderCtx.PendingBlockValueCapture = nil
+        return capture
+    }
+
+    /// Issue #5613: captures a narrowed read that is the value of a branch, where the read binds, with its backward
+    /// `goto` facts (cref:BinderContext.CaptureBackwardGotoNarrowingUse). A later assignment or narrowing frame does
+    /// not change them. A read whose narrowing changes the runtime type of a local is checked at the read.
+    /// @param value The bound value.
+    /// @param location The location of the value.
+    /// @param captureValue Receives the narrowed read, or `nil` for no capture.
+    private func CaptureBranchValue(
+        value BoundExpression,
+        location TextLocation,
+        captureValue((NarrowedBranchValue) -> void)?
+    ) {
+        if captureValue is {} sink && binderCtx.TryCaptureNarrowedRead(value, location, out var read) {
+            sink(read!!)
+        }
+    }
+
+    // Issue #5613: records the use of a captured narrowed read whose value keeps its narrowed type.
+    private func RecordNarrowedValueAtItsType(read NarrowedBranchValue) {
+        if read.Use is {} use {
+            binderCtx.RecordBackwardGotoNarrowingUse(
+                use,
+                read.Location,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.Conversion,
+                read.NarrowedType
+            )
+        }
+    }
+
+    /// Issue #5613: gets the location of the value of a branch: the trailing value of a block, or the branch.
+    /// @param branch The branch syntax.
+    /// @returns The location of the branch value.
+    private func BranchValueLocation(branch ExpressionSyntax) TextLocation -> if branch is BlockExpressionSyntax{
+        Expression: {} value
+    } {
+        value.Location
+    } else {
+        branch.Location
     }
 
     private func BindChannelReceiveExpression(syntax UnaryExpressionSyntax) BoundExpression {
@@ -1435,6 +1584,7 @@ internal partial class ExpressionBinder {
         // `x is T t && t.Length > 0` binds `t.Length` with `t` in scope, and
         // `!(x is T t) || t.Length > 0` likewise through the negation.
         var boundRight BoundExpression
+        var coalesceRightRead NarrowedBranchValue? = nil
         if syntax.OperatorToken.Kind == SyntaxKind.AmpersandAmpersandToken {
             let rightFrame = TryClassifyTypeTestNarrowingForAnd(boundLeft)
             let (leftWhenTrue, _) = PatternVariables.Classify(boundLeft)
@@ -1455,12 +1605,21 @@ internal partial class ExpressionBinder {
                 }
             )
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenFalse, leftWhenFalse)
-        } else if coalesceTargetType != nil &&
-            syntax
-            .OperatorToken
-            .Kind == SyntaxKind.QuestionQuestionToken &&
-            IsTargetDependentExpressionSyntax(syntax.Right) {
-            boundRight = BindExpression(syntax.Right, coalesceTargetType)
+        } else if syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken {
+            // Issue #5613: the right operand is a branch of the result, so its narrowed read is captured where it
+            // binds and decided for the result type.
+            boundRight = BindBranchValue(
+                syntax.Right,
+                nil,
+                if coalesceTargetType != nil && IsTargetDependentExpressionSyntax(syntax.Right) {
+                    coalesceTargetType
+                } else {
+                    default(TypeSymbol?)
+                },
+                (read NarrowedBranchValue) -> {
+                    coalesceRightRead = read
+                }
+            )
         } else {
             boundRight = BindExpression(syntax.Right)
         }
@@ -1768,9 +1927,15 @@ internal partial class ExpressionBinder {
             // the contextual target that makes the right group a value.
             boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type)
         } else if boundOperator.Kind == BoundBinaryOperatorKind.NullCoalesce &&
-            boundRight.Type != boundOperator.Type &&
-            boundRight.Type != TypeSymbol.Never {
-            boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type)
+            (boundRight.Type != boundOperator.Type || coalesceRightRead != nil) &&
+            boundRight.Type != TypeSymbol
+            .Never {
+            // Issue #5613: a narrowed right operand is decided for the result type as a conditional branch is.
+            boundRight = if coalesceRightRead != nil {
+                ConvertConditionalBranch(syntax.Right.Location, boundRight, boundOperator.Type, coalesceRightRead)
+            } else {
+                conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type)
+            }
         }
         // Issue #3317 / ADR-0159: with sound empty-instance zero values, a nil
         // comparison whose non-nil operand's STATIC type is a bare (non-`?`)
@@ -2743,6 +2908,22 @@ internal partial class ExpressionBinder {
     }
 
     shared {
+        /// Issue #5635: gets a value indicating whether [`syntax`](paramref) is a block value, also in parentheses or
+        /// `checked`/`unchecked`. These wrappers bind their operand as the value.
+        /// @param syntax The value syntax.
+        /// @returns `true` when the value is a block.
+        internal func IsBlockValueSyntax(syntax ExpressionSyntax) bool {
+            var valueSyntax = syntax
+            while valueSyntax is ParenthesizedExpressionSyntax || valueSyntax is CheckedExpressionSyntax {
+                valueSyntax = if valueSyntax is ParenthesizedExpressionSyntax parenthesized {
+                    parenthesized.Expression
+                } else {
+                    cast[CheckedExpressionSyntax](valueSyntax).Expression
+                }
+            }
+            return valueSyntax is BlockExpressionSyntax
+        }
+
         private func IsPointerOffsetType(type TypeSymbol) bool -> type == TypeSymbol.Int8 ||
             type == TypeSymbol.UInt8 ||
             type == TypeSymbol.Int16 ||
@@ -3278,7 +3459,16 @@ internal partial class ExpressionBinder {
             expression is BoundClrMethodGroupExpression &&
             expression.ResolvedMethod == nil
 
-        private func TryGetPromotedCharUnaryType(
+        /// Issue #3684: whether a unary minus applies directly to the decimal literal `2147483648`, which the lexer
+        /// types as `uint32`; together they are `int32.MinValue`, as in C#. Also read by the #5520 literal
+        /// initializer test (`DeclarationBinder.IsLiteralInitializerSyntax`).
+        internal func IsNegatedInt32MinValueLiteral(operatorKind SyntaxKind, operand ExpressionSyntax) bool ->
+        operatorKind == SyntaxKind.MinusToken &&
+            operand is LiteralExpressionSyntax{Value: uint32 negatedMagnitude} &&
+            negatedMagnitude == uint32(int32.MaxValue) +
+            uint32(1)
+
+        internal func TryGetPromotedCharUnaryType(
             operatorKind SyntaxKind,
             operandType TypeSymbol,
             out promotedType TypeSymbol?
@@ -3623,8 +3813,12 @@ internal partial class ExpressionBinder {
         internal func MakeSymbolicArgumentConversionClassifier(
             boundArguments IReadOnlyList[BoundExpression]?,
             argumentOffset int32 = 0,
-            nativeConversions ConversionClassifier? = nil
-        )((int32, Type, ParameterInfo) -> ClrOverloadResolution.ImplicitConversionKind?)? {
+            nativeConversions ConversionClassifier? = nil,
+            receiverType TypeSymbol? = nil,
+            openGenericDefinition Type? = nil,
+            symbolicTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
+            explicitMethodTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
+        )((int32, Type, ParameterInfo, ImmutableArray[TypeSymbol?]) -> ClrOverloadResolution.ImplicitConversionKind?)? {
             let DeclaresImplicitOperator = func (type TypeSymbol) bool {
                 var type = type
                 while type is NullableTypeSymbol nullable {
@@ -3640,13 +3834,45 @@ internal partial class ExpressionBinder {
             if boundArguments == nil {
                 return nil
             }
-            return (index int32, clrParameterType Type?, parameter ParameterInfo) -> {
+            return (
+                index int32,
+                clrParameterType Type?,
+                parameter ParameterInfo,
+                inferredMethodTypeArguments ImmutableArray[TypeSymbol?]
+            ) -> {
                 let argIndex = index - argumentOffset
-                if argIndex < 0 ||
-                    argIndex >= boundArguments.Count ||
-                    clrParameterType == nil ||
-                    clrParameterType.IsByRef {
+                if argIndex < 0 || argIndex >= boundArguments.Count || clrParameterType == nil {
                     return nil
+                }
+                if clrParameterType.IsByRef {
+                    // Issue #5558: when a by-reference parameter is substituted from
+                    // symbolic type arguments, compare the argument's storage type
+                    // against the substituted symbolic pointee.
+                    if ByRefStorageMatching.TryGetStorageType(boundArguments[argIndex]) is not{} storageType {
+                        return nil
+                    }
+                    let symbolicPointee = TryResolveSymbolicByRefParameterPointee(
+                        parameter,
+                        receiverType,
+                        openGenericDefinition,
+                        symbolicTypeArguments,
+                        explicitMethodTypeArguments,
+                        inferredMethodTypeArguments
+                    )
+                    if symbolicPointee == nil || symbolicPointee == TypeSymbol.Error {
+                        return nil
+                    }
+                    return if ByRefStorageMatching.AreSameStorageType(
+                        storageType,
+                        symbolicPointee,
+                        out _,
+                        out _,
+                        out _
+                    ) {
+                        ClrOverloadResolution.ImplicitConversionKind.Identity
+                    } else {
+                        ClrOverloadResolution.ImplicitConversionKind.None
+                    }
                 }
                 let sourceType = boundArguments[argIndex].Type
                 var nativeTarget = ClrNullability.GetParameterTypeSymbol(parameter)
@@ -3708,6 +3934,163 @@ internal partial class ExpressionBinder {
                     )
                 }
             }
+        }
+
+        internal func TryResolveSymbolicByRefParameterPointee(
+            parameter ParameterInfo,
+            receiverType TypeSymbol?,
+            openGenericDefinition Type? = nil,
+            symbolicTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
+            explicitMethodTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
+            inferredMethodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?])
+        ) TypeSymbol? {
+            var openDef = openGenericDefinition
+            var declaringTypeArgs = symbolicTypeArguments
+            if (openDef == nil || declaringTypeArgs.IsDefaultOrEmpty) &&
+                receiverType != nil &&
+                MemberLookup.GetProjectionReceiverImportedType(receiverType) is ImportedTypeSymbol importedReceiver &&
+                importedReceiver.OpenDefinition != nil &&
+                !importedReceiver
+                .TypeArguments
+                .IsDefaultOrEmpty &&
+                parameter
+                .Member
+                ?.DeclaringType is {} declaringType &&
+                MemberLookup
+                .TryGetSymbolicDeclaringContext(
+                importedReceiver,
+                declaringType,
+                out var resolvedOpenDef,
+                out var resolvedDeclaringArgs
+            ) &&
+                resolvedOpenDef != nil &&
+                !resolvedDeclaringArgs.IsDefaultOrEmpty {
+                openDef = resolvedOpenDef
+                declaringTypeArgs = resolvedDeclaringArgs
+            }
+            if parameter.Member is ConstructorInfo ctor {
+                return ResolveConstructorParameterPointeeType(ctor, parameter.Position, openDef, declaringTypeArgs)
+            }
+            if parameter.Member is not MethodInfo method {
+                return nil
+            }
+            let nullableMethodTypeArgs = if !explicitMethodTypeArguments.IsDefaultOrEmpty {
+                ImmutableArray.CreateRange[TypeSymbol?](explicitMethodTypeArguments)
+            } else {
+                inferredMethodTypeArguments
+            }
+            if openDef != nil && !declaringTypeArgs.IsDefaultOrEmpty {
+                var openMethod MethodInfo? = nil
+                for candidate in openDef.GetMethods(
+                    BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic
+                ) {
+                    if candidate.MetadataToken == method.MetadataToken && candidate.Module == method.Module {
+                        openMethod = candidate
+                        break
+                    }
+                }
+                if openMethod == nil {
+                    return nil
+                }
+                let openParams = openMethod.GetParameters()
+                if uint32(parameter.Position) >= uint32(openParams.Length) ||
+                    !openParams[parameter.Position]
+                    .ParameterType
+                    .IsByRef ||
+                    !openParams[parameter.Position]
+                    .ParameterType
+                    .ContainsGenericParameters {
+                    return nil
+                }
+                if MentionsUnresolvedMethodGenericParameter(
+                    openParams[parameter.Position].ParameterType,
+                    nullableMethodTypeArgs
+                ) {
+                    return nil
+                }
+                if !nullableMethodTypeArgs.IsDefaultOrEmpty && openMethod.GetGenericArguments()
+                    .Length != nullableMethodTypeArgs.Length {
+                    return nil
+                }
+                return ByRefStorageMatching.PreserveNominalClrPointeeType(
+                    openParams[parameter.Position].ParameterType,
+                    MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
+                        openParams[parameter.Position],
+                        openDef,
+                        declaringTypeArgs,
+                        if nullableMethodTypeArgs.IsDefaultOrEmpty {
+                            default(MethodInfo?)
+                        } else {
+                            openMethod
+                        },
+                        nullableMethodTypeArgs
+                    )
+                )
+            }
+            if !nullableMethodTypeArgs.IsDefaultOrEmpty && method.IsGenericMethod {
+                let openMethod = if method.IsGenericMethodDefinition {
+                    method
+                } else {
+                    method.GetGenericMethodDefinition()
+                }
+                if openMethod.GetGenericArguments().Length != nullableMethodTypeArgs.Length {
+                    return nil
+                }
+                let openParams = openMethod.GetParameters()
+                if uint32(parameter.Position) >= uint32(openParams.Length) ||
+                    !openParams[parameter.Position]
+                    .ParameterType
+                    .IsByRef ||
+                    !openParams[parameter.Position]
+                    .ParameterType
+                    .ContainsGenericParameters ||
+                    MentionsUnresolvedMethodGenericParameter(
+                    openParams[parameter.Position].ParameterType,
+                    nullableMethodTypeArgs
+                ) {
+                    return nil
+                }
+                return ByRefStorageMatching.PreserveNominalClrPointeeType(
+                    openParams[parameter.Position].ParameterType,
+                    MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
+                        openParams[parameter.Position],
+                        openDefinition: nil,
+                        ImmutableArray[TypeSymbol].Empty,
+                        openMethod,
+                        nullableMethodTypeArgs
+                    )
+                )
+            }
+            return nil
+        }
+
+        private func MentionsUnresolvedMethodGenericParameter(
+            type Type?,
+            methodTypeArguments ImmutableArray[TypeSymbol?]
+        ) bool {
+            if type == nil {
+                return false
+            }
+            if type.IsGenericParameter {
+                if type.DeclaringMethod == nil {
+                    return false
+                }
+                let position = type.GenericParameterPosition
+                return methodTypeArguments.IsDefaultOrEmpty ||
+                    uint32(position) >= uint32(methodTypeArguments.Length) ||
+                    methodTypeArguments[position] == nil
+            }
+            if type.HasElementType {
+                return MentionsUnresolvedMethodGenericParameter(type.GetElementType(), methodTypeArguments)
+            }
+            if type.IsGenericType {
+                for argument in type.GetGenericArguments() {
+                    if MentionsUnresolvedMethodGenericParameter(argument, methodTypeArguments) {
+                        return true
+                    }
+                }
+            }
+            return false
         }
 
         // ADR-0148: imported overload resolution works on CLR Type surrogates and
@@ -3917,7 +4300,6 @@ internal partial class ExpressionBinder {
         internal func IsErasedArgumentApplicabilityMismatch(sourceType TypeSymbol?, clrParameterType Type?) bool {
             if sourceType == nil ||
                 clrParameterType == nil ||
-                clrParameterType.IsByRef ||
                 clrParameterType.IsPointer ||
                 clrParameterType.ContainsGenericParameters {
                 return false
@@ -3927,6 +4309,9 @@ internal partial class ExpressionBinder {
                 sourceType
             ) {
                 return false
+            }
+            if clrParameterType.IsByRef {
+                return sourceType is ByRefTypeSymbol
             }
             // An erasure can only be MISTAKEN for the parameter where the parameter
             // has an erasure SURROGATE in the position the erasure filled — that

@@ -21,6 +21,7 @@ import System.Collections.Concurrent
 import SystemObject = System.Object
 import System.Globalization
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Lowering.Async
 import GSharp.Core.CodeAnalysis.Syntax
 
 /// Result of resolving an imported CLR indexer overload set.
@@ -195,8 +196,28 @@ internal class MemberLookup {
                 let parameterTypes = ImmutableArray.CreateBuilder[TypeSymbol](boundArguments.Length)
                 var candidateApplicable = true
                 for var i = 0; i < boundArguments.Length; i++ {
-                    let parameterType = GetIndexerParameterTypeSymbol(targetType, property, i)
+                    var parameterType = GetIndexerParameterTypeSymbol(targetType, property, i)
+                    if parameterType is ByRefTypeSymbol parameterByRef && parameters[i].ParameterType.IsByRef {
+                        parameterType = parameterByRef.PointeeType
+                    }
                     parameterTypes.Add(parameterType)
+                    let parameterRefKind = RefCapabilities.GetParameterRefKind(parameters[i])
+                    if boundArguments[i].Type is ByRefTypeSymbol && ByRefStorageMatching.TryGetStorageType(
+                        boundArguments[i]
+                    ) is {} storageType {
+                        if parameterRefKind == RefKind.None || ByRefStorageMatching.IsExactStorageMatch(
+                            storageType,
+                            parameterType
+                        ) == nil {
+                            candidateApplicable = false
+                            break
+                        }
+                        continue
+                    }
+                    if parameterRefKind != RefKind.None && parameterRefKind != RefKind.In {
+                        candidateApplicable = false
+                        break
+                    }
                     let conversion = ClassifySymbolicIndexerConversion(boundArguments[i], parameterType)
                     if !conversion.IsImplicit {
                         candidateApplicable = false
@@ -216,7 +237,9 @@ internal class MemberLookup {
                             continue
                         }
                         if !IsBetterSymbolicIndexerCandidate(
+                            candidate.Property,
                             candidate.ParameterTypes,
+                            other.Property,
                             other.ParameterTypes,
                             boundArguments
                         ) {
@@ -248,7 +271,7 @@ internal class MemberLookup {
         }
         let argTypes = [boundArguments.Length]Type?
         for var i = 0; i < boundArguments.Length; i++ {
-            argTypes[i] = boundArguments[i].Type?.ClrType
+            argTypes[i] = NullableLifting.GetEffectiveClrType(boundArguments[i].Type)
             if argTypes[i] == nil {
                 // Issue #2471: imported generic receivers constructed with a
                 // same-compilation source type use System.Object as the
@@ -1654,14 +1677,35 @@ internal class MemberLookup {
         /// @param structSymbol The user struct symbol to inspect.
         /// @param clrProp The CLR property whose contract to check.
         /// @returns The matching (cref:FieldSymbol), or `null`.
-        func FindMatchingFieldForPropertyContract(structSymbol StructSymbol, clrProp PropertyInfo) FieldSymbol? {
-            if !structSymbol.TryGetFieldIncludingInherited(clrProp.Name, out var field, out _) {
+        func FindMatchingFieldForPropertyContract(
+            structSymbol StructSymbol,
+            clrProp PropertyInfo,
+            symbolicArgs ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
+        ) FieldSymbol? -> FindMatchingFieldForPropertyContract(structSymbol, clrProp, symbolicArgs, out _)
+
+        func FindMatchingFieldForPropertyContract(
+            structSymbol StructSymbol,
+            clrProp PropertyInfo,
+            symbolicArgs ImmutableArray[TypeSymbol],
+            out declaringType StructSymbol?
+        ) FieldSymbol? {
+            declaringType = nil
+            if clrProp.GetIndexParameters().Length != 0 || !structSymbol.TryGetFieldIncludingInherited(
+                clrProp.Name,
+                out var field,
+                out declaringType
+            ) {
                 return nil
             }
             if field!!.Accessibility != Accessibility.Public {
                 return nil
             }
-            if !ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(field!!.Type), clrProp.PropertyType) {
+            let typeMatches = if symbolicArgs.IsDefaultOrEmpty {
+                ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(field!!.Type), clrProp.PropertyType)
+            } else {
+                ParameterTypeMatchesSubstituted(field!!.Type, clrProp.PropertyType, symbolicArgs)
+            }
+            if !typeMatches {
                 return nil
             }
             // A read-only field cannot satisfy a read-write property contract.
@@ -4443,6 +4487,35 @@ internal class MemberLookup {
             return nil
         }
 
+        private func TryGetComparableClrReturnType(
+            candidate FunctionSymbol,
+            clrMethod MethodInfo,
+            @NotNullWhen(true) out comparableClrReturnType Type?
+        ) bool {
+            // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
+            comparableClrReturnType = if clrMethod.ReturnType.IsByRef {
+                clrMethod.ReturnType.GetElementType()!!
+            } else {
+                clrMethod.ReturnType
+            }
+            if !candidate.IsAsync || AsyncIteratorDetection.IsAsyncIteratorReturnType(candidate.Type) {
+                return true
+            }
+            if candidate.IsAsyncVoid {
+                return !clrMethod.ReturnType.IsByRef && clrMethod.ReturnType.IsSameAs(typeof(Void))
+            }
+            if !clrMethod.ReturnType.IsByRef && AsyncReturnTypeNormalizer.TryUnwrapTaskClrType(
+                clrMethod.ReturnType,
+                out var awaitedReturnClr,
+                out var isValueTask
+            ) &&
+                isValueTask == candidate.AsyncReturnsValueTask {
+                comparableClrReturnType = awaitedReturnClr
+                return true
+            }
+            return false
+        }
+
         /// Determines whether one G# method matches an imported CLR method signature.
         /// @param candidate The candidate G# method.
         /// @param clrMethod The imported CLR method.
@@ -4450,12 +4523,6 @@ internal class MemberLookup {
         func MethodMatchesClrSignature(candidate FunctionSymbol, clrMethod MethodInfo) bool {
             if candidate.ReturnRefKind != RefCapabilities.GetReturnRefKind(clrMethod) {
                 return false
-            }
-            // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
-            let clrReturnType = if clrMethod.ReturnType.IsByRef {
-                clrMethod.ReturnType.GetElementType()!!
-            } else {
-                clrMethod.ReturnType
             }
             let clrParams = clrMethod.GetParameters()
             // Issue #2230: an imported (metadata) interface method may itself be
@@ -4483,19 +4550,8 @@ internal class MemberLookup {
             if methodGenericParams.Length != candidateTypeParams.Length {
                 return false
             }
-            if candidate.IsAsync && AsyncReturnTypeNormalizer.TryUnwrapTaskClrType(
-                clrMethod.ReturnType,
-                out var awaitedReturnClr
-            ) {
-                if !ClrParamTypeMatchesGenericMethodParam(
-                    candidate.Type,
-                    awaitedReturnClr,
-                    methodGenericParams,
-                    candidateTypeParams
-                ) {
-                    return false
-                }
-            } else if !ClrParamTypeMatchesGenericMethodParam(
+            if !TryGetComparableClrReturnType(candidate, clrMethod, out var clrReturnType) ||
+                !ClrParamTypeMatchesGenericMethodParam(
                 candidate.Type,
                 clrReturnType,
                 methodGenericParams,
@@ -4619,18 +4675,11 @@ internal class MemberLookup {
             if callable.Length != clrParams.Length {
                 return false
             }
-            // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
+            if !TryGetComparableClrReturnType(candidate, openMethod, out var openReturnType) {
+                return false
+            }
             if candidate.ReturnRefKind != RefCapabilities.GetReturnRefKind(openMethod) ||
-                !ReturnTypeMatchesSubstituted(
-                candidate.Type,
-                if openMethod.ReturnType.IsByRef {
-                    openMethod.ReturnType.GetElementType()!!
-                } else {
-                    openMethod.ReturnType
-                },
-                symbolicArgs,
-                methodTypeArgs
-            ) {
+                !ReturnTypeMatchesSubstituted(candidate.Type, openReturnType, symbolicArgs, methodTypeArgs) {
                 return false
             }
             for var i = 0; i < callable.Length; i++ {
@@ -4788,18 +4837,11 @@ internal class MemberLookup {
             if callable.Length != clrParams.Length {
                 return false
             }
-            // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
+            if !TryGetComparableClrReturnType(method, slot.Method, out var slotReturnType) {
+                return false
+            }
             if method.ReturnRefKind != RefCapabilities.GetReturnRefKind(slot.Method) ||
-                !ReturnTypeMatchesSubstituted(
-                method.Type,
-                if slot.Method.ReturnType.IsByRef {
-                    slot.Method.ReturnType.GetElementType()!!
-                } else {
-                    slot.Method.ReturnType
-                },
-                slot.SymbolicArgs,
-                methodTypeArgs
-            ) {
+                !ReturnTypeMatchesSubstituted(method.Type, slotReturnType, slot.SymbolicArgs, methodTypeArgs) {
                 return false
             }
             for var i = 0; i < callable.Length; i++ {
@@ -5083,11 +5125,12 @@ internal class MemberLookup {
                 return false
             }
             for var i = 0; i < clrParameters.Length; i++ {
+                var slotParameterType = GetIndexerParameterTypeSymbol(slotOwner, clrProperty, i)
+                if slotParameterType is ByRefTypeSymbol slotParameterByRef {
+                    slotParameterType = slotParameterByRef.PointeeType
+                }
                 if property.Parameters[i].RefKind != RefCapabilities.GetParameterRefKind(clrParameters[i]) ||
-                    !SameTypeSymbol(
-                    property.Parameters[i].Type,
-                    GetIndexerParameterTypeSymbol(slotOwner, clrProperty, i)
-                ) {
+                    !SameTypeSymbol(property.Parameters[i].Type, slotParameterType) {
                     return false
                 }
             }
@@ -7064,7 +7107,10 @@ internal class MemberLookup {
                 return false
             }
             for var i = 0; i < firstParameters.Length; i++ {
-                if !SameTypeSymbol(
+                if RefCapabilities.GetParameterRefKind(firstParameters[i]) != RefCapabilities.GetParameterRefKind(
+                    secondParameters[i]
+                ) ||
+                    !SameTypeSymbol(
                     GetIndexerParameterTypeSymbol(targetType, first, i),
                     GetIndexerParameterTypeSymbol(targetType, second, i)
                 ) {
@@ -7075,12 +7121,27 @@ internal class MemberLookup {
         }
 
         private func IsBetterSymbolicIndexerCandidate(
+            candidateProperty PropertyInfo,
             candidate ImmutableArray[TypeSymbol],
+            otherProperty PropertyInfo,
             other ImmutableArray[TypeSymbol],
             arguments ImmutableArray[BoundExpression]
         ) bool {
             var hasBetterConversion = false
             for var i = 0; i < arguments.Length; i++ {
+                if arguments[i].Type is ByRefTypeSymbol && ByRefStorageMatching.TryGetStorageType(
+                    arguments[i]
+                ) is {} storageType {
+                    let candidateExact = ByRefStorageMatching.IsExactStorageMatch(storageType, candidate[i]) == true
+                    let otherExact = ByRefStorageMatching.IsExactStorageMatch(storageType, other[i]) == true
+                    if candidateExact != otherExact {
+                        if !candidateExact {
+                            return false
+                        }
+                        hasBetterConversion = true
+                    }
+                    continue
+                }
                 let numericTarget = ClrOverloadResolution.CompareNumericConversionTargets(
                     NullableLifting.GetEffectiveClrType(candidate[i]),
                     NullableLifting.GetEffectiveClrType(other[i]),
@@ -7112,14 +7173,45 @@ internal class MemberLookup {
                 }
                 hasBetterConversion = true
             }
-            return hasBetterConversion
+            if hasBetterConversion {
+                return true
+            }
+            for var i = 0; i < arguments.Length; i++ {
+                if !SameTypeSymbol(candidate[i], other[i]) {
+                    return false
+                }
+            }
+            let candidateParameters = candidateProperty.GetIndexParameters()
+            let otherParameters = otherProperty.GetIndexParameters()
+            if candidateParameters.Length != otherParameters.Length {
+                return candidateParameters.Length < otherParameters.Length
+            }
+            var hasBetterPassingMode = false
+            for var i = 0; i < arguments.Length; i++ {
+                if arguments[i].Type is ByRefTypeSymbol {
+                    continue
+                }
+                let candidateIsByValue = RefCapabilities.GetParameterRefKind(candidateParameters[i]) == RefKind.None
+                let otherIsByValue = RefCapabilities.GetParameterRefKind(otherParameters[i]) == RefKind.None
+                if candidateIsByValue != otherIsByValue {
+                    if !candidateIsByValue {
+                        return false
+                    }
+                    hasBetterPassingMode = true
+                }
+            }
+            return hasBetterPassingMode
         }
 
         private func ClassifySymbolicIndexerConversion(source BoundExpression, target TypeSymbol)(
             IsImplicit bool,
             IsIdentity bool
         ) {
-            let conversion = ClassifySymbolicIndexerConversion(source.Type, target)
+            var sourceType = source.Type
+            if sourceType is ByRefTypeSymbol sourceByRef {
+                sourceType = sourceByRef.PointeeType
+            }
+            let conversion = ClassifySymbolicIndexerConversion(sourceType, target)
             return if !conversion.IsImplicit && ExpressionBinder.IsImplicitConstantNarrowingArgument(source, target) {
                 (true, false)
             } else {
@@ -7221,8 +7313,8 @@ internal class MemberLookup {
             isImplicit = false
             if source is not ImportedTypeSymbol sourceImported ||
                 target is not ImportedTypeSymbol targetImported ||
-                sourceImported.OpenDefinition == nil ||
-                targetImported.OpenDefinition == nil ||
+                sourceImported.OpenDefinition is not{} sourceOpenDefinition ||
+                targetImported.OpenDefinition is not{} targetOpenDefinition ||
                 sourceImported
                 .TypeArguments
                 .IsDefaultOrEmpty ||
@@ -7232,9 +7324,9 @@ internal class MemberLookup {
                 return false
             }
             var sourceArguments ImmutableArray[TypeSymbol]
-            if ClrTypeUtilities.AreSame(sourceImported.OpenDefinition, targetImported.OpenDefinition) {
+            if ClrTypeUtilities.AreSame(sourceOpenDefinition, targetOpenDefinition) {
                 sourceArguments = sourceImported.TypeArguments
-            } else if !TryMapThroughImplemented(sourceImported, targetImported.OpenDefinition, out sourceArguments) {
+            } else if !TryMapThroughImplemented(sourceImported, targetOpenDefinition, out sourceArguments) {
                 return false
             }
             if sourceArguments.Length != targetImported.TypeArguments.Length {
@@ -8719,6 +8811,9 @@ internal class MemberLookup {
         ) {
             var actual = actual
             if openClr == nil || actual == nil {
+                return
+            }
+            if !openClr.IsByRef && actual is ByRefTypeSymbol {
                 return
             }
             if object.ReferenceEquals(actual, TypeSymbol.Error) {

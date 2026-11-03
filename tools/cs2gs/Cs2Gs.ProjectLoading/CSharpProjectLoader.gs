@@ -214,6 +214,99 @@ shared class CSharpProjectLoader {
         return results
     }
 
+    /// Evaluates the transitive C# compile `ProjectReference` paths for a
+    /// single project through (cref:MSBuildWorkspace) without building Roslyn
+    /// compilations or semantic models.
+    /// @param projectPath The `.csproj` path.
+    /// @param cancellationToken A cancellation token.
+    /// @returns The MSBuild-evaluated transitive C# `ProjectReference` paths.
+    async func EvaluateCompileProjectReferencePathsAsync(
+        projectPath string?,
+        cancellationToken CancellationToken = default(CancellationToken)
+    ) IReadOnlyList[string] {
+        if projectPath == nil {
+            throw ArgumentNullException("projectPath")
+        }
+        let fullPath = Path.GetFullPath(projectPath)
+        if !File.Exists(fullPath) {
+            throw FileNotFoundException("Project file not found: $fullPath", fullPath)
+        }
+        let evaluated = await EvaluateCompileProjectReferencePathsAsync(
+            []string{fullPath},
+            cancellationToken
+        ).ConfigureAwait(false)
+        return evaluated[fullPath]
+    }
+
+    /// Evaluates the transitive C# compile `ProjectReference` paths for a set
+    /// of projects in a single shared (cref:MSBuildWorkspace), reusing
+    /// already-opened projects in the workspace solution without building
+    /// Roslyn compilations or semantic models.
+    /// @param projectPaths The `.csproj` paths to evaluate.
+    /// @param cancellationToken A cancellation token.
+    /// @returns A dictionary mapping each normalized project path to its ordered transitive C# compile
+    /// reference paths.
+    async func EvaluateCompileProjectReferencePathsAsync(
+        projectPaths IEnumerable[string]?,
+        cancellationToken CancellationToken = default(CancellationToken)
+    ) IReadOnlyDictionary[string, IReadOnlyList[string]] {
+        if projectPaths == nil {
+            throw ArgumentNullException("projectPaths")
+        }
+        let normalizedPaths = projectPaths
+            .Where((path string) -> !string.IsNullOrEmpty(path))
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList()
+        let result = Dictionary[string, IReadOnlyList[string]](StringComparer.OrdinalIgnoreCase)
+        if normalizedPaths.Count == 0 {
+            return result
+        }
+        EnsureMSBuildRegistered()
+        using let workspace = CreateWorkspace()
+        for fullPath in normalizedPaths {
+            if !File.Exists(fullPath) {
+                throw FileNotFoundException("Project file not found: $fullPath", fullPath)
+            }
+            let existing Project? = workspace
+                .CurrentSolution
+                .Projects
+                .FirstOrDefault(
+                (p Project) -> !string.IsNullOrEmpty(p.FilePath) && string.Equals(
+                    Path.GetFullPath(p.FilePath!!),
+                    fullPath,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+            if existing == nil {
+                await workspace.OpenProjectAsync(fullPath, cancellationToken: cancellationToken).ConfigureAwait(false)
+            }
+        }
+        for fullPath in normalizedPaths {
+            let project Project? = workspace
+                .CurrentSolution
+                .Projects
+                .FirstOrDefault(
+                (p Project) -> !string.IsNullOrEmpty(p.FilePath) && string.Equals(
+                    Path.GetFullPath(p.FilePath!!),
+                    fullPath,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+            if project == nil {
+                result[fullPath] = Array.Empty[string]()
+                continue
+            }
+            result[fullPath] = TransitiveCSharpProjectReferences(project)
+                .Select((referenced Project) -> referenced.FilePath ?? string.Empty)
+                .Where((path string) -> !string.IsNullOrEmpty(path))
+                .Select(Path.GetFullPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList()
+        }
+        return result
+    }
+
     /// Compiles a set of in-memory C# sources into a bound compilation. This is
     /// the fast path for unit tests; it does not touch MSBuild.
     /// @param sources The `(fileName, sourceText)` pairs to compile.
@@ -253,10 +346,17 @@ shared class CSharpProjectLoader {
         return LoadedCSharpProject(compilation, documents, loadDiagnostics)
     }
 
+    private let CachedRuntimeReferences Lazy[IReadOnlyList[MetadataReference]] = Lazy[IReadOnlyList[MetadataReference]](
+        BuildRuntimeReferences,
+        LazyThreadSafetyMode.ExecutionAndPublication
+    )
+
     /// Builds the default metadata reference set from the running runtime's
     /// trusted platform assemblies (the shared framework).
     /// @returns The metadata references for the current runtime.
-    func RuntimeReferences() IReadOnlyList[MetadataReference] {
+    func RuntimeReferences() IReadOnlyList[MetadataReference] -> CachedRuntimeReferences.Value
+
+    private func BuildRuntimeReferences() IReadOnlyList[MetadataReference] {
         let tpa string? = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string
         if string.IsNullOrEmpty(tpa) {
             throw InvalidOperationException(

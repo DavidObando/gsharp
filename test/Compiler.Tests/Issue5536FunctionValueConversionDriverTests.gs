@@ -235,6 +235,2008 @@ class Program {
 `, "OF")
     }
 
+    /// Issue #5543: a function literal is a plain value, so it binds to the pointee of an imported `in` or
+    /// `ref readonly` delegate parameter. That makes the delegate overload better than the `object` overload,
+    /// as in C#.
+    @Fact
+    func FunctionLiteral_AtImportedInDelegateParameter_SelectsTheDelegate() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.In(() -> 1, 1))
+    Console.Write(Calls.In(() -> { return 1 }, 1))
+    Console.Write(Calls.RR(() -> 1, 1))
+    Console.Write(Calls.P((y) -> y + 1, 1))
+    Console.Write(Calls.PG((y) -> y + 1, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.In(() => 1, 1));
+        Console.Write(Calls.In(() => { return 1; }, 1));
+        Console.Write(Calls.RR(() => 1, 1));
+        Console.Write(Calls.P(y => y + 1, 1));
+        Console.Write(Calls.PG(y => y + 1, 1));
+    }
+}
+`, "FFFF3F2")
+    }
+
+    /// Issue #5543: imported constructors, instance methods and reduced extension calls use the same `in`
+    /// pointee target for a function literal.
+    @Fact
+    func FunctionLiteral_AtImportedInDelegateParameter_OfConstructorsAndInstanceCalls() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(InCtor(() -> 1, 1).Kind)
+    Console.Write(InReceiver().M(() -> 1, 1))
+    Console.Write(InReceiver().X(() -> 1, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(new InCtor(() => 1, 1).Kind);
+        Console.Write(new InReceiver().M(() => 1, 1));
+        Console.Write(new InReceiver().X(() => 1, 1));
+    }
+}
+`, "FFF")
+    }
+
+    /// Issue #5543: symbolic target recovery reads the pointee of an `in` delegate slot too. A source type
+    /// argument therefore reaches an explicit or inferred lambda parameter for generic receivers, generic
+    /// methods, reduced extensions, static members and constructors.
+    @Fact
+    func FunctionLiteral_AtImportedInDelegateParameter_KeepsSourceTypeArguments() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import System.Collections.Generic
+import FunctionControl
+class Pt {
+    var X int32 = 3
+}
+func Main() {
+    let p = Pt()
+    Console.Write(InBox[Pt]().M(p, (q Pt) -> q.X))
+    Console.Write(InBox[Pt]().M(p, (q) -> q.X))
+    Console.Write(InHolder[Pt](p, (q Pt) -> q.X).Kind)
+    Console.Write(InHolder[Pt](p, (q) -> q.X).Kind)
+    Console.Write(InStatic[Pt].S(p, (q Pt) -> q.X))
+    Console.Write(InGeneric.Of(p, (q) -> q.X))
+    Console.Write(List[Pt]{p}.Each((q) -> q.X))
+}
+`, `using System;
+using System.Collections.Generic;
+using FunctionControl;
+class Pt {
+    public int X = 3;
+}
+class Program {
+    static void Main() {
+        var p = new Pt();
+        Console.Write(new InBox<Pt>().M(p, (Pt q) => q.X));
+        Console.Write(new InBox<Pt>().M(p, q => q.X));
+        Console.Write(new InHolder<Pt>(p, (Pt q) => q.X).Kind);
+        Console.Write(new InHolder<Pt>(p, q => q.X).Kind);
+        Console.Write(InStatic<Pt>.S(p, (Pt q) => q.X));
+        Console.Write(InGeneric.Of(p, q => q.X));
+        Console.Write(new List<Pt> { p }.Each(q => q.X));
+    }
+}
+`, "B3B3H3H3S3G3E3")
+    }
+
+    /// Issue #5543 control: an expression-bodied literal whose result does not convert to the `in` delegate
+    /// keeps its natural type, so the `object` overload applies, as for a by-value slot.
+    @Fact
+    func InDelegateParameter_IncompatibleExpressionLiteral_SelectsObject() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.In(() -> "s", 1))
+    Console.Write(Calls.M(() -> "s", 1))
+    Console.Write(InCtor(() -> "s", 1).Kind)
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.In(() => "s", 1));
+        Console.Write(Calls.M(() => "s", 1));
+        Console.Write(new InCtor(() => "s", 1).Kind);
+    }
+}
+`, "OOO")
+    }
+
+    /// Issue #5569: a block-bodied literal is bound against a delegate target speculatively when another candidate
+    /// takes its natural type. A literal whose `return` value does not convert makes the delegate candidates
+    /// inapplicable, so the `object` overload applies, as in C#. This holds for by-value and `in` slots, methods,
+    /// constructors, reduced extensions and generic receivers. A literal that converts still selects the delegate.
+    @Fact
+    func BlockLiteral_ThatDoesNotConvertToTheDelegate_SelectsObject() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+class Pt {
+    var X int32 = 3
+}
+func Main() {
+    Console.Write(Calls.In(() -> { return "s" }, 1))
+    Console.Write(Calls.M(() -> { return "s" }, 1))
+    Console.Write(InCtor(() -> { return "s" }, 1).Kind)
+    Console.Write(C(() -> { return "s" }, 1).Kind)
+    Console.Write(InReceiver().X(() -> { return "s" }, 1))
+    Console.Write(LitBox[Pt]().M((p Pt) -> { return "s" }))
+    Console.Write(Calls.In(() -> { return 1 }, 1))
+    Console.Write(InCtor(() -> { return 1 }, 1).Kind)
+    Console.Write(LitBox[Pt]().M((p Pt) -> { return p.X }))
+}
+`, `using System;
+using FunctionControl;
+class Pt {
+    public int X = 3;
+}
+class Program {
+    static void Main() {
+        Console.Write(Calls.In(() => { return "s"; }, 1));
+        Console.Write(Calls.M(() => { return "s"; }, 1));
+        Console.Write(new InCtor(() => { return "s"; }, 1).Kind);
+        Console.Write(new C(() => { return "s"; }, 1).Kind);
+        Console.Write(new InReceiver().X(() => { return "s"; }, 1));
+        Console.Write(new LitBox<Pt>().M((Pt p) => { return "s"; }));
+        Console.Write(Calls.In(() => { return 1; }, 1));
+        Console.Write(new InCtor(() => { return 1; }, 1).Kind);
+        Console.Write(new LitBox<Pt>().M((Pt p) => { return p.X; }));
+    }
+}
+`, "OOOOOOFFF")
+    }
+
+    /// Issue #5569: each speculative literal binds its body once, and a target-typed return value at most twice,
+    /// so nested literals cost linear work. Before,
+    /// a literal whose `return` value did not convert bound its body again with its natural type, so each
+    /// nesting level doubled the work of the levels inside it. At depth 24 that compile does not finish within the
+    /// 30-second driver bound; now it takes the same time as depth 1. Roslyn itself binds such nesting
+    /// exponentially (CS9236), so its oracle uses depth 2 of the same shape, which gives the same output because
+    /// no literal runs.
+    @Fact
+    func NestedBlockLiterals_ThatSelectObject_BindInLinearWork() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let shapes = []string{"Calls.M(|, 1)", "Calls.In(|, 1)", "C(|, 1).Kind", "InCtor(|, 1).Kind"}
+        let source = StringBuilder("import System\nimport FunctionControl\nfunc Main() {\n    let flag = true\n")
+        let oracle = StringBuilder(
+            "using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n        var flag = true;\n"
+        )
+        // The second form returns a target-typed conditional, whose value also binds again with its natural type.
+        let returns = []string{"\"s\"", "true ? \"s\" : \"t\""}
+        for returned in returns {
+            for shape in shapes {
+                source
+                    .Append("    Console.Write(")
+                    .Append(NestBlockLiterals(shape, 24, "() -> { ", "return " + returned + " }"))
+                    .Append(")\n")
+                oracle
+                    .Append("        Console.Write(")
+                    .Append(NestBlockLiterals(OracleShape(shape), 2, "() => { ", "return " + returned + "; }"))
+                    .Append(");\n")
+            }
+        }
+        // The third form returns a block that returns the next block from a branch (review of PR #5564). Each
+        // nested return binds in the pass of the value that contains it.
+        for shape in shapes {
+            source
+                .Append("    Console.Write(")
+                .Append(shape.Replace("|", "() -> { return " + NestReturnBlocks(24) + " }"))
+                .Append(")\n")
+            oracle
+                .Append("        Console.Write(")
+                .Append(
+                OracleShape(shape).Replace(
+                    "|",
+                    "() => { if (flag) { if (flag) { return \"s\"; } return \"s\"; } return \"s\"; }"
+                )
+            )
+                .Append(");\n")
+        }
+        source.Append("}\n")
+        oracle.Append("    }\n}\n")
+        Check(fixture, source.ToString(), oracle.ToString(), "OOOOOOOOOOOO")
+    }
+
+    /// Issue #5569 control (review of PR #5564): a literal whose parameter count no candidate's delegate accepts
+    /// stops at the outermost level with one diagnostic, also when it is nested. The target bind does not run
+    /// again after the natural bind, so 24 levels finish within the driver bound. Roslyn also reports one error
+    /// at the outermost literal; its oracle uses depth 2 because Roslyn binds such nesting exponentially.
+    @Fact
+    func NestedLiterals_ThatNoCandidateAccepts_ReportOnce() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let literal = NestRejectedLiterals(24, "(x int32)", "->")
+        Reject(
+            fixture,
+            "import System\nimport FunctionControl\nfunc Main() {\n    Console.Write(Calls.N(" + literal + ", 1))\n}\n",
+            "using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n        Console.Write(Calls.N(" +
+                NestRejectedLiterals(2, "(int x)", "=>") +
+                ", 1));\n    }\n}\n",
+            "CS1593",
+            line: 4,
+            column: 27,
+            length: literal.Length,
+            diagnostic: "GS0144"
+        )
+    }
+
+    /// Issue #5569 (review of PR #5564): a return value that binds again with its natural type starts from the
+    /// binder state before the value. A narrowing that the target pass removed is back, and a label that the
+    /// target pass declared is not declared twice.
+    @Fact
+    func RetriedReturnValue_StartsFromTheStateBeforeTheValue() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let shapes = []string{"Calls.M(|, 1)", "Calls.In(|, 1)", "C(|, 1).Kind", "InCtor(|, 1).Kind"}
+        let narrowing = "() -> {\n        var x string? = \"a\"\n        if x != nil {\n            return {\n                let n = x.Length\n                x = nil\n                \"s\"\n            }\n        }\n        return \"t\"\n    }"
+        let label = "() -> {\n        return {\n            L: Console.Write(\"\")\n            \"s\"\n        }\n    }"
+        let oracleNarrowing = "() => { string? x = \"a\"; if (x != null) { var n = x.Length; x = null; return \"s\"; } return \"t\"; }"
+        let oracleLabel = "() => { L: Console.Write(\"\"); return \"s\"; }"
+        let source = StringBuilder("import System\nimport FunctionControl\nfunc Main() {\n")
+        let oracle = StringBuilder("using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n")
+        for shape in shapes {
+            source.Append("    Console.Write(").Append(shape.Replace("|", narrowing)).Append(")\n")
+            source.Append("    Console.Write(").Append(shape.Replace("|", label)).Append(")\n")
+            oracle
+                .Append("        Console.Write(")
+                .Append(OracleShape(shape).Replace("|", oracleNarrowing))
+                .Append(");\n")
+            oracle.Append("        Console.Write(").Append(OracleShape(shape).Replace("|", oracleLabel)).Append(");\n")
+        }
+        source.Append("}\n")
+        oracle.Append("    }\n}\n")
+        Check(fixture, source.ToString(), oracle.ToString(), "OOOOOOOO")
+    }
+
+    /// Issue #5569: a target-typed return value (conditional, `switch`, `if` or block) that does not convert to
+    /// the delegate's result binds again with its natural type, so the `object` overload applies, as in C#. The
+    /// C# oracle writes the `if` form as a conditional and the block form as a local. Values that convert still
+    /// select the delegate.
+    @Fact
+    func TargetTypedReturnValue_ThatDoesNotConvert_SelectsObject() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    let k = 1
+    Console.Write(Calls.M(() -> { return true ? "s" : "t" }, 1))
+    Console.Write(Calls.In(() -> { return true ? "s" : "t" }, 1))
+    Console.Write(C(() -> { return true ? "s" : "t" }, 1).Kind)
+    Console.Write(InCtor(() -> { return true ? "s" : "t" }, 1).Kind)
+    Console.Write(Calls.M(() -> { return switch k { case 1: "a" default: "b" } }, 1))
+    Console.Write(Calls.In(() -> { return switch k { case 1: "a" default: "b" } }, 1))
+    Console.Write(C(() -> { return switch k { case 1: "a" default: "b" } }, 1).Kind)
+    Console.Write(InCtor(() -> { return switch k { case 1: "a" default: "b" } }, 1).Kind)
+    Console.Write(Calls.M(() -> { return if true { "a" } else { "b" } }, 1))
+    Console.Write(Calls.In(() -> { return if true { "a" } else { "b" } }, 1))
+    Console.Write(C(() -> { return if true { "a" } else { "b" } }, 1).Kind)
+    Console.Write(InCtor(() -> { return if true { "a" } else { "b" } }, 1).Kind)
+    Console.Write(Calls.M(() -> { return {
+        let q = "s"
+        q
+    } }, 1))
+    Console.Write(Calls.In(() -> { return {
+        let q = "s"
+        q
+    } }, 1))
+    Console.Write(C(() -> { return {
+        let q = "s"
+        q
+    } }, 1).Kind)
+    Console.Write(InCtor(() -> { return {
+        let q = "s"
+        q
+    } }, 1).Kind)
+    Console.Write(Calls.M(() -> { return true ? 1 : 2 }, 1))
+    Console.Write(Calls.In(() -> { return switch k { case 1: 1 default: 2 } }, 1))
+    Console.Write(C(() -> { return if true { 1 } else { 2 } }, 1).Kind)
+    Console.Write(InCtor(() -> { return {
+        let q = 1
+        q
+    } }, 1).Kind)
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        var k = 1;
+        Console.Write(Calls.M(() => { return true ? "s" : "t"; }, 1));
+        Console.Write(Calls.In(() => { return true ? "s" : "t"; }, 1));
+        Console.Write(new C(() => { return true ? "s" : "t"; }, 1).Kind);
+        Console.Write(new InCtor(() => { return true ? "s" : "t"; }, 1).Kind);
+        Console.Write(Calls.M(() => { return k switch { 1 => "a", _ => "b" }; }, 1));
+        Console.Write(Calls.In(() => { return k switch { 1 => "a", _ => "b" }; }, 1));
+        Console.Write(new C(() => { return k switch { 1 => "a", _ => "b" }; }, 1).Kind);
+        Console.Write(new InCtor(() => { return k switch { 1 => "a", _ => "b" }; }, 1).Kind);
+        Console.Write(Calls.M(() => { return true ? "a" : "b"; }, 1));
+        Console.Write(Calls.In(() => { return true ? "a" : "b"; }, 1));
+        Console.Write(new C(() => { return true ? "a" : "b"; }, 1).Kind);
+        Console.Write(new InCtor(() => { return true ? "a" : "b"; }, 1).Kind);
+        Console.Write(Calls.M(() => { var q = "s"; return q; }, 1));
+        Console.Write(Calls.In(() => { var q = "s"; return q; }, 1));
+        Console.Write(new C(() => { var q = "s"; return q; }, 1).Kind);
+        Console.Write(new InCtor(() => { var q = "s"; return q; }, 1).Kind);
+        Console.Write(Calls.M(() => { return true ? 1 : 2; }, 1));
+        Console.Write(Calls.In(() => { return k switch { 1 => 1, _ => 2 }; }, 1));
+        Console.Write(new C(() => { return true ? 1 : 2; }, 1).Kind);
+        Console.Write(new InCtor(() => { var q = 1; return q; }, 1).Kind);
+    }
+}
+`, "OOOOOOOOOOOOOOOOFFFF")
+    }
+
+    /// Issue #5569: an explicit parameter type or a parameter count that the delegate does not accept makes the
+    /// delegate candidates inapplicable, so the `object` overload applies, as in C#. The target bind stops
+    /// before the body, so the natural bind is the only body bind.
+    @Fact
+    func ExplicitlyTypedLiteral_ThatTheDelegateDoesNotAccept_SelectsObject() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.PV((x int32) -> { return x }, 1))
+    Console.Write(Calls.P((x int32) -> { return x }, 1))
+    Console.Write(PCtor((x int32) -> { return x }, 1).Kind)
+    Console.Write(PInCtor((x int32) -> { return x }, 1).Kind)
+    Console.Write(Calls.PV((x int32, y int32) -> { return x }, 1))
+    Console.Write(Calls.PV((x int64) -> { return x }, 1))
+    Console.Write(Calls.P((x int64) -> { return x }, 1))
+    Console.Write(PCtor((x int64) -> { return x }, 1).Kind)
+    Console.Write(PInCtor((x int64) -> { return x }, 1).Kind)
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.PV((int x) => { return x; }, 1));
+        Console.Write(Calls.P((int x) => { return x; }, 1));
+        Console.Write(new PCtor((int x) => { return x; }, 1).Kind);
+        Console.Write(new PInCtor((int x) => { return x; }, 1).Kind);
+        Console.Write(Calls.PV((int x, int y) => { return x; }, 1));
+        Console.Write(Calls.PV((long x) => { return x; }, 1));
+        Console.Write(Calls.P((long x) => { return x; }, 1));
+        Console.Write(new PCtor((long x) => { return x; }, 1).Kind);
+        Console.Write(new PInCtor((long x) => { return x; }, 1).Kind);
+    }
+}
+`, "OOOOOF2F2F2F2")
+    }
+
+    /// Issue #5569: a literal that keeps its natural type keeps its written parameter types, so the `object`
+    /// overload receives a `Func<long, string>` that it can call, as in C#.
+    @Fact
+    func NaturalLiteral_KeepsItsWrittenParameterTypes() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.Sig((x int64) -> { return "s" }, 1))
+    Console.Write(Calls.SigIn((x int64) -> { return "s" }, 1))
+    Console.Write(SigCtor((x int64) -> { return "s" }, 1).Kind)
+    Console.Write(SigInCtor((x int64) -> { return "s" }, 1).Kind)
+    Console.Write(Calls.Sig((x int64) -> "s", 1))
+    Console.Write(Calls.SigIn((x int64) -> "s", 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.Sig((long x) => { return "s"; }, 1));
+        Console.Write(Calls.SigIn((long x) => { return "s"; }, 1));
+        Console.Write(new SigCtor((long x) => { return "s"; }, 1).Kind);
+        Console.Write(new SigInCtor((long x) => { return "s"; }, 1).Kind);
+        Console.Write(Calls.Sig((long x) => "s", 1));
+        Console.Write(Calls.SigIn((long x) => "s", 1));
+    }
+}
+`, "OsOsOsOsOsOs")
+    }
+
+    /// Issue #5569: an open generic candidate infers its type argument from the literal's natural type, within
+    /// its constraints; and a return value that converts to the target does not stop another return value that
+    /// does not from selecting `object` with the natural type, as in C#.
+    @Fact
+    func NaturalLiteral_AtGenericCandidatesAndMixedReturns() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    let flag = true
+    Console.Write(Calls.G(() -> { return "s" }, 1))
+    Console.Write(Calls.GV(() -> { return "s" }, 1))
+    Console.Write(Calls.GC(() -> { return "s" }, 1))
+    Console.Write(Calls.G(() -> 1, 1))
+    Console.Write(Calls.Dm(() -> {
+        if flag {
+            return flag ? D() : D()
+        }
+        return B()
+    }, 1))
+    Console.Write(Calls.DmIn(() -> {
+        if flag {
+            return flag ? D() : D()
+        }
+        return B()
+    }, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        var flag = true;
+        Console.Write(Calls.G(() => { return "s"; }, 1));
+        Console.Write(Calls.GV(() => { return "s"; }, 1));
+        Console.Write(Calls.GC(() => { return "s"; }, 1));
+        Console.Write(Calls.G(() => 1, 1));
+        Console.Write(Calls.Dm(() => { if (flag) { return flag ? new D() : new D(); } return new B(); }, 1));
+        Console.Write(Calls.DmIn(() => { if (flag) { return flag ? new D() : new D(); } return new B(); }, 1));
+    }
+}
+`, "G:Func`1G:Func`1G:Func`1FOO")
+    }
+
+    /// Issue #5569: a constructor of a generic type with a same-compilation type argument binds the literal by
+    /// the same speculative rule, so a literal that its delegate does not accept selects `object`, as in C#.
+    @Fact
+    func SymbolicConstructorTarget_ThatDoesNotConvert_SelectsObject() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+class Pt {
+    var X int32 = 3
+}
+func Main() {
+    Console.Write(SymHolder[Pt]((p Pt) -> { return "s" }, 1).Kind)
+    Console.Write(SymInHolder[Pt]((p Pt) -> { return "s" }, 1).Kind)
+    Console.Write(SymHolder[Pt]((p Pt) -> p.X, 1).Kind)
+    Console.Write(SymInHolder[Pt]((p Pt) -> p.X, 1).Kind)
+}
+`, `using System;
+using FunctionControl;
+class Pt { public int X = 3; }
+class Program {
+    static void Main() {
+        Console.Write(new SymHolder<Pt>((Pt p) => { return "s"; }, 1).Kind);
+        Console.Write(new SymInHolder<Pt>((Pt p) => { return "s"; }, 1).Kind);
+        Console.Write(new SymHolder<Pt>((Pt p) => p.X, 1).Kind);
+        Console.Write(new SymInHolder<Pt>((Pt p) => p.X, 1).Kind);
+    }
+}
+`, "OOFF")
+    }
+
+    /// Issue #5569: a user label keeps one object in both passes of a retried return value, so a `goto` in the
+    /// value to a later label, a label in the value with a backward `goto` in the value, a `goto` in a nested
+    /// return value, a `goto` that leaves a `try` with a `finally` and a backward `goto` from the value to an
+    /// earlier label of the body all reach their labels when the literal keeps its natural type. The `object`
+    /// overloads call the delegate, so the output shows the control flow.
+    @Fact
+    func RetriedReturnValue_KeepsItsGotoTargets() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let forward = `() -> {
+        if flag {
+            return {
+                if flag {
+                    goto M
+                }
+                D()
+            }
+        }
+        M: return B()
+    }`
+        let nested = `() -> {
+        if flag {
+            return {
+                var n = 0
+                N: n++
+                Console.Write(n)
+                if n < 3 {
+                    goto N
+                }
+                if !flag {
+                    return {
+                        if flag {
+                            goto M
+                        }
+                        D()
+                    }
+                }
+                if flag {
+                    goto M
+                }
+                D()
+            }
+        }
+        M: return B()
+    }`
+        let leavesFinally = `() -> {
+        if flag {
+            return {
+                try {
+                    if flag {
+                        goto M
+                    }
+                } finally {
+                    Console.Write("f")
+                }
+                D()
+            }
+        }
+        M: return B()
+    }`
+        let backward = `() -> {
+        var n = 0
+        M: n++
+        Console.Write(n)
+        if flag {
+            return {
+                if n < 3 {
+                    goto M
+                }
+                D()
+            }
+        }
+        return B()
+    }`
+        let oracleForward = "() => { if (flag) { if (flag) goto M; return new D(); } M: return new B(); }"
+        let oracleNested = "() => { if (flag) { var n = 0; N: n++; Console.Write(n); if (n < 3) goto N; " +
+            "if (!flag) { if (flag) goto M; return new D(); } if (flag) goto M; return new D(); } M: return new B(); }"
+        let oracleLeavesFinally = "() => { if (flag) { try { if (flag) goto M; } finally { Console.Write(\"f\"); } " +
+            "return new D(); } M: return new B(); }"
+        let oracleBackward = "() => { var n = 0; M: n++; Console.Write(n); if (flag) { if (n < 3) goto M; " +
+            "return new D(); } return new B(); }"
+        let source = StringBuilder("import System\nimport FunctionControl\nfunc Main() {\n    let flag = true\n")
+        let oracle = StringBuilder(
+            "using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n        var flag = true;\n"
+        )
+        let shapes = []string{"Calls.Dg(|, 1)", "Calls.DgIn(|, 1)", "DgCtor(|, 1).Kind", "DgInCtor(|, 1).Kind"}
+        let literals = []string{forward, nested, leavesFinally, backward}
+        let oracleLiterals = []string{oracleForward, oracleNested, oracleLeavesFinally, oracleBackward}
+        for var i = 0; i < literals.Length; i++ {
+            for shape in shapes {
+                source.Append("    Console.Write(").Append(shape.Replace("|", literals[i])).Append(")\n")
+                oracle
+                    .Append("        Console.Write(")
+                    .Append(OracleShape(shape).Replace("|", oracleLiterals[i]))
+                    .Append(");\n")
+            }
+        }
+        source.Append("}\n")
+        oracle.Append("    }\n}\n")
+        Check(
+            fixture,
+            source.ToString(),
+            oracle.ToString(),
+            "OBOBOBOB" + "123OB123OB123OB123OB" + "fOBfOBfOBfOB" + "123OD123OD123OD123OD"
+        )
+    }
+
+    /// Issue #5569 (review of b9401fdc): a speculative literal converts each `return` value to the target where the
+    /// value binds, as an eager bind does. So a narrowing that a backward `goto` removes is checked at the
+    /// `return` (GS0155) at every speculative slot, as at the only candidate, and nil does not reach the
+    /// `string` result. A narrowing that the `goto` keeps still selects the delegate.
+    @Fact
+    func DeferredReturnValue_KeepsTheNarrowingCheckOfABackwardGoto() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let body = "{\n        var s string? = \"a\"\n        var n = 0\n        if s != nil {\n            L: if n > 0 {\n" +
+            "                return |\n            }\n            n++\n            #\n            goto L\n        }\n" +
+            "        return \"x\"\n    }"
+        let oracleBody = "{ string? s = \"a\"; var n = 0; if (s != null) { L: if (n > 0) { return s!; } n++; goto L; } " +
+            "return \"x\"; }"
+        let shapes = []string{
+            "Calls.NsOne(|)",
+            "Calls.Ns(|, 1)",
+            "Calls.NsIn(|, 1)",
+            "NsCtor(|, 1).Kind",
+            "NsInCtor(|, 1).Kind"
+        }
+        let source = StringBuilder("import System\nimport FunctionControl\nfunc Main() {\n")
+        let oracle = StringBuilder("using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n")
+        for shape in shapes {
+            source
+                .Append("    Console.Write(")
+                .Append(shape.Replace("|", "() -> " + body.Replace("|", "s").Replace("#", "Console.Write(\"\")")))
+                .Append(")\n")
+            oracle
+                .Append("        Console.Write(")
+                .Append(OracleShape(shape).Replace("|", "() => " + oracleBody))
+                .Append(");\n")
+        }
+        source.Append("}\n")
+        oracle.Append("    }\n}\n")
+        Check(fixture, source.ToString(), oracle.ToString(), "F1F1F1F1F1")
+        // The `return` value is on line 9 from column 24, and the error is at its last character, the read of `s`.
+        for shape in shapes {
+            for value in[]string{"s", "n > 1 ? \"t\" : s"} {
+                let literal = "() -> " + body.Replace("|", value).Replace("#", "s = nil")
+                RejectConsumer(
+                    fixture,
+                    "import System\nimport FunctionControl\nfunc Main() {\n    Console.Write(" + shape.Replace(
+                        "|",
+                        literal
+                    ) +
+                        ")\n}\n",
+                    "GS0155",
+                    line: 9,
+                    column: 24 + value.Length - 1,
+                    length: 1
+                )
+            }
+        }
+    }
+
+    /// Issue #5569 (review of 7c9c7101): the backward `goto` check of a `return` value's conversion to the delegate
+    /// result waits for the choice of the function type. Here the other `return` makes the natural result
+    /// `string?`, which takes the nil `s`, so the check does not apply and the call binds as C# binds it. (A
+    /// `string` natural result keeps the check; see the test above.)
+    @Fact
+    func DeferredReturnNarrowingCheck_WaitsForTheNaturalType() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let literal = `() -> {
+        var s string? = "a"
+        var n = 0
+        if s != nil {
+            L: if n > 0 {
+                return s
+            }
+            n++
+            s = nil
+            goto L
+        }
+        return default(string?)
+    }`
+        let oracleLiteral = "() => { string? s = \"a\"; var n = 0; if (s != null) { L: if (n > 0) { return s; } n++; " +
+            "s = null; goto L; } return default(string?); }"
+        let source = StringBuilder("import System\nimport FunctionControl\nfunc Main() {\n")
+        let oracle = StringBuilder("using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n")
+        for shape in[]string{"Calls.Ns(|, 1)", "Calls.NsIn(|, 1)", "NsCtor(|, 1).Kind", "NsInCtor(|, 1).Kind"} {
+            source.Append("    Console.Write(").Append(shape.Replace("|", literal)).Append(")\n")
+            oracle
+                .Append("        Console.Write(")
+                .Append(OracleShape(shape).Replace("|", oracleLiteral))
+                .Append(");\n")
+        }
+        source.Append("}\n")
+        oracle.Append("    }\n}\n")
+        Check(fixture, source.ToString(), oracle.ToString(), "F<null>F<null>F<null>F<null>")
+    }
+
+    /// Issue #5603: a function literal with an inferred result checks a narrowed `return` value against a backward
+    /// `goto` where the value binds, as a literal with a delegate result does. A `goto` that removes the narrowing
+    /// reports GS0155 at the `return` value when the inferred result is `string`, so nil does not reach it. This
+    /// applies to a local literal, a nested literal, a generic and a source delegate argument, an async literal and
+    /// a `goto` to the outer of two nested labels.
+    @Fact
+    func InferredResult_KeepsTheNarrowingCheckOfABackwardGoto() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Assert.NotEmpty(InferredResultShapes)
+        for shape in InferredResultShapes {
+            for (body, line, column) in[](Body string, Line int32, Column int32){
+                (InferredResultBody, 12, 24),
+                (InferredResultNestedLabelBody, 13, 28)
+            } {
+                for value in[]string{"s", "(s)"} {
+                    let literal = body.Replace("|", value).Replace("#", "s = nil")
+                    RejectConsumer(
+                        fixture,
+                        InferredResultPrelude + "func Main() {\n    " + shape.Replace("|", literal) + "\n}\n",
+                        "GS0155",
+                        line,
+                        column,
+                        value.Length
+                    )
+                }
+            }
+        }
+    }
+
+    /// Issue #5603 controls: a `goto` that keeps the narrowing, a forward `goto`, and a result that another
+    /// `return` makes `string?` still compile, and run as C# runs them.
+    @Fact
+    func InferredResult_ThatKeepsOrDoesNotNeedTheNarrowing_Runs() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let oracleBody = "{ string? s = \"a\"; var n = 0; if (s != null) { L: if (n > 0) { return s; } n++; goto L; } " +
+            "return \"x\"; }"
+        let oracleNestedLabelBody = "{ string? s = \"a\"; var n = 0; if (s != null) { L: if (n > 1) { M: if (n > 2) " +
+            "{ return s; } n++; goto M; } n++; goto L; } return \"x\"; }"
+        let oracleShapes = []string{
+            "Func<string> f = () => |; Console.Write(Len(f()));",
+            "Func<Func<string>> g = () => () => |; Console.Write(Len(g()()));",
+            "Console.Write(Len(T(() => |)));",
+            "Console.Write(Len(S(() => |)));",
+            "Func<Task<string>> a = async () => |; Console.Write(Len(a().Result));"
+        }
+        Assert.Equal(InferredResultShapes.Length, oracleShapes.Length)
+        let source = StringBuilder(InferredResultPrelude)
+        let oracle = StringBuilder(
+            "using System;\nusing System.Threading.Tasks;\nclass Program {\n" +
+                "    static int Len(string v) => v.Length;\n    static R T<R>(Func<R> f) => f();\n" +
+                "    static string S(Func<string> f) => f();\n"
+        )
+        let main = StringBuilder("func Main() {\n")
+        let oracleMain = StringBuilder("    static void Main() {\n")
+        var cases = 0
+        for var index = 0; index < InferredResultShapes.Length; index++ {
+            for (body, oracleCaseBody) in[](Body string, Oracle string){
+                (InferredResultBody, oracleBody),
+                (InferredResultNestedLabelBody, oracleNestedLabelBody)
+            } {
+                let name = "Case" + cases.ToString()
+                cases++
+                source
+                    .Append("func ")
+                    .Append(name)
+                    .Append("() {\n    ")
+                    .Append(
+                    InferredResultShapes[index].Replace("|", body.Replace("|", "s").Replace("#", "Console.Write(\"\")"))
+                )
+                    .Append("\n}\n")
+                oracle
+                    .Append("    static void ")
+                    .Append(name)
+                    .Append("() { ")
+                    .Append(oracleShapes[index].Replace("|", oracleCaseBody))
+                    .Append(" }\n")
+                main.Append("    ").Append(name).Append("()\n")
+                oracleMain.Append("        ").Append(name).Append("();\n")
+            }
+        }
+        source.Append(main.ToString()).Append(`    let forward = (n int32) -> {
+        var s string? = "a"
+        if s != nil {
+            if n > 0 {
+                goto L
+            }
+            s = "bb"
+            L: if n >= 0 {
+                return s
+            }
+        }
+        return "x"
+    }
+    Console.Write(Len(forward(1)))
+    Console.Write(Len(forward(0)))
+    let nullable = () -> {
+        var s string? = "a"
+        var n = 0
+        if s != nil {
+            L: if n > 0 {
+                return s
+            }
+            n++
+            s = nil
+            goto L
+        }
+        return default(string?)
+    }
+    Console.Write(nullable() == nil)
+}
+`)
+        oracle.Append(oracleMain.ToString()).Append(`        Func<int, string> forward = (int n) => {
+            string? s = "a";
+            if (s != null) { if (n > 0) goto L; s = "bb"; L: if (n >= 0) { return s; } }
+            return "x";
+        };
+        Console.Write(Len(forward(1)));
+        Console.Write(Len(forward(0)));
+        Func<string?> nullable = () => {
+            string? s = "a";
+            var n = 0;
+            if (s != null) { L: if (n > 0) { return s; } n++; s = null; goto L; }
+            return default(string?);
+        };
+        Console.Write(nullable() == null);
+    }
+}
+`)
+        Check(fixture, source.ToString(), oracle.ToString(), "1111111111" + "12True")
+    }
+
+    /// Issue #5603 (review of e920ba13): a stable member path declared `Animal` and narrowed to `Dog` by a type test
+    /// reads the narrowed value with a cast. When a backward `goto` replaces the holder, the result conversion of
+    /// the `return` value needs the narrowing for a `Dog` or `Dog?` result: an inferred result and a declared `Dog?`
+    /// result report GS0155 at the value, as a declared `Dog` result does. The cast does not throw at run time.
+    @Fact
+    func InferredResult_OfANarrowedMember_ChecksTheDeclaredRead() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Assert.NotEmpty(MemberResultCases)
+        for (head, other) in MemberResultCases {
+            RejectConsumer(
+                fixture,
+                MemberResultSource(head, other, "holder = Holder(Cat())"),
+                "GS0155",
+                line: 23,
+                column: 24,
+                length: "holder.Pet".Length
+            )
+        }
+    }
+
+    /// Issue #5603 (review of e920ba13): for an `Animal` result, inferred or declared, the declared read of the
+    /// member replaces the narrowed read, as an eager conversion does. A backward `goto` that replaces the holder
+    /// then returns the `Cat`, as C# does. A `goto` that keeps the narrowing returns the `Dog`.
+    @Fact
+    func InferredResult_OfANarrowedMember_ReadsTheDeclaredValue() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let source = MemberResultSource("let f = () -> {", "Animal()", "holder = Holder(Cat())").Replace(
+            "    Console.Write(r)\n",
+            "    Console.Write(Declared().Name())\n    Console.Write(Kept().Name())\n    Console.Write(r.Name())\n"
+        )
+            .Replace(
+            "func Main() {",
+            "func Declared() Animal {\n" +
+                MemberResultBody("Animal()", "holder = Holder(Cat())") +
+                "\n}\n" +
+                "func Kept() Animal {\n    let f = () -> {\n" +
+                MemberResultBody("Animal()", "Console.Write(\"\")") +
+                "\n    }\n    return f()\n}\nfunc Main() {"
+        )
+        let oracleBody = "{ var holder = new Holder(new Dog()); var n = 0; if (holder.Pet is Dog) { L: if (n > 0) { " +
+            "return holder.Pet; } n++; # goto L; } return new Animal(); }"
+        let oracle = "using System;\nclass Animal { public virtual string Name() => \"animal\"; }\n" +
+            "class Dog : Animal { public override string Name() => \"dog\"; }\n" +
+            "class Cat : Animal { public override string Name() => \"cat\"; }\n" +
+            "class Holder { public readonly Animal Pet; public Holder(Animal pet) { Pet = pet; } }\n" +
+            "class Program {\n    static Animal Declared() " +
+            oracleBody.Replace("#", "holder = new Holder(new Cat());") +
+            "\n    static Animal Kept() { Func<Animal> f = () => " +
+            oracleBody.Replace("#", "Console.Write(\"\");") +
+            "; return f(); }\n    static void Main() {\n        Func<Animal> f = () => " +
+            oracleBody.Replace("#", "holder = new Holder(new Cat());") +
+            ";\n        var r = f();\n        Console.Write(Declared().Name());\n        Console.Write(Kept().Name());\n" +
+            "        Console.Write(r.Name());\n    }\n}\n"
+        Check(fixture, source, oracle, "catdogcat")
+    }
+
+    /// Issue #5603 (review of e920ba13): the natural result of a speculative literal uses the same decision. The
+    /// `return` of the `Pet` declared `object` and narrowed to `string` converts to the delegate result `string`
+    /// with the narrowing, which the backward `goto` removes. The natural result `string?` needs it too, so the
+    /// literal keeps the delegate and its two GS0155, and does not cast the `int32` to `string` at run time.
+    @Fact
+    func SpeculativeLiteral_NaturalResultOfANarrowedMember_KeepsTheCheck() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let source = `import System
+import FunctionControl
+class Box {
+    let Pet object
+    init(pet object) {
+        Pet = pet
+    }
+}
+func Main() {
+    Console.Write(Calls.Pz(() -> {
+        var holder = Box("s")
+        var n = 0
+        if holder.Pet is string {
+            L: if n > 0 {
+                return holder.Pet
+            }
+            n++
+            holder = Box(1)
+            goto L
+        }
+        let none string? = nil
+        return none
+    }, 1))
+}
+`
+        Assert.Equal(
+            [](Code string, Line int32, Column int32){("GS0155", 15, 24), ("GS0155", 22, 16)},
+            RejectConsumerErrors(fixture, source)
+        )
+    }
+
+    /// Issue #5603 (review of 9910e997): a stable `box.Value` declared `int32?` and narrowed by a nil guard is read
+    /// through a compiler-generated unwrap. The backward `goto` check recognizes the unwrap (an explicit `!!` stays
+    /// a run-time check). An `int32` result, inferred or declared, reports GS0155 at the value when the `goto`
+    /// replaces `box` with `Box(nil)`, so the unwrap does not throw at run time.
+    @Fact
+    func InferredResult_OfANarrowedOptionalMember_ChecksTheUnwrap() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        for head in[]string{"let f = () -> {", "let f = func() int32 {"} {
+            RejectConsumer(
+                fixture,
+                OptionalMemberSource(head, "0", "box = Box(nil)", "Console.Write(f())"),
+                "GS0155",
+                line: 14,
+                column: 24,
+                length: "box.Value".Length
+            )
+        }
+    }
+
+    /// Issue #5603 (review of 9910e997): an `int32?` result, inferred or declared, takes the stored value of
+    /// `box.Value` without the unwrap, as C# does, so the replaced `Box(nil)` returns nil. A `goto` that keeps the
+    /// narrowing returns the value.
+    @Fact
+    func InferredResult_OfANarrowedOptionalMember_ReadsTheStoredValue() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let source = OptionalMemberSource(
+            "let f = () -> {",
+            "default(int32?)",
+            "box = Box(nil)",
+            "Console.Write(f() == nil)\n    Console.Write(Declared() == nil)\n    Console.Write(Kept())"
+        )
+            .Replace(
+            "func Main() {",
+            "func Declared() int32? {\n" +
+                OptionalMemberBody("default(int32?)", "box = Box(nil)") +
+                "\n}\n" +
+                "func Kept() int32 {\n    let f = () -> {\n" +
+                OptionalMemberBody("0", "n = n + 0") +
+                "\n    }\n    return f()\n}\nfunc Main() {"
+        )
+        let oracleBody = "{ var box = new Box(1); var n = 0; if (box.Value != null) { L: if (n > 0) { return box.Value; } " +
+            "n++; # goto L; } return ~; }"
+        let oracle = "using System;\nclass Box { public readonly int? Value; public Box(int? value) { Value = value; } }\n" +
+            "class Program {\n    static int? Declared() " +
+            oracleBody
+            .Replace("#", "box = new Box(null);").Replace("~", "default(int?)") +
+            "\n    static int Kept() { Func<int> f = () => " +
+            oracleBody
+            .Replace("#", "n = n + 0;")
+            .Replace("box.Value; }", "box.Value.Value; }")
+            .Replace("~", "0") +
+            "; return f(); }\n    static void Main() {\n        Func<int?> f = () => " +
+            oracleBody
+            .Replace("#", "box = new Box(null);").Replace("~", "default(int?)") +
+            ";\n        Console.Write(f() == null);\n        Console.Write(Declared() == null);\n" +
+            "        Console.Write(Kept());\n    }\n}\n"
+        Check(fixture, source, oracle, "TrueTrue1")
+    }
+
+    /// Issue #5613: a narrowed read in a branch of a conditional, `if`, `if let` or `switch` value, in the right
+    /// operand of `??`, or in the trailing value of a branch block, converts to the common type with the backward
+    /// `goto` check. A `goto` that removes the narrowing reports GS0155 at the read, as `let t = s` does. This
+    /// applies to an inferred local, to a nested branch, to the `return` value of a function literal with an
+    /// inferred result, and to a member read that a type test or a nil guard narrows. The check uses the narrowing
+    /// state where the read binds, so an assignment in the other branch or a `goto` into the branch does not hide it.
+    @Fact
+    func BranchValue_KeepsTheNarrowingCheckOfABackwardGoto() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Assert.NotEmpty(BranchValueForms)
+        for form in BranchValueForms {
+            RejectMarked(
+                fixture,
+                BranchValuePrelude + "func Main() {\n" + BranchValueBody.Replace("|", "let t = " + form).Replace(
+                    "#",
+                    "s = nil"
+                ) +
+                    "\n}\n",
+                "s"
+            )
+            let literal = InferredResultBody.Replace("|", form).Replace("#", "s = nil")
+            RejectMarked(
+                fixture,
+                BranchValuePrelude + "func Main() {\n    " + InferredResultShapes[0].Replace("|", literal) + "\n}\n",
+                "s"
+            )
+        }
+        Assert.NotEmpty(InferredResultShapes)
+        for shape in InferredResultShapes.Skip(1) {
+            let literal = InferredResultBody.Replace("|", BranchValueForms[0]).Replace("#", "s = nil")
+            RejectMarked(
+                fixture,
+                BranchValuePrelude + "func Main() {\n    " + shape.Replace("|", literal) + "\n}\n",
+                "s"
+            )
+        }
+        RejectMarked(fixture, BranchValuePrelude + BranchValueJumpIntoBranch, "s")
+        RejectMarked(
+            fixture,
+            MemberResultSource("let f = () -> {", "Dog()", "holder = Holder(Cat())").Replace(
+                "return holder.Pet",
+                "return n > 1 ? Dog() : @holder.Pet"
+            ),
+            "holder.Pet"
+        )
+        // A target-typed branch converts the block value to `Animal` before the common type, so the narrowed read stays
+        // and its cast needs the narrowing.
+        RejectMarked(
+            fixture,
+            MemberResultSource("let f = func() Animal {", "Animal()", "holder = Holder(Cat())").Replace(
+                "return holder.Pet",
+                "return n > 1 ? Animal() : checked({ @holder.Pet })"
+            ),
+            "holder.Pet"
+        )
+        RejectMarked(
+            fixture,
+            OptionalMemberSource("let f = () -> {", "0", "box = Box(nil)", "Console.Write(f())").Replace(
+                "return box.Value",
+                "return n > 1 ? 0 : @box.Value"
+            ),
+            "box.Value"
+        )
+    }
+
+    /// Issue #5613 controls: a branch whose common type is `string?` takes the declared value, so the `goto` that
+    /// removes the narrowing gives nil. A `goto` that keeps the narrowing gives a `string`. A branch that proves its
+    /// own narrowing (`s != nil ? s : "x"`, or an `if let` guard) does not need the outer narrowing. A block value
+    /// that converts to a declared `string?` takes the declared value too (`let t string? = ({ …; s })`, #5635).
+    /// Each runs as C# runs it.
+    @Fact
+    func BranchValue_ThatKeepsOrDoesNotNeedTheNarrowing_Runs() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let cases[](Form string, Oracle string, BeforeGoto string, Use string, OracleUse string) = [](
+            Form string,
+            Oracle string,
+            BeforeGoto string,
+            Use string,
+            OracleUse string
+        ){
+            ("n > 1 ? U() : s", "n > 1 ? U() : s", "s = nil", "t == nil", "t == null"),
+            ("if n > 1 { U() } else { s }", "n > 1 ? U() : s", "s = nil", "t == nil", "t == null"),
+            ("n > 1 ? default(string?) : s", "n > 1 ? default(string?) : s", "s = nil", "t == nil", "t == null"),
+            (
+                "switch n { case 5: U() default: s }",
+                "n switch { 5 => U(), _ => s }",
+                "s = nil",
+                "t == nil",
+                "t == null"
+            ),
+            (
+                "n > 1 ? U() : ({\n                n = n + 0\n                s\n            })",
+                "n > 1 ? U() : s",
+                "s = nil",
+                "t == nil",
+                "t == null"
+            ),
+            ("if n > 1 { U() } else { ({ s }) }", "n > 1 ? U() : s", "s = nil", "t == nil", "t == null"),
+            ("n > 1 ? U() : checked({ s })", "n > 1 ? U() : checked(s)", "s = nil", "t == nil", "t == null"),
+            (
+                "string? = ({\n                n = n + 0\n                s\n            })",
+                "(string?)s",
+                "s = nil",
+                "t == nil",
+                "t == null"
+            ),
+            (
+                "n > 1 ? \"t\" : (n > 2 ? \"u\" : s)",
+                "n > 1 ? \"t\" : (n > 2 ? \"u\" : s)",
+                "n = n + 0",
+                "Len(t)",
+                "Len(t)"
+            ),
+            (
+                "if n > 1 { \"t\" } else { n = n + 0\n                s }",
+                "n > 1 ? \"t\" : s",
+                "n = n + 0",
+                "Len(t)",
+                "Len(t)"
+            ),
+            (
+                "switch n { case 5: \"t\" default: s }",
+                "n switch { 5 => \"t\", _ => s }",
+                "n = n + 0",
+                "Len(t)",
+                "Len(t)"
+            ),
+            ("U() ?? s", "U() ?? s", "n = n + 0", "Len(t)", "Len(t)"),
+            ("s != nil ? s : \"x\"", "s != null ? s : \"x\"", "s = nil", "Len(t)", "Len(t)"),
+            ("if s != nil { s } else { \"x\" }", "s != null ? s : \"x\"", "s = nil", "Len(t)", "Len(t)"),
+            (
+                "if let q = U() && s != nil { s } else { \"x\" }",
+                "U() is {} q && s != null ? s : \"x\"",
+                "s = nil",
+                "Len(t)",
+                "Len(t)"
+            )
+        }
+        let source = StringBuilder(BranchValuePrelude)
+        let oracle = StringBuilder(
+            "using System;\nclass Program {\n    static int Len(string v) => v.Length;\n" +
+                "    static string? U() => null;\n"
+        )
+        let main = StringBuilder("func Main() {\n")
+        let oracleMain = StringBuilder("    static void Main() {\n")
+        for var index = 0; index < cases.Length; index++ {
+            let (form, oracleForm, beforeGoto, use, oracleUse) = cases[index]
+            let name = "Case" + index.ToString()
+            source
+                .Append("func ")
+                .Append(name)
+                .Append("() {\n")
+                .Append(
+                BranchValueBody.Replace("|", "let t" + Declare(form) + "\n            Console.Write(" + use + ")")
+                    .Replace("#", beforeGoto)
+            )
+                .Append("\n}\n")
+            oracle
+                .Append("    static void ")
+                .Append(name)
+                .Append("() { string? s = \"a\"; var n = 0; if (s != null) { L: if (n > 0) { var t = ")
+                .Append(oracleForm)
+                .Append("; Console.Write(")
+                .Append(oracleUse)
+                .Append("); return; } n++; ")
+                .Append(beforeGoto.Replace("nil", "null"))
+                .Append("; goto L; } }\n")
+            main.Append("    ").Append(name).Append("()\n")
+            oracleMain.Append("        ").Append(name).Append("();\n")
+        }
+        source.Append(main.ToString()).Append("}\n")
+        oracle.Append(oracleMain.ToString()).Append("    }\n}\n")
+        Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrueTrueTrueTrueTrue1111111")
+    }
+
+    /// Issue #5635: a narrowed read that gives its narrowed type to a slot with no conversion keeps the backward
+    /// `goto` check: a tuple element (also in a deconstruction), an argument whose parameter has its type (an
+    /// inferred type argument of a source or imported generic function, a plain parameter, a variadic element) and
+    /// the trailing value of a block without a target. A `goto` that removes the narrowing reports GS0155 at the
+    /// read, as `let t = s` does. A typed `let` and an assignment decide the block's read for their non-null type.
+    /// A later argument that assigns the variable does not hide the read of an earlier argument. This applies in a
+    /// function literal with an inferred result too.
+    @Fact
+    func NoConversionValue_KeepsTheNarrowingCheckOfABackwardGoto() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Assert.NotEmpty(NoConversionForms)
+        for form in NoConversionForms {
+            RejectMarked(
+                fixture,
+                NoConversionPrelude + "func Main() {\n" + BranchValueBody.Replace("|", form).Replace("#", "s = nil") +
+                    "\n}\n",
+                "s"
+            )
+        }
+        Assert.NotEmpty(InferredResultShapes)
+        Assert.NotEmpty(NoConversionReturnForms)
+        for shape in InferredResultShapes {
+            for form in NoConversionReturnForms {
+                let literal = InferredResultBody.Replace("|", form).Replace("#", "s = nil")
+                RejectMarked(
+                    fixture,
+                    NoConversionPrelude + "func Main() {\n    " + shape.Replace("|", literal) + "\n}\n",
+                    "s"
+                )
+            }
+        }
+    }
+
+    /// Issue #5635 controls: a block value or tuple literal that converts to a nullable target takes the declared
+    /// value, and so does an explicit nullable type argument. The `goto` that removes the narrowing then gives nil.
+    /// A `goto` that keeps the narrowing gives a `string` in each form of
+    /// (cref:NoConversionValue_KeepsTheNarrowingCheckOfABackwardGoto). Each runs as C# runs it.
+    @Fact
+    func NoConversionValue_ThatKeepsOrDoesNotNeedTheNarrowing_Runs() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let cases[](Statement string, Oracle string, BeforeGoto string) = [](
+            Statement string,
+            Oracle string,
+            BeforeGoto string
+        ){
+            (
+                "var t string? = U()\n            t = ({\n                n = n + 0\n                s\n            })\n" +
+                    "            Console.Write(t == nil)",
+                "string? t = U(); t = s; Console.Write(t == null);",
+                "s = nil"
+            ),
+            (
+                "let t string? = checked({ s })\n            Console.Write(t == nil)",
+                "string? t = s; Console.Write(t == null);",
+                "s = nil"
+            ),
+            (
+                "let t (string?, int32) = (s, 1)\n            Console.Write(t.Item1 == nil)",
+                "(string?, int) t = (s, 1); Console.Write(t.Item1 == null);",
+                "s = nil"
+            ),
+            (
+                "let t ((string?, int32), int32) = ((s, 1), 2)\n            Console.Write(t.Item1.Item1 == nil)",
+                "((string?, int), int) t = ((s, 1), 2); Console.Write(t.Item1.Item1 == null);",
+                "s = nil"
+            ),
+            (
+                "let t (string?, int32) = (({ s }), 1)\n            Console.Write(t.Item1 == nil)",
+                "(string?, int) t = (s, 1); Console.Write(t.Item1 == null);",
+                "s = nil"
+            ),
+            ("Console.Write(Id[string?](s) == nil)", "Console.Write(Id<string?>(s) == null);", "s = nil"),
+            (
+                "Console.Write(Task.FromResult[string?](s).Result == nil)",
+                "Console.Write(Task.FromResult<string?>(s).Result == null);",
+                "s = nil"
+            ),
+            (
+                "let f = () -> {\n                var r string? = \"a\"\n                var m = 0\n" +
+                    "                if r != nil {\n                    M: if m > 0 {\n                        return ({\n" +
+                    "                            m = m + 0\n                            r\n                        })\n" +
+                    "                    }\n                    m++\n                    r = nil\n                    goto M\n" +
+                    "                }\n                return default(string?)\n            }\n" +
+                    "            Console.Write(f() == nil)",
+                "Func<string?> f = () => { string? r = \"a\"; var m = 0; if (r != null) { M: if (m > 0) { return r; } " +
+                    "m++; r = null; goto M; } return default(string?); }; Console.Write(f() == null);",
+                "n = n + 0"
+            ),
+            (
+                "let t = (s, 1)\n            Console.Write(Len(t.Item1))",
+                "var t = (s, 1); Console.Write(Len(t.Item1));",
+                "n = n + 0"
+            ),
+            (
+                "let (a, b) = (s, 1)\n            Console.Write(Len(a))",
+                "var (a, b) = (s, 1); Console.Write(Len(a));",
+                "n = n + 0"
+            ),
+            ("Console.Write(Len(Id(s)))", "Console.Write(Len(Id(s)));", "n = n + 0"),
+            ("Console.Write(F(s))", "Console.Write(F(s));", "n = n + 0"),
+            ("Console.Write(V(\"x\", s))", "Console.Write(V(\"x\", s));", "n = n + 0"),
+            (
+                "Console.Write(Len(Task.FromResult(s).Result))",
+                "Console.Write(Len(Task.FromResult(s).Result));",
+                "n = n + 0"
+            ),
+            (
+                "let t = ({\n                n = n + 0\n                s\n            })\n            Console.Write(Len(t))",
+                "var t = s; Console.Write(Len(t));",
+                "n = n + 0"
+            )
+        }
+        let source = StringBuilder(NoConversionPrelude)
+        let oracle = StringBuilder(
+            "using System;\nusing System.Threading.Tasks;\nclass Program {\n    static int Len(string v) => v.Length;\n" +
+                "    static string? U() => null;\n    static T Id<T>(T x) => x;\n    static int F(string x) => x.Length;\n" +
+                "    static int V(params string[] xs) => xs.Length;\n"
+        )
+        let main = StringBuilder("func Main() {\n")
+        let oracleMain = StringBuilder("    static void Main() {\n")
+        for var index = 0; index < cases.Length; index++ {
+            let (statement, oracleStatement, beforeGoto) = cases[index]
+            let name = "Case" + index.ToString()
+            source
+                .Append("func ")
+                .Append(name)
+                .Append("() {\n")
+                .Append(BranchValueBody.Replace("|", statement).Replace("#", beforeGoto))
+                .Append("\n}\n")
+            oracle
+                .Append("    static void ")
+                .Append(name)
+                .Append("() { string? s = \"a\"; var n = 0; if (s != null) { L: if (n > 0) { ")
+                .Append(oracleStatement)
+                .Append(" return; } n++; ")
+                .Append(beforeGoto.Replace("nil", "null"))
+                .Append("; goto L; } }\n")
+            main.Append("    ").Append(name).Append("()\n")
+            oracleMain.Append("        ").Append(name).Append("();\n")
+        }
+        source.Append(main.ToString()).Append("}\n")
+        oracle.Append(oracleMain.ToString()).Append("    }\n}\n")
+        Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrueTrueTrueTrueTrue1111211")
+    }
+
+    /// Issue #5635 (review of d3333218): an imported generic slot whose type argument inference takes from a narrowed
+    /// read is decided for the slot under the inferred type arguments. A slot that takes nil (`Append` on `[]string?`,
+    /// `IsNil`, `IsNilParams` over a source class, `First` with `U()`) does not need a nil-guard narrowing, while a
+    /// `T?` slot still needs a type-test narrowing (`IsNil(holder.Pet)`). A slot that another argument widens
+    /// (`Pick(holder.Pet, Animal())`) reads the declared member. Each runs as C# runs it.
+    @Fact
+    func NoConversionValue_AtAnInferredImportedSlot_TakesTheSlotType() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let source = `import System
+import System.Linq
+import FunctionControl
+open class Animal {
+    open func Name() string -> "animal"
+}
+class Dog : Animal {
+    override func Name() string -> "dog"
+}
+class Cat : Animal {
+    override func Name() string -> "cat"
+}
+class Holder {
+    let Pet Animal
+    init(pet Animal) {
+        Pet = pet
+    }
+}
+func U() string? -> nil
+func Strings() {
+    var s string? = "a"
+    var n = 0
+    let xs = []string?{"x"}
+    if s != nil {
+        L: if n > 0 {
+            Console.Write(xs.Append(s).Last() == nil)
+            Console.Write(Calls.IsNil(s))
+            Console.Write(Calls.First(s, U()) == nil)
+            return
+        }
+        n++
+        s = nil
+        goto L
+    }
+}
+func Pets() {
+    var holder = Holder(Dog())
+    var dog Dog? = Dog()
+    var n = 0
+    if holder.Pet is Dog && dog != nil {
+        L: if n > 0 {
+            Console.Write(Calls.Pick(holder.Pet, Animal()).Name())
+            Console.Write(Calls.IsNilParams(dog))
+            return
+        }
+        n++
+        holder = Holder(Cat())
+        dog = nil
+        goto L
+    }
+}
+func Main() {
+    Strings()
+    Pets()
+}
+`
+        let oracle = `using System;
+using System.Linq;
+using FunctionControl;
+class Animal { public virtual string Name() => "animal"; }
+class Dog : Animal { public override string Name() => "dog"; }
+class Cat : Animal { public override string Name() => "cat"; }
+class Holder { public readonly Animal Pet; public Holder(Animal pet) { Pet = pet; } }
+class Program {
+    static string? U() => null;
+    static void Strings() {
+        string? s = "a";
+        var n = 0;
+        var xs = new string?[] { "x" };
+        if (s != null) { L: if (n > 0) { Console.Write(xs.Append(s).Last() == null); Console.Write(Calls.IsNil(s)); Console.Write(Calls.First(s, U()) == null); return; } n++; s = null; goto L; }
+    }
+    static void Pets() {
+        var holder = new Holder(new Dog());
+        Dog? dog = new Dog();
+        var n = 0;
+        if (holder.Pet is Dog && dog != null) { L: if (n > 0) { Console.Write(Calls.Pick(holder.Pet, new Animal()).Name()); Console.Write(Calls.IsNilParams(dog)); return; } n++; holder = new Holder(new Cat()); dog = null; goto L; }
+    }
+    static void Main() {
+        Strings();
+        Pets();
+    }
+}
+`
+        Check(fixture, source, oracle, "TrueTrueTruecatTrue")
+        RejectMarked(
+            fixture,
+            "import FunctionControl\n" + MemberResultSource(
+                "let f = () -> {",
+                "false",
+                "holder = Holder(Cat())"
+            ).Replace("return holder.Pet", "return Calls.IsNil(@holder.Pet)"),
+            "holder.Pet"
+        )
+    }
+
+    /// Issue #5603 (review of 9910e997): the natural result of a speculative literal also checks the narrowing
+    /// uses of its original `return` values, which the lambda body records where they bind, whatever target
+    /// conversion runs. With `Po(Func<object>, int)` and `Po(object, long)`, the target `object` reads the declared
+    /// `Pet` and takes the nullable `return`, so the delegate is selected and returns the replacement `int32`, as in
+    /// C#.
+    @Fact
+    func SpeculativeLiteral_WiderTargetOfANarrowedMember_KeepsTheDelegate() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let source = `import System
+import FunctionControl
+class Box {
+    let Pet object
+    init(pet object) {
+        Pet = pet
+    }
+}
+func Main() {
+    Console.Write(Calls.Po(() -> {
+        var holder = Box("s")
+        var n = 0
+        if holder.Pet is string {
+            L: if n > 0 {
+                return holder.Pet
+            }
+            n++
+            holder = Box(1)
+            goto L
+        }
+        return default(string?)
+    }, 1))
+}
+`
+        let oracle = `using System;
+using FunctionControl;
+class Box { public readonly object Pet; public Box(object pet) { Pet = pet; } }
+class Program {
+    static void Main() {
+        Console.Write(Calls.Po(() => {
+            var holder = new Box("s");
+            var n = 0;
+            if (holder.Pet is string) { L: if (n > 0) { return holder.Pet; } n++; holder = new Box(1); goto L; }
+            return default(string?);
+        }, 1));
+    }
+}
+`
+        Check(fixture, source, oracle, "F1")
+    }
+
+    /// Issue #5569 (review of 7c9c7101): a loop body that binds again after an inherited narrowing changes
+    /// discards the held returns of its first bind. So a call where no overload applies reports the held target
+    /// diagnostics of a speculative literal once: the same set as the same loop without the rebind (`s = nil`
+    /// replaced by a call), and for methods the set that main reports for the by-value form.
+    @Fact
+    func LoopRebind_InASpeculativeLiteral_ReportsTheHeldDiagnosticsOnce() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let literal = `() -> {
+        var s string? = "a"
+        if s != nil {
+            for var i = 0; i < 2; i++ {
+                if flag {
+                    return true ? "s" : "t"
+                }
+                #
+            }
+        }
+        return 1
+    }`
+        let Errors = func (shape string, statement string)[]string {
+            return RejectConsumerErrors(
+                fixture,
+                "import System\nimport FunctionControl\nfunc Main() {\n    let flag = true\n    Console.Write(" +
+                    shape.Replace("|", literal.Replace("#", statement)) + ")\n}\n"
+            )
+                .Select(
+                (error(Code string, Line int32, Column int32)) -> error.Code + " (" + error.Line.ToString() +
+                    "," +
+                    error
+                    .Column
+                    .ToString() + ")"
+            )
+                .ToArray()
+        }
+        for shape in[]string{"Calls.M(|, \"x\")", "Calls.In(|, \"x\")", "C(|, \"x\").Kind", "InCtor(|, \"x\").Kind"} {
+            let rebound = Errors(shape, "s = nil")
+            Assert.Equal(Errors(shape, "Console.Write(\"\")"), rebound)
+            if shape.StartsWith("Calls.", StringComparison.Ordinal) {
+                Assert.Equal([]string{"GS0159 (5,25)", "GS0155 (10,35)", "GS0155 (10,41)"}, rebound)
+            }
+        }
+    }
+
+    /// Issue #5569 (review of b9401fdc): the natural-type fallback also applies when the other candidate takes the
+    /// literal in the expanded form of a `params` array (at the array's position or past it), when a destructured
+    /// parameter's written element types do not fit the delegate, and when an interpolated `return` value is
+    /// formattable only for the delegate. The `in` forms of these compiled on main; the oracle selects the same
+    /// overloads. A formattable return that converts keeps the delegate.
+    @Fact
+    func NaturalLiteral_AtParamsDestructuredAndInterpolatedReturns() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let mixed = `() -> {
+        if !flag {
+            return "s"
+        }
+        return "x${1}"
+    }`
+        let mixedFlag = `() -> {
+        if flag {
+            return "s"
+        }
+        return "x${1}"
+    }`
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    let flag = true
+    Console.Write(Calls.Pa(() -> { return "s" }, 1))
+    Console.Write(Calls.PaIn(() -> { return "s" }, 1))
+    Console.Write(PaCtor(() -> { return "s" }, 1).Kind)
+    Console.Write(PaInCtor(() -> { return "s" }, 1).Kind)
+    Console.Write(Calls.Pc(1, 2, () -> { return "s" }))
+    Console.Write(Calls.PcIn(1, 2, () -> { return "s" }))
+    Console.Write(PcCtor(1, 2, () -> { return "s" }).Kind)
+    Console.Write(Calls.Tu(((a int32, b int32)) -> { return "s" }, 1))
+    Console.Write(Calls.TuIn(((a int32, b int32)) -> { return "s" }, 1))
+    Console.Write(Calls.Fm(` + mixed + `, 1))
+    Console.Write(Calls.FmIn(` + mixed + `, 1))
+    Console.Write(Calls.FmIn(` + mixedFlag + `, 1))
+    Console.Write(Calls.FmIn(() -> { return "x${1}" }, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        var flag = true;
+        Console.Write(Calls.Pa(() => { return "s"; }, 1));
+        Console.Write(Calls.PaIn(() => { return "s"; }, 1));
+        Console.Write(new PaCtor(() => { return "s"; }, 1).Kind);
+        Console.Write(new PaInCtor(() => { return "s"; }, 1).Kind);
+        Console.Write(Calls.Pc(1, 2, () => { return "s"; }));
+        Console.Write(Calls.PcIn(1, 2, () => { return "s"; }));
+        Console.Write(new PcCtor(1, 2, () => { return "s"; }).Kind);
+        Console.Write(Calls.Tu(((int, int) t) => { return "s"; }, 1));
+        Console.Write(Calls.TuIn(((int, int) t) => { return "s"; }, 1));
+        Console.Write(Calls.Fm(() => { if (!flag) { return "s"; } return $"x{1}"; }, 1));
+        Console.Write(Calls.FmIn(() => { if (!flag) { return "s"; } return $"x{1}"; }, 1));
+        Console.Write(Calls.FmIn(() => { if (flag) { return "s"; } return $"x{1}"; }, 1));
+        Console.Write(Calls.FmIn(() => { return $"x{1}"; }, 1));
+    }
+}
+`, "P<s>P<s>P<s>P<s>P<s>P<s>P<s>O[s]O[s]O<x1>O<x1>O<s>Fx1")
+    }
+
+    /// Issue #5569 control: with no other candidate, a target-typed block return value keeps the target bind and
+    /// its diagnostic.
+    @Fact
+    func BlockReturnValue_AtTheOnlyCandidate_ReportsTheConversion() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.One(() -> { return {
+        let q = "s"
+        q
+    } }))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.One(() => { var q = "s"; return q; }));
+    }
+}
+`, "CS0029", line: 6, column: 9, length: 1, oracleCompanion: "CS1662")
+    }
+
+    /// Issue #5569 control: with no other candidate, an explicit parameter type that the delegate does not accept
+    /// keeps its diagnostic.
+    @Fact
+    func ExplicitParameter_AtTheOnlyCandidate_ReportsTheParameter() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.POne((x int32) -> { return x }))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.POne((int x) => { return x; }));
+    }
+}
+`, "CS1678", line: 4, column: 33, length: 5, diagnostic: "GS0156", oracleCompanion: "CS1661")
+    }
+
+    /// Issue #5569 control: with no other candidate, the block-bodied literal keeps the target bind and its
+    /// diagnostic at the `return` value.
+    @Fact
+    func BlockLiteral_AtTheOnlyCandidate_ReportsTheReturnConversion() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.One(() -> { return "s" }))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.One(() => { return "s"; }));
+    }
+}
+`, "CS0029", line: 4, column: 44, length: 3, oracleCompanion: "CS1662")
+    }
+
+    /// Issue #5543 controls: a by-value delegate slot, a source `in` slot and an explicit address keep their
+    /// selection. A function value still needs a delegate that it can keep (#5536).
+    @Fact
+    func InDelegateParameter_ValuesAddressesAndSourceSlots_KeepTheirSelection() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func S(in f () -> int64, x int32) string -> "F"
+func S(o object, x int64) string -> "O"
+func Main() {
+    var f () -> int32 = () -> 1
+    var g () -> int64 = () -> 2
+    Console.Write(Calls.M(() -> 1, 1))
+    Console.Write(S(() -> 1, 1))
+    Console.Write(Calls.In(f, 1))
+    Console.Write(Calls.In(g, 1))
+    Console.Write(Calls.In(&g, 1))
+    Console.Write(Calls.Amb(&f, 1))
+    Console.Write(Calls.Amb(in f, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static string S(in Func<long> f, int x) => "F";
+    static string S(object o, long x) => "O";
+    static void Main() {
+        Func<int> f = () => 1;
+        Func<long> g = () => 2;
+        Console.Write(Calls.M(() => 1, 1));
+        Console.Write(S(() => 1, 1));
+        Console.Write(Calls.In(f, 1));
+        Console.Write(Calls.In(g, 1));
+        Console.Write(Calls.In(in g, 1));
+        Console.Write(Calls.Amb(in f, 1));
+        Console.Write(Calls.Amb(in f, 1));
+    }
+}
+`, "FFOFFOO")
+    }
+
+    /// Issue #5558: an explicit address (`&x` or `in x`) of differently typed storage is rejected at an imported
+    /// by-reference parameter instead of emitting invalid IL or reporting a false ambiguity.
+    @Fact
+    func ExplicitAddress_OfDifferentStorageAtImportedByRefParameter_IsRejected() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h int32 = 1
+    Console.Write(S.R(&h))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        int h = 1;
+        Console.Write(S.R(ref h));
+    }
+}
+`, "CS1503", line: 5, column: 23, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h int32 = 1
+    Console.Write(S.I(&h))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        int h = 1;
+        Console.Write(S.I(in h));
+    }
+}
+`, "CS1503", line: 5, column: 23, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h int32 = 1
+    Console.Write(S.I(in h))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        int h = 1;
+        Console.Write(S.I(in h));
+    }
+}
+`, "CS1503", line: 5, column: 23, length: 4, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var f () -> int32 = () -> 1
+    Console.Write(S.F(&f))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> f = () => 1;
+        Console.Write(S.F(in f));
+    }
+}
+`, "CS1503", line: 5, column: 23, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var f () -> int32 = () -> 1
+    Console.Write(S.F(in f))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> f = () => 1;
+        Console.Write(S.F(in f));
+    }
+}
+`, "CS1503", line: 5, column: 23, length: 4, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h Func[int32] = () -> 1
+    Console.Write(Calls.In(&h, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> h = () => 1;
+        Console.Write(Calls.In(in h, 1));
+    }
+}
+`, "CS1503", line: 5, column: 28, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h Func[int32] = () -> 1
+    Console.Write(Calls.In(in h, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> h = () => 1;
+        Console.Write(Calls.In(in h, 1));
+    }
+}
+`, "CS1503", line: 5, column: 28, length: 4, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h Func[int32] = () -> 1
+    Console.Write(InCtor(&h, 1).Kind)
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> h = () => 1;
+        Console.Write(new InCtor(in h, 1).Kind);
+    }
+}
+`, "CS1503", line: 5, column: 26, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h Func[int32] = () -> 1
+    Console.Write(InReceiver().M(&h, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> h = () => 1;
+        Console.Write(new InReceiver().M(in h, 1));
+    }
+}
+`, "CS1503", line: 5, column: 34, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h Func[int32] = () -> 1
+    Console.Write(Calls.G(&h, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Func<int> h = () => 1;
+        Console.Write(Calls.G(in h, 1));
+    }
+}
+`, "CS1503", line: 5, column: 27, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+class MyD : B {}
+func Main() {
+    var d = MyD()
+    Console.Write(S.B(&d))
+}
+`, `using System;
+using FunctionControl;
+class MyD : B {}
+class Program {
+    static void Main() {
+        var d = new MyD();
+        Console.Write(S.B(in d));
+    }
+}
+`, "CS1503", line: 6, column: 23, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+enum E { A = 1, B = 2 }
+func Main() {
+    var h int32 = 1
+    Console.Write(RefHolder[E](&h).Value)
+}
+`, `using System;
+using FunctionControl;
+enum E { A = 1, B = 2 }
+class Program {
+    static void Main() {
+        int h = 1;
+        Console.Write(new RefHolder<E>(ref h).Value);
+    }
+}
+`, "CS1503", line: 6, column: 32, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var h int32 = 1
+    Console.Write(RefHolder[int64](&h).Value)
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        int h = 1;
+        Console.Write(new RefHolder<long>(ref h).Value);
+    }
+}
+`, "CS1503", line: 5, column: 36, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import System.Collections.Generic
+import FunctionControl
+class A {}
+class B {}
+func Main() {
+    var bs = List[B]()
+    Console.Write(RefHolder[List[A]](&bs).Value.Count)
+}
+`, `using System;
+using System.Collections.Generic;
+using FunctionControl;
+class A {}
+class B {}
+class Program {
+    static void Main() {
+        var bs = new List<B>();
+        Console.Write(new RefHolder<List<A>>(ref bs).Value.Count);
+    }
+}
+`, "CS1503", line: 8, column: 38, length: 3, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var x = (1, 2)
+    Console.Write(S.RT(&x))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        var x = (1, 2);
+        Console.Write(S.RT(ref x));
+    }
+}
+`, "CS1503", line: 5, column: 24, length: 2, diagnostic: "GS0154")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    var a = [1, 1](int32, (int32, int32)){(1, (2, 3))}
+    Console.Write(S.RTGrid[int32](&a))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        var a = new (int, (int, int))[1, 1] { { (1, (2, 3)) } };
+        Console.Write(S.RTGrid<int>(ref a));
+    }
+}
+`, "CS1503", line: 5, column: 35, length: 2, diagnostic: "GS0154")
+        Check(fixture, `import System
+import System.Collections.Generic
+import FunctionControl
+enum E { A = 1, B = 2 }
+class A {}
+class MyD : B {}
+func Main() {
+    var h int64 = 3
+    var f () -> int64 = () -> 4
+    var e = E.B
+    var next = E.A
+    let holder = RefHolder[E](&e)
+    var as_ = List[A]{A()}
+    let listHolder = RefHolder[List[A]](&as_)
+    var fixedArr = [3]int32{7, 8, 9}
+    var es = List[E]{E.B}
+    var vt = (5, 6)
+    var pairRt = (System.Tuple[int32, int32](1, 2), 3)
+    var rt8 = System.Tuple[int32, int32, int32, int32, int32, int32, int32, System.Tuple[int32]](1, 2, 3, 4, 5, 6, 7, System.Tuple[int32](8))
+    var rt9 = System.Tuple[int32, int32, int32, int32, int32, int32, int32, System.Tuple[int32, int32]](1, 2, 3, 4, 5, 6, 7, System.Tuple[int32, int32](8, 9))
+    var ds = List[MyD]{MyD()}
+    var d = MyD()
+    Console.Write(S.R(&h))
+    Console.Write(S.I(&h))
+    Console.Write(S.I(in h))
+    Console.Write(S.F(&f))
+    Console.Write(S.F(in f))
+    Console.Write(int32(holder.Value))
+    Console.Write(int32(holder.Swap(&next)))
+    Console.Write(int32(holder.Value))
+    Console.Write(int32(RefHolder[E].Echo(&next)))
+    Console.Write(listHolder.Value.Count)
+    Console.Write(S.Read(&fixedArr))
+    Console.Write(S.ReadG[int32](&fixedArr))
+    Console.Write(int32(es.ReadExt[E](&next)))
+    Console.Write(S.VT(&vt))
+    Console.Write(S.RTPair(&pairRt))
+    Console.Write(S.RT8(&rt8))
+    Console.Write(S.RT9(&rt9))
+    Console.Write(ds.ReadExt(&d) == ds[0] ? 1 : 0)
+}
+`, `using System;
+using System.Collections.Generic;
+using FunctionControl;
+enum E { A = 1, B = 2 }
+class A {}
+class MyD : B {}
+class Program {
+    static void Main() {
+        long h = 3;
+        Func<long> f = () => 4;
+        var e = E.B;
+        var next = E.A;
+        var holder = new RefHolder<E>(ref e);
+        var as_ = new List<A> { new A() };
+        var listHolder = new RefHolder<List<A>>(ref as_);
+        var fixedArr = new int[] { 7, 8, 9 };
+        var es = new List<E> { E.B };
+        var vt = (5, 6);
+        var pairRt = (new Tuple<int, int>(1, 2), 3);
+        var rt8 = new Tuple<int, int, int, int, int, int, int, Tuple<int>>(1, 2, 3, 4, 5, 6, 7, new Tuple<int>(8));
+        var rt9 = new Tuple<int, int, int, int, int, int, int, Tuple<int, int>>(1, 2, 3, 4, 5, 6, 7, new Tuple<int, int>(8, 9));
+        var ds = new List<MyD> { new MyD() };
+        var d = new MyD();
+        Console.Write(S.R(ref h));
+        Console.Write(S.I(in h));
+        Console.Write(S.I(in h));
+        Console.Write(S.F(in f));
+        Console.Write(S.F(in f));
+        Console.Write((int)holder.Value);
+        Console.Write((int)holder.Swap(ref next));
+        Console.Write((int)holder.Value);
+        Console.Write((int)RefHolder<E>.Echo(ref next));
+        Console.Write(listHolder.Value.Count);
+        Console.Write(S.Read(ref fixedArr));
+        Console.Write(S.ReadG<int>(ref fixedArr));
+        Console.Write((int)es.ReadExt<E>(ref next));
+        Console.Write(S.VT(ref vt));
+        Console.Write(S.RTPair(ref pairRt));
+        Console.Write(S.RT8(ref rt8));
+        Console.Write(S.RT9(ref rt9));
+        Console.Write(ds.ReadExt(ref d) == ds[0] ? 1 : 0);
+    }
+}
+`, "333442211177254891")
+    }
+
+    /// Issue #5543 control: the `in` pointee target does not decide a call where each `in` candidate is better
+    /// for one argument.
+    @Fact
+    func InDelegateParameter_LiteralThatEachCandidatePrefersOnce_StaysAmbiguous() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.Amb(() -> 1, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.Amb(() => 1, 1));
+    }
+}
+`, "CS0121", line: 4, column: 25, length: 15, diagnostic: "GS0160")
+    }
+
     @Fact
     func ImportedExtensionReceiver_SkipsFunctionValueThatNeedsAConversion() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
@@ -505,6 +2507,58 @@ class Program {
 `, "Truem74")
     }
 
+    /// Issue #5569: nests a block-bodied literal [`depth`](paramref) times. Each level writes the call of the
+    /// level inside it and then returns a string, which does not convert to the delegate's `int64` result.
+    /// @param shape The call, with `|` in place of the literal.
+    /// @param depth The number of enclosing levels.
+    /// @param bodyStart The text that starts a literal body.
+    /// @param bodyEnd The `return` statement and the end of a literal body.
+    /// @returns The nested call.
+    private func NestBlockLiterals(shape string, depth int32, bodyStart string, bodyEnd string) string {
+        var call = shape.Replace("|", bodyStart + bodyEnd)
+        for var level = 0; level < depth; level++ {
+            call = shape.Replace("|", bodyStart + "Console.Write(" + call + ")" + StatementEnd(bodyStart) + bodyEnd)
+        }
+        return call
+    }
+
+    /// Issue #5569: a block value that, at each level, returns the next block from a branch, then gives `"s"`.
+    /// @param depth The number of levels.
+    /// @returns The block value.
+    private func NestReturnBlocks(depth int32) string {
+        var value = "{ \"s\" }"
+        for var level = 0; level < depth; level++ {
+            value = "{\nif flag {\nreturn " + value + "\n}\n\"s\"\n}"
+        }
+        return value
+    }
+
+    /// Issue #5569: an expression-bodied literal with one parameter, nested [`depth`](paramref) times, at a
+    /// candidate set whose delegate takes no parameter. No candidate accepts any level.
+    /// @param depth The number of enclosing levels.
+    /// @param parameter The parameter list.
+    /// @param arrow The lambda arrow.
+    /// @returns The outermost literal.
+    private func NestRejectedLiterals(depth int32, parameter string, arrow string) string {
+        var literal = parameter + " " + arrow + " x"
+        for var level = 0; level < depth; level++ {
+            literal = parameter + " " + arrow + " Calls.N(" + literal + ", 1).Length"
+        }
+        return literal
+    }
+
+    private func StatementEnd(bodyStart string) string -> if bodyStart.Contains("=>") {
+        "; "
+    } else {
+        "\n"
+    }
+
+    private func OracleShape(shape string) string -> if shape.StartsWith("Calls.", StringComparison.Ordinal) {
+        shape
+    } else {
+        "new " + shape
+    }
+
     private func Reject(
         fixture CSharpFixture,
         source string,
@@ -513,16 +2567,15 @@ class Program {
         line int32,
         column int32,
         length int32,
-        diagnostic string = "GS0155"
+        diagnostic string = "GS0155",
+        oracleCompanion string? = nil
     ) {
         output.WriteLine("Contract source:\n" + Contract)
         output.WriteLine("Oracle source:\n" + oracle)
         let compilation = CSharpCompilation.Create(
             "RejectedOracle",
             []SyntaxTree{CSharpSyntaxTree.ParseText(oracle)},
-            RuntimeReferences().Concat([]string{fixture.AssemblyPath}).Select(
-                (path string) -> MetadataReference.CreateFromFile(path)
-            ),
+            RuntimeMetadataReferences.Value.Append(MetadataReference.CreateFromFile(fixture.AssemblyPath)),
             CSharpCompilationOptions(
                 OutputKind.DynamicallyLinkedLibrary,
                 nullableContextOptions: NullableContextOptions.Enable
@@ -531,11 +2584,55 @@ class Program {
         using let stream = MemoryStream()
         let emitted = compilation.Emit(stream)
         Assert.False(emitted.Success)
+        // A companion is a second oracle error that Roslyn reports for the same defect.
         let oracleError = Assert.Single(
-            emitted.Diagnostics.Where((diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error)
+            emitted.Diagnostics.Where(
+                (diagnostic Diagnostic) -> diagnostic.Severity == DiagnosticSeverity.Error &&
+                    diagnostic.Id != oracleCompanion
+            )
         )
+        if oracleCompanion != nil {
+            Assert.Single(emitted.Diagnostics.Where((diagnostic Diagnostic) -> diagnostic.Id == oracleCompanion))
+        }
         Assert.Equal(oracleDiagnostic, oracleError.Id)
         output.WriteLine("Oracle diagnostic: " + oracleError.ToString())
+        RejectConsumer(fixture, source, diagnostic, line, column, length)
+    }
+
+    // Compiles a consumer that must fail, with no output, and gives its errors (code and start) in report order.
+    private func RejectConsumerErrors(fixture CSharpFixture, source string)[](Code string, Line int32, Column int32) {
+        for path in OutputPaths(fixture) {
+            File.Delete(path)
+        }
+        let result = Compile(fixture, source)
+        Assert.NotEqual(0, result.Code)
+        for path in OutputPaths(fixture) {
+            Assert.False(File.Exists(path))
+        }
+        return Regex
+            .Matches(
+            Encoding.UTF8.GetString(result.Bytes) + result.Error,
+            `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`
+        )
+            .Select(
+            (match Match) -> (
+                match.Groups[5].Value,
+                int32.Parse(match.Groups[1].Value),
+                int32.Parse(match.Groups[2].Value)
+            )
+        )
+            .ToArray()
+    }
+
+    // Compiles a consumer that must fail with exactly one error, at the given span, and no output.
+    private func RejectConsumer(
+        fixture CSharpFixture,
+        source string,
+        diagnostic string,
+        line int32,
+        column int32,
+        length int32
+    ) {
         for path in OutputPaths(fixture) {
             File.Delete(path)
         }
@@ -554,6 +2651,28 @@ class Program {
         for path in OutputPaths(fixture) {
             Assert.False(File.Exists(path))
         }
+    }
+
+    // Issue #5613: gives the declaration of `t` for a form, which can start with a declared type (`string? = …`).
+    private func Declare(form string) string -> if form.StartsWith("string? = ", StringComparison.Ordinal) {
+        " " + form
+    } else {
+        " = " + form
+    }
+
+    // Issue #5613: compiles a consumer that must fail with GS0155 only, at the value after the `@` marker.
+    private func RejectMarked(fixture CSharpFixture, marked string, value string) {
+        let index = marked.IndexOf("@" + value, StringComparison.Ordinal)
+        Assert.True(index >= 0, marked)
+        let prefix = marked.Substring(0, index)
+        RejectConsumer(
+            fixture,
+            marked.Remove(index, 1),
+            "GS0155",
+            prefix.Count((c char) -> c == '\n') + 1,
+            index - prefix.LastIndexOf('\n'),
+            value.Length
+        )
     }
 
     private func Check(fixture CSharpFixture, source string, oracle string, expected string) {
@@ -580,9 +2699,7 @@ class Program {
         let compilation = CSharpCompilation.Create(
             "Oracle",
             []SyntaxTree{CSharpSyntaxTree.ParseText(oracle)},
-            RuntimeReferences().Concat([]string{fixture.AssemblyPath}).Select(
-                (path string) -> MetadataReference.CreateFromFile(path)
-            ),
+            RuntimeMetadataReferences.Value.Append(MetadataReference.CreateFromFile(fixture.AssemblyPath)),
             CSharpCompilationOptions(
                 OutputKind.ConsoleApplication,
                 nullableContextOptions: NullableContextOptions.Enable,
@@ -599,7 +2716,7 @@ class Program {
             Path.ChangeExtension(oraclePath, ".runtimeconfig.json")
         )
         // Strict verification with every reference runs before any image executes.
-        Verify(fixture.AssemblyPath, nil)
+        VerifyContractOnce(fixture.AssemblyPath)
         Verify(image, fixture.AssemblyPath)
         Verify(oraclePath, fixture.AssemblyPath)
         for executable in[]string{image, oraclePath} {
@@ -682,20 +2799,184 @@ class Program {
         "SHA256 " + path + ": " + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))
     )
 
+    private func VerifyContractOnce(contractPath string) {
+        if !contractVerified {
+            Verify(contractPath, nil)
+            contractVerified = true
+        }
+    }
+
     shared {
+        private var contractVerified bool
+
+        private let CachedRuntimeReferences Lazy[[]string] = Lazy[[]string](
+            () -> {
+                let directory = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
+                return ReferenceResolver
+                    .HostTrustedPlatformAssemblyPaths()
+                    .Where((path string) -> Path.GetDirectoryName(path) == directory)
+                    .OrderBy((path string) -> path, StringComparer.Ordinal)
+                    .ToArray()
+            }
+        )
+
+        private let RuntimeMetadataReferences Lazy[[]MetadataReference] = Lazy[[]MetadataReference](
+            () -> RuntimeReferences().Select(
+                (path string) -> cast[MetadataReference](MetadataReference.CreateFromFile(path))
+            )
+                .ToArray()
+        )
+
         private func OutputPaths(fixture CSharpFixture)[]string -> []string{
             Path.Combine(fixture.DirectoryPath, "Consumer.dll"),
             Path.Combine(fixture.DirectoryPath, "Consumer.ref.dll"),
             Path.Combine(fixture.DirectoryPath, "Consumer.pdb")
         }
 
-        private func RuntimeReferences()[]string {
-            let directory = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
-            return ReferenceResolver
-                .HostTrustedPlatformAssemblyPaths()
-                .Where((path string) -> Path.GetDirectoryName(path) == directory)
-                .OrderBy((path string) -> path, StringComparer.Ordinal)
-                .ToArray()
+        private func RuntimeReferences()[]string -> CachedRuntimeReferences.Value
+
+        // Issue #5603 (review of 9910e997): the source has the `return` value on line 14 from column 24.
+        private func OptionalMemberBody(other string, beforeGoto string) string -> "        var box = Box(1)\n" +
+            "        var n = 0\n        if box.Value != nil {\n            L: if n > 0 {\n                return box.Value\n" +
+            "            }\n            n++\n            " +
+            beforeGoto +
+            "\n            goto L\n        }\n        return " +
+            other
+
+        private func OptionalMemberSource(
+            head string,
+            other string,
+            beforeGoto string,
+            use string
+        ) string -> "import System\n" +
+            "class Box {\n    let Value int32?\n    init(value int32?) {\n        Value = value\n    }\n}\nfunc Main() {\n    " +
+            head +
+            "\n" +
+            OptionalMemberBody(other, beforeGoto) +
+            "\n    }\n    " +
+            use +
+            "\n}\n"
+
+        // Issue #5603 (review of e920ba13): a function literal or function head, and the other `return` value that
+        // sets its result type.
+        private let MemberResultCases[](Head string, Other string) = [](Head string, Other string){
+            ("let f = () -> {", "default(Dog?)"),
+            ("let f = () -> {", "Dog()"),
+            ("let f = func() Dog? {", "default(Dog?)")
+        }
+
+        // Issue #5603: the source has the `return` value on line 23 from column 24.
+        private func MemberResultBody(
+            other string,
+            beforeGoto string
+        ) string -> "        var holder = Holder(Dog())\n" +
+            "        var n = 0\n        if holder.Pet is Dog {\n            L: if n > 0 {\n                return holder.Pet\n" +
+            "            }\n            n++\n            " +
+            beforeGoto +
+            "\n            goto L\n        }\n        return " +
+            other
+
+        private func MemberResultSource(head string, other string, beforeGoto string) string -> "import System\n" +
+            "open class Animal {\n    open func Name() string -> \"animal\"\n}\nclass Dog : Animal {\n" +
+            "    override func Name() string -> \"dog\"\n}\nclass Cat : Animal {\n" +
+            "    override func Name() string -> \"cat\"\n}\nclass Holder {\n    let Pet Animal\n    init(pet Animal) {\n" +
+            "        Pet = pet\n    }\n}\nfunc Main() {\n    " +
+            head +
+            "\n" +
+            MemberResultBody(other, beforeGoto) +
+            "\n    }\n    let r = f()\n    Console.Write(r)\n}\n"
+
+        // Issue #5603: the prelude has six lines, so a literal that starts on the first line of `Main` starts on line 7.
+        private const InferredResultPrelude string = "import System\nimport System.Threading.Tasks\n" +
+            "func Len(v string) int32 -> v.Length\nfunc T[R](f () -> R) R -> f()\nfunc S(f Func[string]) string -> f()\n"
+
+        // Issue #5603: `|` is the `return` value and `#` is the statement before the backward `goto`.
+        private const InferredResultBody string = "{\n        var s string? = \"a\"\n        var n = 0\n        if s != nil {\n" +
+            "            L: if n > 0 {\n                return |\n            }\n            n++\n            #\n" +
+            "            goto L\n        }\n        return \"x\"\n    }"
+
+        private const InferredResultNestedLabelBody string = "{\n        var s string? = \"a\"\n        var n = 0\n" +
+            "        if s != nil {\n            L: if n > 1 {\n                M: if n > 2 {\n                    return |\n" +
+            "                }\n                n++\n                goto M\n            }\n            n++\n" +
+            "            #\n            goto L\n        }\n        return \"x\"\n    }"
+
+        // Issue #5603: function literals whose result is inferred. `|` is the literal body.
+        private let InferredResultShapes[]string = []string{
+            "let f = () -> |\n    Console.Write(Len(f()))",
+            "let g = () -> () -> |\n    Console.Write(Len(g()()))",
+            "Console.Write(Len(T(() -> |)))",
+            "Console.Write(Len(S(() -> |)))",
+            "let a = async () -> |\n    Console.Write(Len(a().Result))"
+        }
+
+        // Issue #5613: `U` gives a `string?`, so a branch with it has the common type `string?`.
+        private let BranchValuePrelude string = InferredResultPrelude + "func U() string? -> nil\n"
+
+        // Issue #5613: `|` is the statement that uses `s` and `#` is the statement before the backward `goto`.
+        private const BranchValueBody string = "    var s string? = \"a\"\n    var n = 0\n    if s != nil {\n" +
+            "        L: if n > 0 {\n            |\n            return\n        }\n        n++\n        #\n" +
+            "        goto L\n    }"
+
+        // Issue #5613: a backward `goto` into a branch whose condition narrows `s`, after `s = nil`.
+        private const BranchValueJumpIntoBranch string = "func Main() {\n    var s string? = \"a\"\n    var n = 0\n" +
+            "    let t = if s != nil {\n        M: n++\n        @s\n    } else {\n        \"x\"\n    }\n" +
+            "    Console.Write(t == nil)\n    if n < 2 {\n        s = nil\n        goto M\n    }\n}\n"
+
+        // Issue #5613: values whose common type is `string`. `@` marks the narrowed read in a branch. A form assigns
+        // `s` in the other branch, after the read binds. The last forms yield the read from a block: in parentheses,
+        // as the right operand of `??`, as the trailing value of a branch block, and in `checked`.
+        private let BranchValueForms[]string = []string{
+            "n > 1 ? \"t\" : @s",
+            "n > 1 ? \"t\" : (n > 2 ? \"u\" : @s)",
+            "if n > 1 { \"t\" } else { @s }",
+            "if n > 1 { \"t\" } else if n > 2 { \"u\" } else { n = n + 1\n                @s }",
+            "if let q = U() { q } else { @s }",
+            "if let q = U() { @s } else { \"x\" }",
+            "switch n { case 5: \"t\" default: @s }",
+            "U() ?? @s",
+            "if n > 1 { \"t\" } else { defer Console.Write(\"\")\n                @s }",
+            "if n > 1 { @s } else { s = nil\n                \"x\" }",
+            "n > 1 ? \"t\" : ({\n                n = n + 0\n                @s\n            })",
+            "U() ?? {\n                n = n + 0\n                @s\n            }",
+            "if n > 1 { \"t\" } else { ({ @s }) }",
+            "n > 1 ? \"t\" : checked({ @s })",
+            "if n > 1 { \"t\" } else { defer Console.Write(\"\")\n                ({ @s }) }"
+        }
+
+        // Issue #5635: `Id` infers its type argument, `F` has a `string` parameter and `V` a variadic one. `F2` and
+        // `Box.M` take a second argument that can assign the first. `Calls` is the imported contract.
+        private let NoConversionPrelude string = "import FunctionControl\n" +
+            BranchValuePrelude +
+            "func Id[T](x T) T -> x\nfunc F(x string) int32 -> x.Length\nfunc V(xs ...string) int32 -> xs.Length\n" +
+            "func F2(x string, y int32) int32 -> x.Length\nclass Box {\n    func M(x string, y int32) int32 -> x.Length\n}\n"
+
+        // Issue #5635: statements that give the narrowed read at `@` to a slot with no conversion.
+        private let NoConversionForms[]string = []string{
+            "let t = (@s, 1)",
+            "let (a, b) = (@s, 1)",
+            "let t = ((@s, 1), 2)",
+            "let t = (({ @s }), 1)",
+            "let t (string, int64) = (@s, 1)",
+            "let u = Id(@s)",
+            "let u = F(@s)",
+            "let u = V(\"x\", @s)",
+            "let u = Task.FromResult(@s)",
+            "let u = Calls.IdentityDefault(@s)",
+            "let u = Calls.First(@s)",
+            "let t = ({\n                n = n + 0\n                @s\n            })",
+            "let t = ({\n                n = n + 0\n                @s\n            }).Length",
+            "let t string = ({\n                n = n + 0\n                @s\n            })",
+            "let u = F2(@s, ({\n                s = nil\n                0\n            }))",
+            "let u = Box().M(@s, ({\n                s = nil\n                0\n            }))",
+            "var w = \"x\"\n            w = ({\n                n = n + 0\n                @s\n            })"
+        }
+
+        // Issue #5635: `return` values of a function literal with an inferred result that give the narrowed read at
+        // `@` to a slot with no conversion.
+        private let NoConversionReturnForms[]string = []string{
+            "(@s, 1).Item1",
+            "Id(@s)",
+            "({\n                    n = n + 0\n                    @s\n                })"
         }
 
         private const Contract string = `#nullable enable
@@ -707,6 +2988,174 @@ namespace FunctionControl {
         public static string M(object o, long x) => "O";
         public static string In(in System.Func<long> f, int x) => "F";
         public static string In(object o, long x) => "O";
+        public static string One(System.Func<long> f) => "F";
+        public static string N(System.Func<long> f, int x) => "F";
+        public static string N(string s, long x) => "S";
+        public static string PV(System.Func<long, long> f, int x) => "F" + f(2);
+        public static string PV(object o, long x) => "O";
+        public static string POne(System.Func<long, long> f) => "F";
+        public static string RR(ref readonly System.Func<long> f, int x) => "F";
+        public static string RR(object o, long x) => "O";
+        public static string P(in System.Func<long, long> f, int x) => "F" + f(2);
+        public static string P(object o, long x) => "O";
+        public static string PG<T>(in System.Func<T, T> f, T x) => "F" + f(x);
+        public static string PG(object o, string s) => "O";
+        public static string Amb(in System.Func<long> f, int x) => "F";
+        public static string Amb(in System.Func<int> o, long x) => "O";
+        public static string Sig(System.Func<int, long> f, int x) => "F";
+        public static string Sig(object o, long x) => Kinds.Of(o);
+        public static string SigIn(in System.Func<int, long> f, int x) => "F";
+        public static string SigIn(object o, long x) => Kinds.Of(o);
+        public static string G(in System.Func<long> f, int x) => "F";
+        public static string G<T>(T value, long x) => "G:" + typeof(T).Name;
+        public static string GV(System.Func<long> f, int x) => "F";
+        public static string GV<T>(T value, long x) => "G:" + typeof(T).Name;
+        public static string GC(in System.Func<long> f, int x) => "F";
+        public static string GC<T>(T value, long x) where T : class => "G:" + typeof(T).Name;
+        public static string Dm(System.Func<System.IDisposable> f, int x) => "F";
+        public static string Dm(object o, long x) => "O";
+        public static string DmIn(in System.Func<System.IDisposable> f, int x) => "F";
+        public static string DmIn(object o, long x) => "O";
+        public static string Dg(System.Func<System.IDisposable> f, int x) => "F";
+        public static string Dg(object o, long x) => Kinds.OfB(o);
+        public static string DgIn(in System.Func<System.IDisposable> f, int x) => "F";
+        public static string DgIn(object o, long x) => Kinds.OfB(o);
+        public static string NsOne(System.Func<string> f) => "F" + (f()?.Length.ToString() ?? "<null>");
+        public static string Ns(System.Func<string> f, int x) => "F" + (f()?.Length.ToString() ?? "<null>");
+        public static string Ns(object o, long x) => "O";
+        public static string NsIn(in System.Func<string> f, int x) => "F" + (f()?.Length.ToString() ?? "<null>");
+        public static string NsIn(object o, long x) => "O";
+        public static string Pz(System.Func<string> f, int x) => "F" + f();
+        public static T Pick<T>(T a, T b) => a;
+        public static bool IsNil<T>(T? value) where T : class => value == null;
+        public static bool IsNilParams<T>(params T?[] xs) where T : class => xs[0] == null;
+        public static T IdentityDefault<T>(T value = default!) => value;
+        public static T First<T>(params T[] xs) => xs[0];
+        public static string Po(System.Func<object> f, int x) => "F" + f();
+        public static string Po(object o, long x) => "O" + ((System.Delegate)o).DynamicInvoke();
+        public static string Pz(object o, long x) => "O" + ((System.Delegate)o).DynamicInvoke();
+        public static string Pa(System.Func<long> f, int x) => "F";
+        public static string Pa(params object[] xs) => "P" + Kinds.OfS(xs[0]);
+        public static string PaIn(in System.Func<long> f, int x) => "F";
+        public static string PaIn(params object[] xs) => "P" + Kinds.OfS(xs[0]);
+        public static string Pc(int a, int b, System.Func<long> f) => "F";
+        public static string Pc(int a, params object[] xs) => "P" + Kinds.OfS(xs[xs.Length - 1]);
+        public static string PcIn(int a, int b, in System.Func<long> f) => "F";
+        public static string PcIn(int a, params object[] xs) => "P" + Kinds.OfS(xs[xs.Length - 1]);
+        public static string Tu(System.Func<(long, long), long> f, int x) => "F";
+        public static string Tu(object o, long x) => "O" + Kinds.OfS(o);
+        public static string TuIn(in System.Func<(long, long), long> f, int x) => "F";
+        public static string TuIn(object o, long x) => "O" + Kinds.OfS(o);
+        public static string Fm(System.Func<System.IFormattable> f, int x) =>
+            "F" + f().ToString(null, System.Globalization.CultureInfo.InvariantCulture);
+        public static string Fm(object o, long x) => "O" + Kinds.OfS(o);
+        public static string FmIn(in System.Func<System.IFormattable> f, int x) =>
+            "F" + f().ToString(null, System.Globalization.CultureInfo.InvariantCulture);
+        public static string FmIn(object o, long x) => "O" + Kinds.OfS(o);
+    }
+    public class NsCtor {
+        public string Kind;
+        public NsCtor(System.Func<string> f, int x) { Kind = "F" + (f()?.Length.ToString() ?? "<null>"); }
+        public NsCtor(object o, long x) { Kind = "O"; }
+    }
+    public class NsInCtor {
+        public string Kind;
+        public NsInCtor(in System.Func<string> f, int x) { Kind = "F" + (f()?.Length.ToString() ?? "<null>"); }
+        public NsInCtor(object o, long x) { Kind = "O"; }
+    }
+    public class PaCtor {
+        public string Kind;
+        public PaCtor(System.Func<long> f, int x) { Kind = "F"; }
+        public PaCtor(params object[] xs) { Kind = "P" + Kinds.OfS(xs[0]); }
+    }
+    public class PaInCtor {
+        public string Kind;
+        public PaInCtor(in System.Func<long> f, int x) { Kind = "F"; }
+        public PaInCtor(params object[] xs) { Kind = "P" + Kinds.OfS(xs[0]); }
+    }
+    public class PcCtor {
+        public string Kind;
+        public PcCtor(int a, int b, System.Func<long> f) { Kind = "F"; }
+        public PcCtor(int a, params object[] xs) { Kind = "P" + Kinds.OfS(xs[xs.Length - 1]); }
+    }
+    public class DgCtor {
+        public string Kind;
+        public DgCtor(System.Func<System.IDisposable> f, int x) { Kind = "F"; }
+        public DgCtor(object o, long x) { Kind = Kinds.OfB(o); }
+    }
+    public class DgInCtor {
+        public string Kind;
+        public DgInCtor(in System.Func<System.IDisposable> f, int x) { Kind = "F"; }
+        public DgInCtor(object o, long x) { Kind = Kinds.OfB(o); }
+    }
+    public static class Kinds {
+        public static string Of(object o) => o is System.Func<long, string> g ? "O" + g(5) : "O:" + o.GetType();
+        public static string OfB(object o) => o is System.Func<B> f ? "O" + f().GetType().Name : "O:" + o.GetType();
+        public static string OfS(object o) => o is System.Func<string> f ? "<" + f() + ">" :
+            o is System.Func<(int, int), string> g ? "[" + g((1, 2)) + "]" : "?" + o.GetType();
+    }
+    public class B { }
+    public class D : B, System.IDisposable { public void Dispose() { } }
+    public class SigCtor {
+        public string Kind;
+        public SigCtor(System.Func<int, long> f, int x) { Kind = "F"; }
+        public SigCtor(object o, long x) { Kind = Kinds.Of(o); }
+    }
+    public class SigInCtor {
+        public string Kind;
+        public SigInCtor(in System.Func<int, long> f, int x) { Kind = "F"; }
+        public SigInCtor(object o, long x) { Kind = Kinds.Of(o); }
+    }
+    public class SymHolder<T> {
+        public string Kind;
+        public SymHolder(System.Func<T, long> f, int x) { Kind = "F"; }
+        public SymHolder(object o, long x) { Kind = "O"; }
+    }
+    public class SymInHolder<T> {
+        public string Kind;
+        public SymInHolder(in System.Func<T, long> f, int x) { Kind = "F"; }
+        public SymInHolder(object o, long x) { Kind = "O"; }
+    }
+    public class InReceiver {
+        public string M(in System.Func<long> f, int x) => "F";
+        public string M(object o, long x) => "O";
+    }
+    public static class InE {
+        public static string X(this InReceiver r, in System.Func<long> f, int x) => "F";
+        public static string X(this InReceiver r, object o, long x) => "O";
+    }
+    public class LitBox<T> {
+        public string M(System.Func<T, long> f) => "F";
+        public string M(object o) => "O";
+    }
+    public class InBox<T> {
+        public string M(T x, in System.Func<T, int> f) => "B" + f(x);
+    }
+    public class InHolder<T> {
+        public string Kind;
+        public InHolder(T x, in System.Func<T, int> f) { Kind = "H" + f(x); }
+    }
+    public class InStatic<T> {
+        public static string S(T x, in System.Func<T, int> f) => "S" + f(x);
+    }
+    public static class InGeneric {
+        public static string Of<T>(T x, in System.Func<T, int> f) => "G" + f(x);
+        public static string Each<T>(this System.Collections.Generic.List<T> l, in System.Func<T, int> f) => "E" + f(l[0]);
+    }
+    public class PCtor {
+        public string Kind;
+        public PCtor(System.Func<long, long> f, int x) { Kind = "F" + f(2); }
+        public PCtor(object o, long x) { Kind = "O"; }
+    }
+    public class PInCtor {
+        public string Kind;
+        public PInCtor(in System.Func<long, long> f, int x) { Kind = "F" + f(2); }
+        public PInCtor(object o, long x) { Kind = "O"; }
+    }
+    public class InCtor {
+        public string Kind;
+        public InCtor(in System.Func<long> f, int x) { Kind = "F"; }
+        public InCtor(object o, long x) { Kind = "O"; }
     }
     public static class E {
         public static string M(this System.Func<long> f, int x) => "F";
@@ -716,6 +3165,27 @@ namespace FunctionControl {
         public string Kind;
         public C(System.Func<long> f, int x) { Kind = "F"; }
         public C(object o, long x) { Kind = "O"; }
+    }
+    public static class S {
+        public static long R(ref long x) => x;
+        public static long I(in long x) => x;
+        public static long F(in System.Func<long> f) => f();
+        public static string B(in B b) => "B";
+        public static int RT(ref System.Tuple<int, int> x) => x.Item1;
+        public static int RTPair(ref (System.Tuple<int, int>, int) x) => x.Item1.Item1 + x.Item2;
+        public static int RTGrid<T>(ref (T, System.Tuple<int, int>)[,] x) => x[0, 0].Item2.Item1;
+        public static int RT8(ref System.Tuple<int, int, int, int, int, int, int, System.Tuple<int>> x) => x.Rest.Item1;
+        public static int RT9(ref System.Tuple<int, int, int, int, int, int, int, System.Tuple<int, int>> x) => x.Rest.Item2;
+        public static int VT(ref (int, int) x) => x.Item1;
+        public static int Read(ref int[] a) => a[0];
+        public static T ReadG<T>(ref T[] a) => a[0];
+        public static T ReadExt<T>(this System.Collections.Generic.List<T> xs, ref T value) { value = xs[0]; return value; }
+    }
+    public class RefHolder<T> {
+        public T Value;
+        public RefHolder(ref T value) { Value = value; }
+        public T Swap(ref T next) { var prev = Value; Value = next; return prev; }
+        public static T Echo(ref T value) => value;
     }
 }
 `

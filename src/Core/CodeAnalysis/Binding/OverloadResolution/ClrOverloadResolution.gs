@@ -330,7 +330,6 @@ internal shared class ClrOverloadResolution {
         supplementaryInterfaceCheck((Type, Type) -> bool)? = nil
     ) ImplicitConversionKind {
         var target = target
-        var source = source
         if target == nil {
             return ImplicitConversionKind.None
         }
@@ -392,45 +391,40 @@ internal shared class ClrOverloadResolution {
             }
             return ImplicitConversionKind.None
         }
-        // ADR-0039: peel by-ref from target (ref/out/in parameter) for matching.
-        // If the user passes &x (source is T&), peel both sides.
-        // If the user passes x (source is T), peel only the target.
-        let byRefStorage = target.IsByRef && source.IsByRef
+        // ADR-0039, #4422, #5558: an address passes the storage location.
+        // It matches only a by-reference parameter with the same pointee type.
+        // A plain argument peels a by-reference target.
+        if source.IsByRef {
+            return if target.IsByRef && ClrTypeUtilities.AreSame(target.GetElementType(), source.GetElementType()) {
+                ImplicitConversionKind.Identity
+            } else {
+                ImplicitConversionKind.None
+            }
+        }
         if target.IsByRef {
             target = target.GetElementType()!!
-        }
-        if source.IsByRef {
-            source = source.GetElementType()!!
         }
         if ClrTypeUtilities.AreSame(target, source) {
             return ImplicitConversionKind.Identity
         }
-        // Issue #4422: an address passes the storage itself, so a value-type
-        // `Nullable<V>` on either side must match exactly: `int?` storage is
-        // not an `int` location, nor the reverse, and wrapping it would emit
-        // unverifiable IL.
-        if byRefStorage &&
-            (NullableLifting.IsValueTypeNullableClr(target) || NullableLifting.IsValueTypeNullableClr(source)) {
-            return ImplicitConversionKind.None
-        }
-        if target!!.IsPointer && source!!.IsPointer && string.Equals(
+        if target!!.IsPointer && source.IsPointer && string.Equals(
             target!!.GetElementType()?.FullName,
             "System.Void",
             StringComparison.Ordinal
         ) {
             return ImplicitConversionKind.Reference
         }
-        if IsNumericWidening(source!!, target!!) {
+        if IsNumericWidening(source, target!!) {
             return ImplicitConversionKind.NumericWidening
         }
         if string.Equals(target!!.FullName, "System.Object", StringComparison.Ordinal) {
-            return if source!!.IsValueType {
+            return if source.IsValueType {
                 ImplicitConversionKind.Boxing
             } else {
                 ImplicitConversionKind.Reference
             }
         }
-        if IsNullableWrap(source!!, target!!) {
+        if IsNullableWrap(source, target!!) {
             return ImplicitConversionKind.NullableWrap
         }
         // Issue #322: any delegate type (Func<...>/Action<...> or a named
@@ -460,7 +454,7 @@ internal shared class ClrOverloadResolution {
         // literal's natural delegate type is a host-runtime Func<> closed over
         // MetadataLoadContext type arguments, on which those reflection probes
         // throw. Ranked last so an exact (identity) delegate match always wins.
-        if IsDelegateReturnCovariant(target!!, source!!) {
+        if IsDelegateReturnCovariant(target!!, source) {
             return ImplicitConversionKind.DelegateReturnCovariance
         }
         // Issue #1150: delegate return-type numeric widening. A delegate value
@@ -471,10 +465,10 @@ internal shared class ClrOverloadResolution {
         // delegate return type. Checked here — alongside the reference
         // covariance case — before the assignability / base-type-walk blocks
         // below. Ranked last so an exact (identity) delegate match always wins.
-        if IsDelegateReturnNumericWidening(target!!, source!!) {
+        if IsDelegateReturnNumericWidening(target!!, source) {
             return ImplicitConversionKind.DelegateReturnNumericWidening
         }
-        if object.ReferenceEquals(target!!.Assembly, source!!.Assembly) || target!!.GetType() == source!!.GetType() {
+        if object.ReferenceEquals(target!!.Assembly, source.Assembly) || target!!.GetType() == source.GetType() {
             try {
                 if target!!.IsAssignableFrom(source) {
                     // Issue #2516: CLR array assignability is broader than G#.
@@ -507,8 +501,7 @@ internal shared class ClrOverloadResolution {
         // walk the source's interface set and base-type chain by name.
         if target!!.IsInterface &&
             (
-            ClrTypeUtilities.ImplementsInterfaceByName(source, target) ||
-                IsSafeArrayInterfaceVariance(target!!, source!!)
+            ClrTypeUtilities.ImplementsInterfaceByName(source, target) || IsSafeArrayInterfaceVariance(target!!, source)
         ) {
             return ImplicitConversionKind.Reference
         }
@@ -521,14 +514,14 @@ internal shared class ClrOverloadResolution {
         // `IEqualityComparer<IMethodSymbol>` slot) fell through and failed
         // GS0267 even though C#/the CLR accept it. Mirrors
         // `IsSafeArrayInterfaceVariance` for the general interface case.
-        if target!!.IsInterface && IsVariantGenericInterfaceConversion(target!!, source!!) {
+        if target!!.IsInterface && IsVariantGenericInterfaceConversion(target!!, source) {
             return ImplicitConversionKind.Reference
         }
         // Cross-context base-class walk (#610): covers inheritance across
         // reflection contexts (e.g. an MLC-loaded subclass passed to a
         // parameter typed as its live-runtime base class or vice versa).
-        if !source!!.IsValueType && !target!!.IsValueType && !target!!.IsInterface {
-            for var baseType Type? = source!!.BaseType; baseType != nil; baseType = baseType!!.BaseType {
+        if !source.IsValueType && !target!!.IsValueType && !target!!.IsInterface {
+            for var baseType Type? = source.BaseType; baseType != nil; baseType = baseType!!.BaseType {
                 if ClrTypeUtilities.AreSame(baseType, target) {
                     return ImplicitConversionKind.Reference
                 }
@@ -539,13 +532,11 @@ internal shared class ClrOverloadResolution {
         // whose CLR type is a surrogate (e.g. System.Object), the built-in checks
         // above won't recognise that the user class implements the target interface.
         // This callback lets the binder inject that knowledge.
-        if supplementaryInterfaceCheck != nil &&
-            target!!.IsInterface &&
-            supplementaryInterfaceCheck(source!!, target!!) {
+        if supplementaryInterfaceCheck != nil && target!!.IsInterface && supplementaryInterfaceCheck(source, target!!) {
             return ImplicitConversionKind.Reference
         }
         let udi Func[Type, Type, bool]? = UserDefinedImplicitConversionLookup
-        if udi != nil && udi(source!!, target!!) {
+        if udi != nil && udi(source, target!!) {
             return ImplicitConversionKind.UserDefinedImplicit
         }
         // Issue #889: a value-returning func/arrow literal (whose natural CLR
@@ -555,7 +546,7 @@ internal shared class ClrOverloadResolution {
         // Func<...> overload always wins when both are applicable. The binder's
         // void-izing rebind (RebindFunctionLiteralDelegateArguments) materializes
         // the actual discard for the selected literal argument.
-        if IsValueReturningDelegateToVoidDelegate(target!!, source!!) {
+        if IsValueReturningDelegateToVoidDelegate(target!!, source) {
             return ImplicitConversionKind.LambdaToVoidDelegate
         }
         // Issue #932: a func/arrow literal whose natural delegate type is a
@@ -567,7 +558,7 @@ internal shared class ClrOverloadResolution {
         // last because the covariance / void-discard cases above already cover
         // the differing-return-type shapes; this only handles the exact-shape
         // delegate-kind mismatch.
-        if IsStructurallyCompatibleDelegate(target!!, source!!) {
+        if IsStructurallyCompatibleDelegate(target!!, source) {
             return ImplicitConversionKind.DelegateStructuralMatch
         }
         // Issue #2142: a lambda/arrow literal (natural CLR type Func<…>/Action<…>)
@@ -748,7 +739,9 @@ internal shared class ClrOverloadResolution {
         explicitTypeArgumentMismatchCheck((int32, MethodBase) -> bool)? = nil,
         openLiteralArgumentCheck((int32, Type) -> bool)? = nil,
         symbolicArgTypes IReadOnlyList[TypeSymbol]? = nil,
-        symbolicArgumentConversionClassifier((int32, Type, ParameterInfo) -> ImplicitConversionKind?)? = nil,
+        symbolicArgumentConversionClassifier(
+            (int32, Type, ParameterInfo, ImmutableArray[TypeSymbol?]) -> ImplicitConversionKind?
+        )? = nil,
         trailingParameterCountToIgnore((MethodBase) -> int32)? = nil
     ) Result[T] {
         let applicable = List[
@@ -1031,6 +1024,8 @@ internal shared class ClrOverloadResolution {
     /// @param t2 The second candidate target type.
     /// @returns -1, 0, or +1 per the description above.
     func CompareReferenceTargets(t1 Type?, t2 Type?) int32 {
+        let t1 = PeelByRef(t1)
+        let t2 = PeelByRef(t2)
         if t1 == nil || t2 == nil || ClrTypeUtilities.AreSame(t1, t2) {
             return 0
         }
@@ -1105,6 +1100,8 @@ internal shared class ClrOverloadResolution {
     /// @param source The source argument type.
     /// @returns -1, 0, or +1 per the description above.
     func CompareNumericTargets(t1 Type?, t2 Type?, source Type?) int32 {
+        let t1 = PeelByRef(t1)
+        let t2 = PeelByRef(t2)
         if t1 == nil || t2 == nil || source == nil {
             return 0
         }
@@ -4005,10 +4002,7 @@ internal shared class ClrOverloadResolution {
             var invoke MethodInfo?
             var invokeParams[]ParameterInfo
             try {
-                var delegateType Type? = parameters[paramIndex].ParameterType
-                if delegateType == nil {
-                    return false
-                }
+                var delegateType = ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex])
                 // Issue #2375: mirror UnifyForInference's #2142 unwrap — a
                 // deferred lambda slot whose delegate parameter is
                 // `Expression<TDelegate>` (e.g. `HasOne<TRelated>(Expression<Func<TEntity, TRelated>>)`)
@@ -5329,7 +5323,9 @@ internal shared class ClrOverloadResolution {
         explicitTypeArgumentMismatchCheck((int32, MethodBase) -> bool)? = nil,
         openLiteralArgumentCheck((int32, Type) -> bool)? = nil,
         symbolicArgTypes IReadOnlyList[TypeSymbol]? = nil,
-        symbolicArgumentConversionClassifier((int32, Type, ParameterInfo) -> ImplicitConversionKind?)? = nil,
+        symbolicArgumentConversionClassifier(
+            (int32, Type, ParameterInfo, ImmutableArray[TypeSymbol?]) -> ImplicitConversionKind?
+        )? = nil,
         trailingParameterCountToIgnore((MethodBase) -> int32)? = nil
     ) {
         {
@@ -5711,14 +5707,18 @@ internal shared class ClrOverloadResolution {
                     isExpanded: false,
                     resolvedTypeArgSymbols: resolvedTypeArgSymbols
                 )
-                if !(
-                    conv == ImplicitConversionKind.Identity &&
-                        IsErasedGenericParameterSlot(rawCandidate, paramIndex, explicitTypeArgIsGenuine)
+                if (
+                    paramTypes[i].IsByRef ||
+                        !(
+                        conv == ImplicitConversionKind.Identity &&
+                            IsErasedGenericParameterSlot(rawCandidate, paramIndex, explicitTypeArgIsGenuine)
+                    )
                 ) &&
                     symbolicArgumentConversionClassifier?(
                     i,
                     paramTypes[i],
-                    parameters[paramIndex]
+                    parameters[paramIndex],
+                    resolvedTypeArgSymbols
                 ) is {} symbolicConversion {
                     conv = symbolicConversion
                 }
@@ -6006,7 +6006,9 @@ internal shared class ClrOverloadResolution {
         deferredInferenceArgs IReadOnlyList[bool]? = nil,
         openLiteralArgumentCheck((int32, Type) -> bool)? = nil,
         symbolicArgTypes IReadOnlyList[TypeSymbol]? = nil,
-        symbolicArgumentConversionClassifier((int32, Type, ParameterInfo) -> ImplicitConversionKind?)? = nil,
+        symbolicArgumentConversionClassifier(
+            (int32, Type, ParameterInfo, ImmutableArray[TypeSymbol?]) -> ImplicitConversionKind?
+        )? = nil,
         trailingParameterCountToIgnore((MethodBase) -> int32)? = nil
     ) {
         var candidate = rawCandidate
@@ -6238,11 +6240,19 @@ internal shared class ClrOverloadResolution {
                 isExpanded: true,
                 resolvedTypeArgSymbols: resolvedTypeArgSymbols
             )
-            if !(
-                conv == ImplicitConversionKind.Identity &&
-                    IsErasedGenericParameterSlot(rawCandidate, slot, explicitTypeArgIsGenuine)
+            if (
+                target.IsByRef ||
+                    !(
+                    conv == ImplicitConversionKind.Identity &&
+                        IsErasedGenericParameterSlot(rawCandidate, slot, explicitTypeArgIsGenuine)
+                )
             ) &&
-                symbolicArgumentConversionClassifier?(i, target, parameters[slot]) is {} symbolicConversion {
+                symbolicArgumentConversionClassifier?(
+                i,
+                target,
+                parameters[slot],
+                resolvedTypeArgSymbols
+            ) is {} symbolicConversion {
                 conv = symbolicConversion
             }
             // Issue #3989: the same second opinion the normal-form loop takes.
@@ -6841,6 +6851,49 @@ internal shared class ClrOverloadResolution {
                 )
             }
         }
+        // Issue #4421: when candidates remain tied and an argument omits `in`
+        // (its source type is not ByRef), prefer a by-value parameter over a
+        // by-reference parameter, matching C# §12.6.4.3.
+        if pool.Count > 1 && argTypes.Count > 0 {
+            let preferredByValue = List[
+                (Method T, Conversions[]ImplicitConversionKind, ParamTypes[]Type, Mapping[]?int32, IsExpanded bool)
+            ](pool.Count)
+            for candidate in pool {
+                var dominated = false
+                for other in pool {
+                    if object.ReferenceEquals(candidate.Method, other.Method) {
+                        continue
+                    }
+                    if IsBetterOmittedByRefPassingMode(
+                        other.Method,
+                        other.Conversions,
+                        other.ParamTypes,
+                        other.Mapping,
+                        candidate.Method,
+                        candidate.Conversions,
+                        candidate.ParamTypes,
+                        candidate.Mapping,
+                        argTypes
+                    ) {
+                        dominated = true
+                        break
+                    }
+                }
+                if !dominated {
+                    preferredByValue.Add(candidate)
+                }
+            }
+            if preferredByValue.Count >= 1 && preferredByValue.Count < pool.Count {
+                pool = preferredByValue
+            }
+            if pool.Count == 1 {
+                return Result[T].Single(
+                    pool[0].Method,
+                    BuildMappingArray(pool[0].Mapping, argumentNames),
+                    pool[0].IsExpanded
+                )
+            }
+        }
         // Phase 2g — the full NuGet transitive closure can surface the exact
         // same method more than once: e.g. `MemoryExtensions.AsSpan` reachable
         // via both `System.Memory` and a type-forwarding facade, or
@@ -7172,6 +7225,67 @@ internal shared class ClrOverloadResolution {
         return hasStrictlyBetter
     }
 
+    private func IsBetterOmittedByRefPassingMode(
+        candidateMethod MethodBase,
+        candidateConversions[]ImplicitConversionKind,
+        candidateParams[]Type,
+        candidateMapping[]?int32,
+        otherMethod MethodBase,
+        otherConversions[]ImplicitConversionKind,
+        otherParams[]Type,
+        otherMapping[]?int32,
+        sources IReadOnlyList[Type?]
+    ) bool {
+        let candidateParameters = candidateMethod.GetParameters()
+        let otherParameters = otherMethod.GetParameters()
+        let count = Math.Min(
+            sources.Count,
+            Math.Min(
+                Math.Min(candidateConversions.Length, otherConversions.Length),
+                Math.Min(candidateParams.Length, otherParams.Length)
+            )
+        )
+        var hasBetter = false
+        for var i = 0; i < count; i++ {
+            if candidateConversions[i] != otherConversions[i] || !ClrTypeUtilities.AreSame(
+                PeelByRef(candidateParams[i]),
+                PeelByRef(otherParams[i])
+            ) {
+                return false
+            }
+            let source = sources[i]
+            if source?.IsByRef == true || object.ReferenceEquals(source, SymbolicByRefArgumentType) {
+                continue
+            }
+            let candidateSlot = if candidateMapping != nil && i < candidateMapping.Length {
+                candidateMapping[i]
+            } else {
+                i
+            }
+            let otherSlot = if otherMapping != nil && i < otherMapping.Length {
+                otherMapping[i]
+            } else {
+                i
+            }
+            if candidateSlot < 0 ||
+                otherSlot < 0 ||
+                candidateSlot >= candidateParameters.Length ||
+                otherSlot >= otherParameters.Length {
+                continue
+            }
+            let candidateKind = RefCapabilities.GetParameterRefKind(candidateParameters[candidateSlot])
+            let otherKind = RefCapabilities.GetParameterRefKind(otherParameters[otherSlot])
+            if (candidateKind == RefKind.None && otherKind == RefKind.In) ||
+                (candidateKind == RefKind.In && otherKind == RefKind.None) {
+                if candidateKind != RefKind.None {
+                    return false
+                }
+                hasBetter = true
+            }
+        }
+        return hasBetter
+    }
+
     private func CompareConversions(
         ka ImplicitConversionKind,
         paramA Type,
@@ -7303,7 +7417,7 @@ internal shared class ClrOverloadResolution {
         return peeled != nil && string.Equals(peeled.FullName, "System.Object", StringComparison.Ordinal)
     }
 
-    private func PeelByRef(type Type) Type? {
+    private func PeelByRef(type Type?) Type? {
         return if type != nil && type.IsByRef == true {
             type.GetElementType()
         } else {
@@ -7457,6 +7571,22 @@ internal shared class ClrOverloadResolution {
         }
         return SatisfiesDeclaredConstraints(typeParams, typeArgs, typeArgSymbols, out _, out _)
     }
+
+    /// Issue #5569: whether a closed type argument satisfies the declared constraints of one method or type
+    /// parameter, by the rules that a candidate's inferred type arguments use.
+    /// @param typeParameter The generic parameter.
+    /// @param typeArgument The closed type argument.
+    /// @returns `true` when every declared constraint holds.
+    internal func SatisfiesTypeParameterConstraints(
+        typeParameter Type,
+        typeArgument Type
+    ) bool -> SatisfiesDeclaredConstraints(
+        []Type{typeParameter},
+        []Type{typeArgument},
+        default(ImmutableArray[TypeSymbol?]),
+        out _,
+        out _
+    )
 
     private func SatisfiesDeclaredConstraints(
         typeParams[]Type,
@@ -9061,6 +9191,9 @@ internal shared class ClrOverloadResolution {
 
     private func UnifyForInference(parameterType Type?, argumentType Type?, bounds Dictionary[string, Type]) bool {
         if parameterType == nil || argumentType == nil {
+            return true
+        }
+        if !parameterType.IsByRef && argumentType.IsByRef {
             return true
         }
         if parameterType.IsGenericParameter {

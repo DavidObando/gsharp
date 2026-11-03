@@ -547,6 +547,22 @@ class FunctionSymbol : Symbol {
     /// Defaults to `false`.
     prop IsReturnTypeInferred bool
 
+    /// Gets or sets the state of a lambda body whose return statements keep their value unconverted (issue
+    /// #5569). The lambda binder converts them after the body, so one body bind can give the target function
+    /// type or the natural one. Unlike (cref:IsReturnTypeInferred), the declared return type still target-types
+    /// the return values. `null` for every other function.
+    internal prop DeferredReturns LambdaBinder.DeferredReturnState?
+
+    /// Gets a value indicating whether (cref:DeferredReturns) is set.
+    internal prop DefersReturnConversion bool -> DeferredReturns != nil
+
+    /// Gets or sets the narrowing uses of the `return` values of a lambda body whose result type the lambda binder
+    /// chooses after the body (issue #5603): an inferred result, or the natural result of a speculative lambda. A
+    /// backward `goto` check records them where each value binds. The lambda binder reports them, or rejects the
+    /// natural type, when the result needs the narrowing. Set only when (cref:IsReturnTypeInferred) or
+    /// (cref:DefersReturnConversion) is `true`.
+    internal prop InferredReturnNarrowings LambdaBinder.DeferredReturnState?
+
     /// Gets or sets the resolved `@DllImport` metadata for a P/Invoke
     /// function declaration (ADR-0086 / issue #727). Non-null when the
     /// function is a well-formed P/Invoke stub; the emitter consumes the

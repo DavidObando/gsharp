@@ -946,24 +946,61 @@ internal partial class ExpressionBinder {
         expectedParameterCount int32? = nil
     ) bool {
         naturalType = nil
-        if !TryGetUniqueSymbolicMethodGroupCandidate(group, expectedParameterCount, out var candidate) {
+        if group.Candidates.Length > 1 && expectedParameterCount == nil {
             return false
         }
-        let offset = if candidate.IsExtension && group.Receiver != nil {
-            1
-        } else {
-            0
-        }
-        let parameterTypes = ImmutableArray.CreateBuilder[TypeSymbol](candidate.Parameters.Length - offset)
-        for var i = offset; i < candidate.Parameters.Length; i++ {
-            if candidate.Parameters[i].RefKind != RefKind.None {
+        var selected FunctionSymbol? = nil
+        var selectedParameters[]?TypeSymbol = nil
+        var selectedReturn TypeSymbol? = nil
+        for candidate in group.Candidates {
+            let offset = if candidate.IsExtension && group.Receiver != nil {
+                1
+            } else {
+                0
+            }
+            let candidateArity = candidate.Parameters.Length - offset
+            if expectedParameterCount is {} arity && candidateArity != arity {
+                continue
+            }
+            var hasByRef = false
+            for var i = offset; i < candidate.Parameters.Length; i++ {
+                if candidate.Parameters[i].RefKind != RefKind.None {
+                    hasByRef = true
+                    break
+                }
+            }
+            if hasByRef {
+                continue
+            }
+            let candidateOwner = if group.StaticOwnerType != nil &&
+                candidate.StaticOwnerType is StructSymbol declaredOwner {
+                TypeMemberModel.ResolveStaticMemberOwner(group.StaticOwnerType, declaredOwner)
+            } else {
+                default(StructSymbol?)
+            }
+            if !TryCloseMethodGroupCandidate(
+                candidate,
+                group.Receiver,
+                candidateOwner,
+                candidateArity,
+                out var closedParameters,
+                out var closedReturn
+            ) {
+                continue
+            }
+            if selected != nil {
                 return false
             }
-            parameterTypes.Add(candidate.Parameters[i].Type)
+            selected = candidate
+            selectedParameters = closedParameters
+            selectedReturn = closedReturn
+        }
+        if selected == nil {
+            return false
         }
         naturalType = FunctionTypeSymbol.Get(
-            parameterTypes.MoveToImmutable(),
-            MethodGroupObservableReturnType(candidate)
+            ImmutableArray.CreateRange(selectedParameters!!),
+            GetMethodGroupObservableReturnType(selected, selectedReturn)
         )
         return true
     }
@@ -975,32 +1012,43 @@ internal partial class ExpressionBinder {
     ) bool {
         naturalType = nil
         var selected FunctionSymbol? = nil
+        var selectedParameters[]?TypeSymbol = nil
+        var selectedReturn TypeSymbol? = nil
         for var pass = 0; pass < 2 && selected == nil; pass++ {
             let allowVariance = pass == 1
             for candidate in group.Candidates {
-                if candidate.IsGeneric {
-                    continue
-                }
                 let offset = if candidate.IsExtension && group.Receiver != nil {
                     1
                 } else {
                     0
                 }
-                if candidate.Parameters.Length - offset != expectedParameterTypes.Length {
+                let candidateOwner = if group.StaticOwnerType != nil &&
+                    candidate.StaticOwnerType is StructSymbol declaredOwner {
+                    TypeMemberModel.ResolveStaticMemberOwner(group.StaticOwnerType, declaredOwner)
+                } else {
+                    default(StructSymbol?)
+                }
+                if !TryCloseMethodGroupCandidate(
+                    candidate,
+                    group.Receiver,
+                    candidateOwner,
+                    expectedParameterTypes,
+                    out var closedParameters,
+                    out var closedReturn,
+                    out _
+                ) {
                     continue
                 }
                 var compatible = true
                 for var i = 0; i < expectedParameterTypes.Length; i++ {
                     let candidateParameter = candidate.Parameters[i + offset]
+                    let closedParameter = closedParameters[i]
                     let expectedParameter = expectedParameterTypes[i]
                     if candidateParameter.RefKind != RefKind.None ||
                         (
-                        !DeclarationBinder.TypeSignaturesEquivalent(expectedParameter, candidateParameter.Type) &&
+                        !DeclarationBinder.TypeSignaturesEquivalent(expectedParameter, closedParameter) &&
                             (
-                            !allowVariance || !Conversion.ClassifyNonStructural(
-                                expectedParameter,
-                                candidateParameter.Type
-                            )
+                            !allowVariance || !Conversion.ClassifyNonStructural(expectedParameter, closedParameter)
                                 .IsImplicit
                         )
                     ) {
@@ -1015,23 +1063,16 @@ internal partial class ExpressionBinder {
                     return false
                 }
                 selected = candidate
+                selectedParameters = closedParameters
+                selectedReturn = closedReturn
             }
         }
         if selected == nil {
             return false
         }
-        let selectedOffset = if selected.IsExtension && group.Receiver != nil {
-            1
-        } else {
-            0
-        }
-        let parameterTypes = ImmutableArray.CreateBuilder[TypeSymbol](selected.Parameters.Length - selectedOffset)
-        for var i = selectedOffset; i < selected.Parameters.Length; i++ {
-            parameterTypes.Add(selected.Parameters[i].Type)
-        }
         naturalType = FunctionTypeSymbol.Get(
-            parameterTypes.MoveToImmutable(),
-            MethodGroupObservableReturnType(selected)
+            ImmutableArray.CreateRange(selectedParameters!!),
+            GetMethodGroupObservableReturnType(selected, selectedReturn)
         )
         return true
     }
@@ -1823,6 +1864,15 @@ internal partial class ExpressionBinder {
                     return BindImportedTypeLiteralExpression(
                         syntax,
                         closedImportedType,
+                        if hasSymbolicArgument {
+                            ImportedTypeSymbol.GetConstructed(
+                                closedImportedType,
+                                importedCandidate.ClassType,
+                                literalSymbolicArguments
+                            )
+                        } else {
+                            nil
+                        },
                         resolveTypeOnly: resolveTypeOnly
                     )
                 } else if !typeNameAmbiguous &&
@@ -1882,6 +1932,15 @@ internal partial class ExpressionBinder {
         // StructSymbol object).
         if structSymbol.IsGenericDefinition {
             let substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
+            let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(structSymbol)
+            for var i = 0; i < enclosingParams.Length; i++ {
+                substitution[enclosingParams[i]] = if !enclosingTypeArguments.IsDefaultOrEmpty &&
+                    i < enclosingTypeArguments.Length {
+                    enclosingTypeArguments[i]
+                } else {
+                    enclosingParams[i]
+                }
+            }
             let tps = structSymbol.TypeParameters
             if syntax.TypeArgumentList != nil {
                 let explicitArgs = syntax.TypeArgumentList!!.Arguments
@@ -3431,9 +3490,24 @@ internal partial class ExpressionBinder {
             } else {
                 elementNames.Add(nil)
             }
-            let be = BindExpression(e)
+            // Issue #5635: the element takes the type of its value with no conversion, so a narrowed read that the
+            // element yields (the value, or the trailing value of a block) is decided for that type where it binds,
+            // as `let t = s` is.
+            var elementRead NarrowedBranchValue? = nil
+            var be = BindBranchValue(
+                e,
+                nil,
+                nil,
+                (read NarrowedBranchValue) -> {
+                    elementRead = read
+                }
+            )
             if be.Type == TypeSymbol.Error {
                 return BoundErrorExpression(nil)
+            }
+            if elementRead is {} read {
+                be = conversions.ResolveNarrowedValue(be, read, be.Type)
+                binderCtx.CaptureNarrowedRead(be, read)
             }
             bound.Add(be)
             elementTypes.Add(be.Type)
@@ -4194,53 +4268,6 @@ internal partial class ExpressionBinder {
         }
 
         /// Issue #3712: picks the single non-generic candidate of a user method
-        /// group. A group with one candidate resolves unconditionally; an
-        /// overloaded group resolves only when [`expectedParameterCount`](paramref)
-        /// selects exactly one candidate by arity.
-        /// @param group The bound method group.
-        /// @param expectedParameterCount Optional target-delegate arity.
-        /// @param candidate The selected candidate, on success.
-        /// @returns `true` when exactly one candidate was selected.
-        private func TryGetUniqueSymbolicMethodGroupCandidate(
-            group BoundMethodGroupExpression,
-            expectedParameterCount int32?,
-            @NotNullWhen(true) out candidate FunctionSymbol?
-        ) bool {
-            candidate = nil
-            if group.Candidates.Length == 1 {
-                candidate = if group.Candidates[0] is {IsGeneric: false} single {
-                    single
-                } else {
-                    default(FunctionSymbol?)
-                }
-                return candidate != nil
-            }
-            if expectedParameterCount is not{} arity {
-                return false
-            }
-            for groupCandidate in group.Candidates {
-                if groupCandidate.IsGeneric {
-                    continue
-                }
-                let offset = if groupCandidate.IsExtension && group.Receiver != nil {
-                    1
-                } else {
-                    0
-                }
-                if groupCandidate.Parameters.Length - offset != arity {
-                    continue
-                }
-                if candidate != nil {
-                    // Ambiguous by arity alone — leave the group unresolved so the
-                    // existing erasure path decides.
-                    candidate = nil
-                    return false
-                }
-                candidate = groupCandidate
-            }
-            return candidate != nil
-        }
-
         /// Determines whether [`type`](paramref) is the contextual target type
         /// that triggers ADR-0055 Tier 4 lowering — `System.IFormattable` or
         /// `System.FormattableString`. Compared by full name so the check is

@@ -39,7 +39,7 @@ open class Issue2771AsyncNullConditionalHoistEmitTests {
         return value
     }
 }`)
-        let (directory, outputPath) = Compile(source)
+        let (directory, outputPath) = Compile(source, library: true)
         try {
             IlVerifier.Verify(outputPath)
             let loadContext = AssemblyLoadContext("Issue2771FieldShape", isCollectible: true)
@@ -249,7 +249,7 @@ import System.Threading.Tasks
             }
         }
 
-        private func Compile(source string)(Directory string, OutputPath string) {
+        private func Compile(source string, library bool = false)(Directory string, OutputPath string) {
             let directory = Path.GetFullPath(
                 Path.Combine(
                     Directory.GetCurrentDirectory(),
@@ -271,7 +271,16 @@ import System.Threading.Tasks
             var exitCode int32
             try {
                 exitCode = Program.Main(
-                    []string{"/out:" + outputPath, "/target:exe", "/targetframework:net10.0", sourcePath}
+                    []string{
+                        "/out:" + outputPath,
+                        if library {
+                            "/target:library"
+                        } else {
+                            "/target:exe"
+                        },
+                        "/targetframework:net10.0",
+                        sourcePath
+                    }
                 )
             } finally {
                 Console.SetOut(previousOut)

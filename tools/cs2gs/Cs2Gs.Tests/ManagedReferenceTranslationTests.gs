@@ -4042,11 +4042,22 @@ public class Outer<T> {
         public Inner(T[] items) { this.value = items[0]; }
         public T Get() => this.value;
     }
+    public class Mid {
+        public class Deep {
+            public Deep(T[] items) { }
+        }
+    }
+    public class GenericInner<U> {
+        public GenericInner(T[] items, U tag) { }
+    }
 }
 public class Probe {
     public static int Run() {
         int[] values = { 42 };
         var source = new ManagedRef<int>[1];
+        _ = new Outer<ManagedRef<int>>.Inner(new ManagedRef<int>[1]);
+        _ = new Outer<ManagedRef<int>>.Mid.Deep(new ManagedRef<int>[1]);
+        _ = new Outer<ManagedRef<int>>.GenericInner<string>(new ManagedRef<int>[1], "ok");
         source[0] = ManagedRef<int>.FromArray(values, 0);
         var inner = new Outer<ManagedRef<int>>.Inner(source);
         return inner.Get().Borrow();
@@ -4064,8 +4075,22 @@ public class Probe {
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Empty(context.Diagnostics)
-        Assert.Contains("let inner = Inner(source)", text, StringComparison.Ordinal)
+        Assert.Contains("Outer[managed[int32]?].Inner([1]managed[int32]?)", text, StringComparison.Ordinal)
+        Assert.Contains("Outer[managed[int32]?].Mid.Deep([1]managed[int32]?)", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "Outer[managed[int32]?].GenericInner[string]([1]managed[int32]?, \"ok\")",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("let inner = Outer[managed[int32]?].Inner(source)", text, StringComparison.Ordinal)
         Assert.Contains("inner.Get()!!.Borrow()", text, StringComparison.Ordinal)
+        let result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+        )
+        Assert.Empty(result.Diagnostics)
+        Assert.Null(result.UnhandledException)
+        Assert.Equal(42, result.Value)
     }
 
     @Fact
@@ -7278,6 +7303,780 @@ public class Probe {
     }
 }`)
         Assert.Empty(context.Diagnostics)
+    }
+
+    @Fact
+    func NonGenericDerivedReceiverProjectsInheritedGenericBaseMembers() {
+        const source = `using System;
+using System.Linq;
+using Gsharp.Values;
+namespace ManagedArrayInheritedGenericBase;
+public interface IMarker { }
+public interface ISelf<U> where U : ISelf<U> { }
+public class SelfNode : ISelf<SelfNode> { }
+public class Box<T> {
+    private readonly T item;
+    public Box() { }
+    public Box(T[] items) { this.item = items[0]; }
+    public T Get() => this.item;
+}
+public class Wrapper<TFirst, TSecond> {
+    public void UseFirst(TFirst value) { }
+    public void UseSecond(TSecond value) { }
+}
+public class Base<T> {
+    private T stored;
+    public byte Flag;
+    public T Value;
+    public Box<T>? ValueBox;
+    public Func<Box<T>> Factory = () => new Box<T>();
+    public Wrapper<T, ManagedRef<int>> Data = new();
+    public void Add(T value) {
+        this.stored = value;
+        this.ValueBox = new Box<T>(new[] { value });
+    }
+    public int AddAndReturn(T value) {
+        this.Add(value);
+        return 0;
+    }
+    public T Get() => this.stored;
+    public Box<T> GetBox() => this.ValueBox!;
+    public void OutBox(out Box<T> box) => box = this.ValueBox!;
+    public (Box<T>, int) Pair() => (this.ValueBox!, 7);
+    public void UseConstrained<U>(U box) where U : Box<T> { }
+    public void UseSelf<U>(U value) where U : ISelf<U> { }
+    public string Describe() => "ok";
+    public void AcceptObject(object value) { }
+    public U Echo<U>(U value) => value;
+    public T Id<U>(T value, U tag) => value;
+    public T this[T key] {
+        get => this.stored;
+        set { this.stored = value; }
+    }
+}
+public class ParamsIndexerBase<T> {
+    private T stored;
+    public T this[params T[] keys] {
+        get => this.stored;
+        set { this.stored = value; }
+    }
+}
+public class ParamsIndexerDerived : ParamsIndexerBase<ManagedRef<int>> { }
+public class PatternBeforeCallerDerived : Base<ManagedRef<int>> { }
+public class QueryBeforeCallerDerived : Base<ManagedRef<int>> { }
+public class OutVarDerived : Base<ManagedRef<int>> { }
+public class SelfConstrainedMethodDerived : Base<ManagedRef<int>> { }
+public class DeclPatternNonNullDerived : Base<ManagedRef<int>> { }
+public class InferredDeconstructDerived : Base<ManagedRef<int>> { }
+public class InferredDeconstructConsumerDerived : Base<ManagedRef<int>> { }
+public class MethodGroupAssignDerived : Base<ManagedRef<int>> { }
+public class Derived : Base<ManagedRef<int>> {
+    public void BaseAdd(ManagedRef<int>[] items) => base.Add(items[0]);
+    public int BaseRead() => base.Get().Borrow();
+}
+public class SubDerived : Derived { }
+public class NestedCallDerived : Base<ManagedRef<int>> { }
+public class MarkerDerived : Base<ManagedRef<int>>, IMarker { }
+public class ImplicitAssignDerived : Base<Box<ManagedRef<int>>> {
+    public void Assign(ManagedRef<int>[] items) {
+        Value = new Box<ManagedRef<int>>(items);
+    }
+}
+public class GenericDerived<T> : Base<T> { }
+public class OpenDerived<U> : Base<ManagedRef<U>> { }
+public class TupleDerived<U> : Base<(ManagedRef<U> Reference, U Value)> { }
+public class Probe {
+    private static ref int GetRef(int[] storage, object? ignored) => ref storage[0];
+    private static void AcceptNonNullScalar(ManagedRef<int> value) { }
+    private static int ReadConstrained<U>(U item) where U : SubDerived => item.Get().Borrow();
+
+    public static int Run() {
+        var emptySource = new ManagedRef<int>[1];
+        if (emptySource is [var patternItem]) {
+            new PatternBeforeCallerDerived().Add(patternItem);
+        }
+        _ = (from queryItem in emptySource select new QueryBeforeCallerDerived().AddAndReturn(queryItem)).Count();
+        var selfDerived = new SelfConstrainedMethodDerived();
+        selfDerived.UseSelf(new SelfNode());
+        selfDerived.Add(emptySource[0]);
+        var derived = new Derived();
+        derived.Flag = 0;
+        derived.BaseAdd(emptySource);
+        derived.UseConstrained(new Box<ManagedRef<int>>(emptySource));
+        derived.Data.UseFirst(emptySource[0]);
+        derived[emptySource[0]] = emptySource[0];
+        _ = derived[emptySource[0]];
+        var paramsDerived = new ParamsIndexerDerived();
+        paramsDerived[emptySource[0]] = emptySource[0];
+        _ = paramsDerived[emptySource[0]];
+        new SubDerived().Add(emptySource[0]);
+        new NestedCallDerived().Add(new NestedCallDerived().Id<int>(emptySource[0], 0));
+        IMarker marker = new MarkerDerived();
+        new MarkerDerived().Add(emptySource[0]);
+        new ImplicitAssignDerived().Assign(emptySource);
+        new GenericDerived<ManagedRef<int>>().Add(emptySource[0]);
+        var genericLocal = new GenericDerived<ManagedRef<int>>();
+        genericLocal.Add(emptySource[0]);
+        new OpenDerived<int>().Add(emptySource[0]);
+        var emptyLongSource = new ManagedRef<long>[1];
+        new OpenDerived<long>().Add(emptyLongSource[0]);
+        var emptyTuples = new (ManagedRef<int> Reference, int Value)[1];
+        new TupleDerived<int>().Add(emptyTuples[0]);
+
+        int[] values = { 20, 22 };
+        var populatedSource = new ManagedRef<int>[1];
+        populatedSource[0] = ManagedRef<int>.FromArray(values, 0);
+        var populated = new SubDerived();
+        Func<object> describeReader = populated.Describe;
+        Action<string> objectWriter = populated.AcceptObject;
+        _ = describeReader();
+        objectWriter("test");
+        populated.Add(populatedSource[0]);
+        ref int alias = ref GetRef(values, populated.Get());
+        _ = alias;
+        SubDerived? nullablePopulated = populated;
+        var nestedConditional = nullablePopulated?.ValueBox?.Get().Borrow() ?? 0;
+        _ = (nullablePopulated?.Pair()).HasValue;
+        _ = (nullablePopulated?.Pair()).Value.Item1.Get().Borrow();
+        var inferredDeconstruct = new InferredDeconstructDerived();
+        inferredDeconstruct.Add(populatedSource[0]);
+        var (inferredBox, _) = inferredDeconstruct.Pair();
+        _ = inferredBox.Get().Borrow();
+        new InferredDeconstructConsumerDerived().UseConstrained(inferredBox);
+        var mgAssign = new MethodGroupAssignDerived();
+        mgAssign.Factory = mgAssign.GetBox;
+        mgAssign.Add(populatedSource[0]);
+        _ = mgAssign.Factory().Get().Borrow();
+        var outVarDerived = new OutVarDerived();
+        outVarDerived.Add(populatedSource[0]);
+        outVarDerived.OutBox(out var outProjectedBox);
+        _ = outProjectedBox.Get().Borrow();
+        if (populatedSource[0] is ManagedRef<int> declNonNullItem) {
+            AcceptNonNullScalar(declNonNullItem);
+            new DeclPatternNonNullDerived().Add(declNonNullItem);
+        }
+        var secondSource = new ManagedRef<int>[1];
+        secondSource[0] = ManagedRef<int>.FromArray(values, 1);
+        return (ReadConstrained(populated) - nestedConditional) + populated.BaseRead() + populated.Echo(secondSource[0]).Borrow();
+    }
+}`
+        let references = List[MetadataReference](
+            CSharpProjectLoader.RuntimeReferences()
+        ){MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)}
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("ManagedArrayInheritedGenericBase.cs", source)},
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Empty(context.Diagnostics)
+        Assert.Contains("open class Derived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains("open class PatternBeforeCallerDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains("open class QueryBeforeCallerDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains("open class OutVarDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class SelfConstrainedMethodDerived : Base[managed[int32]?]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class DeclPatternNonNullDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class InferredDeconstructDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class InferredDeconstructConsumerDerived : Base[managed[int32]?]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class MethodGroupAssignDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class ParamsIndexerDerived : ParamsIndexerBase[managed[int32]?]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class SubDerived : Derived", text, StringComparison.Ordinal)
+        Assert.Contains("open class NestedCallDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains("open class MarkerDerived : Base[managed[int32]?], IMarker", text, StringComparison.Ordinal)
+        Assert.Contains("open class ImplicitAssignDerived : Base[Box[managed[int32]?]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class OpenDerived[U] : Base[managed[U]?]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class TupleDerived[U] : Base[(Reference managed[U]?, Value U)]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("base.Add(items[0])", text, StringComparison.Ordinal)
+        Assert.Contains("base.Get()!!.Borrow()", text, StringComparison.Ordinal)
+        Assert.Contains("item.Get()!!.Borrow()", text, StringComparison.Ordinal)
+        Assert.Contains("derived.UseConstrained(Box[managed[int32]?](emptySource))", text, StringComparison.Ordinal)
+        Assert.Contains("derived.Data.UseFirst(emptySource[0])", text, StringComparison.Ordinal)
+        Assert.Contains("derived[emptySource[0]] = emptySource[0]", text, StringComparison.Ordinal)
+        Assert.Contains("_ = derived[emptySource[0]]", text, StringComparison.Ordinal)
+        Assert.Contains("paramsDerived[emptySource[0]] = emptySource[0]", text, StringComparison.Ordinal)
+        Assert.Contains("_ = paramsDerived[emptySource[0]]", text, StringComparison.Ordinal)
+        Assert.Contains("SubDerived().Add(emptySource[0])", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "NestedCallDerived().Add(NestedCallDerived().Id[int32](emptySource[0], 0))",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("GenericDerived[managed[int32]?]().Add(emptySource[0])", text, StringComparison.Ordinal)
+        Assert.Contains("OpenDerived[int32]().Add(emptySource[0])", text, StringComparison.Ordinal)
+        Assert.Contains("OpenDerived[int64]().Add(emptyLongSource[0])", text, StringComparison.Ordinal)
+        Assert.Contains("TupleDerived[int32]().Add(emptyTuples[0])", text, StringComparison.Ordinal)
+        Assert.DoesNotContain("emptySource[0]!!", text, StringComparison.Ordinal)
+        Assert.Contains("nullablePopulated?.ValueBox?.Get()!!.Borrow()", text, StringComparison.Ordinal)
+        Assert.Contains("populated.Echo(secondSource[0])!!.Borrow()", text, StringComparison.Ordinal)
+        let result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+        )
+        Assert.Empty(result.Diagnostics)
+        Assert.Null(result.UnhandledException)
+        Assert.Equal(42, result.Value)
+    }
+
+    @Fact
+    func NonGenericDerivedReceiverRejectsFixedBaseConversionWhenProjected() {
+        const source = `using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Gsharp.Values;
+namespace ManagedArrayInheritedGenericBaseFixedDestination;
+public interface IStore<T> {
+    void Replace(ref T value);
+}
+public interface IFixedProperty {
+    ManagedRef<int> PropValue { get; set; }
+}
+public class SelfNode<T> where T : SelfNode<T> {
+    public object BoxValue(T value) => value;
+}
+public class Box<T> {
+    public Box() { }
+    public Box(T[] items) { }
+    public void Add(T value) { }
+    public Box<T> Next() => this;
+}
+public class Holder<T> {
+    public Box<T> Value = new();
+}
+public class Wrapper<TFirst, TSecond> {
+    public void UseFirst(TFirst value) { }
+    public void UseSecond(TSecond value) { }
+}
+public class CollectionBase<T> : IEnumerable<Box<T>> {
+    public void Add(Box<T> item) { }
+    public void AddScalar(T value) { }
+    public IEnumerator<Box<T>> GetEnumerator() => null!;
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => null!;
+}
+public class NamedIndexerBase<T> {
+    public void Add(T value) { }
+    public int this[int index, Box<T> key] => 0;
+}
+public static class BoxExtensions {
+    public static void Ignore<U>(this Box<ManagedRef<int>> box, U tag) { }
+}
+public class Base<T> {
+    public T ScalarValue;
+    public Box<T> Value = new();
+    public Box<T>? NullableBox;
+    public Holder<T> NestedHolder = new();
+    public Wrapper<T, ManagedRef<int>> Data = new();
+    public T PropValue { get; set; }
+    public virtual event Action<T> Changed;
+    public event Action<Box<T>> BoxChanged;
+    public Action<Box<T>> Callback = _ => { };
+    public Func<Box<T>> Factory = () => new Box<T>();
+    public Base() { }
+    public Base(ref T value) { }
+    public virtual void Add(T value) { }
+    public void Use(Box<T> box) { }
+    public void UseConstrained<U>(U box) where U : Box<T> { }
+    public void Replace(ref T value) { }
+    public void OutBox(out Box<T> box) => box = this.Value;
+    public T Get() => default;
+    public (Box<T>, int) Pair() => (this.Value, 0);
+    public Task<Box<T>> GetAsync() => Task.FromResult(this.Value);
+    public int this[Box<T> key] {
+        get => 0;
+        set { }
+    }
+}
+public class ConstrainedPairBase<T, U> where U : Box<T> {
+    public void Add(T value) { }
+}
+public class Mid<U> : Base<U> { }
+public class Derived : Base<ManagedRef<int>> { }
+public class ConditionalDerived : Base<ManagedRef<int>> { }
+public class SwitchDerived : Base<ManagedRef<int>> { }
+public class BoxDerived : Base<ManagedRef<int>> { }
+public class ByRefCtorDerived : Base<ManagedRef<int>> {
+    public ByRefCtorDerived(ref ManagedRef<int> value) : base(ref value) { }
+}
+public class PrimaryByRefCtorDerived(ref ManagedRef<int> value) : Base<ManagedRef<int>>(ref value);
+public class ListCovariantDerived : Base<ManagedRef<int>> { }
+public class ArrayCovariantDerived : Base<ManagedRef<int>> { }
+public class OwnGenericDerived<U> : Base<ManagedRef<int>> {
+    public void Own(U value) { }
+}
+public class FixedMemberDerived : Base<ManagedRef<int>> {
+    public Box<ManagedRef<int>> Fixed = new();
+    public void CallImplicitFixed(ManagedRef<int>[] items) => Fixed.Add(items[0]);
+}
+public class OverrideParentDerived : Base<ManagedRef<int>> { }
+public class OverrideChildDerived : OverrideParentDerived {
+    public override void Add(ManagedRef<int> value) { }
+}
+public class EventOverrideParentDerived : Base<ManagedRef<int>> { }
+public class EventOverrideChildDerived : EventOverrideParentDerived {
+    public override event Action<ManagedRef<int>> Changed;
+}
+public class InterfaceDerived : Base<ManagedRef<int>>, IStore<ManagedRef<int>> { }
+public class InterfacePropertyDerived : Base<ManagedRef<int>>, IFixedProperty { }
+public class MethodGroupDerived : Base<ManagedRef<int>> { }
+public class IndexerDerived : Base<ManagedRef<int>> { }
+public class MultiLevelBoxDerived : Mid<ManagedRef<int>> { }
+public class LambdaMemberDerived : Base<ManagedRef<int>> { }
+public class MemberReadDerived : Base<ManagedRef<int>> { }
+public class ConditionalAccessDerived : Base<ManagedRef<int>> { }
+public class RefLocalDerived : Base<ManagedRef<int>> { }
+public class RefReturnDerived : Base<ManagedRef<int>> { }
+public class EventSubDerived : Base<ManagedRef<int>> { }
+public class ImplicitIndexerInitDerived : Base<ManagedRef<int>> { }
+public class LambdaParamDerived : Base<ManagedRef<int>> { }
+public class PartialWrapperDerived : Base<ManagedRef<int>> { }
+public class ChainedReadDerived : Base<ManagedRef<int>> { }
+public class CollectionExprDerived : CollectionBase<ManagedRef<int>> { }
+public class CoalesceAssignDerived : Base<ManagedRef<int>> { }
+public class ConstrainedDerived : Base<ManagedRef<int>> { }
+public class ForEachDerived : CollectionBase<ManagedRef<int>> { }
+public class NamedIndexerDerived : NamedIndexerBase<ManagedRef<int>> { }
+public class ValueAssignDerived : Base<ManagedRef<int>> { }
+public class GenericExtDerived : Base<ManagedRef<int>> { }
+public class DelegateCallDerived : Base<ManagedRef<int>> { }
+public class ConstraintInstantiationDerived : Base<ManagedRef<int>> { }
+public class AwaitDerived : Base<ManagedRef<int>> { }
+public class PatternDerived : Base<ManagedRef<int>> { }
+public class SuppressDerived : Base<ManagedRef<int>> { }
+public class CrossProjectDerived : Base<ManagedRef<int>> { }
+public class NestedConstraintInstantiationDerived : Base<ManagedRef<int>> { }
+public class MethodConstraintDerived : Base<ManagedRef<int>> { }
+public class SwitchPatternDerived : Base<ManagedRef<int>> { }
+public class CoalesceValueDerived : Base<ManagedRef<int>> { }
+public class ConstrainedPairDerived : ConstrainedPairBase<ManagedRef<int>, Box<ManagedRef<int>>> { }
+public class NestedConditionalDerived : Base<ManagedRef<int>> { }
+public class DeconstructDerived : Base<ManagedRef<int>> { }
+public class LiftedTupleDerived : Base<ManagedRef<int>> { }
+public class InferredDeconstructFixedDerived : Base<ManagedRef<int>> { }
+public class UnderscoreLocalDeconstructDerived : Base<ManagedRef<int>> { }
+public class FixedMethodGroupTargetDerived : Base<ManagedRef<int>> { }
+public class OutVarFixedDerived : Base<ManagedRef<int>> { }
+public class Probe {
+    private static readonly Box<ManagedRef<int>> FixedBox = new();
+    private static readonly Action<Box<ManagedRef<int>>> FixedHandler = _ => { };
+    private static Box<ManagedRef<int>> FixedGetBox() => FixedBox;
+    private static void AcceptFixed(Base<ManagedRef<int>> value) { }
+    private static void AcceptBox(Box<ManagedRef<int>> value) { }
+    private static void RequireBase<T>() where T : Base<ManagedRef<int>> { }
+    private static void RequireBaseEnumerable<U>() where U : IEnumerable<Base<ManagedRef<int>>> { }
+    private static ref ManagedRef<int> BorrowScalar(RefReturnDerived value) => ref value.ScalarValue;
+    private static void ReadConstrainedBox<U>(U item) where U : ConstrainedDerived => AcceptBox(item.Value);
+
+    private static void RunUnderscoreDeconstruct(ManagedRef<int>[] source, Box<ManagedRef<int>> _) {
+        var underscoreDeconstruct = new UnderscoreLocalDeconstructDerived();
+        int ignoredCount;
+        (_, ignoredCount) = underscoreDeconstruct.Pair();
+        underscoreDeconstruct.Add(source[0]);
+    }
+
+    private static async Task RunAsync(ManagedRef<int>[] source) {
+        var awaitDerived = new AwaitDerived();
+        AcceptBox(await awaitDerived.GetAsync());
+        awaitDerived.Add(source[0]);
+    }
+
+    public static void Run(
+        bool flag,
+        string? nullableText,
+        ref ManagedRef<int> nonNullRef,
+        OwnGenericDerived<ManagedRef<int>> ownDerived
+    ) {
+        _ = nullableText?.Trim().Length;
+        var source = new ManagedRef<int>[1];
+        var derived = new Derived();
+        AcceptFixed(derived);
+        derived.Add(source[0]);
+
+        Base<ManagedRef<int>> conditionalFixed = flag
+            ? new ConditionalDerived()
+            : new Base<ManagedRef<int>>();
+        new ConditionalDerived().Add(source[0]);
+
+        Base<ManagedRef<int>> switchFixed = flag switch {
+            true => new SwitchDerived(),
+            false => new Base<ManagedRef<int>>(),
+        };
+        new SwitchDerived().Add(source[0]);
+
+        var boxDerived = new BoxDerived();
+        boxDerived.Add(source[0]);
+        boxDerived.Use(FixedBox);
+
+        var byRefCtorDerived = new ByRefCtorDerived(ref nonNullRef);
+        byRefCtorDerived.Add(source[0]);
+
+        var primaryByRefDerived = new PrimaryByRefCtorDerived(ref nonNullRef);
+        primaryByRefDerived.Add(source[0]);
+
+        IEnumerable<Base<ManagedRef<int>>> listView = new List<ListCovariantDerived>();
+        new ListCovariantDerived().Add(source[0]);
+
+        Base<ManagedRef<int>>[] arrayView = new ArrayCovariantDerived[1];
+        new ArrayCovariantDerived().Add(source[0]);
+
+        ownDerived.Add(source[0]);
+        ownDerived.Own(source[0]);
+
+        var fixedMember = new FixedMemberDerived();
+        fixedMember.Add(source[0]);
+        fixedMember.Fixed = new Box<ManagedRef<int>>(source);
+        fixedMember.Fixed.Add(source[0]);
+        fixedMember.CallImplicitFixed(source);
+
+        new OverrideParentDerived().Add(source[0]);
+
+        new EventOverrideParentDerived().Add(source[0]);
+
+        new InterfaceDerived().Add(source[0]);
+
+        new InterfacePropertyDerived().Add(source[0]);
+
+        var methodGroupDerived = new MethodGroupDerived();
+        Func<ManagedRef<int>> reader = methodGroupDerived.Get;
+        methodGroupDerived.Add(source[0]);
+
+        var indexerDerived = new IndexerDerived();
+        _ = indexerDerived[FixedBox];
+        indexerDerived.Add(source[0]);
+
+        var multiLevel = new MultiLevelBoxDerived();
+        multiLevel.Add(source[0]);
+        multiLevel.Use(FixedBox);
+
+        var lambdaMember = new LambdaMemberDerived { Factory = () => FixedBox };
+        lambdaMember.Add(source[0]);
+
+        var memberRead = new MemberReadDerived();
+        AcceptBox(memberRead.Value);
+        memberRead.Add(source[0]);
+
+        ConditionalAccessDerived conditionalAccess = new();
+        conditionalAccess?.Use(FixedBox);
+        conditionalAccess.Add(source[0]);
+
+        var refLocalDerived = new RefLocalDerived();
+        ref ManagedRef<int> alias = ref refLocalDerived.ScalarValue;
+        refLocalDerived.Add(source[0]);
+
+        var refReturnDerived = new RefReturnDerived();
+        _ = BorrowScalar(refReturnDerived);
+        refReturnDerived.Add(source[0]);
+
+        var eventSubDerived = new EventSubDerived();
+        eventSubDerived.BoxChanged += FixedHandler;
+        eventSubDerived.Add(source[0]);
+
+        var implicitIndexerInit = new ImplicitIndexerInitDerived { [FixedBox] = 0 };
+        implicitIndexerInit.Add(source[0]);
+
+        var lambdaParamDerived = new LambdaParamDerived();
+        lambdaParamDerived.Callback = box => { };
+        lambdaParamDerived.Add(source[0]);
+
+        var partialWrapper = new PartialWrapperDerived();
+        partialWrapper.Add(source[0]);
+        partialWrapper.Data.UseSecond(source[0]);
+
+        var chainedRead = new ChainedReadDerived();
+        AcceptBox(chainedRead.NestedHolder.Value);
+        chainedRead.Add(source[0]);
+
+        CollectionExprDerived collectionExpr = [FixedBox];
+        collectionExpr.AddScalar(source[0]);
+
+        var coalesceAssign = new CoalesceAssignDerived();
+        coalesceAssign.Add(source[0]);
+        coalesceAssign.NullableBox ??= FixedBox;
+
+        var constrained = new ConstrainedDerived();
+        ReadConstrainedBox(constrained);
+        constrained.Add(source[0]);
+
+        var forEachDerived = new ForEachDerived();
+        foreach (var box in forEachDerived) {
+            AcceptBox(box);
+        }
+        forEachDerived.AddScalar(source[0]);
+
+        var namedIndexer = new NamedIndexerDerived();
+        _ = namedIndexer[key: FixedBox, index: 0];
+        namedIndexer.Add(source[0]);
+
+        var valueAssign = new ValueAssignDerived();
+        AcceptBox(valueAssign.Value = new Box<ManagedRef<int>>(source));
+
+        var genericExt = new GenericExtDerived();
+        genericExt.Add(source[0]);
+        genericExt.Value.Ignore(0);
+
+        var delegateCall = new DelegateCallDerived();
+        delegateCall.Callback(FixedBox);
+        delegateCall.Add(source[0]);
+
+        RequireBase<ConstraintInstantiationDerived>();
+        new ConstraintInstantiationDerived().Add(source[0]);
+
+        _ = RunAsync(source);
+
+        var patternDerived = new PatternDerived();
+        if (patternDerived is { Value: var patternBox }) {
+            AcceptBox(patternBox);
+        }
+        patternDerived.Add(source[0]);
+
+        var suppressDerived = new SuppressDerived();
+        suppressDerived.Add(source[0]);
+        AcceptBox(suppressDerived.Value!);
+
+        new CrossProjectDerived().Add(source[0]);
+
+        RequireBaseEnumerable<List<NestedConstraintInstantiationDerived>>();
+        new NestedConstraintInstantiationDerived().Add(source[0]);
+
+        var methodConstraintDerived = new MethodConstraintDerived();
+        methodConstraintDerived.UseConstrained<Box<ManagedRef<int>>>(FixedBox);
+        methodConstraintDerived.Add(source[0]);
+
+        var switchPatternDerived = new SwitchPatternDerived();
+        switch (switchPatternDerived.Value) {
+            case var switchBox:
+                AcceptBox(switchBox);
+                break;
+        }
+        switchPatternDerived.Add(source[0]);
+
+        var coalesceValueDerived = new CoalesceValueDerived();
+        coalesceValueDerived.Add(source[0]);
+        AcceptBox(coalesceValueDerived.NullableBox ?? FixedBox);
+
+        new ConstrainedPairDerived().Add(source[0]);
+
+        NestedConditionalDerived? nestedCondDerived = new();
+        AcceptBox(nestedCondDerived?.NullableBox?.Next());
+        nestedCondDerived.Add(source[0]);
+
+        var deconstructDerived = new DeconstructDerived();
+        Box<ManagedRef<int>> deconstructedBox;
+        (deconstructedBox, _) = deconstructDerived.Pair();
+        deconstructDerived.Add(source[0]);
+
+        LiftedTupleDerived? liftedTupleDerived = new();
+        AcceptBox((liftedTupleDerived?.Pair())!.Value.Item1);
+        liftedTupleDerived.Add(source[0]);
+
+        var inferredDeconstructFixed = new InferredDeconstructFixedDerived();
+        var (inferredFixedBox, _) = inferredDeconstructFixed.Pair();
+        AcceptBox(inferredFixedBox);
+        inferredDeconstructFixed.Add(source[0]);
+
+        RunUnderscoreDeconstruct(source, FixedBox);
+
+        var fixedMgTarget = new FixedMethodGroupTargetDerived();
+        fixedMgTarget.Factory = FixedGetBox;
+        fixedMgTarget.Add(source[0]);
+
+        var outVarFixed = new OutVarFixedDerived();
+        outVarFixed.OutBox(out var outFixedBox);
+        AcceptBox(outFixedBox);
+        outVarFixed.Add(source[0]);
+    }
+}`
+        const benignConsumerSource = `using ManagedArrayInheritedGenericBaseFixedDestination;
+namespace BenignConsumer;
+public class BenignProbe {
+    public static CrossProjectDerived Create() => new CrossProjectDerived();
+}`
+        const consumerSource = `using Gsharp.Values;
+using ManagedArrayInheritedGenericBaseFixedDestination;
+namespace DownstreamConsumer;
+public class ConsumerProbe {
+    public static Base<ManagedRef<int>> Hold() => new CrossProjectDerived();
+}`
+        let references = List[MetadataReference](
+            CSharpProjectLoader.RuntimeReferences()
+        ){MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)}
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("ManagedArrayInheritedGenericBaseFixedDestination.cs", source)},
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        using let peStream = System.IO.MemoryStream()
+        Assert.True(project.Compilation.Emit(peStream).Success)
+        let consumerReferences = List[MetadataReference](references)
+        consumerReferences.Add(MetadataReference.CreateFromImage(peStream.ToArray()))
+        let benignConsumerProject = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("BenignConsumer.cs", benignConsumerSource)},
+            consumerReferences,
+            assemblyName: "BenignConsumer"
+        )
+        Assert.True(
+            benignConsumerProject.BoundWithoutErrors,
+            string.Join(Environment.NewLine, benignConsumerProject.ErrorDiagnostics)
+        )
+        let consumerProject = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("Consumer.cs", consumerSource)},
+            consumerReferences,
+            assemblyName: "DownstreamConsumer"
+        )
+        Assert.True(
+            consumerProject.BoundWithoutErrors,
+            string.Join(Environment.NewLine, consumerProject.ErrorDiagnostics)
+        )
+        let document = Assert.Single(project.Documents)
+        let benignContext = TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            repositoryCompilations: []Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpCompilation{project.Compilation, benignConsumerProject.Compilation}
+        )
+        let benignText = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, benignContext))
+        Assert.Contains("open class CrossProjectDerived : Base[managed[int32]?]", benignText, StringComparison.Ordinal)
+        let context = TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            repositoryCompilations: []Microsoft.CodeAnalysis.CSharp.CSharpCompilation{consumerProject.Compilation}
+        )
+        {
+            using let outerScope = context.UseSemanticModelFor(consumerProject.Compilation.SyntaxTrees[0])
+            using let innerScope = context.UseSemanticModelFor(document.SyntaxTree)
+            Assert.Same(project.Compilation, context.Compilation)
+        }
+        let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Equal(
+            52,
+            context.Diagnostics.Count(
+                (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
+                    diagnostic.Message!!.Contains("fixed receiver storage", StringComparison.Ordinal)
+            )
+        )
+        Assert.Equal(
+            2,
+            context.Diagnostics.Count(
+                (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
+                    diagnostic.Message!!.Contains("fixed destination storage", StringComparison.Ordinal)
+            )
+        )
+        Assert.Contains("open class Derived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class ConditionalDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class SwitchDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class BoxDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class ByRefCtorDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class PrimaryByRefCtorDerived(ref value managed[int32]) : Base[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class ListCovariantDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class ArrayCovariantDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class OwnGenericDerived[U] : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains("open class FixedMemberDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains("open class OverrideParentDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class EventOverrideParentDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class InterfaceDerived : Base[managed[int32]], IStore[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "open class InterfacePropertyDerived : Base[managed[int32]], IFixedProperty",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class MethodGroupDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class IndexerDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class MultiLevelBoxDerived : Mid[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class LambdaMemberDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class MemberReadDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class ConditionalAccessDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class RefLocalDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class RefReturnDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class EventSubDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class ImplicitIndexerInitDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class LambdaParamDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class PartialWrapperDerived : Base[managed[int32]?]", text, StringComparison.Ordinal)
+        Assert.Contains("open class ChainedReadDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class CollectionExprDerived : CollectionBase[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class CoalesceAssignDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class ConstrainedDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class ForEachDerived : CollectionBase[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class NamedIndexerDerived : NamedIndexerBase[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class ValueAssignDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class GenericExtDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class DelegateCallDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class ConstraintInstantiationDerived : Base[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class AwaitDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class PatternDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class SuppressDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class CrossProjectDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class NestedConstraintInstantiationDerived : Base[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class MethodConstraintDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class SwitchPatternDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class CoalesceValueDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class ConstrainedPairDerived : ConstrainedPairBase[managed[int32], Box[managed[int32]]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class NestedConditionalDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class DeconstructDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains("open class LiftedTupleDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+        Assert.Contains(
+            "open class InferredDeconstructFixedDerived : Base[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "open class UnderscoreLocalDeconstructDerived : Base[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "open class FixedMethodGroupTargetDerived : Base[managed[int32]]",
+            text,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("open class OutVarFixedDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
     }
 
     shared {

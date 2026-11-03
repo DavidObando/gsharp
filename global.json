@@ -4,6 +4,6 @@
     "rollForward": "latestFeature"
   },
   "msbuild-sdks": {
-    "Gsharp.NET.Sdk": "0.5.212"
+    "Gsharp.NET.Sdk": "0.5.460-g21e3f30fa3"
   }
 }

@@ -213,10 +213,14 @@ internal class UserTokenResolver {
         for ownTp in ownTypeParameters {
             TypeSymbol.CollectReferencedTypeParameters(ownTp.ConstraintReferenceType, referenced)
         }
-        LambdaEnclosingTypeParameterCollector.Collect(loweredBody, referenced, this.GetPromotedExtras)
+        LambdaEnclosingTypeParameterCollector.Collect(loweredBody, referenced, this.GetPromotedOrClosureExtras)
         // Only an ENCLOSING type parameter gets cloned/promoted here — the
         // function's own declared type parameters (if any) already have a
         // valid MVar slot on this very method.
+        if !ownTypeParameters.IsDefaultOrEmpty {
+            referenced.RemoveAll((tp TypeParameterSymbol) -> ownTypeParameters.Contains(tp))
+        }
+        SynthesizedClosureReifier.ExpandWithConstraintDependencies(referenced)
         if !ownTypeParameters.IsDefaultOrEmpty {
             referenced.RemoveAll((tp TypeParameterSymbol) -> ownTypeParameters.Contains(tp))
         }
@@ -292,6 +296,13 @@ internal class UserTokenResolver {
         ImmutableArray[TypeParameterSymbol].Empty
     }
 
+    internal func GetPromotedOrClosureExtras(fn FunctionSymbol) ImmutableArray[TypeParameterSymbol] {
+        if this.lambdaMethodTypeArgsByFunction.TryGetValue(fn, out var extras) && !extras.IsDefaultOrEmpty {
+            return extras
+        }
+        return this.outer.closures.GetClosureReifiedTypeParameters(fn)
+    }
+
     /// Issue #2118: resolves the `ldftn` target token for a non-capturing
     /// lambda function. When the lambda was generic-promoted
     /// ((cref:TryPromoteNonCapturingGenericLambda)) the token is a
@@ -301,7 +312,16 @@ internal class UserTokenResolver {
     /// @param fn The lambda function whose function pointer is loaded.
     /// @returns The MethodDef or MethodSpec token for the `ldftn`.
     internal func ResolveLambdaFunctionFtnToken(fn FunctionSymbol) EntityHandle {
-        let methodHandle = this.cache.FunctionHandles[fn]
+        if !this
+            .cache
+            .FunctionHandles
+            .TryGetValue(fn, out var methodHandle) &&
+            !this
+            .cache
+            .MethodHandles
+            .TryGetValue(fn, out methodHandle) {
+            throw InvalidOperationException("Function '${fn.Name}' has no emitted MethodDef.")
+        }
         if this.lambdaMethodTypeArgsByFunction.TryGetValue(fn, out var typeArgs) && !typeArgs.IsDefaultOrEmpty {
             let args = [typeArgs.Length]TypeSymbol
             for var i = 0; i < typeArgs.Length; i++ {
@@ -339,7 +359,9 @@ internal class UserTokenResolver {
         // The bound node was recorded before any enclosing-type-parameter
         // promotion, so its arity always matches the OWN (pre-promotion) list.
         var ownArgs[]TypeSymbol
-        if !call.MethodTypeArguments.IsDefaultOrEmpty && call.MethodTypeArguments.Length == ownCount {
+        if ownCount == 0 {
+            ownArgs = Array.Empty[TypeSymbol]()
+        } else if !call.MethodTypeArguments.IsDefaultOrEmpty && call.MethodTypeArguments.Length == ownCount {
             ownArgs = call.MethodTypeArguments.ToArray()
         } else {
             ownArgs = [ownCount]TypeSymbol
@@ -369,7 +391,30 @@ internal class UserTokenResolver {
     internal func BuildMethodSpecForGenericMethodGroup(
         openMethod EntityHandle,
         methodGroup BoundMethodGroupExpression
-    ) EntityHandle -> this.BuildMethodSpec(openMethod, methodGroup.MethodTypeArguments.ToArray())
+    ) EntityHandle {
+        let function = Invariant.Required(
+            methodGroup.Function,
+            "a generic method group has a resolved function",
+            expression: "methodGroup.Function"
+        )
+        let extras = this.GetPromotedExtras(function)
+        if extras.IsDefaultOrEmpty {
+            return this.BuildMethodSpec(openMethod, methodGroup.MethodTypeArguments.ToArray())
+        }
+        let ownCount = if methodGroup.MethodTypeArguments.IsDefault {
+            0
+        } else {
+            methodGroup.MethodTypeArguments.Length
+        }
+        let args = [ownCount + extras.Length]TypeSymbol
+        for var i = 0; i < ownCount; i++ {
+            args[i] = methodGroup.MethodTypeArguments[i]
+        }
+        for var i = 0; i < extras.Length; i++ {
+            args[ownCount + i] = extras[i]
+        }
+        return this.BuildMethodSpec(openMethod, args)
+    }
 
     /// Issue #3226: builds a MethodSpec for a generic G# user function call
     /// whose instantiation was LIFTED at the call site — an unconstrained
@@ -980,8 +1025,18 @@ internal class UserTokenResolver {
     private func EncodeFunctionReturnSymbol(encoder ReturnTypeEncoder, fn FunctionSymbol) {
         if fn.IsAsyncOrSuspending && fn.StateMachineType != nil {
             for plan in this.outer.stateMachines.AsyncStateMachinePlans {
-                if plan.KickoffMethod == fn {
-                    this.outer.EncodeAsyncReturnType(encoder, plan)
+                if plan.KickoffMethod == fn ||
+                    (fn.Declaration != nil && object.ReferenceEquals(plan.KickoffMethod.Declaration, fn.Declaration)) {
+                    if this.outer.GetAsyncReturnTypeSymbol(plan) is not{} asyncReturnType {
+                        encoder.Void()
+                    } else {
+                        let effectiveReturnType = if fn.StaticOwnerType is StructSymbol owner {
+                            owner.SubstituteMemberType(asyncReturnType) ?? asyncReturnType
+                        } else {
+                            asyncReturnType
+                        }
+                        this.signatures.EncodeTypeSymbol(encoder.Type(), effectiveReturnType)
+                    }
                     return
                 }
             }
@@ -1374,12 +1429,12 @@ internal class UserTokenResolver {
             }
         ) +
             defProp.Name
-        return this.GetUserStructMethodRef(
-            containingType,
-            accessor,
-            accessorName,
-            this.EncodeOpenPropertyAccessorSignature(defProp, wantSetter)
-        )
+        var sigBlob BlobBuilder
+        {
+            using let _ = this.remaps.PushSmRemap(defType)
+            sigBlob = this.EncodeOpenPropertyAccessorSignature(defProp, wantSetter)
+        }
+        return this.GetUserStructMethodRef(containingType, accessor, accessorName, sigBlob)
     }
 
     /// Resolves a user-interface property accessor against its effective
@@ -1443,7 +1498,7 @@ internal class UserTokenResolver {
     /// definition's property type is used so type parameters encode as
     /// `VAR(idx)`, and an init-only setter retains its
     /// `modreq(IsExternalInit)` return modifier.
-    private func EncodeOpenPropertyAccessorSignature(property PropertySymbol, wantSetter bool) BlobBuilder {
+    internal func EncodeOpenPropertyAccessorSignature(property PropertySymbol, wantSetter bool) BlobBuilder {
         let sigBlob = BlobBuilder()
         let indexParams = if property.Parameters.IsDefaultOrEmpty {
             ImmutableArray[ParameterSymbol].Empty
@@ -1468,9 +1523,11 @@ internal class UserTokenResolver {
                 },
                 (ps ParametersEncoder) -> {
                     for p in indexParams {
-                        this.signatures.EncodeTypeSymbol(
-                            ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None),
-                            p.Type
+                        TypeDefEmitter.EncodeParameterSignature(
+                            ps,
+                            p,
+                            this.signatures.EncodeTypeSymbol,
+                            this.outer.wellKnown
                         )
                     }
                     this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(), property.Type)
@@ -1482,9 +1539,11 @@ internal class UserTokenResolver {
                 (r ReturnTypeEncoder) -> this.signatures.EncodeReturnSymbol(r, property.Type, property.ReturnRefKind),
                 (ps ParametersEncoder) -> {
                     for p in indexParams {
-                        this.signatures.EncodeTypeSymbol(
-                            ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None),
-                            p.Type
+                        TypeDefEmitter.EncodeParameterSignature(
+                            ps,
+                            p,
+                            this.signatures.EncodeTypeSymbol,
+                            this.outer.wellKnown
                         )
                     }
                 }
@@ -1686,18 +1745,24 @@ internal class UserTokenResolver {
             }
         }
         let sigBlob = BlobBuilder()
-        BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
-            paramCount,
-            (r ReturnTypeEncoder) -> r.Void(),
-            (ps ParametersEncoder) -> {
-                for p in function.Parameters {
-                    if object.ReferenceEquals(p, function.ThisParameter) {
-                        continue
+        {
+            using let _ = this.remaps.PushSmRemap(constructedBase.Definition ?? constructedBase)
+            BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
+                paramCount,
+                (r ReturnTypeEncoder) -> r.Void(),
+                (ps ParametersEncoder) -> {
+                    for p in function.Parameters {
+                        if object.ReferenceEquals(p, function.ThisParameter) {
+                            continue
+                        }
+                        this.signatures.EncodeTypeSymbol(
+                            ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None),
+                            p.Type
+                        )
                     }
-                    this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type)
                 }
-            }
-        )
+            )
+        }
         return this.GetUserStructMethodRef(constructedBase, ctorDef, ".ctor", sigBlob)
     }
 
@@ -1847,7 +1912,10 @@ internal class UserTokenResolver {
             openDef,
             typeArguments
         )
-        if substitutedReturn == nil || substitutedReturn == TypeSymbol.Error {
+        // The tail reads `ClrType` from a local: a read of `TypeSymbol.Error` is a static access (ADR-0208, #5520)
+        // and would end the narrowing of the `out` parameter between the guard and the use.
+        let substituted = substitutedReturn
+        if substituted == nil || substituted == TypeSymbol.Error {
             return false
         }
         // The symbolic-container MemberRef fires for ANY non-empty argument
@@ -1864,10 +1932,7 @@ internal class UserTokenResolver {
         // the historical IL byte-identical.
         return typeArguments.Any(TypeSymbol.RequiresSymbolicProjection) ||
             (
-            substitutedReturn.ClrType is {} substitutedClr && !ClrTypeUtilities.AreSame(
-                substitutedClr,
-                property.PropertyType
-            )
+            substituted.ClrType is {} substitutedClr && !ClrTypeUtilities.AreSame(substitutedClr, property.PropertyType)
         )
     }
 
@@ -1922,7 +1987,10 @@ internal class UserTokenResolver {
         // ADR-0193 Phase 2: [NullabilityFunnel] on purpose; see the property
         // variant above.
         substitutedReturn = MemberLookup.MapOpenClrTypeToSymbolic(openReturn, openDef, typeArguments)
-        if substitutedReturn == nil || substitutedReturn == TypeSymbol.Error {
+        // The tail reads `ClrType` from a local: a read of `TypeSymbol.Error` is a static access (ADR-0208, #5520)
+        // and would end the narrowing of the `out` parameter between the guard and the use.
+        let substituted = substitutedReturn
+        if substituted == nil || substituted == TypeSymbol.Error {
             return false
         }
         // Issue #3311: also fire for a CONCRETE argument recovered through an
@@ -1930,12 +1998,7 @@ internal class UserTokenResolver {
         // `Dictionary[int32, V]`); see the property variant above for the
         // rationale.
         return typeArguments.Any(TypeSymbol.RequiresSymbolicProjection) ||
-            (
-            substitutedReturn.ClrType is {} substitutedClr && !ClrTypeUtilities.AreSame(
-                substitutedClr,
-                method.ReturnType
-            )
-        )
+            (substituted.ClrType is {} substitutedClr && !ClrTypeUtilities.AreSame(substitutedClr, method.ReturnType))
     }
 
     /// Issue #903: when a generic imported (extension) call — e.g. a LINQ
@@ -2442,7 +2505,14 @@ internal class UserTokenResolver {
 
         private func GetGenericTypeArguments(type TypeSymbol?) ImmutableArray[TypeSymbol] {
             let args = switch type {
-                case s is StructSymbol: s.TypeArguments
+                case s is StructSymbol: if s.EnclosingTypeArguments.IsDefaultOrEmpty {
+                    s.TypeArguments
+                } else if s.TypeArguments.IsDefaultOrEmpty {
+                    s.EnclosingTypeArguments
+                } else {
+                    s.EnclosingTypeArguments.AddRange(s.TypeArguments)
+                }
+                case e is EnumSymbol: e.EnclosingTypeArguments
                 case i is InterfaceSymbol: i.TypeArguments
                 case it is ImportedTypeSymbol: it.TypeArguments
                 default: default(ImmutableArray[TypeSymbol])

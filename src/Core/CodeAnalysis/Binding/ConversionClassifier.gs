@@ -296,15 +296,25 @@ internal class ConversionClassifier {
     /// classification.
     /// @param callParameter The target parameter when binding a call
     /// argument; supplies the call-specific GS0154 diagnostic contract.
+    /// @param trackNarrowing When `false`, the caller has decided the
+    /// backward `goto` check of a narrowed read (issue #5613).
     /// @returns The shaped bound expression.
     func BindConversion(
         diagnosticLocation TextLocation,
         expression BoundExpression,
         type TypeSymbol?,
         allowExplicit bool = false,
-        callParameter ParameterSymbol? = nil
+        callParameter ParameterSymbol? = nil,
+        trackNarrowing bool = true
     ) BoundExpression {
-        let result = BindConversionCore(diagnosticLocation, expression, type, allowExplicit, callParameter)
+        let result = BindConversionCore(
+            diagnosticLocation,
+            expression,
+            type,
+            allowExplicit,
+            callParameter,
+            trackNarrowing
+        )
         if !allowExplicit &&
             expression.Type != TypeSymbol.Error &&
             result.Type != TypeSymbol.Error &&
@@ -318,12 +328,216 @@ internal class ConversionClassifier {
         return result
     }
 
+    /// Issue #5613: decides the backward `goto` check of a captured narrowed read that [`value`](paramref) yields
+    /// (the value, or the trailing value of a block) for [`target`](paramref), with the decision of every other
+    /// conversion (cref:ConversionNeedsNarrowedSource). The declared read replaces the narrowed read when the target
+    /// takes it (cref:TryRecoverDeclaredMemberRead). Otherwise a target that needs the narrowing, or a read that stays
+    /// and casts or unwraps, records the use from the capture, which has the narrowing state where the read binds.
+    /// @param value The bound value.
+    /// @param read The captured narrowed read that the value yields.
+    /// @param target The conversion target.
+    /// @returns The value, with the declared read when it replaces the narrowed read.
+    func ResolveNarrowedValue(value BoundExpression, read NarrowedBranchValue, target TypeSymbol) BoundExpression {
+        if TryRecoverDeclaredMemberRead(read.Value, read.Path, read.NarrowedType, target, out var declaredRead) &&
+            ReplaceNarrowedLeaf(value, read.Value, declaredRead!!) is {} recovered {
+            return recovered
+        }
+        // The narrowed read stays in the value, so a read that casts or unwraps needs the narrowing whatever the
+        // target is, as a constrained-call argument does. Then the cast or unwrap to the narrowed type is the use.
+        if read.Use is {} use && ConstrainedArgumentNeedsNarrowedSource(read.Path, read.NarrowedType, target) {
+            binderCtx.RecordBackwardGotoNarrowingUse(
+                BackwardGotoNarrowingCapture(
+                    use.Path,
+                    use.NarrowedType,
+                    use.Labels,
+                    binderCtx.DeferredReturnNarrowingOwner ?? use.Owner
+                ),
+                read.Location,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.Conversion,
+                if ConversionNeedsNarrowedSource(
+                    MemberLookup.GetDeclaredAccessPathType(read.Path, read.NarrowedType),
+                    read.NarrowedType,
+                    target
+                ) {
+                    target
+                } else {
+                    read.NarrowedType
+                }
+            )
+        }
+        return value
+    }
+
+    /// Decides the backward `goto` check of a narrowed read that converts to [`target`](paramref) where the read
+    /// binds (issue #5603), with the decision of every other conversion (cref:ConversionNeedsNarrowedSource). The
+    /// declared read replaces the narrowed read when the target takes it (cref:TryRecoverDeclaredMemberRead). Issue
+    /// #5635: a value that goes into a slot of its own type with no conversion uses this decision too. A tuple
+    /// literal that converts to a tuple type decides its elements for the target element types.
+    /// @param diagnosticLocation The location of the use.
+    /// @param expression The value.
+    /// @param target The conversion target.
+    /// @returns The value, with the declared read when it replaces the narrowed read.
+    func DecideNarrowedConversion(
+        diagnosticLocation TextLocation,
+        expression BoundExpression,
+        target TypeSymbol?
+    ) BoundExpression {
+        if target is TupleTypeSymbol || target is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol} {
+            let targetTuple = if target is TupleTypeSymbol directTuple {
+                directTuple
+            } else {
+                cast[TupleTypeSymbol](cast[NullableTypeSymbol](target).UnderlyingType)
+            }
+            if expression is BoundTupleLiteralExpression || expression is BoundBlockExpression {
+                return ResolveTupleLiteralNarrowing(expression, targetTuple)
+            }
+        }
+        // Issue #5635: a read captured where it binds keeps those facts, so a value that binds between the read and
+        // this decision (such as a later argument) does not change them.
+        var capture BackwardGotoNarrowingCapture? = nil
+        var path AccessPath? = nil
+        var narrowedType TypeSymbol? = nil
+        let captured = binderCtx.TryGetCapturedNarrowedRead(expression, out var read)
+        if captured {
+            let capturedRead = read!!
+            path = capturedRead.Path
+            narrowedType = capturedRead.NarrowedType
+            capture = capturedRead.Use
+        } else if !binderCtx.TryGetBackwardGotoNarrowingPath(expression, out path, out narrowedType) {
+            return expression
+        }
+        let narrowedPath = Invariant.Required(path, "a narrowed conversion has an access path", expression: "path")
+        let narrowedSourceType = Invariant.Required(
+            narrowedType,
+            "a narrowed conversion has a narrowed type",
+            expression: "narrowedType"
+        )
+        if TryRecoverDeclaredMemberRead(expression, narrowedPath, narrowedSourceType, target, out var declaredRead) {
+            return declaredRead
+        }
+        if (
+            narrowedPath.HasMembers || !BinderContext.NarrowedReadChangesRuntimeType(
+                narrowedPath.Root.Type,
+                narrowedSourceType
+            )
+        ) &&
+            ConversionNeedsNarrowedSource(
+            MemberLookup.GetDeclaredAccessPathType(narrowedPath, narrowedSourceType),
+            narrowedSourceType,
+            target
+        ) {
+            if !captured {
+                binderCtx.TrackBackwardGotoNarrowingUse(
+                    narrowedPath,
+                    diagnosticLocation,
+                    string.Empty,
+                    BackwardGotoNarrowingUseKind.Conversion,
+                    target
+                )
+            } else if capture is {} use {
+                // The use belongs to the conversion that runs now, as an uncaptured read's use does.
+                binderCtx.RecordBackwardGotoNarrowingUse(
+                    BackwardGotoNarrowingCapture(
+                        use.Path,
+                        use.NarrowedType,
+                        use.Labels,
+                        binderCtx.DeferredReturnNarrowingOwner
+                    ),
+                    diagnosticLocation,
+                    string.Empty,
+                    BackwardGotoNarrowingUseKind.Conversion,
+                    target
+                )
+            }
+        }
+        return expression
+    }
+
+    // Issue #5613: replaces the narrowed read that a value yields (the value, or a block's trailing value).
+    private func ReplaceNarrowedLeaf(
+        value BoundExpression,
+        leaf BoundExpression,
+        replacement BoundExpression
+    ) BoundExpression? {
+        if object.ReferenceEquals(value, leaf) {
+            return replacement
+        }
+        if value is BoundBlockExpression block &&
+            ReplaceNarrowedLeaf(block.Expression, leaf, replacement) is {} trailing {
+            return BoundBlockExpression(block.Syntax, block.Statements, trailing)
+        }
+        return nil
+    }
+
+    // Issue #5635: decides the captured narrowed reads in a tuple literal for the target tuple's element types.
+    // This replaces the element-type decision from where the literal bound.
+    private func ResolveTupleLiteralNarrowing(expression BoundExpression, targetTuple TupleTypeSymbol) BoundExpression {
+        if expression is BoundBlockExpression block {
+            let resolvedTrailing = ResolveTupleLiteralNarrowing(block.Expression, targetTuple)
+            return if object.ReferenceEquals(resolvedTrailing, block.Expression) {
+                expression
+            } else {
+                cast[BoundExpression](BoundBlockExpression(block.Syntax, block.Statements, resolvedTrailing))
+            }
+        }
+        if expression is not BoundTupleLiteralExpression literal || literal.Elements.Length != targetTuple.Arity {
+            return expression
+        }
+        var builder ImmutableArray[BoundExpression].Builder? = nil
+        for var i = 0; i < literal.Elements.Length; i++ {
+            let element = literal.Elements[i]
+            let targetElement = targetTuple.ElementTypes[i]
+            var resolved = element
+            if (
+                targetElement is TupleTypeSymbol || targetElement is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol}
+            ) &&
+                (element is BoundTupleLiteralExpression || element is BoundBlockExpression) {
+                let nestedTarget = if targetElement is TupleTypeSymbol directNested {
+                    directNested
+                } else {
+                    cast[TupleTypeSymbol](cast[NullableTypeSymbol](targetElement).UnderlyingType)
+                }
+                resolved = ResolveTupleLiteralNarrowing(element, nestedTarget)
+            }
+            if object.ReferenceEquals(resolved, element) && binderCtx.TryGetCapturedNarrowedRead(
+                element,
+                out var read
+            ) {
+                let capturedRead = read!!
+                binderCtx.UntrackBackwardGotoNarrowingConversion(capturedRead.Path, capturedRead.Location)
+                resolved = ResolveNarrowedValue(element, capturedRead, targetElement)
+            }
+            if !object.ReferenceEquals(resolved, element) && builder == nil {
+                builder = ImmutableArray.CreateBuilder[BoundExpression](literal.Elements.Length)
+                for var j = 0; j < i; j++ {
+                    builder.Add(literal.Elements[j])
+                }
+            }
+            builder?.Add(resolved)
+        }
+        if builder == nil {
+            return literal
+        }
+        let elements = builder.MoveToImmutable()
+        let elementTypes = ImmutableArray.CreateBuilder[TypeSymbol](elements.Length)
+        for element in elements {
+            elementTypes.Add(element.Type)
+        }
+        return BoundTupleLiteralExpression(
+            literal.Syntax,
+            TupleTypeSymbol.Get(elementTypes.MoveToImmutable(), literal.TupleType.ElementNames),
+            elements
+        )
+    }
+
     private func BindConversionCore(
         diagnosticLocation TextLocation,
         expression BoundExpression,
         type TypeSymbol?,
         allowExplicit bool,
-        callParameter ParameterSymbol?
+        callParameter ParameterSymbol?,
+        trackNarrowing bool
     ) BoundExpression {
         var expression = expression
         if type != nil && NativeProtocolOperations.GetProtocol(type) != nil &&
@@ -331,85 +545,10 @@ internal class ConversionClassifier {
             expression.Type != TypeSymbol.Error {
             return bindNativeProtocolConversion(diagnosticLocation, expression, type)
         }
-        let TryRecoverDeclaredMemberPathConversion = func (
-            expression BoundExpression,
-            path AccessPath,
-            target TypeSymbol,
-            @NotNullWhen(true) out declaredRead BoundExpression?
-        ) bool {
-            let declaredType = MemberLookup.GetDeclaredAccessPathType(path, expression.Type)
-            if declaredType is NullableTypeSymbol ||
-                declaredType is PlatformTypeSymbol ||
-                !Conversion.IsRepresentationPreservingImplicit(declaredType, target) {
-                declaredRead = nil
-                return false
-            }
-            declaredRead = switch expression {
-                case field is BoundFieldAccessExpression: cast[BoundExpression](
-                    BoundFieldAccessExpression(
-                        field.Syntax,
-                        field.Receiver,
-                        field.StructType,
-                        field.Field,
-                        field.SubstitutedType,
-                        narrowedType: nil
-                    )
-                )
-                case property is BoundPropertyAccessExpression: cast[BoundExpression](
-                    BoundPropertyAccessExpression(
-                        property.Syntax,
-                        property.Receiver,
-                        property.StructType,
-                        property.Property,
-                        property.SubstitutedType,
-                        narrowedType: nil,
-                        property.InterfaceType
-                    )
-                )
-                case property is BoundClrPropertyAccessExpression: cast[BoundExpression](
-                    BoundClrPropertyAccessExpression(
-                        property.Syntax,
-                        property.Receiver,
-                        property.Member,
-                        declaredType,
-                        property.StaticContainerType,
-                        property.ConstrainedReceiverTypeParameter,
-                        property.ConstrainedInterfaceType,
-                        property.IsAddressableStaticField,
-                        property.IsReadOnlySubmissionGlobal
-                    )
-                )
-                default: nil
-            }
-            return declaredRead != nil
-        }
-        if binderCtx.TryGetBackwardGotoNarrowingPath(expression, out var path, out var narrowedType) &&
-            path!!.HasMembers &&
-            TryRecoverDeclaredMemberPathConversion(expression, path!!, type!!, out var declaredRead) {
-            expression = declaredRead!!
-        } else if binderCtx.TryGetBackwardGotoNarrowingPath(expression, out path, out narrowedType) &&
-            (
-            Invariant.Required(path, "a narrowed conversion has an access path", expression: "path")
-                .HasMembers ||
-                !BinderContext
-                .NarrowedReadChangesRuntimeType(
-                path!!.Root.Type,
-                Invariant.Required(
-                    narrowedType,
-                    "a narrowed conversion has a narrowed type",
-                    expression: "narrowedType"
-                )
-            )
-        ) &&
-            !(type is NullableTypeSymbol) &&
-            !(type is PlatformTypeSymbol) {
-            binderCtx.TrackBackwardGotoNarrowingUse(
-                path!!,
-                diagnosticLocation,
-                string.Empty,
-                BackwardGotoNarrowingUseKind.Conversion,
-                type
-            )
+        // Issue #5603: the decision is shared with the deferred conversion of an inferred lambda result. Issue #5613:
+        // a branch value converts to the common type without it, because the branch decided it where the read binds.
+        if trackNarrowing {
+            expression = DecideNarrowedConversion(diagnosticLocation, expression, type)
         }
         if NativeSliceTypes.HaveIncompatibleElements(expression.Type, type) ||
             ManagedReferenceTypes
@@ -1190,7 +1329,53 @@ internal class ConversionClassifier {
             } else {
                 parameterMapping[i]
             }
-            let argument = arguments[i]
+            var argument = arguments[i]
+            // Issue #5635: a method type argument that inference reads from the argument at a bare type-parameter
+            // slot can take the narrowed type of a narrowed read. The read is decided for the slot under the inferred
+            // type arguments, with the slot's declared `?` applied, as `let t = s` is. The imported slot itself takes
+            // nil, so its conversion does not decide the read. A null default (`T value = default`) does not make the
+            // slot nullable. The declared read replaces the narrowed read when the slot takes it.
+            if paramIndex < parameters.Length &&
+                call?.TypeArgumentList == nil &&
+                method is {IsGenericMethod: true} genericMethod &&
+                !parameters[paramIndex]
+                .ParameterType
+                .IsByRef &&
+                (
+                if genericMethod.IsGenericMethodDefinition {
+                    genericMethod
+                } else {
+                    genericMethod.GetGenericMethodDefinition()
+                }
+            ).GetParameters()[paramIndex] is {} openParameter &&
+                openParameter
+                .ParameterType
+                .IsGenericMethodParameter {
+                let sourceIndex = i - receiverArgCount
+                let slotType = TrySubstituteParameterTypeFromMethodTypeArgs(
+                    method,
+                    paramIndex,
+                    symbolicMethodTypeArgs,
+                    allowConcreteSymbolic: true
+                ) ??
+                    argument.Type
+                argument = DecideNarrowedConversion(
+                    if !parameterArgumentLocations.IsDefault &&
+                        paramIndex < parameterArgumentLocations.Length &&
+                        parameterArgumentLocations[paramIndex] is {} inferredLocation {
+                        inferredLocation
+                    } else if call != nil && sourceIndex >= 0 && sourceIndex < call.Arguments.Count {
+                        call.Arguments[sourceIndex].Location
+                    } else {
+                        argument.Syntax?.Location ?? call?.Location ?? default(TextLocation)
+                    },
+                    argument,
+                    NullabilityImportRule.ApplyOpenSlot(
+                        slotType,
+                        ClrNullability.GetParameterDeclaredState(openParameter)
+                    )
+                )
+            }
             var rebound = argument
             if paramIndex < parameters.Length {
                 let parameterType = parameters[paramIndex].ParameterType
@@ -1269,6 +1454,52 @@ internal class ConversionClassifier {
                         rejectedArgument
                     } else {
                         BindImplicitInArgument(location, argument, inPointee, parameter: nil)
+                    }
+                } else if parameterType.IsByRef && ByRefStorageMatching.TryGetStorageType(argument) is {} storageType {
+                    // Issue #5558: an explicit address at an imported by-reference
+                    // parameter must match the substituted storage type.
+                    var byRefPointeeOverride TypeSymbol? = nil
+                    parameterTypeOverrides?.TryGetValue(paramIndex, out byRefPointeeOverride)
+                    let byRefPointee = ByRefStorageMatching.PreserveNominalClrPointeeType(
+                        parameterType,
+                        byRefPointeeOverride ??
+                            GetImplicitInClrPointeeType(
+                            parameters[paramIndex],
+                            paramIndex,
+                            method,
+                            receiverType,
+                            symbolicMethodTypeArgs,
+                            argument
+                        )
+                    )
+                    if byRefPointee != TypeSymbol.Error && !ByRefStorageMatching.AreSameStorageType(
+                        storageType,
+                        byRefPointee,
+                        out _,
+                        out _,
+                        out _
+                    ) {
+                        let sourceIndex = i - receiverArgCount
+                        let location = if !parameterArgumentLocations.IsDefault &&
+                            paramIndex < parameterArgumentLocations.Length &&
+                            parameterArgumentLocations[paramIndex] is {} mappedLocation {
+                            mappedLocation
+                        } else {
+                            (
+                                if call != nil && sourceIndex >= 0 && sourceIndex < call.Arguments.Count {
+                                    call.Arguments[sourceIndex].Location
+                                } else {
+                                    call?.Location ?? default(TextLocation)
+                                }
+                            )
+                        }
+                        ReportByRefStorageMismatch(
+                            location,
+                            parameters[paramIndex].Name ?? "value",
+                            byRefPointee,
+                            storageType
+                        )
+                        rebound = BoundErrorExpression(argument.Syntax)
                     }
                 } else if !parameterType.IsByRef &&
                     (
@@ -1616,6 +1847,10 @@ internal class ConversionClassifier {
                             }
                         )
                     }
+                    if argument is BoundTupleLiteralExpression || argument is BoundBlockExpression {
+                        argument = DecideNarrowedConversion(rejectionLocation, argument, rejectionTargetType)
+                        rebound = argument
+                    }
                     if substituted != nil && TypeSymbol.ContainsNullLiteralType(argument.Type) &&
                         argument is BoundTupleLiteralExpression &&
                         targetType is TupleTypeSymbol {
@@ -1767,7 +2002,7 @@ internal class ConversionClassifier {
                     }
                 }
             }
-            if rebound != argument && builder == nil {
+            if rebound != arguments[i] && builder == nil {
                 builder = ImmutableArray.CreateBuilder[BoundExpression](arguments.Length)
                 for var j = 0; j < i; j++ {
                     builder.Add(arguments[j])
@@ -2562,7 +2797,7 @@ internal class ConversionClassifier {
         argumentIndex int32
     ) BoundExpression {
         if parameter != nil && parameter.RefKind != RefKind.None {
-            if argument is BoundAddressOfExpression addr {
+            if argument is BoundAddressOfExpression{IsUnmanaged: false} addr {
                 let operandType TypeSymbol? = addr.Operand?.Type
                 if operandType == TypeSymbol.Error ||
                     expectedType == TypeSymbol.Error ||
@@ -2879,28 +3114,25 @@ internal class ConversionClassifier {
             } else {
                 default(TypeSymbol?)
             }
-            if parameterType != nil && binderCtx.TryGetBackwardGotoNarrowingPath(
-                arguments[i],
-                out var path,
-                out var narrowedType
-            ) &&
+            // Issue #5635: the argument keeps the backward `goto` facts where it binds (a later argument can assign
+            // the variable), as every other conversion of a captured read does (cref:DecideNarrowedConversion).
+            if parameterType != nil &&
                 (
-                Invariant.Required(path, "a narrowed constrained-call argument has an access path", expression: "path")
-                    .HasMembers ||
-                    !BinderContext
-                    .NarrowedReadChangesRuntimeType(
-                    path!!.Root.Type,
-                    Invariant.Required(
-                        narrowedType,
-                        "a narrowed constrained-call argument has a narrowed type",
-                        expression: "narrowedType"
-                    )
+                binderCtx.TryGetCapturedNarrowedRead(arguments[i], out var read) || binderCtx.TryCaptureNarrowedRead(
+                    arguments[i],
+                    location,
+                    out read
                 )
             ) &&
-                !(parameterType is NullableTypeSymbol) &&
-                !(parameterType is PlatformTypeSymbol) {
-                binderCtx.TrackBackwardGotoNarrowingUse(
-                    path!!,
+                ConstrainedArgumentNeedsNarrowedSource(read!!.Path, read!!.NarrowedType, parameterType) &&
+                read!!.Use is {} use {
+                binderCtx.RecordBackwardGotoNarrowingUse(
+                    BackwardGotoNarrowingCapture(
+                        use.Path,
+                        use.NarrowedType,
+                        use.Labels,
+                        binderCtx.DeferredReturnNarrowingOwner
+                    ),
                     location,
                     string.Empty,
                     BackwardGotoNarrowingUseKind.Conversion,
@@ -3322,7 +3554,8 @@ internal class ConversionClassifier {
                         diagnosticLocation,
                         literalSource.Elements[i],
                         targetTuple.ElementTypes[i],
-                        allowExplicit
+                        allowExplicit,
+                        trackNarrowing: false
                     )
                 )
             }
@@ -3844,6 +4077,110 @@ internal class ConversionClassifier {
     }
 
     shared {
+        /// Gets a value indicating whether a conversion of a narrowed read to [`target`](paramref) needs the
+        /// narrowing, so a backward `goto` that removes it is checked. Issue #5603: an eager conversion, the
+        /// conversion of a `return` value to an inferred lambda result and the natural result of a speculative lambda
+        /// (issue #5569) use this one decision. A nullability narrowing reads the declared value, which a nullable or
+        /// platform target takes. A type test or an optional value narrowing casts or unwraps the value. The declared
+        /// read (cref:TryRecoverDeclaredMemberRead) replaces it when the declared type converts to the target with no
+        /// change of representation, or, for an optional value, when the target takes nil.
+        /// @param declaredType The declared type of the read.
+        /// @param narrowedType The narrowed type of the read.
+        /// @param target The conversion target.
+        /// @returns `true` when the conversion needs the narrowed source.
+        func ConversionNeedsNarrowedSource(declaredType TypeSymbol, narrowedType TypeSymbol, target TypeSymbol?) bool {
+            if target == nil {
+                return true
+            }
+            if !BinderContext.NarrowedReadChangesRuntimeType(declaredType, narrowedType) {
+                return !(target is NullableTypeSymbol) && !(target is PlatformTypeSymbol)
+            }
+            // An optional value whose read unwraps it: the stored value converts to a target that takes nil.
+            if declaredType is NullableTypeSymbol optional &&
+                (NullableLifting.IsValueTypeNullable(optional) || NullableLifting.IsUserValueTypeNullable(optional)) {
+                return !(target is NullableTypeSymbol) || !Conversion.Classify(declaredType, target).IsImplicit
+            }
+            return declaredType is NullableTypeSymbol ||
+                declaredType is PlatformTypeSymbol ||
+                !Conversion.IsRepresentationPreservingImplicit(declaredType, target)
+        }
+
+        // Issue #5603: a constrained-call argument keeps its narrowed read, so a read that casts or unwraps needs the
+        // narrowing even when its declared type converts to the parameter. Issue #5613: so does a branch value whose
+        // narrowed read could not be replaced.
+        private func ConstrainedArgumentNeedsNarrowedSource(
+            path AccessPath,
+            narrowedType TypeSymbol,
+            parameterType TypeSymbol
+        ) bool {
+            let declaredType = MemberLookup.GetDeclaredAccessPathType(path, narrowedType)
+            return ConversionNeedsNarrowedSource(declaredType, narrowedType, parameterType) ||
+                BinderContext.NarrowedReadChangesRuntimeType(declaredType, narrowedType)
+        }
+
+        /// Issue #5603: replaces a narrowed member read that casts or unwraps with its declared read, when the
+        /// conversion to [`target`](paramref) does not need the narrowing (cref:ConversionNeedsNarrowedSource). The
+        /// declared read is correct whether or not a backward `goto` removes the narrowing.
+        /// @param expression The narrowed read.
+        /// @param path The access path of the read.
+        /// @param narrowedType The narrowed type of the read.
+        /// @param target The conversion target.
+        /// @param declaredRead The declared read, when the result is `true`.
+        /// @returns `true` when the declared read replaces the narrowed read.
+        func TryRecoverDeclaredMemberRead(
+            expression BoundExpression,
+            path AccessPath,
+            narrowedType TypeSymbol,
+            target TypeSymbol?,
+            @NotNullWhen(true) out declaredRead BoundExpression?
+        ) bool {
+            let declaredType = MemberLookup.GetDeclaredAccessPathType(path, narrowedType)
+            if !path.HasMembers || !BinderContext.NarrowedReadChangesRuntimeType(declaredType, narrowedType) ||
+                ConversionNeedsNarrowedSource(declaredType, narrowedType, target) {
+                declaredRead = nil
+                return false
+            }
+            declaredRead = switch expression {
+                case unwrap is BoundUnaryExpression when unwrap.IsNarrowingUnwrap: unwrap.Operand
+                case field is BoundFieldAccessExpression: cast[BoundExpression](
+                    BoundFieldAccessExpression(
+                        field.Syntax,
+                        field.Receiver,
+                        field.StructType,
+                        field.Field,
+                        field.SubstitutedType,
+                        narrowedType: nil
+                    )
+                )
+                case property is BoundPropertyAccessExpression: cast[BoundExpression](
+                    BoundPropertyAccessExpression(
+                        property.Syntax,
+                        property.Receiver,
+                        property.StructType,
+                        property.Property,
+                        property.SubstitutedType,
+                        narrowedType: nil,
+                        property.InterfaceType
+                    )
+                )
+                case property is BoundClrPropertyAccessExpression: cast[BoundExpression](
+                    BoundClrPropertyAccessExpression(
+                        property.Syntax,
+                        property.Receiver,
+                        property.Member,
+                        declaredType,
+                        property.StaticContainerType,
+                        property.ConstrainedReceiverTypeParameter,
+                        property.ConstrainedInterfaceType,
+                        property.IsAddressableStaticField,
+                        property.IsReadOnlySubmissionGlobal
+                    )
+                )
+                default: nil
+            }
+            return declaredRead != nil
+        }
+
         // Issue #4400: name prefix of the readonly temp an implicit-`in` rvalue is
         // spilled into (see CreateImplicitInReference / IsImplicitInTemp).
         private const ImplicitInTempPrefix string = "<inArgument"
@@ -4512,12 +4849,33 @@ internal class ConversionClassifier {
         /// @param argument The bound argument.
         /// @param parameter The imported CLR parameter.
         /// @returns `true` when the argument must be passed by implicit readonly reference.
-        func IsImplicitInClrArgument(argument BoundExpression, parameter ParameterInfo) bool -> parameter
+        func IsImplicitInClrArgument(
+            argument BoundExpression,
+            parameter ParameterInfo
+        ) bool -> IsImplicitInClrParameter(parameter) &&
+            (IsPlainValueArgument(argument) || ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument))
+
+        /// Issue #4400: whether an imported parameter is an `in` (or `ref readonly`) slot. Such a slot
+        /// accepts a plain value by implicit readonly reference.
+        /// @param parameter The imported CLR parameter.
+        /// @returns `true` for an `in` or `ref readonly` parameter.
+        func IsImplicitInClrParameter(parameter ParameterInfo) bool -> parameter
             .ParameterType
             .IsByRef &&
             parameter.IsIn &&
-            !parameter.IsOut &&
-            (IsPlainValueArgument(argument) || ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument))
+            !parameter.IsOut
+
+        /// Issue #5543: the CLR type that a plain value argument converts to at an imported parameter. This is
+        /// the pointee of an `in` or `ref readonly` slot, and the parameter type otherwise. Function-literal
+        /// target typing uses it, so a literal at an `in` delegate slot binds to the delegate, as in C#.
+        /// A `ref` or `out` slot keeps its by-reference type, because only an address can reach it.
+        /// @param parameter The imported CLR parameter.
+        /// @returns The type that a plain value converts to.
+        func GetPlainValueClrParameterType(parameter ParameterInfo) Type -> if IsImplicitInClrParameter(parameter) {
+            parameter.ParameterType.GetElementType() ?? parameter.ParameterType
+        } else {
+            parameter.ParameterType
+        }
 
         /// Issue #4400: whether a bound argument is a plain VALUE — not already an
         /// address (`in x`, `&x`, a conditional address, a `*T`),
@@ -4528,13 +4886,13 @@ internal class ConversionClassifier {
         /// @returns `true` when an `in` slot needs it passed by implicit reference.
         func IsPlainValueArgument(argument BoundExpression) bool -> !(
             (
-                argument is BoundAddressOfExpression ||
+                argument is BoundAddressOfExpression{IsUnmanaged: false} ||
                     argument is BoundConditionalAddressExpression ||
                     argument is BoundErrorExpression
             )
         ) &&
             !(argument is BoundInterpolatedStringExpression && argument.Handler != nil) &&
-            argument.Type is not(ByRefTypeSymbol or PointerTypeSymbol) &&
+            argument.Type is not ByRefTypeSymbol &&
             (argument.Type != TypeSymbol.Error || argument is BoundDefaultExpression)
 
         /// Issue #4400: the pointee type an implicit `in` argument converts to

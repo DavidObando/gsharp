@@ -318,7 +318,10 @@ imported method (as `RefCapabilities.GetParameterRefKind` decides, so
 `[In, Out] ref` is writable) is a write; one handed to an `in` parameter is a read
 (`Touch(in flag ? x : x)` keeps the fact, like `Touch(in x)`). The exemption is for plain
 function and method calls only: a property or indexer accessor call (a
-source indexer setter, `box[0] = 1`) keeps the full storage invalidation.
+source indexer setter, `box[0] = 1`) and a conversion operator (`op_Implicit` or
+`op_Explicit`, imported or declared in source, at a call argument such as a
+converted function literal or on a relational pattern operand: #5663, #5665,
+corpus rows z19 to z29) keep the full storage invalidation.
 
 **Known limitations of the call rule.** Because a plain call does not kill
 the fact, the rule does not cover a callee that writes the storage by a path
@@ -544,7 +547,7 @@ covers. The classes, with representative kinds:
 | `member-write` | `BoundFieldAssignmentExpression`, `BoundPropertyAssignmentExpression`, `BoundIndexAssignmentExpression`, `BoundClrIndexAssignmentExpression`, `BoundClrPropertyAssignmentExpression`, `BoundIndirectAssignmentExpression` through an address-of operand | removes every member-bearing path and every fact on the alias class (a `ref` local or a by-reference parameter may alias the written element or member: probes f2, g2); a property setter with user code is also `call` |
 | `pointer-write` | `BoundIndirectAssignmentExpression` through anything else, `BoundDereferenceExpression` as a target | removes every mutable root (`MayMutateAnyRootViaPointer`) |
 | `alias` | `BoundAddressOfExpression`, `BoundConditionalAddressExpression` (both operands, whichever the condition selects; its condition and operands flow like `?:`), `BoundManagedReferenceExpression`, `BoundFixedStatement`, `BoundStackAllocExpression`, a `ref` local declaration | puts the operand's root (every operand's root, for a conditional address) in the alias class; the write rules above then apply to the class |
-| `call` | `BoundCallOperationExpression`, `BoundIndirectCallExpression`, `BoundFunctionPointerInvocationExpression`, `BoundConstructorCallExpression`, `BoundClrConstructorCallExpression`, `BoundTypeParameterConstructionExpression`, `BoundStructLiteralExpression` (field initializers), `BoundBaseClassCallExpression`, `BoundConstructorChainingExpression`, `BoundClrConversionCallExpression`, `BoundConversionExpression` with a user-defined conversion, `BoundBinaryOperationExpression`/`BoundUnaryExpression`/`BoundClrUnaryOperatorExpression` on user-defined operators, `BoundEventSubscriptionExpression`, `BoundClrEventSubscriptionExpression`, `BoundInterpolatedStringExpression` (`ToString`), `BoundAwaitExpression` (awaiter calls), `BoundForRangeStatement`/`BoundAwaitForRangeStatement` (`GetEnumerator`, `MoveNext`, `Current`, disposal; probe f5), `using`/`await using`/`lock`/`defer` cleanup regions (disposal, `Monitor`), `BoundGoStatement`, `BoundYieldStatement` (the consumer runs arbitrary code before resumption), property reads with user code (a non-auto getter; in any position, a condition included: row R14 and amendment A2, #5215) and `BoundPropertyPattern`/`BoundListPattern`/`BoundSlicePattern`/`BoundConstantPattern`/`BoundRelationalPattern` that invoke user code, `BoundMethodReferenceOperationExpression`/`BoundPropertyReferenceOperationExpression` when invoked, **and every kind not in the table** | removes every member-bearing path and every fact on the indirect-write class (mutable globals, closure-assigned locals, the alias class; row R15), except that a plain `BoundCallOperationExpression` does not kill the fact of a by-reference parameter unless the call passes one variable more than once with a `ref`/`out` (amendment A3, #5292: `Use(path)` and `TryGetValue(path, out found)` keep the fact); in straight-line code with a bound callee, today's finer classification may keep mutable globals only when the callee is a declared function proven not to assign them, which this ADR does not define, so globals are always removed |
+| `call` | `BoundCallOperationExpression`, `BoundIndirectCallExpression`, `BoundFunctionPointerInvocationExpression`, `BoundConstructorCallExpression`, `BoundClrConstructorCallExpression`, `BoundTypeParameterConstructionExpression`, `BoundStructLiteralExpression` (field initializers), `BoundBaseClassCallExpression`, `BoundConstructorChainingExpression`, `BoundClrConversionCallExpression`, `BoundConversionExpression` with a user-defined conversion, `BoundBinaryOperationExpression`/`BoundUnaryExpression`/`BoundClrUnaryOperatorExpression` on user-defined operators, `BoundEventSubscriptionExpression`, `BoundClrEventSubscriptionExpression`, `BoundInterpolatedStringExpression` (`ToString`), `BoundAwaitExpression` (awaiter calls), `BoundForRangeStatement`/`BoundAwaitForRangeStatement` (`GetEnumerator`, `MoveNext`, `Current`, disposal; probe f5), `using`/`await using`/`lock`/`defer` cleanup regions (disposal, `Monitor`), `BoundGoStatement`, `BoundYieldStatement` (the consumer runs arbitrary code before resumption), property reads and writes with user code (a non-auto accessor, or an auto accessor that can dispatch to an override: an `open` or `override` property on a receiver type that can have a subclass, or an interface property; in any position, a condition included: row R14, amendment A2, #5215, and #5599) and `BoundPropertyPattern`/`BoundListPattern`/`BoundSlicePattern`/`BoundConstantPattern`/`BoundRelationalPattern` that invoke user code, `BoundMethodReferenceOperationExpression`/`BoundPropertyReferenceOperationExpression` when invoked, **and every kind not in the table** | removes every member-bearing path and every fact on the indirect-write class (mutable globals, closure-assigned locals, the alias class; row R15), except that a plain `BoundCallOperationExpression` does not kill the fact of a by-reference parameter unless the call passes one variable more than once with a `ref`/`out` (amendment A3, #5292: `Use(path)` and `TryGetValue(path, out found)` keep the fact); in straight-line code with a bound callee, today's finer classification may keep mutable globals only when the callee is a declared function proven not to assign them, which this ADR does not define, so globals are always removed |
 | `jump` | `BoundReturnStatement`, `BoundThrowStatement`, `BoundRethrowStatement`, `BoundThrowExpression`, `BoundGotoStatement`, `break`/`continue` | one successor: records the state on the target (through pending cleanup) and yields `Unreachable` |
 | `conditional-jump` | `BoundConditionalGotoStatement` (the binder emits it before the then-body of a multi-clause `if let`, `StatementBinder.Conditionals.gs:299-305`, and the CFG connects both successors, `ControlFlowGraph.gs:298-314`) | two successors: binds the condition and applies its effects (P1 classification plus the condition's own writes and calls); records `Assume(condition, JumpIfTrue)` on the target through pending cleanup; continues with `Assume(condition, !JumpIfTrue)` as the fall-through state. It never yields `Unreachable` by itself. The rule this row fixes: no kind with a live fall-through successor may use the `jump` class, whose transfer ends the current path. A kind that selects between two operands or branches gets its control flow from the join rules (P1 on the condition, each operand under its derived state, P5 on their exits), whatever effect class names its other effect: statement-level branching is `join` or `region`, and an expression such as `BoundConditionalAddressExpression` keeps its `alias` class for the operands it may select while its two operands are joined like those of `?:` |
 | `join` | `BoundIfStatement`, `BoundConditionalExpression`, `BoundSwitchExpression`, `BoundPatternSwitchStatement`, `BoundNullConditionalAccessExpression`, `&&`/`||`/`??`, `BoundTryStatement` exits, labels | P1 on the condition, children under the derived states, P5 on the exits |
@@ -845,9 +848,12 @@ compatibility note. "Probe" refers to section 4.
 | R11 | Any call, written or introduced by lowering, kills a fact on a mutable global: `text = "safe"; Clear(); text.Length` where `Clear` assigns the global (probes d3, d3b); `for item in items { }` over an iterator that assigns it (probe f5) (bug [#5170](https://github.com/DavidObando/gsharp/issues/5170)) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
 | R12 | A write to any member of an alias class kills the facts on the whole class, and so does any member, index or indirect write (a call alone does not kill a by-reference parameter's fact: amendment A3, #5292), because a `ref` local or a by-reference parameter may alias the written element or member: `let ref a C? = x; ...; x = nil; a.Value` (probes d4, d4b); `let ref a C? = xs[0]; ...; xs[0] = nil; a.Value` (probe f2); `Run(ref xs[0], xs)` with `Run(ref a C?, xs []C?)` doing `xs[0] = nil; a.Value` (probe g2) (bug [#5171](https://github.com/DavidObando/gsharp/issues/5171)) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
 | R13 | A suspension point (`await`, `yield`) kills facts on mutable globals and on closure-assigned locals, because the code that runs while the function is suspended may invoke a closure that escaped: iterator with `let clear = func() { s = nil }`, `if s != nil { yield 0; yield s.Length }` (probe g5) | accepted, prints `0` and `1` | GS0158 | less permissive (conservative default; the program is correct) |
-| R14 | A read of a property with user code (a non-auto getter) is a `call` in every position, a condition included, and removes every member-bearing path: `if getResultCall.Receiver is not BoundImportedInstanceCallExpression getAwaiterCall { return }` after an earlier proof of a member path (`ExpressionBinder.Access.MemberLookup.gs:3991`, `BaseCallForwarderRewriter.gs:490`) | accepted (today's straight-line kill follows the statement's syntax: calls and member writes only) | GS0158 / GS0159 on the member-path read | less permissive |
+| R14 | A read of a property with user code (a non-auto getter) is a `call` in every position, a condition included, and removes every member-bearing path. So is a read or write of an auto property that can dispatch to an override (#5599): an `open` or `override` property (a property override can be overridden again) on a receiver whose type can have a subclass, or a property reached through an interface. A value type and a class that is neither `open` nor `sealed` cannot have a subclass, so their auto properties keep the facts, and so does the initializer of a construction, whose type is exact. Example: `if getResultCall.Receiver is not BoundImportedInstanceCallExpression getAwaiterCall { return }` after an earlier proof of a member path (`ExpressionBinder.Access.MemberLookup.gs:3991`, `BaseCallForwarderRewriter.gs:490`) | accepted (today's straight-line kill follows the statement's syntax: calls and member writes only) | GS0158 / GS0159 on the member-path read | less permissive |
 | R15 | Any call, written or introduced by lowering, kills a fact on a closure-assigned local or parameter, because the callee can run a closure that escaped and assigns it. A declared function with no captures and no callable argument is no exception. A call through a callable value keeps today's classification (`AnalyzeCallableVariable`): `h.Callback = func() { x = nil }; if x == nil { return 0 }; Wrapper(h); x.Value` with `Wrapper(h Holder) { h.Callback() }` (probe q3, straight-line form; bug [#5237](https://github.com/DavidObando/gsharp/issues/5237)). A by-reference parameter keeps its fact (amendment A3), and a local that no closure assigns keeps its fact | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
 | R16 | A read of an imported (CLR) property is a `call`, like a source getter (R14), unless the getter is on the stable list: `System.String.Length`, `System.Text.StringBuilder.Length`, `System.Array.Length`, `Length` and `IsEmpty` of `Span<T>` and `ReadOnlySpan<T>`, `Count` of `List<T>`, `Dictionary<K,V>` and `HashSet<T>`, `Key` and `Value` of `KeyValuePair<K,V>`, and `Nullable<T>.HasValue`. A getter is stable only when its declaring type is in a core library assembly, it cannot be overridden (the type is sealed or the accessor is not virtual, or is `final` as an interface implementation is), and it is listed. A call through an interface (`ICollection<T>.Count`), a static getter (`Environment.NewLine`) and every unlisted getter (`Lazy<T>.Value`) kill. `var xs = []C?{C{}}; func Run(ref a C?, xs []C?) { let lazy = Lazy[int32](() -> { xs[0] = nil; return 1 }); if a == nil { return 0 }; let n = lazy.Value; return a.Value + n }` (bug [#5231](https://github.com/DavidObando/gsharp/issues/5231)) | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact | less permissive (soundness) |
+| R17 | A write or read of an imported (CLR) property setter or indexer is a `call` too, unless the accessor is on the stable list (`IsStableClrAccessor`): the `List<T>` indexer (get and set) and `List<T>.Capacity` set, the `Span<T>` indexer, the `ReadOnlySpan<T>` indexer get, the `string` indexer get, the `StringBuilder` indexer (get and set) and `StringBuilder.Length` set. The same conditions as R16 apply (core library, not overridable). An index read on a receiver of an erased generic type (`List[T]` over a type parameter) is always a `call`, because it is emitted through the non-generic `IList` or `IDictionary` interface, which a subclass can reimplement; an index write and a `Span[T]` read over a type parameter keep the listed accessor. `Dictionary<K,V>` indexers are not stable: they call `GetHashCode` and `Equals` of the key. `var x C? = C{}; let oc = ObservableCollection[int32](); oc.Add(1); oc.CollectionChanged += (s, e) -> { x = nil }; if x == nil { return 0 }; oc[0] = 5; return x.Value` (bug [#5532](https://github.com/DavidObando/gsharp/issues/5532)) | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact | less permissive (soundness) |
+| R18 | The effects of the condition of an `if` statement (a call, a getter with user code, an assignment) apply to the narrowing facts before either branch is bound, as section 9 says and as a catch filter already does (R10). `var x C? = C{}; let lazy = Lazy[int32](() -> { x = nil; return 1 }); if x == nil { return 0 }; if lazy.Value > 0 { return x.Value }` (bug [#5534](https://github.com/DavidObando/gsharp/issues/5534); the same with a plain call or a source getter). The facts that the condition proves are added after its effects, so `if Check(h) && x != nil { return x.Value }` still narrows | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact in either branch | less permissive (soundness) |
+| R19 | A pattern test that calls code which can be user code is a `call`, in a statement and in a condition, and so is the test of its own operand (R18 (6)). A constant pattern counts when its emitted test calls `object.Equals(object, object)`, which calls the `Equals` of the input: an `object` input, even with a literal pattern value, or a nullable value input whose underlying type is not a primitive, an enum or `decimal`, unless the pattern value is null for every instantiation (`nil`, or the default of a reference type or of a value-type `Nullable<T>`, by `Binder.IsReferenceTypeForConstraint` and `NullableLifting.IsAnyValueTypeNullable`; a type parameter only with an explicit `class` constraint, so not `default(T)` of an unconstrained or a `T Enum struct` parameter). It is a plain method call, so it keeps the fact of a by-reference parameter (amendment A3). A list pattern over an indexable input counts when its `Length`/`Count` getter is not on the stable list of R16 and R17, or when an element that reads its value (not a slice, a discard `_`, `{}` on a value type that is not nullable, or `and`, `or` and `not` of these) calls a `this[int]` getter that is not on it. `var x object? = e; e.Clear = func() { x = nil }; if x is 1 { return x.GetHashCode() }` where `E.Equals` calls `Clear`; `ReadOnlyCollection[int32](l) is [1]` where the `Count` of the wrapped `IList[int32]` clears `x` (bug [#5593](https://github.com/DavidObando/gsharp/issues/5593)). A test that the compiler emits as a reference test, `string.Equals`, `decimal.op_Equality` or `ceq` (an `int32`, `string`, `int32?`, `nil` or floating-point constant), a `nil`, `default(object)` or `default(C)` (a source class) pattern on `object?` and a `nil` pattern on `DateTime?`, a list pattern over an array or a `List<T>`, and `[]`, `[..]`, `[_]`, `[_ and _]` or `[{}]` over a type whose indexer is not stable keep the facts | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact | less permissive (soundness) |
 
 Details per row:
 
@@ -947,6 +953,142 @@ Details per row:
   before the guard) in the pin-move PR, not with `!!` (section 15). The
   rejected alternatives are in section 19a. Tests: the two shapes with a
   mutant witness (property reads classed `none`).
+- **R14, overridable auto properties (#5599).** R14 treated every read of a source auto property as free of
+  code (`Property.IsAutoProperty`). An `open` auto property, or an `override` (a property override is itself
+  overridable, #3223), can dispatch to an override whose accessor runs user code, and so can an interface
+  property. Through a base-typed receiver that code can write the storage behind a narrowed `ref` parameter, a
+  mutable global or a closure-assigned local: `while text.Length > 0 { n = n + b.Auto * 0 }` with
+  `ref text string?` aliasing a static field that the override's getter clears was accepted and threw
+  `NullReferenceException`. `StatementBinder.SourcePropertyRunsUserCode(property, receiverType)` is now the one
+  decision, and `SourcePropertyAccessRunsUserCode` applies it to a read and a write. The collector reads it for
+  the access, for the fields of a property pattern (the receiver type is the pattern's type) and for the
+  initializers of a construction (no receiver type: the constructed type is exact), so the rule holds in
+  statements, in conditions (R18), in loops and in `finally` summaries. An auto accessor runs no user code when the
+  property is neither `open` nor an `override`, or the receiver type cannot have a subclass: a value type, or a
+  class that is neither `open` nor `sealed` (the `TypeAttributes.Sealed` decision of `TypeDefEmitter`). A type
+  parameter receiver can. A `base.` access is a `BoundBaseClassCallExpression`, a call already. A constructor's
+  store to an auto property without a setter writes the backing field and calls no accessor (row z17). The rule
+  does not rely on the lowering of an auto property to its backing field inside its declaring type, which skips an
+  override (#5630). Not in this row: a call in an earlier operand does not remove a fact read by a later operand of
+  the same expression (#5637, the same for every call), and an auto property that is not `open` but implements an
+  interface is emitted `virtual` without `final`, so another assembly can override it (#5638). A `sealed class` admits subclasses in its package,
+  so it can have an override (row z18). Corpus rows z01 to z18. Impact: no new diagnostic in the 18 projects of the repository. cs2gs does not
+  change: it counts every C# property read as code for a closure-assigned local, a member path gets `!!`, and a
+  by-reference read after any accessor call is #5617.
+- **R19 (#5593).** The construct table lists `BoundConstantPattern` and `BoundListPattern` as `call` when they
+  invoke user code, but the collector treated both as free of effects. A constant pattern on an `object` input is
+  emitted as `object.Equals(object, object)`, which calls the virtual `Equals` of the input, so a user override runs
+  even for a literal pattern value. A list pattern over an indexable input (not an array, issue #3501) calls the
+  `Length` or `Count` getter and the `this[int]` getter of the input's type, and an imported wrapper such as
+  `ReadOnlyCollection<T>` forwards them to a source `IList<T>`. `BoundConstantPattern.ClassifyTest` is now the one
+  decision of which test a constant pattern emits: the emitter emits it, and
+  `StatementBinder.ConstantPatternRunsUserCode` counts its `ObjectEquals` test as a call unless the input is a
+  nullable value of a primitive, an enum or `decimal`, whose `Equals` runs no user code, or the pattern value is
+  `nil` (a conversion of the literal or the default of the input type), which `object.Equals` never passes to an
+  override, nor does the default of any other reference type, a source class included (rows y23 and y26). The
+  default of an unconstrained type parameter is not null for every instantiation (`default(T)` is a boxed zero for
+  `T` = `int32`), so it counts (row y24). A type parameter counts as a reference type only with an explicit `class`
+  constraint: a base-class constraint can be `System.Enum` with `struct`, whose default is a boxed zero (rows y27
+  and y28). The call is
+  a plain method call, so it keeps
+  by-reference facts (A3, row y15). A reference test (`nil`),
+  `string.Equals`, `decimal.op_Equality`, an `isinst` and `ceq` of a floating-point constant and `ceq` run no user
+  code. `StatementBinder.ListPatternRunsUserCode` applies the accessor rule of R16 and R17
+  (`ClrMemberReadRunsUserCode` and `IsStableClrAccessor`) to the two getters, so `List<T>`, `Span<T>` and
+  `ReadOnlySpan<T>` keep their facts and an array reads none. The indexer counts only when an element reads the
+  value, as `EmitPattern` decides it (`PatternReadsInput`): a slice over an indexable input is a discard, `_` emits no
+  load, `{}` on a value type that is not nullable emits nothing, and `and`, `or` and `not` load only through an
+  operand that does (rows y18 to y22 and y25). The collector applies both in `VisitConstantPattern`
+  and `VisitListPattern`, so the rule holds in statements, in conditions (R18), in loops and in `finally`
+  summaries. The fast path of a test's own effects (R18 (6), `RunsNoCode`) treats a literal constant pattern as
+  free of code only when its test calls no user `Equals`. A list pattern also kills member paths, as a getter with
+  user code does (R14): row y06 was accepted and runs, and is now rejected. Corpus rows y01 to y28. cs2gs mirrors
+  the constant-pattern rule for closure-assigned locals (`ConstantPatternMayCallEquals`), between the guard and the
+  read and in the guard's own pattern (R18 (6)); it translates a C# list
+  pattern to `Length` and indexer reads, not to a G# list pattern. cs2gs does not assert a by-reference read after an
+  accessor call (R14, R16, R17), which is #5617. A `switch` case or arm runs its test before its guard and its body or result, so the test's effects apply first,
+  as a condition's do (R18): `StatementBinder.ApplySwitchArmTestEffects` gives the collector the `is` test of the
+  arm's pattern on the evaluated value, so a constant pattern, a list pattern and a property pattern of a case are
+  classified as in `if x is P` (#5629, rows a01 to a05 and a10). Only the pattern's syntax is the test, so a call in
+  the guard or body is not part of it (rows a11 and a12). A case's guard runs after its test and before its body
+  and the later cases, so its effects apply as a condition's do (rows a19 and a20), and a test whose own effects can
+  remove the tested fact proves no narrowing of the discriminant, as for `if x is P` (row a21). Each case's pattern
+  and body see the headers (test and guard) of the cases before it: a case proves no narrowing of the discriminant
+  when a header before it can remove that fact (rows a27 and a28), and a callable alias that a pattern or guard
+  replaces is not external for the later cases (rows a29 to a31). The guard's effects also reach the narrowing that
+  its own pattern proves (rows a24 and a25). A `default` that is not last runs after the tests of the cases after it: those patterns bind in
+  dispatch order before its body, and their effects apply to its body only and are put back afterwards with the R18
+  journal (rows a03, a13, a14, a16 and a17). A statement in a guard block that binds early is not a condition, so the
+  facts it removes are recorded separately and put back the same way; each of those cases removes them again where
+  it is dispatched (rows a34 to a36). This holds unless the default falls through to the next case, whose body then
+  runs on that path too (row a18).
+  A loop's back edge includes a `switch`, `try` or `fixed` statement with a `continue` inside it: the control-flow
+  graph keeps such a statement as one statement, so the jump adds no edge, and its block and the blocks before it
+  now reach the back edge (rows a06 to a09): the statements of that block up to the statement, not those after it,
+  which the jump skips (row a22). Of that statement, the discriminant, every header and the bodies of the arms that
+  reach the jump, directly or by falling through, are counted; an arm that only leaves the loop is not (rows a32 and
+  a33). A jump in a guard block counts (row a26). An arm whose guard is the literal `false` hides no jump (row a23), and a
+  `do { } while false` has no back edge (row a15). The if-expression condition of #5545 shape 8 is not in this change.
+  ADR-0213 slice L1 (#5459) replaces this back-edge pass: a loop binds once after the lower bound of its region, which
+  counts every write of the body at entry. Rows a09, a22, a23 and a32 are rejected there (ADR-0213 R7 (a) and (c)),
+  and row b07 is the L1 form of a09.
+- **R18 (#5534).** `BindIfStatement` applied the effects of the whole statement after both branches were
+  bound, so the branches saw the facts as they were before the condition ran. A plain call, a source getter and
+  an imported getter in the condition all kept a closure-assigned local's fact in the branches (member paths were
+  already removed: the old statement check follows the syntax of calls). `ApplyConditionEffectsToNarrowings`
+  runs `InvalidateNarrowingsForAssignedVariables` on the bound condition right after it is bound, for the `if`
+  statement and for `if init; cond`, before the condition's own narrowing is classified. Three consequences
+  keep safe code compiling. (1) The condition was bound before its effects, so a type test of a path whose fact
+  the effects removed (`Check(h) && x is C` after a guard on `x`) is classified against the path's declared type,
+  the type it has after the effects, as a nil test already is. This applies only to a fact that strips `?` or
+  `!` from a reference type, whose read emits no conversion. The operand of a subtype fact is read with a
+  `castclass` and a nullable value with an unwrap, so that test runs on the stale read (an `InvalidCastException`
+  or `InvalidOperationException` when the call changed the value; #5545); those branches stay rejected
+  (rows w18 and w19). (2) The effects are read with the callable aliases
+  from before the condition, as for a statement, and the aliases are updated after them, so a call of an alias
+  that the condition reassigns later (`action() && (action = callback) is {} a`) keeps its classification.
+  (3) The member-path scan of the syntax (`SyntaxMayMutateMemberPaths`) does not enter a function literal or
+  lambda: creating a closure runs none of its body, and a call of it is a call. This also applies to a statement
+  (`action = func() { ... }` no longer removes member-path facts). (4) The condition of an `if` statement in a
+  then-branch runs only on that path, so the facts it removed from the enclosing frames are put back while the
+  sibling else-branch is bound and removed again after it, as section 9 binds the else-branch from the state after
+  the condition: `if flag if Check(h) { } else { } else { return x.Value }` and the braced form compile (rows w20
+  to w22). The then-branch of `if let` and its else-branch are siblings in the same way (rows w31 and w32); its
+  else-branch starts from the state before the header, so a guard's fact does not hide an outer one (row w34). The
+  `if let` header runs on the else path too and its effects are not applied before the branches (#5545 shape 4), so
+  a fact that the header can remove is not put back (row w41). The initializer of `if init; cond` runs before the
+  condition and both branches, so its effects apply first, as for the statement before an `if` in a block (rows w39
+  and w40). The `if let` guard reads the callable aliases at each test as the `if` condition does (row w42), and the
+  pattern check computes the function's closure-assigned names first (row w43). (5) A property pattern does not match nil, so `Check(h) && x is {}` restores the removed fact as a type
+  test does (rows w23 and w24). (6) A pattern runs after its operand is read, so a test whose own pattern can
+  remove the tested path (a getter with user code in a property sub-pattern, `x is Dog { P: 1 }` where `P` sets
+  `x = nil`, or a call in a constant pattern, `x is Read(h)`) narrows neither branch, by the statement rule
+  applied to the test's effects, whether or not a fact was removed before it (rows w25 to w28 and w30); a getter
+  that cannot reach the path keeps the narrowing (row w29). The test reads the callable aliases at its own
+  evaluation point: an earlier operand's reassignment applies (row w35), a later one does not (row w33). The
+  aliases follow a `&&` chain operand by operand on its true path, so an alias gained earlier in the chain reaches
+  the test (row w44); under `||` the walk joins both paths, so a conditional gain does not (row w46). The `if let`
+  header is read from the aliases it started with (row w45). The `Equals` call of a constant pattern and the
+  accessors of a list pattern count as calls of the test since R19 (#5593). A
+  later operand that removes it (`x is D && Check(h)`) is shape 5 of #5545. This is the ordering
+  decision only; which accessors are calls is R16 and R17. Not in this row, each verified on the old build and
+  tracked in one follow-up issue: the condition of an if-expression or a conditional expression, the operands of
+  `&&` and `||` (the right operand is bound with the facts from before the left one ran), the header of `while`
+  and `for` (ADR-0213), and the bindings of `if let`. Which accesses in a condition count as calls is the one statement rule, so R18 applies the
+  static-access rule of R11 and R15 (#5520) and the imported accessor list of R17 to the condition too: a static
+  read of a type with a non-literal `shared` initializer kills before the branches (row w36), a literal-only type
+  keeps the fact (row w37), and a `Dictionary` indexer kills where a `List` indexer keeps it (row w38). Corpus
+  rows w01 to w46.
+- **R17 (#5532).** R16 classified the imported getter read. The construct table also lists
+  `BoundClrPropertyAssignmentExpression`, `BoundClrIndexAssignmentExpression` and
+  `BoundClrIndexExpression` as `call`, but the collector treated the two writes as member writes only
+  (member paths and by-reference storage) and the indexer read as nothing, so a closure-assigned local
+  or a mutable global kept its fact across an `ObservableCollection<T>` indexer set that raises
+  `CollectionChanged`. `StatementBinder.ClrAccessRunsUserCode` is now the one predicate for the four
+  node kinds; it calls `IsStableClrAccessor(property, isSetter)`, which is `IsStableClrGetter`
+  generalised to setters and indexers with the same list discipline. The ordering of a condition's
+  effects before its branches (#5534) is a different decision and is not part of this row.
+  Corpus rows u01 to u13 (u13 reads the `List<T>` indexer between the guard and the use).
 - **R16 (#5231, maintainer decision: the stable-getter list).** The construct
   table already lists `BoundClrPropertyAccessExpression` as `call`, but the
   collector did not apply it: `AssignedRootsCollector.VisitExpression` killed
@@ -998,10 +1140,51 @@ Details per row:
   read or write and to a static event subscription. The type that counts is the type that declares the member (an
   inherited member triggers the base, a hiding member triggers the hiding type). A `shared { init }` block of a
   class or of a value type counts. A constant, an enum member and a static method call (already a call) need no
-  rule. Known limitation (#5520): the initializer of a `shared` field of a `beforefieldinit` type also runs at
-  the first static field access (probe s12 throws `NullReferenceException`), but counting it adds `GS0158` and
-  `GS0154` in `src/Core` (a static read kills member-path and by-reference facts), so it keeps the fact for now.
-  Corpus rows s01 to s27 (issue #5504).
+  rule. Issue #5520 completes the type-initializer classification with the wide rule (maintainer decision): the
+  initializer of a `shared` field of a `beforefieldinit` type runs at the first static member access, so a
+  static field, property or event access of a type with a non-literal `shared` field initializer counts as a
+  call. It kills member-path and by-reference facts as well as the R11 and R15 roots
+  (`MarkMayMutateGlobalRoots`), exactly like a call. `DeclaresNonLiteralSharedFieldInitializer` is the one
+  declaration-pass fact (like `DeclaresStaticInitializerBlock`, it does not depend on binding order), and
+  `TypeInitializationRunsUserCode(type, atStaticMemberAccess)` is still the one decision. An initializer
+  runs no code when it is `nil` into a reference or `T?` field type, or a literal token (possibly parenthesized or
+  under unary operators that are predefined for the literal's type, `-1`, with the expression binder's
+  `int32.MinValue` and `char` promotion rules) of a built-in field type (a numeric
+  type, `bool`, `char`, `string`, `object`, or `T?` of one). A literal of another field type, or `nil` into a value
+  type, can call a user-defined conversion, a unary operator that is not predefined (`-"x"`) calls a user-defined
+  or extension operator, and anything else (a call, a name, a construction) is code, on purpose, so the answer
+  reads only the syntax and the declared field type. Constructing the type does not run
+  the initializer (row s27). Corpus rows s01 to s27 (issue #5504) and v01 to v27 (issue #5520).
+
+  Contract of #5520 (each row is a compiler corpus row; the mutation witness is a product change that makes the row
+  fail, recorded in the PR):
+
+  | shape | before | after | row | mutation witness |
+  | --- | --- | --- | --- | --- |
+  | static field read, non-literal `shared` initializer, closure-assigned local or mutable global | accepted, `NullReferenceException` | `GS0158` | s12 (R11, R15) | no `shared` field initializer counts (`IsLiteralInitializerSyntax` is always true) |
+  | the same read, fact on a member path | accepted | `GS0158` | v01 | the same |
+  | the same read, fact on a `ref` parameter | accepted | `GS0158` | v02 | the same |
+  | static property read, static field write, static event subscription | accepted | `GS0158` | v08, v09, v10 | the same |
+  | a literal field of a type that also has a non-literal one | accepted | `GS0158` | v11 | the same |
+  | struct, generic type, inherited member of a base with a non-literal initializer | accepted | `GS0158` | v12, v13, v14 | the same |
+  | access in a body of the type itself (static or instance) | accepted | `GS0158` | v16, v17 | the same |
+  | access in a loop between guard and use | accepted | `GS0158` | v18 | the same |
+  | literal initializer of a field type with a user-defined conversion (`var Seed Token = 1`) | accepted, `NullReferenceException` | `GS0158` | v22 | a literal counts as no code whatever the field type |
+  | `nil` initializer of a value type with a user-defined conversion (`var Seed Token = nil`) | accepted, `NullReferenceException` | `GS0158` | v23 | `nil` counts as no code whatever the field type |
+  | `nil` initializer of `T?` of that value type (`var Spare Token? = nil`) | accepted | accepted | v24 | `nil` counts as code whatever the field type |
+  | literal under an extension unary operator (`var Seed int32 = -"x"`) | accepted, `NullReferenceException` | `GS0158` | v25 | any unary operator over a literal counts as no code |
+  | `-2147483648` and `-'a'` (the expression binder's `int32.MinValue` and `char` promotion rules) | accepted | accepted | v26, v27 | the initializer test omits the `int32.MinValue` rule; it omits the `char` promotion |
+  | `shared` fields all literal (`5`, `-1`, `(2)`, `"x"`, `nil`) | accepted | accepted | s11, v03, v04 | every initializer counts as non-literal; every static access counts |
+  | derived type with its own non-literal initializer, member declared by a literal-only base | accepted | accepted | v15 | the same |
+  | `shared` field without an initializer | accepted | accepted | v19 | every static access counts |
+  | `const` read | accepted | accepted | v05 | a constant counts as a static access |
+  | construction (`Trigger{}`) | accepted | accepted | s27, v06 | construction counts as a static access |
+  | instance member read | accepted | accepted | v07 | an instance field counts as a static access |
+  | plain local (no closure assigns it) across a static read | accepted | accepted | v20 | a node that runs user code drops every local |
+  | static read only inside a function literal that is not called | accepted | accepted | v21 | the collector walks a function literal body |
+
+  The `src/Core` reads of `TypeSymbol.Error` and `TypeSymbol.Void` between a guard and a use now read the guarded
+  value from a local (`UserTokenResolver`, `LambdaBinder`). The translator mirrors the rule (cs2gs, same PR).
   The external-callable alias set follows the same rule (#5482): a call that
   `MayRunEscapedClosure` drops an alias when a closure can assign the alias
   or the plain variable in its `ref` chain, not only when the alias's own

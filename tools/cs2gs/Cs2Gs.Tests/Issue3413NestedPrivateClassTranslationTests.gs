@@ -360,7 +360,81 @@ namespace Issue3413
             (method MethodDeclaration) -> method.Name == "Echo"
         )
         Assert.Contains(echo.Attributes, (attribute AttributeUse) -> attribute.Name == "ExtensionOwner")
+        Assert.Contains("Outer[Box].Inner()", rendered, StringComparison.Ordinal)
+        Assert.DoesNotContain("Deep(value, Inner())", rendered, StringComparison.Ordinal)
         TranslationTestValidation.AssertBinds(rendered)
+    }
+
+    @Fact
+    async func Issue4750_ConstructingNestedTypeUnderClosedGenericEnclosingType_RetainsEnclosingQualifier() {
+        const source = `namespace Issue4750;
+
+public sealed class Outer<T>
+{
+    public sealed class Inner
+    {
+    }
+
+    public sealed class GenericInner<U>
+    {
+    }
+}
+
+public static class Probe
+{
+    private static int Consume(Outer<int>.Inner value) => 42;
+
+    private static int ConsumeGeneric(Outer<int>.GenericInner<string> value) => 7;
+
+    public static int Run() => Consume(new Outer<int>.Inner()) + ConsumeGeneric(new Outer<int>.GenericInner<string>());
+
+    public static void Main() => System.Console.WriteLine(Run());
+}`
+        let (unit, _) = Translate(source)
+        let rendered = GSharpPrinter.Print(unit)
+        Assert.Contains("Consume(Outer[int32].Inner())", rendered, StringComparison.Ordinal)
+        Assert.Contains("ConsumeGeneric(Outer[int32].GenericInner[string]())", rendered, StringComparison.Ordinal)
+        TranslationTestValidation.AssertBinds(rendered)
+        let compiler string? = FindCompiler()
+        if compiler == nil || !IlVerifyToolAvailable() {
+            return
+        }
+        let sourceRoot = NewDirectory("scratch-projects")
+        File.WriteAllText(Path.Combine(sourceRoot, "Directory.Build.props"), "<Project></Project>")
+        let projectDirectory = Path.Combine(sourceRoot, "Issue4750")
+        Directory.CreateDirectory(projectDirectory)
+        let projectPath = Path.Combine(projectDirectory, "Issue4750.csproj")
+        File.WriteAllText(projectPath, `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>`)
+        File.WriteAllText(Path.Combine(projectDirectory, "Program.cs"), source)
+        let goldenPath = Path.Combine(projectDirectory, "baseline.stdout.golden")
+        File.WriteAllText(goldenPath, "49\n")
+        let outputRoot = NewDirectory("pipeline-tests")
+        let app = CorpusApp("test/Issue4750", projectPath, TargetKind.Exe, stdoutGolden: goldenPath)
+        let pipeline = MigrationPipeline(
+            PipelineOptions{
+                GscPath: compiler,
+                OutputRoot: outputRoot,
+                SourceRoot: sourceRoot,
+                Config: "Release",
+                CompileViaSdk: false
+            },
+            []IMigrationStage{TranslateStage(), CompileStage(), IlVerifyStage(), TestParityStage()}
+        )
+        let result = await pipeline.RunAsync([]CorpusApp{app})
+        let appResult = Assert.Single(result.Apps)
+        if !appResult.Succeeded {
+            Assert.Fail(PipelineFailureDetails(outputRoot, result, appResult))
+        }
+        Assert.Equal(
+            []string{"passed", "passed", "passed", "passed"},
+            appResult.Stages.Select((stage StageResult) -> stage.Status).ToArray()
+        )
     }
 
     @Fact
@@ -656,14 +730,34 @@ async
         Assert.Contains("private class EntryHelper[T]", translated, StringComparison.Ordinal)
         Assert.Contains("private class Cache[T]", translated, StringComparison.Ordinal)
         // Issue #4676: every extension on the owner is one lifted function hosted on it
-        // through `@ExtensionOwner`; no helper copy and no forwarding companion. (A
-        // bound method group of an async extension, `Func<Task<int>> f = "x".M;`,
-        // is a separate gsc gap, #4699, so the fixture calls them directly.)
+        // through `@ExtensionOwner`; no helper copy and no forwarding companion.
+        // Issue #4699: bound method groups over those async extensions convert to their
+        // `Task` / `ValueTask` delegate shapes and execute.
         Assert.Contains("@ExtensionOwner(typeof(ExtensionOwner))", translated, StringComparison.Ordinal)
         Assert.Contains("async func (value T) DelayIdentityAsync[T]() T", translated, StringComparison.Ordinal)
         Assert.Contains("return Cache[T].Echo(value)", translated, StringComparison.Ordinal)
+        Assert.Contains(
+            "let lengthAsync async () -> int32 = \"four\".LengthAsync",
+            translated,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "let delayAsync async () -> void = \"later\".DelayTextAsync",
+            translated,
+            StringComparison.Ordinal
+        )
         Assert.Contains("async func (value int32) ValueAsync() ValueTask[int32]", translated, StringComparison.Ordinal)
         Assert.Contains("async func (value int32) ValueNoteAsync() ValueTask", translated, StringComparison.Ordinal)
+        Assert.Contains(
+            "let valueLengthAsync() -> ValueTask[int32] = \"five\".ValueLengthAsync",
+            translated,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "let valueDelayAsync() -> ValueTask = \"later\".ValueDelayAsync",
+            translated,
+            StringComparison.Ordinal
+        )
         Assert.DoesNotContain("ExtensionOwner.DelayIdentityAsync", translated, StringComparison.Ordinal)
         Assert.DoesNotContain("ExtensionOwner.ValueAsync", translated, StringComparison.Ordinal)
         Assert.Contains("class GenericOwner[TOuter]", translated, StringComparison.Ordinal)
@@ -850,12 +944,16 @@ namespace Issue3413
             Console.WriteLine(35.AddCached());
             Console.WriteLine(6.DelayIdentityAsync().GetAwaiter().GetResult());
             7.DelayAsync().GetAwaiter().GetResult();
-            Console.WriteLine("four".LengthAsync().GetAwaiter().GetResult());
-            "later".DelayTextAsync().GetAwaiter().GetResult();
+            Func<Task<int>> lengthAsync = "four".LengthAsync;
+            Console.WriteLine(lengthAsync().GetAwaiter().GetResult());
+            Func<Task> delayAsync = "later".DelayTextAsync;
+            delayAsync().GetAwaiter().GetResult();
             Console.WriteLine(9.ValueAsync().AsTask().GetAwaiter().GetResult());
             10.ValueNoteAsync().AsTask().GetAwaiter().GetResult();
-            Console.WriteLine("five".ValueLengthAsync().AsTask().GetAwaiter().GetResult());
-            "later".ValueDelayAsync().AsTask().GetAwaiter().GetResult();
+            Func<ValueTask<int>> valueLengthAsync = "five".ValueLengthAsync;
+            Console.WriteLine(valueLengthAsync().AsTask().GetAwaiter().GetResult());
+            Func<ValueTask> valueDelayAsync = "later".ValueDelayAsync;
+            valueDelayAsync().AsTask().GetAwaiter().GetResult();
             Console.WriteLine("async");
         }
     }

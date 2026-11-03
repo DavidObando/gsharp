@@ -764,7 +764,14 @@ partial class CSharpToGSharpTranslator {
                 return nativeVariables
             }
             var receiver GExpression? = this.TranslateExpression(isPattern.Expression)
-            let receiverType ITypeSymbol? = this.context.GetTypeInfo(isPattern.Expression).Type
+            let receiverType ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(
+                isPattern.Expression
+            ) ??
+                this.GetProjectedReceiverType(isPattern.Expression) ??
+                this
+                .context
+                .GetTypeInfo(isPattern.Expression)
+                .Type
             // ADR-0162 / issues #3347/#3424: G# evaluates a native boolean
             // pattern subject exactly once. Use that form when C# introduces no
             // pattern local and gsc cannot smart-cast the original scrutinee.
@@ -1051,7 +1058,7 @@ partial class CSharpToGSharpTranslator {
                 return if targetType is NamedTypeReference namedTarget {
                     cast[GExpression](
                         InvocationExpression(
-                            IdentifierExpression(namedTarget.Name),
+                            BuildNamedTypeCalleeExpression(namedTarget, namedTarget.Name),
                             []GExpression{receiver!!},
                             namedTarget.TypeArguments
                         )
@@ -1177,7 +1184,8 @@ partial class CSharpToGSharpTranslator {
                 receiverType != nil &&
                 !receiverType.IsValueType &&
                 this.ContainsBareRecursivePattern(pattern)
-            return (nullableMember || guardedNonNullMember) && CountReads(pattern) > 1
+            let designatedUnstableMember = !stableMember && PatternIntroducesBinding(pattern)
+            return (nullableMember || guardedNonNullMember || designatedUnstableMember) && CountReads(pattern) > 1
         }
 
         private func ContainsBareRecursivePattern(pattern PatternSyntax?) bool {
@@ -1613,7 +1621,8 @@ partial class CSharpToGSharpTranslator {
                             this.state.PatternBindings[boundSymbol] = this.BuildPatternNarrowingReplacement(
                                 receiver,
                                 receiverSyntax,
-                                declaration.Type
+                                declaration.Type,
+                                receiverType
                             )!!
                         }
                     }
@@ -1649,6 +1658,9 @@ partial class CSharpToGSharpTranslator {
                         .context
                         .GetDeclaredSymbol(varSingle) is {} varBound {
                         this.state.PatternBindings[varBound] = receiver!!
+                        if varBound is ILocalSymbol varLocal {
+                            this.state.LocalHoldsPromotedValueAnswers.Remove(varLocal)
+                        }
                         this.RegisterProjectedPatternBinding(varBound, receiverType)
                     } else if varPattern.Designation is ParenthesizedVariableDesignationSyntax {
                         // `var (a, b)` binds the deconstructed elements; G# has no
@@ -1764,6 +1776,7 @@ partial class CSharpToGSharpTranslator {
             } else {
                 receiver
             }
+            this.BindPatternDesignation(listPattern.Designation, receiver)
             let lengthAccess = MemberAccessExpression(receiver, "Length")
             var test GExpression = if sliceIndex < 0 {
                 BinaryExpression(lengthAccess, "==", LiteralExpression.Int(elements.Count.ToString()))
@@ -1800,26 +1813,26 @@ partial class CSharpToGSharpTranslator {
                     elementReceiver,
                     element,
                     elementType,
-                    isNestedPatternMember: isNestedPatternMember
+                    isNestedPatternMember: isNestedPatternMember ||
+                        (PatternIntroducesBinding(element) && element is not VarPatternSyntax)
                 )
                 test = BinaryExpression(test, "&&", elementTest)
             }
             // Issue #4356: a list pattern never matches nil, and a NESTED member
-            // tested with one (`{ P: [1] }`, `P` an `int[]?`) arrives here bound
-            // to a `let` local that is `T?` in G#. Guard it first: the guard both
-            // makes the pattern fall through on nil, as C# does, and smart-casts
-            // the local for the `.Length` / index reads.
-            if isNestedPatternMember &&
+            // tested with one (`{ P: [1] }`, `P` an `int[]?`) or a hoisted
+            // nullable scrutinee arrives here bound to a `let` local that is
+            // `T?` in G#. Guard it first: the guard both makes the pattern fall
+            // through on nil, as C# does, and smart-casts the local for the
+            // `.Length` / index reads.
+            if this.IsGSharpNullablePatternReceiver(guardedReceiver) ||
                 (
-                this.IsGSharpNullablePatternReceiver(guardedReceiver) ||
-                    (
+                isNestedPatternMember &&
                     receiverType != nil &&
-                        receiverType.IsReferenceType == true &&
-                        receiverType.NullableAnnotation == Microsoft
-                        .CodeAnalysis
-                        .NullableAnnotation
-                        .Annotated
-                )
+                    receiverType.IsReferenceType == true &&
+                    receiverType.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated
             ) {
                 test = BinaryExpression(BinaryExpression(guardedReceiver, "!=", LiteralExpression.Null()), "&&", test)
             }
@@ -2113,7 +2126,8 @@ partial class CSharpToGSharpTranslator {
                     this.state.PatternBindings[recBound] = this.BuildPatternNarrowingReplacement(
                         receiver,
                         receiverSyntax,
-                        recursive.Type
+                        recursive.Type,
+                        receiverType
                     )!!
                 }
             }
@@ -2259,7 +2273,11 @@ partial class CSharpToGSharpTranslator {
                             this.EmittedName(subpatternMember, memberName)
                         )
                         this.RegisterPatternMemberSlot(subpatternMember, memberAccess)
-                        let memberType ITypeSymbol? = this.TryGetSubpatternMemberType(sub)
+                        let memberType ITypeSymbol? = this.GetProjectedPatternMemberType(
+                            receiverType,
+                            subpatternMember
+                        ) ??
+                            this.TryGetSubpatternMemberType(sub)
                         memberTest = this.TranslatePatternTest(
                             memberAccess,
                             sub.Pattern,
@@ -2943,7 +2961,8 @@ partial class CSharpToGSharpTranslator {
         private func BuildPatternNarrowingReplacement(
             receiver GExpression?,
             receiverSyntax ExpressionSyntax?,
-            narrowedTypeSyntax TypeSyntax?
+            narrowedTypeSyntax TypeSyntax?,
+            receiverType ITypeSymbol? = nil
         ) GExpression? {
             if narrowedTypeSyntax == nil &&
                 receiverSyntax != nil &&
@@ -2974,6 +2993,32 @@ partial class CSharpToGSharpTranslator {
             }
             let narrowedType ITypeSymbol? = this.context.GetTypeInfo(narrowedTypeSyntax).Type
             if narrowedType != nil && narrowedType.IsValueType {
+                let effectiveReceiverType ITypeSymbol? = receiverType ??
+                    (
+                    if receiverSyntax != nil {
+                        this.context.GetTypeInfo(receiverSyntax).Type
+                    } else {
+                        default(ITypeSymbol?)
+                    }
+                )
+                if effectiveReceiverType != nil &&
+                    (
+                    effectiveReceiverType
+                        .OriginalDefinition
+                        .SpecialType == SpecialType.System_Nullable_T ||
+                        SymbolEqualityComparer
+                        .Default
+                        .Equals(effectiveReceiverType, narrowedType)
+                ) {
+                    return NonNullAssertionExpression(receiver)
+                }
+                if this.MapTypeSyntax(narrowedTypeSyntax) is {} targetType {
+                    return ConversionExpression(
+                        targetType,
+                        NonNullAssertionExpression(receiver),
+                        isCheckedReferenceCast: true
+                    )
+                }
                 return NonNullAssertionExpression(receiver)
             }
             return NonNullAssertionExpression(
@@ -3018,7 +3063,8 @@ partial class CSharpToGSharpTranslator {
                     let leafElementType GTypeReference? = this.PromoteElementTypeForNullElements(
                         elementType,
                         elementTypeSymbol,
-                        leaves
+                        leaves,
+                        creation
                     )
                     let leafAcceptsNil = leafElementType!!.IsNullable
                     return ArrayAllocationExpression(
@@ -3034,6 +3080,7 @@ partial class CSharpToGSharpTranslator {
                             .ToList()
                     )
                 }
+                elementType = this.PromoteObliviousArrayElement(elementType, elementTypeSymbol, creation)
                 return ArrayAllocationExpression(
                     elementType,
                     creation
@@ -3107,12 +3154,8 @@ partial class CSharpToGSharpTranslator {
                 elementType = MakeNullable(elementType)
             }
             // Issue #5537: an array stored in oblivious container storage has its
-            // element type.
-            if elementType != nil && elementType.IsNullable == false && this.ObliviousContainerSinkPromotesArrayElement(
-                creation
-            ) {
-                elementType = MakeNullable(elementType)
-            }
+            // element type, nested positions included (#5541).
+            elementType = this.PromoteObliviousArrayElement(elementType, elementTypeSymbol, creation)
             return ArrayAllocationExpression(elementType, length)
         }
 
@@ -4119,8 +4162,14 @@ partial class CSharpToGSharpTranslator {
                 .typeMapper
                 .Map(namedTarget, this.context, collection.GetLocation()) is NamedTypeReference
             let targetRef NamedTypeReference? = if isConstructibleClassTarget {
+                // Issue #5541: the construction states the positions that its storage
+                // and its elements give it, as an array literal does.
                 cast[NamedTypeReference](
-                    this.typeMapper.Map(cast[INamedTypeSymbol](target), this.context, collection.GetLocation())
+                    this.PromoteObliviousCollectionTarget(
+                        this.typeMapper.Map(cast[INamedTypeSymbol](target), this.context, collection.GetLocation()),
+                        target,
+                        collection
+                    )
                 )
             } else {
                 default(NamedTypeReference?)
@@ -4130,17 +4179,9 @@ partial class CSharpToGSharpTranslator {
                 .SemanticModel
                 .GetOperation(collection) as ICollectionExpressionOperation
             if collection.Elements.Count == 0 && isConstructibleClassTarget {
-                return InvocationExpression(
-                    IdentifierExpression(targetRef!!.Name),
-                    List[GExpression](),
-                    if targetRef!!.TypeArguments.Count > 0 {
-                        targetRef!!.TypeArguments
-                    } else {
-                        default(IReadOnlyList[GTypeReference]?)
-                    }
-                )
+                return BuildConstruction(targetRef, List[GExpression]())
             }
-            let elementTypeSymbol ITypeSymbol? = GetCollectionTargetElementType(target)
+            let elementTypeSymbol ITypeSymbol? = this.GetProjectedCollectionTargetElementType(target)
             var elementType GTypeReference?
             if target is IArrayTypeSymbol targetArray && this.typeMapper.Map(
                 targetArray,
@@ -4188,11 +4229,16 @@ partial class CSharpToGSharpTranslator {
                                 elementTypeSymbol ??
                                 operationElementType
                         }
-                        let boundElementRef GTypeReference? = if boundElementType != nil {
+                        var boundElementRef GTypeReference? = if boundElementType != nil {
                             this.typeMapper.Map(boundElementType, this.context, element.GetLocation())
                         } else {
                             elementType
                         }
+                        boundElementRef = this.PromoteObliviousArrayElement(
+                            boundElementRef,
+                            boundElementType,
+                            collection
+                        )
                         initElements.Add(
                             CollectionInitializerElement(
                                 this.CoerceCollectionElement(
@@ -4293,6 +4339,14 @@ partial class CSharpToGSharpTranslator {
             elementType GTypeReference?,
             targetElementSymbol ITypeSymbol?
         ) GExpression? {
+            var targetElementSymbol = targetElementSymbol
+            if elementType?.IsNullable == true &&
+                targetElementSymbol != nil &&
+                targetElementSymbol.IsReferenceType == true {
+                targetElementSymbol = targetElementSymbol.WithNullableAnnotation(
+                    Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                )
+            }
             if targetElementSymbol != nil {
                 this.state.CollectionElementSlots[element] = targetElementSymbol
             }
@@ -4320,7 +4374,8 @@ partial class CSharpToGSharpTranslator {
                 reportedSlotType: targetElementSymbol
             )
             translated = this.AssertFlowNarrowedNullableReference(element, translated, elementType)
-            if IsNullOrSuppressedNull(element) &&
+            if elementType?.IsNullable != true &&
+                IsNullOrSuppressedNull(element) &&
                 targetElementSymbol?.IsReferenceType == true &&
                 targetElementSymbol!!.NullableAnnotation != Microsoft
                 .CodeAnalysis
@@ -4330,7 +4385,9 @@ partial class CSharpToGSharpTranslator {
                 // the target's static type and the nil value without `!!`.
                 return DefaultValueExpression(elementType)
             }
-            if !IsNullOrSuppressedNull(element) && !this.IsWithinExpressionTreeLambda(element) &&
+            if elementType?.IsNullable != true &&
+                !IsNullOrSuppressedNull(element) &&
+                !this.IsWithinExpressionTreeLambda(element) &&
                 targetElementSymbol?.IsReferenceType == true &&
                 targetElementSymbol!!.NullableAnnotation != Microsoft
                 .CodeAnalysis
@@ -4440,7 +4497,9 @@ partial class CSharpToGSharpTranslator {
             let enclosing ISymbol? = this.context.SemanticModel.GetEnclosingSymbol(collection.SpanStart)
             let within = cast[ISymbol](enclosing?.ContainingType) ?? this.context.Compilation.Assembly
             let candidates = List[IMethodSymbol]()
-            for var type ITypeSymbol? = target; type != nil; type = type!!.BaseType {
+            for var type INamedTypeSymbol? = target as INamedTypeSymbol; type != nil; type = this.GetEffectiveBaseType(
+                type
+            ) {
                 for add in type.GetMembers("Add").OfType[IMethodSymbol]() {
                     if !add.IsStatic &&
                         add
@@ -4513,7 +4572,9 @@ partial class CSharpToGSharpTranslator {
                         item.Expression
                     )
                     case spread is SpreadElementSyntax: this.GetMappedArrayElementType(spread.Expression) ??
-                        GetEnumerableElementType(this.GetManagedReferenceArrayProjectedArgumentType(spread.Expression))
+                        this.GetProjectedEnumerableElementType(
+                        this.GetManagedReferenceArrayProjectedArgumentType(spread.Expression)
+                    )
                     default: default(ITypeSymbol?)
                 }
                 if projectedElement == nil {
@@ -4596,6 +4657,25 @@ partial class CSharpToGSharpTranslator {
         // slice lowering below). This also drops #1894's `Length`-arithmetic
         // and receiver-spill workarounds entirely — gsc's own `^n` bound
         // handles from-end offsets and the receiver is only ever embedded once.
+        private func GetProjectedCollectionTargetElementType(
+            target ITypeSymbol?
+        ) ITypeSymbol? -> if IsSpanParamsCollectionType(target) {
+            (cast[INamedTypeSymbol](target)).TypeArguments[0]
+        } else {
+            this.GetProjectedEnumerableElementType(target)
+        }
+
+        private func GetProjectedEnumerableElementType(type ITypeSymbol?, asynchronous bool = false) ITypeSymbol? {
+            if type is INamedTypeSymbol named {
+                for candidate in this.GetReceiverTypeHierarchy(named) {
+                    if IsEnumerableContract(candidate, asynchronous) {
+                        return candidate.TypeArguments[0]
+                    }
+                }
+            }
+            return GetEnumerableElementType(type, asynchronous)
+        }
+
         private func TranslateRangeSlice(receiver GExpression?, $range RangeExpressionSyntax) GExpression {
             let start GExpression? = if $range.LeftOperand != nil {
                 this.TranslateRangeBound($range.LeftOperand)

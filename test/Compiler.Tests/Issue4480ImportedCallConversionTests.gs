@@ -143,7 +143,7 @@ class Derived : GenericBase[IEnumerable[string?]] {
     init() : base(Ob.Strings()) { }
 }`
         using let fixture = Issue4480ImportedCallConversionTests.Fixture("nullable-generic-base")
-        let log = fixture.Compile(source)
+        let log = fixture.Compile(source, library: true)
         Assert.True(File.Exists(fixture.AppPath), log)
         Assert.DoesNotContain("GS0154", log, StringComparison.Ordinal)
         Assert.DoesNotContain("GS0155", log, StringComparison.Ordinal)
@@ -182,12 +182,16 @@ class Derived : GenericBase[IEnumerable[string?]] {
             Assert.Contains(result.Diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "CS1503")
         }
 
-        func Compile(source string, emitArtifacts bool = false) string {
+        func Compile(source string, emitArtifacts bool = false, library bool = false) string {
             let sourcePath = Path.Combine(root, "App.gs")
             File.WriteAllText(sourcePath, source)
             let args = List[string]{
                 "/out:" + AppPath,
-                "/target:exe",
+                if library {
+                    "/target:library"
+                } else {
+                    "/target:exe"
+                },
                 "/targetframework:net10.0",
                 "/reference:" + libraryPath
             }

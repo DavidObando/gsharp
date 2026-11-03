@@ -158,7 +158,12 @@ internal class MemberDefEmitter {
                     (returnType ReturnTypeEncoder) -> this.EncodePropertyType(returnType, prop),
                     (parameters ParametersEncoder) -> {
                         for indexParam in indexParams {
-                            this.encodeTypeSymbol(parameters.AddParameter().Type(), indexParam.Type)
+                            TypeDefEmitter.EncodeParameterSignature(
+                                parameters,
+                                indexParam,
+                                this.encodeTypeSymbol,
+                                this.wellKnown
+                            )
                         }
                     }
                 )
@@ -243,6 +248,10 @@ internal class MemberDefEmitter {
         if property.ReturnRefKind != RefKind.RefReadOnly {
             return
         }
+        this.EmitIsReadOnlyAttribute(handle)
+    }
+
+    private func EmitIsReadOnlyAttribute(handle EntityHandle) {
         let value = BlobBuilder()
         value.WriteUInt16(1)
         value.WriteUInt16(0)
@@ -292,6 +301,9 @@ internal class MemberDefEmitter {
     /// @param rows The rows minted for it.
     private func StampAccessor(handle MethodDefinitionHandle, rows SignatureRows, owner FunctionSymbol?) {
         for var i = 0; i < rows.Rows.Length; i++ {
+            if rows.Parameters[i].RefKind == RefKind.In {
+                this.EmitIsReadOnlyAttribute(rows.Rows[i])
+            }
             this.emitUserAttributes(rows.Rows[i], rows.Parameters[i], AttributeTargetKind.Param)
         }
         this.emitMethodNullability(handle, rows.Nullability, rows.ReturnRow, rows.Rows)
@@ -367,21 +379,23 @@ internal class MemberDefEmitter {
         if this.emitCtx.MetadataOnly {
             return (nil, -1)
         }
+        let fieldOwner = prop.BackingFieldDeclaringType ?? structSym
         if prop.IsAutoProperty &&
             prop.BackingField != nil &&
+            (
             this
-            .cache
-            .StructFieldDefs
-            .TryGetValue(prop.BackingField!!, out var backingHandle) {
-            // Issue #989: inside a generic type's own accessor body the
-            // backing-field token must be a self-TypeSpec MemberRef
-            // (Box`1<!0>), not the bare FieldDef, or the verifier rejects
-            // the receiver type on the stack.
-            let backingToken = if ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym) {
-                this.resolveFieldToken(structSym, prop.BackingField!!)
-            } else {
-                EntityHandle(backingHandle)
-            }
+                .cache
+                .StructFieldDefs
+                .ContainsKey(prop.BackingField!!) ||
+                this
+                .cache
+                .DeclaredFieldDefs
+                .ContainsKey(prop.BackingField!!)
+        ) {
+            // Issue #989: inside a generic type's own accessor body (or when the
+            // backing field lives on a constructed generic base) the backing-field
+            // token must be a TypeSpec MemberRef, not the bare FieldDef.
+            let backingToken = this.resolveFieldToken(fieldOwner, prop.BackingField!!)
             let il = InstructionEncoder(BlobBuilder())
             if isGetter {
                 if !isStatic {
@@ -469,7 +483,7 @@ internal class MemberDefEmitter {
                     return
                 }
                 for indexParam in prop.Parameters {
-                    this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type)
+                    TypeDefEmitter.EncodeParameterSignature(ps, indexParam, this.encodeTypeSymbol, this.wellKnown)
                 }
             }
         )
@@ -507,7 +521,7 @@ internal class MemberDefEmitter {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
         } else if this.emitCtx.InheritedInterfacePropertyAccessors.Contains((prop, true)) {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
-        } else if prop.ExplicitInterfaceMember != nil {
+        } else if prop.ExplicitInterfaceMember != nil || prop.ExplicitInterfaceGetterSlot != nil {
             // Issue #2362: a mangled-name explicit interface property
             // implementation is bound to its interface slot purely via an
             // explicit MethodImpl row (see
@@ -591,7 +605,7 @@ internal class MemberDefEmitter {
                 // parameters ahead of the value parameter.
                 if !prop.Parameters.IsDefaultOrEmpty {
                     for indexParam in prop.Parameters {
-                        this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type)
+                        TypeDefEmitter.EncodeParameterSignature(ps, indexParam, this.encodeTypeSymbol, this.wellKnown)
                     }
                 }
                 this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type)
@@ -619,7 +633,7 @@ internal class MemberDefEmitter {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
         } else if this.emitCtx.InheritedInterfacePropertyAccessors.Contains((prop, false)) {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
-        } else if prop.ExplicitInterfaceMember != nil {
+        } else if prop.ExplicitInterfaceMember != nil || prop.ExplicitInterfaceSetterSlot != nil {
             // Issue #2362: see the matching comment in EmitPropertyGetter —
             // the setter half of a mangled-name explicit interface property
             // implementation needs the same Virtual | NewSlot | Final promotion
@@ -686,7 +700,7 @@ internal class MemberDefEmitter {
             },
             (ps ParametersEncoder) -> {
                 for indexParam in prop.Parameters {
-                    this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type)
+                    TypeDefEmitter.EncodeParameterSignature(ps, indexParam, this.encodeTypeSymbol, this.wellKnown)
                 }
                 if !isGetter {
                     this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type)
@@ -1386,7 +1400,7 @@ internal class MemberDefEmitter {
             methodAttrs |= MethodAttributes.Virtual
         } else if this.EventImplicitlyImplementsInterface(structSym, ev) {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
-        } else if ev.ExplicitInterfaceMember != nil {
+        } else if ev.ExplicitInterfaceMember != nil || ev.ExplicitInterfaceAddSlot != nil {
             // ADR-0149: mirrors the property MethodImpl-bridge promotion —
             // a MethodImpl body method must be Virtual per ECMA-335 §II.10.3.3;
             // Final additionally prevents an accidental by-name override.
@@ -1476,7 +1490,7 @@ internal class MemberDefEmitter {
             methodAttrs |= MethodAttributes.Virtual
         } else if this.EventImplicitlyImplementsInterface(structSym, ev) {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
-        } else if ev.ExplicitInterfaceMember != nil {
+        } else if ev.ExplicitInterfaceMember != nil || ev.ExplicitInterfaceRemoveSlot != nil {
             // ADR-0149: see the matching comment in EmitEventAddAccessor.
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         }
@@ -1577,7 +1591,7 @@ internal class MemberDefEmitter {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
         } else if ev.IsOverride {
             methodAttrs |= MethodAttributes.Virtual
-        } else if ev.ExplicitInterfaceMember != nil {
+        } else if ev.ExplicitInterfaceMember != nil || ev.ExplicitInterfaceRaiseSlot != nil {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         }
         // ADR-0149: see the matching comment in EmitEventAddAccessor.
@@ -1658,7 +1672,12 @@ internal class MemberDefEmitter {
                     (returnType ReturnTypeEncoder) -> this.EncodePropertyType(returnType, prop),
                     (parameters ParametersEncoder) -> {
                         for indexParam in indexParams {
-                            this.encodeTypeSymbol(parameters.AddParameter().Type(), indexParam.Type)
+                            TypeDefEmitter.EncodeParameterSignature(
+                                parameters,
+                                indexParam,
+                                this.encodeTypeSymbol,
+                                this.wellKnown
+                            )
                         }
                     }
                 )
@@ -1733,7 +1752,7 @@ internal class MemberDefEmitter {
                     // parameters ahead of the return type, exactly
                     // like a struct/class indexer getter.
                     for indexParam in prop.Parameters {
-                        this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type)
+                        TypeDefEmitter.EncodeParameterSignature(ps, indexParam, this.encodeTypeSymbol, this.wellKnown)
                     }
                 }
             )
@@ -1790,7 +1809,7 @@ internal class MemberDefEmitter {
                     // parameter, exactly like a struct/class
                     // indexer setter.
                     for indexParam in prop.Parameters {
-                        this.encodeTypeSymbol(ps.AddParameter().Type(), indexParam.Type)
+                        TypeDefEmitter.EncodeParameterSignature(ps, indexParam, this.encodeTypeSymbol, this.wellKnown)
                     }
                     this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type)
                 }
@@ -2026,17 +2045,22 @@ internal class MemberDefEmitter {
                         }
                         var parametersMatch = true
                         for var i = 0; i < indexParameters.Length; i++ {
-                            if !DeclarationBinder.ConformanceSignaturesEquivalent(
+                            var clrParameterType = MemberLookup.GetIndexerParameterTypeSymbol(
+                                Invariant.Required(
+                                    ifaceSym,
+                                    "a CLR interface entry has a type symbol",
+                                    expression: "ifaceSym"
+                                ),
+                                clrProp,
+                                i
+                            )
+                            if clrParameterType is ByRefTypeSymbol clrParameterByRef {
+                                clrParameterType = clrParameterByRef.PointeeType
+                            }
+                            if prop.Parameters[i].RefKind != RefCapabilities.GetParameterRefKind(indexParameters[i]) ||
+                                !DeclarationBinder.ConformanceSignaturesEquivalent(
                                 prop.Parameters[i].Type,
-                                MemberLookup.GetIndexerParameterTypeSymbol(
-                                    Invariant.Required(
-                                        ifaceSym,
-                                        "a CLR interface entry has a type symbol",
-                                        expression: "ifaceSym"
-                                    ),
-                                    clrProp,
-                                    i
-                                )
+                                clrParameterType
                             ) {
                                 parametersMatch = false
                                 break
@@ -2075,7 +2099,13 @@ internal class MemberDefEmitter {
                 return false
             }
             for var i = 0; i < property.Parameters.Length; i++ {
-                if !DeclarationBinder.ConformanceSignaturesEquivalent(
+                if interfaceProperty
+                    .Parameters[i]
+                    .RefKind != property
+                    .Parameters[i]
+                    .RefKind ||
+                    !DeclarationBinder
+                    .ConformanceSignaturesEquivalent(
                     interfaceProperty.Parameters[i].Type,
                     property.Parameters[i].Type,
                     typeParameterMap

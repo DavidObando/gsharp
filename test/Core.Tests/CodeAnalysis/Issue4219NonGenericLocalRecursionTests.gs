@@ -294,4 +294,194 @@ Run()`)
         Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
         Assert.Equal(5, result.Value)
     }
+
+    @Fact
+    func GenericClassAndStructEncloser_CaptureFreeGroupAndMethodGroupConversion_CompilesAndRuns() {
+        // Issue #4655: a capture-free non-generic local-function group inside
+        // a member of a generic class or struct was mistakenly routed into a
+        // `<lambda_host_*>` display class by ClosureEmitter (which only checked
+        // `literal.Function.IsGeneric` instead of `LocalDeclaration != nil`),
+        // skipping `<Program>` MethodDef planning and failing with GS9998.
+        let result = EmittedOracle.Evaluate(`class Box[T] {
+    func Run(n int32) int32 {
+        let Even = func (k int32) bool { return k == 0 ? true : Odd(k - 1) }
+        let Odd = func (k int32) bool { return k == 0 ? false : Even(k - 1) }
+        return Even(n) ? 1 : 0
+    }
+    func EchoViaDelegate(value T) T {
+        let First = func (x T, depth int32) T { return depth == 0 ? x : Second(x, depth - 1) }
+        let Second = func (x T, depth int32) T { return First(x, depth) }
+        let Pass = func (x T) T { return First(x, 1) }
+        let fn (T) -> T = Pass
+        return fn(value)
+    }
+}
+struct SBox[T] {
+    func Run(n int32) int32 {
+        let Even = func (k int32) bool { return k == 0 ? true : Odd(k - 1) }
+        let Odd = func (k int32) bool { return k == 0 ? false : Even(k - 1) }
+        return Even(n) ? 10 : 20
+    }
+}
+let s = SBox[int32]{}
+Box[string]().Run(4) + s.Run(3) + Box[int32]().EchoViaDelegate(21)`)
+        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(42, result.Value)
+    }
+
+    @Theory
+    @InlineData("let callback () -> int32 = Holder[int32].Secret\nreturn callback()", "GS0586")
+    @InlineData("let nested = func() int32 { return 42 }\nreturn nested()", "GS0586")
+    @InlineData(
+        "var data = []int32{1}\nlet At = func(i int32) ref int32 { return ref data[i] }\nreturn At(0)",
+        "GS0586"
+    )
+    @InlineData("var data = []int32{1}\nlet Read[U] = func(v U) int32 { return data[0] }\nreturn Read(1)", "GS0586")
+    func GenericOwnerDependencies_InNonGenericGroup_FailBeforeEmission(body string, diagnostic string) {
+        let result = EmittedOracle.Evaluate((`class Holder[Outer] {
+    shared {
+        private func Secret() int32 { return 42 }
+        func Run() int32 {
+            let first = func(x int32) int32 { return second(x) }
+            let second = func(x int32) int32 { if x < 0 { return first(x) }; ` + "$body" + ` }
+            return first(1)
+        }
+    }
+}
+Holder[string].Run()`))
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == diagnostic)
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+    }
+
+    @Fact
+    func GenericOwnerDependencies_WithEnclosingTypeParameterInSignature_StillReportsGS0586() {
+        let result = EmittedOracle.Evaluate(`class Holder[Outer] {
+    shared {
+        private func Secret() int32 { return 42 }
+        func Run(seed Outer) int32 {
+            let first = func(x Outer, depth int32) int32 { return second(x, depth) }
+            let second = func(x Outer, depth int32) int32 {
+                if depth < 0 { return first(x, depth) }
+                let callback () -> int32 = Holder[int32].Secret
+                return callback()
+            }
+            return first(seed, 0)
+        }
+    }
+}
+Holder[string].Run("ok")`)
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0586")
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+    }
+
+    @Fact
+    func CapturingNonGenericGroupInGenericOwner_WithNestedLambda_CompilesAndRuns() {
+        let result = EmittedOracle.Evaluate(`class Box[T] {
+    func Run(data []int32) int32 {
+        let first = func(i int32) int32 {
+            let nested = func() int32 { return i }
+            return second(nested())
+        }
+        let second = func(i int32) int32 {
+            if i < 0 { return first(i) }
+            return data[i]
+        }
+        return first(0)
+    }
+    func RunFunctionPointer() string {
+        let First = func(n int32) string { return n <= 0 ? Second(0) : First(n - 1) }
+        let Second = func(n int32) string { return n < 0 ? First(n) : typeof(T).Name }
+        let Caller = func() string {
+            unsafe {
+                let fp = &First
+                return fp(1)
+            }
+        }
+        let CallerSibling = func() string { return Caller() }
+        return CallerSibling()
+    }
+    func RunCapturingCallerOfPromotedDelegate[U](n int32) string {
+        let First = func(k int32) string { return k <= 0 ? Second(0) : First(k - 1) }
+        let Second = func(k int32) string { return k < 0 ? First(k) : typeof(U).Name }
+        let Caller = func() string {
+            let fn (int32) -> string = First
+            return fn(n)
+        }
+        return Caller()
+    }
+}
+class PlainBox {
+    func RunFunctionPointer[U]() string {
+        let First = func(n int32) string { return n <= 0 ? Second(0) : First(n - 1) }
+        let Second = func(n int32) string { return n < 0 ? First(n) : typeof(U).Name }
+        unsafe {
+            let fp = &First
+            return fp(1)
+        }
+    }
+    func RunParentChildDelegate[U]() string {
+        let First = func(k int32) string { return k <= 0 ? Second(0) : First(k - 1) }
+        let Second = func(k int32) string { return k < 0 ? First(k) : typeof(U).Name }
+        let Parent[P] = func(p P, n int32) string {
+            let Child[V] = func(v V) string {
+                let fn (int32) -> string = First
+                return fn(n)
+            }
+            return Child(p)
+        }
+        return Parent(0, 1)
+    }
+    func RunCapturingIterator[U](prefix string) string {
+        let First = func(k int32) string { return k <= 0 ? Second(0) : First(k - 1) }
+        let Second = func(k int32) string { return k < 0 ? First(k) : typeof(U).Name }
+        let Iter = func() sequence[string] {
+            yield prefix + First(1)
+        }
+        for s in Iter() {
+            return s
+        }
+        return ""
+    }
+    func RunCapturedFp[U](seed U) U {
+        let First = func(x U) U { return Second(x) }
+        let Second = func(x U) U { return x }
+        unsafe {
+            let fp = &First
+            let readFp = func() bool { return cast[nint](fp) != 0 }
+            return readFp() ? fp(seed) : seed
+        }
+    }
+    func RunConstrained[A, B System.IComparable[A]](xs []B, replacement B) B {
+        let At = func(items []B, index int32) ref B { return ref items[index] }
+        var ref a = At(xs, 0)
+        a = replacement
+        return xs[0]
+    }
+    func RunDependent[A, B A](xs []B, replacement B) B {
+        let At = func(items []B, index int32) ref B { return ref items[index] }
+        var ref a = At(xs, 0)
+        a = replacement
+        return xs[0]
+    }
+}
+class ConstrainedBox[A, B System.IComparable[A]] {
+    func RunRef(xs []B, replacement B) B {
+        let At = func(items []B, index int32) ref B { return ref items[index] }
+        var ref a = At(xs, 0)
+        a = replacement
+        return xs[0]
+    }
+}
+class DependentBox[A, B A] {
+    func RunRef(xs []B, replacement B) B {
+        let At = func(items []B, index int32) ref B { return ref items[index] }
+        var ref a = At(xs, 0)
+        a = replacement
+        return xs[0]
+    }
+}
+"${Box[string]().Run([]int32{42})}:${Box[string]().RunFunctionPointer()}:${Box[string]().RunCapturingCallerOfPromotedDelegate[int32](1)}:${PlainBox().RunFunctionPointer[int32]()}:${PlainBox().RunParentChildDelegate[string]()}:${PlainBox().RunCapturingIterator[string]("iter:")}:${PlainBox().RunCapturedFp("fp")}:${PlainBox().RunDependent[object, string]([]string{"old"}, "dep-m")}:${DependentBox[object, string]().RunRef([]string{"old"}, "dep-c")}"`)
+        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal("42:String:Int32:Int32:String:iter:String:fp:dep-m:dep-c", result.Value)
+    }
 }

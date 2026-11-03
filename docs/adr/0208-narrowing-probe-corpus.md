@@ -187,3 +187,34 @@ a loop that calls `TryGetValue`; `Binding/MemberLookup.gs:1108-1120` and
 read in loops that call), of which 5 are `GS0532` cascades; 0 errors in
 Core.Tests and gsc. This is the whole measured cost of the conservative
 call rule on the compiler's own source.
+
+## ADR-0213 slice L1: rows that change or join
+
+Slice L1 of [ADR-0213](0213-narrowing-across-loops-and-backward-jumps.md) changes four rows of this
+corpus and adds the loop probes of its section 24. e2b becomes rejected (`GS0158`, R7 (a)), e3 becomes
+rejected (`GS0158`, R7 (b)), c8 prints `dog` as c8b does (R7 (d)), and the `local` and `function` rows of
+`NonNullAssignmentAfterUse_PreservesInheritedNarrowing` become rejected (R7 (b)). The rows q3, q4, q5a,
+q5b, q5c, q5d, q7, q8, q9, q12, q13 and q14 are corpus rows (`Adr0208NarrowingCorpusTests`): q3 and q14
+were `NullReferenceException` on the compiler before the slice and are `GS0158` now; q12 is accepted and
+q13 reports `GS0536`.
+
+## Issue #5461: function values reassigned in a loop with no fact in force
+
+[#5461](https://github.com/DavidObando/gsharp/issues/5461): the lower bound of a loop (ADR-0213 section 6)
+ran only when a fact was in force at the loop entry. The external callable aliases are part of the entry
+state (ADR-0213 section 13), so a loop entered with an alias and no fact now applies the lower bound too.
+Each row declares `var x C? = C{}`, `let h = func() { x = nil }` and `var g () -> void = cb`, and its loop
+body holds `if x != nil { g(); total += x.Value }`.
+
+| Probe | Loop | Result on main 7497d3dbb | Result now |
+| --- | --- | --- | --- |
+| d01 | `for var i = 0; i < 2; i++ { ...; g = h }` (the issue program) | accepted, `NullReferenceException` | rejected (`GS0158`) |
+| d02 | `while i < 2 { ...; g = h; i++ }` | accepted, `NullReferenceException` | rejected (`GS0158`) |
+| d03 | `for { if i == 2 { break }; ...; g = h; i++ }` | accepted, `NullReferenceException` | rejected (`GS0158`) |
+| d04 | `do { ...; g = h; i++ } while i < 2` | accepted, `NullReferenceException` | rejected (`GS0158`) |
+| d05 | `for` without a write to `g`; `h()` after the loop | accepted, prints `2` | accepted, prints `2` |
+| d06 | `for var i = 0; i < 2; i++ { ...; g = Other }`, where `Other` is a named function | accepted, prints `2` | rejected (`GS0158`) |
+
+Row d06 is the control for a write of a function that cannot reach `x`. Section 13 removes an alias at any
+write in the region, whatever the written value is, so no write keeps `g` external. Main already rejects
+d06 when another fact is in force at the loop entry; the row now gets the same result without one.

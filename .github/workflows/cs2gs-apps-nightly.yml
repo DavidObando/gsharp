@@ -75,6 +75,11 @@ on:
   schedule:
     - cron: '23 13 * * *'
   workflow_dispatch:
+    inputs:
+      legs:
+        description: 'Comma-separated legs to run (gsharp-csharp,oahu,code-exploder) or all'
+        required: false
+        default: 'all'
 
 env:
   NBGV_SetCloudBuildVersionVars: false
@@ -90,20 +95,35 @@ permissions:
 
 # Issue deduplication is search-then-create, so overlapping runs on main could
 # file duplicates: serialize runs per ref. Only main files issues, so a branch
-# run neither waits for nor blocks the scheduled one.
+# run neither waits for nor blocks the scheduled one, and a newer dispatch on
+# the same branch cancels the superseded run instead of holding runners.
 concurrency:
   group: cs2gs-apps-nightly-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   app:
     name: app (${{ matrix.app }})
+    if: >-
+      github.event.inputs.legs == '' ||
+      github.event.inputs.legs == 'all' ||
+      contains(format(',{0},', github.event.inputs.legs), ',oahu,') ||
+      contains(format(',{0},', github.event.inputs.legs), ',code-exploder,')
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        app: [oahu, code-exploder]
+        app: >-
+          ${{
+            (github.event.inputs.legs == '' || github.event.inputs.legs == 'all' ||
+              (contains(format(',{0},', github.event.inputs.legs), ',oahu,') &&
+               contains(format(',{0},', github.event.inputs.legs), ',code-exploder,'))) &&
+            fromJSON('["oahu","code-exploder"]') ||
+            contains(format(',{0},', github.event.inputs.legs), ',oahu,') &&
+            fromJSON('["oahu"]') ||
+            fromJSON('["code-exploder"]')
+          }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -123,9 +143,17 @@ jobs:
       - name: Build cs2gs (Release)
         run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj --configuration Release --no-restore -graph
 
+      - name: Restore verified C# test stamp for ${{ matrix.app }}
+        id: csharp-verified-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/gsharp-cs2gs-verified/${{ matrix.app }}
+          key: cs2gs-app-verified-${{ matrix.app }}-${{ runner.os }}-${{ hashFiles(format('tools/cs2gs/external/{0}.json', matrix.app)) }}
+
       - name: Migrate and validate ${{ matrix.app }}
         env:
           APP: ${{ matrix.app }}
+          CS2GS_VERIFIED_STAMP: ${{ runner.temp }}/gsharp-cs2gs-verified/${{ matrix.app }}/verified.txt
           # Every leg writes under the one directory the upload step collects.
           OAHU_GATE_ROOT: ${{ runner.temp }}/gsharp-cs2gs-gate/oahu
           CODE_EXPLODER_GATE_ROOT: ${{ runner.temp }}/gsharp-cs2gs-gate/code-exploder
@@ -138,6 +166,9 @@ jobs:
           esac
           "$cmd" 2>&1 | tee "$RUNNER_TEMP/leg.log"
           code=${PIPESTATUS[0]}
+          if [[ -f "$CS2GS_VERIFIED_STAMP" ]]; then
+            echo "verified=true" >> "$GITHUB_OUTPUT"
+          fi
           # The leg script leaves stats.json in its gate root (#4856); the
           # result is red without it, below its floor, or on a non-zero exit.
           python3 build/cs2gs-apps-leg.py result --app "$APP" --exit-code "$code" \
@@ -146,6 +177,14 @@ jobs:
             --out "$RUNNER_TEMP/results/result-$APP.json"
           # The gate job reports the failure; do not fail this leg twice.
           exit 0
+        id: migrate-app
+
+      - name: Save verified C# test stamp for ${{ matrix.app }}
+        if: steps.csharp-verified-cache.outputs.cache-hit != 'true' && steps.migrate-app.outputs.verified == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/gsharp-cs2gs-verified/${{ matrix.app }}
+          key: cs2gs-app-verified-${{ matrix.app }}-${{ runner.os }}-${{ hashFiles(format('tools/cs2gs/external/{0}.json', matrix.app)) }}
 
       # Only result-<app>.json goes into the artifact the gate job downloads;
       # the reports go into a separate one, so the gate job does not pull them.
@@ -174,6 +213,10 @@ jobs:
 
   csharp-migrate:
     name: gsharp-csharp (translate)
+    if: >-
+      github.event.inputs.legs == '' ||
+      github.event.inputs.legs == 'all' ||
+      contains(format(',{0},', github.event.inputs.legs), ',gsharp-csharp,')
     runs-on: ubuntu-latest
     # The one gsharp-csharp job that cannot be split; the translate pass took
     # about 75 minutes before the cut-over. Keep the headroom.
@@ -186,6 +229,14 @@ jobs:
     env:
       # The same absolute path in csharp-validate (`env` is not available here).
       SELFMIG_SOURCE_ROOT: /tmp/gsharp-csharp-corpus
+      # Issue #5659: Nerdbank.GitVersioning takes the public-release decision
+      # from GITHUB_REF, so on a run on main the corpus built Gsharp.NET.Sdk
+      # 0.4.1271 and on any other ref 0.4.1271-g<sha>. The cached corpus out/
+      # is shared across refs, and a shard's C# oracle build then packed the
+      # other version beside the restored one. Fix the decision for every
+      # build in the gsharp-csharp jobs, so the versions never depend on the
+      # ref. Keep this in csharp-validate too.
+      PublicRelease: 'false'
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
@@ -208,10 +259,28 @@ jobs:
         run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj --configuration Release --no-restore -graph
 
       - name: Check out the C# corpus (cs2gs/csharp-0.4, pinned)
-        run: ./build/checkout-csharp-corpus.sh "$SELFMIG_SOURCE_ROOT"
+        run: |
+          ./build/checkout-csharp-corpus.sh "$SELFMIG_SOURCE_ROOT"
+          dotnet restore "$SELFMIG_SOURCE_ROOT/GSharp.sln" --locked-mode
+
+      - name: Cache the built C# corpus prerequisites
+        id: corpus-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SELFMIG_SOURCE_ROOT }}/out
+          # v2 (issue #5659): entries saved before PublicRelease was fixed can
+          # hold a public-release corpus package; never restore them.
+          key: selfmig-corpus-out-v2-${{ runner.os }}-${{ hashFiles('tools/cs2gs/external/gsharp-csharp.json') }}
 
       - name: Translate the corpus
+        env:
+          SELFMIG_CORPUS_RESTORED: ${{ steps.corpus-cache.outputs.cache-hit == 'true' && '1' || '0' }}
         run: ./build/run-cs2gs-selfmig-migrate.sh
+
+      - name: Archive built prerequisites for validation shards
+        run: |
+          tar -cf "$SELFMIG_GATE_ROOT/main-out.tar" out
+          tar -cf "$SELFMIG_GATE_ROOT/corpus-out.tar" -C "$SELFMIG_SOURCE_ROOT" out
 
       # Issue #3721: prefer the durations a recent run measured over the
       # checked-in map, so the packing tracks the migration instead of aging
@@ -264,6 +333,8 @@ jobs:
             ${{ env.SELFMIG_GATE_ROOT }}/migrate.log
             ${{ env.SELFMIG_GATE_ROOT }}/metrics.json
             ${{ env.SELFMIG_GATE_ROOT }}/migrate-run-dir.txt
+            ${{ env.SELFMIG_GATE_ROOT }}/main-out.tar
+            ${{ env.SELFMIG_GATE_ROOT }}/corpus-out.tar
 
   csharp-validate:
     name: gsharp-csharp (validate ${{ matrix.name }})
@@ -273,6 +344,8 @@ jobs:
     env:
       # The same absolute path csharp-migrate recorded.
       SELFMIG_SOURCE_ROOT: /tmp/gsharp-csharp-corpus
+      # Issue #5659: the same versions as csharp-migrate on every ref.
+      PublicRelease: 'false'
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.csharp-migrate.outputs.matrix) }}
@@ -292,9 +365,6 @@ jobs:
       - name: Restore .NET local tools
         run: dotnet tool restore
 
-      - name: Build cs2gs (Release)
-        run: dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.gsproj --configuration Release --no-restore -graph
-
       # `cs2gs validate --corpus` reads the C# corpus too.
       - name: Check out the C# corpus (cs2gs/csharp-0.4, pinned)
         run: ./build/checkout-csharp-corpus.sh "$SELFMIG_SOURCE_ROOT"
@@ -305,10 +375,20 @@ jobs:
           name: cs2gs-selfmig-migrated
           path: ${{ env.SELFMIG_GATE_ROOT }}
 
+      - name: Restore C# corpus packages and extract built prerequisites
+        run: |
+          dotnet restore "$SELFMIG_SOURCE_ROOT/GSharp.sln" --locked-mode
+          rm -rf out "$SELFMIG_SOURCE_ROOT/out"
+          tar -xf "$SELFMIG_GATE_ROOT/main-out.tar"
+          tar -xf "$SELFMIG_GATE_ROOT/corpus-out.tar" -C "$SELFMIG_SOURCE_ROOT"
+          rm -f "$SELFMIG_GATE_ROOT/main-out.tar" "$SELFMIG_GATE_ROOT/corpus-out.tar"
+
       - name: Validate shard
         env:
           SHARD_NAME: ${{ matrix.name }}
           SHARD_APPS: ${{ matrix.apps }}
+          SELFMIG_PREREQUISITES_RESTORED: '1'
+          SELFMIG_CORPUS_RESTORED: '1'
         # SHARD_APPS is a space-separated app-id list: one argument per app.
         run: |
           read -ra apps <<< "$SHARD_APPS"
@@ -342,7 +422,12 @@ jobs:
     # leave a result, and a crashed job must read as red with its reason rather
     # than as a missing result. A shard that left no result fails the merge
     # loudly (build/merge-selfmig-runs.py), which is red here too.
-    if: always()
+    if: >-
+      always() && (
+        github.event.inputs.legs == '' ||
+        github.event.inputs.legs == 'all' ||
+        contains(format(',{0},', github.event.inputs.legs), ',gsharp-csharp,')
+      )
     steps:
       - uses: actions/checkout@v5
 
@@ -457,8 +542,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EXPECTED_LEGS: ${{ (github.event.inputs.legs != '' && github.event.inputs.legs != 'all') && github.event.inputs.legs || 'gsharp-csharp,oahu,code-exploder' }}
         run: |
           mkdir -p results
+          if [[ -z "${EXPECTED_LEGS}" || "${EXPECTED_LEGS}" == *, || "${EXPECTED_LEGS}" == ,* || "${EXPECTED_LEGS}" == *,,* ]]; then
+            echo "cs2gs-apps-nightly: malformed legs input '${EXPECTED_LEGS}'." >&2
+            exit 2
+          fi
+          IFS=',' read -ra requested_legs <<< "${EXPECTED_LEGS,,}"
+          for leg in "${requested_legs[@]}"; do
+            case "$leg" in
+              gsharp-csharp|oahu|code-exploder) ;;
+              *)
+                echo "cs2gs-apps-nightly: unsupported leg '$leg' in '${EXPECTED_LEGS}'." >&2
+                exit 2
+                ;;
+            esac
+          done
           # A leg whose OWN job was cancelled or skipped and left no result is
           # "incomplete": the gate stays red, but no issue is filed for a
           # migration failure nothing showed (run 38908586181). A job that
@@ -471,7 +571,7 @@ jobs:
           python3 build/cs2gs-apps-gate-issues.py \
             --results results \
             --banked tools/cs2gs/apps-nightly-banked.json \
-            --expect gsharp-csharp,oahu,code-exploder \
+            --expect "${EXPECTED_LEGS,,}" \
             --jobs "$RUNNER_TEMP/jobs.json" \
             --leg-job "oahu=app (oahu)" \
             --leg-job "code-exploder=app (code-exploder)" \

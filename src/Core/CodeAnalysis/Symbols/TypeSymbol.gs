@@ -1072,9 +1072,9 @@ open partial class TypeSymbol : Symbol {
             if left is StructSymbol leftStruct && right is StructSymbol rightStruct {
                 return AreSameConstructedUserTypeCore(
                     leftStruct.Definition ?? leftStruct,
-                    leftStruct.TypeArguments,
+                    Conversion.GetEffectiveStructTypeArguments(leftStruct),
                     rightStruct.Definition ?? rightStruct,
-                    rightStruct.TypeArguments
+                    Conversion.GetEffectiveStructTypeArguments(rightStruct)
                 )
             }
             if left is EnumSymbol leftEnum && right is EnumSymbol rightEnum {
@@ -1619,6 +1619,17 @@ open partial class TypeSymbol : Symbol {
                             CollectReferencedTypeParameters(param, visitParameter, signaturePath)
                         }
                         CollectReferencedTypeParameters(fn.ReturnType, visitParameter, signaturePath)
+                        return
+                    }
+                    case fp is FunctionPointerTypeSymbol {
+                        for param in fp.ParameterTypes {
+                            CollectReferencedTypeParameters(param, visitParameter, signaturePath)
+                        }
+                        CollectReferencedTypeParameters(fp.ReturnType, visitParameter, signaturePath)
+                        return
+                    }
+                    case ptr is PointerTypeSymbol {
+                        CollectReferencedTypeParameters(ptr.PointeeType, visitParameter, signaturePath)
                         return
                     }
                     case tup is TupleTypeSymbol {

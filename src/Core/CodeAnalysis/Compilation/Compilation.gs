@@ -553,6 +553,45 @@ open class Compilation {
         }
     }
 
+    /// Issue #5623: gets GS0634 when an executable has no entry point.
+    /// Call this function only when the output is an executable and no other error stops the output.
+    /// (cref:IsLibrary) is `false` by default, so a host that does not know the output kind must not call it.
+    /// A function whose name differs from `Main` only in case gets a hint and the diagnostic location.
+    /// @returns GS0634, or an empty array when the program has an entry point.
+    internal func GetMissingEntryPointDiagnostics() ImmutableArray[Diagnostic] {
+        if IsLibrary || Submission != nil || SyntaxTrees.IsDefaultOrEmpty {
+            return ImmutableArray[Diagnostic].Empty
+        }
+        let bound = GlobalScope
+        if bound.EntryPoint != nil {
+            return ImmutableArray[Diagnostic].Empty
+        }
+        // The candidates are the same as in Binder.ResolveEntryPoint: package functions and static class methods.
+        let nearMiss FunctionSymbol? = bound
+            .Functions
+            .Concat(
+            bound
+                .Structs
+                .Where((s StructSymbol) -> s.IsClass && !s.StaticMethods.IsDefaultOrEmpty)
+                .SelectMany((s StructSymbol) -> s.StaticMethods.AsEnumerable())
+        )
+            .FirstOrDefault(
+            (f FunctionSymbol) -> f.Declaration != nil && f.Name != "Main" && string.Equals(
+                f.Name,
+                "Main",
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
+        let location = if nearMiss?.Declaration is {} declaration {
+            declaration.Identifier.Location
+        } else {
+            TextLocation(SyntaxTrees[0].Text, TextSpan(0, 0))
+        }
+        let diagnostics = DiagnosticBag()
+        diagnostics.ReportExecutableWithoutEntryPoint(location, nearMiss?.Name)
+        return diagnostics.ToImmutableArray()
+    }
+
     // The documentation pass of Emit and of GetDiagnostics: one rule (ADR-0212 §7a).
     private func ValidateDocumentation(program BoundProgram) DiagnosticBag {
         let documentationDiagnostics = DiagnosticBag()

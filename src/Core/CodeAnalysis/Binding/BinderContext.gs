@@ -306,6 +306,41 @@ internal class BinderContext {
 
     prop PotentialReachabilityLabel string?
 
+    /// Issue #5569: set while a speculative lambda body converts a `return` value to its delegate result. A
+    /// backward `goto` narrowing use recorded then belongs to that conversion only, so its diagnostic waits for the
+    /// lambda binder's choice between the delegate and the natural function type. Issue #5603: also set while a
+    /// `return` value of a lambda body with an inferred result records its narrowing use.
+    prop DeferredReturnNarrowingOwner LambdaBinder.DeferredReturnState?
+
+    /// Issue #5613: the capture of the block value that the next expression bind gives (cref:BindWithBlockValueCapture).
+    /// The expression binder takes it when it binds the block, so a nested block does not receive it.
+    prop PendingBlockValueCapture((NarrowedBranchValue) -> void)?
+
+    /// Issue #5635: binds [`syntax`](paramref) with [`bind`](paramref). When the syntax is a block value, also in
+    /// parentheses or `checked`/`unchecked` (cref:ExpressionBinder.IsBlockValueSyntax), the block gives the narrowed
+    /// read that it yields to [`capture`](paramref), captured where the read binds. The consumer then decides the
+    /// read for the type that it converts the value to. Without a capture, a block decides the read at its own type.
+    /// @param syntax The value syntax.
+    /// @param capture Receives the narrowed read that a block value yields.
+    /// @param bind Binds the value.
+    /// @returns The bound value.
+    func BindWithBlockValueCapture(
+        syntax ExpressionSyntax,
+        capture(NarrowedBranchValue) -> void,
+        bind() -> BoundExpression
+    ) BoundExpression {
+        PendingBlockValueCapture = if ExpressionBinder.IsBlockValueSyntax(syntax) {
+            capture
+        } else {
+            default(((NarrowedBranchValue) -> void)?)
+        }
+        try {
+            return bind()
+        } finally {
+            PendingBlockValueCapture = nil
+        }
+    }
+
     /// Gets or sets a value indicating whether the CURRENT function/lambda/
     /// local-function body contains any user-written `goto` statement or non-loop
     /// `label:` declaration (issue #4285), computed syntactically,
@@ -822,6 +857,111 @@ internal class BinderContext {
         targetType TypeSymbol? = nil,
         requiredType TypeSymbol? = nil
     ) {
+        if BackwardGotoNarrowingStates.Count == 0 {
+            return
+        }
+        if CaptureBackwardGotoNarrowingUse(path) is {} capture {
+            RecordBackwardGotoNarrowingUse(capture, location, memberName, kind, targetType, requiredType)
+        }
+    }
+
+    /// Issue #5635: gets or sets the identity of the function body whose backward `goto` labels are bound now. The
+    /// lambda binder gives each nested body a new identity, so a read captured in one body is not recorded against
+    /// the labels of another body with the same names.
+    internal var NarrowingFunctionFrame object = Object()
+
+    // Issue #5635: the narrowed reads captured where they bind (CaptureNarrowedRead), by node, with their function
+    // body. The table is read by node only, so its order does not affect the output.
+    private let narrowedReadCaptures Dictionary[BoundExpression, (Read NarrowedBranchValue, Frame object)] = Dictionary[
+        BoundExpression,
+        (Read NarrowedBranchValue, Frame object)
+    ](ReferenceEqualityComparer.Instance)
+
+    /// Issue #5613: captures [`value`](paramref) when it is a narrowed read (cref:TryGetBackwardGotoNarrowingPath),
+    /// with its backward `goto` facts where the read binds (cref:CaptureBackwardGotoNarrowingUse). A later assignment
+    /// or narrowing frame does not change them. A read whose narrowing changes the runtime type of a local is checked
+    /// at the read, so it is not captured.
+    /// @param value The bound value.
+    /// @param location The location of the value.
+    /// @param read The captured read, when the result is `true`.
+    /// @returns `true` when the value is a narrowed read.
+    func TryCaptureNarrowedRead(
+        value BoundExpression,
+        location TextLocation,
+        @NotNullWhen(true) out read NarrowedBranchValue?
+    ) bool {
+        read = nil
+        if !TryGetBackwardGotoNarrowingPath(value, out var path, out var narrowedType) {
+            return false
+        }
+        let narrowedPath = Invariant.Required(path, "a narrowed read has an access path", expression: "path")
+        let narrowedValueType = Invariant.Required(
+            narrowedType,
+            "a narrowed read has a narrowed type",
+            expression: "narrowedType"
+        )
+        if !narrowedPath.HasMembers && NarrowedReadChangesRuntimeType(narrowedPath.Root.Type, narrowedValueType) {
+            return false
+        }
+        read = NarrowedBranchValue(
+            value,
+            location,
+            narrowedPath,
+            narrowedValueType,
+            CaptureBackwardGotoNarrowingUse(narrowedPath)
+        )
+        return true
+    }
+
+    /// Issue #5635: keeps the backward `goto` facts of a narrowed read where it binds, for a consumer that decides
+    /// the read later (cref:ConversionClassifier.DecideNarrowedConversion). Then a later sibling value, such as an
+    /// argument that assigns the variable, does not change the facts of the read.
+    /// @param value The bound value.
+    /// @param location The location of the value.
+    func CaptureNarrowedRead(value BoundExpression, location TextLocation) {
+        if BackwardGotoNarrowingStates.Count > 0 && TryCaptureNarrowedRead(value, location, out var read) {
+            narrowedReadCaptures[value] = (read!!, NarrowingFunctionFrame)
+        }
+    }
+
+    /// Issue #5635: keeps the captured narrowed read [`read`](paramref) for [`value`](paramref). A conversion of an
+    /// enclosing tuple literal then decides the read for the target element type.
+    /// @param value The bound value.
+    /// @param read The captured narrowed read that the value yields.
+    func CaptureNarrowedRead(value BoundExpression, read NarrowedBranchValue) {
+        if BackwardGotoNarrowingStates.Count > 0 {
+            narrowedReadCaptures[value] = (read, NarrowingFunctionFrame)
+        }
+    }
+
+    /// Issue #5635: gets the narrowed read that (cref:CaptureNarrowedRead) captured for [`value`](paramref) in the
+    /// function body that is bound now.
+    /// @param value The bound value.
+    /// @param read The captured read, when the result is `true`.
+    /// @returns `true` when a capture of this body exists.
+    func TryGetCapturedNarrowedRead(value BoundExpression, @NotNullWhen(true) out read NarrowedBranchValue?) bool {
+        if narrowedReadCaptures.TryGetValue(value, out var entry) && object.ReferenceEquals(
+            entry.Frame,
+            NarrowingFunctionFrame
+        ) {
+            read = entry.Read
+            return true
+        }
+        read = nil
+        return false
+    }
+
+    /// Issue #5635: removes the captured reads when a function body is complete.
+    func ClearCapturedNarrowedReads() {
+        narrowedReadCaptures.Clear()
+    }
+
+    /// Issue #5613: captures the backward `goto` facts of a read of [`path`](paramref) where the read binds: the
+    /// labels whose target state has the same narrowing frame, proof and assignment state. A use that is decided
+    /// later is recorded from the capture (cref:RecordBackwardGotoNarrowingUse).
+    /// @param path The access path of the read.
+    /// @returns The capture, or `nil` when no frame narrows the path.
+    func CaptureBackwardGotoNarrowingUse(path AccessPath) BackwardGotoNarrowingCapture? {
         var frameIndex = -1
         for var i = NarrowedVariables.Count - 1; i >= 0; i-- {
             if NarrowedVariables[i].ContainsKey(path) {
@@ -830,20 +970,10 @@ internal class BinderContext {
             }
         }
         if frameIndex < 0 {
-            return
+            return nil
         }
         let variable = path.Root
-        let narrowedType = NarrowedVariables[frameIndex][path]
-        let operationRequiredType = requiredType ?? narrowedType
-        let access = BackwardGotoNarrowingAccess(
-            path,
-            location,
-            memberName,
-            kind,
-            operationRequiredType,
-            MemberLookup.GetDeclaredAccessPathType(path, narrowedType),
-            targetType
-        )
+        let labels = ImmutableArray.CreateBuilder[string](BackwardGotoNarrowingStates.Count)
         for entry in BackwardGotoNarrowingStates {
             let state = entry.Value
             if !state
@@ -871,6 +1001,47 @@ internal class BinderContext {
             ) {
                 continue
             }
+            labels.Add(entry.Key)
+        }
+        return BackwardGotoNarrowingCapture(
+            path,
+            NarrowedVariables[frameIndex][path],
+            labels.ToImmutable(),
+            DeferredReturnNarrowingOwner
+        )
+    }
+
+    /// Issue #5613: records a narrowing-dependent use of a captured read (cref:CaptureBackwardGotoNarrowingUse) in
+    /// the backward `goto` state of each label of the capture.
+    /// @param capture The facts of the read where it binds.
+    /// @param location The location of the use.
+    /// @param memberName The member name for a member or function use.
+    /// @param kind The kind of the use.
+    /// @param targetType The conversion target, or `nil`.
+    /// @param requiredType The type that the use requires, or `nil` for the narrowed type.
+    func RecordBackwardGotoNarrowingUse(
+        capture BackwardGotoNarrowingCapture,
+        location TextLocation,
+        memberName string,
+        kind BackwardGotoNarrowingUseKind,
+        targetType TypeSymbol? = nil,
+        requiredType TypeSymbol? = nil
+    ) {
+        let path = capture.Path
+        let access = BackwardGotoNarrowingAccess(
+            path,
+            location,
+            memberName,
+            kind,
+            requiredType ?? capture.NarrowedType,
+            MemberLookup.GetDeclaredAccessPathType(path, capture.NarrowedType),
+            targetType,
+            capture.Owner
+        )
+        for label in capture.Labels {
+            if !BackwardGotoNarrowingStates.TryGetValue(label, out var state) {
+                continue
+            }
             state.Accesses.Add(access)
             for edge in state.Edges {
                 edge.Accesses.Add(access)
@@ -884,6 +1055,71 @@ internal class BinderContext {
                     }
                 }
             }
+        }
+    }
+
+    /// Issue #5603: records a narrowed `return` value of a lambda body with an inferred result, where the value
+    /// binds. The result type is not known yet, so the use waits in [`owner`](paramref). The lambda binder reports
+    /// it when the inferred result needs the narrowing. A read whose narrowing changes the runtime type is
+    /// recorded at the read (cref:TrackBackwardGotoNarrowingRead), as for a conversion.
+    /// @param owner The narrowing uses of the lambda body.
+    /// @param value The bound `return` value.
+    /// @param location The location of the `return` value.
+    func TrackInferredReturnNarrowing(
+        owner LambdaBinder.DeferredReturnState,
+        value BoundExpression,
+        location TextLocation
+    ) {
+        if !TryGetBackwardGotoNarrowingPath(value, out var path, out var narrowedType) {
+            return
+        }
+        let narrowedPath = Invariant.Required(path, "a narrowed return value has an access path", expression: "path")
+        let narrowedValueType = Invariant.Required(
+            narrowedType,
+            "a narrowed return value has a narrowed type",
+            expression: "narrowedType"
+        )
+        if !narrowedPath.HasMembers && NarrowedReadChangesRuntimeType(narrowedPath.Root.Type, narrowedValueType) {
+            return
+        }
+        let outerOwner = DeferredReturnNarrowingOwner
+        DeferredReturnNarrowingOwner = owner
+        try {
+            TrackBackwardGotoNarrowingUse(
+                narrowedPath,
+                location,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.Conversion,
+                narrowedValueType
+            )
+        } finally {
+            DeferredReturnNarrowingOwner = outerOwner
+        }
+    }
+
+    /// Issue #5635: records the narrowed read that a block `return` value of a lambda body with an inferred result
+    /// yields, from the capture where the read binds. The use waits in [`owner`](paramref), as for a narrowed
+    /// `return` value. The declared read cannot replace a read in a block after the body, so a read that casts or
+    /// unwraps is recorded now, at its narrowed type.
+    /// @param owner The narrowing uses of the lambda body.
+    /// @param read The narrowed read that the block yields.
+    func TrackInferredReturnNarrowing(owner LambdaBinder.DeferredReturnState, read NarrowedBranchValue) {
+        if read.Use is {} use {
+            let held = if NarrowedReadChangesRuntimeType(
+                MemberLookup.GetDeclaredAccessPathType(read.Path, read.NarrowedType),
+                read.NarrowedType
+            ) {
+                use
+            } else {
+                BackwardGotoNarrowingCapture(use.Path, use.NarrowedType, use.Labels, owner)
+            }
+            RecordBackwardGotoNarrowingUse(
+                held,
+                read.Location,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.Conversion,
+                read.NarrowedType
+            )
         }
     }
 
@@ -969,6 +1205,17 @@ internal class BinderContext {
             path = AccessPath.ForVariable(variableRead.Variable)
             narrowedType = variableNarrowed
             return true
+        }
+        // Issue #5603: the compiler-generated unwrap of a narrowed optional value reads its stored value through the
+        // narrowing. An explicit `!!` is a run-time check, so it is not a narrowed read.
+        if expression is BoundUnaryExpression{IsNarrowingUnwrap: true} unwrap {
+            if unwrap.Operand is BoundVariableExpression unwrappedVariable {
+                let variablePath = AccessPath.ForVariable(unwrappedVariable.Variable)
+                path = variablePath
+                narrowedType = NarrowedVariables.Query(variablePath)
+                return narrowedType != nil
+            }
+            return TryGetBackwardGotoNarrowingPath(unwrap.Operand, out path, out narrowedType)
         }
         // A write to an out parameter or a call drops the narrowing of the others (ADR-0208 R12), so
         // the loop reads a local copy.

@@ -97,10 +97,15 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 plan = selection(path)
                 self.assertEqual(set(plan["projects"].split()), all_tests)
-                self.assertTrue(ci.BUILD_JOBS.issubset(plan["jobs"]))
+                self.assertTrue(ci.COMPILER_JOBS.issubset(plan["jobs"]))
+                self.assertFalse(ci.EDITOR_JOBS.intersection(plan["jobs"]))
+                self.assertEqual(plan["docs_jobs"], [])
+                self.assertEqual(plan["harness_matrix"], {"name": ["comment-checker"]})
         for path in ("global.json", "Directory.Build.props", "new/unknown.input",
                      ".github/workflows/build.yml", "build/ci-selection.py", "GSharp.slnx"):
-            self.assertTrue(selection(path)["full"], path)
+            plan = selection(path)
+            self.assertTrue(plan["full"], path)
+            self.assertFalse(ci.GO_JOBS.intersection(plan["jobs"]), path)
 
     def test_owning_suites_and_downstream_consumers(self):
         for path, suites, jobs in (
@@ -382,6 +387,137 @@ class AdvisorySmokeTests(unittest.TestCase):
         self.assertIn("id: check", block)
 
 
+class PublishJobTests(unittest.TestCase):
+    """ADR-0218: seven publish jobs, each with its condition in full (the implicit success() looks past the
+    direct prerequisite, as the step-2 probe showed). Nothing here can run a publish; only a tag run does."""
+    JOBS = {
+        "publish-verify": {"ci"},
+        "publish-github-release": {"publish-verify"},
+        "publish-nuget-compiler": {"publish-verify"},
+        "publish-nuget-sdk": {"publish-verify", "publish-nuget-compiler"},
+        "publish-vscode-marketplace": {"publish-verify", "publish-nuget-sdk"},
+        "publish-visual-studio-marketplace": {"publish-verify", "publish-nuget-sdk"},
+        "publish-finalize": {"publish-verify", "publish-github-release", "publish-vscode-marketplace",
+                             "publish-visual-studio-marketplace"},
+    }
+
+    def setUp(self):
+        self.text = (ROOT / ".github/workflows/build.yml").read_text()
+
+    def needs(self, name):
+        return set(re.search(r"^    needs: \[(.*?)\]", job(self.text, name), re.M).group(1).split(", "))
+
+    def condition(self, name):
+        return re.search(r"^    if: \$\{\{ (.*) \}\}$", job(self.text, name), re.M).group(1)
+
+    def test_the_old_jobs_are_gone_and_the_seven_exist(self):
+        self.assertNotRegex(self.text, r"(?m)^  publish:")
+        self.assertNotIn("publish-visual-studio-extension", self.text)
+        found = set(re.findall(r"(?m)^  (publish-[\w-]+):", self.text))
+        self.assertEqual(found, set(self.JOBS))
+
+    def test_the_graph_is_the_adr_graph(self):
+        for name, needs in self.JOBS.items():
+            with self.subTest(job=name):
+                self.assertEqual(self.needs(name), needs)
+
+    def test_every_job_states_its_condition_in_full(self):
+        for name, needs in self.JOBS.items():
+            with self.subTest(job=name):
+                condition = self.condition(name)
+                self.assertIn("!cancelled()", condition)
+                self.assertNotIn("always()", condition)
+                self.assertIn("startsWith(github.ref, 'refs/tags/v')", condition)
+                for need in needs:
+                    if name == "publish-finalize" and need != "publish-verify":
+                        continue  # finalize reports the other destinations itself
+                    self.assertIn(f"needs.{need}.result == 'success'", condition)
+
+    def test_only_the_visual_studio_job_skips_on_a_prerelease(self):
+        for name in self.JOBS:
+            has = "prerelease != 'true'" in self.condition(name)
+            self.assertEqual(has, name == "publish-visual-studio-marketplace", name)
+
+    def test_permissions_secrets_and_runners(self):
+        for name in self.JOBS:
+            block = job(self.text, name)
+            writes = "contents: write" in block
+            self.assertEqual(writes, name in {"publish-github-release", "publish-finalize"}, name)
+            self.assertNotIn("environment:", block)
+        for secret, owner in (("NUGET_API_KEY", set()),
+                              ("VSCE_PAT", {"publish-vscode-marketplace", "publish-visual-studio-marketplace"})):
+            self.assertEqual({n for n in self.JOBS if f"secrets.{secret}" in job(self.text, n)}, owner)
+        self.assertIn("runs-on: windows-latest", job(self.text, "publish-visual-studio-marketplace"))
+
+    def test_the_nuget_jobs_use_trusted_publishing(self):
+        # #5535: nuget.org trusted publishing. Only the two NuGet jobs get id-token: write, and no job reads the
+        # long-lived secret. Each job requests its own short-lived key right before its push.
+        self.assertNotIn("secrets.NUGET_API_KEY", self.text)
+        oidc = {n for n in self.JOBS if re.search(r"(?m)^    permissions:\n(?:\s+#.*\n)*(?:      [\w-]+: \w+\n)*"
+                                                   r"      id-token: write$", job(self.text, n))}
+        self.assertEqual(oidc, {"publish-nuget-compiler", "publish-nuget-sdk"})
+        for name, group, after in (("publish-nuget-compiler", "compiler", "--wait-minutes 30"),
+                                   ("publish-nuget-sdk", "sdk", "--wait-minutes 15 --require-sdk")):
+            with self.subTest(job=name):
+                block = job(self.text, name)
+                self.assertRegex(block, r"(?m)^      contents: read$")
+                login = block.index("uses: NuGet/login@v1")
+                self.assertIn("id: nuget-login\n        uses: NuGet/login@v1\n        with:\n          user: david-obando\n",
+                              block)
+                key = "NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}\n"
+                self.assertEqual(block.count("steps.nuget-login.outputs"), 1)
+                push = block.index(f"nuget-push --group {group}")
+                self.assertLess(login, block.index(key))
+                self.assertLess(block.index(key), push)
+                # Only the feed checks follow the push; they need no key, so a long wait cannot outlive it.
+                self.assertLess(push, block.index(after))
+                # The push step is the next step after the login step.
+                self.assertEqual(block[login:push].count("      - name:"), 1)
+
+    def test_scripts_vsce_pin_draft_and_artifacts(self):
+        self.assertIn("nuget-push --group compiler", job(self.text, "publish-nuget-compiler"))
+        self.assertIn("--wait-minutes 30", job(self.text, "publish-nuget-compiler"))
+        sdk = job(self.text, "publish-nuget-sdk")
+        self.assertLess(sdk.index("check-rid-packages.py --packages ./nupkgs\n"), sdk.index("nuget-push --group sdk"))
+        self.assertIn("--wait-minutes 15 --require-sdk", sdk)
+        vscode = job(self.text, "publish-vscode-marketplace")
+        self.assertIn("@vscode/vsce@3.9.2 publish", vscode)
+        self.assertIn("--skip-duplicate", vscode)
+        self.assertNotRegex(vscode, r"vsce@[\d.]+ publish[^\n]*--pre-release")
+        self.assertRegex(self.text, r"@vscode/vsce@\d+\.\d+\.\d+")
+        self.assertNotRegex(self.text, r"vsce publish --packagePath \./vsix/vscode-gsharp\.vsix\n")
+        release = job(self.text, "publish-github-release")
+        self.assertIn("--draft", release)
+        self.assertIn("--prerelease", release)
+        self.assertIn("--clobber", release)
+        self.assertIn("finalize", job(self.text, "publish-finalize"))
+        for name in ("publish-github-release", "publish-nuget-compiler", "publish-nuget-sdk"):
+            self.assertIn("name: nuget-packages", job(self.text, name))
+
+    def test_the_marketplace_query_not_the_publisher_exit_code_decides(self):
+        # A lost answer after an accepted upload must not fail the job: only the final query may.
+        vscode = job(self.text, "publish-vscode-marketplace")
+        self.assertRegex(vscode, r"vsce@[\d.]+ publish [^\n]*\\\n\s*\|\| echo ")
+        self.assertTrue(vscode.rstrip().endswith("query --wait-minutes 5"))
+        studio = job(self.text, "publish-visual-studio-marketplace")
+        after = studio[studio.index("& $publisher publish"):]
+        final = after.index("--wait-minutes 5")
+        self.assertNotIn("throw", after[:final])
+        self.assertIn("throw", after[final:])
+
+    def test_the_vsix_job_asks_tag_kind_for_the_pre_release_flag(self):
+        block = job(self.text, "vsix")
+        self.assertIn('release-publish.py tag-kind "$GITHUB_REF_NAME"', block)
+        self.assertIn("--pre-release", block)
+        self.assertLess(block.index("tag-kind"), block.index("vsce package"))
+
+    def test_publish_verify_forwards_the_ci_output_and_the_script_outputs(self):
+        block = job(self.text, "publish-verify")
+        for name in ("version", "prerelease", "vscode_version", "visual_studio_version"):
+            self.assertIn(f"{name}: ${{{{ steps.verify.outputs.{name} }}}}", block)
+        self.assertIn("unverified_rids: ${{ needs.ci.outputs.unverified_rids }}", block)
+
+
 class WorkflowTests(unittest.TestCase):
     def test_partition_pipeline_propagates_failed_verification(self):
         text = (ROOT / ".github/workflows/build.yml").read_text()
@@ -421,19 +557,33 @@ class WorkflowTests(unittest.TestCase):
 
     def test_official_commands_artifacts_and_publication_dependencies_stay(self):
         text = (ROOT / ".github/workflows/build.yml").read_text()
-        for name in ("build", "tests", "test-partition"):
+        for name in ("build", "test-partition"):
             block = job(text, name)
             self.assertIn("dotnet restore GSharp.slnx --locked-mode", block)
             self.assertIn("dotnet build GSharp.slnx --configuration Release --no-restore -graph", block)
             self.assertIn("if: github.event_name != 'pull_request'", block)
-        publish = job(text, "publish")
-        self.assertIn("if: startsWith(github.ref, 'refs/tags/v')", publish)
-        needs = set(re.search(r"needs: \[(.*?)\]", publish).group(1).split(", "))
-        self.assertEqual(needs, {"build", "tests", "test-partition", "harness", "e2e", "ilverify",
-                                 "cs2gs-corpus", "vsix", "visual-studio-extension", "desktop-msbuild-sdk-smoke",
-                                 "r2r-compiler-smoke"})
+        self.assertEqual(job(text, "build").count("gsfmt.dll --check ."), 1)
+        self.assertIn("name: test-build-outputs", job(text, "test-partition"))
+        tests_block = job(text, "tests")
+        self.assertIn("needs: [select, discover-tests, test-partition]", tests_block)
+        self.assertIn("dotnet restore GSharp.slnx --locked-mode", tests_block)
+        self.assertIn("name: test-build-outputs", tests_block)
+        self.assertNotIn("dotnet build GSharp.slnx", tests_block)
+        self.assertNotIn("ci-projects.py build", tests_block)
+        self.assertNotIn("dotnet build csharp-source/GSharp.sln", tests_block)
+        nightly = (ROOT / ".github/workflows/cs2gs-apps-nightly.yml").read_text()
+        self.assertIn("cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}", nightly)
+        self.assertIn("legs:", nightly)
+        self.assertNotIn("replace(", nightly)
+        self.assertNotIn("matrix.app", job(nightly, "app").split("runs-on:")[0].split("if:")[1])
+        self.assertIn('--expect "${EXPECTED_LEGS,,}"', job(nightly, "gate"))
+        self.assertNotIn("Build cs2gs (Release)", job(nightly, "csharp-validate"))
+        selfmig = (ROOT / "build/selfmig-common.sh").read_text()
+        self.assertIn("SELFMIG_PREREQUISITES_RESTORED", selfmig)
+        self.assertIn("SELFMIG_CORPUS_RESTORED", selfmig)
+        # The publish jobs are covered by PublishJobTests (ADR-0218).
         for artifact in ("nuget-packages", "vscode-gsharp-vsix", "visual-studio-gsharp-vsix"):
-            self.assertIn(f"name: {artifact}", publish)
+            self.assertIn(f"name: {artifact}", job(text, "publish-verify"))
         pages = (ROOT / ".github/workflows/pages.yml").read_text()
         push = pages.split("  push:\n")[1].split("  pull_request:")[0]
         self.assertEqual(re.findall(r"      - '(.*?)'", push),

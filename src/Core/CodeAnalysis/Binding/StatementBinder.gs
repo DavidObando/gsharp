@@ -101,6 +101,9 @@ internal partial class StatementBinder {
     private let internallyReachableLoopBacks HashSet[BoundLabel] = HashSet[BoundLabel]()
     private var internalReachabilityGeneration int32
     private var currentStatementListFallsThrough bool = true
+    // Issue #5569: the user labels of the first pass of a retried return value, which the second pass reuses so
+    // both bound values and the code after them refer to the same label objects.
+    private var retriedValueUserLabels Dictionary[string, BoundLabel]?
     private var usingInitializationFlagCount int32
 
     init(
@@ -437,7 +440,7 @@ internal partial class StatementBinder {
         // already handles a callee declared earlier; this converges the
         // rest. Applies equally to a non-generic group — the reconciler
         // itself does not distinguish generic from non-generic literals.
-        if groupLiterals != nil && groupLiterals.Count > 1 {
+        if groupLiterals != nil && groupLiterals.Count > 0 {
             reconcileGenericLocalFunctionGroupCaptures!!(groupLiterals)
             // The reconcile pass above can widen a member's CapturedVariables
             // after the initial per-member stamp above; re-stamp so a later
@@ -743,13 +746,15 @@ internal partial class StatementBinder {
                 // the persistent frame, so subsequent reads see the non-nullable
                 // type. Runs after invalidation for the same reason as the
                 // assignment narrowing above.
-                ApplyIfJoinNarrowings(statement, memberNotNullFrame)
+                ApplyIfJoinNarrowings(statement, memberNotNullFrame, externalCallableAliasesAtEntry)
                 // ADR-0208: lift what the join of the branch exits proves, for an
                 // `if` and for a bare block. It runs after the invalidation, which
                 // owns every kill that a write causes, and after the legacy lifts,
                 // so it can strengthen a fact they lifted but never weakens one.
                 ApplyJoinExitNarrowings(statement, memberNotNullFrame, externalCallableAliasesAtEntry)
                 ApplyTryFinallyFallthroughNarrowings(statement, memberNotNullFrame)
+                // ADR-0213 row R7 (f): the facts that the header of a loop proves when the loop ends.
+                ApplyLoopExitNarrowings(statementSyntax, memberNotNullFrame)
                 ShadowAfterStatement(statement)
                 let hasInternallyReachableFallthrough = HasInternallyReachableFallthrough(statement)
                 let canCompleteNormally = CanCompleteNormally(statement)
