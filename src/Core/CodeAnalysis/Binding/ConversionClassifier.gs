@@ -4143,21 +4143,24 @@ internal class ConversionClassifier {
         /// @returns The bound default-value argument.
         func CreateOptionalDefaultArgument(parameter ParameterInfo) BoundExpression {
             let typeSymbol = ClrNullability.GetParameterTypeSymbol(parameter)
-            if TryGetDateTimeParameterDefault(parameter, out var dateTime) {
-                let constructor ConstructorInfo? = parameter
-                    .ParameterType
-                    .GetConstructors()
-                    .FirstOrDefault(
+            let valueTypeSymbol = GetOptionalDefaultValueType(typeSymbol)
+            let valueClrType = NullableLifting.GetValueTypeNullableUnderlyingClr(parameter.ParameterType) ??
+                parameter.ParameterType
+            if TryGetDateTimeParameterDefault(parameter, valueClrType, out var dateTime) {
+                let constructor ConstructorInfo? = valueClrType.GetConstructors().FirstOrDefault(
                     (candidate ConstructorInfo) -> candidate.GetParameters() is [
                         {ParameterType: {FullName: "System.Int64"}}
                     ]
                 )
                 if constructor != nil {
-                    return BoundClrConstructorCallExpression(
-                        nil,
-                        parameter.ParameterType,
-                        constructor,
-                        ImmutableArray.Create[BoundExpression](BoundLiteralExpression(nil, dateTime.Ticks)),
+                    return LiftOptionalDefaultValue(
+                        BoundClrConstructorCallExpression(
+                            nil,
+                            valueClrType,
+                            constructor,
+                            ImmutableArray.Create[BoundExpression](BoundLiteralExpression(nil, dateTime.Ticks)),
+                            valueTypeSymbol
+                        ),
                         typeSymbol
                     )
                 }
@@ -4171,13 +4174,53 @@ internal class ConversionClassifier {
             }
             if TryGetConstantParameterDefault(parameter, out var constant) {
                 let literal = BoundLiteralExpression(nil, constant)
-                return if parameter.ParameterType.IsEnum {
-                    cast[BoundExpression](BoundConversionExpression(nil, typeSymbol, literal))
-                } else {
-                    cast[BoundExpression](literal)
-                }
+                return LiftOptionalDefaultValue(
+                    if valueClrType.IsEnum {
+                        cast[BoundExpression](BoundConversionExpression(nil, valueTypeSymbol, literal))
+                    } else {
+                        cast[BoundExpression](literal)
+                    },
+                    typeSymbol
+                )
             }
             return BoundDefaultExpression(nil, typeSymbol)
+        }
+
+        /// Issue #5589: builds the omitted argument for a constant default that a G#
+        /// parameter records. The constant has the CLR form of the parameter's value type.
+        /// @param value The recorded constant, or `null` for a `nil` or `default(T)` default.
+        /// @param parameterType The parameter type at the call site.
+        /// @returns The bound default-value argument.
+        internal func CreateConstantDefaultArgument(value object?, parameterType TypeSymbol) BoundExpression {
+            if value == nil {
+                return BoundDefaultExpression(nil, parameterType)
+            }
+            return LiftOptionalDefaultValue(
+                BoundLiteralExpression(nil, value, GetOptionalDefaultValueType(parameterType)),
+                parameterType
+            )
+        }
+
+        // Issue #5589: a non-null default of a value-type `T?` parameter is a `T` value.
+        // The constant tables keep the `T` form, as C# does.
+        private func GetOptionalDefaultValueType(
+            parameterType TypeSymbol
+        ) TypeSymbol -> if parameterType is NullableTypeSymbol nullable &&
+            NullableLifting.IsAnyValueTypeNullable(nullable) {
+            nullable.UnderlyingType
+        } else {
+            parameterType
+        }
+
+        // Issue #5589: every omitted value-type `T?` argument goes through the `T -> T?`
+        // conversion. A bare `T` in a `Nullable<T>` slot is invalid IL.
+        private func LiftOptionalDefaultValue(
+            value BoundExpression,
+            parameterType TypeSymbol
+        ) BoundExpression -> if object.ReferenceEquals(GetOptionalDefaultValueType(parameterType), parameterType) {
+            value
+        } else {
+            BoundConversionExpression(nil, parameterType, value)
         }
 
         /// ADR-0056 §1: when a CLR member returns a (cref:ByRefTypeSymbol)
@@ -5526,9 +5569,13 @@ internal class ConversionClassifier {
             }
         }
 
-        private func TryGetDateTimeParameterDefault(parameter ParameterInfo, out value DateTime) bool {
+        private func TryGetDateTimeParameterDefault(
+            parameter ParameterInfo,
+            valueClrType Type,
+            out value DateTime
+        ) bool {
             try {
-                if parameter.ParameterType.FullName == "System.DateTime" {
+                if valueClrType.FullName == "System.DateTime" {
                     if parameter.RawDefaultValue is int64 ticks {
                         value = DateTime(ticks)
                         return true
