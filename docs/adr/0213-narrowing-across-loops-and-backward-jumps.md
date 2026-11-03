@@ -1329,8 +1329,9 @@ runs `ApplyLoopEntryLowerBound`; the decisions are those of slice L0 (`DecideReg
   inline declaration (typed or not) and a function literal convert nothing, and a value does not bind a `ref` or `out`
   parameter. A parameter that names a type parameter counts, since the walker does not infer type arguments. A callee
   whose candidates the walker cannot list (a receiver that it does not resolve, an imported base interface with a
-  method of the name, a method that only an extension can supply), a candidate with an optional or variadic parameter
-  that can take another number of arguments, and a call that no candidate takes, all count. This is stricter than
+  method of the name, a method that only an extension can supply), a variadic or `params` candidate (its expanded
+  form converts each argument to the element type, at any arity), a candidate with an optional parameter at another
+  arity, and a call that no candidate takes, all count. This is stricter than
   main where the binder selects a candidate that converts nothing while another candidate of the name could convert:
   `Console.WriteLine("ab")` (a `ReadOnlySpan[char]` candidate and `params` overloads), `Math.Max(n, 1)` and
   `Keep(dt)` for a generic `Keep[T]`. The PR lists those rows. It replaced a model of candidate selection (identity
