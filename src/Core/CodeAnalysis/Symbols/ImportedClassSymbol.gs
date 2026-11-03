@@ -570,7 +570,9 @@ class ImportedClassSymbol : Symbol {
             symbolicArgTypes: symbolicArgVector,
             symbolicArgumentConversionClassifier: ExpressionBinder.MakeSymbolicArgumentConversionClassifier(
                 arguments,
-                nativeConversions: nativeConversions
+                nativeConversions: nativeConversions,
+                receiverType: ConstructedReceiver ?? SymbolicReceiver,
+                explicitMethodTypeArguments: typeArgSymbols
             )
         )
         switch result.Outcome {
