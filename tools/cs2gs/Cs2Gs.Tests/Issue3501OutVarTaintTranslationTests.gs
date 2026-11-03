@@ -660,6 +660,19 @@ namespace Demo
             return "none";
         }
 
+        public static string ComputedPropertyVarPatternEvaluatedOnce()
+        {
+            step = 0;
+            var box = new Box();
+            while (Next(out string x) && box is { ComputedName: var name })
+            {
+                x = null;
+                return RequireNonNull(name) + ":" + box.ReadCount;
+            }
+
+            return "none";
+        }
+
         public static string DoAndForContinueInsideLock()
         {
             object gate = new object();
@@ -777,7 +790,8 @@ namespace Demo
             GenericTypeParameterPatternInHoistedLoop<string>("hi") + "|" +
             BoxedValuePropertyPatternInHoistedLoop(new Box { Value = 42 }) + ":" +
             BoxedValuePropertyPatternInHoistedLoop(new Box { Value = "nope" }) + "|" +
-            ComputedPropertyPatternEvaluatedOnce() + "|" +
+            ComputedPropertyPatternEvaluatedOnce() + ":" +
+            ComputedPropertyVarPatternEvaluatedOnce() + "|" +
             DoAndForContinueInsideLock() + "|" +
             ForBodyLocalShadowsStaticIncrementorTarget();
     }
@@ -785,7 +799,7 @@ namespace Demo
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "System.Console.WriteLine(Demo.C.MainEntry())",
-            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil|OK:nil:no-match|inc|enter>dispose>cond:2|False:True|42:nil:no-int|N1:1|2:2/1|1"
+            "cond:0|enter>dispose>cond:1>enter>dispose>cond:2|filtered:1|2:0|skipped/V1:nil|OK:nil:no-match|inc|enter>dispose>cond:2|False:True|42:nil:no-int|N1:1:N1:1|2:2/1|1"
         )
     }
 

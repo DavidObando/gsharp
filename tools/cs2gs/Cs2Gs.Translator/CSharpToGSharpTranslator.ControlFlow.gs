@@ -378,10 +378,23 @@ partial class CSharpToGSharpTranslator {
                     BindingKind.Let
                 }
                 let nestedName = this.EmittedName(nestedBinder, nestedBinder.Name)
-                let nestedType = this.PromoteIfUsedAsNullable(
+                var nestedType = this.PromoteIfUsedAsNullable(
                     this.typeMapper.MapExplicitType(nestedBinder.Type, this.context, clause.GetLocation()),
                     nestedBinder
                 )
+                if nestedType != nil &&
+                    !nestedType.IsNullable &&
+                    nestedBinder
+                    .Type
+                    .IsReferenceType &&
+                    nestedBinder
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax()
+                    ?.Parent is VarPatternSyntax &&
+                    (!this.TryGetVarCaptureStaticNonNull(nestedBinder, out var varIsNonNull) || !varIsNonNull) {
+                    nestedType = MakeNullable(nestedType)
+                }
                 this.state.LocalHoldsPromotedValueAnswers.Clear()
                 if nestedType != nil {
                     this.state.EmittedLocalTypeClauses.Add(nestedBinder)
