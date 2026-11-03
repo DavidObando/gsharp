@@ -1242,11 +1242,15 @@ partial class CSharpToGSharpTranslator {
             sink ISymbol?,
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) bool {
-            if sink is not IParameterSymbol parameter || !IsInferredGenericParameterTarget(parameter, value) {
+            if sink is not IParameterSymbol parameter || !this.IsInferredGenericParameterTarget(parameter, value) {
                 return false
             }
             let declared = parameter.OriginalDefinition.Type
-            let inferred ITypeSymbol? = GetParamsElementType(parameter.OriginalDefinition) ?? declared
+            let inferred ITypeSymbol? = if this.IsExpandedParamsArgument(value, parameter) {
+                GetParamsElementType(parameter.OriginalDefinition) ?? declared
+            } else {
+                declared
+            }
             return inferred is ITypeParameterSymbol typeParameter &&
                 !NullableTypeArgumentViolatesTranslatedConstraints(typeParameter)
         }
@@ -1671,7 +1675,7 @@ partial class CSharpToGSharpTranslator {
                 typeParameter
                 .ConstraintTypes
                 .Length > 0 ||
-                !IsInferredGenericParameterTarget(parameter, argumentExpression) ||
+                !this.IsInferredGenericParameterTarget(parameter, argumentExpression) ||
                 !this.TargetContractIsFrozenInMetadata(parameter) {
                 return false
             }

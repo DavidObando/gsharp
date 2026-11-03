@@ -349,6 +349,11 @@ namespace App
 
         public static T SpanParamsId<T>(params System.ReadOnlySpan<T> values) => values[0];
 
+        public static int CountAll<T>(params System.Collections.Generic.IEnumerable<T> values) => 0;
+
+        public static int NormalFormGenericParams(Model.Arg a, Model.Arg b, bool flag) =>
+            CountAll(flag ? a.Objects : b.Objects);
+
         public static string Explicit(Model.Arg argument, int i) => Id<string>(i > 0 ? argument.Value : argument.Name);
 
         public static string ExplicitParams(Model.Arg argument, int i) => ParamsId<string>(i > 0 ? argument.Value : argument.Name);
@@ -376,6 +381,7 @@ namespace App
         Assert.Contains("ObjectParamsCount(if flag { a.Objects!! } else { b.Objects!! })", printed)
         Assert.Contains("bag[if i > 2 { argument.Name!! } else { \"z\" }, \"tail\"]", printed)
         Assert.Contains("bag[0, if flag { a.Objects!! } else { b.Objects!! }]", printed)
+        Assert.Contains("CountAll(if flag { a.Objects!! } else { b.Objects!! })", printed)
         Assert.Contains("Id[string](if i > 0 {", printed)
         Assert.Contains("ParamsId[string](if i > 0 {", printed)
         Assert.Contains("SpanParamsId[string](", printed)
@@ -408,6 +414,18 @@ public static class C
             : name ?? id;
         return new Session { Alias = alias };
     }
+
+#nullable enable annotations
+    public static IEnumerable<string>? Maybe() => null;
+
+    public static IEnumerable<string> Fallback() => System.Array.Empty<string>();
+
+    public static int Count<T>(params IEnumerable<T> xs) => 0;
+
+    public static int CallDirect() => Count(Maybe());
+
+    public static int CallConditional(bool flag) => Count(flag ? Maybe() : Fallback());
+#nullable restore
 }`
         let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
@@ -415,6 +433,8 @@ public static class C
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Contains("{ a!! } else { name ?? id }", printed)
+        Assert.Contains("Count(Maybe()!!)", printed)
+        Assert.Contains("Count(if flag { Maybe()!! } else { Fallback() })", printed)
         let result RoundTripResult? = TranslationTestValidation.AssertBinds(printed)
         Assert.True(result!!.Success, string.Join("\n", result!!.Errors) + `
 

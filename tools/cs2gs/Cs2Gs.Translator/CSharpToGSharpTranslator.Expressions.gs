@@ -2902,8 +2902,10 @@ partial class CSharpToGSharpTranslator {
                     value
                 ) ||
                     (
-                    targetSymbol is IParameterSymbol parameterTarget &&
-                        IsInferredGenericParameterTarget(parameterTarget, branch)
+                    targetSymbol is IParameterSymbol parameterTarget && this.IsInferredGenericParameterTarget(
+                        parameterTarget,
+                        branch
+                    )
                 )
             ) {
                 return translated
@@ -6554,10 +6556,105 @@ partial class CSharpToGSharpTranslator {
             .CodeAnalysis
             .NullableAnnotation
             .Annotated &&
-            !(targetSymbol is IParameterSymbol parameter && IsInferredGenericParameterTarget(parameter, callSite)) &&
+            !(
+            targetSymbol is IParameterSymbol parameter && this.IsInferredGenericParameterTarget(parameter, callSite)
+        ) &&
             (
             !targetType.IsReferenceType || this.TargetWillRemainNonNullableReference(targetType, targetSymbol, callSite)
         )
+
+        /// Issue #4356: whether an argument's target parameter is generic in a way
+        /// G# will RE-INFER from the emitted argument — a parameter declared
+        /// `T` or `params T[]` on a call whose type arguments are
+        /// inferred. Then the emitted argument's own type decides `T`, so a
+        /// `T?` value makes `T` nullable and must not be asserted.
+        /// With EXPLICIT type arguments (`Identity<SyntaxNode>(x)`) the
+        /// substituted parameter type is the real target, so this answers false
+        /// and the ordinary nullability of that type decides. When the call site
+        /// cannot be found, the target is treated as inferred (no assertion).
+        /// @param parameter The (constructed) target parameter.
+        /// @param callSite The argument expression, if known.
+        /// @returns True when the target is an inferred generic parameter.
+        private func IsInferredGenericParameterTarget(
+            parameter IParameterSymbol,
+            callSite Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            let declared = parameter.OriginalDefinition.Type
+            // Only a METHOD type parameter is re-inferred from the argument. A
+            // containing-type parameter is already fixed by the receiver
+            // (`Box[C].Use(x)`), so its substituted type is the real target.
+            let IsMethodTypeParameter = func (candidate ITypeSymbol?) bool {
+                return candidate is ITypeParameterSymbol methodParameter &&
+                    methodParameter.TypeParameterKind == TypeParameterKind.Method
+            }
+            let generic = IsMethodTypeParameter(declared) ||
+                (
+                this.IsExpandedParamsArgument(callSite, parameter) &&
+                    IsMethodTypeParameter(GetParamsElementType(parameter.OriginalDefinition))
+            )
+            return generic && !CallHasExplicitTypeArguments(callSite)
+        }
+
+        private func IsExpandedParamsArgument(
+            callSite Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            parameter IParameterSymbol
+        ) bool {
+            if !parameter.IsParams {
+                return false
+            }
+            if callSite == nil {
+                return true
+            }
+            var current Microsoft.CodeAnalysis.SyntaxNode? = callSite
+            while (
+                current!!.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedExpressionSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .CheckedExpressionSyntax or
+                    PostfixUnaryExpressionSyntax and
+                    {RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)}
+            ) ||
+                (
+                current!!.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ConditionalExpressionSyntax conditional &&
+                    (conditional.WhenTrue == current || conditional.WhenFalse == current)
+            ) ||
+                (
+                current!!.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchExpressionArmSyntax{
+                    Parent: Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax
+                } arm &&
+                    arm.Expression == current
+            ) {
+                current = if current!!.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchExpressionArmSyntax switchArm {
+                    switchArm.Parent
+                } else {
+                    current!!.Parent
+                }
+            }
+            return current!!.Parent is ArgumentSyntax argument && this.TryGetExpandedParamsElementTarget(
+                argument,
+                parameter,
+                out _,
+                out _
+            )
+        }
 
         private func FindNullForgivingTarget(value PostfixUnaryExpressionSyntax)(Type ITypeSymbol?, Symbol ISymbol?) {
             let ExplicitLocalTypeIsNullable = func (local ILocalSymbol) bool {
@@ -9202,35 +9299,6 @@ partial class CSharpToGSharpTranslator {
                         .SwitchExpressionArmSyntax: arm.Expression == current
                     default: false
                 }
-            }
-
-            /// Issue #4356: whether an argument's target parameter is generic in a way
-            /// G# will RE-INFER from the emitted argument — a parameter declared
-            /// `T` or `params T[]` on a call whose type arguments are
-            /// inferred. Then the emitted argument's own type decides `T`, so a
-            /// `T?` value makes `T` nullable and must not be asserted.
-            /// With EXPLICIT type arguments (`Identity<SyntaxNode>(x)`) the
-            /// substituted parameter type is the real target, so this answers false
-            /// and the ordinary nullability of that type decides. When the call site
-            /// cannot be found, the target is treated as inferred (no assertion).
-            /// @param parameter The (constructed) target parameter.
-            /// @param callSite The argument expression, if known.
-            /// @returns True when the target is an inferred generic parameter.
-            private func IsInferredGenericParameterTarget(
-                parameter IParameterSymbol,
-                callSite Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
-            ) bool {
-                let declared = parameter.OriginalDefinition.Type
-                // Only a METHOD type parameter is re-inferred from the argument. A
-                // containing-type parameter is already fixed by the receiver
-                // (`Box[C].Use(x)`), so its substituted type is the real target.
-                let IsMethodTypeParameter = func (candidate ITypeSymbol?) bool {
-                    return candidate is ITypeParameterSymbol methodParameter &&
-                        methodParameter.TypeParameterKind == TypeParameterKind.Method
-                }
-                let generic = IsMethodTypeParameter(declared) ||
-                    IsMethodTypeParameter(GetParamsElementType(parameter.OriginalDefinition))
-                return generic && !CallHasExplicitTypeArguments(callSite)
             }
 
             // Issue #4356: whether the invocation an argument belongs to spells its
