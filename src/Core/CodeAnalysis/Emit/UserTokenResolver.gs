@@ -965,7 +965,10 @@ internal class UserTokenResolver {
         }
         let parent = this.GetUserInterfaceTypeSpec(containingInterface)
         let sigBlob = BlobBuilder()
-        this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).FieldSignature(), defField.Type)
+        {
+            using let _ = this.remaps.PushSmRemap(def)
+            this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).FieldSignature(), defField.Type)
+        }
         let memberRef = EntityHandle(
             this
                 .emitCtx
@@ -1300,8 +1303,18 @@ internal class UserTokenResolver {
             containingInterface,
             openDef,
             openMethod.Name,
-            this.EncodeOpenMethodSignature(openMethod)
+            this.EncodeOpenInterfaceMethodSignature(containingInterface, openMethod)
         )
+    }
+
+    private func EncodeOpenInterfaceMethodSignature(
+        containingInterface InterfaceSymbol,
+        openMethod FunctionSymbol
+    ) BlobBuilder {
+        {
+            using let _ = this.remaps.PushSmRemap(containingInterface.Definition ?? containingInterface)
+            return this.EncodeOpenMethodSignature(openMethod)
+        }
     }
 
     /// Issue #1433: returns a `MemberRef` handle for a static method on a
@@ -1483,12 +1496,12 @@ internal class UserTokenResolver {
             }
         ) +
             definitionProperty.Name
-        return this.GetUserInterfaceMethodRef(
-            containingInterface,
-            accessor,
-            accessorName,
-            this.EncodeOpenPropertyAccessorSignature(definitionProperty, wantSetter)
-        )
+        var sigBlob BlobBuilder
+        {
+            using let _ = this.remaps.PushSmRemap(definition)
+            sigBlob = this.EncodeOpenPropertyAccessorSignature(definitionProperty, wantSetter)
+        }
+        return this.GetUserInterfaceMethodRef(containingInterface, accessor, accessorName, sigBlob)
     }
 
     /// Issue #989: encodes the open accessor signature for a user property,
@@ -1566,17 +1579,7 @@ internal class UserTokenResolver {
                 "User generic interface '${def.Name}' has no emitted TypeDef when constructing TypeSpec."
             )
         }
-        var typeArgs ImmutableArray[TypeSymbol]
-        if !ifaceSym.TypeArguments.IsDefaultOrEmpty {
-            typeArgs = ifaceSym.TypeArguments
-        } else {
-            let defTps = def.TypeParameters
-            let bld = ImmutableArray.CreateBuilder[TypeSymbol](defTps.Length)
-            for tp in defTps {
-                bld.Add(tp)
-            }
-            typeArgs = bld.MoveToImmutable()
-        }
+        let typeArgs = this.ResolveUserInterfaceTypeSpecArguments(ifaceSym, def)
         let sigBlob = BlobBuilder()
         let encoder = BlobEncoder(sigBlob).TypeSpecificationSignature()
         let gi = encoder.GenericInstantiation(defHandle, typeArgs.Length, isValueType: false)
@@ -1588,6 +1591,61 @@ internal class UserTokenResolver {
         )
         this.userInterfaceTypeSpecCache[cacheKey] = spec
         return spec
+    }
+
+    internal func ResolveUserInterfaceTypeSpecArguments(ifaceSym InterfaceSymbol, def InterfaceSymbol) ImmutableArray[
+        TypeSymbol
+    ] {
+        if this.remaps.TryGetNestedTypeEnclosingArity(def, out var enclosingArity) && enclosingArity > 0 {
+            let defTps = def.TypeParameters
+            let total = defTps.Length
+            if ifaceSym.EnclosingTypeArguments.IsDefaultOrEmpty && ifaceSym.TypeArguments.Length == total {
+                return ifaceSym.TypeArguments
+            }
+            let builder = ImmutableArray.CreateBuilder[TypeSymbol](total)
+            if !ifaceSym.EnclosingTypeArguments.IsDefaultOrEmpty {
+                for var i = 0; i < enclosingArity && i < ifaceSym.EnclosingTypeArguments.Length; i++ {
+                    builder.Add(ifaceSym.EnclosingTypeArguments[i])
+                }
+                for var i = builder.Count; i < enclosingArity && i < total; i++ {
+                    builder.Add(defTps[i])
+                }
+            } else {
+                for var i = 0; i < enclosingArity && i < total; i++ {
+                    builder.Add(defTps[i])
+                }
+            }
+            if !ifaceSym.TypeArguments.IsDefaultOrEmpty {
+                builder.AddRange(ifaceSym.TypeArguments)
+                for var i = builder.Count; i < total; i++ {
+                    builder.Add(defTps[i])
+                }
+            } else {
+                for var i = enclosingArity; i < total; i++ {
+                    builder.Add(defTps[i])
+                }
+            }
+            if builder.Count > total {
+                let trimmed = ImmutableArray.CreateBuilder[TypeSymbol](total)
+                for var i = 0; i < total; i++ {
+                    trimmed.Add(builder[i])
+                }
+                return trimmed.MoveToImmutable()
+            }
+            return builder.ToImmutable()
+        }
+        if !ifaceSym.TypeArguments.IsDefaultOrEmpty {
+            return ifaceSym.TypeArguments
+        }
+        if !ifaceSym.EnclosingTypeArguments.IsDefaultOrEmpty {
+            return ifaceSym.EnclosingTypeArguments
+        }
+        let defTps = def.TypeParameters
+        let bld = ImmutableArray.CreateBuilder[TypeSymbol](defTps.Length)
+        for tp in defTps {
+            bld.Add(tp)
+        }
+        return bld.MoveToImmutable()
     }
 
     /// ADR-0091: returns the right token for an instance call into a
@@ -1614,6 +1672,7 @@ internal class UserTokenResolver {
             return cached
         }
         let parent = this.GetUserInterfaceTypeSpec(containingInterface)
+        let signatureBlob = this.EncodeOpenInterfaceMethodSignature(containingInterface, openMethod)
         let memberRef = EntityHandle(
             this
                 .emitCtx
@@ -1621,7 +1680,7 @@ internal class UserTokenResolver {
                 .AddMemberReference(
                 parent: parent,
                 name: this.emitCtx.Metadata.GetOrAddString(openMethod.Name),
-                signature: this.emitCtx.Metadata.GetOrAddBlob(this.EncodeOpenMethodSignature(openMethod))
+                signature: this.emitCtx.Metadata.GetOrAddBlob(signatureBlob)
             )
         )
         this.userInterfaceMethodRefCache[key] = memberRef
@@ -2537,7 +2596,13 @@ internal class UserTokenResolver {
                     s.EnclosingTypeArguments.AddRange(s.TypeArguments)
                 }
                 case e is EnumSymbol: e.EnclosingTypeArguments
-                case i is InterfaceSymbol: i.TypeArguments
+                case i is InterfaceSymbol: if i.EnclosingTypeArguments.IsDefaultOrEmpty {
+                    i.TypeArguments
+                } else if i.TypeArguments.IsDefaultOrEmpty {
+                    i.EnclosingTypeArguments
+                } else {
+                    i.EnclosingTypeArguments.AddRange(i.TypeArguments)
+                }
                 case it is ImportedTypeSymbol: it.TypeArguments
                 default: default(ImmutableArray[TypeSymbol])
             }
@@ -2703,7 +2768,7 @@ internal class UserTokenResolver {
                         clrParameterType,
                         interfaceSymbol,
                         interfaceSymbol.PackageName,
-                        interfaceSymbol.TypeArguments,
+                        Conversion.GetEffectiveInterfaceTypeArguments(interfaceSymbol),
                         declaringTypeParameters
                     )
                 }

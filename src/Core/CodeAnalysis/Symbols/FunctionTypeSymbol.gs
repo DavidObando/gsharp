@@ -464,30 +464,33 @@ class FunctionTypeSymbol : TypeSymbol {
                     .TypeArguments
                     .IsDefaultOrEmpty {
                     builder.Append("!struct:").Append(st.Definition?.Name ?? st.Name).Append('(')
-                    if !st.EnclosingTypeArguments.IsDefaultOrEmpty {
-                        for var i = 0; i < st.EnclosingTypeArguments.Length; i++ {
-                            if i > 0 {
-                                builder.Append(',')
-                            }
-                            appendComponent!!(builder, st.EnclosingTypeArguments[i])
-                        }
-                        builder.Append('|')
-                    }
-                    for var i = 0; i < st.TypeArguments.Length; i++ {
+                    let effectiveArgs = GSharp.Core.CodeAnalysis.Binding.Conversion.GetEffectiveStructTypeArguments(st)
+                    for var i = 0; i < effectiveArgs.Length; i++ {
                         if i > 0 {
                             builder.Append(',')
                         }
-                        appendComponent!!(builder, st.TypeArguments[i])
+                        appendComponent!!(builder, effectiveArgs[i])
                     }
                     builder.Append(')')
                 }
-                case iface is InterfaceSymbol when !iface.TypeArguments.IsDefaultOrEmpty {
+                case iface is InterfaceSymbol when !iface
+                    .EnclosingTypeArguments
+                    .IsDefaultOrEmpty ||
+                    !iface
+                    .TypeArguments
+                    .IsDefaultOrEmpty {
                     builder.Append("!iface:").Append(iface.Definition?.Name ?? iface.Name).Append('(')
-                    for var i = 0; i < iface.TypeArguments.Length; i++ {
+                    let effectiveArgs = GSharp
+                        .Core
+                        .CodeAnalysis
+                        .Binding
+                        .Conversion
+                        .GetEffectiveInterfaceTypeArguments(iface)
+                    for var i = 0; i < effectiveArgs.Length; i++ {
                         if i > 0 {
                             builder.Append(',')
                         }
-                        appendComponent!!(builder, iface.TypeArguments[i])
+                        appendComponent!!(builder, effectiveArgs[i])
                     }
                     builder.Append(')')
                 }

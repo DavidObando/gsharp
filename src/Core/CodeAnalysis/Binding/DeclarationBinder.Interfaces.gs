@@ -101,11 +101,17 @@ internal partial class DeclarationBinder {
                 }
             }
         }
-        // Phase 4.3c: push the interface's type parameters so that method
-        // signatures can reference them.
+        // Phase 4.3c: push the interface's enclosing and own type parameters so
+        // that method signatures can reference them.
         let previousTypeParameters = binderCtx.CurrentTypeParameters
-        if !interfaceSymbol.TypeParameters.IsDefaultOrEmpty {
+        let previousContainingType = binderCtx.CurrentContainingType
+        this.binderCtx.CurrentContainingType = interfaceSymbol
+        let enclosingTypeParameters = StructSymbol.CollectEnclosingTypeParameters(interfaceSymbol)
+        if !interfaceSymbol.TypeParameters.IsDefaultOrEmpty || !enclosingTypeParameters.IsDefaultOrEmpty {
             this.binderCtx.CurrentTypeParameters = Dictionary[string, TypeParameterSymbol]()
+            for tp in enclosingTypeParameters {
+                binderCtx.CurrentTypeParameters!![tp.Name] = tp
+            }
             for tp in interfaceSymbol.TypeParameters {
                 binderCtx.CurrentTypeParameters!![tp.Name] = tp
             }
@@ -130,6 +136,7 @@ internal partial class DeclarationBinder {
             }
         } finally {
             this.binderCtx.CurrentTypeParameters = previousTypeParameters
+            this.binderCtx.CurrentContainingType = previousContainingType
         }
     }
 
