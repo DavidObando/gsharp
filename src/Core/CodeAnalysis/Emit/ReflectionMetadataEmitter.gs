@@ -5446,77 +5446,15 @@ internal class ReflectionMetadataEmitter {
             if arg is TypeParameterSymbol {
                 return true
             }
-            if arg is ImportedTypeSymbol nested &&
-                nested.OpenDefinition != nil &&
-                !nested
-                .TypeArguments
-                .IsDefaultOrEmpty &&
-                nested
-                .TypeArguments
-                .Any(ArgIsSymbolicUserDefined) {
-                return true
-            }
-            if arg is ArrayTypeSymbol arr {
-                return ArgIsSymbolicUserDefined(arr.ElementType)
-            }
-            if arg is RectangularArrayTypeSymbol rectangular {
-                return ArgIsSymbolicUserDefined(rectangular.ElementType)
-            }
-            if arg is SliceTypeSymbol slice {
-                return ArgIsSymbolicUserDefined(slice.ElementType)
-            }
-            if arg is NullableTypeSymbol nullable && nullable.UnderlyingType != nil {
-                return ArgIsSymbolicUserDefined(nullable.UnderlyingType)
-            }
-            // Issue #1902: a positional tuple element may itself carry a
-            // same-compilation user type (e.g. the `(Owner, Pet)` transparent
-            // identifier a query's Join/GroupJoin result-selector returns).
-            // Without recursing here, `FunctionTypeNeedsSymbolicDelegate` misses
-            // the tuple-typed return and picks the reflection-resolved
-            // `overrideDelegateType` (whose ClrType was closed with the erased
-            // `object` placeholders from `TryBuildErasedClosedGeneric` — see
-            // MemberLookup.cs), so the lambda gets emitted as
-            // `Func<Owner,Pet,ValueTuple<object,object>>` while the body it
-            // targets is really typed `ValueTuple<Owner,Pet>` — a stack-shape
-            // mismatch ilverify rejects (StackUnexpected).
-            //
             // Issue #4358: `tuple.ClrType` is ALSO null whenever any element
             // merely carries a reference-nullable annotation (`(string?, int32)`)
             // — `TupleTypeSymbol.BuildClrType` deliberately nulls the whole tuple
             // out in that case (ADR-0186 / #2119 / #2702) so signature encoding
-            // keeps the nullable shape symbolic. The per-element recursion above
-            // does not see this: `ArgIsSymbolicUserDefined` unwraps a
-            // `NullableTypeSymbol` down to its non-nullable underlying type before
-            // recursing, which is correct for a bare reference-nullable
-            // parameter/return (erasure keeps its own `ClrType` non-null) but
-            // hides exactly the condition that poisons a *containing tuple's*
-            // `ClrType`. Missing this made `FunctionTypeNeedsSymbolicDelegate`
-            // answer false for a tuple-returning function type with a nullable
-            // element, so both the delegate-construction site and the
-            // `Invoke` call site fell back to the naive reflection path
-            // (`ResolveDelegateClrType` / `ResolveDelegateArgClrType`), which
-            // resolves the poisoned-null tuple `ClrType` through
-            // `MapToReferenceClrType` and silently erases it to `object` —
-            // producing an `Invoke` MemberRef typed `Func<string, object>` over a
-            // delegate instance that is actually `Func<string, ValueTuple<string,
-            // int32>>`. The struct-vs-object return calling convention mismatch
-            // segfaults the runtime instead of throwing (a P0: no diagnostic, no
-            // catchable exception). Checking `tuple.ClrType == null` directly
-            // catches this alongside the existing same-compilation-user-type
-            // recursion.
-            if arg is TupleTypeSymbol tuple {
-                return tuple.ClrType == nil || tuple.ElementTypes.Any(ArgIsSymbolicUserDefined)
+            // keeps the nullable shape symbolic.
+            if arg is TupleTypeSymbol tuple && tuple.ClrType == nil {
+                return true
             }
-            // Issue #3501 (ilverify): a function-typed argument
-            // (`List[(BoundNode) -> object?]`) reifies to `Func<…>` over its
-            // parameter/return symbols in signatures, so a user type anywhere in
-            // its shape makes the whole argument symbolic. Without this the
-            // ctor/member refs stay erased (`List<object>`) while the local slot
-            // reifies (`List<Func<BoundNode, object>>`) — a stack mismatch.
-            if arg is FunctionTypeSymbol fnArg {
-                return fnArg.ParameterTypes.Any(ArgIsSymbolicUserDefined) || ArgIsSymbolicUserDefined(fnArg.ReturnType)
-            }
-            return false
+            return TypeSymbol.GetWrappedTypes(arg).Any(ArgIsSymbolicUserDefined)
         }
 
         // Issue #504: a NullableTypeSymbol whose underlying CLR type is a value

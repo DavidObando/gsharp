@@ -210,6 +210,27 @@ open class ObjectInitializerHoverCompletionTests {
     }
 
     @Fact
+    func ComputeCompletions_OnChainedReceiverRootedInAGenericLocalFunction_BindsTheLocalFunction() {
+        // Issue #5469: the speculative bind of the incomplete chain `Twice(d).Next!!.` needs the
+        // generic local function `Twice` of the enclosing body; ignoring the in-scope local functions
+        // leaves the receiver unbound.
+        const source = "class Derived {\n" +
+            "    prop Next Derived?\n" +
+            "    prop Width int32\n" +
+            "}\n" +
+            "func main() {\n" +
+            "    let d = Derived()\n" +
+            "    let Twice[T] = func(x T) T { return x }\n" +
+            "    Twice(d).Next!!.\n" +
+            "}\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let dot = LanguageServerTestHelpers.PositionOf(source, "Next!!.")
+        let caret = Position(dot.Line, dot.Character + 7)
+        let items = CompletionComputer.ComputeCompletions(content, caret)
+        Assert.Contains(items, (i CompletionItem) -> i.Label == "Width" && i.Kind == CompletionItemKind.Property)
+    }
+
+    @Fact
     func ComputeCompletions_InValuePositionOfInitializer_FallsBackToGlobalList() {
         const source = "import System.Diagnostics\n" +
             "func main() {\n" +
