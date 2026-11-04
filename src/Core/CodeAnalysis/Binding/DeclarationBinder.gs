@@ -357,7 +357,39 @@ internal partial class DeclarationBinder {
             // ADR-0063 §5: delegate declarations can declare default-valued
             // parameters; the value is recorded on the parameter symbol for
             // call-site default substitution.
-            conversions.BindAndAttachParameterDefaultValue(parameterSyntax, delegateParam)
+            if parameterSyntax.HasDefaultValue {
+                let capturedScope = $scope
+                let packageName = delegateSymbol.PackageName
+                let syntaxTree = parameterSyntax.SyntaxTree
+                let capturedInUnsafeContext = binderCtx.InUnsafeContext
+                let capturedTypeParameters = if binderCtx.CurrentTypeParameters == nil {
+                    default(Dictionary[string, TypeParameterSymbol]?)
+                } else {
+                    Dictionary[string, TypeParameterSymbol](binderCtx.CurrentTypeParameters!!)
+                }
+                pendingParameterDefaultValueBindings.Add(
+                    () -> {
+                        let outerScope = $scope
+                        let outerTypeParameters = binderCtx.CurrentTypeParameters
+                        $scope = capturedScope
+                        using let unsafeContext = binderCtx.PushUnsafeContext(capturedInUnsafeContext)
+                        let savedPackage = $scope.SetCurrentDeclaringPackage(packageName)
+                        let savedTree = $scope.SetCurrentReferencingSyntaxTree(syntaxTree)
+                        this.binderCtx.CurrentTypeParameters = capturedTypeParameters
+                        try {
+                            conversions.BindAndAttachParameterDefaultValue(parameterSyntax, delegateParam)
+                            if delegateParam.HasExplicitDefaultValue {
+                                delegateSymbol.SetSignature(delegateSymbol.Parameters, delegateSymbol.ReturnType)
+                            }
+                        } finally {
+                            $scope.SetCurrentDeclaringPackage(savedPackage)
+                            $scope.SetCurrentReferencingSyntaxTree(savedTree)
+                            $scope = outerScope
+                            this.binderCtx.CurrentTypeParameters = outerTypeParameters
+                        }
+                    }
+                )
+            }
             // Issue #1913: delegate parameters can carry `@Attr` annotations
             // same as any other parameter list.
             BindAndAttachParameterAttributes(parameterSyntax, delegateParam)
