@@ -208,11 +208,19 @@ func BadUnconstructedOuterLiteral() {
     let item = Outer.Inner{Value: 7}
 }
 func BadUnqualifiedTypeClause(item Inner) { }
-func BadUnconstructedOuterTypeClause(item Outer.Inner) { }`)
+func BadUnconstructedOuterTypeClause(item Outer.Inner) { }
+open class Base[T] {
+    public struct InheritedInner { }
+}
+class Derived[U] : Base[U] { }
+func BadInheritedTypeClause(item Derived.InheritedInner) { }
+func BadInheritedLiteral() {
+    let item = Derived.InheritedInner{}
+}`)
         let unclosedErrors = unclosedOutsideOwnerDiagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
-        Assert.Equal(4, unclosedErrors.Length)
-        Assert.Equal(2, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0157"))
-        Assert.Equal(2, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0113"))
+        Assert.Equal(6, unclosedErrors.Length)
+        Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0157"))
+        Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0113"))
 
         let validScopedAndConstructedDiagnostics = GetDiagnostics(`package Issue4774BinderValid
 class Outer[T] {
@@ -220,14 +228,31 @@ class Outer[T] {
         private var Seed int32 = 5
         public func Read() int32 -> Seed + Value
     }
+    public interface IPlain {
+        func Echo(v T) T;
+    }
+    public interface IGeneric[U] {
+        func Combine(a T, b U) string;
+    }
     public func Inside() int32 {
         let item = Inner{Value: 7}
         return item.Read()
     }
 }
-func Outside() int32 {
+open class Base[T] {
+    public struct InheritedInner(Value int32) {
+        public func Read() int32 -> Value
+    }
+}
+class Derived[U] : Base[U] {
+    public func InsideDerived() int32 {
+        let item = Derived.InheritedInner{Value: 11}
+        return item.Read()
+    }
+}
+func Outside(plain Outer[string].IPlain, generic Outer[int32].IGeneric[string], inherited Derived[int32].InheritedInner) string {
     let item = Outer[string].Inner{Value: 7}
-    return item.Read()
+    return plain.Echo("ok") + ":" + generic.Combine(item.Read(), "x") + ":" + inherited.Read().ToString()
 }`)
         Assert.Empty(validScopedAndConstructedDiagnostics)
 

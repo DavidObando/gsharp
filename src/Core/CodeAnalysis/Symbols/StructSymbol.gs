@@ -3091,17 +3091,17 @@ class StructSymbol : TypeSymbol {
                 }
             }
             if type is InterfaceSymbol iface && !iface.TypeArguments.IsDefaultOrEmpty {
-                let substitutedArgs = ImmutableArray.CreateBuilder[TypeSymbol](iface.TypeArguments.Length)
-                var changed = false
-                for var i = 0; i < iface.TypeArguments.Length; i++ {
-                    let substituted = SubstituteNested(iface.TypeArguments[i])
-                    substitutedArgs.Add(substituted)
-                    changed |= !object.ReferenceEquals(substituted, iface.TypeArguments[i])
+                return InterfaceSymbol.SubstituteConstructionArguments(iface, SubstituteNested, mapClrType)
+            }
+            if type is InterfaceSymbol nestedIface && nestedIface.TypeArguments.IsDefaultOrEmpty {
+                let newEnclosing = InterfaceSymbol.SubstituteEnclosingArguments(nestedIface, SubstituteNested)
+                if !newEnclosing.IsDefault {
+                    return InterfaceSymbol.ConstructNested(
+                        nestedIface.Definition ?? nestedIface,
+                        newEnclosing,
+                        mapClrType
+                    )!!
                 }
-                if !changed {
-                    return iface
-                }
-                return InterfaceSymbol.Construct(iface.Definition, substitutedArgs.MoveToImmutable(), mapClrType)!!
             }
             if type is ImportedTypeSymbol imported &&
                 imported.OpenDefinition != nil &&

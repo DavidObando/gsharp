@@ -1113,7 +1113,16 @@ internal partial class ExpressionBinder {
             }
             case nestedIface is InterfaceSymbol {
                 let ifaceDef = nestedIface.Definition ?? nestedIface
-                nestedType = if !ownArgs.IsDefaultOrEmpty {
+                nestedType = if !enclosingArgs.IsDefaultOrEmpty && !ownArgs.IsDefaultOrEmpty {
+                    InterfaceSymbol.ConstructNestedGeneric(
+                        ifaceDef,
+                        enclosingArgs,
+                        ownArgs,
+                        $scope.References!!.MapClrTypeToReferences
+                    )
+                } else if !enclosingArgs.IsDefaultOrEmpty {
+                    InterfaceSymbol.ConstructNested(ifaceDef, enclosingArgs, $scope.References!!.MapClrTypeToReferences)
+                } else if !ownArgs.IsDefaultOrEmpty {
                     InterfaceSymbol.Construct(ifaceDef, ownArgs, $scope.References!!.MapClrTypeToReferences)
                 } else {
                     ifaceDef

@@ -330,8 +330,16 @@ internal partial class ExpressionBinder {
     /// @returns `true` when a declared generic definition of that arity was found.
     private func TryResolveOpenGenericDeclaredType(name string, arity int32, out type TypeSymbol?) bool {
         type = nil
-        let candidate TypeSymbol? = lookupType(name)
-        if candidate == nil || DeclaredGenericDefinitionArity(candidate) != arity {
+        if !binderCtx.TryLookupSourceType(
+            $scope,
+            name,
+            arity,
+            getCurrentFunction(),
+            out var candidate,
+            out _,
+            allowUnclosedEnclosingTypeParameters: true
+        ) ||
+            DeclaredGenericDefinitionArity(candidate!!) != arity {
             return false
         }
         type = candidate
@@ -406,7 +414,8 @@ internal partial class ExpressionBinder {
                 arities[head],
                 getCurrentFunction(),
                 out var current,
-                out _
+                out _,
+                allowUnclosedEnclosingTypeParameters: true
             ) ||
                 !DeclaredSegmentShapeMatches(current!!, arities[head]) ||
                 !PrefixMatchesDeclaringPackage(current!!, names, head) {

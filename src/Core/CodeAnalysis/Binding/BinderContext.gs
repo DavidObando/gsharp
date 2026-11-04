@@ -558,7 +558,8 @@ internal class BinderContext {
         preferredArity int32,
         currentFunction FunctionSymbol?,
         @NotNullWhen(true) out type TypeSymbol?,
-        out ambiguousAcrossImportedPackages bool
+        out ambiguousAcrossImportedPackages bool,
+        allowUnclosedEnclosingTypeParameters bool = false
     ) bool {
         let currentContainingType TypeSymbol? = CurrentContainingType ??
             currentFunction?.ReceiverType ??
@@ -570,7 +571,7 @@ internal class BinderContext {
             preferredArity,
             out type
         ) &&
-            !HasUnclosedEnclosingTypeParameters(type, currentFunction) {
+            (allowUnclosedEnclosingTypeParameters || !HasUnclosedEnclosingTypeParameters(type, currentFunction)) {
             ambiguousAcrossImportedPackages = false
             return true
         }
@@ -586,12 +587,17 @@ internal class BinderContext {
             importedType: nil
         ) &&
             $scope.TryResolveExplicitSourceTypeAlias(name, preferredArity, out var aliasedSourceType) &&
-            !HasUnclosedEnclosingTypeParameters(aliasedSourceType, currentFunction) {
+            (
+            allowUnclosedEnclosingTypeParameters ||
+                !HasUnclosedEnclosingTypeParameters(aliasedSourceType, currentFunction)
+        ) {
             type = aliasedSourceType
             ambiguousAcrossImportedPackages = false
             return true
         }
-        if foundSource && HasUnclosedEnclosingTypeParameters(type, currentFunction) {
+        if !allowUnclosedEnclosingTypeParameters &&
+            foundSource &&
+            HasUnclosedEnclosingTypeParameters(type, currentFunction) {
             type = nil
             foundSource = false
         }
@@ -601,7 +607,7 @@ internal class BinderContext {
         if !$scope.TryResolveExplicitSourceTypeAlias(name, preferredArity, out type) {
             return false
         }
-        if HasUnclosedEnclosingTypeParameters(type, currentFunction) {
+        if !allowUnclosedEnclosingTypeParameters && HasUnclosedEnclosingTypeParameters(type, currentFunction) {
             type = nil
             return false
         }
@@ -616,29 +622,42 @@ internal class BinderContext {
         if enclosingParams.IsDefaultOrEmpty {
             return false
         }
-        let suppliedEnclosingArgs = switch type {
-            case s is StructSymbol: s.EnclosingTypeArguments
-            case e is EnumSymbol: e.EnclosingTypeArguments
-            default: ImmutableArray[TypeSymbol].Empty
-        }
-        if !suppliedEnclosingArgs.IsDefaultOrEmpty && suppliedEnclosingArgs.Length == enclosingParams.Length {
-            return false
-        }
         let currentContainingType TypeSymbol? = CurrentContainingType ??
             currentFunction?.ReceiverType ??
             currentFunction?.StaticOwnerType ??
             currentFunction?.LexicalEnclosingType
+        let suppliedEnclosingArgs = switch type {
+            case s is StructSymbol: s.EnclosingTypeArguments
+            case e is EnumSymbol: e.EnclosingTypeArguments
+            case i is InterfaceSymbol: i.EnclosingTypeArguments
+            default: ImmutableArray[TypeSymbol].Empty
+        }
+        if !suppliedEnclosingArgs.IsDefaultOrEmpty && suppliedEnclosingArgs.Length == enclosingParams.Length {
+            let referencedTypeParameters = List[TypeParameterSymbol]()
+            for arg in suppliedEnclosingArgs {
+                TypeSymbol.CollectReferencedTypeParameters(arg, referencedTypeParameters, nil)
+            }
+            for tp in referencedTypeParameters {
+                if !IsTypeParameterInScope(tp, currentContainingType) {
+                    return true
+                }
+            }
+            return false
+        }
         for tp in enclosingParams {
-            if CurrentTypeParameters != nil && CurrentTypeParameters!!.TryGetValue(tp.Name, out var inScopeTp) &&
-                object.ReferenceEquals(inScopeTp, tp) {
-                continue
+            if !IsTypeParameterInScope(tp, currentContainingType) {
+                return true
             }
-            if IsEnclosingTypeParameterOf(tp, currentContainingType) {
-                continue
-            }
-            return true
         }
         return false
+    }
+
+    private func IsTypeParameterInScope(typeParameter TypeParameterSymbol, containingType TypeSymbol?) bool {
+        if CurrentTypeParameters != nil && CurrentTypeParameters!!.TryGetValue(typeParameter.Name, out var inScopeTp) &&
+            object.ReferenceEquals(inScopeTp, typeParameter) {
+            return true
+        }
+        return IsEnclosingTypeParameterOf(typeParameter, containingType)
     }
 
     private func IsEnclosingTypeParameterOf(typeParameter TypeParameterSymbol, containingType TypeSymbol?) bool {

@@ -68,16 +68,27 @@ class InterfaceSymbol : TypeSymbol {
         definition InterfaceSymbol,
         typeArguments ImmutableArray[TypeSymbol],
         constructedName string,
-        mapClrType((Type) -> Type)?
+        mapClrType((Type) -> Type)?,
+        enclosingTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
     ) : base(constructedName) {
         Accessibility = definition.Accessibility
         Declaration = definition.Declaration
         PackageName = definition.PackageName
         Methods = ImmutableArray[FunctionSymbol].Empty
-        TypeParameters = ImmutableArray[TypeParameterSymbol].Empty
+        TypeParameters = if typeArguments.IsDefaultOrEmpty {
+            definition.TypeParameters
+        } else {
+            ImmutableArray[TypeParameterSymbol].Empty
+        }
         TypeArguments = typeArguments
+        EnclosingTypeArguments = if enclosingTypeArguments.IsDefault {
+            ImmutableArray[TypeSymbol].Empty
+        } else {
+            enclosingTypeArguments
+        }
         Definition = definition
         this.mapClrType = mapClrType
+        SetContainingTypeCore(definition.ContainingType)
     }
 
     /// Gets the interface accessibility.
@@ -292,6 +303,22 @@ class InterfaceSymbol : TypeSymbol {
             _typeArguments = value
         }
     }
+
+    private var _enclosingTypeArguments ImmutableArray[TypeSymbol] = ImmutableArray[TypeSymbol].Empty
+
+    /// Gets the flattened enclosing type arguments when this interface is nested inside a constructed
+    /// generic enclosing type.
+    prop EnclosingTypeArguments ImmutableArray[TypeSymbol] {
+        get {
+            return _enclosingTypeArguments
+        }
+        private set {
+            _enclosingTypeArguments = value
+        }
+    }
+
+    /// Gets a value indicating whether this interface carries enclosing generic type arguments.
+    prop IsConstructedNestedType bool -> !EnclosingTypeArguments.IsDefaultOrEmpty
 
     /// Gets a value indicating whether this is a generic definition (has type parameters and no type
     /// arguments).
@@ -573,7 +600,8 @@ class InterfaceSymbol : TypeSymbol {
     /// @param type Member type declared on the generic definition.
     /// @returns Type closed over this interface's type arguments.
     internal func SubstituteMemberType(type TypeSymbol) TypeSymbol {
-        return if Definition != nil && !object.ReferenceEquals(Definition, this) && !TypeArguments.IsDefaultOrEmpty {
+        return if Definition != nil && !object.ReferenceEquals(Definition, this) &&
+            (!TypeArguments.IsDefaultOrEmpty || !EnclosingTypeArguments.IsDefaultOrEmpty) {
             SubstituteType(type, GetTypeSubstitution(), mapClrType)
         } else {
             type
@@ -605,9 +633,21 @@ class InterfaceSymbol : TypeSymbol {
     }
 
     private func GetTypeSubstitution() Dictionary[TypeParameterSymbol, TypeSymbol] {
-        let subst = Dictionary[TypeParameterSymbol, TypeSymbol](Definition!!.TypeParameters.Length)
-        for var i = 0; i < Definition!!.TypeParameters.Length; i++ {
-            subst[Definition!!.TypeParameters[i]] = TypeArguments[i]
+        let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(Definition!!)
+        let subst = Dictionary[TypeParameterSymbol, TypeSymbol](
+            enclosingParams.Length + Definition!!.TypeParameters.Length
+        )
+        if !EnclosingTypeArguments.IsDefaultOrEmpty {
+            let enclosingCount = Math.Min(enclosingParams.Length, EnclosingTypeArguments.Length)
+            for var i = 0; i < enclosingCount; i++ {
+                subst[enclosingParams[i]] = EnclosingTypeArguments[i]
+            }
+        }
+        if !TypeArguments.IsDefaultOrEmpty {
+            let ownCount = Math.Min(Definition!!.TypeParameters.Length, TypeArguments.Length)
+            for var i = 0; i < ownCount; i++ {
+                subst[Definition!!.TypeParameters[i]] = TypeArguments[i]
+            }
         }
         return subst
     }
@@ -690,6 +730,19 @@ class InterfaceSymbol : TypeSymbol {
             InterfaceSymbol
         ] = ConcurrentDictionary[(Def InterfaceSymbol, Args TypeArgsKey), InterfaceSymbol]()
 
+        private let ConstructedNestedCache ConcurrentDictionary[
+            (Def InterfaceSymbol, EnclosingArgs TypeArgsKey),
+            InterfaceSymbol
+        ] = ConcurrentDictionary[(Def InterfaceSymbol, EnclosingArgs TypeArgsKey), InterfaceSymbol]()
+
+        private let ConstructedNestedGenericCache ConcurrentDictionary[
+            (Def InterfaceSymbol, EnclosingArgs TypeArgsKey, OwnArgs TypeArgsKey),
+            InterfaceSymbol
+        ] = ConcurrentDictionary[
+            (Def InterfaceSymbol, EnclosingArgs TypeArgsKey, OwnArgs TypeArgsKey),
+            InterfaceSymbol
+        ]()
+
         /// Constructs a closed instance of a generic interface definition with the supplied type arguments
         /// (Phase 4.3c / ADR-0020). Method signatures are substituted; identity is cached so two calls with
         /// the same definition + arguments return the same (cref:InterfaceSymbol) reference.
@@ -707,10 +760,22 @@ class InterfaceSymbol : TypeSymbol {
             typeArguments ImmutableArray[TypeSymbol],
             mapClrType((Type) -> Type)? = nil
         ) InterfaceSymbol? {
-            if definition == nil || !definition.IsGenericDefinition {
+            if definition == nil {
                 return definition
             }
-            let cacheKey = (definition, BuildArgsKey(typeArguments))
+            if definition.IsGenericDefinition && !definition.EnclosingTypeArguments.IsDefaultOrEmpty {
+                return ConstructNestedGeneric(
+                    definition.Definition ?? definition,
+                    definition.EnclosingTypeArguments,
+                    typeArguments,
+                    mapClrType
+                )!!
+            }
+            if !definition.IsGenericDefinition {
+                return definition
+            }
+            let def = definition.Definition ?? definition
+            let cacheKey = (def, BuildArgsKey(typeArguments))
             if ConstructedCache.TryGetValue(cacheKey, out var cached) {
                 return cached
             }
@@ -727,10 +792,162 @@ class InterfaceSymbol : TypeSymbol {
             // died with no diagnostics at all. Publishing first makes the recursive
             // request a cache hit that returns this instance, and the members it
             // still needs resolve lazily on first access via EnsureMembersResolved.
-            let instance = CreateConstructed(definition, typeArguments, mapClrType)
+            let instance = CreateConstructed(def, typeArguments, mapClrType)
             let published = ConstructedCache.GetOrAdd(cacheKey, instance)
             published.EnsureMembersResolved()
             return published
+        }
+
+        /// Constructs a reference to an interface nested inside a generic enclosing type,
+        /// closed over the enclosing construction's type arguments.
+        /// @param nestedDefinition The open nested interface definition.
+        /// @param enclosingTypeArguments The flattened enclosing construction arguments.
+        /// @param mapClrType Optional CLR type projector.
+        /// @returns The constructed nested interface reference.
+        @return: NotNullIfNotNull("nestedDefinition")
+        func ConstructNested(
+            nestedDefinition InterfaceSymbol?,
+            enclosingTypeArguments ImmutableArray[TypeSymbol],
+            mapClrType((Type) -> Type)? = nil
+        ) InterfaceSymbol? {
+            if nestedDefinition == nil || enclosingTypeArguments.IsDefaultOrEmpty {
+                return nestedDefinition
+            }
+            let def = nestedDefinition.Definition ?? nestedDefinition
+            let cacheKey = (def, BuildArgsKey(enclosingTypeArguments))
+            if ConstructedNestedCache.TryGetValue(cacheKey, out var cached) {
+                return cached
+            }
+            let instance = InterfaceSymbol(
+                def,
+                ImmutableArray[TypeSymbol].Empty,
+                def.Name,
+                mapClrType,
+                enclosingTypeArguments
+            )
+            let published = ConstructedNestedCache.GetOrAdd(cacheKey, instance)
+            published.EnsureMembersResolved()
+            return published
+        }
+
+        /// Constructs a reference to a generic interface nested inside a generic enclosing type,
+        /// closed over both the enclosing construction's type arguments and the interface's own type arguments.
+        /// @param nestedDefinition The open nested interface definition.
+        /// @param enclosingTypeArguments The flattened enclosing construction arguments.
+        /// @param ownTypeArguments The interface's own type arguments.
+        /// @param mapClrType Optional CLR type projector.
+        /// @returns The constructed nested generic interface reference.
+        @return: NotNullIfNotNull("nestedDefinition")
+        func ConstructNestedGeneric(
+            nestedDefinition InterfaceSymbol?,
+            enclosingTypeArguments ImmutableArray[TypeSymbol],
+            ownTypeArguments ImmutableArray[TypeSymbol],
+            mapClrType((Type) -> Type)? = nil
+        ) InterfaceSymbol? {
+            if nestedDefinition == nil {
+                return nestedDefinition
+            }
+            if ownTypeArguments.IsDefaultOrEmpty {
+                return ConstructNested(nestedDefinition, enclosingTypeArguments, mapClrType)!!
+            }
+            if enclosingTypeArguments.IsDefaultOrEmpty {
+                return Construct(nestedDefinition.Definition ?? nestedDefinition, ownTypeArguments, mapClrType)!!
+            }
+            let def = nestedDefinition.Definition ?? nestedDefinition
+            let cacheKey = (def, BuildArgsKey(enclosingTypeArguments), BuildArgsKey(ownTypeArguments))
+            if ConstructedNestedGenericCache.TryGetValue(cacheKey, out var cached) {
+                return cached
+            }
+            let argParts = [ownTypeArguments.Length]string
+            for var i = 0; i < ownTypeArguments.Length; i++ {
+                argParts[i] = ownTypeArguments[i].Name
+            }
+            let constructedName = "${def.Name}[${string.Join(", ", argParts)}]"
+            let instance = InterfaceSymbol(def, ownTypeArguments, constructedName, mapClrType, enclosingTypeArguments)
+            let published = ConstructedNestedGenericCache.GetOrAdd(cacheKey, instance)
+            published.EnsureMembersResolved()
+            return published
+        }
+
+        internal func SubstituteEnclosingArguments(
+            nested InterfaceSymbol?,
+            substituteOne(TypeSymbol) -> TypeSymbol
+        ) ImmutableArray[TypeSymbol] {
+            if nested == nil || !nested.TypeArguments.IsDefaultOrEmpty {
+                return default(ImmutableArray[TypeSymbol])
+            }
+            let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(nested)
+            if enclosingParams.IsDefaultOrEmpty {
+                return default(ImmutableArray[TypeSymbol])
+            }
+            var current ImmutableArray[TypeSymbol]
+            if nested.IsConstructedNestedType {
+                current = nested.EnclosingTypeArguments
+            } else {
+                let currentBuilder = ImmutableArray.CreateBuilder[TypeSymbol](enclosingParams.Length)
+                for parameter in enclosingParams {
+                    currentBuilder.Add(parameter)
+                }
+                current = currentBuilder.MoveToImmutable()
+            }
+            let builder = ImmutableArray.CreateBuilder[TypeSymbol](current.Length)
+            var changed = false
+            for arg in current {
+                let substituted = substituteOne(arg)
+                changed |= !object.ReferenceEquals(substituted, arg)
+                builder.Add(substituted)
+            }
+            return if changed {
+                builder.ToImmutable()
+            } else {
+                default(ImmutableArray[TypeSymbol])
+            }
+        }
+
+        internal func SubstituteConstructionArguments(
+            type InterfaceSymbol,
+            substituteOne(TypeSymbol) -> TypeSymbol,
+            mapClrType((Type) -> Type)? = nil
+        ) InterfaceSymbol {
+            let definition InterfaceSymbol? = type.Definition
+            if definition == nil {
+                return type
+            }
+            var enclosingSource = type.EnclosingTypeArguments
+            if enclosingSource.IsDefaultOrEmpty {
+                let enclosingParameters = StructSymbol.CollectEnclosingTypeParameters(type)
+                let sourceBuilder = ImmutableArray.CreateBuilder[TypeSymbol](enclosingParameters.Length)
+                sourceBuilder.AddRange[TypeParameterSymbol](enclosingParameters)
+                enclosingSource = sourceBuilder.MoveToImmutable()
+            }
+            let enclosingArguments = ImmutableArray.CreateBuilder[TypeSymbol](enclosingSource.Length)
+            let ownArguments = ImmutableArray.CreateBuilder[TypeSymbol](type.TypeArguments.Length)
+            var enclosingChanged = false
+            var ownChanged = false
+            for argument in enclosingSource {
+                let substituted = substituteOne(argument)
+                enclosingChanged |= !object.ReferenceEquals(substituted, argument)
+                enclosingArguments.Add(substituted)
+            }
+            for argument in type.TypeArguments {
+                let substituted = substituteOne(argument)
+                ownChanged |= !object.ReferenceEquals(substituted, argument)
+                ownArguments.Add(substituted)
+            }
+            if !enclosingChanged && !ownChanged {
+                return type
+            }
+            let substitutedEnclosing = if enclosingChanged {
+                enclosingArguments.MoveToImmutable()
+            } else {
+                type.EnclosingTypeArguments
+            }
+            let substitutedOwn = ownArguments.MoveToImmutable()
+            return if !substitutedEnclosing.IsDefaultOrEmpty {
+                ConstructNestedGeneric(definition, substitutedEnclosing, substitutedOwn, mapClrType)!!
+            } else {
+                Construct(definition, substitutedOwn, mapClrType)!!
+            }
         }
 
         /// ADR-0085 / issue #726: returns true when [`method`](paramref) is
@@ -748,7 +965,11 @@ class InterfaceSymbol : TypeSymbol {
         /// (cref:Type) objects and definition/argument symbols backed by
         /// a disposed metadata load context that would otherwise pin the
         /// context's memory indefinitely.
-        internal func ClearCache() -> ConstructedCache.Clear()
+        internal func ClearCache() {
+            ConstructedCache.Clear()
+            ConstructedNestedCache.Clear()
+            ConstructedNestedGenericCache.Clear()
+        }
 
         private func BuildArgsKey(typeArguments ImmutableArray[TypeSymbol]) TypeArgsKey -> TypeArgsKey(typeArguments)
 
@@ -855,17 +1076,23 @@ class InterfaceSymbol : TypeSymbol {
             // the definition's type parameters in its arguments. Recurse so they
             // are substituted with this constructed instance's type arguments.
             if type is InterfaceSymbol iface && !iface.TypeArguments.IsDefaultOrEmpty {
-                let substitutedArgs = ImmutableArray.CreateBuilder[TypeSymbol](iface.TypeArguments.Length)
-                var changed = false
-                for var i = 0; i < iface.TypeArguments.Length; i++ {
-                    let substituted = SubstituteType(iface.TypeArguments[i], subst, mapClrType)
-                    substitutedArgs.Add(substituted)
-                    changed |= !object.ReferenceEquals(substituted, iface.TypeArguments[i])
-                }
-                return if changed {
-                    Construct(iface.Definition, substitutedArgs.MoveToImmutable(), mapClrType)!!
-                } else {
-                    iface
+                return SubstituteConstructionArguments(
+                    iface,
+                    (argument TypeSymbol) -> {
+                        return SubstituteType(argument, subst, mapClrType)
+                    },
+                    mapClrType
+                )
+            }
+            if type is InterfaceSymbol nestedIface && nestedIface.TypeArguments.IsDefaultOrEmpty {
+                let enclosingArgs = SubstituteEnclosingArguments(
+                    nestedIface,
+                    (argument TypeSymbol) -> {
+                        return SubstituteType(argument, subst, mapClrType)
+                    }
+                )
+                if !enclosingArgs.IsDefaultOrEmpty {
+                    return ConstructNested(nestedIface.Definition ?? nestedIface, enclosingArgs, mapClrType)!!
                 }
             }
             if type is EnumSymbol enumType {

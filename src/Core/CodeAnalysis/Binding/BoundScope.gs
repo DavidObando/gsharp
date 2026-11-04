@@ -1941,6 +1941,13 @@ class BoundScope {
             case nestedEnum is EnumSymbol: cast[TypeSymbol](
                 EnumSymbol.ConstructNested(nestedEnum.Definition ?? nestedEnum, enclosingArguments)!!
             )
+            case nestedInterface is InterfaceSymbol: cast[TypeSymbol](
+                InterfaceSymbol.ConstructNested(
+                    nestedInterface.Definition ?? nestedInterface,
+                    enclosingArguments,
+                    References!!.MapClrTypeToReferences
+                )!!
+            )
             default: nestedType
         }
     }

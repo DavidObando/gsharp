@@ -1714,15 +1714,23 @@ open partial class TypeSymbol : Symbol {
                         }
                         return
                     }
-                    case iface is InterfaceSymbol when !iface.TypeArguments.IsDefaultOrEmpty {
+                    case iface is InterfaceSymbol {
+                        if !iface.EnclosingTypeArguments.IsDefaultOrEmpty {
+                            for arg in iface.EnclosingTypeArguments {
+                                CollectReferencedTypeParameters(arg, visitParameter, signaturePath)
+                            }
+                        } else {
+                            for tp in StructSymbol.CollectEnclosingTypeParameters(iface) {
+                                CollectReferencedTypeParameters(tp, visitParameter, signaturePath)
+                            }
+                        }
                         for arg in iface.TypeArguments {
                             CollectReferencedTypeParameters(arg, visitParameter, signaturePath)
                         }
-                        return
-                    }
-                    case ifaceOpen is InterfaceSymbol when !ifaceOpen.TypeParameters.IsDefaultOrEmpty {
-                        for tp in ifaceOpen.TypeParameters {
-                            CollectReferencedTypeParameters(tp, visitParameter, signaturePath)
+                        if iface.TypeArguments.IsDefaultOrEmpty {
+                            for tp in iface.TypeParameters {
+                                CollectReferencedTypeParameters(tp, visitParameter, signaturePath)
+                            }
                         }
                         return
                     }

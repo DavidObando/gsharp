@@ -5136,6 +5136,22 @@ partial class Binder {
             }
         } else if deepest is EnumSymbol deepestEnum && !enclosingArgs.IsDefaultOrEmpty {
             deepest = EnumSymbol.ConstructNested(deepestEnum.Definition ?? deepestEnum, enclosingArgs)!!
+        } else if deepest is InterfaceSymbol deepestInterface && !enclosingArgs.IsDefaultOrEmpty {
+            let ownArgs = deepestInterface.TypeArguments
+            deepest = if ownArgs.IsDefaultOrEmpty {
+                InterfaceSymbol.ConstructNested(
+                    deepestInterface.Definition ?? deepestInterface,
+                    enclosingArgs,
+                    $scope.References!!.MapClrTypeToReferences
+                )!!
+            } else {
+                InterfaceSymbol.ConstructNestedGeneric(
+                    deepestInterface.Definition ?? deepestInterface,
+                    enclosingArgs,
+                    ownArgs,
+                    $scope.References!!.MapClrTypeToReferences
+                )!!
+            }
         }
         if binderCtx.HasUnclosedEnclosingTypeParameters(deepest, function) {
             return nil
@@ -13466,19 +13482,19 @@ partial class Binder {
                 !ifaceType
                 .TypeArguments
                 .IsDefaultOrEmpty {
-                let newIfaceArgs = ImmutableArray.CreateBuilder[TypeSymbol](ifaceType.TypeArguments.Length)
-                var ifaceChanged = false
-                for arg in ifaceType.TypeArguments {
-                    let substituted = SubstituteType(arg, substitution, mapClrType)
-                    ifaceChanged |= !object.ReferenceEquals(substituted, arg)
-                    newIfaceArgs.Add(substituted)
-                }
-                return if ifaceChanged {
-                    cast[TypeSymbol](
-                        InterfaceSymbol.Construct(ifaceType.Definition, newIfaceArgs.MoveToImmutable(), mapClrType)!!
-                    )
-                } else {
-                    type
+                return InterfaceSymbol.SubstituteConstructionArguments(ifaceType, substituteEnclosingType, mapClrType)
+            }
+            if type is InterfaceSymbol nestedInterfaceRef && nestedInterfaceRef.TypeArguments.IsDefaultOrEmpty {
+                let newEnclosing = InterfaceSymbol.SubstituteEnclosingArguments(
+                    nestedInterfaceRef,
+                    substituteEnclosingType
+                )
+                if !newEnclosing.IsDefault {
+                    return InterfaceSymbol.ConstructNested(
+                        nestedInterfaceRef.Definition ?? nestedInterfaceRef,
+                        newEnclosing,
+                        mapClrType
+                    )!!
                 }
             }
             // Issue #2340 follow-up (sibling to the #1503 branch already present

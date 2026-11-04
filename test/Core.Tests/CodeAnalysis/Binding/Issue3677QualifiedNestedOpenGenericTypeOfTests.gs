@@ -70,6 +70,15 @@ typeof(Outer[_].Inner[_]).Name
     }
 
     @Fact
+    func UnqualifiedNestedGenericInsideGeneric_BindsAndEmitsOpenDefinition() {
+        let result = EmittedOracle.Evaluate(Fixtures + `
+typeof(Inner[_]).IsGenericTypeDefinition && typeof(Inner[_]).Name == "Inner` + "`" + `1"
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(true, result.Value)
+    }
+
+    @Fact
     func NestedSourceGenericInsideGeneric_CarriesEnclosingTypeParameters() {
         // The CLR gives a type nested in a generic its enclosing type's
         // parameters too, so `Outer`1+Inner`1` is an arity-2 definition —

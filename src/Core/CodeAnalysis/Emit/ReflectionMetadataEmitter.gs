@@ -2356,7 +2356,7 @@ internal class ReflectionMetadataEmitter {
                             this.cache.StructTypeDefs[c],
                             this.userTokens.GetUserInterfaceTypeSpec(iface)
                         )
-                    } else if this.cache.InterfaceTypeDefs.TryGetValue(iface, out var ifaceHandle) {
+                    } else if this.cache.InterfaceTypeDefs.TryGetValue(iface.Definition ?? iface, out var ifaceHandle) {
                         this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[c], ifaceHandle)
                     }
                 }
@@ -2586,7 +2586,10 @@ internal class ReflectionMetadataEmitter {
                             ifaceTypeDef,
                             this.userTokens.GetUserInterfaceTypeSpec(baseIface)
                         )
-                    } else if this.cache.InterfaceTypeDefs.TryGetValue(baseIface, out var baseHandle) {
+                    } else if this
+                        .cache
+                        .InterfaceTypeDefs
+                        .TryGetValue(baseIface.Definition ?? baseIface, out var baseHandle) {
                         this.emitCtx.Metadata.AddInterfaceImplementation(ifaceTypeDef, baseHandle)
                     }
                 }
