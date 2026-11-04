@@ -696,11 +696,28 @@ internal partial class ExpressionBinder {
         }
         var whenTrue BoundExpression
         var whenFalse BoundExpression
+        var thenExit List[
+            (
+                Id int32,
+                Frame NarrowingFrame?,
+                Entries Dictionary[AccessPath, TypeSymbol]?,
+                Aliases HashSet[VariableSymbol]
+            )
+        ]? = nil
+        var falseExit List[
+            (
+                Id int32,
+                Frame NarrowingFrame?,
+                Entries Dictionary[AccessPath, TypeSymbol]?,
+                Aliases HashSet[VariableSymbol]
+            )
+        ]? = nil
         if targetType != nil {
             whenTrue = bindWhenTrue(targetType)
-            let thenExit = CaptureExpressionNarrowingFrames()
+            thenExit = CaptureExpressionNarrowingFrames()
             RestoreExpressionNarrowingFrames(afterCondition)
             whenFalse = bindWhenFalse(targetType)
+            falseExit = CaptureExpressionNarrowingFrames()
             MergeBranchExpressionNarrowingFrames(thenExit)
         } else if trueIsBareDefault && falseIsBareDefault {
             Diagnostics.ReportBareDefaultNoTargetType(
@@ -712,32 +729,35 @@ internal partial class ExpressionBinder {
             if whenFalse is BoundErrorExpression {
                 return BoundErrorExpression(nil)
             }
-            let falseExit = CaptureExpressionNarrowingFrames()
+            falseExit = CaptureExpressionNarrowingFrames()
             RestoreExpressionNarrowingFrames(afterCondition)
             whenTrue = BindWithPatternVariables(
                 patternWhenTrue,
                 () -> BoundDefaultExpression(syntax.WhenTrue, whenFalse.Type),
                 syntax.WhenTrue
             )
+            thenExit = CaptureExpressionNarrowingFrames()
             MergeBranchExpressionNarrowingFrames(falseExit)
         } else if falseIsBareDefault {
             whenTrue = bindWhenTrue(nil)
             if whenTrue is BoundErrorExpression {
                 return BoundErrorExpression(nil)
             }
-            let thenExit = CaptureExpressionNarrowingFrames()
+            thenExit = CaptureExpressionNarrowingFrames()
             RestoreExpressionNarrowingFrames(afterCondition)
             whenFalse = BindWithPatternVariables(
                 patternWhenFalse,
                 () -> BoundDefaultExpression(syntax.WhenFalse, whenTrue.Type),
                 syntax.WhenFalse
             )
+            falseExit = CaptureExpressionNarrowingFrames()
             MergeBranchExpressionNarrowingFrames(thenExit)
         } else {
             whenTrue = bindWhenTrue(nil)
-            let thenExit = CaptureExpressionNarrowingFrames()
+            thenExit = CaptureExpressionNarrowingFrames()
             RestoreExpressionNarrowingFrames(afterCondition)
             whenFalse = bindWhenFalse(nil)
+            falseExit = CaptureExpressionNarrowingFrames()
             MergeBranchExpressionNarrowingFrames(thenExit)
         }
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
@@ -758,8 +778,12 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
+        RestoreExpressionNarrowingFrames(thenExit)
         let convertedTrue = ConvertConditionalBranch(syntax.WhenTrue.Location, whenTrue, resultType)
+        thenExit = CaptureExpressionNarrowingFrames()
+        RestoreExpressionNarrowingFrames(falseExit)
         let convertedFalse = ConvertConditionalBranch(syntax.WhenFalse.Location, whenFalse, resultType)
+        MergeBranchExpressionNarrowingFrames(thenExit)
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
@@ -875,9 +899,10 @@ internal partial class ExpressionBinder {
             return BindWithNarrowing(whenFalseNarrowing, bindWhenFalse, whenFalseAliases)
         }
         var whenTrue = BindWithPatternVariables(patternWhenTrue, bindWhenTrueNarrowed, syntax.ThenBlock)
-        let thenExit = CaptureExpressionNarrowingFrames()
+        var thenExit = CaptureExpressionNarrowingFrames()
         RestoreExpressionNarrowingFrames(afterCondition)
         var whenFalse = BindWithPatternVariables(patternWhenFalse, bindWhenFalseNarrowed, elseSyntax)
+        let falseExit = CaptureExpressionNarrowingFrames()
         MergeBranchExpressionNarrowingFrames(thenExit)
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
             return BoundErrorExpression(nil)
@@ -908,8 +933,12 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
+        RestoreExpressionNarrowingFrames(thenExit)
         let convertedTrue = ConvertConditionalBranch(BranchValueLocation(syntax.ThenBlock), whenTrue, resultType)
+        thenExit = CaptureExpressionNarrowingFrames()
+        RestoreExpressionNarrowingFrames(falseExit)
         let convertedFalse = ConvertConditionalBranch(BranchValueLocation(elseSyntax), whenFalse, resultType)
+        MergeBranchExpressionNarrowingFrames(thenExit)
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
@@ -1367,7 +1396,12 @@ internal partial class ExpressionBinder {
         if object.ReferenceEquals(branch.Type, commonType) {
             return branch
         }
-        return conversions.BindConversion(location, branch, commonType)
+        let entryAliases = GetCurrentExpressionCallableAliases()
+        let converted = conversions.BindConversion(location, branch, commonType)
+        if !(converted is BoundErrorExpression) && !object.ReferenceEquals(converted, branch) {
+            InvalidateExpressionNarrowingFrames(converted, entryAliases)
+        }
+        return converted
     }
 
     /// Issue #5613: gets the location of the value of a branch: the trailing value of a block, or the branch.

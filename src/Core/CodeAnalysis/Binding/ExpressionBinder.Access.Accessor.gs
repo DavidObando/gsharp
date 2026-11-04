@@ -1328,7 +1328,7 @@ internal partial class ExpressionBinder {
         if receiver is BoundErrorExpression {
             return receiver
         }
-        return BindNullConditionalAccessExpressionCore(receiver, syntax.RightPart)
+        return BindPossiblySkippedOperand(() -> BindNullConditionalAccessExpressionCore(receiver, syntax.RightPart))
     }
 
     private func BindNullConditionalAccessExpressionCore(

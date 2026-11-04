@@ -1494,7 +1494,31 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         let pending = literalTargetDiagnostics.Count
         let mark = Diagnostics.Count
+        let beforeCall = if ce.NullableQuestionToken != nil {
+            CaptureExpressionNarrowingFrames()
+        } else {
+            default(
+                List[
+                    (
+                        Id int32,
+                        Frame NarrowingFrame?,
+                        Entries Dictionary[AccessPath, TypeSymbol]?,
+                        Aliases HashSet[VariableSymbol]
+                    )
+                ]?
+            )
+        }
+        let entryAliases = if ce.NullableQuestionToken != nil {
+            GetCurrentExpressionCallableAliases()
+        } else {
+            default(HashSet[VariableSymbol]?)
+        }
         let call = BindAccessorCallCore(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+        if ce.NullableQuestionToken != nil && call is BoundNullConditionalAccessExpression {
+            InvalidateExpressionNarrowingFrames(call, entryAliases)
+            MergeBranchExpressionNarrowingFrames(beforeCall)
+            expressionExitAliases[call] = GetCurrentExpressionCallableAliases()
+        }
         ReportDiscardedLiteralTargetDiagnostics(pending, HasErrorDiagnosticSince(mark))
         return call
     }

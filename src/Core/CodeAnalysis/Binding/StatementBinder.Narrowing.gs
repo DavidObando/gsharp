@@ -83,13 +83,15 @@ internal partial class StatementBinder {
         bound BoundExpression,
         state Dictionary[AccessPath, TypeSymbol],
         beforeAliases HashSet[VariableSymbol],
-        alreadyProcessed HashSet[BoundExpression]?
+        alreadyProcessed HashSet[BoundExpression]?,
+        exitAliases Dictionary[BoundExpression, HashSet[VariableSymbol]]? = nil
     ) HashSet[VariableSymbol] {
         if bound.Syntax is {} anchor {
             EnsureClosureAssignedNames(anchor)
         }
         let collector = NewCollector(nil, beforeAliases)
         collector.AlreadyProcessedExpressions = alreadyProcessed
+        collector.ProcessedExpressionExitAliases = exitAliases
         collector.VisitExpression(bound)
         if state.Count > 0 {
             ClearAssignedRoots(bound, state, collector)
@@ -2462,6 +2464,11 @@ internal partial class StatementBinder {
             set;
         }
 
+        prop ProcessedExpressionExitAliases Dictionary[BoundExpression, HashSet[VariableSymbol]]? {
+            get;
+            set;
+        }
+
         prop MayMutateAnyRoot bool {
             get;
             private set;
@@ -2553,7 +2560,15 @@ internal partial class StatementBinder {
             }
             if AlreadyProcessedExpressions != nil &&
                 visitedFunctionLiterals.Count == 0 &&
-                !AlreadyProcessedExpressions!!.Add(node) {
+                !AlreadyProcessedExpressions!!
+                .Add(node) {
+                if ProcessedExpressionExitAliases != nil && ProcessedExpressionExitAliases!!.TryGetValue(
+                    node,
+                    out var exitAliases
+                ) {
+                    normalCallableState.SetExternalOnly(exitAliases)
+                    allEntryCallableState.SetExternalOnly(exitAliases)
+                }
                 return
             }
             if StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) {
@@ -3932,6 +3947,13 @@ internal partial class StatementBinder {
                 LocalParameters.Clear()
                 CapturedVariables.Clear()
                 MergeFrom(other)
+            }
+
+            func SetExternalOnly(externalAliases HashSet[VariableSymbol]) {
+                Literals.Clear()
+                Unknown.Clear()
+                External.Clear()
+                External.UnionWith(externalAliases)
             }
 
             func MergeFrom(other CallableAliasState) {

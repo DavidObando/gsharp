@@ -2929,8 +2929,16 @@ internal partial class StatementBinder {
                         includeCallBody: bodyHasEffects,
                         out var hasRefArgs
                     )
-                    if !bodyHasEffects && !hasRefArgs {
-                        return nil
+                    if !bodyHasEffects {
+                        return if hasRefArgs {
+                            BuildCompetingRefWritesShell(
+                                userCall.Arguments,
+                                userCall.Function.Parameters,
+                                excludeArgumentIndex
+                            )
+                        } else {
+                            default(BoundExpression?)
+                        }
                     }
                     return BoundCallExpression(userCall.Syntax, userCall.Function, filtered)
                 }
@@ -2943,8 +2951,16 @@ internal partial class StatementBinder {
                         includeCallBody: bodyHasEffects,
                         out var hasRefArgs
                     )
-                    if !bodyHasEffects && !hasRefArgs {
-                        return nil
+                    if !bodyHasEffects {
+                        return if hasRefArgs {
+                            BuildCompetingRefWritesShell(
+                                userInstanceCall.Arguments,
+                                userInstanceCall.Method.Parameters,
+                                excludeArgumentIndex
+                            )
+                        } else {
+                            default(BoundExpression?)
+                        }
                     }
                     return BoundUserInstanceCallExpression(
                         userInstanceCall.Syntax,
@@ -2955,28 +2971,46 @@ internal partial class StatementBinder {
                 }
                 case importedCall is BoundImportedCallExpression {
                     let bodyHasEffects = includeCallBody && !IsKnownPureImportedPredicate(importedCall.Function.Method)
+                    let parameters = importedCall.Function.Method.GetParameters()
                     let filtered = BuildFilteredImportedRefArguments(
                         importedCall.Arguments,
-                        importedCall.Function.Method.GetParameters(),
+                        parameters,
                         excludeArgumentIndex,
                         includeCallBody: bodyHasEffects,
                         out var hasRefArgs
                     )
-                    if !bodyHasEffects && !hasRefArgs {
-                        return nil
+                    if !bodyHasEffects {
+                        return if hasRefArgs {
+                            BuildCompetingImportedRefWritesShell(
+                                importedCall.Arguments,
+                                parameters,
+                                excludeArgumentIndex
+                            )
+                        } else {
+                            default(BoundExpression?)
+                        }
                     }
                     return BoundImportedCallExpression(importedCall.Syntax, importedCall.Function, filtered)
                 }
                 case importedInstanceCall is BoundImportedInstanceCallExpression {
+                    let parameters = importedInstanceCall.Method.GetParameters()
                     let filtered = BuildFilteredImportedRefArguments(
                         importedInstanceCall.Arguments,
-                        importedInstanceCall.Method.GetParameters(),
+                        parameters,
                         excludeArgumentIndex,
                         includeCallBody,
                         out var hasRefArgs
                     )
-                    if !includeCallBody && !hasRefArgs {
-                        return nil
+                    if !includeCallBody {
+                        return if hasRefArgs {
+                            BuildCompetingImportedRefWritesShell(
+                                importedInstanceCall.Arguments,
+                                parameters,
+                                excludeArgumentIndex
+                            )
+                        } else {
+                            default(BoundExpression?)
+                        }
                     }
                     return BoundImportedInstanceCallExpression(
                         importedInstanceCall.Syntax,
@@ -2990,6 +3024,67 @@ internal partial class StatementBinder {
                     return nil
                 }
             }
+        }
+
+        private func BuildCompetingRefWriteStatement(argument BoundExpression) BoundStatement {
+            var target = argument
+            while target is BoundAddressOfExpression address {
+                target = address.Operand
+            }
+            while target is BoundConversionExpression conversion {
+                target = conversion.Expression
+            }
+            while target is BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.NullAssertion}} assertion {
+                target = assertion.Operand
+            }
+            return BoundExpressionStatement(
+                nil,
+                BoundAddressOfExpression(nil, target, unmanaged: false, isReadOnly: false)
+            )
+        }
+
+        private func BuildCompetingRefWritesShell(
+            arguments ImmutableArray[BoundExpression],
+            parameters ImmutableArray[ParameterSymbol],
+            excludeArgumentIndex int32
+        ) BoundExpression? {
+            let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+            for var i = 0; i < arguments.Length; i++ {
+                let refKind = if i < parameters.Length {
+                    parameters[i].RefKind
+                } else {
+                    RefKind.None
+                }
+                if i != excludeArgumentIndex && IsByRefArgument(arguments[i], refKind) {
+                    statements.Add(BuildCompetingRefWriteStatement(arguments[i]))
+                }
+            }
+            if statements.Count == 0 {
+                return nil
+            }
+            return BoundBlockExpression(nil, statements.ToImmutable(), BoundLiteralExpression(nil, 0))
+        }
+
+        private func BuildCompetingImportedRefWritesShell(
+            arguments ImmutableArray[BoundExpression],
+            parameters[]ParameterInfo,
+            excludeArgumentIndex int32
+        ) BoundExpression? {
+            let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+            for var i = 0; i < arguments.Length; i++ {
+                let refKind = if i < parameters.Length {
+                    RefCapabilities.GetParameterRefKind(parameters[i])
+                } else {
+                    RefKind.None
+                }
+                if i != excludeArgumentIndex && IsByRefArgument(arguments[i], refKind) {
+                    statements.Add(BuildCompetingRefWriteStatement(arguments[i]))
+                }
+            }
+            if statements.Count == 0 {
+                return nil
+            }
+            return BoundBlockExpression(nil, statements.ToImmutable(), BoundLiteralExpression(nil, 0))
         }
 
         private func IsKnownPureImportedPredicate(method MethodInfo) bool -> (

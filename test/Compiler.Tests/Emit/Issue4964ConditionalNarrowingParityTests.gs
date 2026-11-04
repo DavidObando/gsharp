@@ -604,13 +604,64 @@ func CheckSwitchExitEffectsInNarrowedArm(ref s string?, flag bool) int32 ->
 
 func CheckSwitchDefaultFirstExitEffectsInNarrowedArm(ref s string?, flag bool) int32 ->
     s != nil ? (switch flag { default: (s = nil) == nil ? 0 : 0 case true: 0 }) + s.Length : 0
+
+class OptBox {
+    func Use(fn () -> bool) int32 -> 1
+}
+
+@SuppressDiagnostic("GS0524")
+func CheckIfLetThreeBindingsMiddleInitializerAliasExit(external () -> bool, seed string?, a int32?, b int32?, c int32?) int32 {
+    var s = seed
+    var action = external
+    let reset = () -> {
+        s = nil
+        return true
+    }
+    return s != nil ? (if let x = a, let y = ((action = reset) is {} _ ? b : nil), let z = ((action = external) is {} _ ? c : nil) {
+        0
+    } else {
+        action() ? s.Length : 0
+    }) : 0
+}
+
+@SuppressDiagnostic("GS0524")
+func CheckNullConditionalArgumentAliasJoin(external () -> bool, seed string?, box OptBox?) int32 {
+    var s = seed
+    var action = () -> {
+        s = nil
+        return true
+    }
+    return (box?.Use(action = external), (!string.IsNullOrEmpty(s) && action()) ? s.Length : 0).Item2
+}
+
+func CheckCalleeProvenanceBeforeArgumentReassignment(external (bool) -> bool, seed string?) int32 {
+    var s = seed
+    var action = (flag bool) -> {
+        s = nil
+        return flag
+    }
+    return s != nil ? (action((action = external) is {} a) ? 1 : 0) + s.Length : 0
+}
 `
         Assert.Equal(
-            "GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length",
+            "GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length",
             DiagnoseSource(callableReassignment)
         )
 
         let nestedIfAndSwitch = `package Issue4969.NestedIfAndSwitch
+import System.Diagnostics.CodeAnalysis
+
+var gOut string? = nil
+
+func TryGetWithRefCount(@NotNullWhen(true) out text string?, ref count int32) bool {
+    count += 1
+    text = "ok"
+    return true
+}
+
+func OutGlobalWithUnrelatedRefCount(ref count int32) int32 ->
+    TryGetWithRefCount(out gOut, ref count) ? gOut.Length : 0
+
 func NestedIfInIfExpr(ref s string?, flag bool) int32 -> if s != nil {
     if flag {
         s = nil
@@ -643,6 +694,10 @@ func SwitchExprInTernary(ref s string?, flag bool) int32 -> s != nil ? switch fl
 import System
 import System.Diagnostics.CodeAnalysis
 
+public struct Token {
+    public func operator implicit(t Token) float64 -> 0.0
+}
+
 public shared class CallbackPredicates {
     public func Has(@NotNullWhen(true) value string?, callback Action) bool {
         callback()
@@ -657,6 +712,10 @@ public shared class CallbackPredicates {
 import Issue4969.CallbackLib
 var g string? = "seed"
 func Check() int32 -> CallbackPredicates.Has(g, () -> { g = nil }) ? g.Length : 0
+func CheckCondArmConv(flag bool, token Token) float64 ->
+    !string.IsNullOrEmpty(g) ? (flag ? token : 0.0) + float64(g.Length) : 0.0
+func CheckSwitchArmConv(flag bool, token Token) float64 ->
+    !string.IsNullOrEmpty(g) ? (switch flag { case false: 0.0 default: token }) + float64(g.Length) : 0.0
 `)
             using let standardOut = StringWriter()
             using let standardError = StringWriter()
@@ -685,7 +744,8 @@ func Check() int32 -> CallbackPredicates.Has(g, () -> { g = nil }) ? g.Length : 
             }
             Assert.Equal(0, helperExit)
             Assert.NotEqual(0, exitCode)
-            Assert.Contains("GS0158", standardOut.ToString() + standardError.ToString())
+            let consumerDiagnostics = standardOut.ToString() + standardError.ToString()
+            Assert.Equal(3, consumerDiagnostics.Split("GS0158").Length - 1)
         } finally {
             if Directory.Exists(outputDirectory) {
                 Directory.Delete(outputDirectory, recursive: true)

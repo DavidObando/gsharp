@@ -580,8 +580,9 @@ partial class Binder {
                 bound BoundExpression,
                 state Dictionary[AccessPath, TypeSymbol],
                 beforeAliases HashSet[VariableSymbol],
-                alreadyProcessed HashSet[BoundExpression]?
-            ) -> Statements.ApplyExpressionEffects(bound, state, beforeAliases, alreadyProcessed),
+                alreadyProcessed HashSet[BoundExpression]?,
+                exitAliases Dictionary[BoundExpression, HashSet[VariableSymbol]]?
+            ) -> Statements.ApplyExpressionEffects(bound, state, beforeAliases, alreadyProcessed, exitAliases),
             recordExpressionNarrowingKill: (frame NarrowingFrame, path AccessPath, type TypeSymbol) ->
             Statements.RecordExpressionNarrowingKill(frame, path, type),
             getCallableAliases: () -> Statements.CaptureExternalCallableAliasesForExpression(),

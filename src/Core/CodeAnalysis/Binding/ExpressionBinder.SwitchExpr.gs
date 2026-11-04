@@ -234,12 +234,16 @@ internal partial class ExpressionBinder {
                 resultType != TypeSymbol.Error &&
                 resultType != TypeSymbol
                 .Void {
+                RestoreExpressionNarrowingFrames(armExits[armIndex])
                 result = BindExpression(arm.Syntax.Result, resultType)
+                armExits[armIndex] = CaptureExpressionNarrowingFrames()
                 arms.Add(BoundSwitchExpressionArm(nil, arm.Pattern, arm.Guard, result))
                 continue
             }
             let conversion = Conversion.Classify(result.Type, resultType)
-            if !conversion.Exists || conversion.IsExplicit {
+            let hasUserImplicit = !conversion.IsImplicit &&
+                ConversionClassifier.HasUserDefinedImplicitConversionForTypes(result.Type, resultType)
+            if (!conversion.Exists || conversion.IsExplicit) && !hasUserImplicit {
                 if result.Type != TypeSymbol.Error && resultType != TypeSymbol.Error {
                     Diagnostics.ReportSwitchExpressionArmTypeMismatch(
                         arm.Syntax.Result.Location,
@@ -255,9 +259,14 @@ internal partial class ExpressionBinder {
                 // BoundDefaultExpression (the verifiable Nullable<T> default),
                 // matching the if-expression path. The Conversion.Classify check
                 // above still governs the GS0179 arm-mismatch diagnostic.
+                RestoreExpressionNarrowingFrames(armExits[armIndex])
                 result = ConvertConditionalBranch(BranchValueLocation(arm.Syntax.Result), result, resultType)
+                armExits[armIndex] = CaptureExpressionNarrowingFrames()
             }
             arms.Add(BoundSwitchExpressionArm(nil, arm.Pattern, arm.Guard, result))
+        }
+        for armExit in armExits {
+            MergeBranchExpressionNarrowingFrames(armExit)
         }
         let boundArms = arms.ToImmutable()
         // Issue #1238: a deferred argument switch-expression whose arms could not
@@ -321,7 +330,10 @@ internal partial class ExpressionBinder {
                     continue
                 }
                 let conversion = Conversion.Classify(armType, candidate)
-                if !conversion.IsImplicit {
+                if !conversion.IsImplicit && !ConversionClassifier.HasUserDefinedImplicitConversionForTypes(
+                    armType,
+                    candidate
+                ) {
                     return false
                 }
             }
