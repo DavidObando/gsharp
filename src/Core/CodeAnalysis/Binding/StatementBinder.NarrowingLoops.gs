@@ -3641,7 +3641,8 @@ internal partial class StatementBinder {
         breakLabel BoundLabel,
         continueLabel BoundLabel,
         boundBody BoundStatement,
-        loopEntryState NarrowingState
+        loopEntryState NarrowingState,
+        boundPost BoundStatement? = nil
     ) {
         let rawBreaks = binderCtx.NarrowingFlow.TakeBreaks(breakLabel)
         let loop = loopBody.Parent
@@ -3653,7 +3654,7 @@ internal partial class StatementBinder {
             let activeFinallySet = HashSet[FinallyClauseSyntax](activeFinallyClauses)
             let activeCleanupSet = HashSet[BoundStatement](activeCleanupStatements)
             for snapshot in rawBreaks {
-                ApplyBreakPrefixEffects(snapshot, loopBody, boundBody, condition)
+                ApplyBreakPrefixEffects(snapshot, loopBody, boundBody, condition, boundPost)
                 if ApplyExitedFinallyEffects(snapshot, activeFinallySet, activeCleanupSet) {
                     reachableBreaks ??= List[NarrowingState](rawBreaks.Count)
                     reachableBreaks!!.Add(NarrowingState.Empty.WithAll(snapshot.NarrowedVariables))

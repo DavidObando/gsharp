@@ -746,6 +746,61 @@ func RunMemberCollectionInitializer() int32 {
 }
 var g string? = "ok"
 Console.WriteLine(DerivedCallHost().RunBaseCall(Token{}) + RunVariadicCall() + RunPackedVariadicConversion(Token{}) + RunReorderedNamed() + RunIndirectCall((a int32, b int32) -> a + b, Token{}) + RunMemberCollectionInitializer())`, "GS0158@41:18 GS0158@62:14 GS0158@74:14 GS0158@86:14 GS0158@98:14 GS0158@114:14", "reject", ""}
+            yield[]object{"control11_deferred_return_for_post_and_custom_handler_breaks", `import System
+import System.Globalization
+func Clear() int32 {
+    g = nil
+    return 1
+}
+func ClearBool() bool {
+    g = nil
+    return true
+}
+func Consume(b bool) { }
+func PickLambda(f Func[int64], tag int32) int32 { return tag }
+func PickLambda(o object, tag int64) int32 { return 0 }
+func RunDeferredReturnLambda() int32 {
+    return PickLambda(() -> {
+        while true {
+            if g == nil {
+                return 0
+            }
+            return {
+                Clear() + {
+                    break
+                    0
+                }
+            }
+        }
+        return g.Length
+    }, 1)
+}
+func RunForPostBreak() int32 {
+    for ; true; Consume(g != nil && (ClearBool() && {
+        break
+        true
+    })) { }
+    return g.Length
+}
+func RunCustomHandlerFirstHole() int32 {
+    var s string? = "ok"
+    cleaner = func() {
+        s = nil
+    }
+    while true {
+        if s == nil {
+            return 0
+        }
+        let ignored = String.Create(CultureInfo.InvariantCulture, "prefix${{
+            break
+            0
+        }}")
+    }
+    return s.Length
+}
+var g string? = "ok"
+var cleaner () -> void = func() { }
+Console.WriteLine(RunDeferredReturnLambda() + RunForPostBreak() + RunCustomHandlerFirstHole())`, "GS0158@27:18 GS0158@35:14 GS0158@51:14", "reject", ""}
             yield[]object{"control7_killed_branch_and_loop_condition_facts_not_replayed_on_break", `import System
 func Get() string? { return "ok" }
 func RunShortCircuitKilled() int32 {

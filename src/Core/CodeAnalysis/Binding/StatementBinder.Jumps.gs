@@ -190,7 +190,8 @@ internal partial class StatementBinder {
         bindIteration(() -> BoundStatement)? = nil,
         iterationRunsUserCode bool = false,
         loopCondition(() -> BoundExpression?)? = nil,
-        enumeratorDisposalRunsUserCode bool = false
+        enumeratorDisposalRunsUserCode bool = false,
+        loopPost(() -> BoundStatement?)? = nil
     ) BoundStatement {
         // ADR-0213 section 13 (#5461): the external callable aliases are part of the entry state.
         // A loop that reassigns an alias must remove it even when no fact is in force.
@@ -236,7 +237,15 @@ internal partial class StatementBinder {
         } finally {
             binderCtx.LoopStack.Pop()
         }
-        RecordLoopExitFacts(body, loopCondition?(), breakLabelValue, continueLabelValue, boundBody, loopEntryState)
+        RecordLoopExitFacts(
+            body,
+            loopCondition?(),
+            breakLabelValue,
+            continueLabelValue,
+            boundBody,
+            loopEntryState,
+            loopPost?()
+        )
         return boundBody
     }
 
@@ -477,7 +486,14 @@ internal partial class StatementBinder {
                 return false
             }
             Path.Add(node)
-            if object.ReferenceEquals(node, target) {
+            if object.ReferenceEquals(node, target) ||
+                (
+                node is BoundGotoStatement gotoNode &&
+                    target is BoundGotoStatement targetGoto &&
+                    gotoNode.Label == targetGoto.Label &&
+                    target.Syntax != nil &&
+                    object.ReferenceEquals(gotoNode.Syntax, target.Syntax)
+            ) {
                 Found = true
                 return false
             }
@@ -600,7 +616,8 @@ internal partial class StatementBinder {
         snapshot NarrowingJumpState,
         loopBody SyntaxNode,
         boundBody BoundStatement,
-        condition BoundExpression?
+        condition BoundExpression?,
+        boundPost BoundStatement? = nil
     ) {
         if snapshot.BreakNode is not{} breakNode {
             return
@@ -609,6 +626,9 @@ internal partial class StatementBinder {
         finder.Visit(boundBody)
         if !finder.Found && condition != nil {
             finder.Visit(condition)
+        }
+        if !finder.Found && boundPost != nil {
+            finder.Visit(boundPost)
         }
         if !finder.Found || finder.Path.Count < 2 {
             return
@@ -697,6 +717,18 @@ internal partial class StatementBinder {
                         }
                         prefixes.Add((forwarded, default(bool?)))
                     }
+                }
+                if interp.Handler != nil {
+                    prefixes.Add(
+                        (
+                            BoundInterpolatedStringExpression(
+                                interp.Syntax,
+                                ImmutableArray[BoundInterpolatedStringPart].Empty,
+                                interp.Handler
+                            ),
+                            default(bool?)
+                        )
+                    )
                 }
                 for part in interp.Parts {
                     if part.IsLiteral || part.Value == nil {

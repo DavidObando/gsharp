@@ -695,7 +695,8 @@ internal partial class StatementBinder {
                     $scope = headerParentScope
                 }
             },
-            loopCondition: () -> boundCondition
+            loopCondition: () -> boundCondition,
+            loopPost: () -> boundPost
         )
         condition = boundCondition
         post = boundPost
