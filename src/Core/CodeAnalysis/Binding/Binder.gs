@@ -587,10 +587,20 @@ partial class Binder {
             Statements.RecordExpressionNarrowingKill(frame, path, type),
             getCallableAliases: () -> Statements.CaptureExternalCallableAliasesForExpression(),
             setCallableAliases: (aliases HashSet[VariableSymbol]) ->
-            Statements.SetExternalCallableAliasesFromExpression(aliases)
+            Statements.SetExternalCallableAliasesFromExpression(aliases),
+            dischargesNullableWidening: (bound BoundExpression, path AccessPath, widenedType TypeSymbol) ->
+            Statements.DischargesNullableWidening(bound, path, widenedType)
         )
         Statements.SetSyncExpressionCallableAliases(
             (aliases IReadOnlyCollection[VariableSymbol]) -> expressions.SyncActiveExpressionCallableAliases(aliases)
+        )
+        conversions.SetExpressionNarrowingHooks(
+            () -> expressions.ExpressionNarrowingVersion,
+            (original BoundExpression, converted BoundExpression, beforeVersion int32) ->
+            expressions.OnConversionBound(original, converted, beforeVersion),
+            (expression BoundExpression) -> expressions.TryGetReboundSibling(expression),
+            () -> expressions.EnterTupleConversion(),
+            () -> expressions.LeaveTupleConversion()
         )
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor

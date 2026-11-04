@@ -86,6 +86,7 @@ internal partial class ExpressionBinder {
         ]? = nil
         var guardEntryAliases HashSet[VariableSymbol]? = nil
         var guardTrueAliases HashSet[VariableSymbol]? = nil
+        var thenArmExitFrame Dictionary[AccessPath, TypeSymbol]? = nil
         let (clauses, guard_, whenTrueBound) = IfLetBindingSupport.BindHeader(
             binderCtx,
             syntax.Bindings,
@@ -93,12 +94,11 @@ internal partial class ExpressionBinder {
             Diagnostics,
             conversions,
             bindTypeClause,
-            (initializer ExpressionSyntax) -> {
-                let boundInitializer = BindExpression(initializer)
+            (initializer ExpressionSyntax) -> BindExpression(initializer),
+            (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> {
                 afterBindingInitializers.Add(CaptureExpressionNarrowingFrames())
-                return boundInitializer
+                return DeclareIfLetLocal(identifier, isReadOnly, type)
             },
-            DeclareIfLetLocal,
             (guardSyntax ExpressionSyntax) -> {
                 guardEntryAliases = GetCurrentExpressionCallableAliases()
                 return BindExpression(guardSyntax, TypeSymbol.Bool)
@@ -120,6 +120,9 @@ internal partial class ExpressionBinder {
                 try {
                     return BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
                 } finally {
+                    if topFrame.Count > 0 {
+                        thenArmExitFrame = Dictionary[AccessPath, TypeSymbol](topFrame.Entries)
+                    }
                     expressionNarrowingFrames.RemoveAt(expressionNarrowingFrames.Count - 1)
                     if HasActiveExpressionNarrowings() {
                         setCallableAliases(GetCurrentExpressionCallableAliases())
@@ -181,7 +184,13 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         RestoreExpressionNarrowingFrames(thenExit)
-        let convertedTrue = ConvertConditionalBranch(BranchValueLocation(syntax.ThenBlock), whenTrue, resultType)
+        let convertedTrue = ConvertConditionalBranchWithNarrowing(
+            BranchValueLocation(syntax.ThenBlock),
+            whenTrue,
+            resultType,
+            thenArmExitFrame,
+            PatternVariables.Classify(guard_).WhenTrue
+        )
         thenExit = CaptureExpressionNarrowingFrames()
         RestoreExpressionNarrowingFrames(falseExit)
         let convertedFalse = ConvertConditionalBranch(

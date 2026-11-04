@@ -497,7 +497,11 @@ internal partial class StatementBinder {
                             DropsOnMemberMutation(key, dropAllMemberPaths, dropAllMemberPaths)
                     }
                 )
-                if drop {
+                if drop &&
+                    (
+                    !IsNullableWidening(key, frame[key]) ||
+                        StatementDischargesNullableWidening(boundStatement, key, frame[key])
+                ) {
                     (
                         (
                             if toRemove == nil {
@@ -1195,7 +1199,10 @@ internal partial class StatementBinder {
         if !SmartCastStability.IsAssignmentNarrowingRoot(assign.Variable) || assign.Variable.IsReadOnly {
             return false
         }
-        if assign.Variable.Type is not NullableTypeSymbol nullable {
+        let nullable = assign.Variable.Type as NullableTypeSymbol ?? binderCtx.NarrowedVariables.Query(
+            AccessPath.ForVariable(assign.Variable)
+        ) as NullableTypeSymbol
+        if nullable == nil {
             return false
         }
         // Issue #1123 is scoped to reference (and interface) types. Nullable
@@ -1259,6 +1266,67 @@ internal partial class StatementBinder {
         }
         return AssignmentTypePreservesNarrowing(innerValue.Type, narrowedType) ||
             NestedAssignmentPreservesNarrowing(innerValue, narrowedType)
+    }
+
+    internal func DischargesNullableWidening(bound BoundExpression, path AccessPath, widenedType TypeSymbol) bool {
+        if path.HasMembers || widenedType is not NullableTypeSymbol widenedNullable {
+            return false
+        }
+        let underlying = widenedNullable.UnderlyingType
+        if !IsReferenceLikeType(underlying) || !SmartCastStability.IsAssignmentNarrowingRoot(path.Root) ||
+            path
+            .Root
+            .IsReadOnly {
+            return false
+        }
+        var expr = bound
+        while expr is BoundConversionExpression conversion {
+            expr = conversion.Expression
+        }
+        if expr is BoundAssignmentExpression assign && object.ReferenceEquals(assign.Variable, path.Root) {
+            return AssignmentTypePreservesNarrowing(assign.AssignedValueType, underlying) ||
+                NestedAssignmentPreservesNarrowing(assign.Expression, underlying)
+        }
+        if expr.Syntax is NullCoalescingAssignmentExpressionSyntax &&
+            expr is BoundBlockExpression{
+            Expression: BoundBinaryExpression{
+                Op: {Kind: BoundBinaryOperatorKind.NullCoalesce},
+                Left: BoundVariableExpression targetVar
+            }
+        } &&
+            object.ReferenceEquals(targetVar.Variable, path.Root) {
+            return AssignmentTypePreservesNarrowing(expr.Type, underlying)
+        }
+        return false
+    }
+
+    private func StatementDischargesNullableWidening(
+        statement BoundStatement?,
+        path AccessPath,
+        widenedType TypeSymbol
+    ) bool {
+        var current = statement
+        while current is BoundBlockStatement labeledBlock &&
+            labeledBlock.Syntax is LabeledStatementSyntax &&
+            labeledBlock
+            .Statements
+            .Length == 2 &&
+            labeledBlock.Statements[0] is BoundLabelStatement {
+            current = labeledBlock.Statements[1]
+        }
+        if current is BoundExpressionStatement exprStmt {
+            return DischargesNullableWidening(exprStmt.Expression, path, widenedType)
+        }
+        if current is BoundIfStatement ifStmt {
+            if EndsInUnconditionalExit(ifStmt.ThenStatement) ||
+                ifStmt.ElseStatement == nil ||
+                EndsInUnconditionalExit(ifStmt.ElseStatement) {
+                return false
+            }
+            let joined = ComputeIfJoinNonNull(ifStmt, entry: nil, externalCallableAliases)
+            return joined != nil && joined.ContainsKey(path)
+        }
+        return false
     }
 
     private func AssignmentPreservesNarrowing(assignment BoundAssignmentExpression, narrowedType TypeSymbol) bool {
@@ -2100,6 +2168,8 @@ internal partial class StatementBinder {
         let aliasesBefore = CaptureExternalCallableAliases()
         let pattern = patterns.BindPattern(valueSyntax, discriminant.Type)
         ApplySwitchArmTestEffects(valueSyntax, discriminant.Type, pattern)
+        let evaluated = LocalVariableSymbol("<switch-value>", true, discriminant.Type)
+        ApplyHeaderCallableEffects(BoundIsExpression(valueSyntax, BoundVariableExpression(nil, evaluated), pattern))
         let test = BoundIsExpression(valueSyntax, discriminant, pattern)
         let testMayRemove = TestMayRemoveItsOperandFact(test)
         let frame = if discriminantStale || testMayRemove {

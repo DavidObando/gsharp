@@ -79,6 +79,25 @@ internal class ConversionClassifier {
     private let bindNativeProtocolConversion(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression
     private let canConvertNativeProtocol(TypeSymbol, TypeSymbol) -> bool
     private let getCurrentFunction() -> FunctionSymbol?
+    private var expressionNarrowingVersion(() -> int32)?
+    private var onConversionBound((BoundExpression, BoundExpression, int32) -> void)?
+    private var tryGetReboundSibling((BoundExpression) -> BoundExpression?)?
+    private var enterTupleConversion(() -> void)?
+    private var leaveTupleConversion(() -> void)?
+
+    internal func SetExpressionNarrowingHooks(
+        expressionNarrowingVersion() -> int32,
+        onConversionBound(BoundExpression, BoundExpression, int32) -> void,
+        tryGetReboundSibling(BoundExpression) -> BoundExpression?,
+        enterTupleConversion() -> void,
+        leaveTupleConversion() -> void
+    ) {
+        this.expressionNarrowingVersion = expressionNarrowingVersion
+        this.onConversionBound = onConversionBound
+        this.tryGetReboundSibling = tryGetReboundSibling
+        this.enterTupleConversion = enterTupleConversion
+        this.leaveTupleConversion = leaveTupleConversion
+    }
 
     /// Initializes a new instance of the (cref:ConversionClassifier)
     /// class.
@@ -309,6 +328,11 @@ internal class ConversionClassifier {
         callParameter ParameterSymbol? = nil,
         trackNarrowing bool = true
     ) BoundExpression {
+        var expression = expression
+        if tryGetReboundSibling != nil && tryGetReboundSibling!!(expression) is {} reboundSibling {
+            expression = reboundSibling
+        }
+        let beforeVersion = expressionNarrowingVersion?.Invoke() ?? 0
         let result = BindConversionCore(
             diagnosticLocation,
             expression,
@@ -327,6 +351,7 @@ internal class ConversionClassifier {
             // implementation builds calls or chains through other conversions.
             result.ImplicitConversionOperand = expression
         }
+        onConversionBound?.Invoke(expression, result, beforeVersion)
         return result
     }
 
@@ -1155,6 +1180,9 @@ internal class ConversionClassifier {
                 parameterMapping[i]
             }
             var argument = arguments[i]
+            if tryGetReboundSibling != nil && tryGetReboundSibling!!(argument) is {} reboundSibling {
+                argument = reboundSibling
+            }
             // Issue #5635: a method type argument that inference reads from the argument at a bare type-parameter
             // slot can take the narrowed type of a narrowed read. The read is decided for the slot under the inferred
             // type arguments, with the slot's declared `?` applied, as `let t = s` is. The imported slot itself takes
@@ -1857,6 +1885,23 @@ internal class ConversionClassifier {
     /// argument carrying the user-defined conversion call.
     /// @returns Whether a user-defined implicit conversion was applied.
     func TryApplyUserDefinedImplicitArgumentConversion(
+        argument BoundExpression,
+        expectedType TypeSymbol?,
+        out converted BoundExpression
+    ) bool {
+        var argument = argument
+        if tryGetReboundSibling != nil && tryGetReboundSibling!!(argument) is {} reboundSibling {
+            argument = reboundSibling
+        }
+        let beforeVersion = expressionNarrowingVersion?.Invoke() ?? 0
+        if TryApplyUserDefinedImplicitArgumentConversionCore(argument, expectedType, out converted) {
+            onConversionBound?.Invoke(argument, converted, beforeVersion)
+            return true
+        }
+        return false
+    }
+
+    private func TryApplyUserDefinedImplicitArgumentConversionCore(
         argument BoundExpression,
         expectedType TypeSymbol?,
         out converted BoundExpression
@@ -3346,16 +3391,34 @@ internal class ConversionClassifier {
         // element type without introducing a temp or element accesses.
         if expression is BoundTupleLiteralExpression literalSource && literalSource.Elements.Length == arity {
             let convertedLiteralElements = ImmutableArray.CreateBuilder[BoundExpression](arity)
-            for var i = 0; i < arity; i++ {
-                convertedLiteralElements.Add(
-                    BindConversion(
+            var earlierElementChangedNarrowing = false
+            enterTupleConversion?.Invoke()
+            try {
+                for var i = 0; i < arity; i++ {
+                    var element = literalSource.Elements[i]
+                    if earlierElementChangedNarrowing && element.Syntax is ExpressionSyntax elementSyntax {
+                        let unwrappedSyntax = if elementSyntax is NamedTupleElementSyntax named {
+                            named.Expression
+                        } else {
+                            elementSyntax
+                        }
+                        element = bindExpression(unwrappedSyntax)
+                    }
+                    let beforeVersion = expressionNarrowingVersion?.Invoke() ?? 0
+                    let convertedElement = BindConversion(
                         diagnosticLocation,
-                        literalSource.Elements[i],
+                        element,
                         targetTuple.ElementTypes[i],
                         allowExplicit,
                         trackNarrowing: false
                     )
-                )
+                    if (expressionNarrowingVersion?.Invoke() ?? 0) != beforeVersion {
+                        earlierElementChangedNarrowing = true
+                    }
+                    convertedLiteralElements.Add(convertedElement)
+                }
+            } finally {
+                leaveTupleConversion?.Invoke()
             }
             return BoundTupleLiteralExpression(expression.Syntax, targetTuple, convertedLiteralElements.ToImmutable())
         }

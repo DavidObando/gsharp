@@ -642,9 +642,32 @@ func CheckCalleeProvenanceBeforeArgumentReassignment(external (bool) -> bool, se
     }
     return s != nil ? (action((action = external) is {} a) ? 1 : 0) + s.Length : 0
 }
+
+func CheckDelegateInvokeProvenanceBeforeArgumentReassignment(external Func[bool, bool], seed string?) int32 {
+    var s = seed
+    var action Func[bool, bool] = (flag bool) -> {
+        s = nil
+        return flag
+    }
+    return s != nil ? (action.Invoke((action = external) is {} a), s.Length).Item2 : 0
+}
+
+@SuppressDiagnostic("GS0524")
+func CheckNonFinalDefaultArmCallableAliasExit(external () -> bool, seed string?, flag bool) int32 {
+    var s = seed
+    var action = external
+    let reset = () -> {
+        s = nil
+        return true
+    }
+    return s != nil ? ((switch flag {
+        default: (action = reset) is {} _ ? 0 : 0
+        case true: 0
+    }), action() ? s.Length : 0).Item2 : 0
+}
 `
         Assert.Equal(
-            "GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length",
+            "GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length",
             DiagnoseSource(callableReassignment)
         )
 
@@ -711,11 +734,27 @@ public shared class CallbackPredicates {
             File.WriteAllText(consumerPath, `package Issue4969.CallbackConsumer
 import Issue4969.CallbackLib
 var g string? = "seed"
+func Consume(x float64, n int32) int32 -> n
 func Check() int32 -> CallbackPredicates.Has(g, () -> { g = nil }) ? g.Length : 0
 func CheckCondArmConv(flag bool, token Token) float64 ->
     !string.IsNullOrEmpty(g) ? (flag ? token : 0.0) + float64(g.Length) : 0.0
 func CheckSwitchArmConv(flag bool, token Token) float64 ->
     !string.IsNullOrEmpty(g) ? (switch flag { case false: 0.0 default: token }) + float64(g.Length) : 0.0
+func CheckIfLetExplicitTypeConv(token Token?) int32 ->
+    !string.IsNullOrEmpty(g) ? (if let x float64 = token { g.Length } else { 0 }) : 0
+func CheckIfLetExplicitTypeConvElse(token Token?) int32 ->
+    !string.IsNullOrEmpty(g) ? (if let x float64 = token { 0 } else { g.Length }) : 0
+func CheckCallArgImplicitConv(token Token) int32 ->
+    !string.IsNullOrEmpty(g) ? Consume(token, g.Length) : 0
+func CheckTargetTypedTupleElementConv(token Token) int32 {
+    let pair (float64, int32) = !string.IsNullOrEmpty(g) ? (token, g.Length) : (0.0, 0)
+    return pair.Item2
+}
+func CheckDirectTargetTypedTupleConv(token Token) int32 ->
+    !string.IsNullOrEmpty(g) ? {
+        let pair (float64, int32) = (token, g.Length)
+        pair.Item2
+    } : 0
 `)
             using let standardOut = StringWriter()
             using let standardError = StringWriter()
@@ -745,7 +784,7 @@ func CheckSwitchArmConv(flag bool, token Token) float64 ->
             Assert.Equal(0, helperExit)
             Assert.NotEqual(0, exitCode)
             let consumerDiagnostics = standardOut.ToString() + standardError.ToString()
-            Assert.Equal(3, consumerDiagnostics.Split("GS0158").Length - 1)
+            Assert.Equal(8, consumerDiagnostics.Split("GS0158").Length - 1)
         } finally {
             if Directory.Exists(outputDirectory) {
                 Directory.Delete(outputDirectory, recursive: true)
@@ -788,6 +827,15 @@ func CheckSwitchArmConv(flag bool, token Token) float64 ->
     @InlineData(
         "return (!dict.TryGetValue(\"a\", out value) && (!dict.TryGetValue(\"b\", out value) && !dict.TryGetValue(\"c\", out value))) ? 0 : value.Length",
         ""
+    )
+    @InlineData("return dict.TryGetValue(\"missing\", out value) ? 0 : (value = \"ok\", value.Length).Item2", "")
+    @InlineData(
+        "return dict.TryGetValue(\"missing\", out value) ? 0 : (dict.TryGetValue(\"other\", out value), value.Length).Item2",
+        "GS0158:Length"
+    )
+    @InlineData(
+        "return dict.TryGetValue(\"missing\", out value) ? 0 : (flag ? \"no\" : (value = \"ok\"), value.Length).Item2",
+        "GS0158:Length"
     )
     func Composed_MaybeNullWhen_Preserves_Widening_Across_And_And_Or(body string, expected string) {
         let source = (`package Issue4969.ComposedMaybeNull

@@ -88,6 +88,8 @@ internal partial class ExpressionBinder {
                 )
             ]?
         ](syntax.Arms.Length)
+        let armExitFrames = List[Dictionary[AccessPath, TypeSymbol]?](syntax.Arms.Length)
+        let armPatternVariables = List[ImmutableArray[LocalVariableSymbol]](syntax.Arms.Length)
         for var armIndex = 0; armIndex < syntax.Arms.Length; armIndex++ {
             let armSyntax = syntax.Arms[armIndex]
             var pattern BoundPattern? = nil
@@ -97,8 +99,18 @@ internal partial class ExpressionBinder {
                 }
                 hasDefault = true
                 let defaultIndex = armIndex
+                var defaultExit List[
+                    (
+                        Id int32,
+                        Frame NarrowingFrame?,
+                        Entries Dictionary[AccessPath, TypeSymbol]?,
+                        Aliases HashSet[VariableSymbol]
+                    )
+                ]? = nil
                 let bindDefaultResult = func () BoundExpression {
-                    return BindExpressionWithNarrowing(armSyntax.Result, nil, targetType, canBeVoid)
+                    let boundDefault = BindExpressionWithNarrowing(armSyntax.Result, nil, targetType, canBeVoid)
+                    defaultExit = CaptureExpressionNarrowingFrames()
+                    return boundDefault
                 }
                 let beforeDefaultArm = CaptureExpressionNarrowingFrames()
                 let result = if defaultIndex == syntax.Arms.Length - 1 {
@@ -137,7 +149,9 @@ internal partial class ExpressionBinder {
                         )
                     )
                 }
-                armExits.Add(CaptureExpressionNarrowingFrames())
+                armExits.Add(defaultExit)
+                armExitFrames.Add(nil)
+                armPatternVariables.Add(default(ImmutableArray[LocalVariableSymbol]))
                 RestoreExpressionNarrowingFrames(beforeDefaultArm)
                 boundArmBuilders.Add((armSyntax, pattern, default(BoundExpression), result))
                 continue
@@ -184,14 +198,17 @@ internal partial class ExpressionBinder {
             // ADR-0166: the arm result sees the guard's when-true pattern variables.
             let (guardWhenTrue, _) = PatternVariables.Classify(guard_)
             let beforeArmResult = CaptureExpressionNarrowingFrames()
+            var armExitFrame Dictionary[AccessPath, TypeSymbol]? = nil
             let armResult = BindWithPatternVariables(
                 guardWhenTrue,
                 () -> {
-                    return BindExpressionWithNarrowing(armSyntax.Result, frame, targetType, canBeVoid)
+                    return BindExpressionWithNarrowing(armSyntax.Result, frame, out armExitFrame, targetType, canBeVoid)
                 },
                 armSyntax.Result
             )
             armExits.Add(CaptureExpressionNarrowingFrames())
+            armExitFrames.Add(armExitFrame)
+            armPatternVariables.Add(guardWhenTrue)
             RestoreExpressionNarrowingFrames(beforeArmResult)
             $scope = $scope.Pop()
             boundArmBuilders.Add((armSyntax, pattern, guard_, armResult))
@@ -260,7 +277,13 @@ internal partial class ExpressionBinder {
                 // matching the if-expression path. The Conversion.Classify check
                 // above still governs the GS0179 arm-mismatch diagnostic.
                 RestoreExpressionNarrowingFrames(armExits[armIndex])
-                result = ConvertConditionalBranch(BranchValueLocation(arm.Syntax.Result), result, resultType)
+                result = ConvertConditionalBranchWithNarrowing(
+                    BranchValueLocation(arm.Syntax.Result),
+                    result,
+                    resultType,
+                    armExitFrames[armIndex],
+                    armPatternVariables[armIndex]
+                )
                 armExits[armIndex] = CaptureExpressionNarrowingFrames()
             }
             arms.Add(BoundSwitchExpressionArm(nil, arm.Pattern, arm.Guard, result))
