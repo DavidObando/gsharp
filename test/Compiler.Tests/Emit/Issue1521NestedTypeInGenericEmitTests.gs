@@ -209,6 +209,72 @@ func Main() {
         Assert.Equal("ctl${Environment.NewLine}ctl${Environment.NewLine}", output)
     }
 
+    @Fact
+    func Issue4774_UnclosedGenericEnclosingNestedStruct_RejectedAtBindWhileConstructedOwnerRuns() {
+        const invalidSource = `package UnqualifiedNested4774
+import System
+class Outer[T] {
+    public struct Inner(Value int32) {
+        private var Seed int32 = 5
+        public func Read() int32 -> Seed
+    }
+}
+func Main() {
+    let item = Inner{Value: 7}
+    Console.WriteLine(item.Read())
+}`
+        let tempDir = Directory.CreateTempSubdirectory("gs_4774_neg_").FullName
+        try {
+            let srcPath = Path.Combine(tempDir, "test.gs")
+            let dllPath = Path.Combine(tempDir, "test.dll")
+            File.WriteAllText(srcPath, invalidSource)
+            let args = []string{"/out:" + dllPath, "/target:exe", "/targetframework:net10.0", srcPath}
+            using let stdoutWriter = StringWriter()
+            using let stderrWriter = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(stdoutWriter)
+            Console.SetError(stderrWriter)
+            var compileExit int32
+            try {
+                compileExit = Program.Main(args)
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            let combined = stdoutWriter.ToString() + stderrWriter.ToString()
+            Assert.NotEqual(0, compileExit)
+            Assert.False(File.Exists(dllPath))
+            Assert.Contains("error GS0157: Cannot find type Inner", combined, StringComparison.Ordinal)
+            Assert.Contains("(10,16,10,21)", combined, StringComparison.Ordinal)
+        } finally {
+            try {
+                Directory.Delete(tempDir, recursive: true)
+            } catch { }
+        }
+
+        const validSource = `package QualifiedNested4774
+import System
+class Outer[T] {
+    public struct Inner(Value int32) {
+        private var Seed int32 = 5
+        public func Read() int32 -> Seed + Value
+    }
+    public func ReadScoped() int32 {
+        let scopedItem = Inner{Value: 4}
+        return scopedItem.Read()
+    }
+}
+func Main() {
+    let item = Outer[string].Inner{Value: 7}
+    let owner = Outer[string]{}
+    Console.WriteLine(item.Read())
+    Console.WriteLine(owner.ReadScoped())
+}`
+        let output = CompileAndRun(validSource)
+        Assert.Equal("12${Environment.NewLine}9${Environment.NewLine}", output)
+    }
+
     shared {
         private func CompileAndRun(source string) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_1521_exe_").FullName

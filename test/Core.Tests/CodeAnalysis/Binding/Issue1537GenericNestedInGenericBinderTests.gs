@@ -182,17 +182,54 @@ func Use(m Issue1537SOuter[int32].Issue1537SMiddle[string]) { }`)
         let mismatchedDiagnostics = GetDiagnostics(`package Issue4750BinderMismatch
 class Issue4750MOuter[T] {
     class Issue4750MInner { }
+    func RunOpen() int32 -> Issue4750MProbe.Consume(Issue4750MInner())
 }
 class Issue4750MProbe {
     shared {
-        private func Consume(value Issue4750MOuter[int32].Issue4750MInner) int32 -> 42
+        func Consume(value Issue4750MOuter[int32].Issue4750MInner) int32 -> 42
         func RunMismatch() int32 -> Issue4750MProbe.Consume(Issue4750MOuter[string].Issue4750MInner())
-        func RunOpen() int32 -> Issue4750MProbe.Consume(Issue4750MInner())
     }
 }`)
         let errors = mismatchedDiagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
         Assert.Equal(2, errors.Length)
         Assert.All(errors, (d Diagnostic) -> Assert.Equal("GS0154", d.Id))
+
+        let unclosedOutsideOwnerDiagnostics = GetDiagnostics(`package Issue4774BinderUnclosed
+class Outer[T] {
+    public struct Inner(Value int32) {
+        private var Seed int32 = 5
+        public func Read() int32 -> Seed
+    }
+}
+func BadUnqualifiedLiteral() {
+    let item = Inner{Value: 7}
+}
+func BadUnconstructedOuterLiteral() {
+    let item = Outer.Inner{Value: 7}
+}
+func BadUnqualifiedTypeClause(item Inner) { }
+func BadUnconstructedOuterTypeClause(item Outer.Inner) { }`)
+        let unclosedErrors = unclosedOutsideOwnerDiagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
+        Assert.Equal(4, unclosedErrors.Length)
+        Assert.Equal(2, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0157"))
+        Assert.Equal(2, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0113"))
+
+        let validScopedAndConstructedDiagnostics = GetDiagnostics(`package Issue4774BinderValid
+class Outer[T] {
+    public struct Inner(Value int32) {
+        private var Seed int32 = 5
+        public func Read() int32 -> Seed + Value
+    }
+    public func Inside() int32 {
+        let item = Inner{Value: 7}
+        return item.Read()
+    }
+}
+func Outside() int32 {
+    let item = Outer[string].Inner{Value: 7}
+    return item.Read()
+}`)
+        Assert.Empty(validScopedAndConstructedDiagnostics)
 
         let derivedMismatchDiagnostics = GetDiagnostics(`package Issue4750BinderDerivedMismatch
 class Issue4750DOuter[T] {

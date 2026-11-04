@@ -1105,6 +1105,10 @@ internal partial class ExpressionBinder {
                 } else {
                     nestedType = def
                 }
+                if binderCtx.HasUnclosedEnclosingTypeParameters(nestedType, getCurrentFunction()) {
+                    nestedType = nil
+                    return false
+                }
                 return true
             }
             case nestedIface is InterfaceSymbol {
@@ -1114,10 +1118,18 @@ internal partial class ExpressionBinder {
                 } else {
                     ifaceDef
                 }
+                if binderCtx.HasUnclosedEnclosingTypeParameters(nestedType, getCurrentFunction()) {
+                    nestedType = nil
+                    return false
+                }
                 return true
             }
             default {
                 nestedType = definitions[segments.Count - 1]
+                if binderCtx.HasUnclosedEnclosingTypeParameters(nestedType, getCurrentFunction()) {
+                    nestedType = nil
+                    return false
+                }
                 return true
             }
         }
@@ -2326,6 +2338,10 @@ internal partial class ExpressionBinder {
                 } else {
                     nestedEnum.Definition ?? nestedEnum
                 }
+                if binderCtx.HasUnclosedEnclosingTypeParameters(constructedEnum, getCurrentFunction()) {
+                    constructedEnum = nil
+                    return false
+                }
                 return true
             }
             if nested is not StructSymbol nestedStruct {
@@ -2352,6 +2368,10 @@ internal partial class ExpressionBinder {
                 constructedStruct = def
             }
             if i == segments.Count - 1 {
+                if binderCtx.HasUnclosedEnclosingTypeParameters(constructedStruct, getCurrentFunction()) {
+                    constructedStruct = nil
+                    return false
+                }
                 return true
             }
             // Inherited nested lookup needs the constructed owner at every

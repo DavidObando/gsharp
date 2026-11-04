@@ -5136,6 +5136,9 @@ partial class Binder {
         } else if deepest is EnumSymbol deepestEnum && !enclosingArgs.IsDefaultOrEmpty {
             deepest = EnumSymbol.ConstructNested(deepestEnum.Definition ?? deepestEnum, enclosingArgs)!!
         }
+        if binderCtx.HasUnclosedEnclosingTypeParameters(deepest, function) {
+            return nil
+        }
         return deepest
     }
 
@@ -5221,7 +5224,7 @@ partial class Binder {
         let segmentTexts = [totalSegments]string
         segmentTexts[0] = qualifiedIdentifier.ValueText
         for var i = 0; i < syntax.QualifierIdentifierTokens.Length; i++ {
-            segmentTexts[1 + i] = syntax.QualifierIdentifierTokens[i].Text
+            segmentTexts[1 + i] = syntax.QualifierIdentifierTokens[i].ValueText
         }
         // HasTypeArguments implies the parser set TypeArguments.
         let qualifiedTypeArguments = syntax.TypeArguments
@@ -5281,6 +5284,7 @@ partial class Binder {
         // Without a metadata homonym, the exact source lookup below handles it.
         let qualifiedName = $scope.ExpandQualifiedTypeName(segmentTexts, totalSegments)
         if $scope.TryLookupQualifiedSourceType(qualifiedName, targetArity, out var packageQualifiedSourceType) &&
+            !binderCtx.HasUnclosedEnclosingTypeParameters(packageQualifiedSourceType, function) &&
             TryResolveOuterPrefix(segmentTexts, totalSegments, targetArity) != nil {
             if targetArity == 0 {
                 return packageQualifiedSourceType!!
@@ -5326,7 +5330,9 @@ partial class Binder {
         }
         // Source types have no CLR representation while binding. Preserve the
         // complete name: an enum member must not resolve as an unrelated type.
-        if $scope.TryLookupQualifiedSourceType(qualifiedName, targetArity, out var sourceType) {
+        if $scope.TryLookupQualifiedSourceType(qualifiedName, targetArity, out var sourceType) &&
+            !binderCtx
+            .HasUnclosedEnclosingTypeParameters(sourceType, function) {
             if targetArity == 0 {
                 return sourceType
             }
@@ -5361,7 +5367,7 @@ partial class Binder {
         }
         var lastGoodName = qualifiedIdentifier.ValueText
         for var i = 0; i < syntax.QualifierIdentifierTokens.Length; i++ {
-            let segmentText = syntax.QualifierIdentifierTokens[i].Text
+            let segmentText = syntax.QualifierIdentifierTokens[i].ValueText
             let isLast = i == syntax.QualifierIdentifierTokens.Length - 1
             var next Type? = nil
             if isLast && targetArity > 0 {

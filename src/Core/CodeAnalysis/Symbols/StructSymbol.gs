@@ -2660,8 +2660,9 @@ class StructSymbol : TypeSymbol {
 
         private func EnclosingTypeOf(type TypeSymbol) TypeSymbol? -> switch type {
             case s is StructSymbol: (s.Definition ?? s).ContainingType
-            case i is InterfaceSymbol: i.ContainingType
-            case e is EnumSymbol: e.ContainingType
+            case i is InterfaceSymbol: (i.Definition ?? i).ContainingType
+            case e is EnumSymbol: (e.Definition ?? e).ContainingType
+            case d is DelegateTypeSymbol: (d.Definition ?? d).ContainingType
             default: default(TypeSymbol?)
         }
 

@@ -357,7 +357,7 @@ internal partial class ExpressionBinder {
         out type TypeSymbol?
     ) bool {
         type = nil
-        let names = typeClause.DottedName.Split('.')
+        let names = GetTypeClauseSegmentNames(typeClause)
         if names.Length < 2 {
             return false
         }
@@ -365,6 +365,18 @@ internal partial class ExpressionBinder {
         Array.Fill(arities, -1)
         arities[names.Length - 1] = arity
         return TryResolveOpenGenericDeclaredNestedType(names, arities, out type)
+    }
+
+    private func GetTypeClauseSegmentNames(typeClause TypeClauseSyntax)[]string {
+        if typeClause.Identifier == nil {
+            return Array.Empty[string]()
+        }
+        let segments = [typeClause.SegmentCount]string
+        segments[0] = typeClause.Identifier!!.ValueText
+        for var i = 1; i < segments.Length; i++ {
+            segments[i] = typeClause.QualifierIdentifierTokens[i - 1].ValueText
+        }
+        return segments
     }
 
     /// Issue #3677: resolves a dotted open-generic `typeof(...)` target
@@ -444,16 +456,7 @@ internal partial class ExpressionBinder {
         if !typeClause.HasQualifier || typeClause.IsArray || typeClause.IsNullable || lookupType("_") != nil {
             return false
         }
-        segments = [typeClause.SegmentCount]string
-        segments[0] = Invariant.Required(
-            typeClause.Identifier,
-            "a named type clause has an identifier",
-            expression: "typeClause.Identifier"
-        )
-            .Text
-        for var i = 1; i < segments.Length; i++ {
-            segments[i] = typeClause.QualifierIdentifierTokens[i - 1].Text
-        }
+        segments = GetTypeClauseSegmentNames(typeClause)
         // Issue #3677: the source-declaration fallback walks SYMBOLS, not
         // `+`-joined reflection names, so it needs the raw per-segment name and
         // arity next to the arity-mangled reflection segments built below.
@@ -2057,6 +2060,10 @@ internal partial class ExpressionBinder {
                 enclosingTypeArguments,
                 $scope.References!!.MapClrTypeToReferences
             )
+        }
+        if binderCtx.HasUnclosedEnclosingTypeParameters(structSymbol, getCurrentFunction()) {
+            Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName)
+            return BoundErrorExpression(syntax)
         }
         // Issue #5425: an imported data class uses the CLR constructor path.
         // Validate type arguments above first, so that every spelling gets the same arity check.
