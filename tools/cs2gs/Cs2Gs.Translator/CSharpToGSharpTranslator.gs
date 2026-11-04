@@ -1253,6 +1253,174 @@ partial class CSharpToGSharpTranslator {
             HashSet[INamedTypeSymbol]
         ] = ConditionalWeakTable[Compilation, HashSet[INamedTypeSymbol]]()
 
+        private let LiftedDelegateReferencedSymbolsCache ConditionalWeakTable[
+            Compilation,
+            HashSet[ISymbol]
+        ] = ConditionalWeakTable[Compilation, HashSet[ISymbol]]()
+
+        private func IsReferencedByLiftedDelegate(compilation Compilation, symbol ISymbol?) bool {
+            if symbol == nil {
+                return false
+            }
+            let referenced = LiftedDelegateReferencedSymbolsCache.GetValue(
+                compilation,
+                CollectLiftedDelegateReferencedSymbols
+            )
+            return referenced.Contains(symbol.OriginalDefinition)
+        }
+
+        private func CollectLiftedDelegateReferencedSymbols(compilation Compilation) HashSet[ISymbol] {
+            let referenced = HashSet[ISymbol](SymbolEqualityComparer.Default)
+            let visitedTypes = HashSet[ITypeSymbol](SymbolEqualityComparer.Default)
+            for tree in compilation.SyntaxTrees {
+                let delegates = tree.GetRoot().DescendantNodes().OfType[DelegateDeclarationSyntax]().ToList()
+                if delegates.Count == 0 {
+                    continue
+                }
+                let model = compilation.GetSemanticModel(tree)
+                for declaration in delegates {
+                    if model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol delegateSymbol ||
+                        !CSharpTypeMapper.IsLiftedNestedDelegate(delegateSymbol) {
+                        continue
+                    }
+                    CollectLiftedDelegateSymbolReferences(delegateSymbol, referenced, visitedTypes)
+                    for node in declaration.DescendantNodes() {
+                        if model.GetSymbolInfo(node).Symbol is not ISymbol symbol {
+                            continue
+                        }
+                        if symbol is ITypeSymbol typeSymbol {
+                            CollectLiftedDelegateTypeReferences(typeSymbol, referenced, visitedTypes)
+                        } else if symbol.ContainingType != nil {
+                            referenced.Add(symbol.OriginalDefinition)
+                            CollectLiftedDelegateTypeReferences(symbol.ContainingType, referenced, visitedTypes)
+                        }
+                    }
+                }
+            }
+            return referenced
+        }
+
+        private func CollectLiftedDelegateSymbolReferences(
+            delegateSymbol INamedTypeSymbol,
+            referenced HashSet[ISymbol],
+            visitedTypes HashSet[ITypeSymbol]
+        ) {
+            let definition = delegateSymbol.OriginalDefinition
+            CollectLiftedDelegateAttributeReferences(definition.GetAttributes(), referenced, visitedTypes)
+            if definition.DelegateInvokeMethod is IMethodSymbol invoke {
+                CollectLiftedDelegateTypeReferences(invoke.ReturnType, referenced, visitedTypes)
+                CollectLiftedDelegateAttributeReferences(invoke.GetReturnTypeAttributes(), referenced, visitedTypes)
+                for parameter in invoke.Parameters {
+                    CollectLiftedDelegateTypeReferences(parameter.Type, referenced, visitedTypes)
+                    CollectLiftedDelegateAttributeReferences(parameter.GetAttributes(), referenced, visitedTypes)
+                }
+            }
+            for typeParameter in definition.TypeParameters {
+                CollectLiftedDelegateTypeReferences(typeParameter, referenced, visitedTypes)
+                CollectLiftedDelegateAttributeReferences(typeParameter.GetAttributes(), referenced, visitedTypes)
+            }
+        }
+
+        private func CollectLiftedDelegateAttributeReferences(
+            attributes ImmutableArray[AttributeData],
+            referenced HashSet[ISymbol],
+            visitedTypes HashSet[ITypeSymbol]
+        ) {
+            for attribute in attributes {
+                if attribute.AttributeClass != nil {
+                    CollectLiftedDelegateTypeReferences(attribute.AttributeClass, referenced, visitedTypes)
+                }
+                if attribute.AttributeConstructor is {ContainingType: not nil} constructor {
+                    referenced.Add(constructor.OriginalDefinition)
+                }
+                for argument in attribute.ConstructorArguments {
+                    CollectLiftedDelegateConstantReferences(argument, referenced, visitedTypes)
+                }
+                for named in attribute.NamedArguments {
+                    CollectLiftedDelegateConstantReferences(named.Value, referenced, visitedTypes)
+                }
+            }
+        }
+
+        private func CollectLiftedDelegateConstantReferences(
+            constant TypedConstant,
+            referenced HashSet[ISymbol],
+            visitedTypes HashSet[ITypeSymbol]
+        ) {
+            if constant.Type != nil {
+                CollectLiftedDelegateTypeReferences(constant.Type, referenced, visitedTypes)
+            }
+            switch constant.Kind {
+                case TypedConstantKind.Type {
+                    if constant.Value is ITypeSymbol type {
+                        CollectLiftedDelegateTypeReferences(type, referenced, visitedTypes)
+                    }
+                }
+                case TypedConstantKind.Array {
+                    if !constant.Values.IsDefaultOrEmpty {
+                        for element in constant.Values {
+                            CollectLiftedDelegateConstantReferences(element, referenced, visitedTypes)
+                        }
+                    }
+                }
+                default { }
+            }
+        }
+
+        private func CollectLiftedDelegateTypeReferences(
+            type ITypeSymbol?,
+            referenced HashSet[ISymbol],
+            visitedTypes HashSet[ITypeSymbol]
+        ) {
+            if type == nil || !visitedTypes.Add(type) {
+                return
+            }
+            switch type {
+                case array is IArrayTypeSymbol {
+                    CollectLiftedDelegateTypeReferences(array.ElementType, referenced, visitedTypes)
+                }
+                case pointer is IPointerTypeSymbol {
+                    CollectLiftedDelegateTypeReferences(pointer.PointedAtType, referenced, visitedTypes)
+                }
+                case functionPointer is IFunctionPointerTypeSymbol {
+                    CollectLiftedDelegateTypeReferences(functionPointer.Signature.ReturnType, referenced, visitedTypes)
+                    for parameter in functionPointer.Signature.Parameters {
+                        CollectLiftedDelegateTypeReferences(parameter.Type, referenced, visitedTypes)
+                    }
+                }
+                case typeParameter is ITypeParameterSymbol {
+                    for constraint in typeParameter.ConstraintTypes {
+                        CollectLiftedDelegateTypeReferences(constraint, referenced, visitedTypes)
+                    }
+                }
+                case named is INamedTypeSymbol {
+                    let liftedDelegate = CSharpTypeMapper.IsLiftedNestedDelegate(named)
+                    if liftedDelegate {
+                        CollectLiftedDelegateSymbolReferences(named.OriginalDefinition, referenced, visitedTypes)
+                    }
+                    for var current INamedTypeSymbol? = named; current != nil; current = current!!.ContainingType {
+                        let definition = current.OriginalDefinition
+                        if !liftedDelegate && definition.ContainingType != nil {
+                            referenced.Add(definition)
+                            if definition.BaseType != nil {
+                                CollectLiftedDelegateTypeReferences(definition.BaseType, referenced, visitedTypes)
+                            }
+                            for iface in definition.Interfaces {
+                                CollectLiftedDelegateTypeReferences(iface, referenced, visitedTypes)
+                            }
+                            for typeParameter in definition.TypeParameters {
+                                CollectLiftedDelegateTypeReferences(typeParameter, referenced, visitedTypes)
+                            }
+                        }
+                        for argument in current.TypeArguments {
+                            CollectLiftedDelegateTypeReferences(argument, referenced, visitedTypes)
+                        }
+                    }
+                }
+                default { }
+            }
+        }
+
         /// Gets the distinct source namespaces declared by a document.
         /// @param document The bound source document.
         /// @returns Declared namespaces in source order.
