@@ -215,6 +215,20 @@ Console.WriteLine(RunAsync().GetAwaiter().GetResult())
             Assert.Same(openGetEnumerator, mappedDef)
             Assert.Same(openGetEnumerator, unmappedDef)
             Assert.NotNull(decodedReturn)
+
+            let hostOpenList = typeof(List[_])
+            let hybridList = hostOpenList.MakeGenericType(contextString)
+            let openIndexOf3 = Assert.Single(
+                hostOpenList.GetMethods(),
+                (m MethodInfo) -> m.Name == "IndexOf" && m.GetParameters().Length == 3
+            )
+            let mappedIndexOf3 = ClrTypeUtilities.MapConstructedGenericMethod(hybridList, openIndexOf3)
+            let rawUnmappedIndexOf3 = TypeBuilder.GetMethod(hybridList, openIndexOf3)
+            Assert.Same(openIndexOf3, ImportedMemberRefFactory.ResolveMethodOnOpenDefinition(hostOpenList, mappedIndexOf3))
+            Assert.Same(
+                rawUnmappedIndexOf3,
+                ImportedMemberRefFactory.ResolveMethodOnOpenDefinition(hostOpenList, rawUnmappedIndexOf3)
+            )
         } finally {
             mlc.Dispose()
         }

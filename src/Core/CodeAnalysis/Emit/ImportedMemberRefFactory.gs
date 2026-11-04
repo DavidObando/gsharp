@@ -2053,6 +2053,7 @@ internal class ImportedMemberRefFactory {
                 }
             }
             var fallback MethodInfo? = nil
+            var ambiguousFallback = false
             for candidate in open_.GetMethods(
                 BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic
             ) {
@@ -2060,17 +2061,22 @@ internal class ImportedMemberRefFactory {
                     candidate.IsStatic == method.IsStatic &&
                     candidate.IsGenericMethod == method
                     .IsGenericMethod {
-                    var parametersMatch = true
                     try {
-                        parametersMatch = candidate.GetParameters().Length == method.GetParameters().Length
-                    } catch (NotSupportedException) { }
-                    if parametersMatch {
+                        if candidate.GetParameters().Length != method.GetParameters().Length {
+                            continue
+                        }
                         fallback = candidate
                         break
+                    } catch (NotSupportedException) {
+                        if fallback != nil {
+                            ambiguousFallback = true
+                            break
+                        }
+                        fallback = candidate
                     }
                 }
             }
-            if fallback != nil {
+            if fallback != nil && !ambiguousFallback {
                 return fallback
             }
             return method
@@ -2149,7 +2155,7 @@ internal class ImportedMemberRefFactory {
             }
             let openMethod MethodInfo? = GetOpenMethod(method)
             return if openMethod != nil && openMethod.DeclaringType?.IsGenericTypeDefinition == true {
-                TypeBuilder.GetMethod(declaring, openMethod)
+                ClrTypeUtilities.MapConstructedGenericMethod(declaring, openMethod)
             } else {
                 method
             }
@@ -2217,7 +2223,7 @@ internal class ImportedMemberRefFactory {
                 openProperty?.GetGetMethod(nonPublic)
             }
             return if openAccessor != nil {
-                TypeBuilder.GetMethod(declaring, openAccessor)
+                ClrTypeUtilities.MapConstructedGenericMethod(declaring, openAccessor)
             } else {
                 default(MethodInfo?)
             }
@@ -2353,6 +2359,7 @@ internal class ImportedMemberRefFactory {
                 }
             }
             var fallback MethodInfo? = nil
+            var ambiguousFallback = false
             for candidate in openDefinition.GetMethods(
                 BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic
             ) {
@@ -2360,17 +2367,26 @@ internal class ImportedMemberRefFactory {
                     candidate.IsStatic == method.IsStatic &&
                     candidate.IsGenericMethod == method
                     .IsGenericMethod {
-                    var parametersMatch = true
                     try {
-                        parametersMatch = candidate.GetParameters().Length == method.GetParameters().Length
-                    } catch (NotSupportedException) { }
-                    if parametersMatch {
+                        if candidate.GetParameters().Length != method.GetParameters().Length {
+                            continue
+                        }
                         fallback = candidate
                         break
+                    } catch (NotSupportedException) {
+                        if fallback != nil {
+                            ambiguousFallback = true
+                            break
+                        }
+                        fallback = candidate
                     }
                 }
             }
-            return fallback ?? method
+            return if ambiguousFallback {
+                method
+            } else {
+                fallback ?? method
+            }
         }
 
         internal func ResolvePropertyOnOpenDefinition(openDefinition Type?, property PropertyInfo?) PropertyInfo? {
