@@ -53,7 +53,6 @@ internal partial class StatementBinder {
     internal func IsolateExternalCallableAliases() HashSet[VariableSymbol] {
         let saved = HashSet[VariableSymbol](externalCallableAliases)
         externalCallableAliases.Clear()
-        SyncExpressionCallableAliasesNow()
         return saved
     }
 
@@ -79,6 +78,31 @@ internal partial class StatementBinder {
     internal func EvolveCallableAliases(operand BoundExpression, before HashSet[VariableSymbol]) HashSet[
         VariableSymbol
     ] -> AliasesAfter(operand, before)
+
+    internal func ApplyExpressionEffects(
+        bound BoundExpression,
+        state Dictionary[AccessPath, TypeSymbol],
+        beforeAliases HashSet[VariableSymbol],
+        alreadyProcessed HashSet[BoundExpression]?
+    ) HashSet[VariableSymbol] {
+        if bound.Syntax is {} anchor {
+            EnsureClosureAssignedNames(anchor)
+        }
+        let collector = NewCollector(nil, beforeAliases)
+        collector.AlreadyProcessedExpressions = alreadyProcessed
+        collector.VisitExpression(bound)
+        if state.Count > 0 {
+            ClearAssignedRoots(bound, state, collector)
+        }
+        let after = HashSet[VariableSymbol](collector.DefinitelyExternalFunctionValues)
+        if collector.MayMutateAnyRootViaPointer {
+            after.Clear()
+        }
+        if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
+            after.RemoveWhere(NamesClosureAssignedStorage)
+        }
+        return after
+    }
 
     internal func RecordExpressionNarrowingKill(frame NarrowingFrame, path AccessPath, type TypeSymbol) {
         conditionKillJournal?.Add((frame, path, type))
@@ -1618,6 +1642,10 @@ internal partial class StatementBinder {
         WhenFalseAliases HashSet[VariableSymbol]
     ) {
         switch condition {
+            case block is BoundBlockExpression {
+                let afterPrefix = AliasesAfterBlockPrefix(block, beforeAliases)
+                return ComputeConditionNarrowingInOrder(block.Expression, afterPrefix)
+            }
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
                 let (inThen, inElse, trueAliases, falseAliases) = ComputeConditionNarrowingInOrder(
                     unary.Operand,
@@ -2084,6 +2112,55 @@ internal partial class StatementBinder {
         ClearAssignedRoots(node, state, collector)
     }
 
+    internal func ClearAssignedRootsForConditionOperand(
+        node BoundNode,
+        state Dictionary[AccessPath, TypeSymbol],
+        callableAliases IReadOnlyCollection[VariableSymbol]? = nil
+    ) {
+        if state.Count == 0 {
+            return
+        }
+        if node.Syntax is {} anchor {
+            EnsureClosureAssignedNames(anchor)
+        }
+        let collector = NewCollector(nil, callableAliases ?? externalCallableAliases)
+        collector.Visit(node)
+        var memberPaths Dictionary[AccessPath, TypeSymbol]? = nil
+        for entry in state.ToArray() {
+            if entry.Key.HasMembers && !IsExternalStorageAlias(entry.Key.Root) {
+                if memberPaths == nil {
+                    memberPaths = Dictionary[AccessPath, TypeSymbol]()
+                }
+                memberPaths[entry.Key] = entry.Value
+                state.Remove(entry.Key)
+            }
+        }
+        if state.Count > 0 {
+            ClearAssignedRoots(node, state, collector)
+        }
+        if memberPaths != nil {
+            var filterWrites List[(TryBlock SyntaxNode?, Names HashSet[string])]? = nil
+            if node.Syntax is {} syntax && (collector.MayMutateMemberPaths || collector.ContainsTry) {
+                let filters = CollectCatchFiltersAbove(syntax)
+                if filters.Count > 0 {
+                    filterWrites = CollectEnclosingFilterWrites(filters)
+                }
+            }
+            for entry in memberPaths {
+                let path = entry.Key
+                let rootPath = AccessPath.ForVariable(path.Root)
+                let killedByFilter = filterWrites != nil &&
+                    (FilterWritesVariable(filterWrites, path.Root) || MayBeMutatedByUnknownCallable(path))
+                let killed = killedByFilter || collector.AssignsRoot(path.Root) ||
+                    MayBeMutatedByUnknownWrite(collector, rootPath) ||
+                    (collector.MayMutateMemberPaths && MayBeMutatedByUnknownCallable(rootPath))
+                if !killed {
+                    state[path] = entry.Value
+                }
+            }
+        }
+    }
+
     private func ClearAssignedRoots(
         node BoundNode,
         state Dictionary[AccessPath, TypeSymbol],
@@ -2256,6 +2333,11 @@ internal partial class StatementBinder {
             get;
         }
 
+        prop AlreadyProcessedExpressions HashSet[BoundExpression]? {
+            get;
+            set;
+        }
+
         prop MayMutateAnyRoot bool {
             get;
             private set;
@@ -2343,6 +2425,11 @@ internal partial class StatementBinder {
 
         open override func VisitExpression(node BoundExpression?) {
             if node == nil {
+                return
+            }
+            if AlreadyProcessedExpressions != nil &&
+                visitedFunctionLiterals.Count == 0 &&
+                !AlreadyProcessedExpressions!!.Add(node) {
                 return
             }
             if StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) {
@@ -2673,20 +2760,58 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitBinaryExpression(node BoundBinaryExpression) {
-            VisitExpression(node.Left)
             if node
                 .Op
                 .Kind is BoundBinaryOperatorKind.LogicalAnd or
                 BoundBinaryOperatorKind.LogicalOr or
-                BoundBinaryOperatorKind.NullCoalesce {
+                BoundBinaryOperatorKind
+                .NullCoalesce {
+                VisitExpression(node.Left)
                 VisitPossiblySkipped(() -> VisitExpression(node.Right))
-            } else {
-                VisitExpression(node.Right)
+                return
             }
-            if StatementBinder.BinaryEqualityRunsUserCode(node) {
-                // ADR-0208 R19 (#5710): structural equality calls `Equals`, which can be user code. It is a plain
-                // method call, so it does not write by-reference storage (R12, amendment A3).
-                MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+            if node.Left is not BoundBinaryExpression {
+                VisitExpression(node.Left)
+                VisitExpression(node.Right)
+                if StatementBinder.BinaryEqualityRunsUserCode(node) {
+                    // ADR-0208 R19 (#5710): structural equality calls `Equals`, which can be user code. It is a plain
+                    // method call, so it does not write by-reference storage (R12, amendment A3).
+                    MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                }
+                return
+            }
+            let spine = Stack[BoundBinaryExpression]()
+            var current BoundExpression = node
+            while current is BoundBinaryExpression bin &&
+                bin
+                .Op
+                .Kind is not(
+                BoundBinaryOperatorKind.LogicalAnd or
+                    BoundBinaryOperatorKind.LogicalOr or
+                    BoundBinaryOperatorKind.NullCoalesce
+            ) {
+                spine.Push(bin)
+                let left = bin.Left
+                if AlreadyProcessedExpressions != nil &&
+                    visitedFunctionLiterals.Count == 0 &&
+                    AlreadyProcessedExpressions!!.Contains(left) {
+                    current = left
+                    break
+                }
+                current = left
+            }
+            VisitExpression(current)
+            while spine.Count > 0 {
+                let bin = spine.Pop()
+                if !object.ReferenceEquals(bin, node) &&
+                    AlreadyProcessedExpressions != nil &&
+                    visitedFunctionLiterals.Count == 0 {
+                    AlreadyProcessedExpressions!!.Add(bin)
+                }
+                VisitExpression(bin.Right)
+                if StatementBinder.BinaryEqualityRunsUserCode(bin) {
+                    MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                }
             }
         }
 
@@ -3479,6 +3604,10 @@ internal partial class StatementBinder {
         ) {
             if literal.Body is not{} body || !visitedFunctionLiterals.Add(literal) {
                 return
+            }
+            for captured in literal.CapturedVariables {
+                normalCallableState.CapturedVariables.Add(captured)
+                allEntryCallableState.CapturedVariables.Add(captured)
             }
             let parameters = literal.Function.Parameters
             for var i = 0; i < parameters.Length; i++ {
@@ -6312,6 +6441,35 @@ internal partial class StatementBinder {
 
         internal func IsConversionOperator(function FunctionSymbol) bool -> function.IsSpecialName &&
             (function.Name == "op_Implicit" || function.Name == "op_Explicit")
+
+        internal func HasShallowExpressionEffects(node BoundExpression) bool {
+            if node is BoundAssignmentExpression or
+                BoundCallOperationExpression or
+                BoundClrConversionCallExpression or
+                BoundClrBinaryOperatorExpression or
+                BoundClrUnaryOperatorExpression or
+                BoundFunctionPointerInvocationExpression or
+                BoundEventSubscriptionExpression or
+                BoundClrEventSubscriptionExpression or
+                BoundTypeParameterConstructionExpression or
+                BoundStructLiteralExpression or
+                BoundInterpolatedStringExpression or
+                BoundIsExpression or
+                BoundNullConditionalAccessExpression {
+                return true
+            }
+            if node is BoundAddressOfExpression{IsReadOnly: false} {
+                return true
+            }
+            if node is BoundBinaryExpression bin {
+                return BinaryEqualityRunsUserCode(bin)
+            }
+            return IsPotentiallyMutatingMemberPathExpression(node.Kind) ||
+                IsMemberStorageWriteExpression(node.Kind) ||
+                SourcePropertyAccessRunsUserCode(node) ||
+                ClrAccessRunsUserCode(node) ||
+                StaticMemberAccessRunsUserCode(node)
+        }
 
         /// Returns whether an expression kind can invoke user code or assign
         /// through a member-bearing path.

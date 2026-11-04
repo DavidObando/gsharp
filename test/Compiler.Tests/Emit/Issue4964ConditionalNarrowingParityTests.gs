@@ -520,9 +520,73 @@ func CheckNilFrameAliasPropagation(external () -> bool, seed string?) bool {
     }
     return ((action = reset) is {} a) && (!string.IsNullOrEmpty(s) && action() && s.Length > 0)
 }
+
+func Consume(a () -> bool, b () -> int32, c int32) int32 -> b() + c
+
+@SuppressDiagnostic("GS0524")
+func CheckLambdaArgAfterCallableReassignment(external () -> bool, seed string?) int32 {
+    var s = seed
+    var action = external
+    let reset = () -> {
+        s = nil
+        return true
+    }
+    return s != nil ? Consume(action = reset, () -> 0, action() ? s.Length : 0) : 0
+}
+
+@SuppressDiagnostic("GS0524")
+func CheckBlockTupleAfterCallableReassignment(external () -> bool, seed string?) int32 {
+    var s = seed
+    var action = external
+    let reset = () -> {
+        s = nil
+        return true
+    }
+    return s != nil ? (action = reset, {
+        let _ = 0
+        0
+    }, action() ? s.Length : 0).Item3 : 0
+}
+
+@SuppressDiagnostic("GS0524")
+func CheckTupleAssignmentOrderNoReplay(external () -> bool, seed string?) int32 {
+    var s = seed
+    var action = external
+    var reset = () -> {
+        s = nil
+        return true
+    }
+    return s != nil ? ((action = reset, reset = external), action() ? s.Length : 0).Item2 : 0
+}
+
+func CheckBlockValuedConditionPrefixAliases(external () -> bool, seed string?) int32 {
+    var s = seed
+    var action = external
+    let reset = () -> {
+        s = nil
+        return true
+    }
+    return {
+        action = reset
+        Has(s, external, action())
+    } ? s.Length : 0
+}
+
+func CheckBlockValuedConditionPrefixAliasesOutwardAnd(external () -> bool, seed string?) int32 {
+    var s = seed
+    var action = external
+    let reset = () -> {
+        s = nil
+        return true
+    }
+    return ({
+        action = reset
+        !string.IsNullOrEmpty(s)
+    } && action()) ? s.Length : 0
+}
 `
         Assert.Equal(
-            "GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length",
+            "GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length",
             DiagnoseSource(callableReassignment)
         )
 
@@ -721,6 +785,25 @@ func f() int32 {
 }
 `)
         Assert.Equal("GS0473:v", DiagnoseSource(source))
+    }
+
+    @Fact
+    func Left_Associated_Arithmetic_Chain_In_Narrowed_Arm_Scales_Linearly() {
+        let buildChainSource = func (terms int32) string {
+            let chain = string.Join(" + ", Enumerable.Repeat("1", terms))
+            return (`package Issue4969.ChainScaling
+func Compute(s string?, n int32?) int32 -> (s != nil && n != nil) ? (` + chain + ` + s.Length + n) : 0
+`)
+        }
+        // Warm up compilation pipeline.
+        Assert.Equal("", DiagnoseSource(buildChainSource(16)))
+        let swSmall = Stopwatch.StartNew()
+        Assert.Equal("", DiagnoseSource(buildChainSource(32)))
+        swSmall.Stop()
+        let swLarge = Stopwatch.StartNew()
+        Assert.Equal("", DiagnoseSource(buildChainSource(128)))
+        swLarge.Stop()
+        Assert.True(swLarge.ElapsedMilliseconds < 10_000, "128-term chain took ${swLarge.ElapsedMilliseconds}ms")
     }
 
     shared {

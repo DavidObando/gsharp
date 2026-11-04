@@ -29,6 +29,9 @@ internal partial class StatementBinder {
         removedFacts Dictionary[AccessPath, TypeSymbol]? = nil
     )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
         switch condition {
+            case block is BoundBlockExpression {
+                return ClassifyIfConditionNarrowing(block.Expression, removedFacts)
+            }
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
                 let (inThen, inElse) = ClassifyIfConditionNarrowing(unary.Operand, removedFacts)
                 return (inElse, inThen)
@@ -737,6 +740,23 @@ internal partial class StatementBinder {
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
         switch condition {
+            case block is BoundBlockExpression {
+                {
+                    var nextAliases = callableAliases
+                    if nextAliases == nil && testAliasesAt is {} aliasesAt && aliasesAt.TryGetValue(
+                        block.Expression,
+                        out var atExpr
+                    ) {
+                        nextAliases = atExpr
+                    } else if !block.Statements.IsDefaultOrEmpty {
+                        nextAliases = AliasesAfterBlockPrefix(
+                            block,
+                            HashSet[VariableSymbol](callableAliases ?? externalCallableAliases)
+                        )
+                    }
+                    return TryClassifyTypeTestNarrowing(block.Expression, removedFacts, nextAliases)
+                }
+            }
             case isExpr is BoundIsExpression {
                 {
                     if TestMayRemoveItsOperandFact(isExpr, callableAliases) {
@@ -828,7 +848,7 @@ internal partial class StatementBinder {
             aliases = atRight
         }
         let filtered = Dictionary[AccessPath, TypeSymbol](leftFrame)
-        ClearAssignedRoots(rightOperand, filtered, aliases)
+        ClearAssignedRootsForConditionOperand(rightOperand, filtered, aliases)
         return if filtered.Count == 0 {
             default(Dictionary[AccessPath, TypeSymbol]?)
         } else {
@@ -958,6 +978,12 @@ internal partial class StatementBinder {
     )(WhenTrue HashSet[VariableSymbol], WhenFalse HashSet[VariableSymbol]) {
         aliasesAt[expression] = before
         switch expression {
+            case block is BoundBlockExpression {
+                {
+                    let afterPrefix = AliasesAfterBlockPrefix(block, before)
+                    return WalkTestAliases(block.Expression, afterPrefix, aliasesAt)
+                }
+            }
             case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
                 {
                     let (leftTrue, leftFalse) = WalkTestAliases(binary.Left, before, aliasesAt)
@@ -994,6 +1020,16 @@ internal partial class StatementBinder {
         let joined = HashSet[VariableSymbol](first)
         joined.IntersectWith(second)
         return joined
+    }
+
+    private func AliasesAfterBlockPrefix(block BoundBlockExpression, before HashSet[VariableSymbol]) HashSet[
+        VariableSymbol
+    ] {
+        if block.Statements.IsDefaultOrEmpty {
+            return before
+        }
+        let prefixShell = BoundBlockExpression(block.Syntax, block.Statements, BoundLiteralExpression(nil, 0))
+        return AliasesAfter(prefixShell, before)
     }
 
     // The aliases after [`operand`](paramref) on every path, from the aliases before it. An assignment of an external
@@ -1040,6 +1076,11 @@ internal partial class StatementBinder {
         // `!`, `&&`, and `||` so guards like `if a == nil || cond { ... } else { use(a) }`
         // narrow `a` to its non-nullable underlying type in the else-branch.
         switch condition {
+            case block is BoundBlockExpression {
+                {
+                    return TryClassifyNilGuard(block.Expression)
+                }
+            }
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
                 {
                     let (inThen, inElse) = TryClassifyNilGuard(unary.Operand)
@@ -1110,6 +1151,21 @@ internal partial class StatementBinder {
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
         switch condition {
+            case block is BoundBlockExpression {
+                var nextAliases = callableAliases
+                if nextAliases == nil && testAliasesAt is {} aliasesAt && aliasesAt.TryGetValue(
+                    block.Expression,
+                    out var atExpr
+                ) {
+                    nextAliases = atExpr
+                } else if !block.Statements.IsDefaultOrEmpty {
+                    nextAliases = AliasesAfterBlockPrefix(
+                        block,
+                        HashSet[VariableSymbol](callableAliases ?? externalCallableAliases)
+                    )
+                }
+                return TryClassifyBoolCallNarrowing(block.Expression, nextAliases)
+            }
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
                 let (inThen, inElse) = TryClassifyBoolCallNarrowing(unary.Operand, callableAliases)
                 return (inElse, inThen)
@@ -1990,8 +2046,22 @@ internal partial class StatementBinder {
             )? = nil,
             evolveAliases((BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol])? = nil
         )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
+            var effectiveAliases = callableAliases
             var inner = condition
             while inner is BoundBlockExpression block {
+                if !block.Statements.IsDefaultOrEmpty && evolveAliases != nil {
+                    let currentAliases = if effectiveAliases != nil {
+                        HashSet[VariableSymbol](effectiveAliases)
+                    } else {
+                        HashSet[VariableSymbol]()
+                    }
+                    let prefixShell = BoundBlockExpression(
+                        block.Syntax,
+                        block.Statements,
+                        BoundLiteralExpression(nil, 0)
+                    )
+                    effectiveAliases = evolveAliases(prefixShell, currentAliases)
+                }
                 inner = block.Expression
             }
             if inner is BoundImportedCallExpression importedCall && importedCall.Type == TypeSymbol.Bool {
@@ -1999,7 +2069,7 @@ internal partial class StatementBinder {
                     importedCall,
                     negate: false,
                     restrictBareVariableToLocalsAndParams,
-                    callableAliases,
+                    effectiveAliases,
                     clearAssignedRoots,
                     evolveAliases
                 )
@@ -2013,7 +2083,7 @@ internal partial class StatementBinder {
                     importedInstanceCall.Arguments,
                     negate: false,
                     restrictBareVariableToLocalsAndParams,
-                    callableAliases,
+                    effectiveAliases,
                     clearAssignedRoots,
                     evolveAliases
                 )
@@ -2021,7 +2091,7 @@ internal partial class StatementBinder {
                     importedInstanceCall,
                     negate: false,
                     $scope,
-                    callableAliases,
+                    effectiveAliases,
                     clearAssignedRoots,
                     evolveAliases,
                     &thenFrame,
@@ -2034,7 +2104,7 @@ internal partial class StatementBinder {
                     userCall,
                     negate: false,
                     restrictBareVariableToLocalsAndParams,
-                    callableAliases,
+                    effectiveAliases,
                     clearAssignedRoots,
                     evolveAliases
                 )
@@ -2046,7 +2116,7 @@ internal partial class StatementBinder {
                     userInstanceCall.Arguments,
                     negate: false,
                     restrictBareVariableToLocalsAndParams,
-                    callableAliases,
+                    effectiveAliases,
                     clearAssignedRoots,
                     evolveAliases
                 )
@@ -2055,7 +2125,7 @@ internal partial class StatementBinder {
                     negate: false,
                     $scope,
                     restrictBareVariableToLocalsAndParams,
-                    callableAliases,
+                    effectiveAliases,
                     clearAssignedRoots,
                     evolveAliases,
                     &thenFrame,

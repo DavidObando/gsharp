@@ -144,10 +144,11 @@ internal partial class ExpressionBinder {
                 reapplySwitchArmHeaderEffects(patternSyntax, armSyntax.Guard, early)
                 let evaluatedSwitchValue = LocalVariableSymbol("<switch-value>", true, discriminant.Type)
                 InvalidateExpressionNarrowingFrames(
-                    BoundIsExpression(patternSyntax, BoundVariableExpression(nil, evaluatedSwitchValue), early.Pattern)
+                    BoundIsExpression(patternSyntax, BoundVariableExpression(nil, evaluatedSwitchValue), early.Pattern),
+                    forceFullSubtree: true
                 )
                 if early.Guard is {} earlyGuard {
-                    InvalidateExpressionNarrowingFrames(earlyGuard)
+                    InvalidateExpressionNarrowingFrames(earlyGuard, forceFullSubtree: true)
                 }
                 early
             } else {

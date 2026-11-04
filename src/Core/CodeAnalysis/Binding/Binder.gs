@@ -355,10 +355,14 @@ partial class Binder {
                 "a parameter declaration",
                 AttributeTargets.Parameter
             ),
-            isolateExternalCallableAliases: () -> Statements.IsolateExternalCallableAliases(),
-            restoreExternalCallableAliases: (
-                saved HashSet[VariableSymbol]
-            ) -> Statements.RestoreExternalCallableAliases(saved),
+            isolateExternalCallableAliases: () -> {
+                Expressions.IsolateExpressionNarrowingFramesForNestedLambda()
+                return Statements.IsolateExternalCallableAliases()
+            },
+            restoreExternalCallableAliases: (saved HashSet[VariableSymbol]) -> {
+                Statements.RestoreExternalCallableAliases(saved)
+                Expressions.RestoreExpressionNarrowingFramesForNestedLambda()
+            },
             bindLocalVariable: (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> {
                 return Declarations.BindVariableDeclaration(identifier, isReadOnly, type)
             },
@@ -569,9 +573,15 @@ partial class Binder {
                 node BoundNode,
                 state Dictionary[AccessPath, TypeSymbol],
                 aliases IReadOnlyCollection[VariableSymbol]?
-            ) -> Statements.ClearAssignedRoots(node, state, aliases),
+            ) -> Statements.ClearAssignedRootsForConditionOperand(node, state, aliases),
             evolveAliases: (expr BoundExpression, aliases HashSet[VariableSymbol]) ->
             Statements.EvolveCallableAliases(expr, aliases),
+            applyExpressionEffects: (
+                bound BoundExpression,
+                state Dictionary[AccessPath, TypeSymbol],
+                beforeAliases HashSet[VariableSymbol],
+                alreadyProcessed HashSet[BoundExpression]?
+            ) -> Statements.ApplyExpressionEffects(bound, state, beforeAliases, alreadyProcessed),
             recordExpressionNarrowingKill: (frame NarrowingFrame, path AccessPath, type TypeSymbol) ->
             Statements.RecordExpressionNarrowingKill(frame, path, type),
             getCallableAliases: () -> Statements.CaptureExternalCallableAliasesForExpression(),
