@@ -372,15 +372,18 @@ internal partial class StatementBinder {
     internal func BindStatementList(
         statementSyntaxes ImmutableArray[StatementSyntax],
         beforeBind((StatementSyntax) -> void)? = nil,
-        trailingStatement(() -> BoundStatement)? = nil
+        trailingStatement(() -> BoundStatement)? = nil,
+        trailingSyntax SyntaxNode? = nil
     ) ImmutableArray[BoundStatement] {
         let previousTopLevelStatements = topLevelStatementList
-        if statementSyntaxes.Length > 0 && statementSyntaxes[0].Parent is GlobalStatementSyntax {
+        if statementSyntaxes.Length > 0 &&
+            statementSyntaxes[0].Parent is GlobalStatementSyntax or
+            StaticInitializerBlockSyntax {
             topLevelStatementList = statementSyntaxes
         }
         try {
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-            let _ = BindBlockStatements(statementSyntaxes, 0, statements, beforeBind, trailingStatement)
+            let _ = BindBlockStatements(statementSyntaxes, 0, statements, beforeBind, trailingStatement, trailingSyntax)
             return statements.ToImmutable()
         } finally {
             topLevelStatementList = previousTopLevelStatements
@@ -466,7 +469,8 @@ internal partial class StatementBinder {
         startIndex int32,
         statements ImmutableArray[BoundStatement].Builder,
         beforeBind((StatementSyntax) -> void)? = nil,
-        trailingStatement(() -> BoundStatement)? = nil
+        trailingStatement(() -> BoundStatement)? = nil,
+        trailingSyntax SyntaxNode? = nil
     ) bool {
         // Issue #208: push a persistent narrowing frame for this statement list.
         // After each call statement whose method carries [MemberNotNull], the
@@ -771,7 +775,9 @@ internal partial class StatementBinder {
                     canCompleteNormally
             }
             if trailingStatement != nil {
-                if statementSyntaxes.Length > 0 &&
+                if trailingSyntax != nil {
+                    EnterBackwardJumpSpanIfFirstStatement(trailingSyntax)
+                } else if statementSyntaxes.Length > 0 &&
                     statementSyntaxes[0].Parent is BlockExpressionSyntax blockExpr &&
                     blockExpr.Expression is {} tailExpr {
                     EnterBackwardJumpSpanIfFirstStatement(tailExpr)

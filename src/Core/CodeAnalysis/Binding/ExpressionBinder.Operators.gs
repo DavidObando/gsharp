@@ -1039,7 +1039,8 @@ internal partial class ExpressionBinder {
                     fastBoundExpression = bindValue()
                     sentinel = BoundExpressionStatement(nil, BoundLiteralExpression(nil, value: 0, TypeSymbol.Void))
                     return sentinel
-                }
+                },
+                valueSyntax
             )
             if sentinel != nil && fastBoundStatements.Length > 0 && object.ReferenceEquals(
                 fastBoundStatements[^1],
@@ -1080,7 +1081,7 @@ internal partial class ExpressionBinder {
             $scope.TryDeclareVariable(resultVariable)
             return BoundVariableDeclaration(valueSyntax, resultVariable, value)
         }
-        let boundStatements = bindStatementList(statements, bindTrailingStatement)
+        let boundStatements = bindStatementList(statements, bindTrailingStatement, valueSyntax)
         let resultExpression = if result != nil {
             cast[BoundExpression](BoundVariableExpression(valueSyntax, result))
         } else {
@@ -1119,20 +1120,8 @@ internal partial class ExpressionBinder {
         if syntax.Expression == nil {
             return BindValuelessBlockExpression(syntax, canBeVoid)
         }
-        // If there are no prefix statements, just bind the expression directly.
-        if syntax.Statements.IsDefaultOrEmpty {
-            let expression = if targetType == nil {
-                BindExpression(syntax.Expression!!, canBeVoid)
-            } else {
-                BindExpression(syntax.Expression!!, targetType)
-            }
-            return if preserveEmptyBlock && !(expression is BoundErrorExpression) {
-                cast[BoundExpression](BoundBlockExpression(syntax, ImmutableArray[BoundStatement].Empty, expression))
-            } else {
-                expression
-            }
-        }
-        // Bind prefix statements.
+        // Bind prefix statements and trailing expression through the shared statement-list hook so
+        // span-entry lowering applies to the trailing expression even when the prefix list is empty.
         let (boundStatements, boundExpression) = BindBlockExpressionParts(
             syntax.Statements,
             Invariant.Required(
@@ -1147,6 +1136,9 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(syntax)
         }
         if boundExpression is BoundErrorExpression {
+            return boundExpression
+        }
+        if boundStatements.IsDefaultOrEmpty && !preserveEmptyBlock {
             return boundExpression
         }
         return BoundBlockExpression(syntax, boundStatements, boundExpression)
@@ -1172,7 +1164,7 @@ internal partial class ExpressionBinder {
         let statements = if syntax.Statements.IsDefaultOrEmpty {
             ImmutableArray[BoundStatement].Empty
         } else {
-            bindStatementList(syntax.Statements, nil)
+            bindStatementList(syntax.Statements, nil, nil)
         }
         if StatementBinder.BlockEndIsUnreachable(statements) {
             let unreachableValue = BoundThrowExpression(nil, BoundLiteralExpression(nil, value: nil))
@@ -1236,7 +1228,7 @@ internal partial class ExpressionBinder {
             let voidStatements = if block.Statements.IsDefaultOrEmpty {
                 ImmutableArray[BoundStatement].Empty
             } else {
-                bindStatementList(block.Statements, nil)
+                bindStatementList(block.Statements, nil, nil)
             }
             if voidStatements.Length == 0 {
                 return BoundLiteralExpression(block, value: 0, TypeSymbol.Void)

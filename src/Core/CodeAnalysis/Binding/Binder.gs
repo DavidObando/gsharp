@@ -132,7 +132,14 @@ partial class Binder {
             syntax ExpressionSyntax,
             targetType TypeSymbol?
         ) BoundExpression {
-            return Statements.OutsideExceptionHandlers(() -> Expressions.BindLambdaBodyExpression(syntax, targetType))
+            return Statements.OutsideExceptionHandlers(
+                () -> {
+                    if syntax !is BlockExpressionSyntax {
+                        Statements.EnterBackwardJumpSpanIfFirstStatement(syntax)
+                    }
+                    return Expressions.BindLambdaBodyExpression(syntax, targetType)
+                }
+            )
         }
         binderCtx = BinderContext(parent)
         // Declaration binding captures lexical unsafe context. Metadata ownership does not establish that context.
@@ -533,8 +540,9 @@ partial class Binder {
             getCurrentFunction: () -> this.function,
             bindStatementList: (
                 syntax ImmutableArray[StatementSyntax],
-                trailing(() -> BoundStatement)?
-            ) -> Statements.BindStatementList(syntax, trailingStatement: trailing),
+                trailing(() -> BoundStatement)?,
+                trailingSyntax SyntaxNode?
+            ) -> Statements.BindStatementList(syntax, trailingStatement: trailing, trailingSyntax: trailingSyntax),
             bindLocalVariable: (
                 identifier SyntaxToken,
                 isReadOnly bool,
@@ -9262,14 +9270,20 @@ partial class Binder {
                 binder.binderCtx.FunctionContainsUserGotoOrLabel = initBlocks.Any(
                     (b StaticInitializerBlockSyntax) -> StatementBinder.ContainsUserGotoOrLabel(b.Body)
                 )
-                let boundBlocks = ImmutableArray.CreateBuilder[BoundStatement]()
-                for initBlock in initBlocks {
-                    // Issue #3336: merged partial blocks retain the declaring part's tree.
-                    parentScope.SetCurrentReferencingSyntaxTree(initBlock.SyntaxTree)
-                    boundBlocks.Add(binder.statements.BindBlockStatement(initBlock.Body))
-                }
+                let staticInitBodies = initBlocks.Select(
+                    (b StaticInitializerBlockSyntax) -> cast[StatementSyntax](b.Body)
+                )
+                    .ToImmutableArray()
+                let boundBlocks = binder.statements.BindStatementList(
+                    staticInitBodies,
+                    (statement StatementSyntax) -> {
+                        // Issue #3336: merged partial blocks retain the declaring part's tree.
+                        parentScope.SetCurrentReferencingSyntaxTree(statement.SyntaxTree)
+                        return
+                    }
+                )
                 binder.statements.FinalizeUserLabels()
-                let combined = BoundBlockStatement(nil, boundBlocks.ToImmutable())
+                let combined = BoundBlockStatement(nil, boundBlocks)
                 ProtectedReceiverDiagnostics.Report(combined, context, binder.Diagnostics)
                 let lowered = Lowerer.Lower(combined, structSym)
                 MethodGroupDiagnostics.ReportUnresolved(lowered, binder.Diagnostics)

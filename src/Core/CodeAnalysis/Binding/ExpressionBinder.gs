@@ -62,9 +62,11 @@ internal partial class ExpressionBinder {
     private let reportObsoleteUseIfApplicable(TextLocation, Symbol, string) -> void
     private let isAsyncIteratorReturnType(TypeSymbol) -> bool
     private let getCurrentFunction() -> FunctionSymbol?
-    private let bindStatementList(ImmutableArray[StatementSyntax], (() -> BoundStatement)?) -> ImmutableArray[
-        BoundStatement
-    ]
+    private let bindStatementList(
+        ImmutableArray[StatementSyntax],
+        (() -> BoundStatement)?,
+        SyntaxNode?
+    ) -> ImmutableArray[BoundStatement]
     private let bindRichAnonymousObject(AnonymousClassExpressionSyntax, StructSymbol) -> BoundExpression
     private let bindStructuralAdaptation(CallExpressionSyntax) -> BoundExpression
     private let bindNativeProtocolProbe(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression
@@ -116,7 +118,9 @@ internal partial class ExpressionBinder {
         reportObsoleteUseIfApplicable(TextLocation, Symbol, string) -> void,
         isAsyncIteratorReturnType(TypeSymbol) -> bool,
         getCurrentFunction() -> FunctionSymbol?,
-        bindStatementList(ImmutableArray[StatementSyntax], (() -> BoundStatement)?) -> ImmutableArray[BoundStatement],
+        bindStatementList(ImmutableArray[StatementSyntax], (() -> BoundStatement)?, SyntaxNode?) -> ImmutableArray[
+            BoundStatement
+        ],
         bindLocalVariable(SyntaxToken, bool, TypeSymbol) -> VariableSymbol,
         bindRichAnonymousObject(AnonymousClassExpressionSyntax, StructSymbol) -> BoundExpression,
         bindStructuralAdaptation(CallExpressionSyntax) -> BoundExpression,

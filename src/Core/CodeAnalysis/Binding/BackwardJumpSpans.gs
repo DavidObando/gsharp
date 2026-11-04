@@ -51,11 +51,14 @@ internal sealed class BackwardJumpSpan {
         if index < StatementList.Length {
             return StatementList[index]
         }
-        return Invariant.Required(
-            cast[BlockExpressionSyntax](Owner).Expression,
-            "a span index past the statements names the trailing expression",
-            expression: "Owner.Expression"
-        )
+        if Owner is BlockExpressionSyntax blockOwner {
+            return Invariant.Required(
+                blockOwner.Expression,
+                "a span index past the statements names the trailing expression",
+                expression: "Owner.Expression"
+            )
+        }
+        return Owner
     }
 
     /// Gets the index of the first statement of the span in the list.
@@ -200,7 +203,13 @@ internal shared class BackwardJumpSpans {
         let tries = List[TrySite]()
         let visitCounter = List[int32]()
         visitCounter.Add(0)
-        Collect(body, path, tries, false, labels, gotos, visitCounter)
+        if body is ExpressionSyntax && body !is BlockExpressionSyntax {
+            path.Add(Step(body, ImmutableArray[StatementSyntax].Empty, 0))
+            Collect(body, path, tries, false, labels, gotos, visitCounter)
+            path.RemoveAt(path.Count - 1)
+        } else {
+            Collect(body, path, tries, false, labels, gotos, visitCounter)
+        }
         return BuildSpan(labels, gotos)
     }
 

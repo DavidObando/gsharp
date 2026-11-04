@@ -3085,8 +3085,10 @@ internal partial class StatementBinder {
         if body == nil {
             return nil
         }
-        if body is CompilationUnitSyntax && !topLevelStatementList.IsDefaultOrEmpty {
-            let rootKey = topLevelStatementList[0].SyntaxTree.Root
+        if (body is CompilationUnitSyntax || body.Parent is StaticInitializerBlockSyntax) &&
+            !topLevelStatementList
+            .IsDefaultOrEmpty {
+            let rootKey = topLevelStatementList[0]
             if spansByBody.TryGetValue(rootKey, out var cachedTopLevel) {
                 return cachedTopLevel
             }
@@ -3143,7 +3145,7 @@ internal partial class StatementBinder {
 
     /// ADR-0213 section 11 (slice L2): when [`node`](paramref) is the first statement of the enclosing
     /// function's backward-jump span, applies `L = Lower(S, span)` before the statement is bound.
-    private func EnterBackwardJumpSpanIfFirstStatement(node SyntaxNode) {
+    internal func EnterBackwardJumpSpanIfFirstStatement(node SyntaxNode) {
         if !binderCtx.FunctionContainsUserGotoOrLabel {
             return
         }

@@ -84,12 +84,12 @@ internal partial class StatementBinder {
             GetEnclosingBackwardJumpSpan(syntax)
         }
         let isParticipant = span != nil && span.Labels.Contains(labelName)
-        if isParticipant {
-            ApplySpanLabelLowerBound(span!!, labelName, wasReachable, hadIncomingForwardJump)
-        }
         currentStatementListFallsThrough = currentStatementListFallsThrough ||
             hadIncomingForwardJump ||
             (isParticipant && span!!.TargetedLabels.Contains(labelName))
+        if isParticipant {
+            ApplySpanLabelLowerBound(span!!, labelName, wasReachable, hadIncomingForwardJump)
+        }
         if !wasReachable && currentStatementListFallsThrough {
             internalReachabilityGeneration++
         }
