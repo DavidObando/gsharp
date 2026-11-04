@@ -2563,15 +2563,23 @@ internal class MemberLookup {
                         erasedObject
                     ) ??
                         openReturn
-                    return ImportedTypeSymbol.GetConstructed(closedReturn, openReturnDefinition, symbolicArguments)
+                    return TupleElementNamesReader.ApplyNames(
+                        ImportedTypeSymbol.GetConstructed(closedReturn, openReturnDefinition, symbolicArguments),
+                        openMethod.ReturnParameter,
+                        openReturn
+                    )
                 }
             }
-            let mapped = MapOpenSignatureWithoutDeclarationMerge(
-                openReturn,
-                receiverOpenDef,
-                receiverTypeArgs,
-                openMethod,
-                symbolicMethodTypeArgs
+            let mapped = TupleElementNamesReader.ApplyNames(
+                MapOpenSignatureWithoutDeclarationMerge(
+                    openReturn,
+                    receiverOpenDef,
+                    receiverTypeArgs,
+                    openMethod,
+                    symbolicMethodTypeArgs
+                ),
+                openMethod.ReturnParameter,
+                openReturn
             )
             // ADR-0172: a named-tuple-bearing return shares its CLR backing with
             // the unnamed shape, so the CLR fallback would erase the names — keep
@@ -2648,14 +2656,18 @@ internal class MemberLookup {
             if !openType.ContainsGenericParameters {
                 return nil
             }
-            let mapped = MapOpenSignatureWithoutDeclarationMerge(
-                openType,
-                receiverOpenDef,
-                receiverTypeArgs,
-                openMethod,
-                symbolicMethodTypeArgs
+            let mapped = TupleElementNamesReader.ApplyNames(
+                MapOpenSignatureWithoutDeclarationMerge(
+                    openType,
+                    receiverOpenDef,
+                    receiverTypeArgs,
+                    openMethod,
+                    symbolicMethodTypeArgs
+                ),
+                parameters[parameterIndex],
+                openType
             )
-            return if TypeSymbol.RequiresSymbolicProjection(mapped) {
+            return if TypeSymbol.RequiresSymbolicProjection(mapped) || TypeSymbol.ContainsNamedTupleElements(mapped) {
                 mapped
             } else {
                 default(TypeSymbol?)
@@ -5269,14 +5281,18 @@ internal class MemberLookup {
                 let openParameters[]?ParameterInfo = openIndexer?.GetIndexParameters()
                 if openParameters != nil && parameterIndex < openParameters.Length {
                     let openParameter = openParameters[parameterIndex]
-                    return NullableFlagsBuilder.MergeDeclarationNullability(
-                        MapOpenClrTypeToSymbolic(
-                            ClrNullability.GetSignatureType(openParameter),
-                            openDefinition,
-                            declaringTypeArguments
+                    return TupleElementNamesReader.ApplyNames(
+                        NullableFlagsBuilder.MergeDeclarationNullability(
+                            MapOpenClrTypeToSymbolic(
+                                ClrNullability.GetSignatureType(openParameter),
+                                openDefinition,
+                                declaringTypeArguments
+                            ),
+                            openParameter.ParameterType,
+                            ClrNullability.ReadNullableFlags(openParameter, openIndexer)
                         ),
-                        openParameter.ParameterType,
-                        ClrNullability.ReadNullableFlags(openParameter, openIndexer)
+                        openParameter,
+                        openParameter.ParameterType
                     )
                 }
             }
@@ -5377,10 +5393,10 @@ internal class MemberLookup {
                             openProperty,
                             openProperty.DeclaringType
                         )
-                        let result = NullableFlagsBuilder.MergeDeclarationNullability(
-                            mapped,
-                            projectionType,
-                            declarationFlags
+                        let result = TupleElementNamesReader.ApplyNames(
+                            NullableFlagsBuilder.MergeDeclarationNullability(mapped, projectionType, declarationFlags),
+                            openProperty,
+                            projectionType
                         )
                         return if openPropertyType.IsByRef {
                             cast[TypeSymbol](ByRefTypeSymbol.Get(result))
@@ -5491,10 +5507,10 @@ internal class MemberLookup {
                         declaringTypeArguments
                     )
                     let declarationFlags = ClrNullability.ReadNullableFlags(openField, openDefinition)
-                    return NullableFlagsBuilder.MergeDeclarationNullability(
-                        mapped,
-                        openField.FieldType,
-                        declarationFlags
+                    return TupleElementNamesReader.ApplyNames(
+                        NullableFlagsBuilder.MergeDeclarationNullability(mapped, openField.FieldType, declarationFlags),
+                        openField,
+                        openField.FieldType
                     )
                 }
             }
@@ -5539,10 +5555,14 @@ internal class MemberLookup {
             } else {
                 valueType
             }
-            let merged = NullableFlagsBuilder.MergeDeclarationNullability(
-                MapOpenClrTypeToSymbolic(layout, openDefinition, typeArguments),
-                layout,
-                ClrNullability.ReadNullableFlags(openMember, openMember.DeclaringType)
+            let merged = TupleElementNamesReader.ApplyNames(
+                NullableFlagsBuilder.MergeDeclarationNullability(
+                    MapOpenClrTypeToSymbolic(layout, openDefinition, typeArguments),
+                    layout,
+                    ClrNullability.ReadNullableFlags(openMember, openMember.DeclaringType)
+                ),
+                openMember,
+                layout
             )
             return if valueType.IsByRef {
                 cast[TypeSymbol](ByRefTypeSymbol.Get(merged))
@@ -5640,10 +5660,14 @@ internal class MemberLookup {
             if openEvent?.EventHandlerType == nil || closedEvent.EventHandlerType == nil {
                 return handlerType
             }
-            let projected = ClrNullability.SymbolFromLayoutFlags(
-                ClrNullability.GetSignatureType(closedEvent),
-                ClrNullability.GetSignatureType(openEvent!!),
-                ClrNullability.ReadNullableFlags(openEvent!!, openDefinition)
+            let projected = TupleElementNamesReader.ApplyNames(
+                ClrNullability.SymbolFromLayoutFlags(
+                    ClrNullability.GetSignatureType(closedEvent),
+                    ClrNullability.GetSignatureType(openEvent!!),
+                    ClrNullability.ReadNullableFlags(openEvent!!, openDefinition)
+                ),
+                openEvent!!,
+                ClrNullability.GetSignatureType(openEvent!!)
             )
             return if projected is NullableTypeSymbol nullableHandler {
                 nullableHandler.UnderlyingType
@@ -5730,10 +5754,10 @@ internal class MemberLookup {
                     }
                     let mapped = MapOpenClrTypeToSymbolic(returnLayout, openDefinition, declaringTypeArguments)
                     let declarationFlags = ClrNullability.ReadNullableFlags(openMethod.ReturnParameter, openMethod)
-                    let merged = NullableFlagsBuilder.MergeDeclarationNullability(
-                        mapped,
-                        returnLayout,
-                        declarationFlags
+                    let merged = TupleElementNamesReader.ApplyNames(
+                        NullableFlagsBuilder.MergeDeclarationNullability(mapped, returnLayout, declarationFlags),
+                        openMethod.ReturnParameter,
+                        returnLayout
                     )
                     return if openReturnType.IsByRef {
                         cast[TypeSymbol](ByRefTypeSymbol.Get(merged))
@@ -5868,17 +5892,25 @@ internal class MemberLookup {
                             expression: "openParameterType.GetElementType()"
                         )
                         return ByRefTypeSymbol.Get(
-                            NullableFlagsBuilder.MergeDeclarationNullability(
-                                MapOpenClrTypeToSymbolic(pointeeType, openDefinition, declaringTypeArguments),
-                                pointeeType,
-                                parameterFlags
+                            TupleElementNamesReader.ApplyNames(
+                                NullableFlagsBuilder.MergeDeclarationNullability(
+                                    MapOpenClrTypeToSymbolic(pointeeType, openDefinition, declaringTypeArguments),
+                                    pointeeType,
+                                    parameterFlags
+                                ),
+                                openParameter,
+                                pointeeType
                             )
                         )
                     }
-                    return NullableFlagsBuilder.MergeDeclarationNullability(
-                        MapOpenClrTypeToSymbolic(openParameterType, openDefinition, declaringTypeArguments),
-                        openParameterType,
-                        parameterFlags
+                    return TupleElementNamesReader.ApplyNames(
+                        NullableFlagsBuilder.MergeDeclarationNullability(
+                            MapOpenClrTypeToSymbolic(openParameterType, openDefinition, declaringTypeArguments),
+                            openParameterType,
+                            parameterFlags
+                        ),
+                        openParameter,
+                        openParameterType
                     )
                 }
             }
@@ -6206,20 +6238,24 @@ internal class MemberLookup {
             } else {
                 openReturn
             }
-            let merged = NullableFlagsBuilder.MergeDeclarationNullability(
-                MapOpenClrTypeToSymbolic(
+            let merged = TupleElementNamesReader.ApplyNames(
+                NullableFlagsBuilder.MergeDeclarationNullability(
+                    MapOpenClrTypeToSymbolic(
+                        layout,
+                        openDefinition,
+                        typeArguments,
+                        if methodTypeArguments.IsDefault {
+                            default(MethodInfo?)
+                        } else {
+                            openMethod
+                        },
+                        methodTypeArguments
+                    ),
                     layout,
-                    openDefinition,
-                    typeArguments,
-                    if methodTypeArguments.IsDefault {
-                        default(MethodInfo?)
-                    } else {
-                        openMethod
-                    },
-                    methodTypeArguments
+                    ClrNullability.ReadNullableFlags(openMethod.ReturnParameter, openMethod)
                 ),
-                layout,
-                ClrNullability.ReadNullableFlags(openMethod.ReturnParameter, openMethod)
+                openMethod.ReturnParameter,
+                layout
             )
             return if openReturn.IsByRef {
                 cast[TypeSymbol](ByRefTypeSymbol.Get(merged))
@@ -6258,10 +6294,14 @@ internal class MemberLookup {
             } else {
                 openType
             }
-            return NullableFlagsBuilder.MergeDeclarationNullability(
-                MapOpenClrTypeToSymbolic(layout, openDefinition, typeArguments, openMethod, methodTypeArguments),
-                layout,
-                ClrNullability.ReadNullableFlags(openParameter, openParameter.Member)
+            return TupleElementNamesReader.ApplyNames(
+                NullableFlagsBuilder.MergeDeclarationNullability(
+                    MapOpenClrTypeToSymbolic(layout, openDefinition, typeArguments, openMethod, methodTypeArguments),
+                    layout,
+                    ClrNullability.ReadNullableFlags(openParameter, openParameter.Member)
+                ),
+                openParameter,
+                layout
             )
         }
 
@@ -9605,7 +9645,11 @@ internal class MemberLookup {
             }
             let handlerLayout = ClrNullability.GetSignatureType(openEvent)
             let declarationFlags = ClrNullability.ReadNullableFlags(openEvent, openDefinition)
-            let merged = NullableFlagsBuilder.MergeDeclarationNullability(mapped, handlerLayout, declarationFlags)
+            let merged = TupleElementNamesReader.ApplyNames(
+                NullableFlagsBuilder.MergeDeclarationNullability(mapped, handlerLayout, declarationFlags),
+                openEvent,
+                handlerLayout
+            )
             return if merged is NullableTypeSymbol nullableHandler {
                 nullableHandler.UnderlyingType
             } else {

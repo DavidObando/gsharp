@@ -101,6 +101,7 @@ internal class DataStructSynthesizer {
         ParameterHandle?,
         ImmutableArray[ParameterHandle]
     ) -> void
+    private let emitTupleElementNamesAttribute(EntityHandle, TypeSymbol) -> void
     private let resolveImportedConstructorRef(ConstructorInfo, TypeSymbol?) -> MemberReferenceHandle
     private let resolveUserPropertyAccessorToken(StructSymbol, PropertySymbol, bool) -> EntityHandle
     private let equalityContractGetters Dictionary[StructSymbol, MethodDefinitionHandle] = Dictionary[
@@ -136,6 +137,7 @@ internal class DataStructSynthesizer {
             ParameterHandle?,
             ImmutableArray[ParameterHandle]
         ) -> void,
+        emitTupleElementNamesAttribute(EntityHandle, TypeSymbol) -> void,
         resolveImportedConstructorRef(ConstructorInfo, TypeSymbol?) -> MemberReferenceHandle,
         resolveUserPropertyAccessorToken(StructSymbol, PropertySymbol, bool) -> EntityHandle
     ) {
@@ -159,6 +161,8 @@ internal class DataStructSynthesizer {
         this.resolveUserInstanceMethodToken = resolveUserInstanceMethodToken ??
             throw ArgumentNullException("resolveUserInstanceMethodToken")
         this.emitMethodNullability = emitMethodNullability ?? throw ArgumentNullException("emitMethodNullability")
+        this.emitTupleElementNamesAttribute = emitTupleElementNamesAttribute ??
+            throw ArgumentNullException("emitTupleElementNamesAttribute")
         this.resolveImportedConstructorRef = resolveImportedConstructorRef ??
             throw ArgumentNullException("resolveImportedConstructorRef")
         this.resolveUserPropertyAccessorToken = resolveUserPropertyAccessorToken ??
@@ -1000,7 +1004,7 @@ internal class DataStructSynthesizer {
             bodyOffset: bodyOffset,
             parameterList: synthesizedRows.First
         )
-        this.StampSynthesized(synthesizedMethod, synthesizedRows)
+        this.StampSynthesized(synthesizedMethod, synthesizedRows, emitParameterTupleNames: false)
         return synthesizedMethod
     }
 
@@ -1236,15 +1240,25 @@ internal class DataStructSynthesizer {
         parameters ImmutableArray[ParameterSymbol]
     ) SignatureRows -> ParameterMetadataEmitter.AddSignatureRows(this.emitCtx, returnType, RefKind.None, parameters)
 
-    /// Issue #4988: stamps the nullability (cref:AddSynthesizedRows) planned.
+    /// Issue #4988: stamps the nullability and tuple element names (cref:AddSynthesizedRows) planned.
     /// @param handle The synthesized member's MethodDef.
     /// @param rows The rows minted for it.
-    private func StampSynthesized(handle MethodDefinitionHandle, rows SignatureRows) -> this.emitMethodNullability(
-        handle,
-        rows.Nullability,
-        rows.ReturnRow,
-        rows.Rows
-    )
+    /// @param emitParameterTupleNames Whether to stamp parameter tuple names here (`false` when already stamped).
+    private func StampSynthesized(
+        handle MethodDefinitionHandle,
+        rows SignatureRows,
+        emitParameterTupleNames bool = true
+    ) {
+        this.emitMethodNullability(handle, rows.Nullability, rows.ReturnRow, rows.Rows)
+        if rows.ReturnRow is {} returnRow {
+            this.emitTupleElementNamesAttribute(returnRow, rows.ReturnType)
+        }
+        if emitParameterTupleNames {
+            for var i = 0; i < rows.Rows.Length; i++ {
+                this.emitTupleElementNamesAttribute(rows.Rows[i], rows.Parameters[i].Type)
+            }
+        }
+    }
 
     /// Issue #410 / ADR-0029: emits
     /// `public override int GetHashCode()`. For up to 8 fields the
