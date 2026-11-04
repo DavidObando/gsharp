@@ -587,11 +587,17 @@ partial class CSharpToGSharpTranslator {
                     return Visibility.Default
                 }
                 case Accessibility.Private {
-                    // Issues #4301/#4472: a kept top-level Program can also
-                    // declare extension methods, but its
-                    // remaining members still need `internal` so hoisted
-                    // top-level statements can reach them.
-                    if !IsExplicitInterfaceImplementation(symbol) && IsMemberOfKeptTopLevelProgram(symbol) {
+                    // Issues #4301/#4472/#4759: a kept top-level Program or a
+                    // lifted nested delegate can reference private nested types
+                    // and members from top-level emitted declarations, which
+                    // require `internal` to remain reachable in G# and the CLR.
+                    if !IsExplicitInterfaceImplementation(symbol) &&
+                        (
+                        IsMemberOfKeptTopLevelProgram(symbol) || CSharpToGSharpTranslator.IsReferencedByLiftedDelegate(
+                            context.Compilation,
+                            symbol
+                        )
+                    ) {
                         return Visibility.Internal
                     }
                     return Visibility.Private
@@ -604,6 +610,12 @@ partial class CSharpToGSharpTranslator {
                     // (CIL family). It is only valid on members of an `open`
                     // class; the translator emits `open` on translatable
                     // non-sealed classes so this maps cleanly.
+                    // Issue #4759: a lifted nested delegate is emitted at top
+                    // level outside its enclosing class hierarchy, so a
+                    // `protected` nested type it references must be `internal`.
+                    if CSharpToGSharpTranslator.IsReferencedByLiftedDelegate(context.Compilation, symbol) {
+                        return Visibility.Internal
+                    }
                     return Visibility.Protected
                 }
                 case Accessibility.ProtectedOrInternal, Accessibility.ProtectedAndInternal {
