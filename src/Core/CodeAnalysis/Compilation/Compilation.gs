@@ -431,6 +431,7 @@ open class Compilation {
             bound = reused
         } else {
             let scopeFailedCalls = CallCandidateRecorder.BeginBody()
+            var recordedFailedCalls = ImmutableArray[BoundErrorExpression].Empty
             try {
                 bound = Binder.BindGlobalScope(
                     previous: nil,
@@ -442,8 +443,9 @@ open class Compilation {
                     Submission
                 )
             } finally {
-                bound.FailedCalls = CallCandidateRecorder.EndBody(scopeFailedCalls)
+                recordedFailedCalls = CallCandidateRecorder.EndBody(scopeFailedCalls)
             }
+            bound.FailedCalls = recordedFailedCalls
         }
         WorkBudget.CancellationToken.ThrowIfCancellationRequested()
         Volatile.Write[BoundGlobalScope?](&this.globalScope, bound)
