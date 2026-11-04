@@ -365,6 +365,96 @@ open class Adr0212ScopeConformanceTests {
     }
 
     @Fact
+    func NestedPartialType_MergedSharedBlock_EnclosingSymbolMatchesRealBlocks() {
+        let text = "class Root {\n partial class Outer { shared { var A int32 } }\n partial class Outer { /* body */ func M() { /* outside */ } class Inner { /* nested */ partial class Deep { } partial class Deep { /* deep */ } } shared { var B int32; func S() { /* inside */ } } }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "shared-enclosing.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        Assert.Equal("Outer", model.GetEnclosingSymbol(text.IndexOf("/* body */", StringComparison.Ordinal))!!.Name)
+        Assert.Equal("M", model.GetEnclosingSymbol(text.IndexOf("/* outside */", StringComparison.Ordinal))!!.Name)
+        Assert.Equal("Inner", model.GetEnclosingSymbol(text.IndexOf("/* nested */", StringComparison.Ordinal))!!.Name)
+        Assert.Equal("Deep", model.GetEnclosingSymbol(text.IndexOf("/* deep */", StringComparison.Ordinal))!!.Name)
+        Assert.Equal("S", model.GetEnclosingSymbol(text.IndexOf("/* inside */", StringComparison.Ordinal))!!.Name)
+        Assert.Equal("Outer", model.GetEnclosingSymbol(text.IndexOf("var B int32", StringComparison.Ordinal))!!.Name)
+    }
+
+    @Fact
+    func NestedPartialType_MergedSharedBlock_LookupSymbolsSeparatesInstanceAndSharedScopes() {
+        let text = "class Root {\n partial class Outer(P int32) { var Inst int32; shared { var A int32 } }\n partial class Outer {\n  var Next int32 = P + A + B\n  func UseInstance() int32 { return Inst + A + B /* instance */ }\n  shared {\n   var B int32 = A + 1\n   func UseShared() int32 { return A + B /* shared */ }\n  }\n }\n}\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "shared-lookup.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        let instanceNames = model
+            .LookupSymbols(text.IndexOf("/* instance */", StringComparison.Ordinal))
+            .Select((s Symbol) -> s.Name)
+            .ToList()
+        Assert.Contains("this", instanceNames)
+        Assert.Contains("Inst", instanceNames)
+        Assert.Contains("Next", instanceNames)
+        Assert.Contains("A", instanceNames)
+        Assert.Contains("B", instanceNames)
+        let initializerNames = model
+            .LookupSymbols(text.IndexOf("P + A + B", StringComparison.Ordinal))
+            .Select((s Symbol) -> s.Name)
+            .ToList()
+        Assert.Contains("P", initializerNames)
+        Assert.Contains("A", initializerNames)
+        Assert.Contains("B", initializerNames)
+        Assert.DoesNotContain("Inst", initializerNames)
+        Assert.DoesNotContain("this", initializerNames)
+        let sharedNames = model
+            .LookupSymbols(text.IndexOf("/* shared */", StringComparison.Ordinal))
+            .Select((s Symbol) -> s.Name)
+            .ToList()
+        Assert.Contains("A", sharedNames)
+        Assert.Contains("B", sharedNames)
+        Assert.Contains("UseShared", sharedNames)
+        Assert.DoesNotContain("Inst", sharedNames)
+        Assert.DoesNotContain("Next", sharedNames)
+        Assert.DoesNotContain("P", sharedNames)
+        Assert.DoesNotContain("this", sharedNames)
+    }
+
+    @Fact
+    func NestedPartialType_MergedSharedBlock_AcrossThreePartsAndMultipleTrees() {
+        let firstText = "partial class Root {\n class Holder {\n  partial class Outer { var Inst int32; shared { var A int32 } }\n  partial class Outer { func Middle() int32 { return Inst + A + C /* middle */ } }\n  partial class Outer {\n   func Last() int32 { return Inst + A + C /* last */ }\n   shared {\n    var C int32\n    func SharedLast() int32 { return A + C /* shared-last */ }\n   }\n  }\n }\n partial class Cross { var CrossInst int32; shared { var CrossA int32 } }\n}\n"
+        let secondText = "partial class Root {\n partial class Cross {\n  func UseCross() int32 { return CrossInst + CrossA + CrossB /* cross-instance */ }\n  shared {\n   var CrossB int32\n   func SharedCross() int32 { return CrossA + CrossB /* cross-shared */ }\n  }\n }\n}\n"
+        let firstTree = SyntaxTree.Parse(SourceText.From(firstText, "part1.gs"))
+        let secondTree = SyntaxTree.Parse(SourceText.From(secondText, "part2.gs"))
+        let compilation = Compilation(firstTree, secondTree)
+        let firstModel = compilation.GetSemanticModel(firstTree)
+        let middlePos = firstText.IndexOf("/* middle */", StringComparison.Ordinal)
+        let lastPos = firstText.IndexOf("/* last */", StringComparison.Ordinal)
+        let sharedLastPos = firstText.IndexOf("/* shared-last */", StringComparison.Ordinal)
+        Assert.Equal("Middle", firstModel.GetEnclosingSymbol(middlePos)!!.Name)
+        Assert.Equal("Last", firstModel.GetEnclosingSymbol(lastPos)!!.Name)
+        Assert.Equal("SharedLast", firstModel.GetEnclosingSymbol(sharedLastPos)!!.Name)
+        let middleNames = firstModel.LookupSymbols(middlePos).Select((s Symbol) -> s.Name).ToList()
+        Assert.Contains("Inst", middleNames)
+        Assert.Contains("A", middleNames)
+        Assert.Contains("C", middleNames)
+        let lastNames = firstModel.LookupSymbols(lastPos).Select((s Symbol) -> s.Name).ToList()
+        Assert.Contains("Inst", lastNames)
+        Assert.Contains("A", lastNames)
+        Assert.Contains("C", lastNames)
+        let sharedLastNames = firstModel.LookupSymbols(sharedLastPos).Select((s Symbol) -> s.Name).ToList()
+        Assert.Contains("A", sharedLastNames)
+        Assert.Contains("C", sharedLastNames)
+        Assert.DoesNotContain("Inst", sharedLastNames)
+        let secondModel = compilation.GetSemanticModel(secondTree)
+        let crossInstancePos = secondText.IndexOf("/* cross-instance */", StringComparison.Ordinal)
+        let crossSharedPos = secondText.IndexOf("/* cross-shared */", StringComparison.Ordinal)
+        Assert.Equal("UseCross", secondModel.GetEnclosingSymbol(crossInstancePos)!!.Name)
+        Assert.Equal("SharedCross", secondModel.GetEnclosingSymbol(crossSharedPos)!!.Name)
+        let crossInstanceNames = secondModel.LookupSymbols(crossInstancePos).Select((s Symbol) -> s.Name).ToList()
+        Assert.Contains("CrossInst", crossInstanceNames)
+        Assert.Contains("CrossA", crossInstanceNames)
+        Assert.Contains("CrossB", crossInstanceNames)
+        let crossSharedNames = secondModel.LookupSymbols(crossSharedPos).Select((s Symbol) -> s.Name).ToList()
+        Assert.Contains("CrossA", crossSharedNames)
+        Assert.Contains("CrossB", crossSharedNames)
+        Assert.DoesNotContain("CrossInst", crossSharedNames)
+    }
+
+    @Fact
     func Globals_AreListedInSourceOrderAcrossKinds() {
         let text = "var first = 1\nfunc second() int32 { return 1 }\nenum Third { A }\nvar fourth = 2\n"
         let tree = SyntaxTree.Parse(SourceText.From(text, "order.gs"))

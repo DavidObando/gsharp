@@ -400,7 +400,10 @@ class SemanticModel {
   imported interface inherits from its base interfaces, the default methods of
   the interfaces a class implements, and the built-in members of a slice,
   array, map, channel or sequence over a source element type, which has no CLR
-  type. Extension
+  type. Issue #5488 adds the members of a type parameter: the members of each
+  constraint in constraint order along the forwarded bound chain, then the
+  public instance members of `object` when no constraint is a class (instance
+  members only for a base-class constraint, each member listed once). Extension
   members in scope follow the type's own members (question 12, resolved in
   #5440): source extension functions by file path then start, then imported
   extension methods by holder class then metadata token.
