@@ -111,6 +111,17 @@ partial class CSharpToGSharpTranslator {
                         .Any((reference SyntaxReference) -> this.IsTranslatedByThisRun(reference.SyntaxTree)) {
                         break
                     }
+                    if propertySymbol != nil && propertySymbol.IsPartialDefinition == true {
+                        // Issue #4370: unless the implementation is generated
+                        // code this run does not translate — then the property
+                        // would vanish, so say so.
+                        this.ReportGeneratedPartialImplementation(
+                            property,
+                            propertySymbol,
+                            propertySymbol.PartialImplementationPart
+                        )
+                        break
+                    }
                     let propertyAttributes = this.MapPropertyAttributes(property)
                     if (ownerKind == TypeDeclarationKind.DataClass || ownerKind == TypeDeclarationKind.DataStruct) &&
                         IsExplicitPositionalAutoProperty(property, propertySymbol) &&
@@ -174,23 +185,6 @@ partial class CSharpToGSharpTranslator {
                                 Visibility.Public
                             ),
                             false
-                        )
-                        break
-                    }
-                    // ADR-0143 §D rule 3 (defensive): C# 13 partial properties
-                    // have no G# surface, exactly like partial methods. Skip a
-                    // partial-property DEFINITION node: an implemented property's
-                    // defining part is dropped in favor of its implementation
-                    // part (which translates normally), and an unimplemented
-                    // partial-property definition is elided outright.
-                    if propertySymbol != nil && propertySymbol.IsPartialDefinition == true {
-                        // Issue #4370: unless the implementation is generated
-                        // code this run does not translate — then the property
-                        // would vanish, so say so.
-                        this.ReportGeneratedPartialImplementation(
-                            property,
-                            propertySymbol,
-                            propertySymbol.PartialImplementationPart
                         )
                         break
                     }
@@ -441,6 +435,14 @@ partial class CSharpToGSharpTranslator {
                             let propertySymbol IPropertySymbol? = this.context.GetDeclaredSymbol(
                                 property
                             ) as IPropertySymbol
+                            if propertySymbol != nil && propertySymbol.IsPartialDefinition == true {
+                                this.ReportGeneratedPartialImplementation(
+                                    property,
+                                    propertySymbol,
+                                    propertySymbol.PartialImplementationPart
+                                )
+                                break
+                            }
                             let propertyAttributes = this.MapPropertyAttributes(property)
                             let isStatic = propertySymbol != nil && propertySymbol.IsStatic
                             if isStatic {

@@ -146,26 +146,11 @@ open partial class TypeSymbol : Symbol {
                     function.ParameterTypes.Add(function.ReturnType)
                 }
             }
-            case structure is StructSymbol when !structure
-                .TypeArguments
-                .IsDefaultOrEmpty ||
-                !structure
-                .EnclosingTypeArguments
-                .IsDefaultOrEmpty {
-                return if structure.EnclosingTypeArguments.IsDefaultOrEmpty {
-                    structure.TypeArguments
-                } else {
-                    structure.EnclosingTypeArguments.AddRange(
-                        if structure.TypeArguments.IsDefault {
-                            ImmutableArray[TypeSymbol].Empty
-                        } else {
-                            structure.TypeArguments
-                        }
-                    )
-                }
+            case structure is StructSymbol {
+                return GSharp.Core.CodeAnalysis.Binding.Conversion.GetEffectiveStructTypeArguments(structure)
             }
-            case constructedInterface is InterfaceSymbol when !constructedInterface.TypeArguments.IsDefaultOrEmpty {
-                return constructedInterface.TypeArguments
+            case sourceInterface is InterfaceSymbol {
+                return GSharp.Core.CodeAnalysis.Binding.Conversion.GetEffectiveInterfaceTypeArguments(sourceInterface)
             }
             case constructedDelegate is DelegateTypeSymbol when !constructedDelegate.TypeArguments.IsDefaultOrEmpty {
                 return constructedDelegate.TypeArguments

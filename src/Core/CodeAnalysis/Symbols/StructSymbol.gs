@@ -2730,14 +2730,15 @@ class StructSymbol : TypeSymbol {
 
         private func EnclosingTypeOf(type TypeSymbol) TypeSymbol? -> switch type {
             case s is StructSymbol: (s.Definition ?? s).ContainingType
-            case i is InterfaceSymbol: i.ContainingType
-            case e is EnumSymbol: e.ContainingType
+            case i is InterfaceSymbol: (i.Definition ?? i).ContainingType
+            case e is EnumSymbol: (e.Definition ?? e).ContainingType
+            case d is DelegateTypeSymbol: (d.Definition ?? d).ContainingType
             default: default(TypeSymbol?)
         }
 
         private func EnclosingTypeParametersOf(type TypeSymbol) ImmutableArray[TypeParameterSymbol] -> switch type {
             case s is StructSymbol: (s.Definition ?? s).DeclaredTypeParameters
-            case i is InterfaceSymbol: (i.Definition ?? i).TypeParameters
+            case i is InterfaceSymbol: (i.Definition ?? i).DeclaredTypeParameters
             default: ImmutableArray[TypeParameterSymbol].Empty
         }
 
@@ -3128,17 +3129,17 @@ class StructSymbol : TypeSymbol {
                 }
             }
             if type is InterfaceSymbol iface && !iface.TypeArguments.IsDefaultOrEmpty {
-                let substitutedArgs = ImmutableArray.CreateBuilder[TypeSymbol](iface.TypeArguments.Length)
-                var changed = false
-                for var i = 0; i < iface.TypeArguments.Length; i++ {
-                    let substituted = SubstituteNested(iface.TypeArguments[i])
-                    substitutedArgs.Add(substituted)
-                    changed |= !object.ReferenceEquals(substituted, iface.TypeArguments[i])
+                return InterfaceSymbol.SubstituteConstructionArguments(iface, SubstituteNested, mapClrType)
+            }
+            if type is InterfaceSymbol nestedIface && nestedIface.TypeArguments.IsDefaultOrEmpty {
+                let newEnclosing = InterfaceSymbol.SubstituteEnclosingArguments(nestedIface, SubstituteNested)
+                if !newEnclosing.IsDefault {
+                    return InterfaceSymbol.ConstructNested(
+                        nestedIface.Definition ?? nestedIface,
+                        newEnclosing,
+                        mapClrType
+                    )!!
                 }
-                if !changed {
-                    return iface
-                }
-                return InterfaceSymbol.Construct(iface.Definition, substitutedArgs.MoveToImmutable(), mapClrType)!!
             }
             if type is ImportedTypeSymbol imported &&
                 imported.OpenDefinition != nil &&

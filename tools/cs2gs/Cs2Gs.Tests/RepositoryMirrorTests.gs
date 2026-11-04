@@ -333,8 +333,27 @@ class RepositoryMirrorTests {
             source,
             destination,
             []string{"Product.slnx", "test/Core.Tests/Core.Tests.csproj", "test/Shared/GoldenFile.cs"},
+            additionalFiles: []string{
+                "out/obj/Core/Debug/net10.0/ProducerDeclaration.Native_Other.gs",
+                "src/Core/obj/Debug/net10.0/ProducerDeclaration.Native_Other.gs"
+            },
             excludedScope: scope_,
             translatedSourceFiles: []string{sharedSource, Path.Combine(source, "out", "obj", "Core", "Generated.cs")}
+        )
+        let missingSplit = Assert.Throws[InvalidOperationException](
+            () -> RepositoryMirror.ValidateCompleted(
+                source,
+                destination,
+                []string{"Product.slnx", "test/Core.Tests/Core.Tests.csproj", "test/Shared/GoldenFile.cs"},
+                additionalFiles: []string{"test/Shared/GoldenFile.Other.gs"},
+                excludedScope: scope_,
+                translatedSourceFiles: []string{sharedSource}
+            )
+        )
+        Assert.Contains(
+            "expected file 'test/Shared/GoldenFile.Other.gs'",
+            missingSplit.Message,
+            StringComparison.Ordinal
         )
     }
 
