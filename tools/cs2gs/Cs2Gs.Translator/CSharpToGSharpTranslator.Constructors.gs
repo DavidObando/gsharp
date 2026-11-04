@@ -189,8 +189,14 @@ partial class CSharpToGSharpTranslator {
             if symbol != nil {
                 type = this.PromoteIfUsedAsNullable(type, symbol)
             }
+            let isPartialIndexerImplementation = symbol is IPropertySymbol{PartialDefinitionPart: not nil}
             var indexParameters = if symbol != nil {
-                symbol.Parameters.Select((p IParameterSymbol) -> this.MapParameter(p, node)).ToList()
+                symbol
+                    .Parameters
+                    .Select(
+                    (p IParameterSymbol) -> this.MapParameter(p, node, includeDefault: !isPartialIndexerImplementation)
+                )
+                    .ToList()
             } else {
                 this.MapParameterList(node.ParameterList)
             }
@@ -810,12 +816,16 @@ partial class CSharpToGSharpTranslator {
                 if skipFirst {
                     source = source.Skip(1)
                 }
+                let includeDefault = !(symbol.PartialDefinitionPart != nil && !this.emitGeneratedImplementingParts)
                 // Fall back to the parameter LIST's syntax as the diagnostic anchor
                 // for each parameter symbol here: when `symbol` overrides/implements
                 // a member from a REFERENCED assembly, its `IParameterSymbol`s have
                 // no `DeclaringSyntaxReferences` of their own (see
                 // <see cref="MapConstantDefault"/> remarks).
-                return source.Select((p IParameterSymbol) -> this.MapParameter(p, syntax)).ToList()
+                return source.Select(
+                    (p IParameterSymbol) -> this.MapParameter(p, syntax, includeDefault: includeDefault)
+                )
+                    .ToList()
             }
             return if syntax == nil {
                 List[Parameter]()
@@ -838,7 +848,8 @@ partial class CSharpToGSharpTranslator {
             symbol IParameterSymbol,
             fallbackNode Microsoft.CodeAnalysis.SyntaxNode?,
             promoteNullability bool = true,
-            spellingLocation Location? = nil
+            spellingLocation Location? = nil,
+            includeDefault bool = true
         ) Parameter {
             var spellingLocation = spellingLocation
             // ADR-0192: a partial method's declaring part maps the
@@ -951,7 +962,11 @@ partial class CSharpToGSharpTranslator {
             if !variadic {
                 type = this.PromoteDelegateParameterInvokedWithNull(type, symbol)
             }
-            let defaultValue GExpression? = this.BuildOptionalParameterDefault(symbol, type, fallbackNode)
+            let defaultValue GExpression? = if includeDefault {
+                this.BuildOptionalParameterDefault(symbol, type, fallbackNode)
+            } else {
+                default(GExpression?)
+            }
             return Parameter(
                 MapParameterName(symbol, fallbackNode),
                 type,

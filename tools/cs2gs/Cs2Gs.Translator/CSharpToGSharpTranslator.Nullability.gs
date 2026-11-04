@@ -2090,7 +2090,8 @@ partial class CSharpToGSharpTranslator {
             // types because promoting arbitrary reference parameters cascades
             // nullable-mismatch errors (GS0156) at pass-through call sites that
             // would each need their own flow-driven promotion.
-            if symbol is IParameterSymbol{HasExplicitDefaultValue: true} defaulted &&
+            if symbol is IParameterSymbol parameter &&
+                EffectiveDefaultParameter(parameter) is {HasExplicitDefaultValue: true} defaulted &&
                 defaulted.ExplicitDefaultValue == nil &&
                 defaulted
                 .Type
@@ -2628,6 +2629,23 @@ partial class CSharpToGSharpTranslator {
                 CSharpCompilation,
                 ConcurrentDictionary[ISymbol, bool]
             ] = ConditionalWeakTable[CSharpCompilation, ConcurrentDictionary[ISymbol, bool]]()
+
+            private func EffectiveDefaultParameter(parameter IParameterSymbol) IParameterSymbol -> switch parameter
+                .ContainingSymbol {
+                case method is IMethodSymbol{
+                    PartialDefinitionPart: IMethodSymbol definition
+                } when parameter.Ordinal >= 0 &&
+                    parameter.Ordinal < definition
+                    .Parameters
+                    .Length: definition.Parameters[parameter.Ordinal]
+                case property is IPropertySymbol{
+                    PartialDefinitionPart: IPropertySymbol definition
+                } when parameter.Ordinal >= 0 &&
+                    parameter.Ordinal < definition
+                    .Parameters
+                    .Length: definition.Parameters[parameter.Ordinal]
+                default: parameter
+            }
 
             private func PartialCounterpart(symbol ISymbol?) ISymbol? -> switch symbol {
                 case property is IPropertySymbol: property.PartialDefinitionPart ?? property.PartialImplementationPart

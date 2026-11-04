@@ -3510,8 +3510,10 @@ namespace N2 {
 }
 namespace N3 {
     public sealed class Other { }
-}`), ("Decl.cs", declImports + `
+}`), ("Decl.cs", `#nullable enable
+` + declImports + `
 namespace Demo {
+    public enum Mode { A = 1 }
     public sealed class Outer<T> {
         public delegate int Callback(int x);
     }
@@ -3525,9 +3527,12 @@ namespace Demo {
             [Tag(typeof(Helper), Choice.First, Helper.FloatRate, Helper.DoubleRate, new int[] { 11 })]
             [N1.GenericTag<N1.GenericHelper<int>>(typeof(N1.GenericHelper<int>), Choice.First)]
             int index,
-            int step = 2] { get; }
+            int step = 2,
+            System.Action callback = null!,
+            Mode mode = Mode.A] { get; }
     }
-}`), ("Impl.cs", implImports + `
+}`), ("Impl.cs", `#nullable enable
+` + implImports + `
 using Outer_Callback = System.String;
 namespace Demo {
     ` + innerShadowAlias + `public sealed partial class Rows {
@@ -3540,10 +3545,12 @@ namespace Demo {
             [Tag(typeof(Helper), Choice.Second, Helper.FloatRate, Helper.DoubleRate, new int[] { 110 })]
             [N2.GenericTag<N2.GenericHelper<string>>(typeof(N2.GenericHelper<string>), Choice.Second)]
             int index,
-            int step] => Value + index + step;
+            int step,
+            System.Action callback,
+            Mode mode = (Mode)42] => Value + index + step + (mode == Mode.A ? 0 : 100);
 
         [Tag(typeof(Helper), Choice.Second)]
-        public static int Use(N3.Other other) => other == null ? 0 : 1;
+        public static int Use(N3.Other? other) => other == null ? 0 : 1;
     }
 }`), ("Program.cs", `using System;
 using System.Reflection;
@@ -3619,7 +3626,9 @@ namespace Demo {
         let implPrinted = File.ReadAllText(Path.Combine(dir, "Impl.gs"))
         Assert.DoesNotContain("import N1\n", implPrinted)
         Assert.Contains("typeof(Demo.Outer_Callback)", implPrinted)
+        Assert.Contains("callback (() -> void)? = nil", implPrinted)
         Assert.DoesNotContain("typeof(Outer[int32].Callback)", implPrinted)
+        Assert.DoesNotContain("42", implPrinted)
         if shadowLeadingNamespace {
             Assert.Contains("import N1Namespace = N1\n", implPrinted)
             Assert.Contains(
