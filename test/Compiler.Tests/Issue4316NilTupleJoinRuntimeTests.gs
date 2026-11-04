@@ -165,6 +165,7 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
         }
         return nil
     }
+    let widenedNullableTuple (string?, int64)? = (nil, 1)
     return if standalone.Item1 == nil &&
         da == nil &&
         (db != nil || !d) &&
@@ -185,7 +186,8 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
         swStmt == 1 &&
         multiRet(false).Item1 == nil &&
         nullableTupleRet(false, true) == nil &&
-        nullableTupleRet(true, true) != nil {
+        nullableTupleRet(true, true) != nil &&
+        widenedNullableTuple != nil {
         (a.Item2, b.Item2)
     } else {
         ("bad", "bad")
