@@ -1638,7 +1638,8 @@ func (self Type?) IsSameAs(other Type?) bool {
     // itself a constructed generic, so arrays of cross-context generics
     // require structural comparison.
     if self.IsArray && other.IsArray {
-        return self.GetArrayRank() == other.GetArrayRank() && self.GetElementType().IsSameAs(other.GetElementType())
+        return self.IsSZArray == other.IsSZArray && self.GetArrayRank() == other.GetArrayRank() && self.GetElementType()
+            .IsSameAs(other.GetElementType())
     }
     if self.IsByRef && other.IsByRef {
         return self.GetElementType().IsSameAs(other.GetElementType())

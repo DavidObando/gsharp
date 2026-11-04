@@ -1757,12 +1757,14 @@ internal partial class MethodBodyEmitter {
     /// @param element The array-backed element access.
     private func EmitElementAddress(element BoundIndexExpression) {
         this.EmitExpression(element.Target)
-        if GetRectangularArrayType(element.Target.Type) is {} rectangular {
+        if TryGetNonSzArrayShape(element.Target.Type, out var nonSzArray, out var nonSzElement, out var nonSzRank) {
             for index in element.Indices {
                 this.EmitExpression(index)
             }
             this.il.OpCode(ILOpCode.Call)
-            this.il.Token(this.outer.memberRefs.GetRectangularArrayMemberReference(rectangular, "Address"))
+            this.il.Token(
+                this.outer.memberRefs.GetNonSzArrayMemberReference(nonSzArray!!, nonSzElement!!, nonSzRank, "Address")
+            )
             return
         }
         this.EmitExpression(element.Index)
