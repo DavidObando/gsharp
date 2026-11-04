@@ -559,6 +559,39 @@ func Branches(x object, maybe object?) int32 {
         )
         Assert.Equal("Other", importedOverClass.PackageName)
         Assert.Same(TypeSymbol.Int64, importedOverClass.Target)
+        let genericPkgTree = SyntaxTree.Parse(
+            SourceText.From(
+                "package GenericPkg\npublic class Coord[T] { }\npublic class OnlyGeneric[T, U] { }\n",
+                "k-generic-pkg.gs"
+            )
+        )
+        let generic1PkgTree = SyntaxTree.Parse(
+            SourceText.From("package Generic1Pkg\npublic class OnlyGeneric[T] { }\n", "l-generic1-pkg.gs")
+        )
+        let mixedArityTwoImportsTree = SyntaxTree.Parse(
+            SourceText.From(
+                "package MixedConsumer\nimport Lib\nimport GenericPkg\nimport Generic1Pkg\nfunc Use() Coord { return 1 }\n",
+                "m-mixed-consumer.gs"
+            )
+        )
+        let mixedArityAliasCompilation = Compilation(genericPkgTree, generic1PkgTree, libTree, mixedArityTwoImportsTree)
+        Assert.Empty(mixedArityAliasCompilation.GetDiagnostics())
+        let mixedArityAliasModel = mixedArityAliasCompilation.GetSemanticModel(mixedArityTwoImportsTree)
+        let mixedArityAlias = Assert.IsType[TypeAliasSymbol](
+            Assert.Single(mixedArityAliasModel.LookupSymbols(0, "Coord"))
+        )
+        Assert.Equal("Lib", mixedArityAlias.PackageName)
+        Assert.Same(TypeSymbol.Int32, mixedArityAlias.Target)
+        let lowestArityGeneric = Assert.IsType[StructSymbol](
+            Assert.Single(mixedArityAliasModel.LookupSymbols(0, "OnlyGeneric"))
+        )
+        Assert.Equal("Generic1Pkg", lowestArityGeneric.PackageName)
+        Assert.Single(lowestArityGeneric.TypeParameters)
+        let mixedArityClassCompilation = Compilation(genericPkgTree, classLibTree, mixedArityTwoImportsTree)
+        let mixedArityClassModel = mixedArityClassCompilation.GetSemanticModel(mixedArityTwoImportsTree)
+        let mixedArityClass = Assert.IsType[StructSymbol](Assert.Single(mixedArityClassModel.LookupSymbols(0, "Coord")))
+        Assert.Equal("Lib", mixedArityClass.PackageName)
+        Assert.Empty(mixedArityClass.TypeParameters)
     }
 
     @Fact

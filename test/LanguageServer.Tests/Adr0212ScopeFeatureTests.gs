@@ -92,6 +92,26 @@ func Run() int32 {
         )
         let coord = Assert.Single(items, (i CompletionItem) -> i.Label == "Coord")
         Assert.Equal("type Coord = int32", coord.Detail)
+
+        let mixedProject = ProjectState("/test/mixed.gsproj")
+        mixedProject.UpdateFile("/test/a_generic.gs", "package GenericPkg\npublic class Coord[T] { }\n")
+        mixedProject.UpdateFile("/test/b_lib.gs", "package Lib\ntype Coord = int32\n")
+        let consumerSource = "package Consumer\nimport GenericPkg\nimport Lib\nfunc Run() Coord {\n    // caret\n    return 0\n}\n"
+        mixedProject.UpdateFile("/test/c_consumer.gs", consumerSource)
+        mixedProject.TryGetSyntaxTree("/test/c_consumer.gs", out var consumerTree)
+        let consumerLines = List[int32]()
+        for var i = 0; i < consumerSource.Length; i++ {
+            if consumerSource[i] == '\n' {
+                consumerLines.Add(i)
+            }
+        }
+        let consumerContent = DocumentContent(consumerTree, consumerLines, mixedProject)
+        let consumerItems = CompletionComputer.ComputeCompletions(
+            consumerContent,
+            LanguageServerTestHelpers.PositionOf(consumerSource, "// caret")
+        )
+        let consumerCoord = Assert.Single(consumerItems, (i CompletionItem) -> i.Label == "Coord")
+        Assert.Equal("type Coord = int32", consumerCoord.Detail)
     }
 
     @Fact

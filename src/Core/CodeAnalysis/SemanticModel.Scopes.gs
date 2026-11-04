@@ -1148,6 +1148,14 @@ partial class SemanticModel {
             default: nil
         }
 
+        private func TypeSymbolArity(symbol Symbol) int32 -> switch symbol {
+            case a is TypeAliasSymbol: TypeSymbolArity(a.Target)
+            case s is StructSymbol when s.IsGenericDefinition: s.TypeParameters.Length
+            case i is InterfaceSymbol when i.IsGenericDefinition: i.TypeParameters.Length
+            case d is DelegateTypeSymbol when d.IsGenericDefinition: d.TypeParameters.Length
+            default: 0
+        }
+
         private func SelectVisibleTypeSymbols(
             globalScope BoundGlobalScope,
             treePackageName string?,
@@ -1164,11 +1172,13 @@ partial class SemanticModel {
                 } else {
                     group.ToList()
                 }
-                if topLevel.Count == 1 {
-                    selected.Add(topLevel[0])
+                let minArity = topLevel.Min((s Symbol) -> TypeSymbolArity(s))
+                let bucket = topLevel.Where((s Symbol) -> TypeSymbolArity(s) == minArity).ToList()
+                if bucket.Count == 1 {
+                    selected.Add(bucket[0])
                     continue
                 }
-                let own = topLevel.FirstOrDefault(
+                let own = bucket.FirstOrDefault(
                     (s Symbol) -> string.Equals(TypeSymbolPackageName(s), treePackageName, StringComparison.Ordinal)
                 )
                 if own != nil {
@@ -1178,7 +1188,7 @@ partial class SemanticModel {
                 if importedPackages != nil && importedPackages.Count > 0 {
                     let imported = List[Symbol]()
                     let seenImportedPackages = HashSet[string](StringComparer.Ordinal)
-                    for candidate in topLevel {
+                    for candidate in bucket {
                         let pkg = TypeSymbolPackageName(candidate)
                         if pkg != nil && importedPackages.Contains(pkg) && seenImportedPackages.Add(pkg) {
                             imported.Add(candidate)
@@ -1198,7 +1208,7 @@ partial class SemanticModel {
                         continue
                     }
                 }
-                selected.Add(topLevel[0])
+                selected.Add(bucket[0])
             }
             return selected
         }
