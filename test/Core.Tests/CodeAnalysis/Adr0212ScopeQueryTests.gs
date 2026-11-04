@@ -156,6 +156,11 @@ if topInput is not string topText {
     return
 }
 let topUsed = topText.Length // PTopLevelAfterGuard
+let topAnon = object {
+    func Read() int32 {
+        return topText.Length // PInTopLevelAnonMethod
+    }
+}
 func SubsequentFunction() int32 {
     return 0 // PInSubsequentFunction
 }
@@ -170,6 +175,7 @@ func SubsequentFunction() int32 {
             return topModel.LookupSymbols(at).Select((s Symbol) -> s.Name).ToList()
         }
         Assert.Contains("topText", TopNamesAt("PTopLevelAfterGuard"))
+        Assert.Contains("topText", TopNamesAt("PInTopLevelAnonMethod"))
         Assert.DoesNotContain("topText", TopNamesAt("PInSubsequentFunction"))
     }
 

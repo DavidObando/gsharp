@@ -698,7 +698,7 @@ internal partial class StatementBinder {
             if current is GlobalStatementSyntax {
                 return node.SyntaxTree.Root
             }
-            if current is MemberSyntax {
+            if current.Parent is CompilationUnitSyntax && current is MemberSyntax {
                 return nil
             }
             current = current.Parent

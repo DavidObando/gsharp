@@ -963,7 +963,7 @@ partial class SemanticModel {
             if current is GlobalStatementSyntax {
                 return true
             }
-            if current is MemberSyntax || (current is AnnotationSyntax && current.Parent is CompilationUnitSyntax) {
+            if current.Parent is CompilationUnitSyntax && current is MemberSyntax or AnnotationSyntax {
                 return false
             }
             node = current.Parent
