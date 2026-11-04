@@ -261,4 +261,8 @@ class PipelineOptions {
     /// Gets or sets cached translation-validity outcomes for unselected
     /// referenced projects (issue #4767).
     internal prop ValidatedReferencedProjects IDictionary[string, bool]?
+
+    /// Gets or sets the MSBuild-evaluated transitive compile `ProjectReference`
+    /// paths keyed by referencing project path (issue #4767).
+    internal prop EvaluatedProjectReferences IReadOnlyDictionary[string, IReadOnlyList[string]]?
 }

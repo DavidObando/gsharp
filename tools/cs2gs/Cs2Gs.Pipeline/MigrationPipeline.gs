@@ -152,6 +152,7 @@ class MigrationPipeline {
             cancellationToken
         )
             .ConfigureAwait(false)
+        this.options.EvaluatedProjectReferences = evaluatedProjectReferences
         // Issue #3645: an executable app that another app in this run compiles
         // against must keep its entry-point class as a real G# class (see
         // PipelineOptions.ProjectsReferencedByOtherApps).
@@ -478,10 +479,11 @@ class MigrationPipeline {
         this.ResolveValidationSdkPin(migratedRoot)
         let evaluatedProjectReferences = await this.LoadEvaluatedProjectReferencesAsync(
             allApps,
-            includeBuildOrdering: false,
+            includeBuildOrdering: true,
             cancellationToken
         )
             .ConfigureAwait(false)
+        this.options.EvaluatedProjectReferences = evaluatedProjectReferences
         this.options.ProjectsReferencedByOtherApps = DeclaredProjectItems.CollectCompileReferencedProjectPaths(
             allApps.Select((app CorpusApp) -> app.ProjectPath),
             evaluatedProjectReferences

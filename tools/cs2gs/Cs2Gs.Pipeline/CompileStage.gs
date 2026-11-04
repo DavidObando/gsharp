@@ -376,22 +376,50 @@ class CompileStage : IMigrationStage {
             return StageOutcome.Failed(artifacts)
         }
 
-        private func HasInvalidProjectReference(context StageExecutionContext) bool {
+        internal func HasInvalidProjectReference(context StageExecutionContext) bool {
             let invalidTranslated = context.Options.InvalidTranslatedProjectPaths
             let invalidCompiled = context.Options.InvalidCompiledProjectPaths
             if invalidTranslated == nil && invalidCompiled == nil {
                 return false
             }
-            for reference in context.ProjectReferences {
-                if string.IsNullOrEmpty(reference.SourceInclude) || IsBuildOrderingOnlyReference(reference) {
-                    continue
-                }
-                let fullPath = Path.GetFullPath(reference.SourceInclude!!)
+            for referencedProjectPath in ActiveCompileReferencePaths(context) {
+                let fullPath = Path.GetFullPath(referencedProjectPath)
                 if invalidTranslated?.Contains(fullPath) == true || invalidCompiled?.Contains(fullPath) == true {
                     return true
                 }
             }
             return false
+        }
+
+        private func ActiveCompileReferencePaths(context StageExecutionContext) IReadOnlyList[string] {
+            if context.EvaluatedProjectReferencesResolved {
+                return context.EvaluatedProjectReferencePaths
+            }
+            let appProjectPath = Path.GetFullPath(context.App.ProjectPath)
+            if context
+                .Options
+                .EvaluatedProjectReferences != nil &&
+                context
+                .Options
+                .EvaluatedProjectReferences!!.TryGetValue(appProjectPath, out var evaluated) {
+                return evaluated
+            }
+            return context
+                .ProjectReferences
+                .Where(
+                (reference DeclaredProjectItem) -> !string.IsNullOrEmpty(reference.SourceInclude) &&
+                    !IsBuildOrderingOnlyReference(reference) &&
+                    !HasCondition(reference)
+            )
+                .Select((reference DeclaredProjectItem) -> Path.GetFullPath(reference.SourceInclude!!))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList()
+        }
+
+        private func HasCondition(reference DeclaredProjectItem) bool {
+            return !string.IsNullOrWhiteSpace(reference.ItemGroupCondition) || !string.IsNullOrWhiteSpace(
+                reference.Element.Attribute(XName?("Condition")!!)?.Value
+            )
         }
 
         private func IsBuildOrderingOnlyReference(reference DeclaredProjectItem) bool {
@@ -409,8 +437,9 @@ class CompileStage : IMigrationStage {
             return string.Equals(referenceOutputAssembly?.Trim(), "false", StringComparison.OrdinalIgnoreCase)
         }
 
-        private func IsReferencedProjectDiagnostic(context StageExecutionContext, diagnostic GscDiagnostic) bool {
-            if context.ProjectReferences.Count == 0 || string.IsNullOrEmpty(diagnostic.File) {
+        internal func IsReferencedProjectDiagnostic(context StageExecutionContext, diagnostic GscDiagnostic) bool {
+            let activeReferences = ActiveCompileReferencePaths(context)
+            if activeReferences.Count == 0 || string.IsNullOrEmpty(diagnostic.File) {
                 return false
             }
             if !Path.GetExtension(diagnostic.File).Equals(".gs", StringComparison.OrdinalIgnoreCase) {
@@ -425,18 +454,15 @@ class CompileStage : IMigrationStage {
             if IsUnderDirectory(diagnosticPath, ownOutputDir) {
                 return false
             }
-            for reference in context.ProjectReferences {
-                if string.IsNullOrEmpty(reference.SourceInclude) || IsBuildOrderingOnlyReference(reference) {
-                    continue
-                }
-                let referencedProjectPath = Path.GetFullPath(reference.SourceInclude!!)
-                let referencedSourceDir string? = Path.GetDirectoryName(referencedProjectPath)
+            for referencedProjectPath in activeReferences {
+                let fullReferencedPath = Path.GetFullPath(referencedProjectPath)
+                let referencedSourceDir string? = Path.GetDirectoryName(fullReferencedPath)
                 if !string.IsNullOrEmpty(referencedSourceDir) &&
                     IsUnderDirectory(diagnosticPath, referencedSourceDir!!) {
                     return true
                 }
                 if context.Options.GeneratedProjectPaths != nil && context.Options.GeneratedProjectPaths!!.TryGetValue(
-                    referencedProjectPath,
+                    fullReferencedPath,
                     out var generatedProjectPath
                 ) {
                     let generatedDir string? = Path.GetDirectoryName(Path.GetFullPath(generatedProjectPath))

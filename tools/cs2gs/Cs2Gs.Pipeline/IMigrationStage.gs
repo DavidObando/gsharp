@@ -69,6 +69,7 @@ class StageExecutionContext {
         BuildOnlyPackageReferences = List[DeclaredPackageReference]()
         PackageReferences = List[DeclaredProjectItem]()
         ProjectReferences = List[DeclaredProjectItem]()
+        EvaluatedProjectReferencePaths = List[string]()
         GeneratedFriendAssemblies = HashSet[string](StringComparer.Ordinal)
         AllowedTestFailures = List[string]()
         StaleTestAllowListEntries = List[string]()
@@ -207,6 +208,16 @@ class StageExecutionContext {
     prop ProjectReferences List[DeclaredProjectItem] {
         get;
     }
+
+    /// Gets the MSBuild-evaluated active compile `ProjectReference` paths for
+    /// the current configuration/target framework (issue #4767).
+    prop EvaluatedProjectReferencePaths List[string] {
+        get;
+    }
+
+    /// Gets or sets a value indicating whether (cref:EvaluatedProjectReferencePaths)
+    /// was populated from an MSBuild-evaluated project graph.
+    prop EvaluatedProjectReferencesResolved bool
 
     /// Gets friend assemblies contributed by generated C# sources, including
     /// SDK-generated `InternalsVisibleTo` items.

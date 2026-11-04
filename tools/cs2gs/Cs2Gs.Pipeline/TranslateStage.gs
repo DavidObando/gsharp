@@ -235,6 +235,15 @@ class TranslateStage : IMigrationStage {
         } else {
             siblingCompilations = projects.Select((p LoadedCSharpProject) -> p.Compilation).ToList()
         }
+        context.EvaluatedProjectReferencesResolved = true
+        for referencedProject in(sdkReferencedProjects ?? projects).Skip(1) {
+            if !string.IsNullOrEmpty(referencedProject.ProjectPath) {
+                let referencedPath = Path.GetFullPath(referencedProject.ProjectPath!!)
+                if !context.EvaluatedProjectReferencePaths.Contains(referencedPath, StringComparer.OrdinalIgnoreCase) {
+                    context.EvaluatedProjectReferencePaths.Add(referencedPath)
+                }
+            }
+        }
         let repositoryCompilations IReadOnlyList[CSharpCompilation]? = context
             .Options
             .RepositoryLoadedProjects
@@ -1598,12 +1607,56 @@ class TranslateStage : IMigrationStage {
                         )
                     }
                     let printed = GSharpPrinter.Print(unit)
+                    if context.Options.FormatOutput {
+                        let format = GSharpFormatter.Format(SourceText.From(printed, document.FilePath))
+                        if !format.Diagnostics.IsEmpty {
+                            valid = false
+                            let formatMessage = string.Join(
+                                "; ",
+                                format.Diagnostics.Select(
+                                    (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.Message
+                                )
+                            )
+                            Note(
+                                context,
+                                "dependency-blocked: unselected referenced project '$referencedPath' failed gsfmt post-pass in '${document.FilePath}': $formatMessage"
+                            )
+                        }
+                    }
                     let roundTrip = GSharpRoundTrip.Validate(printed)
                     if !roundTrip.Success {
                         valid = false
                         Note(
                             context,
                             "dependency-blocked: unselected referenced project '$referencedPath' emitted G# that did not round-trip-parse in '${document.FilePath}': ${roundTrip.Errors.FirstOrDefault() ?? "unknown parse error"}"
+                        )
+                    }
+                }
+                for resxPath in referencedProject.ResxFiles {
+                    cancellationToken.ThrowIfCancellationRequested()
+                    var generated string
+                    try {
+                        generated = ResxCodeGenerator.GenerateFromFile(
+                            resxPath,
+                            referencedProject.ProjectDirectory!!,
+                            referencedProject.RootNamespace
+                        )
+                    } catch (ex Exception) when ex is IOException ||
+                        ex is XmlException ||
+                        ex is UnauthorizedAccessException {
+                        valid = false
+                        Note(
+                            context,
+                            "dependency-blocked: unselected referenced project '$referencedPath' failed .resx generation for '$resxPath': ${ex.Message}"
+                        )
+                        continue
+                    }
+                    let resxRoundTrip = GSharpRoundTrip.Validate(generated)
+                    if !resxRoundTrip.Success {
+                        valid = false
+                        Note(
+                            context,
+                            "dependency-blocked: unselected referenced project '$referencedPath' emitted .resx G# that did not round-trip-parse for '$resxPath': ${resxRoundTrip.Errors.FirstOrDefault() ?? "unknown parse error"}"
                         )
                     }
                 }

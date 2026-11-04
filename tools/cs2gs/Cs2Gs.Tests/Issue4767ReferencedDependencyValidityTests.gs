@@ -273,6 +273,182 @@ open class Issue4767ReferencedDependencyValidityTests {
         }
     }
 
+    /// Review finding 1 (`PRRT_kwDOCzQNb86zvJa3`): a declared `ProjectReference`
+    /// disabled by an `ItemGroup` or item `Condition` must stay in
+    /// `context.ProjectReferences` for project emission, but must not mark the
+    /// consumer `dependency-blocked` when the inactive target fails.
+    @Fact
+    async func InactiveConditionedProjectReference_ToFailedProducer_DoesNotBlockConsumer() {
+        let compiler string? = FindCompiler()
+        if compiler == nil {
+            return
+        }
+        let corpusRoot = WriteTwoProjectFixture("inactive-condition", AbstractRefGetterModelsSource)
+        try {
+            let modelsProject = Path.Combine(corpusRoot, "Models", "Models.csproj")
+            let consumerProject = Path.Combine(corpusRoot, "Consumer", "Consumer.csproj")
+            File.WriteAllText(
+                consumerProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <ItemGroup Condition=\"'$$(Configuration)' == 'Never'\">\n" +
+                    "    <ProjectReference Include=\"../Models/Models.csproj\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            File.WriteAllText(Path.Combine(corpusRoot, "Consumer", "Consumer.cs"), `namespace Consumers;
+
+public static class Consumer
+{
+    public static int Read(int value) => value + 1;
+}
+`)
+            let outRoot = Path.Combine(corpusRoot, "runs")
+            let invalidProjects = HashSet[string](StringComparer.OrdinalIgnoreCase){Path.GetFullPath(modelsProject)}
+            let options = PipelineOptions{
+                GscPath: compiler,
+                OutputRoot: outRoot,
+                SourceRoot: corpusRoot,
+                InvalidTranslatedProjectPaths: invalidProjects,
+                InvalidCompiledProjectPaths: invalidProjects
+            }
+            let app = CorpusApp("corpus/Consumer", consumerProject, TargetKind.Library)
+            let context = StageExecutionContext(
+                app,
+                options,
+                GscInvoker(compiler),
+                outRoot,
+                TriageBuilder("run_inactive", "2026-10-05T00:00:00Z", "0.5.0", app.Id)
+            )
+            let translateOutcome = await TranslateStage().ExecuteAsync(context)
+            Assert.Equal(StageStatus.Passed, translateOutcome.Status)
+            Assert.Single(context.ProjectReferences)
+            Assert.True(context.EvaluatedProjectReferencesResolved)
+            Assert.Empty(context.EvaluatedProjectReferencePaths)
+            Assert.False(CompileStage.HasInvalidProjectReference(context))
+            let modelsDiagnostic = GscDiagnostic(
+                "GS0185",
+                "override mismatch",
+                "error",
+                Path.Combine(corpusRoot, "Models", "Contracts.gs"),
+                5,
+                5
+            )
+            Assert.False(CompileStage.IsReferencedProjectDiagnostic(context, modelsDiagnostic))
+
+            // Positive control: once the reference is active in the evaluated graph,
+            // CompileStage marks the consumer dependency-blocked.
+            context.EvaluatedProjectReferencePaths.Add(Path.GetFullPath(modelsProject))
+            Assert.True(CompileStage.HasInvalidProjectReference(context))
+            Assert.True(CompileStage.IsReferencedProjectDiagnostic(context, modelsDiagnostic))
+            let blockedCompileOutcome = await CompileStage().ExecuteAsync(context)
+            Assert.Equal(StageStatus.Failed, blockedCompileOutcome.Status)
+            Assert.Equal("dependency-blocked", blockedCompileOutcome.FailureCategory)
+            Assert.Empty(blockedCompileOutcome.Artifacts)
+        } finally {
+            Directory.Delete(corpusRoot, recursive: true)
+        }
+    }
+
+    /// Review finding 2 (`PRRT_kwDOCzQNb86zvJbf`): in `--no-via-sdk` runs, a
+    /// workspace-load failure (`CS2GS0001`) in a referenced producer must remain
+    /// producer-owned and mark the selected consumer `dependency-blocked` with
+    /// zero consumer-owned triage artifacts.
+    @Fact
+    async func CliMigrate_NoViaSdk_ReferencedProducerWorkspaceLoadFailure_BlocksConsumerWithoutConsumerArtifact() {
+        let compiler string? = FindCompiler()
+        if compiler == nil {
+            return
+        }
+        let corpusRoot = WriteTwoProjectFixture("referenced-load-failure", SupportedNonRefModelsSource)
+        try {
+            File.WriteAllText(Path.Combine(corpusRoot, "Models", "Models.csproj"), `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../DoesNotExist/DoesNotExist.csproj" />
+  </ItemGroup>
+</Project>
+`)
+            let modelsRun = await RunCliMigrateAsync(compiler, corpusRoot, "load-models", "Models")
+            Assert.Equal(1, modelsRun.ExitCode)
+            let modelsApp = Assert.Single(modelsRun.Run.Apps)
+            Assert.False(modelsApp.Succeeded)
+            Assert.Equal("translation-unsupported", modelsApp.FailureCategory)
+            Assert.Single(modelsApp.Artifacts)
+            let modelsGap = Assert.Single(modelsRun.Summary.Gaps)
+            Assert.Equal("CS2GS0001", modelsGap.Diagnostic.Id)
+            Assert.Equal("corpus/Models", Assert.Single(modelsGap.Occurrences).AppId)
+
+            let consumerRun = await RunCliMigrateAsync(compiler, corpusRoot, "load-consumer", "Consumer")
+            Assert.Equal(1, consumerRun.ExitCode)
+            Assert.False(consumerRun.Run.Succeeded)
+            Assert.False(consumerRun.Summary.IsGreen)
+            let consumerApp = Assert.Single(consumerRun.Run.Apps)
+            Assert.False(consumerApp.Succeeded)
+            Assert.False(consumerApp.Unverified)
+            Assert.Equal("dependency-blocked", consumerApp.FailureCategory)
+            Assert.Empty(consumerApp.Artifacts)
+            Assert.Empty(consumerApp.Fingerprints)
+            Assert.Empty(consumerRun.Summary.Gaps)
+            let translateLog = File.ReadAllText(
+                Assert.Single(Directory.GetFiles(consumerRun.RunDir, "translate.log", SearchOption.AllDirectories))
+            )
+            Assert.Contains("dependency-blocked: referenced project", translateLog, StringComparison.Ordinal)
+            Assert.Contains("failed workspace load", translateLog, StringComparison.Ordinal)
+        } finally {
+            Directory.Delete(corpusRoot, recursive: true)
+        }
+    }
+
+    /// Review finding 3 (`PRRT_kwDOCzQNb86zvJb5`): an unselected SDK-mode
+    /// referenced producer with valid C# source and a malformed `.resx` file
+    /// must fail validation in `IsUnselectedReferencedProjectValid` and mark the
+    /// consumer `dependency-blocked` without consumer-owned artifacts.
+    @Fact
+    async func TranslateStage_ViaSdk_UnselectedProducerWithMalformedResx_BlocksConsumerWithoutConsumerArtifact() {
+        let compiler string? = FindCompiler()
+        if compiler == nil {
+            return
+        }
+        let corpusRoot = WriteTwoProjectFixture("unselected-malformed-resx", SupportedNonRefModelsSource)
+        try {
+            let modelsResxPath = Path.Combine(corpusRoot, "Models", "Resources.resx")
+            File.WriteAllText(modelsResxPath, "<root><broken")
+            let outRoot = Path.Combine(corpusRoot, "runs")
+            let consumerProject = Path.Combine(corpusRoot, "Consumer", "Consumer.csproj")
+            let options = PipelineOptions{
+                GscPath: compiler,
+                OutputRoot: outRoot,
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true,
+                ValidatedReferencedProjects: Dictionary[string, bool](StringComparer.OrdinalIgnoreCase)
+            }
+            let app = CorpusApp("corpus/Consumer", consumerProject, TargetKind.Library)
+            let context = StageExecutionContext(
+                app,
+                options,
+                GscInvoker(compiler),
+                outRoot,
+                TriageBuilder("run_resx", "2026-10-05T00:00:00Z", "0.5.0", app.Id)
+            )
+            let outcome = await TranslateStage().ExecuteAsync(context)
+            Assert.Equal(StageStatus.Failed, outcome.Status)
+            Assert.Equal("dependency-blocked", outcome.FailureCategory)
+            Assert.Empty(outcome.Artifacts)
+            let modelsProjectPath = Path.GetFullPath(Path.Combine(corpusRoot, "Models", "Models.csproj"))
+            Assert.True(options.ValidatedReferencedProjects!!.TryGetValue(modelsProjectPath, out var cachedValid))
+            Assert.False(cachedValid)
+        } finally {
+            Directory.Delete(corpusRoot, recursive: true)
+        }
+    }
+
     private data class CliRunOutcome(ExitCode int32, RunDir string, Run RunResult, Summary ReportModel) : IEquatable[
         Issue4767ReferencedDependencyValidityTests.CliRunOutcome
     ] { }
