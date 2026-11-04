@@ -734,7 +734,22 @@ internal partial class StatementBinder {
                     continue
                 }
                 let externalCallableAliasesAtEntry = externalCallableAliases.ToArray()
-                let statement BoundStatement? = BindStatement(statementSyntax)
+                var recordedStatementEntry = false
+                if !blockEntryStates.ContainsKey(statementSyntax) {
+                    blockEntryStates[statementSyntax] = (
+                        binderCtx.NarrowedVariables.Count,
+                        externalCallableAliasesAtEntry.ToImmutableArray()
+                    )
+                    recordedStatementEntry = true
+                }
+                var statement BoundStatement? = nil
+                try {
+                    statement = BindStatement(statementSyntax)
+                } finally {
+                    if recordedStatementEntry {
+                        blockEntryStates.Remove(statementSyntax)
+                    }
+                }
                 if statement == nil {
                     continue
                 }
@@ -791,14 +806,30 @@ internal partial class StatementBinder {
                     canCompleteNormally
             }
             if trailingStatement != nil {
-                if trailingSyntax != nil {
-                    EnterBackwardJumpSpanIfFirstStatement(trailingSyntax)
+                var tailNode SyntaxNode? = trailingSyntax
+                if tailNode != nil {
+                    EnterBackwardJumpSpanIfFirstStatement(tailNode)
                 } else if statementSyntaxes.Length > 0 &&
                     statementSyntaxes[0].Parent is BlockExpressionSyntax blockExpr &&
                     blockExpr.Expression is {} tailExpr {
+                    tailNode = tailExpr
                     EnterBackwardJumpSpanIfFirstStatement(tailExpr)
                 }
-                statements.Add(trailingStatement())
+                var recordedTailEntry = false
+                if tailNode != nil && !blockEntryStates.ContainsKey(tailNode) {
+                    blockEntryStates[tailNode] = (
+                        binderCtx.NarrowedVariables.Count,
+                        externalCallableAliases.ToImmutableArray()
+                    )
+                    recordedTailEntry = true
+                }
+                try {
+                    statements.Add(trailingStatement())
+                } finally {
+                    if recordedTailEntry && tailNode != nil {
+                        blockEntryStates.Remove(tailNode)
+                    }
+                }
             }
             return currentStatementListFallsThrough
         } finally {

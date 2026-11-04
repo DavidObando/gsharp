@@ -498,43 +498,270 @@ internal partial class StatementBinder {
                 blockEntries[entry.Node] = (entry.FrameIndex, entry.Aliases)
             }
         }
-        let steps = List[
-            (Parent SyntaxNode, Child SyntaxNode, ChildMinFrame int32, ChildEntryAliases ImmutableArray[VariableSymbol])
-        ]()
+        let steps = List[(Parent SyntaxNode, Child SyntaxNode, ChildMinFrame int32)]()
         var child SyntaxNode = breakSyntax
         var innerBlockMinFrame = int32.MaxValue
-        var innerBlockAliases = default(ImmutableArray[VariableSymbol])
         while !object.ReferenceEquals(child, targetLoopBody) && child.Parent is {} parent {
-            if blockEntries.TryGetValue(child, out var childEntry) && childEntry.FrameIndex < innerBlockMinFrame {
+            if (child is BlockStatementSyntax or BlockExpressionSyntax) && blockEntries.TryGetValue(
+                child,
+                out var childEntry
+            ) &&
+                childEntry.FrameIndex < innerBlockMinFrame {
                 innerBlockMinFrame = childEntry.FrameIndex
-                innerBlockAliases = childEntry.Aliases
             }
-            steps.Add((parent, child, innerBlockMinFrame, innerBlockAliases))
+            steps.Add((parent, child, innerBlockMinFrame))
             child = parent
         }
         if object.ReferenceEquals(child, targetLoopBody) && targetLoopBody.Parent is {} loopParent {
-            if blockEntries.TryGetValue(child, out var loopBodyEntry) && loopBodyEntry.FrameIndex < innerBlockMinFrame {
+            if (child is BlockStatementSyntax or BlockExpressionSyntax) && blockEntries.TryGetValue(
+                child,
+                out var loopBodyEntry
+            ) &&
+                loopBodyEntry.FrameIndex < innerBlockMinFrame {
                 innerBlockMinFrame = loopBodyEntry.FrameIndex
-                innerBlockAliases = loopBodyEntry.Aliases
             }
-            steps.Add((loopParent, targetLoopBody, innerBlockMinFrame, innerBlockAliases))
+            steps.Add((loopParent, targetLoopBody, innerBlockMinFrame))
+        }
+        var currentAliases = if blockEntries.TryGetValue(targetLoopBody, out var rootEntry) {
+            HashSet[VariableSymbol](rootEntry.Aliases)
+        } else {
+            HashSet[VariableSymbol](snapshot.ExternalCallableAliases)
         }
         for var i = steps.Count - 1; i >= 0; i-- {
-            let (parent, stepChild, childMinFrame, childEntryAliases) = steps[i]
-            let prefixes = EnumerateEvaluatedPrefixesBeforeChild(parent, stepChild)
-            if prefixes.Count == 0 {
-                continue
+            let (parent, stepChild, childMinFrame) = steps[i]
+            if (parent is BlockStatementSyntax or BlockExpressionSyntax) && blockEntries.TryGetValue(
+                stepChild,
+                out var statementEntry
+            ) {
+                currentAliases = HashSet[VariableSymbol](statementEntry.Aliases)
             }
-            let prefixAliases = if childEntryAliases.IsDefault {
-                HashSet[VariableSymbol](snapshot.ExternalCallableAliases)
+            if parent is StructLiteralExpressionSyntax or
+                CollectionInitializerExpressionSyntax or
+                ObjectCreationExpressionSyntax {
+                ApplyCompositeInitializerPrefixEffects(
+                    snapshot,
+                    parent,
+                    stepChild,
+                    breakSyntax,
+                    childMinFrame,
+                    currentAliases
+                )
             } else {
-                HashSet[VariableSymbol](childEntryAliases)
+                let prefixes = EnumerateEvaluatedPrefixesBeforeChild(parent, stepChild)
+                for (prefix, conditionBranch) in prefixes {
+                    ApplyEvaluatedPrefixEffectsToSnapshot(
+                        snapshot,
+                        prefix,
+                        conditionBranch,
+                        childMinFrame,
+                        currentAliases
+                    )
+                }
             }
-            prefixAliases.IntersectWith(snapshot.ExternalCallableAliases)
-            for (prefix, conditionBranch) in prefixes {
-                ApplyEvaluatedPrefixEffectsToSnapshot(snapshot, prefix, conditionBranch, childMinFrame, prefixAliases)
+            if (stepChild is BlockStatementSyntax or BlockExpressionSyntax) && blockEntries.TryGetValue(
+                stepChild,
+                out var blockEntry
+            ) {
+                currentAliases = HashSet[VariableSymbol](blockEntry.Aliases)
             }
         }
+    }
+
+    private sealed class BreakTargetFinder : BoundTreeWalker {
+        private let breakSyntax SyntaxNode
+        private let stepChild SyntaxNode
+        internal var Found bool
+
+        init(breakSyntax SyntaxNode, stepChild SyntaxNode) {
+            this.breakSyntax = breakSyntax
+            this.stepChild = stepChild
+        }
+
+        private func Matches(syntax SyntaxNode?) bool {
+            if syntax == nil {
+                return false
+            }
+            if object.ReferenceEquals(syntax, breakSyntax) || object.ReferenceEquals(syntax, stepChild) {
+                return true
+            }
+            return object.ReferenceEquals(syntax.SyntaxTree, stepChild.SyntaxTree) &&
+                stepChild
+                .Span
+                .Start <= syntax
+                .Span
+                .Start &&
+                syntax
+                .Span
+                .End <= stepChild
+                .Span
+                .End
+        }
+
+        override func VisitStatement(node BoundStatement?) {
+            if Found || node == nil {
+                return
+            }
+            if Matches(node.Syntax) {
+                Found = true
+                return
+            }
+            base.VisitStatement(node)
+        }
+
+        override func VisitExpression(node BoundExpression?) {
+            if Found || node == nil {
+                return
+            }
+            if Matches(node.Syntax) {
+                Found = true
+                return
+            }
+            base.VisitExpression(node)
+        }
+    }
+
+    private func BreakTargetContainsStatement(
+        statement BoundStatement,
+        breakSyntax SyntaxNode,
+        stepChild SyntaxNode
+    ) bool {
+        let finder = BreakTargetFinder(breakSyntax, stepChild)
+        finder.Visit(statement)
+        return finder.Found
+    }
+
+    private func BreakTargetContainsExpression(
+        expression BoundExpression,
+        breakSyntax SyntaxNode,
+        stepChild SyntaxNode
+    ) bool {
+        let finder = BreakTargetFinder(breakSyntax, stepChild)
+        finder.Visit(expression)
+        return finder.Found
+    }
+
+    private func ApplyCompositeInitializerPrefixEffects(
+        snapshot NarrowingJumpState,
+        parent SyntaxNode,
+        stepChild SyntaxNode,
+        breakSyntax SyntaxNode,
+        childMinFrame int32,
+        currentAliases HashSet[VariableSymbol]
+    ) {
+        if (
+            parent is CollectionInitializerExpressionSyntax collInit && object.ReferenceEquals(
+                stepChild,
+                collInit.Target
+            )
+        ) ||
+            (
+            parent is ObjectCreationExpressionSyntax objCreate && object.ReferenceEquals(stepChild, objCreate.Target)
+        ) {
+            return
+        }
+        if binderCtx.BoundExpressionsInLoop.TryGetValue(parent, out var boundParent) {
+            let prefixStatements = List[BoundStatement]()
+            if boundParent is BoundBlockExpression loweredBlock {
+                var stoppedAtChild = false
+                for stmt in loweredBlock.Statements {
+                    if BreakTargetContainsStatement(stmt, breakSyntax, stepChild) {
+                        stoppedAtChild = true
+                        break
+                    }
+                    prefixStatements.Add(stmt)
+                }
+                if !stoppedAtChild && loweredBlock.Expression is BoundStructLiteralExpression trailingStructLit {
+                    CollectStructLiteralPrefixStatements(
+                        parent,
+                        trailingStructLit,
+                        breakSyntax,
+                        stepChild,
+                        prefixStatements
+                    )
+                }
+            } else if boundParent is BoundStructLiteralExpression structLit {
+                CollectStructLiteralPrefixStatements(parent, structLit, breakSyntax, stepChild, prefixStatements)
+            }
+            for stmt in prefixStatements {
+                ApplyEvaluatedBoundStatementEffectsToSnapshot(snapshot, parent, stmt, childMinFrame, currentAliases)
+            }
+            return
+        }
+        for (prefix, conditionBranch) in EnumerateEvaluatedPrefixesBeforeChild(parent, stepChild) {
+            ApplyEvaluatedPrefixEffectsToSnapshot(snapshot, prefix, conditionBranch, childMinFrame, currentAliases)
+        }
+    }
+
+    private func CollectStructLiteralPrefixStatements(
+        parent SyntaxNode,
+        structLit BoundStructLiteralExpression,
+        breakSyntax SyntaxNode,
+        stepChild SyntaxNode,
+        prefixStatements List[BoundStatement]
+    ) {
+        if !BoundStructLiteralExpression.UsesPrimaryConstructor(structLit.StructType) {
+            prefixStatements.Add(
+                BoundExpressionStatement(
+                    parent,
+                    BoundStructLiteralExpression(
+                        parent,
+                        structLit.StructType,
+                        ImmutableArray[BoundFieldInitializer].Empty
+                    )
+                )
+            )
+        }
+        for init in structLit.Initializers {
+            if init.IsDeclarationInitializer {
+                continue
+            }
+            if BreakTargetContainsExpression(init.Value, breakSyntax, stepChild) {
+                break
+            }
+            prefixStatements.Add(
+                BoundExpressionStatement(
+                    parent,
+                    BoundStructLiteralExpression(parent, structLit.StructType, ImmutableArray.Create(init))
+                )
+            )
+        }
+    }
+
+    private func ApplyEvaluatedBoundStatementEffectsToSnapshot(
+        snapshot NarrowingJumpState,
+        syntax SyntaxNode,
+        statement BoundStatement,
+        childMinFrame int32,
+        prefixAliases HashSet[VariableSymbol]
+    ) {
+        EnsureClosureAssignedNames(syntax)
+        let aliasesBefore = HashSet[VariableSymbol](prefixAliases)
+        let collector = NewCollector(AssignmentPreservesNarrowing, aliasesBefore)
+        collector.VisitStatement(statement)
+        let dropAllMemberPaths = SyntaxMayMutateMemberPaths(statement.Syntax ?? syntax) ||
+            collector.MayMutateMemberPaths
+        let filterWrites = EnclosingFilterWrites(syntax, collector)
+        for entry in snapshot.NarrowedVariables.ToArray() {
+            let key = entry.Key
+            if snapshot.NarrowingFrameIndices.TryGetValue(key, out var frameIndex) && frameIndex >= childMinFrame {
+                continue
+            }
+            let drop = (
+                filterWrites != nil &&
+                    (FilterWritesVariable(filterWrites, key.Root) || MayBeMutatedByUnknownCallable(key))
+            ) ||
+                StatementKillsPath(collector, key, dropAllMemberPaths, collector.MayMutateReferenceStorage)
+            if drop {
+                snapshot.RemoveNarrowing(key)
+            }
+        }
+        prefixAliases.Clear()
+        for alias in collector.DefinitelyExternalFunctionValues {
+            prefixAliases.Add(alias)
+        }
+        let updatedSnapshotAliases = HashSet[VariableSymbol](snapshot.ExternalCallableAliases)
+        updatedSnapshotAliases.IntersectWith(prefixAliases)
+        snapshot.ReplaceExternalCallableAliases(updatedSnapshotAliases)
     }
 
     private func EnumerateEvaluatedPrefixesBeforeChild(parent SyntaxNode, child SyntaxNode) List[

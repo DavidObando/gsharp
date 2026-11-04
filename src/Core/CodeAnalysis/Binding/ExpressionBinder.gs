@@ -297,11 +297,86 @@ internal partial class ExpressionBinder {
         let result = BindExpressionWithTargetTypeCore(syntax, targetType)
         if !(result is BoundErrorExpression) {
             result.AnchorSyntax(syntax)
-            if binderCtx.LoopStack.Count > 0 {
-                binderCtx.BoundExpressionsInLoop[syntax] = result
-            }
+            RecordBoundExpressionInLoop(syntax, result)
         }
         return result
+    }
+
+    internal func RecordBoundExpressionInLoop(syntax SyntaxNode, result BoundExpression) {
+        if binderCtx.LoopStack.Count == 0 || result is BoundErrorExpression {
+            return
+        }
+        binderCtx.BoundExpressionsInLoop[syntax] = result
+        if TryGetFinalizedCallArguments(result, out var arguments) {
+            for arg in arguments {
+                if !(arg is BoundErrorExpression) && UnwrapOriginalArgumentSyntax(arg) is {} argSyntax {
+                    binderCtx.BoundExpressionsInLoop[argSyntax] = arg
+                }
+            }
+        }
+    }
+
+    private func TryGetFinalizedCallArguments(
+        expression BoundExpression,
+        out arguments ImmutableArray[BoundExpression]
+    ) bool {
+        switch expression {
+            case callOp is BoundCallOperationExpression {
+                arguments = callOp.Arguments
+                return true
+            }
+            case ctorCall is BoundConstructorCallExpression {
+                arguments = ctorCall.Arguments
+                return true
+            }
+            case clrCtorCall is BoundClrConstructorCallExpression {
+                arguments = clrCtorCall.Arguments
+                return true
+            }
+            case indexExpr is BoundIndexExpression {
+                arguments = indexExpr.Indices
+                return true
+            }
+            case clrIndexExpr is BoundClrIndexExpression {
+                arguments = clrIndexExpr.Arguments
+                return true
+            }
+            default {
+                arguments = ImmutableArray[BoundExpression].Empty
+                return false
+            }
+        }
+    }
+
+    private func UnwrapOriginalArgumentSyntax(expression BoundExpression) SyntaxNode? {
+        var current = expression
+        while true {
+            if current.ImplicitConversionOperand is {} implicitOperand {
+                current = implicitOperand
+                continue
+            }
+            if current is BoundConversionExpression conversion && !object.ReferenceEquals(
+                conversion.Expression,
+                current
+            ) {
+                current = conversion.Expression
+                continue
+            }
+            if current is BoundClrConversionCallExpression clrConversion && !object.ReferenceEquals(
+                clrConversion.Source,
+                current
+            ) {
+                current = clrConversion.Source
+                continue
+            }
+            if current is BoundCallExpression{Function: var fn, Arguments: {Length: 1} args} &&
+                (fn.Name == "op_Implicit" || fn.Name == "op_Explicit") &&
+                !object.ReferenceEquals(args[0], current) {
+                current = args[0]
+                continue
+            }
+            return current.Syntax
+        }
     }
 
     private func BindExpressionWithTargetTypeCore(syntax ExpressionSyntax, targetType TypeSymbol) BoundExpression {
@@ -432,9 +507,7 @@ internal partial class ExpressionBinder {
         // re-binds and duplicated diagnostics.
         if !(result is BoundErrorExpression) {
             result.AnchorSyntax(syntax)
-            if binderCtx.LoopStack.Count > 0 {
-                binderCtx.BoundExpressionsInLoop[syntax] = result
-            }
+            RecordBoundExpressionInLoop(syntax, result)
         }
         return result
     }

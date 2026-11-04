@@ -80,9 +80,7 @@ internal partial class ExpressionBinder {
         } else {
             BindAccessorStepOnReceiver(receiver, classSymbol, rightPart, receiverSyntax, receiverStart)
         }
-        if binderCtx.LoopStack.Count > 0 && !(result is BoundErrorExpression) {
-            binderCtx.BoundExpressionsInLoop[rightPart] = result
-        }
+        RecordBoundExpressionInLoop(rightPart, result)
         return result
     }
 

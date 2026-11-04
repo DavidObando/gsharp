@@ -492,8 +492,49 @@ func RunImplicitConversion(value Token) int32 {
     }
     return g.Length
 }
+class MutatingInitClass {
+    var Init int32 = Clear()
+    var Value int32
+}
+class MutatingBag : System.Collections.IEnumerable {
+    func Add(x int32) {
+        g = nil
+    }
+    func GetEnumerator() System.Collections.IEnumerator {
+        throw NotImplementedException()
+    }
+}
+func RunClassLiteralInit() int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let ignored = MutatingInitClass{
+            Value: ({
+                break
+                0
+            })
+        }
+    }
+    return g.Length
+}
+func RunCollectionAdd() int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let ignored = MutatingBag(){
+            1,
+            ({
+                break
+                0
+            })
+        }
+    }
+    return g.Length
+}
 var g string? = "ok"
-Console.WriteLine(RunAdd() + RunAnd() + RunLabeledOr() + RunChainedCall(Box()) + RunNestedLambdaLoop() + RunImplicitConversion(Token{}))`, "GS0158@27:14 GS0158@39:14 GS0158@53:14 GS0158@65:14 GS0158@89:14 GS0158@101:14", "reject", ""}
+Console.WriteLine(RunAdd() + RunAnd() + RunLabeledOr() + RunChainedCall(Box()) + RunNestedLambdaLoop() + RunImplicitConversion(Token{}) + RunClassLiteralInit() + RunCollectionAdd())`, "GS0158@27:14 GS0158@39:14 GS0158@53:14 GS0158@65:14 GS0158@89:14 GS0158@101:14 GS0158@127:14 GS0158@142:14", "reject", ""}
             yield[]object{"control8_interpolation_and_reassigned_callable_before_break", `import System
 class C {
     var Value int32 = 1
@@ -521,6 +562,7 @@ func RunInterpolation() int32 {
     }
     return x.Value
 }
+func TakeThree(a int32, b int32, c int32) int32 { return a + b + c }
 func RunCallableReassignedAfterCall(cb () -> int32) int32 {
     var s string? = "ok"
     var f () -> int32 = () -> {
@@ -539,8 +581,54 @@ func RunCallableReassignedAfterCall(cb () -> int32) int32 {
     }
     return s.Length
 }
+func RunCallableReassignedInSiblingArgument(cb () -> int32) int32 {
+    var s string? = "ok"
+    var f () -> int32 = () -> {
+        s = nil
+        return 1
+    }
+    while true {
+        if s == nil {
+            return 0
+        }
+        let ignored = TakeThree(f(), {
+            f = cb
+            0
+        }, {
+            break
+            0
+        })
+    }
+    return s.Length
+}
 var cleaner () -> void = func() { }
-Console.WriteLine(RunInterpolation() + RunCallableReassignedAfterCall(() -> 1))`, "GS0158@26:14 GS0158@44:14", "reject", ""}
+Console.WriteLine(RunInterpolation() + RunCallableReassignedAfterCall(() -> 1) + RunCallableReassignedInSiblingArgument(() -> 1))`, "GS0158@26:14 GS0158@45:14 GS0158@65:14", "reject", ""}
+            yield[]object{"control9_identity_overload_selected_over_mutating_conversion_preserves_fact", `import System
+struct Token {
+    var Value int32
+    shared {
+        func operator implicit(t Token) int32 {
+            g = nil
+            return t.Value
+        }
+    }
+}
+func TakeOverloaded(t Token, x int32) int32 { return t.Value + x }
+func TakeOverloaded(a int32, x int32) int32 { return a + x }
+func RunIdentityOverload(token Token) int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let ignored = TakeOverloaded(token, {
+            break
+            0
+        })
+    }
+    return g.Length
+}
+var g string? = "ok"
+Console.WriteLine(RunIdentityOverload(Token{Value: 1}))`, "", "run", "2"}
             yield[]object{"control7_killed_branch_and_loop_condition_facts_not_replayed_on_break", `import System
 func Get() string? { return "ok" }
 func RunShortCircuitKilled() int32 {

@@ -327,16 +327,6 @@ internal class ConversionClassifier {
             // implementation builds calls or chains through other conversions.
             result.ImplicitConversionOperand = expression
         }
-        if binderCtx.LoopStack.Count > 0 && !(result is BoundErrorExpression) && !object.ReferenceEquals(
-            result,
-            expression
-        ) &&
-            expression.Syntax is {} exprSyntax {
-            if result.Syntax == nil {
-                result.AnchorSyntax(exprSyntax)
-            }
-            binderCtx.BoundExpressionsInLoop[exprSyntax] = result
-        }
         return result
     }
 
@@ -1863,26 +1853,6 @@ internal class ConversionClassifier {
     /// argument carrying the user-defined conversion call.
     /// @returns Whether a user-defined implicit conversion was applied.
     func TryApplyUserDefinedImplicitArgumentConversion(
-        argument BoundExpression,
-        expectedType TypeSymbol?,
-        out converted BoundExpression
-    ) bool {
-        let applied = TryApplyUserDefinedImplicitArgumentConversionCore(argument, expectedType, out converted)
-        if applied &&
-            binderCtx
-            .LoopStack
-            .Count > 0 &&
-            !(converted is BoundErrorExpression) &&
-            argument.Syntax is {} argSyntax {
-            if converted.Syntax == nil {
-                converted.AnchorSyntax(argSyntax)
-            }
-            binderCtx.BoundExpressionsInLoop[argSyntax] = converted
-        }
-        return applied
-    }
-
-    private func TryApplyUserDefinedImplicitArgumentConversionCore(
         argument BoundExpression,
         expectedType TypeSymbol?,
         out converted BoundExpression
