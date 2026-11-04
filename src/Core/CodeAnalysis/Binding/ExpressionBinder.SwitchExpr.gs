@@ -448,7 +448,10 @@ internal partial class ExpressionBinder {
                 }
                 // Two arms join as a conditional does; more join as a switch does. An all-`nil`
                 // column stays `TypeSymbol.Null` so an outer arm or target can still resolve it.
-                let element TypeSymbol? = if column.All((t TypeSymbol) -> t == TypeSymbol.Null) {
+                let element TypeSymbol? = if column.All(
+                    (t TypeSymbol) -> t == TypeSymbol.Null || t == TypeSymbol.Never
+                ) &&
+                    column.Any((t TypeSymbol) -> t == TypeSymbol.Null) {
                     TypeSymbol.Null
                 } else if column.Count == 2 {
                     ComputeConditionalResultType(column[0], column[1], nil)

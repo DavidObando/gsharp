@@ -1326,21 +1326,36 @@ internal partial class StatementBinder {
             Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, rawTupleType.Arity)
             return BoundExpressionStatement(syntax, tupleValue)
         }
-        let tupleType = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(rawTupleType))
-        tupleValue = conversions.BindConversion(valueSyntax.Location, tupleValue, tupleType)
-        let (tupleTemp, tupleElements) = CreateTupleDeconstructionPlan(valueSyntax, tupleType)
         let captures = ImmutableArray.CreateBuilder[BoundStatement]()
-        let plans = ImmutableArray.CreateBuilder[MultiAssignmentTargetPlan](targets.Length)
+        let sources = [targets.Length]LocalVariableSymbol?
+        let rawPlans = [targets.Length]MultiAssignmentTargetPlan
+        let resolvedElements = ImmutableArray.CreateBuilder[TypeSymbol](targets.Length)
         for var i = 0; i < targets.Length; i++ {
+            let rawElement = rawTupleType.ElementTypes[i]
             if IsDiscardTarget(targets[i]) {
-                plans.Add(MultiAssignmentTargetPlan(assignedValue: nil, createWrite: nil))
+                rawPlans[i] = MultiAssignmentTargetPlan(assignedValue: nil, createWrite: nil)
+                resolvedElements.Add(
+                    if rawElement == TypeSymbol.Null {
+                        cast[TypeSymbol](NullableTypeSymbol.Get(TypeSymbol.Object))
+                    } else {
+                        TupleTypeSymbol.ResolveNilElements(rawElement)
+                    }
+                )
                 continue
             }
             if targets[i] is MultiAssignmentDeclarationExpressionSyntax declaration {
-                plans.Add(MultiAssignmentTargetPlan(tupleElements[i], createWrite: nil, declaration))
+                rawPlans[i] = MultiAssignmentTargetPlan(assignedValue: nil, createWrite: nil, declaration)
+                resolvedElements.Add(
+                    if rawElement == TypeSymbol.Null {
+                        cast[TypeSymbol](NullableTypeSymbol.Get(TypeSymbol.Object))
+                    } else {
+                        TupleTypeSymbol.ResolveNilElements(rawElement)
+                    }
+                )
                 continue
             }
-            let source = DeclareMultiAssignmentTemp("element$i", tupleType.ElementTypes[i])
+            let source = DeclareMultiAssignmentTemp("element$i", rawElement)
+            sources[i] = source
             let sourceToken = SyntaxToken(
                 syntax.SyntaxTree,
                 SyntaxKind.IdentifierToken,
@@ -1349,11 +1364,43 @@ internal partial class StatementBinder {
                 source.Name
             )
             let sourceSyntax = NameExpressionSyntax(syntax.SyntaxTree, sourceToken)
-            var plan = BindMultiAssignmentTarget(targets[i], sourceSyntax, syntax.OperatorToken, captures)
-            if plan.AssignedValue != nil {
-                plan = plan.WithAssignedValue(
+            let plan = BindMultiAssignmentTarget(targets[i], sourceSyntax, syntax.OperatorToken, captures)
+            rawPlans[i] = plan
+            if rawElement == TypeSymbol.Null &&
+                plan.AssignedValue is {Type: var targetElementType} &&
+                targetElementType != TypeSymbol.Error &&
+                !TypeSymbol.ContainsNullLiteralType(targetElementType) {
+                resolvedElements.Add(targetElementType)
+            } else if rawElement == TypeSymbol.Null {
+                resolvedElements.Add(NullableTypeSymbol.Get(TypeSymbol.Object))
+            } else {
+                resolvedElements.Add(TupleTypeSymbol.ResolveNilElements(rawElement))
+            }
+        }
+        let tupleType = if rawTupleType.HasNames {
+            TupleTypeSymbol.Get(resolvedElements.MoveToImmutable(), rawTupleType.ElementNames)
+        } else {
+            TupleTypeSymbol.Get(resolvedElements.MoveToImmutable())
+        }
+        tupleValue = conversions.BindConversion(valueSyntax.Location, tupleValue, tupleType)
+        let (tupleTemp, tupleElements) = CreateTupleDeconstructionPlan(valueSyntax, tupleType)
+        let plans = ImmutableArray.CreateBuilder[MultiAssignmentTargetPlan](targets.Length)
+        for var i = 0; i < targets.Length; i++ {
+            var plan = rawPlans[i]
+            if plan.Declaration != nil {
+                plans.Add(MultiAssignmentTargetPlan(tupleElements[i], createWrite: nil, plan.Declaration))
+                continue
+            }
+            if plan.AssignedValue != nil && sources[i] is {} source {
+                let replacement = if plan.AssignedValue is BoundConversionExpression{
+                    Expression: BoundVariableExpression v
+                } conv &&
+                    object.ReferenceEquals(v.Variable, source) && conv.Type == tupleElements[i].Type {
+                    tupleElements[i]
+                } else {
                     MultiAssignmentTupleElementRewriter(source, tupleElements[i]).Replace(plan.AssignedValue)
-                )
+                }
+                plan = plan.WithAssignedValue(replacement)
             }
             plans.Add(plan)
         }
