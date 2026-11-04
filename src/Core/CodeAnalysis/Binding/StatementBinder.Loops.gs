@@ -911,6 +911,10 @@ internal partial class StatementBinder {
             Diagnostics.ReportLockTargetMustBeReferenceType(syntax.Expression.Location, target.Type ?? TypeSymbol.Error)
             return BindErrorStatement()
         }
+        if target.Type is NullableTypeSymbol nullableLockTarget {
+            Diagnostics.ReportCannotConvert(syntax.Expression.Location, target.Type, nullableLockTarget.UnderlyingType)
+            return BindErrorStatement()
+        }
         let tempVar = LocalVariableSymbol(
             "$$lock$$target$$${binderCtx.SyntheticLocalCounter++}",
             isReadOnly: true,
@@ -990,12 +994,12 @@ internal partial class StatementBinder {
             bindIteration: func () BoundStatement {
                 $scope = BoundScope(headerParentScope)
                 try {
-                    condition = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool)
                     let boundBody = Invariant.Required(
                         BindStatement(bodySyntax),
                         "a loop body has a bound statement",
                         expression: "BindStatement(bodySyntax)"
                     )
+                    condition = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool)
                     return boundBody
                 } finally {
                     $scope = headerParentScope
@@ -1036,7 +1040,7 @@ internal partial class StatementBinder {
             if NarrowingComparison.LoopsEnabled {
                 ReportBackwardJumpSpan(syntax)
             }
-            let userLabel = DefineUserLabel(labelName, syntax.LabelIdentifier.Location)
+            let userLabel = DefineUserLabel(labelName, syntax.LabelIdentifier.Location, syntax)
             let boundInner = BindStatement(inner)
             let labeledStatement = BoundBlockStatement(
                 syntax,
@@ -1243,7 +1247,7 @@ internal partial class StatementBinder {
             return type!!.ClrType == nil || !type!!.ClrType!!.IsValueType
         }
 
-        private func IsLabelableLoop(stmt StatementSyntax) bool {
+        internal func IsLabelableLoop(stmt SyntaxNode) bool {
             return switch stmt.Kind {
                 case SyntaxKind.WhileLetStatement: true
                 case SyntaxKind.WhileStatement: true

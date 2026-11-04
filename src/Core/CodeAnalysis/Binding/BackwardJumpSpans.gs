@@ -21,7 +21,8 @@ internal sealed class BackwardJumpSpan {
         firstIndex int32,
         lastIndex int32,
         labels List[string],
-        gotoCount int32
+        gotoCount int32,
+        targetedLabels List[string]? = nil
     ) {
         Owner = owner
         StatementList = statements
@@ -29,9 +30,10 @@ internal sealed class BackwardJumpSpan {
         LastIndex = lastIndex
         Labels = labels
         GotoCount = gotoCount
+        TargetedLabels = targetedLabels ?? labels
     }
 
-    /// Gets the block statement or block expression that holds the statement list of the span.
+    /// Gets the block statement, block expression or compilation unit that holds the statement list of the span.
     prop Owner SyntaxNode {
         get;
     }
@@ -49,11 +51,14 @@ internal sealed class BackwardJumpSpan {
         if index < StatementList.Length {
             return StatementList[index]
         }
-        return Invariant.Required(
-            cast[BlockExpressionSyntax](Owner).Expression,
-            "a span index past the statements names the trailing expression",
-            expression: "Owner.Expression"
-        )
+        if Owner is BlockExpressionSyntax blockOwner {
+            return Invariant.Required(
+                blockOwner.Expression,
+                "a span index past the statements names the trailing expression",
+                expression: "Owner.Expression"
+            )
+        }
+        return Owner
     }
 
     /// Gets the index of the first statement of the span in the list.
@@ -68,6 +73,11 @@ internal sealed class BackwardJumpSpan {
 
     /// Gets the labels inside the span, in source order. Every one is a participant.
     prop Labels List[string] {
+        get;
+    }
+
+    /// Gets the participant labels that at least one participant `goto` targets.
+    prop TargetedLabels List[string] {
         get;
     }
 
@@ -165,6 +175,21 @@ internal shared class BackwardJumpSpans {
         }
     }
 
+    private sealed class TrySite {
+        init(statement TryStatementSyntax, startPosition int32) {
+            Statement = statement
+            StartPosition = startPosition
+        }
+
+        prop Statement TryStatementSyntax {
+            get;
+        }
+
+        prop StartPosition int32 {
+            get;
+        }
+    }
+
     /// Computes the span of a function body, or `nil` when the body has no participant backward
     /// `goto`.
     func Compute(body BlockStatementSyntax) BackwardJumpSpan? -> Compute(cast[SyntaxNode](body))
@@ -175,8 +200,35 @@ internal shared class BackwardJumpSpans {
         let labels = List[LabelSite]()
         let gotos = List[GotoSite]()
         let path = List[Step]()
-        let tries = List[TryStatementSyntax]()
-        Collect(body, path, tries, false, labels, gotos)
+        let tries = List[TrySite]()
+        let visitCounter = List[int32]()
+        visitCounter.Add(0)
+        if body is ExpressionSyntax && body !is BlockExpressionSyntax {
+            path.Add(Step(body, ImmutableArray[StatementSyntax].Empty, 0))
+            Collect(body, path, tries, false, labels, gotos, visitCounter)
+            path.RemoveAt(path.Count - 1)
+        } else {
+            Collect(body, path, tries, false, labels, gotos, visitCounter)
+        }
+        return BuildSpan(labels, gotos)
+    }
+
+    /// Computes the span of a combined top-level statement list across one or more syntax trees.
+    func Compute(owner SyntaxNode, topStatements ImmutableArray[StatementSyntax]) BackwardJumpSpan? {
+        if topStatements.Length == 0 {
+            return nil
+        }
+        let labels = List[LabelSite]()
+        let gotos = List[GotoSite]()
+        let path = List[Step]()
+        let tries = List[TrySite]()
+        let visitCounter = List[int32]()
+        visitCounter.Add(0)
+        CollectList(owner, topStatements, path, tries, false, labels, gotos, visitCounter)
+        return BuildSpan(labels, gotos)
+    }
+
+    private func BuildSpan(labels List[LabelSite], gotos List[GotoSite]) BackwardJumpSpan? {
         if gotos.Count == 0 {
             return nil
         }
@@ -259,7 +311,13 @@ internal shared class BackwardJumpSpans {
                 spanLabels.Add(label.Name)
             }
         }
-        return BackwardJumpSpan(owner, statements, first, last, spanLabels, backward.Count)
+        let targetedLabels = List[string]()
+        for site in gotos {
+            if site.Participates && spanLabels.Contains(site.Name) && !targetedLabels.Contains(site.Name) {
+                targetedLabels.Add(site.Name)
+            }
+        }
+        return BackwardJumpSpan(owner, statements, first, last, spanLabels, backward.Count, targetedLabels)
     }
 
     // A label does not change what its statement does: `Again: return 0` ends the path.
@@ -268,12 +326,141 @@ internal shared class BackwardJumpSpans {
         while node is LabeledStatementSyntax labeled {
             node = labeled.Statement
         }
-        return node.Kind == SyntaxKind.BreakStatement ||
-            node.Kind == SyntaxKind.ContinueStatement ||
-            node.Kind == SyntaxKind.ReturnStatement ||
-            node.Kind == SyntaxKind.ThrowStatement ||
-            node.Kind == SyntaxKind.RethrowStatement ||
-            node.Kind == SyntaxKind.GotoStatement
+        switch node.Kind {
+            case SyntaxKind.BreakStatement,
+            SyntaxKind.ContinueStatement,
+            SyntaxKind.ReturnStatement,
+            SyntaxKind.ThrowStatement,
+            SyntaxKind.RethrowStatement,
+            SyntaxKind.GotoStatement {
+                return true
+            }
+            case SyntaxKind.BlockStatement {
+                let block = cast[BlockStatementSyntax](node)
+                return block
+                    .Statements
+                    .Length > 0 &&
+                    !ContainsUserLabel(block) &&
+                    IsUnconditionalExit(block.Statements[block.Statements.Length - 1])
+            }
+            case SyntaxKind.IfStatement {
+                let ifStatement = cast[IfStatementSyntax](node)
+                return ifStatement.ElseClause != nil &&
+                    !ContainsUserLabel(ifStatement) &&
+                    IsUnconditionalExit(ifStatement.ThenStatement) &&
+                    IsUnconditionalExit(ifStatement.ElseClause.ElseStatement)
+            }
+            case SyntaxKind.ForInfiniteStatement {
+                let loop = cast[ForInfiniteStatementSyntax](node)
+                return !ContainsUserLabel(loop.Body) && !ContainsBreakForLoop(loop.Body)
+            }
+            case SyntaxKind.SwitchStatement {
+                let switchStatement = cast[SwitchStatementSyntax](node)
+                if ContainsUserLabel(switchStatement) || ContainsBreakForSwitch(switchStatement) {
+                    return false
+                }
+                var hasDefaultOrDiscard = false
+                for arm in switchStatement.Cases {
+                    if arm.IsDefault || (arm.Guard == nil && arm.Value is DiscardPatternSyntax) {
+                        hasDefaultOrDiscard = true
+                    }
+                    if !IsUnconditionalExit(arm.Body) {
+                        return false
+                    }
+                }
+                return hasDefaultOrDiscard
+            }
+            case SyntaxKind.TryStatement {
+                return FinallyCannotComplete(cast[TryStatementSyntax](node))
+            }
+            default {
+                return false
+            }
+        }
+    }
+
+    private func ContainsUserLabel(node SyntaxNode) bool {
+        if IsFunctionLike(node) {
+            return false
+        }
+        if node is LabeledStatementSyntax labeled && !StatementBinder.IsLabelableLoop(labeled.Statement) {
+            return true
+        }
+        for child in node.GetChildren() {
+            if ContainsUserLabel(child) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func ContainsBreakForLoop(
+        node SyntaxNode,
+        inNestedLoopOrSwitch bool = false,
+        innerLoopLabels List[string]? = nil
+    ) bool {
+        if IsFunctionLike(node) {
+            return false
+        }
+        if node is BreakStatementSyntax breakStatement {
+            if breakStatement.LabelIdentifier == nil {
+                return !inNestedLoopOrSwitch
+            }
+            let target = breakStatement.LabelIdentifier.ValueText
+            return innerLoopLabels == nil || !innerLoopLabels.Contains(target)
+        }
+        var nextLabels = innerLoopLabels
+        if node is LabeledStatementSyntax labeled && StatementBinder.IsLabelableLoop(labeled.Statement) {
+            let copy = if innerLoopLabels == nil {
+                List[string]()
+            } else {
+                List[string](innerLoopLabels)
+            }
+            copy.Add(labeled.LabelIdentifier.ValueText)
+            nextLabels = copy
+        }
+        let nested = inNestedLoopOrSwitch || StatementBinder.IsLabelableLoop(node) || node is SwitchStatementSyntax
+        for child in node.GetChildren() {
+            if ContainsBreakForLoop(child, nested, nextLabels) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func ContainsBreakForSwitch(
+        node SyntaxNode,
+        inNestedLoopOrSwitch bool = false,
+        innerLoopLabels List[string]? = nil
+    ) bool {
+        if IsFunctionLike(node) {
+            return false
+        }
+        if node is BreakStatementSyntax breakStatement {
+            if breakStatement.LabelIdentifier == nil {
+                return !inNestedLoopOrSwitch
+            }
+            let target = breakStatement.LabelIdentifier.ValueText
+            return innerLoopLabels == nil || !innerLoopLabels.Contains(target)
+        }
+        var nextLabels = innerLoopLabels
+        if node is LabeledStatementSyntax labeled && StatementBinder.IsLabelableLoop(labeled.Statement) {
+            let copy = if innerLoopLabels == nil {
+                List[string]()
+            } else {
+                List[string](innerLoopLabels)
+            }
+            copy.Add(labeled.LabelIdentifier.ValueText)
+            nextLabels = copy
+        }
+        for child in node.GetChildren() {
+            let childNested = inNestedLoopOrSwitch || StatementBinder.IsLabelableLoop(child) ||
+                child is SwitchStatementSyntax
+            if ContainsBreakForSwitch(child, childNested, nextLabels) {
+                return true
+            }
+        }
+        return false
     }
 
     private func IsFunctionLike(node SyntaxNode) bool -> node.Kind == SyntaxKind.FunctionLiteralExpression ||
@@ -294,55 +481,251 @@ internal shared class BackwardJumpSpans {
         owner SyntaxNode,
         statements ImmutableArray[StatementSyntax],
         path List[Step],
-        tries List[TryStatementSyntax],
+        tries List[TrySite],
         dead bool,
         labels List[LabelSite],
-        gotos List[GotoSite]
-    ) {
+        gotos List[GotoSite],
+        visitCounter List[int32]
+    ) bool {
         var deadHere = dead
         for var i = 0; i < statements.Length; i++ {
             let statement = statements[i]
-            if statement.Kind == SyntaxKind.LabeledStatement {
+            if statement is LabeledStatementSyntax labeledStatement && !StatementBinder.IsLabelableLoop(
+                labeledStatement.Statement
+            ) {
                 deadHere = false
             }
+            let labelsBefore = labels.Count
             path.Add(Step(owner, statements, i))
-            Collect(statement, path, tries, deadHere, labels, gotos)
+            Collect(statement, path, tries, deadHere, labels, gotos, visitCounter)
             path.RemoveAt(path.Count - 1)
+            if labels.Count > labelsBefore {
+                deadHere = false
+            }
             if IsUnconditionalExit(statement) {
                 deadHere = true
             }
         }
+        return deadHere
     }
 
     private func Collect(
         node SyntaxNode,
         path List[Step],
-        tries List[TryStatementSyntax],
+        tries List[TrySite],
         dead bool,
         labels List[LabelSite],
-        gotos List[GotoSite]
+        gotos List[GotoSite],
+        visitCounter List[int32]
     ) {
+        if node is CompilationUnitSyntax unit {
+            let topStatements = unit
+                .Members
+                .OfType[GlobalStatementSyntax]()
+                .Select((globalStatement GlobalStatementSyntax) -> globalStatement.Statement)
+                .ToImmutableArray()
+            if topStatements.Length > 0 {
+                let _ = CollectList(unit, topStatements, path, tries, dead, labels, gotos, visitCounter)
+            }
+            return
+        }
         if node is BlockStatementSyntax block {
-            CollectList(block, block.Statements, path, tries, dead, labels, gotos)
+            let _ = CollectList(block, block.Statements, path, tries, dead, labels, gotos, visitCounter)
             return
         }
         if node is BlockExpressionSyntax blockExpression {
-            CollectList(blockExpression, blockExpression.Statements, path, tries, dead, labels, gotos)
+            let tailDead = CollectList(
+                blockExpression,
+                blockExpression.Statements,
+                path,
+                tries,
+                dead,
+                labels,
+                gotos,
+                visitCounter
+            )
             let tail = blockExpression.Expression
             if tail != nil {
                 // The trailing expression follows the statements in the same list, so it has a step of its own.
                 path.Add(Step(blockExpression, blockExpression.Statements, blockExpression.Statements.Length))
-                Collect(tail, path, tries, dead, labels, gotos)
+                Collect(tail, path, tries, tailDead, labels, gotos, visitCounter)
                 path.RemoveAt(path.Count - 1)
             }
             return
         }
+        if node is IfStatementSyntax ifStatement {
+            var branchDead = dead
+            let labelsBeforeHeader = labels.Count
+            if ifStatement.Initializer != nil {
+                Collect(ifStatement.Initializer, path, tries, branchDead, labels, gotos, visitCounter)
+                if labels.Count > labelsBeforeHeader {
+                    branchDead = false
+                }
+            }
+            Collect(ifStatement.Condition, path, tries, branchDead, labels, gotos, visitCounter)
+            if labels.Count > labelsBeforeHeader {
+                branchDead = false
+            }
+            Collect(ifStatement.ThenStatement, path, tries, branchDead, labels, gotos, visitCounter)
+            if ifStatement.ElseClause != nil {
+                Collect(ifStatement.ElseClause.ElseStatement, path, tries, branchDead, labels, gotos, visitCounter)
+            }
+            return
+        }
+        if node is IfExpressionSyntax ifExpression {
+            var branchDead = dead
+            let labelsBeforeHeader = labels.Count
+            if ifExpression.Initializer != nil {
+                Collect(ifExpression.Initializer, path, tries, branchDead, labels, gotos, visitCounter)
+                if labels.Count > labelsBeforeHeader {
+                    branchDead = false
+                }
+            }
+            Collect(ifExpression.Condition, path, tries, branchDead, labels, gotos, visitCounter)
+            if labels.Count > labelsBeforeHeader {
+                branchDead = false
+            }
+            Collect(ifExpression.ThenBlock, path, tries, branchDead, labels, gotos, visitCounter)
+            if ifExpression.ElseExpression != nil {
+                Collect(ifExpression.ElseExpression, path, tries, branchDead, labels, gotos, visitCounter)
+            }
+            return
+        }
+        if node is ConditionalExpressionSyntax conditionalExpression {
+            var branchDead = dead
+            let labelsBeforeCondition = labels.Count
+            Collect(conditionalExpression.Condition, path, tries, branchDead, labels, gotos, visitCounter)
+            if labels.Count > labelsBeforeCondition {
+                branchDead = false
+            }
+            Collect(conditionalExpression.WhenTrue, path, tries, branchDead, labels, gotos, visitCounter)
+            Collect(conditionalExpression.WhenFalse, path, tries, branchDead, labels, gotos, visitCounter)
+            return
+        }
+        if node is SwitchStatementSyntax switchStatement {
+            var armDead = dead
+            let labelsBeforeDiscriminant = labels.Count
+            Collect(switchStatement.Expression, path, tries, armDead, labels, gotos, visitCounter)
+            if labels.Count > labelsBeforeDiscriminant {
+                armDead = false
+            }
+            let headerVisited = [switchStatement.Cases.Length]bool
+            var seenDefault = false
+            var priorFallthroughReachable = false
+            for var caseIndex = 0; caseIndex < switchStatement.Cases.Length; caseIndex++ {
+                let arm = switchStatement.Cases[caseIndex]
+                if arm.IsDefault {
+                    if !seenDefault {
+                        seenDefault = true
+                        for var later = caseIndex + 1; later < switchStatement.Cases.Length; later++ {
+                            let laterArm = switchStatement.Cases[later]
+                            if laterArm.IsDefault {
+                                continue
+                            }
+                            headerVisited[later] = true
+                            let beforeHeader = labels.Count
+                            if laterArm.Value != nil {
+                                Collect(laterArm.Value, path, tries, armDead, labels, gotos, visitCounter)
+                            }
+                            if laterArm.Guard != nil {
+                                Collect(laterArm.Guard, path, tries, armDead, labels, gotos, visitCounter)
+                            }
+                            if labels.Count > beforeHeader {
+                                armDead = false
+                            }
+                        }
+                    }
+                } else if !headerVisited[caseIndex] {
+                    headerVisited[caseIndex] = true
+                    let beforeHeader = labels.Count
+                    if arm.Value != nil {
+                        Collect(arm.Value, path, tries, armDead, labels, gotos, visitCounter)
+                    }
+                    if arm.Guard != nil {
+                        Collect(arm.Guard, path, tries, armDead, labels, gotos, visitCounter)
+                    }
+                    if labels.Count > beforeHeader {
+                        armDead = false
+                    }
+                }
+                let bodyDead = armDead && !priorFallthroughReachable
+                let beforeBody = labels.Count
+                Collect(arm.Body, path, tries, bodyDead, labels, gotos, visitCounter)
+                let bodyReached = !bodyDead || labels.Count > beforeBody
+                let endsInFallthrough = arm
+                    .Body
+                    .Statements
+                    .Length > 0 &&
+                    arm
+                    .Body
+                    .Statements[arm.Body.Statements.Length - 1] is FallthroughStatementSyntax
+                priorFallthroughReachable = bodyReached && endsInFallthrough
+            }
+            return
+        }
+        if node is SwitchExpressionSyntax switchExpression {
+            var armDead = dead
+            let labelsBeforeDiscriminant = labels.Count
+            Collect(switchExpression.Expression, path, tries, armDead, labels, gotos, visitCounter)
+            if labels.Count > labelsBeforeDiscriminant {
+                armDead = false
+            }
+            let headerVisited = [switchExpression.Arms.Length]bool
+            var seenDefault = false
+            for var armIndex = 0; armIndex < switchExpression.Arms.Length; armIndex++ {
+                let arm = switchExpression.Arms[armIndex]
+                if arm.IsDefault {
+                    if !seenDefault {
+                        seenDefault = true
+                        for var later = armIndex + 1; later < switchExpression.Arms.Length; later++ {
+                            let laterArm = switchExpression.Arms[later]
+                            if laterArm.IsDefault {
+                                continue
+                            }
+                            headerVisited[later] = true
+                            let beforeHeader = labels.Count
+                            if laterArm.Value != nil {
+                                Collect(laterArm.Value, path, tries, armDead, labels, gotos, visitCounter)
+                            }
+                            if laterArm.Guard != nil {
+                                Collect(laterArm.Guard, path, tries, armDead, labels, gotos, visitCounter)
+                            }
+                            if labels.Count > beforeHeader {
+                                armDead = false
+                            }
+                        }
+                    }
+                } else if !headerVisited[armIndex] {
+                    headerVisited[armIndex] = true
+                    let beforeHeader = labels.Count
+                    if arm.Value != nil {
+                        Collect(arm.Value, path, tries, armDead, labels, gotos, visitCounter)
+                    }
+                    if arm.Guard != nil {
+                        Collect(arm.Guard, path, tries, armDead, labels, gotos, visitCounter)
+                    }
+                    if labels.Count > beforeHeader {
+                        armDead = false
+                    }
+                }
+                Collect(arm.Result, path, tries, armDead, labels, gotos, visitCounter)
+            }
+            return
+        }
         if node is LabeledStatementSyntax labeled {
-            labels.Add(LabelSite(labeled.LabelIdentifier.ValueText, labeled.Span.Start, path.ToArray()))
-            Collect(labeled.Statement, path, tries, false, labels, gotos)
+            if !StatementBinder.IsLabelableLoop(labeled.Statement) {
+                let labelPos = visitCounter[0]
+                visitCounter[0] = labelPos + 1
+                labels.Add(LabelSite(labeled.LabelIdentifier.ValueText, labelPos, path.ToArray()))
+                Collect(labeled.Statement, path, tries, false, labels, gotos, visitCounter)
+            } else {
+                Collect(labeled.Statement, path, tries, dead, labels, gotos, visitCounter)
+            }
             return
         }
         if node is GotoStatementSyntax jump {
+            let gotoPos = visitCounter[0]
+            visitCounter[0] = gotoPos + 1
             var participates = !dead
             if participates {
                 let name = jump.LabelIdentifier.ValueText
@@ -354,33 +737,43 @@ internal shared class BackwardJumpSpans {
                     }
                 }
                 for enclosing in tries {
-                    if FinallyCannotComplete(enclosing) &&
+                    if FinallyCannotComplete(enclosing.Statement) &&
                         labelPosition >= 0 &&
-                        (labelPosition < enclosing.Span.Start || labelPosition >= enclosing.Span.End) {
+                        labelPosition < enclosing.StartPosition {
                         participates = false
                     }
                 }
             }
-            gotos.Add(GotoSite(jump.LabelIdentifier.ValueText, jump.Span.Start, path.ToArray(), participates))
+            gotos.Add(GotoSite(jump.LabelIdentifier.ValueText, gotoPos, path.ToArray(), participates))
             return
         }
         if node is TryStatementSyntax tryStatement {
-            tries.Add(tryStatement)
-            Collect(tryStatement.TryBlock, path, tries, dead, labels, gotos)
+            let labelsBeforeTry = labels.Count
+            let tryStart = visitCounter[0]
+            visitCounter[0] = tryStart + 1
+            tries.Add(TrySite(tryStatement, tryStart))
+            Collect(tryStatement.TryBlock, path, tries, dead, labels, gotos, visitCounter)
+            let handlersDead = dead && labels.Count == labelsBeforeTry
             for clause in tryStatement.CatchClauses {
-                Collect(clause.Body, path, tries, dead, labels, gotos)
+                Collect(clause.Body, path, tries, handlersDead, labels, gotos, visitCounter)
             }
             tries.RemoveAt(tries.Count - 1)
             if tryStatement.FinallyClause != nil {
-                Collect(tryStatement.FinallyClause.Body, path, tries, dead, labels, gotos)
+                let finallyDead = handlersDead && labels.Count == labelsBeforeTry
+                Collect(tryStatement.FinallyClause.Body, path, tries, finallyDead, labels, gotos, visitCounter)
             }
             return
         }
+        var deadChild = dead
         for child in node.GetChildren() {
             if IsFunctionLike(child) {
                 continue
             }
-            Collect(child, path, tries, dead, labels, gotos)
+            let labelsBeforeChild = labels.Count
+            Collect(child, path, tries, deadChild, labels, gotos, visitCounter)
+            if labels.Count > labelsBeforeChild {
+                deadChild = false
+            }
         }
     }
 }

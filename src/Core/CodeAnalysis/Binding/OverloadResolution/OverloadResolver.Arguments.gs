@@ -188,10 +188,8 @@ internal partial class OverloadResolver {
         if arg.Type == nil || arg.Type == TypeSymbol.Error {
             return arg
         }
-        // Issue #5635: an element that goes into the array with no conversion keeps the backward `goto` check of a
-        // narrowed read, as a variadic element does (cref:CoerceVariadicElement).
         if arg.Type == elementTypeSymbol {
-            return conversions.DecideNarrowedConversion(location, arg, elementTypeSymbol)
+            return arg
         }
         let conversion = Conversion.Classify(arg.Type, elementTypeSymbol)
         if conversions.TryRejectClrPlatformContainerArgument(
@@ -1123,15 +1121,10 @@ internal partial class OverloadResolver {
             // members are erased: leave the argument untouched. Open element types
             // follow the type-erased model where the emitter boxes as needed.
             if argType == nil || argType == TypeSymbol.Error || elementType is TypeParameterSymbol {
-                // Issue #5635: a narrowed read keeps its backward `goto` check where it goes into the slice.
-                return conversions.DecideNarrowedConversion(
-                    location,
-                    Invariant.Required(argument, "a finalized call argument remains bound", expression: "argument"),
-                    elementType
-                )
+                return Invariant.Required(argument, "a finalized call argument remains bound", expression: "argument")
             }
             if argType == elementType {
-                return conversions.DecideNarrowedConversion(location, argument, elementType)
+                return argument
             }
             let conversion = Conversion.Classify(argType, elementType)
             if conversion.Exists && (conversion.IsImplicit || conversion.IsIdentity) {

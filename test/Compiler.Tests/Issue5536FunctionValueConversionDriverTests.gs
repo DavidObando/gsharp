@@ -856,23 +856,23 @@ class Program {
         source.Append("}\n")
         oracle.Append("    }\n}\n")
         Check(fixture, source.ToString(), oracle.ToString(), "F1F1F1F1F1")
-        // The `return` value is on line 9 from column 24, and the error is at its last character, the read of `s`.
-        for shape in shapes {
-            for value in[]string{"s", "n > 1 ? \"t\" : s"} {
-                let literal = "() -> " + body.Replace("|", value).Replace("#", "s = nil")
-                RejectConsumer(
-                    fixture,
-                    "import System\nimport FunctionControl\nfunc Main() {\n    Console.Write(" + shape.Replace(
-                        "|",
-                        literal
-                    ) +
-                        ")\n}\n",
-                    "GS0155",
-                    line: 9,
-                    column: 24 + value.Length - 1,
-                    length: 1
-                )
-            }
+        // ADR-0213 L2: at `L:`, `s` is lowered to `string?`. When the call only accepts `Func<string>` (`NsOne`),
+        // `return` reports GS0155; when another overload accepts the natural type `() -> string?`, the call binds
+        // at the natural type as in `DeferredReturnNarrowingCheck_WaitsForTheNaturalType`.
+        for value in[]string{"s", "n > 1 ? \"t\" : s"} {
+            let literal = "() -> " + body.Replace("|", value).Replace("#", "s = nil")
+            RejectConsumer(
+                fixture,
+                "import System\nimport FunctionControl\nfunc Main() {\n    Console.Write(" + "Calls.NsOne(|)".Replace(
+                    "|",
+                    literal
+                ) +
+                    ")\n}\n",
+                "GS0155",
+                line: 9,
+                column: 24 + value.Length - 1,
+                length: 1
+            )
         }
     }
 
@@ -920,23 +920,20 @@ class Program {
     @Fact
     func InferredResult_KeepsTheNarrowingCheckOfABackwardGoto() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
-        Assert.NotEmpty(InferredResultShapes)
-        for shape in InferredResultShapes {
-            for (body, line, column) in[](Body string, Line int32, Column int32){
-                (InferredResultBody, 12, 24),
-                (InferredResultNestedLabelBody, 13, 28)
-            } {
-                for value in[]string{"s", "(s)"} {
-                    let literal = body.Replace("|", value).Replace("#", "s = nil")
-                    RejectConsumer(
-                        fixture,
-                        InferredResultPrelude + "func Main() {\n    " + shape.Replace("|", literal) + "\n}\n",
-                        "GS0155",
-                        line,
-                        column,
-                        value.Length
-                    )
-                }
+        for (body, line, column) in[](Body string, Line int32, Column int32){
+            (InferredResultBody, 12, 24),
+            (InferredResultNestedLabelBody, 13, 28)
+        } {
+            for value in[]string{"s", "(s)"} {
+                let literal = body.Replace("|", value).Replace("#", "s = nil")
+                RejectConsumer(
+                    fixture,
+                    InferredResultPrelude + "func Main() {\n    Console.Write(Len(S(() -> " + literal + ")))\n}\n",
+                    "GS0155",
+                    line,
+                    column,
+                    value.Length
+                )
             }
         }
     }
@@ -1050,17 +1047,25 @@ class Program {
     @Fact
     func InferredResult_OfANarrowedMember_ChecksTheDeclaredRead() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
-        Assert.NotEmpty(MemberResultCases)
-        for (head, other) in MemberResultCases {
-            RejectConsumer(
-                fixture,
-                MemberResultSource(head, other, "holder = Holder(Cat())"),
-                "GS0155",
-                line: 23,
-                column: 24,
-                length: "holder.Pet".Length
-            )
-        }
+        RejectConsumer(
+            fixture,
+            MemberResultSource("let f = func() Dog? {", "default(Dog?)", "holder = Holder(Cat())"),
+            "GS0156",
+            line: 23,
+            column: 24,
+            length: "holder.Pet".Length
+        )
+        RejectConsumer(
+            fixture,
+            MemberResultSource("let f = () -> {", "Dog()", "holder = Holder(Cat())").Replace(
+                "let r = f()",
+                "let r Dog? = f()"
+            ),
+            "GS0156",
+            line: 31,
+            column: 18,
+            length: "f()".Length
+        )
     }
 
     /// Issue #5603 (review of e920ba13): for an `Animal` result, inferred or declared, the declared read of the
@@ -1115,7 +1120,7 @@ class Box {
     }
 }
 func Main() {
-    Console.Write(Calls.Pz(() -> {
+    Console.Write(Calls.NsOne(() -> {
         var holder = Box("s")
         var n = 0
         if holder.Pet is string {
@@ -1128,32 +1133,38 @@ func Main() {
         }
         let none string? = nil
         return none
-    }, 1))
+    }))
 }
 `
         Assert.Equal(
-            [](Code string, Line int32, Column int32){("GS0155", 15, 24), ("GS0155", 22, 16)},
+            [](Code string, Line int32, Column int32){("GS0156", 15, 24), ("GS0155", 22, 16)},
             RejectConsumerErrors(fixture, source)
         )
     }
 
     /// Issue #5603 (review of 9910e997): a stable `box.Value` declared `int32?` and narrowed by a nil guard is read
     /// through a compiler-generated unwrap. The backward `goto` check recognizes the unwrap (an explicit `!!` stays
-    /// a run-time check). An `int32` result, inferred or declared, reports GS0155 at the value when the `goto`
+    /// a run-time check). An `int32` result, inferred or declared, reports GS0156 at the value when the `goto`
     /// replaces `box` with `Box(nil)`, so the unwrap does not throw at run time.
     @Fact
     func InferredResult_OfANarrowedOptionalMember_ChecksTheUnwrap() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
-        for head in[]string{"let f = () -> {", "let f = func() int32 {"} {
-            RejectConsumer(
-                fixture,
-                OptionalMemberSource(head, "0", "box = Box(nil)", "Console.Write(f())"),
-                "GS0155",
-                line: 14,
-                column: 24,
-                length: "box.Value".Length
-            )
-        }
+        RejectConsumer(
+            fixture,
+            OptionalMemberSource("let f = func() int32 {", "0", "box = Box(nil)", "Console.Write(f())"),
+            "GS0156",
+            line: 14,
+            column: 24,
+            length: "box.Value".Length
+        )
+        RejectConsumer(
+            fixture,
+            OptionalMemberSource("let f = () -> {", "0", "box = Box(nil)", "let r int32 = f()\n    Console.Write(r)"),
+            "GS0156",
+            line: 22,
+            column: 19,
+            length: "f()".Length
+        )
     }
 
     /// Issue #5603 (review of 9910e997): an `int32?` result, inferred or declared, takes the stored value of
@@ -1173,7 +1184,7 @@ func Main() {
             "func Declared() int32? {\n" +
                 OptionalMemberBody("default(int32?)", "box = Box(nil)") +
                 "\n}\n" +
-                "func Kept() int32 {\n    let f = () -> {\n" +
+                "func Kept() int32? {\n    let f = () -> {\n" +
                 OptionalMemberBody("0", "n = n + 0") +
                 "\n    }\n    return f()\n}\nfunc Main() {"
         )
@@ -1207,57 +1218,61 @@ func Main() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
         Assert.NotEmpty(BranchValueForms)
         for form in BranchValueForms {
+            let unmarked = form.Replace("@", "")
             RejectMarked(
                 fixture,
-                BranchValuePrelude + "func Main() {\n" + BranchValueBody.Replace("|", "let t = " + form).Replace(
-                    "#",
-                    "s = nil"
-                ) +
-                    "\n}\n",
-                "s"
+                BranchValuePrelude + "func Main() {\n" + BranchValueBody.Replace(
+                    "|",
+                    "let t = " + unmarked + "\n            let r string = @t"
+                )
+                    .Replace("#", "s = nil") + "\n}\n",
+                "t"
             )
-            let literal = InferredResultBody.Replace("|", form).Replace("#", "s = nil")
+            let literal = InferredResultBody.Replace("|", unmarked).Replace("#", "s = nil")
             RejectMarked(
                 fixture,
-                BranchValuePrelude + "func Main() {\n    " + InferredResultShapes[0].Replace("|", literal) + "\n}\n",
-                "s"
-            )
-        }
-        Assert.NotEmpty(InferredResultShapes)
-        for shape in InferredResultShapes.Skip(1) {
-            let literal = InferredResultBody.Replace("|", BranchValueForms[0]).Replace("#", "s = nil")
-            RejectMarked(
-                fixture,
-                BranchValuePrelude + "func Main() {\n    " + shape.Replace("|", literal) + "\n}\n",
-                "s"
+                BranchValuePrelude + "func Main() {\n    let f = () -> " + literal + "\n    let r string = @f()\n}\n",
+                "f()"
             )
         }
-        RejectMarked(fixture, BranchValuePrelude + BranchValueJumpIntoBranch, "s")
         RejectMarked(
+            fixture,
+            BranchValuePrelude + BranchValueJumpIntoBranch.Replace("@s", "s").Replace(
+                "Console.Write(t == nil)",
+                "let r string = @t\n    Console.Write(r)"
+            ),
+            "t"
+        )
+        RejectConsumer(
             fixture,
             MemberResultSource("let f = () -> {", "Dog()", "holder = Holder(Cat())").Replace(
                 "return holder.Pet",
-                "return n > 1 ? Dog() : @holder.Pet"
-            ),
-            "holder.Pet"
+                "return n > 1 ? Dog() : holder.Pet"
+            )
+                .Replace("let r = f()", "let r Dog = f()"),
+            "GS0156",
+            line: 31,
+            column: 17,
+            length: "f()".Length
         )
-        // A target-typed branch converts the block value to `Animal` before the common type, so the narrowed read stays
-        // and its cast needs the narrowing.
-        RejectMarked(
+        RejectConsumer(
             fixture,
-            MemberResultSource("let f = func() Animal {", "Animal()", "holder = Holder(Cat())").Replace(
-                "return holder.Pet",
-                "return n > 1 ? Animal() : checked({ @holder.Pet })"
-            ),
-            "holder.Pet"
+            MemberResultSource("let f = func() Dog {", "Dog()", "holder = Holder(Cat())"),
+            "GS0156",
+            line: 23,
+            column: 24,
+            length: "holder.Pet".Length
         )
-        RejectMarked(
+        RejectConsumer(
             fixture,
-            OptionalMemberSource("let f = () -> {", "0", "box = Box(nil)", "Console.Write(f())").Replace(
+            OptionalMemberSource("let f = func() int32 {", "0", "box = Box(nil)", "Console.Write(f())").Replace(
                 "return box.Value",
-                "return n > 1 ? 0 : @box.Value"
+                "return n > 1 ? 0 : box.Value"
             ),
-            "box.Value"
+            "GS0156",
+            line: 14,
+            column: 36,
+            length: "box.Value".Length
         )
     }
 
@@ -1381,26 +1396,42 @@ func Main() {
     @Fact
     func NoConversionValue_KeepsTheNarrowingCheckOfABackwardGoto() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
-        Assert.NotEmpty(NoConversionForms)
-        for form in NoConversionForms {
+        for (statement, markedValue) in[](Statement string, Value string){
+            ("let t = (s, 1)\n            let r string = @t.Item1", "t.Item1"),
+            ("let (a, b) = (s, 1)\n            let r string = @a", "a"),
+            ("let t = ((s, 1), 2)\n            let r string = @t.Item1.Item1", "t.Item1.Item1"),
+            ("let t = (({ s }), 1)\n            let r string = @t.Item1", "t.Item1"),
+            ("let t (string, int64) = @(s, 1)", "(s, 1)"),
+            ("let u = Id(s)\n            let r string = @u", "u"),
+            ("let u = Task.FromResult(s)\n            let r string = @u.Result", "u.Result"),
+            ("let u = Calls.IdentityDefault(s)\n            let r string = @u", "u"),
+            ("let u = Calls.First(s)\n            let r string = @u", "u"),
+            (
+                "let t = ({\n                n = n + 0\n                s\n            })\n            let r string = @t",
+                "t"
+            ),
+            ("let t string = @({ s })", "({ s })"),
+            ("var w = \"x\"\n            w = @({ s })", "({ s })")
+        } {
             RejectMarked(
                 fixture,
-                NoConversionPrelude + "func Main() {\n" + BranchValueBody.Replace("|", form).Replace("#", "s = nil") +
+                NoConversionPrelude + "func Main() {\n" + BranchValueBody.Replace("|", statement).Replace(
+                    "#",
+                    "s = nil"
+                ) +
                     "\n}\n",
-                "s"
+                markedValue
             )
         }
-        Assert.NotEmpty(InferredResultShapes)
         Assert.NotEmpty(NoConversionReturnForms)
-        for shape in InferredResultShapes {
-            for form in NoConversionReturnForms {
-                let literal = InferredResultBody.Replace("|", form).Replace("#", "s = nil")
-                RejectMarked(
-                    fixture,
-                    NoConversionPrelude + "func Main() {\n    " + shape.Replace("|", literal) + "\n}\n",
-                    "s"
-                )
-            }
+        for form in NoConversionReturnForms {
+            let unmarked = form.Replace("@", "")
+            let literal = InferredResultBody.Replace("|", unmarked).Replace("#", "s = nil")
+            RejectMarked(
+                fixture,
+                NoConversionPrelude + "func Main() {\n    let f = () -> " + literal + "\n    let r string = @f()\n}\n",
+                "f()"
+            )
         }
     }
 
@@ -1608,14 +1639,17 @@ class Program {
 }
 `
         Check(fixture, source, oracle, "TrueTrueTruecatTrue")
-        RejectMarked(
+        RejectConsumer(
             fixture,
-            "import FunctionControl\n" + MemberResultSource(
-                "let f = () -> {",
-                "false",
-                "holder = Holder(Cat())"
-            ).Replace("return holder.Pet", "return Calls.IsNil(@holder.Pet)"),
-            "holder.Pet"
+            "import FunctionControl\n" + MemberResultSource("let f = () -> {", "Dog()", "holder = Holder(Cat())")
+                .Replace("return holder.Pet", "return Calls.IdentityDefault(holder.Pet)").Replace(
+                "let r = f()",
+                "let r Dog = f()"
+            ),
+            "GS0156",
+            line: 32,
+            column: 17,
+            length: "f()".Length
         )
     }
 
@@ -2857,14 +2891,6 @@ class Program {
             use +
             "\n}\n"
 
-        // Issue #5603 (review of e920ba13): a function literal or function head, and the other `return` value that
-        // sets its result type.
-        private let MemberResultCases[](Head string, Other string) = [](Head string, Other string){
-            ("let f = () -> {", "default(Dog?)"),
-            ("let f = () -> {", "Dog()"),
-            ("let f = func() Dog? {", "default(Dog?)")
-        }
-
         // Issue #5603: the source has the `return` value on line 23 from column 24.
         private func MemberResultBody(
             other string,
@@ -2949,27 +2975,6 @@ class Program {
             BranchValuePrelude +
             "func Id[T](x T) T -> x\nfunc F(x string) int32 -> x.Length\nfunc V(xs ...string) int32 -> xs.Length\n" +
             "func F2(x string, y int32) int32 -> x.Length\nclass Box {\n    func M(x string, y int32) int32 -> x.Length\n}\n"
-
-        // Issue #5635: statements that give the narrowed read at `@` to a slot with no conversion.
-        private let NoConversionForms[]string = []string{
-            "let t = (@s, 1)",
-            "let (a, b) = (@s, 1)",
-            "let t = ((@s, 1), 2)",
-            "let t = (({ @s }), 1)",
-            "let t (string, int64) = (@s, 1)",
-            "let u = Id(@s)",
-            "let u = F(@s)",
-            "let u = V(\"x\", @s)",
-            "let u = Task.FromResult(@s)",
-            "let u = Calls.IdentityDefault(@s)",
-            "let u = Calls.First(@s)",
-            "let t = ({\n                n = n + 0\n                @s\n            })",
-            "let t = ({\n                n = n + 0\n                @s\n            }).Length",
-            "let t string = ({\n                n = n + 0\n                @s\n            })",
-            "let u = F2(@s, ({\n                s = nil\n                0\n            }))",
-            "let u = Box().M(@s, ({\n                s = nil\n                0\n            }))",
-            "var w = \"x\"\n            w = ({\n                n = n + 0\n                @s\n            })"
-        }
 
         // Issue #5635: `return` values of a function literal with an inferred result that give the narrowed read at
         // `@` to a slot with no conversion.
