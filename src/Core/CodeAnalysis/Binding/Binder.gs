@@ -14476,21 +14476,18 @@ partial class Binder {
         }
 
         // Issue #4744: compares constraint type arguments while preserving
-        // reference and value nullability contracts (`T?` vs `T`).
+        // reference, platform, and value nullability contracts (`T?` vs `T!` vs `T`).
         private func SameConstraintType(left TypeSymbol?, right TypeSymbol?) bool {
-            var left = left
-            var right = right
-            if left != nil {
-                left = PlatformTypeSymbol.StripTopLevel(left)
-            }
-            if right != nil {
-                right = PlatformTypeSymbol.StripTopLevel(right)
-            }
             if left == right || object.ReferenceEquals(left, right) {
                 return true
             }
             if left == nil || right == nil {
                 return false
+            }
+            if left is PlatformTypeSymbol || right is PlatformTypeSymbol {
+                return left is PlatformTypeSymbol leftPlatform &&
+                    right is PlatformTypeSymbol rightPlatform &&
+                    SameConstraintType(leftPlatform.UnderlyingType, rightPlatform.UnderlyingType)
             }
             if left is NullableTypeSymbol || right is NullableTypeSymbol {
                 return left is NullableTypeSymbol leftNullable &&
@@ -14531,19 +14528,19 @@ partial class Binder {
                 return SameConstraintTypeArguments(left.GetElementPositions(), right.GetElementPositions())
             }
             if left.ClrType is {IsArray: true} leftClrArr && right.ClrType is {IsArray: true} rightClrArr {
-                return leftClrArr.GetArrayRank() == rightClrArr.GetArrayRank() &&
+                return leftClrArr.IsSZArray == rightClrArr.IsSZArray &&
+                    leftClrArr.GetArrayRank() == rightClrArr.GetArrayRank() &&
                     SameConstraintTypeArguments(left.GetElementPositions(), right.GetElementPositions())
             }
             if TryGetImportedGenericDefinitionAndArguments(left, out var leftOpen, out var leftArgs) &&
                 TryGetImportedGenericDefinitionAndArguments(right, out var rightOpen, out var rightArgs) {
                 return ClrTypeUtilities.AreSame(leftOpen, rightOpen) && SameConstraintTypeArguments(leftArgs, rightArgs)
             }
-            if left.StripToBareShape() is ImportedTypeSymbol leftImp &&
-                right.StripToBareShape() is ImportedTypeSymbol rightImp && left.GetElementPositions()
+            if left.GetElementPositions().IsDefaultOrEmpty && right.GetElementPositions()
                 .IsDefaultOrEmpty &&
-                right
-                .GetElementPositions().IsDefaultOrEmpty {
-                return ClrTypeUtilities.AreSame(leftImp.ClrType, rightImp.ClrType)
+                left.ClrType is {ContainsGenericParameters: false} leftLeafClr &&
+                right.ClrType is {ContainsGenericParameters: false} rightLeafClr {
+                return ClrTypeUtilities.AreSame(leftLeafClr, rightLeafClr)
             }
             return false
         }
@@ -14641,7 +14638,33 @@ partial class Binder {
             openDefinition = nil
             arguments = ImmutableArray[TypeSymbol].Empty
             let bare = type.StripToBareShape()
-            if bare is ImportedTypeSymbol imported && imported.OpenDefinition != nil {
+            if MapTypeSymbol.TryGetMapShape(bare, out _, out _) {
+                openDefinition = typeof(Dictionary[_, _])
+            } else if SequenceTypeSymbol.TryGetEnumerableInterfaceShape(bare, out var seqDef, out _) {
+                openDefinition = seqDef
+            } else if bare is ChannelTypeSymbol channel {
+                openDefinition = ChannelTypeSymbol.OpenClrDefinition(channel.Direction)
+            } else if bare is FunctionTypeSymbol fn {
+                let isVoid = FunctionTypeSymbol.IsVoidReturn(fn.ReturnType)
+                if fn.Arity > 0 || !isVoid {
+                    let erased = ImmutableArray.CreateBuilder[TypeSymbol](fn.Arity)
+                    for var i = 0; i < fn.Arity; i++ {
+                        erased.Add(TypeSymbol.Object)
+                    }
+                    let natural = fn.ClrType ?? FunctionTypeSymbol.Get(
+                        erased.MoveToImmutable(),
+                        if isVoid {
+                            TypeSymbol.Void
+                        } else {
+                            TypeSymbol.Object
+                        }
+                    )
+                        .ClrType
+                    if natural is {IsGenericType: true} generic {
+                        openDefinition = generic.GetGenericTypeDefinition()
+                    }
+                }
+            } else if bare is ImportedTypeSymbol imported && imported.OpenDefinition != nil {
                 openDefinition = imported.OpenDefinition
             } else if bare.ClrType is {IsGenericType: true} clr {
                 openDefinition = if clr.IsGenericTypeDefinition {
@@ -14673,8 +14696,10 @@ partial class Binder {
                 if openClr.GetElementType() is {} elemClr &&
                     ProjectOpenClrTypeWithArguments(elemClr, outerArguments) is {} elemSym {
                     let rank = openClr.GetArrayRank()
-                    return if rank == 1 {
+                    return if openClr.IsSZArray {
                         cast[TypeSymbol](SliceTypeSymbol.Get(elemSym))
+                    } else if rank == 1 {
+                        MemberLookup.ConstructRankOneNonSzArray(elemSym, openClr)
                     } else {
                         cast[TypeSymbol](RectangularArrayTypeSymbol.Get(elemSym, rank))
                     }
@@ -15016,12 +15041,12 @@ partial class Binder {
             if substitution != nil {
                 for pair in substitution {
                     if pair.Key != nil && pair.Value != nil {
-                        subst[pair.Key] = PlatformTypeSymbol.StripTopLevel(pair.Value)
+                        subst[pair.Key] = pair.Value
                     }
                 }
             }
-            if tp != nil && typeArgument != nil {
-                subst[tp] = PlatformTypeSymbol.StripTopLevel(typeArgument)
+            if tp != nil && typeArgument != nil && !subst.ContainsKey(tp) {
+                subst[tp] = typeArgument
             }
             if subst.Count == 0 {
                 return constraint

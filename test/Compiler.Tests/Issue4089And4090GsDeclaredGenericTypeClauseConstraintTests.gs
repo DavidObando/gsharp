@@ -744,6 +744,21 @@ func cmp9[T IComparable[T]](x T) int32 -> x.CompareTo(x)
 func readImportedClass[V, T List[V]](x T) int32 -> x.Count
 func acceptCovariantSeq[T IEnumerable[string?]](x T) string -> "cov"
 func acceptContravariantCmp[T IComparer[string]](c T) int32 -> c.Compare("a", "b")
+func useMapBase[T ValueBase4744[Dictionary[string, Item4744[int32]]]](x T) int32 -> x.Saved.Count
+func useSeqBase[T ValueBase4744[IEnumerable[Item4744[int32]]]](x T) string -> "seq"
+func acceptActionDict[T IDictionary[() -> void, string?]](x T) int32 -> x.Count
+
+class MapDerived4744 : ValueBase4744[map[string, Item4744[int32]]] {
+    init() {
+        Saved = map[string, Item4744[int32]]{"k": Item4744[int32]{Saved: 7}}
+    }
+}
+
+class SeqDerived4744 : ValueBase4744[sequence[Item4744[int32]]] {
+    init() {
+        Saved = []Item4744[int32]{Item4744[int32]{Saved: 7}}
+    }
+}
 
 class RectBox4744[T IEnumerable[[,]object]] {
 }
@@ -803,7 +818,8 @@ Console.WriteLine(readImportedClass[int32, List[int32]](List[int32]{9}))
 Console.WriteLine(Outer4744[int32].Use[NestedIntDerived4744](NestedIntDerived4744()))
 Console.WriteLine(acceptCovariantSeq[List[string]](List[string]{"a"}) + ":" + acceptCovariantSeq[[]string]([]string{"b"}))
 Console.WriteLine(RectHolder4744().Tag)
-Console.WriteLine(acceptContravariantCmp[NullableStrComparer4744](NullableStrComparer4744()))`, []string{
+Console.WriteLine(acceptContravariantCmp[NullableStrComparer4744](NullableStrComparer4744()))
+Console.WriteLine(useMapBase[MapDerived4744](MapDerived4744()).ToString() + ":" + useSeqBase[SeqDerived4744](SeqDerived4744()) + ":" + acceptActionDict[Dictionary[Action, string?]](Dictionary[Action, string?]()).ToString())`, []string{
                     "7",
                     "7",
                     "7",
@@ -818,7 +834,8 @@ Console.WriteLine(acceptContravariantCmp[NullableStrComparer4744](NullableStrCom
                     "nb",
                     "cov:cov",
                     "ro:rn",
-                    "0"
+                    "0",
+                    "1:seq:0"
                 }}
             // #4762: satisfied closed and forwarded open generic named-delegate
             // constructions compile, IL-verify, and run.
