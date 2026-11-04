@@ -1174,10 +1174,15 @@ internal class CustomAttributeEncoder {
                     this.CompilationAssemblyName()
                 )
             }
-            case InterfaceSymbol{ClrType: nil} interfaceType when !interfaceType.TypeArguments.IsDefaultOrEmpty {
+            case InterfaceSymbol{ClrType: nil} interfaceType when !interfaceType
+                .EnclosingTypeArguments
+                .IsDefaultOrEmpty ||
+                !interfaceType
+                .TypeArguments
+                .IsDefaultOrEmpty {
                 return (
-                    GetMetadataTypeName(interfaceType.Definition!!) + this.BuildArgumentList(
-                        interfaceType.TypeArguments
+                    GetMetadataTypeName(interfaceType.Definition ?? interfaceType) + this.BuildArgumentList(
+                        Flatten(interfaceType.EnclosingTypeArguments, interfaceType.TypeArguments)
                     ),
                     this.CompilationAssemblyName()
                 )

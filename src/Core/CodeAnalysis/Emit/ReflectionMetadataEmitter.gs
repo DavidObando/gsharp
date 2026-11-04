@@ -2798,16 +2798,10 @@ internal class ReflectionMetadataEmitter {
         for nested in nestedOrdered {
             switch nested {
                 case ni is InterfaceSymbol {
-                    {
-                        using let _ = this.remaps.PushSmRemap(ni)
-                        let gpRowStart = this.emitCtx.PendingGenericParameters.Count
-                        this.typeDefEmitter.EmitInterfaceTypeDef(
-                            ni,
-                            interfaceFirstMethodRow[ni],
-                            nestedFieldListRow[ni]
-                        )
-                        this.PreResolveReifiedGenericConstraints(gpRowStart)
-                    }
+                    using let _ = this.remaps.PushSmRemap(ni)
+                    let gpRowStart = this.emitCtx.PendingGenericParameters.Count
+                    this.typeDefEmitter.EmitInterfaceTypeDef(ni, interfaceFirstMethodRow[ni], nestedFieldListRow[ni])
+                    this.PreResolveReifiedGenericConstraints(gpRowStart)
                     EmitInterfaceBaseImplRows(ni)
                 }
                 case ns is StructSymbol when ns.IsClass {

@@ -522,13 +522,10 @@ internal shared class NullableFlagsBuilder {
         }
         if type is InterfaceSymbol ifaceSym {
             builder.Add(NotAnnotated)
-            if !ifaceSym.TypeArguments.IsDefaultOrEmpty {
-                for arg in ifaceSym.TypeArguments {
+            let ifaceArgs = Conversion.GetEffectiveInterfaceTypeArguments(ifaceSym)
+            if !ifaceArgs.IsDefaultOrEmpty {
+                for arg in ifaceArgs {
                     Append(arg, builder)
-                }
-            } else if !ifaceSym.TypeParameters.IsDefaultOrEmpty {
-                for defTp in ifaceSym.TypeParameters {
-                    Append(defTp, builder)
                 }
             }
             return
@@ -679,17 +676,14 @@ internal shared class NullableFlagsBuilder {
             }
             return
         }
-        if type is InterfaceSymbol iface && !iface.TypeArguments.IsDefaultOrEmpty {
-            for arg in iface.TypeArguments {
-                Append(arg, builder)
+        if type is InterfaceSymbol iface {
+            let ifaceArgs = Conversion.GetEffectiveInterfaceTypeArguments(iface)
+            if !ifaceArgs.IsDefaultOrEmpty {
+                for arg in ifaceArgs {
+                    Append(arg, builder)
+                }
+                return
             }
-            return
-        }
-        if type is InterfaceSymbol openInterface && !openInterface.TypeParameters.IsDefaultOrEmpty {
-            for defTp in openInterface.TypeParameters {
-                Append(defTp, builder)
-            }
-            return
         }
         if type is TupleTypeSymbol tup {
             for elem in tup.ElementTypes {

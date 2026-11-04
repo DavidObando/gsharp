@@ -3391,7 +3391,12 @@ class BoundScope {
                     ifaceX.Definition ?? ifaceX,
                     ifaceY.Definition ?? ifaceY
                 ) &&
-                    SigTypeArgumentsEquivalent(ifaceX.TypeArguments, ifaceY.TypeArguments, fx, fy)
+                    SigTypeArgumentsEquivalent(
+                    Conversion.GetEffectiveInterfaceTypeArguments(ifaceX),
+                    Conversion.GetEffectiveInterfaceTypeArguments(ifaceY),
+                    fx,
+                    fy
+                )
             }
             if x is EnumSymbol || y is EnumSymbol {
                 return x is EnumSymbol enumX && y is EnumSymbol enumY && object.ReferenceEquals(

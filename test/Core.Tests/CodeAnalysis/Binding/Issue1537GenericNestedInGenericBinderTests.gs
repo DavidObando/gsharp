@@ -218,14 +218,22 @@ func BadInheritedLiteral() {
     let item = Derived.InheritedInner{}
 }
 class InterfaceOwner[T] {
+    public interface IPlain { }
     public interface I[U] { }
+}
+interface IConsumerContract {
+    func Accept(x InterfaceOwner[string].IPlain);
+}
+class BadConsumer : IConsumerContract {
+    public func Accept(x InterfaceOwner[int32].IPlain) { }
 }
 func BadNestedInterfaceOwnerMismatch(x InterfaceOwner[string].I[int32]) InterfaceOwner[int32].I[int32] -> x`)
         let unclosedErrors = unclosedOutsideOwnerDiagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
-        Assert.Equal(7, unclosedErrors.Length)
+        Assert.Equal(8, unclosedErrors.Length)
         Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0157"))
         Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0113"))
         Assert.Equal(1, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0156"))
+        Assert.Equal(1, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0187"))
 
         let validScopedAndConstructedDiagnostics = GetDiagnostics(`package Issue4774BinderValid
 class Outer[T] {
@@ -234,15 +242,21 @@ class Outer[T] {
         public func Read() int32 -> Seed + Value
     }
     public interface IPlain {
+        prop Tag T { get; }
         func Echo(v T) T;
     }
     public interface IGeneric[U] {
         func Combine(a T, b U) string;
     }
+    public func EchoIface(x IPlain) Outer[T].IPlain -> x
     public func Inside() int32 {
         let item = Inner{Value: 7}
         return item.Read()
     }
+}
+class GoodPlainImpl : Outer[string].IPlain {
+    public prop Tag string -> "tag"
+    public func Echo(v string) string -> v
 }
 open class Base[T] {
     public struct InheritedInner(Value int32) {
@@ -255,9 +269,12 @@ class Derived[U] : Base[U] {
         return item.Read()
     }
 }
+func Overload(x Outer[string].IPlain) int32 -> 1
+func Overload(x Outer[int32].IPlain) int32 -> 2
 func Outside(plain Outer[string].IPlain, generic Outer[int32].IGeneric[string], inherited Derived[int32].InheritedInner) string {
     let item = Outer[string].Inner{Value: 7}
-    return plain.Echo("ok") + ":" + generic.Combine(item.Read(), "x") + ":" + inherited.Read().ToString()
+    let impl Outer[string].IPlain = GoodPlainImpl{}
+    return plain.Echo(impl.Tag) + ":" + Overload(plain).ToString() + ":" + generic.Combine(item.Read(), "x") + ":" + inherited.Read().ToString()
 }`)
         Assert.Empty(validScopedAndConstructedDiagnostics)
 

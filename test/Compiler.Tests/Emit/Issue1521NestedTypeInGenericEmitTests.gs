@@ -255,25 +255,32 @@ func Main() {
 
         const validSource = `package QualifiedNested4774
 import System
+@Attribute
+class TypeTagAttribute(First Type, Second Type) { }
 class Outer[T] {
     public struct Inner(Value int32) {
         private var Seed int32 = 5
         public func Read() int32 -> Seed + Value
     }
     public interface IPlain {
+        prop Tag T { get; }
         func ReadPlain(seed T) T;
     }
-    public interface IGeneric[U] {
+    public interface IGeneric[U] : IComparable[U] {
         func ReadGeneric(seed T, suffix U) string;
     }
+    public func EchoIface(x IPlain) Outer[T].IPlain -> x
     public func ReadScoped() int32 {
         let scopedItem = Inner{Value: 4}
         return scopedItem.Read()
     }
 }
+@TypeTag(typeof(Outer[string].IPlain), typeof(Outer[string].IGeneric[int32]))
 class PlainImpl : Outer[string].IPlain, Outer[string].IGeneric[int32] {
-    public func ReadPlain(seed string) string -> seed + ":21"
+    public prop Tag string -> "tag"
+    public func ReadPlain(seed string) string -> seed + ":" + Tag + ":21"
     public func ReadGeneric(seed string, suffix int32) string -> seed + ":" + suffix.ToString()
+    public func CompareTo(other int32) int32 -> other
 }
 func UsePlain(p Outer[string].IPlain) string -> p.ReadPlain("p")
 func UseGeneric(g Outer[string].IGeneric[int32]) string -> g.ReadGeneric("g", 8)
@@ -281,16 +288,77 @@ func Main() {
     let item = Outer[string].Inner{Value: 7}
     let owner = Outer[string]{}
     let impl = PlainImpl{}
+    let tag = cast[TypeTagAttribute](typeof(PlainImpl).GetCustomAttributes(typeof(TypeTagAttribute), false)[0])
+    let baseIface = typeof(Outer[string].IGeneric[int32]).GetInterfaces()[0]
     Console.WriteLine(item.Read())
     Console.WriteLine(owner.ReadScoped())
-    Console.WriteLine(UsePlain(impl))
+    Console.WriteLine(UsePlain(owner.EchoIface(impl)))
     Console.WriteLine(UseGeneric(impl))
+    Console.WriteLine(tag.First == typeof(Outer[string].IPlain) && tag.Second == typeof(Outer[string].IGeneric[int32]))
+    Console.WriteLine(baseIface == typeof(IComparable[int32]))
 }`
         let output = CompileAndRun(validSource)
         Assert.Equal(
-            "12${Environment.NewLine}9${Environment.NewLine}p:21${Environment.NewLine}g:8${Environment.NewLine}",
+            "12${Environment.NewLine}9${Environment.NewLine}p:tag:21${Environment.NewLine}g:8${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}",
             output
         )
+
+        let nullableDir = Directory.CreateTempSubdirectory("gs_4774_null_").FullName
+        try {
+            let libSrc = Path.Combine(nullableDir, "lib.gs")
+            let libDll = Path.Combine(nullableDir, "lib.dll")
+            File.WriteAllText(libSrc, `package NullableNestedIface4774
+public class Outer[T] {
+    public interface IPlain {
+        func Get() T;
+    }
+}
+public class Api {
+    shared {
+        public func GetNullable(x Outer[string?].IPlain) Outer[string?].IPlain -> x
+    }
+}`)
+            let libExit = Program.Main(
+                []string{"/out:" + libDll, "/target:library", "/targetframework:net10.0", libSrc}
+            )
+            Assert.Equal(0, libExit)
+            IlVerifier.Verify(libDll)
+
+            let consumerSrc = Path.Combine(nullableDir, "consumer.gs")
+            let consumerDll = Path.Combine(nullableDir, "consumer.dll")
+            File.WriteAllText(consumerSrc, `package NullableNestedIfaceConsumer4774
+import NullableNestedIface4774
+func Bad(x Outer[string?].IPlain) string -> Api.GetNullable(x).Get()`)
+            using let outWriter = StringWriter()
+            using let errWriter = StringWriter()
+            let savedOut = Console.Out
+            let savedErr = Console.Error
+            Console.SetOut(outWriter)
+            Console.SetError(errWriter)
+            var consumerExit int32
+            try {
+                consumerExit = Program.Main(
+                    []string{
+                        "/out:" + consumerDll,
+                        "/target:library",
+                        "/targetframework:net10.0",
+                        "/r:" + libDll,
+                        consumerSrc
+                    }
+                )
+            } finally {
+                Console.SetOut(savedOut)
+                Console.SetError(savedErr)
+            }
+            let consumerOutput = outWriter.ToString() + errWriter.ToString()
+            Assert.NotEqual(0, consumerExit)
+            Assert.Contains("GS0155", consumerOutput, StringComparison.Ordinal)
+            Assert.Contains("string?", consumerOutput, StringComparison.Ordinal)
+        } finally {
+            try {
+                Directory.Delete(nullableDir, recursive: true)
+            } catch { }
+        }
     }
 
     shared {

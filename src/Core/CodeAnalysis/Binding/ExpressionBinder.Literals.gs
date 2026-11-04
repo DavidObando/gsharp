@@ -367,12 +367,35 @@ internal partial class ExpressionBinder {
             allowUnclosedEnclosingTypeParameters: true
         ) ||
             ambiguousAcrossImportedPackages ||
-            DeclaredGenericDefinitionArity(candidate!!) <= 0 {
+            !IsOpenGenericOrGenericEnclosingDefinition(candidate!!) {
             return false
         }
         reportObsoleteUseIfApplicable(location, candidate!!, candidate!!.Name)
         type = candidate
         return true
+    }
+
+    private func IsOpenGenericOrGenericEnclosingDefinition(type TypeSymbol) bool {
+        if DeclaredGenericDefinitionArity(type) > 0 {
+            return true
+        }
+        return switch type {
+            case structSymbol is StructSymbol when structSymbol
+                .TypeArguments
+                .IsDefaultOrEmpty &&
+                structSymbol
+                .EnclosingTypeArguments
+                .IsDefaultOrEmpty: !StructSymbol
+                .CollectEnclosingTypeParameters(structSymbol).IsDefaultOrEmpty
+            case interfaceSymbol is InterfaceSymbol when interfaceSymbol
+                .TypeArguments
+                .IsDefaultOrEmpty &&
+                interfaceSymbol
+                .EnclosingTypeArguments
+                .IsDefaultOrEmpty: !StructSymbol
+                .CollectEnclosingTypeParameters(interfaceSymbol).IsDefaultOrEmpty
+            default: false
+        }
     }
 
     /// Issue #3677: resolves the QUALIFIED explicit-arity unbound-generic

@@ -2071,10 +2071,12 @@ class Conversion {
                 }
             }
             let typeParameters = def.DeclaredTypeParameters
+            if typeParameters.IsDefaultOrEmpty {
+                return !enclosingParameters.IsDefaultOrEmpty
+            }
             let fromArgs = from.TypeArguments
             let toArgs = to.TypeArguments
-            if typeParameters.IsDefaultOrEmpty ||
-                fromArgs.IsDefaultOrEmpty ||
+            if fromArgs.IsDefaultOrEmpty ||
                 toArgs.IsDefaultOrEmpty ||
                 typeParameters.Length != fromArgs.Length ||
                 typeParameters.Length != toArgs.Length {

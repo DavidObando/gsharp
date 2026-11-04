@@ -75,7 +75,9 @@ typeof(Outer[_].Inner[_]).Name
 typeof(Inner[_]).IsGenericTypeDefinition &&
 typeof(Inner[_]).Name == "Inner` + "`" + `1" &&
 typeof(Inner).IsGenericTypeDefinition &&
-typeof(Inner).Name == "Inner` + "`" + `1"
+typeof(Inner).Name == "Inner` + "`" + `1" &&
+typeof(PlainInner).IsGenericTypeDefinition &&
+typeof(PlainInner).Name == "PlainInner"
 `)
         Assert.Empty(result.Diagnostics)
         Assert.Equal(true, result.Value)
