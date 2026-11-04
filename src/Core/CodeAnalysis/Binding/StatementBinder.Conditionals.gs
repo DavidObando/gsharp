@@ -2288,7 +2288,7 @@ internal partial class StatementBinder {
                         .Type != TypeSymbol
                         .Null {
                         let widenedType = NullableTypeSymbol.Get(widenVarExpr.Variable.Type)
-                        if PreservesArgumentTarget(
+                        let preserved = PreservesArgumentTarget(
                             call,
                             arguments,
                             i,
@@ -2296,30 +2296,15 @@ internal partial class StatementBinder {
                             AccessPath.ForVariable(widenVarExpr.Variable),
                             widenedType,
                             clearAssignedRoots
-                        ) {
-                            let widenThen = maybeNullWhenReturnValue != negate
-                            let widenFrame = if widenThen {
-                                (
-                                    (
-                                        if thenFrame == nil {
-                                            (thenFrame = Dictionary[AccessPath, TypeSymbol]())
-                                        } else {
-                                            thenFrame
-                                        }
-                                    )!!
-                                )
-                            } else {
-                                (
-                                    (
-                                        if elseFrame == nil {
-                                            (elseFrame = Dictionary[AccessPath, TypeSymbol]())
-                                        } else {
-                                            elseFrame
-                                        }
-                                    )!!
-                                )
-                            }
-                            widenFrame[widenVarExpr.Variable] = widenedType
+                        )
+                        let widenThen = maybeNullWhenReturnValue != negate
+                        if widenThen || !preserved {
+                            thenFrame ??= Dictionary[AccessPath, TypeSymbol]()
+                            thenFrame!![widenVarExpr.Variable] = widenedType
+                        }
+                        if !widenThen || !preserved {
+                            elseFrame ??= Dictionary[AccessPath, TypeSymbol]()
+                            elseFrame!![widenVarExpr.Variable] = widenedType
                         }
                     }
                     continue
@@ -2465,7 +2450,12 @@ internal partial class StatementBinder {
                 }
                 // [MaybeNullWhen(rv)]: widen a non-nullable argument to its nullable
                 // counterpart on the arm where the call returns rv.
-                let widenVarExpr BoundVariableExpression? = argExpr as BoundVariableExpression
+                let widenRawArg = if argExpr is BoundAddressOfExpression widenAddrOf {
+                    widenAddrOf.Operand
+                } else {
+                    argExpr
+                }
+                let widenVarExpr BoundVariableExpression? = widenRawArg as BoundVariableExpression
                 if (maybeNullWhenReturnValue != nil) &&
                     widenVarExpr != nil &&
                     (!restrictBareVariableToLocalsAndParams || widenVarExpr.Variable is LocalVariableSymbol) &&
@@ -2475,7 +2465,7 @@ internal partial class StatementBinder {
                     .Type != TypeSymbol
                     .Null {
                     let widenedType = NullableTypeSymbol.Get(widenVarExpr.Variable.Type)
-                    if PreservesArgumentTarget(
+                    let preserved = PreservesArgumentTarget(
                         call,
                         arguments,
                         i,
@@ -2483,30 +2473,15 @@ internal partial class StatementBinder {
                         AccessPath.ForVariable(widenVarExpr.Variable),
                         widenedType,
                         clearAssignedRoots
-                    ) {
-                        let widenThen = maybeNullWhenReturnValue != negate
-                        let widenFrame = if widenThen {
-                            (
-                                (
-                                    if thenFrame == nil {
-                                        (thenFrame = Dictionary[AccessPath, TypeSymbol]())
-                                    } else {
-                                        thenFrame
-                                    }
-                                )!!
-                            )
-                        } else {
-                            (
-                                (
-                                    if elseFrame == nil {
-                                        (elseFrame = Dictionary[AccessPath, TypeSymbol]())
-                                    } else {
-                                        elseFrame
-                                    }
-                                )!!
-                            )
-                        }
-                        widenFrame[widenVarExpr.Variable] = widenedType
+                    )
+                    let widenThen = maybeNullWhenReturnValue != negate
+                    if widenThen || !preserved {
+                        thenFrame ??= Dictionary[AccessPath, TypeSymbol]()
+                        thenFrame!![widenVarExpr.Variable] = widenedType
+                    }
+                    if !widenThen || !preserved {
+                        elseFrame ??= Dictionary[AccessPath, TypeSymbol]()
+                        elseFrame!![widenVarExpr.Variable] = widenedType
                     }
                 }
             }
@@ -2609,7 +2584,7 @@ internal partial class StatementBinder {
                         excludeArgumentIndex,
                         out var hasRefArgs
                     )
-                    let bodyHasEffects = includeCallBody && FunctionBodyMayHaveSideEffects(userCall.Function)
+                    let bodyHasEffects = includeCallBody && !IsPureParameterNullCheckBody(userCall.Function)
                     if !bodyHasEffects && !hasRefArgs {
                         return nil
                     }
@@ -2622,7 +2597,7 @@ internal partial class StatementBinder {
                         excludeArgumentIndex,
                         out var hasRefArgs
                     )
-                    let bodyHasEffects = includeCallBody && FunctionBodyMayHaveSideEffects(userInstanceCall.Method)
+                    let bodyHasEffects = includeCallBody && !IsPureParameterNullCheckBody(userInstanceCall.Method)
                     if !bodyHasEffects && !hasRefArgs {
                         return nil
                     }
@@ -2640,7 +2615,8 @@ internal partial class StatementBinder {
                         excludeArgumentIndex,
                         out var hasRefArgs
                     )
-                    if !hasRefArgs {
+                    let bodyHasEffects = includeCallBody && !IsKnownPureImportedPredicate(importedCall.Function.Method)
+                    if !bodyHasEffects && !hasRefArgs {
                         return nil
                     }
                     return BoundImportedCallExpression(importedCall.Syntax, importedCall.Function, filtered)
@@ -2652,7 +2628,7 @@ internal partial class StatementBinder {
                         excludeArgumentIndex,
                         out var hasRefArgs
                     )
-                    if !hasRefArgs {
+                    if !includeCallBody && !hasRefArgs {
                         return nil
                     }
                     return BoundImportedInstanceCallExpression(
@@ -2669,39 +2645,77 @@ internal partial class StatementBinder {
             }
         }
 
-        private func FunctionBodyMayHaveSideEffects(function FunctionSymbol) bool {
+        private func IsKnownPureImportedPredicate(method MethodInfo) bool -> (
+            method.Name == "IsNullOrEmpty" || method.Name == "IsNullOrWhiteSpace"
+        ) &&
+            ClrTypeUtilities.AreSame(method.DeclaringType, typeof(string))
+
+        private func IsPureParameterNullCheckBody(function FunctionSymbol) bool {
             if function.IsOpen ||
                 function.IsOverride ||
                 function.HasCaptures ||
+                function.ReceiverType != nil ||
                 function
                 .Declaration
                 ?.Body is not{} body {
-                return true
+                return false
             }
             for node in body.DescendantNodesAndSelf() {
                 switch node {
-                    case CallExpressionSyntax or
-                        AccessorExpressionSyntax or
-                        IndexExpressionSyntax or
-                        AssignmentExpressionSyntax or
-                        FieldAssignmentExpressionSyntax or
-                        MemberFieldAssignmentExpressionSyntax or
-                        IndexAssignmentExpressionSyntax or
-                        MemberIndexAssignmentExpressionSyntax or
-                        CompoundIndexAssignmentExpressionSyntax or
-                        IndirectAssignmentExpressionSyntax or
-                        IndirectCompoundAssignmentExpressionSyntax or
-                        MultiAssignmentStatementSyntax or
-                        NullCoalescingAssignmentExpressionSyntax {
-                        return true
+                    case BlockStatementSyntax or
+                        ReturnStatementSyntax or
+                        ParenthesizedExpressionSyntax or
+                        LiteralExpressionSyntax {
+                        continue
                     }
-                    case unary is UnaryExpressionSyntax when unary
+                    case unary is UnaryExpressionSyntax when unary.OperatorToken.Kind == SyntaxKind.BangToken {
+                        continue
+                    }
+                    case binary is BinaryExpressionSyntax when binary
                         .OperatorToken
-                        .Kind is SyntaxKind.AmpersandToken or
-                        SyntaxKind.PlusPlusToken or
-                        SyntaxKind.MinusMinusToken {
-                        return true
+                        .Kind is SyntaxKind.AmpersandAmpersandToken or
+                        SyntaxKind.PipePipeToken {
+                        continue
                     }
+                    case binary is BinaryExpressionSyntax when(
+                        binary.OperatorToken.Kind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken
+                    ) &&
+                        (IsNilLiteralSyntax(binary.Left) || IsNilLiteralSyntax(binary.Right)) {
+                        continue
+                    }
+                    case name is NameExpressionSyntax when IsBuiltInNullableParameter(
+                        function.Parameters,
+                        name.IdentifierToken.ValueText
+                    ) {
+                        continue
+                    }
+                    default {
+                        return false
+                    }
+                }
+            }
+            return true
+        }
+
+        private func IsNilLiteralSyntax(syntax ExpressionSyntax) bool {
+            var current = syntax
+            while current is ParenthesizedExpressionSyntax parenthesized {
+                current = parenthesized.Expression
+            }
+            return current is LiteralExpressionSyntax literal && literal.LiteralToken.Kind == SyntaxKind.NilKeyword
+        }
+
+        private func IsBuiltInNullableParameter(parameters ImmutableArray[ParameterSymbol], name string) bool {
+            for parameter in parameters {
+                if parameter.Name == name {
+                    let underlying = if parameter.Type is NullableTypeSymbol nullable {
+                        nullable.UnderlyingType
+                    } else {
+                        parameter.Type
+                    }
+                    return underlying == TypeSymbol.String ||
+                        underlying == TypeSymbol.Object ||
+                        TypeSymbol.IsLegalPointeeType(underlying)
                 }
             }
             return false
@@ -2727,6 +2741,9 @@ internal partial class StatementBinder {
                 if i != excludeArgumentIndex && IsByRefArgument(arguments[i], refKind) {
                     hasRefArgs = true
                     builder.Add(arguments[i])
+                } else if refKind is RefKind.Ref or RefKind.Out {
+                    let placeholder = LocalVariableSymbol("<excluded-ref>", isReadOnly: false, TypeSymbol.Int32)
+                    builder.Add(BoundVariableExpression(nil, placeholder))
                 } else {
                     builder.Add(BoundLiteralExpression(nil, 0, TypeSymbol.Int32))
                 }
@@ -2754,6 +2771,9 @@ internal partial class StatementBinder {
                 if i != excludeArgumentIndex && IsByRefArgument(arguments[i], refKind) {
                     hasRefArgs = true
                     builder.Add(arguments[i])
+                } else if refKind is RefKind.Ref or RefKind.Out {
+                    let placeholder = LocalVariableSymbol("<excluded-ref>", isReadOnly: false, TypeSymbol.Int32)
+                    builder.Add(BoundVariableExpression(nil, placeholder))
                 } else {
                     builder.Add(BoundLiteralExpression(nil, 0, TypeSymbol.Int32))
                 }

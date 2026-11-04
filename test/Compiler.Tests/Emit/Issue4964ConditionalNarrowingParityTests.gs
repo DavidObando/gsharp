@@ -321,10 +321,14 @@ func f(s string?) int32 {
     @InlineData("return (string.IsNullOrEmpty(g) || ClearInt() < g.Length) ? 1 : 0")
     @InlineData("return HasGlobal(g) ? g.Length : 0")
     @InlineData("if HasGlobal(g) { return g.Length } else { return 0 }")
+    @InlineData("return HasViaReset(g) ? g.Length : 0")
     func Right_Operand_Invalidation_Clears_Left_Narrowing_In_Statements_And_Expressions(body string) {
         let source = (`package Issue4969.RightInvalidation
 import System.Diagnostics.CodeAnalysis
 var g string? = "seed"
+struct Reset {
+    init() { g = nil }
+}
 func Clear() bool {
     g = nil
     return true
@@ -337,11 +341,42 @@ func HasGlobal(@NotNullWhen(true) value string?) bool {
     g = nil
     return value != nil
 }
+func HasViaReset(@NotNullWhen(true) value string?) bool {
+    let _ = Reset{}
+    return value != nil
+}
 func f() int32 {
     ` + body + `
 }
 `)
         Assert.Equal("GS0158:Length", DiagnoseSource(source))
+    }
+
+    @Fact
+    func MaybeNullWhen_With_Aliased_Ref_Argument_Widens_Conservatively_And_Unrelated_Ref_Preserves_NotNullWhen() {
+        let aliased = `package Issue4969.MaybeNullAliased
+import System.Diagnostics.CodeAnalysis
+func TryGet(@MaybeNullWhen(false) out value string, ref other string) bool {
+    value = "ok"
+    other = "ok"
+    return false
+}
+func Check() int32 {
+    var s = "seed"
+    return TryGet(out s, ref s) ? s.Length : s.Length
+}
+`
+        Assert.Equal("GS0158:Length;GS0158:Length", DiagnoseSource(aliased))
+
+        let unrelatedRef = `package Issue4969.UnrelatedRef
+import System.Diagnostics.CodeAnalysis
+func TryCheck(@NotNullWhen(true) ref text string?, ref count int32) bool {
+    count = count + 1
+    return text != nil
+}
+func Check(ref text string?, ref count int32) int32 -> TryCheck(ref text, ref count) ? text.Length : 0
+`
+        Assert.Equal("", DiagnoseSource(unrelatedRef))
     }
 
     @Theory
