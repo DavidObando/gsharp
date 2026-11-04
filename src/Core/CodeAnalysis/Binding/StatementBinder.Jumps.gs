@@ -118,6 +118,8 @@ internal partial class StatementBinder {
         }
         binderCtx.UnresolvedGotoLabels.Clear()
         binderCtx.NarrowingFlow.Clear()
+        binderCtx.BoundExpressionsInLoop.Clear()
+        loopBodyByBreakLabel.Clear()
         loopExitFacts.Clear()
         ClearBackwardJumpSpanCaches()
         boundFinallyBlocks.Clear()
@@ -151,6 +153,8 @@ internal partial class StatementBinder {
         )
     }
 
+    private let loopBodyByBreakLabel Dictionary[BoundLabel, SyntaxNode] = Dictionary[BoundLabel, SyntaxNode]()
+
     /// Binds a loop body while pushing the loop's break/continue labels (and
     /// optional ADR-0070 label name) onto (cref:BinderContext.LoopStack).
     /// @remarks ADR-0213 section 6 (slice L1): when a fact or an external callable alias is in force
@@ -167,6 +171,9 @@ internal partial class StatementBinder {
     /// @param iterationRunsUserCode Whether the loop header calls user code before every body run, as an
     /// enumerator `MoveNext` does (ADR-0208 R11, #5170). Syntax does not show it: the binder reads it from
     /// the type of the collection, and an array, a slice or a string has no such call.
+    /// @param loopCondition Optional callback returning the bound loop condition for exit-fact recording.
+    /// @param enumeratorDisposalRunsUserCode Whether exiting the loop disposes an enumerator in a lowered
+    /// `finally` block (`for ... in` over an enumerable/dictionary/pattern enumerator and `await for`).
     private func BindLoopBody(
         body StatementSyntax,
         labelName string?,
@@ -174,7 +181,8 @@ internal partial class StatementBinder {
         out continueLabel BoundLabel,
         bindIteration(() -> BoundStatement)? = nil,
         iterationRunsUserCode bool = false,
-        loopCondition(() -> BoundExpression?)? = nil
+        loopCondition(() -> BoundExpression?)? = nil,
+        enumeratorDisposalRunsUserCode bool = false
     ) BoundStatement {
         // ADR-0213 section 13 (#5461): the external callable aliases are part of the entry state.
         // A loop that reassigns an alias must remove it even when no fact is in force.
@@ -184,12 +192,14 @@ internal partial class StatementBinder {
         }
         let loopEntryState = binderCtx.Narrowing
         binderCtx.LabelCounter++
-        breakLabel = BoundLabel("break${binderCtx.LabelCounter}")
-        continueLabel = BoundLabel("continue${binderCtx.LabelCounter}")
-        binderCtx.LoopStack.Push((labelName, breakLabel, continueLabel))
-        var boundBody BoundStatement
-        try {
-            boundBody = if bindIteration != nil {
+        let breakLabelValue = BoundLabel("break${binderCtx.LabelCounter}")
+        let continueLabelValue = BoundLabel("continue${binderCtx.LabelCounter}")
+        breakLabel = breakLabelValue
+        continueLabel = continueLabelValue
+        binderCtx.LoopStack.Push((labelName, breakLabelValue, continueLabelValue))
+        loopBodyByBreakLabel[breakLabelValue] = body
+        let BindBodyCore = func () BoundStatement {
+            return if bindIteration != nil {
                 bindIteration()
             } else {
                 Invariant.Required(
@@ -198,10 +208,32 @@ internal partial class StatementBinder {
                     expression: "BindStatement(body)"
                 )
             }
+        }
+        var boundBody BoundStatement
+        try {
+            boundBody = if enumeratorDisposalRunsUserCode {
+                let enumeratorCleanup = BoundForRangeStatement(
+                    nil,
+                    keyVariable: nil,
+                    valueVariable: LocalVariableSymbol("<enumCleanup>", isReadOnly: true, TypeSymbol.Object),
+                    collection: BoundLiteralExpression(nil, value: 0, TypeSymbol.Void),
+                    ForRangeKind.Enumerable,
+                    BoundBlockStatement(nil, ImmutableArray[BoundStatement].Empty),
+                    breakLabelValue,
+                    continueLabelValue
+                )
+                BindWithinSynthesizedCleanup(enumeratorCleanup, BindBodyCore)
+            } else {
+                BindBodyCore()
+            }
         } finally {
             binderCtx.LoopStack.Pop()
+            loopBodyByBreakLabel.Remove(breakLabelValue)
+            if binderCtx.LoopStack.Count == 0 {
+                binderCtx.BoundExpressionsInLoop.Clear()
+            }
         }
-        RecordLoopExitFacts(body, loopCondition?(), breakLabel, continueLabel, boundBody, loopEntryState)
+        RecordLoopExitFacts(body, loopCondition?(), breakLabelValue, continueLabelValue, boundBody, loopEntryState)
         return boundBody
     }
 
@@ -401,7 +433,7 @@ internal partial class StatementBinder {
                     if currentStatementListFallsThrough {
                         internallyReachableLoopExits.Add(breakLabel)
                         if frame.ContinueLabel != nil {
-                            binderCtx.NarrowingFlow.RecordBreak(breakLabel, CaptureJumpState())
+                            binderCtx.NarrowingFlow.RecordBreak(breakLabel, CaptureBreakJumpState(syntax, breakLabel))
                         }
                     }
                     return BoundGotoStatement(syntax, breakLabel)
@@ -420,10 +452,233 @@ internal partial class StatementBinder {
         if currentStatementListFallsThrough {
             internallyReachableLoopExits.Add(breakLabel)
             if topFrame.ContinueLabel != nil {
-                binderCtx.NarrowingFlow.RecordBreak(breakLabel, CaptureJumpState())
+                binderCtx.NarrowingFlow.RecordBreak(breakLabel, CaptureBreakJumpState(syntax, breakLabel))
             }
         }
         return BoundGotoStatement(syntax, breakLabel)
+    }
+
+    private func CaptureBreakJumpState(breakSyntax BreakStatementSyntax, breakLabel BoundLabel) NarrowingJumpState {
+        let snapshot = CaptureJumpState()
+        if !loopBodyByBreakLabel.TryGetValue(breakLabel, out var targetLoopBody) {
+            return snapshot
+        }
+        let steps = List[(Parent SyntaxNode, Child SyntaxNode)]()
+        var child SyntaxNode = breakSyntax
+        while !object.ReferenceEquals(child, targetLoopBody) && child.Parent is {} parent {
+            steps.Add((parent, child))
+            child = parent
+        }
+        if object.ReferenceEquals(child, targetLoopBody) && targetLoopBody.Parent is {} loopParent {
+            steps.Add((loopParent, targetLoopBody))
+        }
+        for var i = steps.Count - 1; i >= 0; i-- {
+            let (parent, stepChild) = steps[i]
+            for (prefix, conditionBranch) in EnumerateEvaluatedPrefixesBeforeChild(parent, stepChild) {
+                ApplyEvaluatedPrefixEffectsToSnapshot(snapshot, prefix, conditionBranch)
+            }
+        }
+        return snapshot
+    }
+
+    private func EnumerateEvaluatedPrefixesBeforeChild(parent SyntaxNode, child SyntaxNode) List[
+        (Prefix SyntaxNode, ConditionBranch bool?)
+    ] {
+        let prefixes = List[(Prefix SyntaxNode, ConditionBranch bool?)]()
+        switch parent {
+            case _ is BlockStatementSyntax or
+                _ is BlockExpressionSyntax or
+                _ is IfStatementSyntax or
+                _ is SwitchCaseClauseSyntax or
+                _ is SwitchExpressionArmSyntax or
+                _ is TryStatementSyntax or
+                _ is CatchClauseSyntax or
+                _ is FinallyClauseSyntax or
+                _ is ElseClauseSyntax { }
+            case ifExpr is IfExpressionSyntax {
+                if !object.ReferenceEquals(child, ifExpr.Initializer) && !object.ReferenceEquals(
+                    child,
+                    ifExpr.Condition
+                ) {
+                    prefixes.Add((ifExpr.Condition, object.ReferenceEquals(child, ifExpr.ThenBlock)))
+                }
+            }
+            case condExpr is ConditionalExpressionSyntax {
+                if !object.ReferenceEquals(child, condExpr.Condition) {
+                    prefixes.Add((condExpr.Condition, object.ReferenceEquals(child, condExpr.WhenTrue)))
+                }
+            }
+            case ifLetStmt is IfLetStatementSyntax {
+                for binding in ifLetStmt.Bindings {
+                    if binding.Span.Start < child.Span.Start {
+                        prefixes.Add((binding.Initializer, nil))
+                    }
+                }
+                if ifLetStmt.Guard is {} guardSyntax && guardSyntax.Span.Start < child.Span.Start {
+                    let branch = if object.ReferenceEquals(child, ifLetStmt.ThenStatement) {
+                        cast[bool?](true)
+                    } else {
+                        default(bool?)
+                    }
+                    prefixes.Add((guardSyntax, branch))
+                }
+            }
+            case ifLetExpr is IfLetExpressionSyntax {
+                for binding in ifLetExpr.Bindings {
+                    if binding.Span.Start < child.Span.Start {
+                        prefixes.Add((binding.Initializer, nil))
+                    }
+                }
+                if ifLetExpr.Guard is {} guardSyntax && guardSyntax.Span.Start < child.Span.Start {
+                    let branch = if object.ReferenceEquals(child, ifLetExpr.ThenBlock) {
+                        cast[bool?](true)
+                    } else {
+                        default(bool?)
+                    }
+                    prefixes.Add((guardSyntax, branch))
+                }
+            }
+            case switchStmt is SwitchStatementSyntax {
+                if !object.ReferenceEquals(child, switchStmt.Expression) {
+                    prefixes.Add((switchStmt.Expression, nil))
+                }
+            }
+            case switchExpr is SwitchExpressionSyntax {
+                if !object.ReferenceEquals(child, switchExpr.Expression) {
+                    prefixes.Add((switchExpr.Expression, nil))
+                }
+            }
+            case forClause is ForClauseStatementSyntax {
+                if object.ReferenceEquals(child, forClause.Body) && forClause.Condition is {} cond {
+                    prefixes.Add((cond, true))
+                }
+            }
+            case whileStmt is WhileStatementSyntax {
+                if object.ReferenceEquals(child, whileStmt.Body) {
+                    prefixes.Add((whileStmt.Condition, true))
+                }
+            }
+            case forCondStmt is ForConditionStatementSyntax {
+                if object.ReferenceEquals(child, forCondStmt.Body) {
+                    prefixes.Add((forCondStmt.Condition, true))
+                }
+            }
+            case binExpr is BinaryExpressionSyntax {
+                if object.ReferenceEquals(child, binExpr.Right) {
+                    let branch = switch binExpr.OperatorToken.Kind {
+                        case SyntaxKind.AmpersandAmpersandToken: cast[bool?](true)
+                        case SyntaxKind.PipePipeToken: cast[bool?](false)
+                        default: default(bool?)
+                    }
+                    prefixes.Add((binExpr.Left, branch))
+                }
+            }
+            default {
+                for sibling in parent.GetChildren() {
+                    if sibling is SyntaxToken {
+                        continue
+                    }
+                    if object.ReferenceEquals(sibling, child) || sibling.Span.Start >= child.Span.Start {
+                        break
+                    }
+                    prefixes.Add((sibling, nil))
+                }
+            }
+        }
+        return prefixes
+    }
+
+    private func CollectBoundExpressionsInPrefix(node SyntaxNode, results List[BoundExpression]) {
+        if node is SyntaxToken or
+            FunctionLiteralExpressionSyntax or
+            LambdaExpressionSyntax or
+            FunctionDeclarationSyntax or
+            AnonymousClassExpressionSyntax {
+            return
+        }
+        if binderCtx.BoundExpressionsInLoop.TryGetValue(node, out var bound) {
+            results.Add(bound)
+            return
+        }
+        for child in node.GetChildren() {
+            CollectBoundExpressionsInPrefix(child, results)
+        }
+    }
+
+    private func ApplyEvaluatedPrefixEffectsToSnapshot(
+        snapshot NarrowingJumpState,
+        prefix SyntaxNode,
+        conditionBranch bool?
+    ) {
+        EnsureClosureAssignedNames(prefix)
+        let aliasesBefore = HashSet[VariableSymbol](snapshot.ExternalCallableAliases)
+        let boundExpressions = List[BoundExpression]()
+        CollectBoundExpressionsInPrefix(prefix, boundExpressions)
+        let assignedNames = HashSet[string]()
+        var dropAllMemberPaths = if boundExpressions.Count > 0 {
+            SyntaxMayMutateMemberPaths(prefix)
+        } else {
+            CollectAssignedNamesAndMemberMutation(prefix, assignedNames)
+        }
+        var collector AssignedRootsCollector? = nil
+        var assignedRoots HashSet[VariableSymbol]? = nil
+        if boundExpressions.Count > 0 {
+            let exprCollector = NewCollector(AssignmentPreservesNarrowing, snapshot.ExternalCallableAliases)
+            for bound in boundExpressions {
+                exprCollector.VisitExpression(bound)
+            }
+            collector = exprCollector
+            dropAllMemberPaths = dropAllMemberPaths || exprCollector.MayMutateMemberPaths
+        } else {
+            assignedRoots = HashSet[VariableSymbol]()
+            for name in assignedNames {
+                if $scope.TryLookupSymbol(name) is VariableSymbol v {
+                    assignedRoots.Add(v)
+                }
+            }
+        }
+        let filterWrites = if collector != nil {
+            EnclosingFilterWrites(prefix, collector)
+        } else {
+            default(List[(TryBlock SyntaxNode?, Names HashSet[string])]?)
+        }
+        for entry in snapshot.NarrowedVariables.ToArray() {
+            let key = entry.Key
+            let drop = (
+                filterWrites != nil &&
+                    (FilterWritesVariable(filterWrites, key.Root) || MayBeMutatedByUnknownCallable(key))
+            ) ||
+                (
+                if collector != nil {
+                    StatementKillsPath(collector, key, dropAllMemberPaths, collector.MayMutateReferenceStorage)
+                } else {
+                    assignedRoots!!.Any(
+                        (assigned VariableSymbol) -> object.ReferenceEquals(assigned, key.Root) ||
+                            MayShareStorage(assigned, key.Root)
+                    ) ||
+                        DropsOnMemberMutation(key, dropAllMemberPaths, dropAllMemberPaths)
+                }
+            )
+            if drop {
+                snapshot.RemoveNarrowing(key)
+            }
+        }
+        if collector != nil {
+            snapshot.ReplaceExternalCallableAliases(collector.DefinitelyExternalFunctionValues)
+        }
+        if conditionBranch is {} whenTrue && boundExpressions.Count == 1 {
+            let (thenNarrow, elseNarrow) = ComputeConditionNarrowing(boundExpressions[0], aliasesBefore)
+            let branchNarrow = if whenTrue {
+                thenNarrow
+            } else {
+                elseNarrow
+            }
+            if branchNarrow != nil {
+                for entry in branchNarrow {
+                    snapshot.SetNarrowing(entry.Key, entry.Value)
+                }
+            }
+        }
     }
 
     /// Issue #3501 A3: binds a `fallthrough` statement (Go semantics).

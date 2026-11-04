@@ -297,6 +297,9 @@ internal partial class ExpressionBinder {
         let result = BindExpressionWithTargetTypeCore(syntax, targetType)
         if !(result is BoundErrorExpression) {
             result.AnchorSyntax(syntax)
+            if binderCtx.LoopStack.Count > 0 {
+                binderCtx.BoundExpressionsInLoop[syntax] = result
+            }
         }
         return result
     }
@@ -429,6 +432,9 @@ internal partial class ExpressionBinder {
         // re-binds and duplicated diagnostics.
         if !(result is BoundErrorExpression) {
             result.AnchorSyntax(syntax)
+            if binderCtx.LoopStack.Count > 0 {
+                binderCtx.BoundExpressionsInLoop[syntax] = result
+            }
         }
         return result
     }

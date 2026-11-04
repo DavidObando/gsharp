@@ -390,6 +390,95 @@ func Main() {
     Console.WriteLine(Run(true))
     Console.WriteLine(Run(false))
 }`, "", "run", "4|2"}
+            yield[]object{"control5_break_after_mutating_operand_in_expression", `import System
+var g string? = "ok"
+func Clear() int32 { g = nil; return 1 }
+func ClearBool() bool { g = nil; return true }
+func RunAdd() int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let ignored = Clear() + {
+            break
+            0
+        }
+    }
+    return g.Length
+}
+func RunAnd() int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let ignored = ClearBool() && {
+            break
+            true
+        }
+    }
+    return g.Length
+}
+func RunLabeledOr() int32 {
+    outer: while true {
+        if g == nil {
+            return 0
+        }
+        while true {
+            let ignored = !ClearBool() || {
+                break outer
+                false
+            }
+        }
+    }
+    return g.Length
+}
+func Main() {
+    Console.WriteLine(RunAdd() + RunAnd() + RunLabeledOr())
+}`, "GS0158@15:14 GS0158@27:14 GS0158@41:14", "reject", ""}
+            yield[]object{"control6a_labeled_break_crossing_for_in_runs_enumerator_disposal", `import System
+var s string? = "ok"
+func Gen() sequence[int32] {
+    try {
+        yield 1
+    } finally {
+        s = nil
+    }
+}
+func RunLabeledBreak() int32 {
+    outer: while true {
+        for v in Gen() {
+            if s != nil {
+                break outer
+            }
+        }
+        return 0
+    }
+    return s.Length
+}
+func RunUnlabeledBreak() int32 {
+    for v in Gen() {
+        if s != nil {
+            break
+        }
+    }
+    return s.Length
+}
+func Main() { Console.WriteLine(RunLabeledBreak() + RunUnlabeledBreak()) }`, "GS0158@19:14 GS0158@27:14", "reject", ""}
+            yield[]object{"control6b_labeled_break_crossing_indexed_for_in_preserves_fact", `import System
+var s string? = "ok"
+func RunIndexed() int32 {
+    let items = []int32{1, 2}
+    outer: while true {
+        for v in items {
+            if s != nil {
+                break outer
+            }
+        }
+        return 0
+    }
+    return s.Length
+}
+func Main() { Console.WriteLine(RunIndexed()) }`, "", "run", "2"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

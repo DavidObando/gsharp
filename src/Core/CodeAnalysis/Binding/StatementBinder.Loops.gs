@@ -467,7 +467,8 @@ internal partial class StatementBinder {
             labelName,
             out var breakLabel,
             out var continueLabel,
-            iterationRunsUserCode: iterationKind != ForRangeKind.Indexed || LoopPreludeRunsUserCode(prelude)
+            iterationRunsUserCode: iterationKind != ForRangeKind.Indexed || LoopPreludeRunsUserCode(prelude),
+            enumeratorDisposalRunsUserCode: iterationKind != ForRangeKind.Indexed
         )
         if !prelude.IsEmpty {
             body = BoundBlockStatement(originatingSyntax, prelude.Add(body))

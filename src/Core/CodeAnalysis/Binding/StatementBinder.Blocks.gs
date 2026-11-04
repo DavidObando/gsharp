@@ -2859,7 +2859,8 @@ internal partial class StatementBinder {
             labelName,
             out var breakLabel,
             out var continueLabel,
-            iterationRunsUserCode: true
+            iterationRunsUserCode: true,
+            enumeratorDisposalRunsUserCode: true
         )
         if typedVariablePrelude != nil {
             body = BoundBlockStatement(originatingSyntax, ImmutableArray.Create(typedVariablePrelude, body))

@@ -101,6 +101,7 @@ internal class BinderContext {
         AsyncLetCells = Stack[List[AsyncLetVariableSymbol]]()
         ScopeContexts = Stack[VariableSymbol]()
         LoopStack = Stack[(LabelName string?, BreakLabel BoundLabel, ContinueLabel BoundLabel?)]()
+        BoundExpressionsInLoop = Dictionary[SyntaxNode, BoundExpression]()
         UsedBreakLabels = HashSet[BoundLabel]()
         UserLabels = Dictionary[string, BoundLabel]()
         DefinedUserLabels = HashSet[string]()
@@ -215,6 +216,12 @@ internal class BinderContext {
     /// a `null` `LabelName` — `continue` binding
     /// skips such frames to reach the enclosing loop.
     prop LoopStack Stack[(LabelName string?, BreakLabel BoundLabel, ContinueLabel BoundLabel?)] {
+        get;
+    }
+
+    /// Bound expressions produced while inside a loop or switch (`LoopStack.Count > 0`), keyed by syntax node
+    /// so a `break` nested inside an expression can apply the effects of already-evaluated prefix operands.
+    prop BoundExpressionsInLoop Dictionary[SyntaxNode, BoundExpression] {
         get;
     }
 
