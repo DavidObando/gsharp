@@ -9287,21 +9287,27 @@ partial class Binder {
         /// @param references The reference resolver supplying imported types.
         /// @param containingFunction The function enclosing the expression, or `null` for top-level statements.
         /// @param additionalLocals In-scope locals/parameters to declare before binding, or `null`.
+        /// @param additionalFunctionScopes In-scope local functions grouped by lexical block depth from outermost
+        /// to innermost, or `null`.
         /// @param expression The expression to read a type for.
         /// @param referencingTree The tree (file) the expression stands in; its imports apply. An expression
         /// parsed on its own would otherwise look up names through its own, import-less tree.
         /// @param inConstructorInitializer Whether the expression stands in the arguments of a constructor's
         /// `: base(...)` or `: this(...)`; the binder then applies the restrictions of that context (no receiver,
         /// so instance access is rejected and the static members stay reachable).
+        /// @param additionalTypeParameters Type parameters of enclosing generic local functions from outermost
+        /// to innermost, or `null`.
         /// @returns The non-error, non-void type, or `null` when binding fails.
         internal func BindSpeculativeExpressionType(
             globalScope BoundGlobalScope?,
             references ReferenceResolver,
             containingFunction FunctionSymbol?,
             additionalLocals IEnumerable[VariableSymbol]?,
+            additionalFunctionScopes IEnumerable[ImmutableArray[FunctionSymbol]]?,
             expression ExpressionSyntax?,
             referencingTree SyntaxTree,
-            inConstructorInitializer bool = false
+            inConstructorInitializer bool = false,
+            additionalTypeParameters IEnumerable[TypeParameterSymbol]? = nil
         ) TypeSymbol? {
             if globalScope == nil || expression == nil {
                 return nil
@@ -9324,6 +9330,30 @@ partial class Binder {
                         for local in additionalLocals {
                             if local != nil {
                                 binder.$scope.TryDeclareVariable(local)
+                            }
+                        }
+                    }
+                    if additionalFunctionScopes != nil {
+                        // Each lexical block depth gets its own child scope from outermost to innermost,
+                        // so an inner local function with the same signature does not drop an outer one
+                        // whose defaults or type-parameter constraints differ.
+                        for functionScope in additionalFunctionScopes {
+                            if functionScope.IsDefaultOrEmpty {
+                                continue
+                            }
+                            binder.$scope = BoundScope(binder.$scope)
+                            for localFunction in functionScope {
+                                if localFunction != nil {
+                                    binder.$scope.TryDeclareFunction(localFunction)
+                                }
+                            }
+                        }
+                    }
+                    if additionalTypeParameters != nil {
+                        for typeParameter in additionalTypeParameters {
+                            if typeParameter != nil {
+                                binder.binderCtx.CurrentTypeParameters ??= Dictionary[string, TypeParameterSymbol]()
+                                binder.binderCtx.CurrentTypeParameters!![typeParameter.Name] = typeParameter
                             }
                         }
                     }
