@@ -466,7 +466,6 @@ internal sealed class RegionEffects {
         BareReads = List[string]()
         OperatorOperandNames = List[string]()
         NilCompareOperandNames = List[string]()
-        ReturnedNames = List[string]()
         TypeTests = List[RegionTypeTest]()
         MemberReads = List[RegionMemberRead]()
         Operators = List[RegionOperator]()
@@ -618,29 +617,10 @@ internal sealed class RegionEffects {
         get;
     }
 
-    /// Whether a declaration with a type or an assignment takes a value that is not a literal. A user-defined
-    /// conversion may run code there (rule W4); the consumer asks whether the package declares any.
-    prop ContainsConversionCandidate bool {
-        get;
-        set;
-    }
-
     /// Gets the names read in the region that no declaration of the region encloses (a bare name can bind to a
     /// property getter of the enclosing type; the consumer resolves it at the entry scope, rule W5).
     prop BareReads List[string] {
         get;
-    }
-
-    /// Gets the plain names that a `return` of the region converts to the return type, in order of first appearance.
-    /// The consumer asks whether a conversion operator can run there (rule W4).
-    prop ReturnedNames List[string] {
-        get;
-    }
-
-    /// Whether a `return` of the region converts a literal or a `nameof` to the return type (rule W4).
-    prop ReturnsConstant bool {
-        get;
-        set;
     }
 
     /// Gets the names that are operands of an operator candidate (a binary or unary operator with no literal
@@ -711,13 +691,6 @@ internal sealed class RegionEffects {
         ContainsOperatorCandidate = ContainsOperatorCandidate || other.ContainsOperatorCandidate
         ContainsIteration = ContainsIteration || other.ContainsIteration
         MemberReadCount = MemberReadCount + other.MemberReadCount
-        ContainsConversionCandidate = ContainsConversionCandidate || other.ContainsConversionCandidate
-        ReturnsConstant = ReturnsConstant || other.ReturnsConstant
-        for name in other.ReturnedNames {
-            if !ReturnedNames.Contains(name) {
-                ReturnedNames.Add(name)
-            }
-        }
         OperatorHasUnresolvedOperand = OperatorHasUnresolvedOperand || other.OperatorHasUnresolvedOperand
         for name in other.NilCompareOperandNames {
             if !NilCompareOperandNames.Contains(name) {

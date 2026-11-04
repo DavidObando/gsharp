@@ -210,16 +210,10 @@ internal partial class ExpressionBinder {
     /// `this.X` and bare field/property reads). In a static context no
     /// `this` is in scope, so this returns `null` and the
     /// bare-name method-group path stays unchanged.
-    private func GetEffectiveThisParameter() ParameterSymbol? {
-        if binderCtx.InConstructorInitializer {
-            return nil
-        }
-        let current = getCurrentFunction()
-        if current?.ThisParameter != nil {
-            return current!!.ThisParameter!!
-        }
-        return $scope.TryLookupSymbol("this") as ParameterSymbol
-    }
+    private func GetEffectiveThisParameter() ParameterSymbol? -> GetEffectiveThisParameter(
+        binderCtx,
+        getCurrentFunction()
+    )
 
     private func GetConstructorInitializerReceiverType() StructSymbol? {
         return (function?.ReceiverType as StructSymbol) ??
@@ -2317,19 +2311,16 @@ internal partial class ExpressionBinder {
         @NotNullWhen(true) out interfaceType InterfaceSymbol?
     ) bool {
         receiver = nil
-        interfaceType = nil
-        let effThis = GetEffectiveThisParameter()
-        if effThis?.Type is not InterfaceSymbol thisInterface {
-            return false
-        }
-        // ADR-0118 / issue #944: an indexer has the CLR name `Item` but is never
-        // reachable by bare name — only through `this[i]`.
-        if (!TypeMemberModel.TryGetProperty(thisInterface, name, out var property, out _) || property!!.IsIndexer) &&
-            MemberLookup.GetInterfaceImportedBaseInstanceProperty(thisInterface, name) == nil {
+        if !TryResolveInterfaceInstancePropertyByBareName(
+            binderCtx,
+            getCurrentFunction(),
+            name,
+            out var effThis,
+            out interfaceType
+        ) {
             return false
         }
         receiver = BoundVariableExpression(nil, effThis!!)
-        interfaceType = thisInterface
         return true
     }
 
@@ -2375,17 +2366,13 @@ internal partial class ExpressionBinder {
         @NotNullWhen(true) out member MemberInfo?
     ) bool {
         receiver = nil
-        member = nil
-        let effThis = GetEffectiveThisParameter()
-        if effThis?.Type is not StructSymbol thisStruct {
-            return false
-        }
-        if GetInheritedClrBaseType(thisStruct) is not Type clrBase {
-            return false
-        }
-        member = ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrBase, name, CanAccessInternalsOf)
-        member ??= ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, name, CanAccessInternalsOf)
-        if member == nil {
+        if !TryResolveInheritedClrInstanceMemberByBareName(
+            binderCtx,
+            getCurrentFunction(),
+            name,
+            out var effThis,
+            out member
+        ) {
             return false
         }
         receiver = BoundVariableExpression(nil, effThis!!)
@@ -3808,12 +3795,148 @@ internal partial class ExpressionBinder {
             return nil
         }
 
+        internal func GetEffectiveThisParameter(binderCtx BinderContext, current FunctionSymbol?) ParameterSymbol? {
+            if binderCtx.InConstructorInitializer {
+                return nil
+            }
+            if current?.ThisParameter != nil {
+                return current!!.ThisParameter!!
+            }
+            return binderCtx.RootScope.TryLookupSymbol("this") as ParameterSymbol
+        }
+
+        internal func ResolvesBareMethodGroup(
+            entryScope BoundScope,
+            binderCtx BinderContext,
+            current FunctionSymbol?,
+            name string
+        ) bool {
+            let overloads = entryScope.TryLookupFunctions(name)
+            if !overloads.IsDefaultOrEmpty {
+                var usableCount = 0
+                var first FunctionSymbol? = nil
+                for candidate in overloads {
+                    if !IsMethodGroupCandidateUsable(candidate) {
+                        continue
+                    }
+                    first ??= candidate
+                    usableCount++
+                }
+                if usableCount == 1 {
+                    return first!!.ReturnRefKind == RefKind.None || first!!.LocalDeclaration == nil
+                }
+                if usableCount > 1 {
+                    return true
+                }
+            }
+            let effThis ParameterSymbol? = GetEffectiveThisParameter(binderCtx, current)
+            if effThis != nil && effThis.Type is StructSymbol thisStruct {
+                if HasNonVariadicMethod(
+                    TypeMemberModel.GetMethods(thisStruct, name, MemberQuery.Instance(MemberKinds.Method))
+                ) {
+                    return true
+                }
+            }
+            if current != nil {
+                let enclosingType StructSymbol? = (current.ReceiverType as StructSymbol) ??
+                    (current.StaticOwnerType as StructSymbol) ??
+                    (current.LexicalEnclosingType as StructSymbol)
+                if enclosingType != nil &&
+                    HasNonVariadicMethod(
+                    TypeMemberModel.GetMethods(enclosingType, name, MemberQuery.Static(MemberKinds.Method))
+                ) {
+                    return true
+                }
+            }
+            return entryScope.TryLookupSymbol(name) is FunctionSymbol single &&
+                IsMethodGroupCandidateUsable(single) &&
+                (single.ReturnRefKind == RefKind.None || single.LocalDeclaration == nil)
+        }
+
+        internal func HasNonVariadicMethod(methods ImmutableArray[FunctionSymbol]) bool {
+            if methods.IsDefaultOrEmpty {
+                return false
+            }
+            for method in methods {
+                var hasVariadic = false
+                for parameter in method.Parameters {
+                    if parameter.IsVariadic {
+                        hasVariadic = true
+                        break
+                    }
+                }
+                if !hasVariadic {
+                    return true
+                }
+            }
+            return false
+        }
+
+        internal func TryResolveInterfaceInstancePropertyByBareName(
+            binderCtx BinderContext,
+            current FunctionSymbol?,
+            name string,
+            @NotNullWhen(true) out thisParameter ParameterSymbol?,
+            @NotNullWhen(true) out interfaceType InterfaceSymbol?
+        ) bool {
+            thisParameter = nil
+            interfaceType = nil
+            let effThis = GetEffectiveThisParameter(binderCtx, current)
+            if effThis?.Type is not InterfaceSymbol thisInterface {
+                return false
+            }
+            // ADR-0118 / issue #944: an indexer has the CLR name `Item` but is never
+            // reachable by bare name — only through `this[i]`.
+            if (
+                !TypeMemberModel.TryGetProperty(thisInterface, name, out var property, out _) || property!!.IsIndexer
+            ) &&
+                MemberLookup.GetInterfaceImportedBaseInstanceProperty(thisInterface, name) == nil {
+                return false
+            }
+            thisParameter = effThis
+            interfaceType = thisInterface
+            return true
+        }
+
+        internal func TryResolveInheritedClrInstanceMemberByBareName(
+            binderCtx BinderContext,
+            current FunctionSymbol?,
+            name string,
+            @NotNullWhen(true) out thisParameter ParameterSymbol?,
+            @NotNullWhen(true) out member MemberInfo?
+        ) bool {
+            thisParameter = nil
+            member = nil
+            let effThis = GetEffectiveThisParameter(binderCtx, current)
+            if effThis?.Type is not StructSymbol thisStruct {
+                return false
+            }
+            if GetInheritedClrBaseType(thisStruct) is not Type clrBase {
+                return false
+            }
+            let canAccessInternals = (clrType Type?) -> clrType?.Assembly is {} assembly &&
+                binderCtx
+                .RootScope
+                .References
+                ?.CanAccessInternalMembers(assembly) == true
+            member = ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrBase, name, canAccessInternals)
+            member ??= ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, name, canAccessInternals)
+            if member == nil {
+                return false
+            }
+            thisParameter = effThis
+            return true
+        }
+
         /// Resolves an inherited imported property or field through the same
         /// receiver-substitution and declaration-nullability readers as direct CLR
         /// member access. This is the shared read-side sibling of
         /// (cref:TryGetWritableClrMember(MemberInfo?, TypeSymbol?, out Type?, out TypeSymbol?, out bool,
         /// bool)).
-        private func GetInheritedClrMemberType(receiverType TypeSymbol, member MemberInfo) TypeSymbol -> switch member {
+        internal func GetInheritedClrMemberType(
+            receiverType TypeSymbol,
+            member MemberInfo
+        ) TypeSymbol -> switch member {
             case property is PropertyInfo: MemberLookup.GetClrPropertyTypeSymbol(
                 receiverType,
                 property,
