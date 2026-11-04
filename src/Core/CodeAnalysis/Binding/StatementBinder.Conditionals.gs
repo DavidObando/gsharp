@@ -587,15 +587,10 @@ internal partial class StatementBinder {
             // entries from PendingEarlyExitFrames keyed by the if node;
             // we have the data inline here, so just promote directly.
             //
-            // Issue #4285: this is the exact same early-exit-lift hazard
-            // ApplyEarlyExitNarrowings guards against — `guard let p = b.Pet
-            // else { goto Skip }` structurally "exits" via the goto, but a
-            // goto elsewhere in the function could land at `Skip:` (or
-            // anywhere past this guard-let) without that exit ever having
-            // been taken. Since this call site never goes through
-            // ApplyEarlyExitNarrowings, it needs its own copy of the same
-            // whole-function suppression.
-            if !binderCtx.FunctionContainsUserGotoOrLabel {
+            // Issue #4285 / ADR-0208 R6: lift the guard-let binding into the enclosing
+            // block's frame when the else branch unconditionally exits; any goto out of
+            // the else branch was bound before this lift and joins at its target label.
+            if EndsInUnconditionalExit(armElse) {
                 persistentFrame[variable] = underlying
             }
             statements.Add(ifStmt)

@@ -610,14 +610,14 @@ internal partial class StatementBinder {
         if path.HasMembers {
             return "R5"
         }
-        if binderCtx.FunctionContainsUserGotoOrLabel {
-            return "R6"
-        }
         if join.Flow.AssignedByExiting.Contains(path.Root) {
             return "R2"
         }
         if join.Flow.HasBareBlock {
             return "R3"
+        }
+        if binderCtx.FunctionContainsUserGotoOrLabel {
+            return "R6"
         }
         return "R1"
     }

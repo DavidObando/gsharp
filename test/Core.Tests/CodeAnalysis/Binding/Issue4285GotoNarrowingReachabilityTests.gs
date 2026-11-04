@@ -96,14 +96,9 @@ Run(true)
 
     @Fact
     func Goto_BypassesTypeGuard_SwitchVariant_DoesNotNarrowFieldPath() {
-        // Same defect, but through the post-switch narrowing lift (ADR-0069
-        // addendum / issue #712) rather than the post-if lift: a `case is
-        // Dog {}` arm falls through with the discriminant narrowed to `Dog`,
-        // and (with a `default { return "" }` arm) issue #712 lifts that
-        // narrowing past the switch. The `goto`/`Never:` pair here is
-        // syntactically unreachable (`if false`) and has nothing to do with
-        // the switch — its mere PRESENCE anywhere in the function is what
-        // must suppress the lift under this conservative fix.
+        // ADR-0208 section 16, row R6 (#5301): an unrelated `goto`/`Never:` pair
+        // after the switch does not bypass the switch, so the post-switch
+        // narrowing lift (`b.Pet -> Dog`) survives to `Never:`.
         let result = Evaluate(Hierarchy + `
 class Box { let Pet Animal }
 func Run(b Box) string {
@@ -115,6 +110,27 @@ func Run(b Box) string {
         goto Never
     }
     Never:
+    return b.Pet.Bark()
+}
+Run(Box{Pet: Dog{Name: "Rex"}})
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("woof", result.Value)
+    }
+
+    @Fact
+    func Goto_BypassesSwitchArm_DoesNotNarrowFieldPath() {
+        // ADR-0208 section 16, row R6 (#5301): when the default arm jumps to
+        // `Skip:` via `goto Skip` without narrowing `b.Pet` to `Dog`, the label
+        // join at `Skip:` drops `b.Pet -> Dog` and rejects `b.Pet.Bark()`.
+        let result = Evaluate(Hierarchy + `
+class Box { let Pet Animal }
+func Run(b Box) string {
+    switch b.Pet {
+        case d is Dog {}
+        default { goto Skip }
+    }
+    Skip:
     return b.Pet.Bark()
 }
 Run(Box{Pet: Dog{Name: "Rex"}})

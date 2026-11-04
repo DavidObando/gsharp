@@ -716,23 +716,13 @@ internal partial class StatementBinder {
     private func ApplyEarlyExitNarrowings(statement BoundStatement?, persistentFrame NarrowingFrame) {
         var statement = statement
         lastEarlyExitLifts.Clear()
-        var isLabeledStatement = false
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
             labeledBlock
             .Statements
             .Length == 2 &&
             labeledBlock.Statements[0] is BoundLabelStatement {
-            isLabeledStatement = true
             statement = labeledBlock.Statements[1]
-        }
-        // Issue #4285 / ADR-0213 L2: a guard without nested user labels lifts bare-variable nullability
-        // facts when its then-branch exits without `goto`, and lifts any bare-variable fact when attached
-        // directly to its target label. Forward jumps into a label or region join at that entry, and
-        // backward-jump spans apply `Lower(S, span)` at entry and at participant labels.
-        if binderCtx.FunctionContainsUserGotoOrLabel &&
-            !(statement is BoundIfStatement && !ContainsUserLabel(statement.Syntax)) {
-            return
         }
         if statement is BoundIfStatement ifStmt {
             if !binderCtx.PendingEarlyExitFrames.TryGetValue(ifStmt, out var elseFrame) {
@@ -746,23 +736,14 @@ internal partial class StatementBinder {
             if !EndsInUnconditionalExit(ifStmt.ThenStatement) {
                 return
             }
+            if ifStmt.ElseStatement != nil &&
+                ifStmt
+                .ElseStatement
+                .Syntax != nil &&
+                ContainsUserLabel(ifStmt.ElseStatement.Syntax) {
+                return
+            }
             for kv in elseFrame {
-                if binderCtx.FunctionContainsUserGotoOrLabel &&
-                    (
-                    !kv
-                        .Key
-                        .Members
-                        .IsDefaultOrEmpty ||
-                        (
-                        !isLabeledStatement &&
-                            (
-                            !EndsInUnconditionalExit(ifStmt.ThenStatement, gotoExits: false) ||
-                                !IsBareNullabilityGuardFact(kv.Key.Root.Type, kv.Value)
-                        )
-                    )
-                ) {
-                    continue
-                }
                 SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value)
                 lastEarlyExitLifts.Add((kv.Key, kv.Value))
             }
@@ -780,12 +761,6 @@ internal partial class StatementBinder {
                 SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value)
             }
         }
-    }
-
-    private func IsBareNullabilityGuardFact(declared TypeSymbol, fact TypeSymbol) bool -> switch declared {
-        case nullable is NullableTypeSymbol: object.Equals(nullable.UnderlyingType, fact)
-        case platform is PlatformTypeSymbol: object.Equals(platform.UnderlyingType, fact)
-        default: false
     }
 
     /// Issue #1123: assignment-based smart cast. When the bound statement is a
@@ -1313,10 +1288,14 @@ internal partial class StatementBinder {
         persistentFrame NarrowingFrame,
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     ) {
-        // Issues #4285 and #4290: arbitrary user jumps invalidate the
-        // dominance assumptions behind branch-exit narrowing.
-        if binderCtx.FunctionContainsUserGotoOrLabel {
-            return
+        var statement = statement
+        while statement is BoundBlockStatement labeledBlock &&
+            labeledBlock.Syntax is LabeledStatementSyntax &&
+            labeledBlock
+            .Statements
+            .Length == 2 &&
+            labeledBlock.Statements[0] is BoundLabelStatement {
+            statement = labeledBlock.Statements[1]
         }
         if statement is not BoundIfStatement ifStmt {
             return
@@ -1506,22 +1485,50 @@ internal partial class StatementBinder {
                 }
             }
             case inner is BoundBlockStatement {
+                if inner.Syntax is LabeledStatementSyntax &&
+                    inner
+                    .Statements
+                    .Length == 2 &&
+                    inner.Statements[0] is BoundLabelStatement {
+                    // A user label can be reached by a goto from outside the branch,
+                    // so only facts established after the label hold on all paths out.
+                    state.Clear()
+                    aliases.Clear()
+                    return ProcessBranchStatement(inner.Statements[1], state, aliases)
+                }
                 if inner.Statements.Any((statement BoundStatement) -> statement is BoundLabelStatement) {
+                    if inner.Syntax != nil && ContainsUserLabel(inner.Syntax) {
+                        state.Clear()
+                        aliases.Clear()
+                    }
                     // Internal jumps do not exit the branch. Without a CFG,
                     // retain only entry facts untouched by the whole block.
                     ClearAssignedRootsAndUpdateAliases(inner, state, aliases)
                     return true
                 }
+                var fallsThrough = true
                 for s in inner.Statements {
+                    if !fallsThrough {
+                        if !HasInternallyReachableFallthrough(s) {
+                            continue
+                        }
+                        state.Clear()
+                        aliases.Clear()
+                        fallsThrough = true
+                    }
                     if !ProcessBranchStatement(s, state, aliases) {
-                        return false
+                        fallsThrough = false
                     }
                 }
-                return true
+                return fallsThrough
             }
             case tryStatement is BoundTryStatement {
-                if EndsInUnconditionalExit(tryStatement) {
+                if !CanCompleteNormally(tryStatement) {
                     return false
+                }
+                if tryStatement.Syntax != nil && ContainsUserLabel(tryStatement.Syntax) {
+                    state.Clear()
+                    aliases.Clear()
                 }
                 if tryStatement.FinallyBlock is not{} finallyBlock {
                     ClearAssignedRootsAndUpdateAliases(tryStatement, state, aliases)
@@ -1544,6 +1551,13 @@ internal partial class StatementBinder {
                 return ProcessBranchStatement(finallyBlock, state, aliases)
             }
             default {
+                if !CanCompleteNormally(stmt) {
+                    return false
+                }
+                if stmt.Syntax != nil && ContainsUserLabel(stmt.Syntax) {
+                    state.Clear()
+                    aliases.Clear()
+                }
                 // Loops, switches, and any other construct that could reassign a
                 // tracked local: conservatively drop every narrowing on a local
                 // the statement's subtree assigns anywhere.

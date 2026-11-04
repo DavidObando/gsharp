@@ -252,6 +252,9 @@ open class Adr0208NarrowingCorpusTests {
                 "m03_5671_function_value_that_the_backward_goto_span_does_not_assign_stays_external",
                 "m04_5671_named_function_stored_in_a_function_value_in_a_backward_goto_span_kills_its_alias",
                 "m05_5671_closure_stored_in_an_external_function_value_after_a_loop_before_backward_goto_into_loop_kills_its_alias",
+                "m06_5301_member_path_and_guard_let_lifts_survive_unrelated_goto_R6",
+                "m07_5301_goto_into_if_branch_after_assignment_does_not_lift_R6",
+                "m08_5301_goto_into_else_branch_of_early_exit_guard_does_not_lift_R6",
                 "m1_unrelated_interface_refinement",
                 "n1_boxed_value_type_test",
                 "o1_callback_after_test_replaces_root",
@@ -1192,7 +1195,7 @@ func Run(c bool) int32 {
     done:
     return s.Length
 }
-func Main() { Console.WriteLine(Run(true)) }`, "GS0158@8:14", "reject", "", "R6 (accepted after)"}
+func Main() { Console.WriteLine(Run(true)) }`, "", "run", "1", "R6"}
             yield[]object{"e6_catch_sees_pretry", `func Get() string? { return "a" }
 func Boom() { throw Exception("x") }
 func Run() int32 {
@@ -1346,7 +1349,7 @@ func Run(x object?, k int32) string {
     Done:
     return x.Name
 }
-func Main() { Console.WriteLine(Run(Dog(), 0)) }`, "GS0158@17:14", "reject", "", "stays rejected until the guard lifts return (R6)"}
+func Main() { Console.WriteLine(Run(Dog(), 0)) }`, "", "run", "a", "R6"}
             yield[]object{"g2_ref_param_aliases_element", `class C {
     var Value int32 = 1
 }
@@ -10115,6 +10118,59 @@ func Main() { Console.WriteLine(Run(func() { })) }`,
                 "",
                 "ADR-0213 section 11 (#5671)"
             }
+            yield[]object{"m06_5301_member_path_and_guard_let_lifts_survive_unrelated_goto_R6", `import System
+open class Animal {
+    var Name string = "rex"
+}
+class Dog : Animal {
+    func Bark() string { return "woof" }
+}
+class Box {
+    let Pet Animal?
+    init(p Animal?) { Pet = p }
+}
+func Run(b Box, s string?, skip bool) string {
+    guard let p = b.Pet else { return "" }
+    if b.Pet !is Dog { return "" }
+    {
+        if s == nil { return "" }
+    }
+    if skip { goto Done }
+    Done:
+    return b.Pet.Bark() + "-" + p.Name + "-" + s.Length.ToString()
+}
+func Main() { Console.WriteLine(Run(Box(Dog()), "ab", true)) }`, "", "run", "woof-rex-2", "R6 (#5301)"}
+            yield[]object{"m07_5301_goto_into_if_branch_after_assignment_does_not_lift_R6", `import System
+func Run(cond bool, flag bool) int32 {
+    var x string? = nil
+    if cond {
+        goto SkipAssign
+    }
+    if flag {
+        x = "hello"
+        SkipAssign:
+        Console.WriteLine("reached")
+    } else {
+        x = "world"
+    }
+    return x.Length
+}
+func Main() { Console.WriteLine(Run(true, true)) }`, "GS0158@14:14", "reject", "", "R6 (#5301)"}
+            yield[]object{"m08_5301_goto_into_else_branch_of_early_exit_guard_does_not_lift_R6", `import System
+func Run(cond bool) int32 {
+    var x string? = nil
+    if cond {
+        goto InsideElse
+    }
+    if x == nil {
+        return 0
+    } else {
+        InsideElse:
+        Console.WriteLine("reached")
+    }
+    return x.Length
+}
+func Main() { Console.WriteLine(Run(true)) }`, "GS0158@13:14", "reject", "", "R6 (#5301)"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
