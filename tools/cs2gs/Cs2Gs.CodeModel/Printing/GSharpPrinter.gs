@@ -585,10 +585,19 @@ shared class GSharpPrinter {
         operand GExpression,
         indent int32,
         minPrecedence int32
-    ) string -> if operand is RangeIndexExpression {
+    ) string -> if operand is RangeIndexExpression ||
+        (operand is PatternTestExpression patternTest && PatternEndsInExpression(patternTest.Pattern)) {
         "(${RenderExpression(operand, indent)})"
     } else {
         RenderExpression(operand, indent, minPrecedence)
+    }
+
+    // Issue #5626: gsc parses the value of a constant or relational pattern as a full expression, so
+    // `x is "a" && y` reads as `x is ("a" && y)`. Such a test keeps its grouping as a binary operand.
+    private func PatternEndsInExpression(pattern GPattern?) bool -> switch pattern {
+        case ConstantPattern, RelationalPattern: true
+        case negated is NotPattern: PatternEndsInExpression(negated.Pattern)
+        default: false
     }
 
     // Issue #3470: the printer renders each statement on one line regardless
@@ -632,7 +641,7 @@ shared class GSharpPrinter {
             let operandMin = GetBinaryPrecedence(chainRoot.Operator) + 1
             let parts = operands.Select(
                 (operand GExpression) -> {
-                    let text = RenderExpression(operand, indent + 1, operandMin)
+                    let text = RenderBinaryOperand(operand, indent + 1, operandMin)
                     return if operand is InvocationExpression && text.IndexOf('\n') < 0 &&
                         continuation.Length +
                         text.Length > MaxLineWidth {

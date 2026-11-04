@@ -867,8 +867,11 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                         return IsInPlaceStorageWriteReceiver(address.WhenTrueOperand) &&
                             IsInPlaceStorageWriteReceiver(address.WhenFalseOperand)
                     }
-                    case fieldLink is BoundFieldAccessExpression when fieldLink.Receiver != nil {
-                        let owner = fieldLink.Receiver!!
+                    case fieldLink is BoundFieldAccessExpression {
+                        if fieldLink.Receiver == nil {
+                            return !fieldLink.Field.IsConst
+                        }
+                        let owner = fieldLink.Receiver
                         if GSharp.Core.CodeAnalysis.Binding.Binder.IsReferenceTypeForConstraint(owner.Type) {
                             return true
                         }

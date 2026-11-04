@@ -1047,10 +1047,9 @@ internal partial class ExpressionBinder {
         private func IndexerDefaultArgument(
             parameter ParameterSymbol,
             parameterType TypeSymbol
-        ) BoundExpression -> if parameter.ExplicitDefaultValue == nil {
-            cast[BoundExpression](BoundDefaultExpression(nil, parameterType))
-        } else {
-            cast[BoundExpression](BoundLiteralExpression(nil, parameter.ExplicitDefaultValue, parameterType))
-        }
+        ) BoundExpression -> ConversionClassifier.CreateConstantDefaultArgument(
+            parameter.ExplicitDefaultValue,
+            parameterType
+        )
     }
 }

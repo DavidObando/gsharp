@@ -66,6 +66,17 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         }
     }
 
+    /// Issue #5596: moves diagnostics added since [`startCount`](paramref) into [`sink`](paramref)
+    /// and truncates back to [`startCount`](paramref) so declaration-initializer diagnostics survive
+    /// outer speculative rollbacks.
+    internal func DrainSince(startCount int32, sink List[Diagnostic]) {
+        let start = Math.Clamp(startCount, 0, diagnostics.Count)
+        for var i = start; i < diagnostics.Count; i++ {
+            sink.Add(diagnostics[i])
+        }
+        TruncateTo(start)
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```

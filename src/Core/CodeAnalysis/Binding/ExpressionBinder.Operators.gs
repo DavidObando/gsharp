@@ -408,25 +408,6 @@ internal partial class ExpressionBinder {
         return BoundDereferenceExpression(nil, operand)
     }
 
-    /// ADR-0122 / issues #1014 and #3286: lowers unmanaged-pointer arithmetic
-    /// and native pointer comparisons. Returns `null` when the
-    /// operator/operand shape is not a supported pointer operation, so the
-    /// caller falls back to the normal (error-reporting) path.
-    /// @param syntax The binary expression syntax.
-    /// @param left The bound left operand.
-    /// @param right The bound right operand.
-    /// @returns The lowered bound expression, or `null`.
-    private func TryBindPointerBinaryExpression(
-        syntax BinaryExpressionSyntax,
-        left BoundExpression,
-        right BoundExpression
-    ) BoundExpression? -> TryBindPointerBinaryOperation(
-        syntax.OperatorToken.Kind,
-        syntax.OperatorToken.Location,
-        left,
-        right
-    )
-
     /// ADR-0122 / issue #1014: lowers a pointer arithmetic or comparison
     /// operation given the base operator token kind (not tied to a
     /// (cref:BinaryExpressionSyntax)), so that both the binary form
@@ -1487,13 +1468,61 @@ internal partial class ExpressionBinder {
                 leftUtf8.Slice
             )
         }
+        return BindBinaryOperation(
+            syntax,
+            syntax.OperatorToken.Kind,
+            syntax.OperatorToken.Location,
+            syntax.OperatorToken.Text,
+            syntax.Location,
+            boundLeft,
+            boundRight,
+            syntax.Left.Location,
+            syntax.Right.Location,
+            coalesceTargetType,
+            deferTargetlessCoalesce,
+            coalesceDiagMark
+        )
+    }
+
+    /// Binds a binary operator on two bound operands: native, built-in, user-defined, CLR, and reference-equality
+    /// operators, in that order. Issue #5688: a `==` or `!=` relational pattern binds its test here, so the
+    /// pattern and the binary expression make the same operator decision.
+    /// @param syntax The syntax of the operation, used for the bound nodes.
+    /// @param operatorKind The operator token kind.
+    /// @param operatorLocation The operator location, used for diagnostics.
+    /// @param operatorText The operator text, used for diagnostics.
+    /// @param location The location of the complete operation.
+    /// @param left The bound left operand.
+    /// @param right The bound right operand.
+    /// @param leftLocation The left operand location.
+    /// @param rightLocation The right operand location.
+    /// @param coalesceTargetType The contextual target type of a `??` operation, or `nil`.
+    /// @param deferTargetlessCoalesce Whether a `??` without a common type is deferred instead of reported.
+    /// @param coalesceDiagMark The diagnostic count before the `??` operands were bound.
+    /// @returns The bound operation, or a (cref:BoundErrorExpression) after a diagnostic.
+    internal func BindBinaryOperation(
+        syntax SyntaxNode,
+        operatorKind SyntaxKind,
+        operatorLocation TextLocation,
+        operatorText string,
+        location TextLocation,
+        left BoundExpression,
+        right BoundExpression,
+        leftLocation TextLocation,
+        rightLocation TextLocation,
+        coalesceTargetType TypeSymbol? = nil,
+        deferTargetlessCoalesce bool = false,
+        coalesceDiagMark int32 = 0
+    ) BoundExpression {
+        var boundLeft = left
+        var boundRight = right
         if boundLeft.Type == TypeSymbol.Error || boundRight.Type == TypeSymbol.Error {
             if TryBindDelegateCombinationOperator(
-                syntax.OperatorToken.Kind,
+                operatorKind,
                 &boundLeft,
                 &boundRight,
-                syntax.Left.Location,
-                syntax.Right.Location,
+                leftLocation,
+                rightLocation,
                 out var delegateOperator
             ) {
                 return BoundBinaryExpression(
@@ -1528,12 +1557,12 @@ internal partial class ExpressionBinder {
                 !ManagedReferenceTypes.IsCompatible(nativeEqualityRightType.ClrType)
         ) {
             Diagnostics.ReportManagedReference(
-                syntax.Location,
+                location,
                 "reference the matching Gsharp.Runtime.Values runtime; the managed-reference ABI is incompatible"
             )
             return BoundErrorExpression(syntax)
         }
-        if (syntax.OperatorToken.Kind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken) &&
+        if (operatorKind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken) &&
             ManagedReferenceTypes.TryGetElement(nativeEqualityLeftType, out _, out var leftReadOnlyManaged) &&
             ManagedReferenceTypes
             .TryGetElement(nativeEqualityRightType, out _, out var rightReadOnlyManaged) {
@@ -1542,12 +1571,12 @@ internal partial class ExpressionBinder {
                 nativeEqualityRightType
             ) {
                 Diagnostics.ReportManagedReference(
-                    syntax.OperatorToken.Location,
+                    operatorLocation,
                     "location equality requires identical referent permissions and type; use SameLocation to compare permissions"
                 )
                 return BoundErrorExpression(syntax)
             }
-            let name = if syntax.OperatorToken.Kind == SyntaxKind.EqualsEqualsToken {
+            let name = if operatorKind == SyntaxKind.EqualsEqualsToken {
                 "op_Equality"
             } else {
                 "op_Inequality"
@@ -1564,14 +1593,14 @@ internal partial class ExpressionBinder {
             )
             return BoundClrBinaryOperatorExpression(
                 syntax,
-                syntax.OperatorToken.Kind,
+                operatorKind,
                 boundLeft,
                 boundRight,
                 method,
                 TypeSymbol.Bool
             )
         }
-        if (syntax.OperatorToken.Kind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken) &&
+        if (operatorKind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken) &&
             NativeSliceTypes.TryGetElement(nativeEqualityLeftType, out _, out var leftReadOnly) &&
             NativeSliceTypes
             .TryGetElement(nativeEqualityRightType, out _, out var rightReadOnly) {
@@ -1580,14 +1609,14 @@ internal partial class ExpressionBinder {
                 nativeEqualityRightType
             ) {
                 Diagnostics.ReportUndefinedBinaryOperator(
-                    syntax.OperatorToken.Location,
-                    syntax.OperatorToken.Text,
+                    operatorLocation,
+                    operatorText,
                     boundLeft.Type,
                     boundRight.Type
                 )
                 return BoundErrorExpression(syntax)
             }
-            let methodName = if syntax.OperatorToken.Kind == SyntaxKind.EqualsEqualsToken {
+            let methodName = if operatorKind == SyntaxKind.EqualsEqualsToken {
                 "op_Equality"
             } else {
                 "op_Inequality"
@@ -1603,11 +1632,11 @@ internal partial class ExpressionBinder {
                 expression: "clrType.GetMethod(methodName, BindingFlags.Public | BindingFlags.Static)"
             )
             TryLiftNullableClrOperatorOperands(
-                syntax.OperatorToken.Kind,
+                operatorKind,
                 &boundLeft,
                 &boundRight,
-                syntax.Left.Location,
-                syntax.Right.Location,
+                leftLocation,
+                rightLocation,
                 nativeEqualityLeftType,
                 nativeEqualityLeftType,
                 TypeSymbol.Bool,
@@ -1616,7 +1645,7 @@ internal partial class ExpressionBinder {
             )
             return BoundClrBinaryOperatorExpression(
                 syntax,
-                syntax.OperatorToken.Kind,
+                operatorKind,
                 boundLeft,
                 boundRight,
                 method,
@@ -1629,29 +1658,22 @@ internal partial class ExpressionBinder {
         // reinterpret conversions — no dedicated bound node is required.
         if (boundLeft.Type is PointerTypeSymbol or FunctionPointerTypeSymbol) ||
             (boundRight.Type is PointerTypeSymbol or FunctionPointerTypeSymbol) {
-            let pointerResult BoundExpression? = TryBindPointerBinaryExpression(syntax, boundLeft, boundRight)
+            let pointerResult BoundExpression? = TryBindPointerBinaryOperation(
+                operatorKind,
+                operatorLocation,
+                boundLeft,
+                boundRight
+            )
             if pointerResult != nil {
                 return pointerResult
             }
         }
-        if (
-            syntax
-                .OperatorToken
-                .Kind == SyntaxKind.EqualsEqualsToken ||
-                syntax
-                .OperatorToken
-                .Kind == SyntaxKind.BangEqualsToken
-        ) &&
+        if (operatorKind == SyntaxKind.EqualsEqualsToken || operatorKind == SyntaxKind.BangEqualsToken) &&
             (
             (boundRight.Type == TypeSymbol.Null && IsExplicitlyNonNullImportedResult(boundLeft)) ||
                 (boundLeft.Type == TypeSymbol.Null && IsExplicitlyNonNullImportedResult(boundRight))
         ) {
-            Diagnostics.ReportUndefinedBinaryOperator(
-                syntax.OperatorToken.Location,
-                syntax.OperatorToken.Text,
-                boundLeft.Type,
-                boundRight.Type
-            )
+            Diagnostics.ReportUndefinedBinaryOperator(operatorLocation, operatorText, boundLeft.Type, boundRight.Type)
             return BoundErrorExpression(nil)
         }
         // Issue #3501 / ADR-0171: tuple `==` / `!=` desugars to element-wise
@@ -1659,17 +1681,17 @@ internal partial class ExpressionBinder {
         // `operator` (the structural tuple type cannot declare one), so this
         // arm short-circuits the whole chain. One tuple against a non-tuple
         // deliberately falls through (→ GS0129).
-        if ((syntax.OperatorToken.Kind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken)) &&
+        if ((operatorKind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken)) &&
             boundLeft.Type is TupleTypeSymbol &&
             boundRight.Type is TupleTypeSymbol {
-            return BindTupleEquality(syntax, boundLeft, boundRight)
+            return BindTupleEquality(syntax, operatorKind, operatorLocation, operatorText, boundLeft, boundRight)
         }
         var boundOperator BoundBinaryOperator? = BindBinaryOperatorWithNumericAdaptation(
-            syntax.OperatorToken.Kind,
+            operatorKind,
             &boundLeft,
             &boundRight,
-            syntax.Left.Location,
-            syntax.Right.Location
+            leftLocation,
+            rightLocation
         )
         // Issue #1480: target-typed null-coalescing. When `a ?? b` has no natural
         // common operand type (so the standard bind produced no operator) but the
@@ -1680,9 +1702,7 @@ internal partial class ExpressionBinder {
         // the target are inserted by the NullCoalesce tail below; the emitter's
         // interface-merge cast (#1480) realigns each branch's stack type.
         if boundOperator == nil &&
-            syntax
-            .OperatorToken
-            .Kind == SyntaxKind.QuestionQuestionToken &&
+            operatorKind == SyntaxKind.QuestionQuestionToken &&
             TryBindTargetTypedNullCoalesce(boundLeft, boundRight, coalesceTargetType, out var targetTypedCoalesce) {
             boundOperator = targetTypedCoalesce
         }
@@ -1690,22 +1710,18 @@ internal partial class ExpressionBinder {
             // Streams D + C: user-defined `operator` methods then CLR `op_*`
             // methods, shared with the compound-assignment path (issue #1554).
             let fallback BoundExpression? = TryBindBinaryWithUserAndClrFallback(
-                syntax.OperatorToken.Kind,
+                operatorKind,
                 &boundLeft,
                 &boundRight,
-                syntax.Left.Location,
-                syntax.Right.Location,
+                leftLocation,
+                rightLocation,
                 out var ambiguous
             )
             if fallback != nil {
                 return fallback
             }
             if ambiguous {
-                Diagnostics.ReportAmbiguousOverload(
-                    syntax.OperatorToken.Location,
-                    syntax.OperatorToken.Text,
-                    candidateCount: 2
-                )
+                Diagnostics.ReportAmbiguousOverload(operatorLocation, operatorText, candidateCount: 2)
                 return BoundErrorExpression(nil)
             }
             // Issue #1480: a `??` whose operands share no natural common type and
@@ -1729,30 +1745,18 @@ internal partial class ExpressionBinder {
             // precedence. Value-type operands (whose `T?` erases to
             // `Nullable<T>`) are excluded, so an unconstrained or
             // `struct`-constrained `T?` still reports GS0129.
-            if (
-                syntax
-                    .OperatorToken
-                    .Kind == SyntaxKind.EqualsEqualsToken ||
-                    syntax
-                    .OperatorToken
-                    .Kind == SyntaxKind.BangEqualsToken
-            ) &&
+            if (operatorKind == SyntaxKind.EqualsEqualsToken || operatorKind == SyntaxKind.BangEqualsToken) &&
                 BoundBinaryOperator.IsReferenceEqualityOperand(boundLeft.Type) &&
                 BoundBinaryOperator
                 .IsReferenceEqualityOperand(boundRight.Type) {
                 let referenceOperator = BoundBinaryOperator.MakeReferenceEquality(
-                    syntax.OperatorToken.Kind,
+                    operatorKind,
                     boundLeft.Type,
                     boundRight.Type
                 )
                 return BoundBinaryExpression(nil, boundLeft, referenceOperator, boundRight, binderCtx.IsCheckedContext)
             }
-            Diagnostics.ReportUndefinedBinaryOperator(
-                syntax.OperatorToken.Location,
-                syntax.OperatorToken.Text,
-                boundLeft.Type,
-                boundRight.Type
-            )
+            Diagnostics.ReportUndefinedBinaryOperator(operatorLocation, operatorText, boundLeft.Type, boundRight.Type)
             return BoundErrorExpression(nil)
         }
         // Issue #1239 / C# §12.15: when `??` computes a best common type that
@@ -1769,11 +1773,11 @@ internal partial class ExpressionBinder {
             // Issue #4065: even when the natural method-group type is already
             // identical to the coalesce result, the left delegate operand is
             // the contextual target that makes the right group a value.
-            boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type)
+            boundRight = conversions.BindConversion(rightLocation, boundRight, boundOperator.Type)
         } else if boundOperator.Kind == BoundBinaryOperatorKind.NullCoalesce &&
             boundRight.Type != boundOperator.Type &&
             boundRight.Type != TypeSymbol.Never {
-            boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type)
+            boundRight = conversions.BindConversion(rightLocation, boundRight, boundOperator.Type)
         }
         // Issue #3317 / ADR-0159: with sound empty-instance zero values, a nil
         // comparison whose non-nil operand's STATIC type is a bare (non-`?`)
@@ -1810,7 +1814,7 @@ internal partial class ExpressionBinder {
             }
             if nilCompareOperand != nil && IsBareMagicCollectionNilCompareOperand(nilCompareOperand) {
                 Diagnostics.ReportNilComparisonAlwaysConstant(
-                    syntax.Location,
+                    location,
                     nilCompareOperand.Type,
                     if boundOperator.Kind == BoundBinaryOperatorKind.Equals {
                         "false"
@@ -1838,11 +1842,7 @@ internal partial class ExpressionBinder {
             boundLeft.Type == TypeSymbol.Null &&
             boundRight.Type != TypeSymbol
             .Null {
-            let mirrored BoundBinaryOperator? = BoundBinaryOperator.Bind(
-                syntax.OperatorToken.Kind,
-                boundRight.Type,
-                boundLeft.Type
-            )
+            let mirrored BoundBinaryOperator? = BoundBinaryOperator.Bind(operatorKind, boundRight.Type, boundLeft.Type)
             if mirrored != nil {
                 boundLeft, boundRight = boundRight, boundLeft
                 boundOperator = mirrored
@@ -3165,6 +3165,8 @@ internal partial class ExpressionBinder {
                 case variable is BoundVariableExpression: variable.NarrowedType == nil
                 case field is BoundFieldAccessExpression: field.NarrowedType == nil
                 case property is BoundPropertyAccessExpression: property.NarrowedType == nil
+                // Issue #5688: the input of a relational pattern can be a narrowed read, and its type does not show it.
+                case BoundPatternOperandExpression: false
                 default: true
             }
         }

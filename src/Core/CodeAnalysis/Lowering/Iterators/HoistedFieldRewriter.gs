@@ -87,10 +87,13 @@ internal open class HoistedFieldRewriter : BoundTreeRewriter {
     // Issue #641: rewrite field assignments whose receiver is the
     // user-class `this` (hoisted as <>4__this) to use an expression
     // receiver so the emitter loads the proxy field.
+    // GSA0005: The rebuild sits inside `node.Receiver != null`, so this is the
+    // variable-receiver form; every other form falls through to base.
+    @SuppressDiagnostic("GSA0005")
     protected open override func RewriteFieldAssignmentExpression(node BoundFieldAssignmentExpression) BoundExpression {
-        let value = this.RewriteExpression(node.Value)
         if node.Receiver != nil && this.fieldMap.TryGetValue(node.Receiver, out var proxyField) {
             let receiverExpr = this.FieldRead(proxyField)
+            let value = this.RewriteExpression(node.Value)
             return BoundFieldAssignmentExpression.WithExpressionReceiver(
                 nil,
                 receiverExpr,
@@ -100,41 +103,7 @@ internal open class HoistedFieldRewriter : BoundTreeRewriter {
                 node.ResultType
             )
         }
-        if node.ReceiverExpression != nil {
-            let receiverExpr = this.RewriteExpression(node.ReceiverExpression)
-            if !object.ReferenceEquals(value, node.Value) || !object.ReferenceEquals(
-                receiverExpr,
-                node.ReceiverExpression
-            ) {
-                return BoundFieldAssignmentExpression.WithExpressionReceiver(
-                    nil,
-                    receiverExpr,
-                    BoundNodeForm.DeclaringType(node),
-                    node.Field,
-                    value,
-                    node.ResultType
-                )
-            }
-        } else if !object.ReferenceEquals(value, node.Value) {
-            // Issue #3333 / #1644: an interface static field write has a null
-            // Receiver and StructType, and carries the owning interface in
-            // InterfaceType. Rebuilding it through the variable-receiver
-            // constructor drops that, and the emitter parents the field at the
-            // open-generic TypeDef instead of a TypeSpec. This override must
-            // carry the same guard the base BoundTreeRewriter does.
-            if node.InterfaceType != nil {
-                return BoundFieldAssignmentExpression(nil, node.Field, node.InterfaceType, value, node.ResultType)
-            }
-            return BoundFieldAssignmentExpression(
-                nil,
-                node.Receiver,
-                BoundNodeForm.DeclaringType(node),
-                node.Field,
-                value,
-                node.ResultType
-            )
-        }
-        return node
+        return base.RewriteFieldAssignmentExpression(node)
     }
 
     protected open override func RewriteVariableDeclaration(node BoundVariableDeclaration) BoundStatement {

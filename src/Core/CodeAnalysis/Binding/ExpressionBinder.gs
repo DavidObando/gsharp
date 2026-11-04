@@ -2653,7 +2653,7 @@ internal partial class ExpressionBinder {
             return IsTargetDependentExpressionSyntax(block.Expression)
         }
 
-        private func IsTargetDependentExpressionSyntax(syntax ExpressionSyntax) bool {
+        internal func IsTargetDependentExpressionSyntax(syntax ExpressionSyntax) bool {
             var syntax = syntax
             while syntax is ParenthesizedExpressionSyntax parenthesizedTail {
                 syntax = parenthesizedTail.Expression

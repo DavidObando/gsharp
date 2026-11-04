@@ -1626,12 +1626,10 @@ internal partial class DeclarationBinder {
         private func CreateProjectedOptionalUserDefaultArgument(
             parameter ParameterSymbol,
             targetType TypeSymbol
-        ) BoundExpression {
-            if parameter.ExplicitDefaultValue == nil {
-                return BoundDefaultExpression(nil, targetType)
-            }
-            return BoundLiteralExpression(nil, parameter.ExplicitDefaultValue, targetType)
-        }
+        ) BoundExpression -> ConversionClassifier.CreateConstantDefaultArgument(
+            parameter.ExplicitDefaultValue,
+            targetType
+        )
 
         private func TryGetAddressedArgumentType(
             argument BoundExpression,

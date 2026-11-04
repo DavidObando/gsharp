@@ -186,6 +186,10 @@ internal partial class MethodBodyEmitter {
             delegateSourceType is ImportedTypeSymbol{ClrType: Type importedDelegateSource} &&
             ClrTypeUtilities
             .IsDelegateType(importedDelegateSource) {
+            if Conversion.ReusesFunctionValueDelegate(delegateSourceType, delegateTargetType) {
+                this.EmitExpression(conv.Expression)
+                return
+            }
             let invoke = importedDelegateSource.GetMethod("Invoke") ??
                 throw InvalidOperationException(
                 "Delegate type '${importedDelegateSource.FullName}' has no Invoke method."
@@ -718,9 +722,9 @@ internal partial class MethodBodyEmitter {
         // Issue #663: fall back to user-defined op_Implicit / op_Explicit when
         // no built-in emit path fires. This covers types like JsonNode that
         // expose conversion operators to string, int, bool, etc.
-        if from.ClrType != nil && to.ClrType != nil && ClrOperatorResolution.TryResolveConversionForTypes(
-            from,
-            to,
+        if from.ClrType != nil && to.ClrType != nil && ClrOperatorResolution.TryResolveConversion(
+            NullableLifting.GetEffectiveClrType(from),
+            to.ClrType,
             allowExplicit: true,
             out var userConvMethod,
             out _

@@ -109,5 +109,6 @@ enum BoundNodeKind {
     BaseInterfaceCallExpression,
     BaseClassCallExpression,
     TypeParameterConstructionExpression,
-    Utf8StringExpression
+    Utf8StringExpression,
+    PatternOperandExpression
 }
