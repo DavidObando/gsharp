@@ -228,22 +228,22 @@ internal partial class DeclarationBinder {
     /// (see (cref:BoundScope.TryDeclareTypeAlias(string, TypeSymbol, string)))
     /// independent of whatever package (if any) the aliased target itself
     /// belongs to.
-    internal func BindTypeAliasDeclaration(syntax TypeAliasDeclarationSyntax, $package PackageSymbol?) {
+    /// @returns The declared alias symbol, or `null` when rejected.
+    internal func BindTypeAliasDeclaration(
+        syntax TypeAliasDeclarationSyntax,
+        $package PackageSymbol?
+    ) TypeAliasSymbol? {
         let name = syntax.Identifier.ValueText
         // Reject shadowing of primitive type names.
         if isPrimitiveTypeName(name) {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name)
-            return
+            return nil
         }
         let aliasedType TypeSymbol? = bindTypeClause(syntax.AliasedType)
         if aliasedType == nil {
-            return
+            return nil
         }
-        // Issue #141 / ADR-0047: type aliases accept annotations syntactically;
-        // since the alias has no dedicated symbol of its own, the resolved
-        // attribute list is reported for diagnostics and otherwise dropped
-        // until v2 introduces a richer alias-symbol shape.
-        BindAttributes(
+        let attributes = BindAttributes(
             syntax.Annotations,
             AttributeTargetKind.Type,
             Binder.TypeDeclarationAllowedTargets,
@@ -260,7 +260,14 @@ internal partial class DeclarationBinder {
             }
         ) {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name)
+            return nil
         }
+        let aliasSymbol = TypeAliasSymbol(name, aliasedType, syntax){PackageName = $package?.Name ?? string.Empty}
+        if !attributes.IsDefaultOrEmpty {
+            aliasSymbol.SetAttributes(attributes)
+        }
+        Binder.AttachDocumentation(aliasSymbol, syntax)
+        return aliasSymbol
     }
 
     /// ADR-0059 / issue #255: binds a `delegate Name(...) `;

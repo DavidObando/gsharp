@@ -455,13 +455,143 @@ func Branches(x object, maybe object?) int32 {
         Assert.Contains("Counter", names)
         Assert.Contains("IShape", names)
         Assert.Contains("Color", names)
+        Assert.Contains("Alias", names)
+        Assert.Contains("Alias2", names)
     }
 
     @Fact
     func TypeAlias_AnswersTheTypeItNamesWhenQueriedByName() {
-        // An alias has no symbol of its own: the name answers the aliased type.
-        Assert.Same(TypeSymbol.Int32, Single("PTop", "Alias"))
-        Assert.Same(TypeSymbol.Int32, Single("PTop", "Alias2"))
+        let first = Assert.IsType[TypeAliasSymbol](Single("PTop", "Alias"))
+        Assert.Equal("Alias", first.Name)
+        Assert.Same(TypeSymbol.Int32, first.Target)
+        let second = Assert.IsType[TypeAliasSymbol](Single("PTop", "Alias2"))
+        Assert.Equal("Alias2", second.Name)
+        Assert.Same(TypeSymbol.Int32, second.Target)
+        Assert.NotSame(first, second)
+    }
+
+    @Fact
+    func TypeAlias_TwoAliasesOfOneTarget_AreListedUnderTheirOwnNamesInSourceOrder() {
+        const text = "var first = 1\ntype Meters = int32\nfunc second() int32 { return 1 }\ntype A = int32\ntype B = int32\nvar last = 2\n"
+        let tree = SyntaxTree.Parse(SourceText.From(text, "aliases-order.gs"))
+        let model = Compilation(tree).GetSemanticModel(tree)
+        let symbols = model.LookupSymbols(0)
+        let names = symbols.Select((s Symbol) -> s.Name).ToList()
+        Assert.Equal([]string{"first", "Meters", "second", "A", "B", "last"}, names)
+        let meters = Assert.IsType[TypeAliasSymbol](symbols[1])
+        let aliasA = Assert.IsType[TypeAliasSymbol](symbols[3])
+        let aliasB = Assert.IsType[TypeAliasSymbol](symbols[4])
+        Assert.Same(TypeSymbol.Int32, meters.Target)
+        Assert.Same(TypeSymbol.Int32, aliasA.Target)
+        Assert.Same(TypeSymbol.Int32, aliasB.Target)
+        Assert.NotSame(aliasA, aliasB)
+    }
+
+    @Fact
+    func TypeAlias_CrossPackageAndImportedPackage_AreVisibleAndDisambiguated() {
+        let libTree = SyntaxTree.Parse(
+            SourceText.From("package Lib\ntype Meters = int32\ntype Coord = int32\n", "a-lib.gs")
+        )
+        let otherTree = SyntaxTree.Parse(SourceText.From("package Other\ntype Coord = int64\n", "b-other.gs"))
+        let appSource = "package App\nimport Other\nfunc Use() int32 {\n    return 0 // PApp\n}\n"
+        let appTree = SyntaxTree.Parse(SourceText.From(appSource, "c-app.gs"))
+        let compilation = Compilation(libTree, otherTree, appTree)
+        Assert.Empty(compilation.GetDiagnostics())
+        let appModel = compilation.GetSemanticModel(appTree)
+        let appPos = appSource.IndexOf("// PApp", StringComparison.Ordinal)
+        let appNames = appModel.LookupSymbols(appPos).Select((s Symbol) -> s.Name).ToList()
+        Assert.Contains("Meters", appNames)
+        Assert.Contains("Coord", appNames)
+        let meters = Assert.IsType[TypeAliasSymbol](Assert.Single(appModel.LookupSymbols(appPos, "Meters")))
+        Assert.Same(TypeSymbol.Int32, meters.Target)
+        let importedCoord = Assert.IsType[TypeAliasSymbol](Assert.Single(appModel.LookupSymbols(appPos, "Coord")))
+        Assert.Same(TypeSymbol.Int64, importedCoord.Target)
+        let libModel = compilation.GetSemanticModel(libTree)
+        let ownCoord = Assert.IsType[TypeAliasSymbol](Assert.Single(libModel.LookupSymbols(0, "Coord")))
+        Assert.Same(TypeSymbol.Int32, ownCoord.Target)
+        let ambiguousTree = SyntaxTree.Parse(
+            SourceText.From("package Both\nimport Lib\nimport Other\nfunc Use() int32 { return 0 }\n", "d-both.gs")
+        )
+        let ambiguousModel = Compilation(libTree, otherTree, ambiguousTree).GetSemanticModel(ambiguousTree)
+        Assert.Empty(ambiguousModel.LookupSymbols(0, "Coord"))
+        let aliasedImportTree = SyntaxTree.Parse(
+            SourceText.From("package Aliased\nimport chosen = $$Other\nfunc Use() int32 { return 0 }\n", "e-aliased.gs")
+        )
+        let aliasedImportModel = Compilation(libTree, otherTree, aliasedImportTree).GetSemanticModel(aliasedImportTree)
+        let aliasedCoord = Assert.IsType[TypeAliasSymbol](Assert.Single(aliasedImportModel.LookupSymbols(0, "Coord")))
+        Assert.Same(TypeSymbol.Int64, aliasedCoord.Target)
+        let sameTargetTree = SyntaxTree.Parse(SourceText.From("package Same\ntype Coord = int32\n", "f-same.gs"))
+        let bothSameTree = SyntaxTree.Parse(
+            SourceText.From(
+                "package BothSame\nimport Lib\nimport Same\nfunc Use() int32 { return 0 }\n",
+                "g-both-same.gs"
+            )
+        )
+        let bothSameModel = Compilation(libTree, sameTargetTree, bothSameTree).GetSemanticModel(bothSameTree)
+        let bothSameCoord = Assert.IsType[TypeAliasSymbol](Assert.Single(bothSameModel.LookupSymbols(0, "Coord")))
+        Assert.Same(TypeSymbol.Int32, bothSameCoord.Target)
+        let classLibTree = SyntaxTree.Parse(SourceText.From("package Lib\npublic class Coord { }\n", "h-class-lib.gs"))
+        let localAliasAppSource = "package App\ntype Coord = int32\nfunc Use() Coord {\n    return 1 // PLocalAlias\n}\n"
+        let localAliasAppTree = SyntaxTree.Parse(SourceText.From(localAliasAppSource, "i-local-alias-app.gs"))
+        let mixedCompilation = Compilation(classLibTree, otherTree, localAliasAppTree)
+        Assert.Empty(mixedCompilation.GetDiagnostics())
+        let localAliasAppModel = mixedCompilation.GetSemanticModel(localAliasAppTree)
+        let localAliasPos = localAliasAppSource.IndexOf("// PLocalAlias", StringComparison.Ordinal)
+        let localAlias = Assert.IsType[TypeAliasSymbol](
+            Assert.Single(localAliasAppModel.LookupSymbols(localAliasPos, "Coord"))
+        )
+        Assert.Equal("App", localAlias.PackageName)
+        Assert.Same(TypeSymbol.Int32, localAlias.Target)
+        Assert.Contains(
+            localAliasAppModel.LookupSymbols(localAliasPos),
+            (s Symbol) -> object.ReferenceEquals(s, localAlias)
+        )
+        let importedAliasOverClassTree = SyntaxTree.Parse(
+            SourceText.From("package Consumer\nimport Other\nfunc Use() Coord { return 1 }\n", "j-consumer.gs")
+        )
+        let importedAliasOverClassModel = Compilation(
+            classLibTree,
+            otherTree,
+            importedAliasOverClassTree
+        ).GetSemanticModel(importedAliasOverClassTree)
+        let importedOverClass = Assert.IsType[TypeAliasSymbol](
+            Assert.Single(importedAliasOverClassModel.LookupSymbols(0, "Coord"))
+        )
+        Assert.Equal("Other", importedOverClass.PackageName)
+        Assert.Same(TypeSymbol.Int64, importedOverClass.Target)
+        let genericPkgTree = SyntaxTree.Parse(
+            SourceText.From(
+                "package GenericPkg\npublic class Coord[T] { }\npublic class OnlyGeneric[T, U] { }\n",
+                "k-generic-pkg.gs"
+            )
+        )
+        let generic1PkgTree = SyntaxTree.Parse(
+            SourceText.From("package Generic1Pkg\npublic class OnlyGeneric[T] { }\n", "l-generic1-pkg.gs")
+        )
+        let mixedArityTwoImportsTree = SyntaxTree.Parse(
+            SourceText.From(
+                "package MixedConsumer\nimport Lib\nimport GenericPkg\nimport Generic1Pkg\nfunc Use() Coord { return 1 }\n",
+                "m-mixed-consumer.gs"
+            )
+        )
+        let mixedArityAliasCompilation = Compilation(genericPkgTree, generic1PkgTree, libTree, mixedArityTwoImportsTree)
+        Assert.Empty(mixedArityAliasCompilation.GetDiagnostics())
+        let mixedArityAliasModel = mixedArityAliasCompilation.GetSemanticModel(mixedArityTwoImportsTree)
+        let mixedArityAlias = Assert.IsType[TypeAliasSymbol](
+            Assert.Single(mixedArityAliasModel.LookupSymbols(0, "Coord"))
+        )
+        Assert.Equal("Lib", mixedArityAlias.PackageName)
+        Assert.Same(TypeSymbol.Int32, mixedArityAlias.Target)
+        let lowestArityGeneric = Assert.IsType[StructSymbol](
+            Assert.Single(mixedArityAliasModel.LookupSymbols(0, "OnlyGeneric"))
+        )
+        Assert.Equal("Generic1Pkg", lowestArityGeneric.PackageName)
+        Assert.Single(lowestArityGeneric.TypeParameters)
+        let mixedArityClassCompilation = Compilation(genericPkgTree, classLibTree, mixedArityTwoImportsTree)
+        let mixedArityClassModel = mixedArityClassCompilation.GetSemanticModel(mixedArityTwoImportsTree)
+        let mixedArityClass = Assert.IsType[StructSymbol](Assert.Single(mixedArityClassModel.LookupSymbols(0, "Coord")))
+        Assert.Equal("Lib", mixedArityClass.PackageName)
+        Assert.Empty(mixedArityClass.TypeParameters)
     }
 
     @Fact
@@ -579,6 +709,49 @@ func Branches(x object, maybe object?) int32 {
             .Parameters[0]
             .Type!!
         Assert.Same(TypeSymbol.Int32, model.GetSymbolInfo(clause.Identifier!!).Symbol)
+    }
+
+    @Fact
+    func SymbolInfo_AndDeclaredSymbol_OfATypeAliasDeclaration_AnswerTheAliasSymbol() {
+        let model = Compiled.Model
+        let tree = Compiled.Tree
+        let declaration = tree
+            .Root
+            .DescendantNodes()
+            .OfType[TypeAliasDeclarationSyntax]()
+            .Single((d TypeAliasDeclarationSyntax) -> d.Identifier.ValueText == "Alias")
+        let byDeclaration = Assert.IsType[TypeAliasSymbol](model.GetDeclaredSymbol(declaration))
+        let byIdentifier = Assert.IsType[TypeAliasSymbol](model.GetDeclaredSymbol(declaration.Identifier))
+        let byDeclarationSymbolInfo = Assert.IsType[TypeAliasSymbol](model.GetSymbolInfo(declaration).Symbol)
+        let bySymbolInfo = Assert.IsType[TypeAliasSymbol](model.GetSymbolInfo(declaration.Identifier).Symbol)
+        Assert.Same(byDeclaration, byIdentifier)
+        Assert.Same(byDeclaration, byDeclarationSymbolInfo)
+        Assert.Same(byDeclaration, bySymbolInfo)
+        Assert.Equal("Alias", byDeclaration.Name)
+        Assert.Equal("Scope", byDeclaration.ContainingNamespace)
+        Assert.Equal("type Alias = int32", byDeclaration.ToString())
+        Assert.Same(TypeSymbol.Int32, byDeclaration.Target)
+        Assert.Same(declaration, byDeclaration.Declaration)
+        Assert.Same(TypeSymbol.Int32, model.GetSymbolInfo(declaration.AliasedType.Identifier!!).Symbol)
+        let beforeTree = SyntaxTree.Parse(
+            SourceText.From("package P\ntype Meters = int32\nfunc F() int32 { return 1 }\n", "repoint.gs")
+        )
+        let beforeComp = Compilation(beforeTree)
+        let beforeAlias = Assert.IsType[TypeAliasSymbol](
+            beforeComp.GetSemanticModel(beforeTree).GetDeclaredSymbol(
+                beforeTree.Root.Members.OfType[TypeAliasDeclarationSyntax]().Single()
+            )
+        )
+        let afterTree = SyntaxTree.Parse(
+            SourceText.From("package P\ntype Meters = int32\nfunc F() int32 { return 2 }\n", "repoint.gs")
+        )
+        let afterComp = beforeComp.ReplaceSyntaxTree(beforeTree, afterTree)
+        let afterDeclaration = afterTree.Root.Members.OfType[TypeAliasDeclarationSyntax]().Single()
+        let afterAlias = Assert.IsType[TypeAliasSymbol](
+            afterComp.GetSemanticModel(afterTree).GetDeclaredSymbol(afterDeclaration)
+        )
+        Assert.Same(beforeAlias, afterAlias)
+        Assert.Same(afterDeclaration, afterAlias.Declaration)
     }
 
     @Fact

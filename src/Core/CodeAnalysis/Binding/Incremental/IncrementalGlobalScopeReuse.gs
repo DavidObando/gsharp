@@ -136,7 +136,8 @@ internal shared class IncrementalGlobalScopeReuse {
             !TryBuildPositionalMap[PropertyDeclarationSyntax](previousTree, updatedTree, out var propertyMap) ||
             !TryBuildPositionalMap[EventDeclarationSyntax](previousTree, updatedTree, out var eventMap) ||
             !TryBuildPositionalMap[EnumDeclarationSyntax](previousTree, updatedTree, out var enumMap) ||
-            !TryBuildPositionalMap[DelegateDeclarationSyntax](previousTree, updatedTree, out var delegateMap) {
+            !TryBuildPositionalMap[DelegateDeclarationSyntax](previousTree, updatedTree, out var delegateMap) ||
+            !TryBuildPositionalMap[TypeAliasDeclarationSyntax](previousTree, updatedTree, out var typeAliasMap) {
             return false
         }
         // Reusing the prior scope keeps the prior (signature-level) diagnostics
@@ -224,6 +225,17 @@ internal shared class IncrementalGlobalScopeReuse {
                 return false
             }
             delegatesToRepoint.Add((delegateSymbol, updated))
+        }
+        let typeAliasesToRepoint = List[(Symbol TypeAliasSymbol, Updated TypeAliasDeclarationSyntax)]()
+        for aliasSymbol in $scope.DeclaredTypeAliases {
+            let declaration TypeAliasDeclarationSyntax? = aliasSymbol.Declaration
+            if declaration == nil || declaration.SyntaxTree != previousTree {
+                continue
+            }
+            if !typeAliasMap.TryGetValue(declaration, out var updated) {
+                return false
+            }
+            typeAliasesToRepoint.Add((aliasSymbol, updated))
         }
         let constructorsToRepoint = List[(Symbol ConstructorSymbol, Updated ConstructorDeclarationSyntax)]()
         let deinitsToRepoint = List[(Symbol DeinitSymbol, Updated DeinitDeclarationSyntax)]()
@@ -364,6 +376,9 @@ internal shared class IncrementalGlobalScopeReuse {
             symbol.RepointDeclaration(updated)
         }
         for (symbol, updated) in delegatesToRepoint {
+            symbol.RepointDeclaration(updated)
+        }
+        for (symbol, updated) in typeAliasesToRepoint {
             symbol.RepointDeclaration(updated)
         }
         for (symbol, updated) in constructorsToRepoint {
