@@ -999,6 +999,7 @@ internal partial class ExpressionBinder {
         // so the whole chain stays open (mirrors the type-clause path's
         // CollectConstructedEnclosingArguments).
         var enclosingBuilder ImmutableArray[TypeSymbol].Builder? = ImmutableArray.CreateBuilder[TypeSymbol]()
+        var hasConstructedSegment = false
         for var i = 0; i < segments.Count - 1; i++ {
             if definitions[i] is StructSymbol nestedConstruction &&
                 !nestedConstruction
@@ -1006,10 +1007,16 @@ internal partial class ExpressionBinder {
                 .IsDefaultOrEmpty {
                 enclosingBuilder!!.Clear()
                 enclosingBuilder!!.AddRange(nestedConstruction.EnclosingTypeArguments)
+                hasConstructedSegment = true
+            } else if i == 0 {
+                let headEnclosingParams = StructSymbol.CollectEnclosingTypeParameters(definitions[0])
+                for tp in headEnclosingParams {
+                    enclosingBuilder!!.Add(tp)
+                }
             }
             let ownParams = switch definitions[i] {
                 case s is StructSymbol: (s.Definition ?? s).DeclaredTypeParameters
-                case iface is InterfaceSymbol: (iface.Definition ?? iface).TypeParameters
+                case iface is InterfaceSymbol: (iface.Definition ?? iface).DeclaredTypeParameters
                 default: ImmutableArray[TypeParameterSymbol].Empty
             }
             var constructionArgs = default(ImmutableArray[TypeSymbol])
@@ -1058,6 +1065,7 @@ internal partial class ExpressionBinder {
                 enclosingBuilder!!.Clear()
                 if !projectedOwner.EnclosingTypeArguments.IsDefaultOrEmpty {
                     enclosingBuilder!!.AddRange(projectedOwner.EnclosingTypeArguments)
+                    hasConstructedSegment = true
                 }
                 let projectedOwnParams = (projectedOwner.Definition ?? projectedOwner).DeclaredTypeParameters
                 if !projectedOwnParams.IsDefaultOrEmpty {
@@ -1071,14 +1079,16 @@ internal partial class ExpressionBinder {
                         break
                     }
                     enclosingBuilder!!.AddRange(projectedOwner.TypeArguments)
+                    hasConstructedSegment = true
                 }
                 continue
             }
             if !constructionArgs.IsDefaultOrEmpty {
                 enclosingBuilder!!.AddRange(constructionArgs)
+                hasConstructedSegment = true
             }
         }
-        let enclosingArgs = if enclosingBuilder != nil && enclosingBuilder.Count > 0 {
+        let enclosingArgs = if hasConstructedSegment && enclosingBuilder != nil && enclosingBuilder.Count > 0 {
             enclosingBuilder.ToImmutable()
         } else {
             default(ImmutableArray[TypeSymbol])
@@ -1105,19 +1115,40 @@ internal partial class ExpressionBinder {
                 } else {
                     nestedType = def
                 }
+                if binderCtx.HasUnclosedEnclosingTypeParameters(nestedType, getCurrentFunction()) {
+                    nestedType = nil
+                    return false
+                }
                 return true
             }
             case nestedIface is InterfaceSymbol {
                 let ifaceDef = nestedIface.Definition ?? nestedIface
-                nestedType = if !ownArgs.IsDefaultOrEmpty {
+                nestedType = if !enclosingArgs.IsDefaultOrEmpty && !ownArgs.IsDefaultOrEmpty {
+                    InterfaceSymbol.ConstructNestedGeneric(
+                        ifaceDef,
+                        enclosingArgs,
+                        ownArgs,
+                        $scope.References!!.MapClrTypeToReferences
+                    )
+                } else if !enclosingArgs.IsDefaultOrEmpty {
+                    InterfaceSymbol.ConstructNested(ifaceDef, enclosingArgs, $scope.References!!.MapClrTypeToReferences)
+                } else if !ownArgs.IsDefaultOrEmpty {
                     InterfaceSymbol.Construct(ifaceDef, ownArgs, $scope.References!!.MapClrTypeToReferences)
                 } else {
                     ifaceDef
+                }
+                if binderCtx.HasUnclosedEnclosingTypeParameters(nestedType, getCurrentFunction()) {
+                    nestedType = nil
+                    return false
                 }
                 return true
             }
             default {
                 nestedType = definitions[segments.Count - 1]
+                if binderCtx.HasUnclosedEnclosingTypeParameters(nestedType, getCurrentFunction()) {
+                    nestedType = nil
+                    return false
+                }
                 return true
             }
         }
@@ -2326,6 +2357,10 @@ internal partial class ExpressionBinder {
                 } else {
                     nestedEnum.Definition ?? nestedEnum
                 }
+                if binderCtx.HasUnclosedEnclosingTypeParameters(constructedEnum, getCurrentFunction()) {
+                    constructedEnum = nil
+                    return false
+                }
                 return true
             }
             if nested is not StructSymbol nestedStruct {
@@ -2352,6 +2387,10 @@ internal partial class ExpressionBinder {
                 constructedStruct = def
             }
             if i == segments.Count - 1 {
+                if binderCtx.HasUnclosedEnclosingTypeParameters(constructedStruct, getCurrentFunction()) {
+                    constructedStruct = nil
+                    return false
+                }
                 return true
             }
             // Inherited nested lookup needs the constructed owner at every
@@ -3570,7 +3609,7 @@ internal partial class ExpressionBinder {
     /// correct construction `TypeSpec`. A non-generic owner of either kind
     /// emits a bare `MethodDef` token.
     internal func BindUserTypeStaticCall(ownerType TypeSymbol, ce CallExpressionSyntax) BoundExpression {
-        let frame = CallCandidateRecorder.Begin(ce)
+        let frame = CallCandidateRecorder.Begin(ce, ownerType)
         try {
             let bound = BindUserTypeStaticCallCore(ownerType, ce)
             CallCandidateRecorder.Stamp(frame, bound)
@@ -4532,6 +4571,11 @@ internal partial class ExpressionBinder {
             let builder = ImmutableArray.CreateBuilder[TypeSymbol]()
             if !enclosing.IsDefaultOrEmpty {
                 builder.AddRange(enclosing)
+            } else {
+                let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(outerConstructed)
+                for tp in enclosingParams {
+                    builder.Add(tp)
+                }
             }
             if !own.IsDefaultOrEmpty {
                 builder.AddRange(own)

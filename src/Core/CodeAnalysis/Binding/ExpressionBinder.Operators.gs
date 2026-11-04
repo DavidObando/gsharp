@@ -1540,7 +1540,7 @@ internal partial class ExpressionBinder {
                     boundRight
                 )
             }
-            return BoundErrorExpression(nil)
+            return BoundErrorExpression.WithFailedOperands(boundLeft, boundRight)
         }
         let nativeEqualityLeftType = if boundLeft.Type is NullableTypeSymbol nullableNativeLeft {
             nullableNativeLeft.UnderlyingType

@@ -84,7 +84,7 @@ open class BuildTask : Task, ICancelableTask {
     /// Gets or sets the assembly version stamped on the output.
     prop Version string?
 
-    /// Gets or sets the MSBuild OutputType (Exe / Library).
+    /// Gets or sets the MSBuild OutputType (Exe / WinExe / Library).
     prop OutputType string?
 
     /// Gets or sets the path of the metadata-only reference assembly to write (refint).
@@ -245,6 +245,8 @@ open class BuildTask : Task, ICancelableTask {
         if outputType != nil && outputType.Length != 0 {
             let t = if outputType.Equals("Exe", StringComparison.OrdinalIgnoreCase) {
                 "exe"
+            } else if outputType.Equals("WinExe", StringComparison.OrdinalIgnoreCase) {
+                "winexe"
             } else {
                 "library"
             }

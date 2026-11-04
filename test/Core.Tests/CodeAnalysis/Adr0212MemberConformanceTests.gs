@@ -255,7 +255,7 @@ open class Adr0212MemberConformanceTests {
                 return BuiltInRow
             }
             if ImportedOf(bound) is {} imported {
-                if receiverType is StructSymbol {
+                if receiverType is StructSymbol{ClrType: nil} {
                     return ImportedBaseRow
                 }
                 if imported.DeclaringType is {} declaring &&
@@ -298,6 +298,7 @@ open class Adr0212MemberConformanceTests {
 
         private func ImportedOf(symbol Symbol) MemberInfo? -> switch symbol {
             case function is ImportedFunctionSymbol: function.Method
+            case function is FunctionSymbol: function.ImportedMember
             case property is PropertySymbol: property.ImportedMember
             case field is FieldSymbol: field.ImportedMember
             case clrEvent is EventSymbol: clrEvent.ImportedMember

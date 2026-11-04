@@ -355,6 +355,7 @@ partial class SemanticModel {
         StaticQualifierReads Dictionary[SyntaxNode, BoundExpression?],
         LogicalCompletions Dictionary[BoundExpression, BoundExpression?],
         StaticQualifierTypes Dictionary[SyntaxNode, TypeSymbol?],
+        FailedCalls Dictionary[SyntaxNode, BoundErrorExpression],
         TypeClauseTokens Dictionary[SyntaxToken, TypeSymbol],
         LocalDeclarations ImmutableArray[(Anchor SyntaxNode, Local Symbol)],
         LocalDeclarationsByName Dictionary[string, ImmutableArray[(Anchor SyntaxNode, Local Symbol)]],
@@ -372,6 +373,7 @@ partial class SemanticModel {
         private let staticQualifierReads Dictionary[SyntaxNode, BoundExpression?]
         private let logicalCompletions Dictionary[BoundExpression, BoundExpression?]
         private let staticQualifierTypes Dictionary[SyntaxNode, TypeSymbol?]
+        private let failedCalls Dictionary[SyntaxNode, BoundErrorExpression]
         private var literalDepth int32
 
         init(
@@ -380,7 +382,8 @@ partial class SemanticModel {
             declaredBySyntax Dictionary[SyntaxNode, Symbol],
             staticQualifierReads Dictionary[SyntaxNode, BoundExpression?],
             logicalCompletions Dictionary[BoundExpression, BoundExpression?],
-            staticQualifierTypes Dictionary[SyntaxNode, TypeSymbol?]
+            staticQualifierTypes Dictionary[SyntaxNode, TypeSymbol?],
+            failedCalls Dictionary[SyntaxNode, BoundErrorExpression]
         ) {
             this.tree = tree
             this.boundBySyntax = boundBySyntax
@@ -388,6 +391,7 @@ partial class SemanticModel {
             this.staticQualifierReads = staticQualifierReads
             this.logicalCompletions = logicalCompletions
             this.staticQualifierTypes = staticQualifierTypes
+            this.failedCalls = failedCalls
         }
 
         override func Visit(node BoundNode?) {
@@ -473,6 +477,9 @@ partial class SemanticModel {
                     staticQualifierTypes[qualifier] = nil
                 }
             }
+            if node is BoundErrorExpression error {
+                RecordFailedCall(error)
+            }
             // A variable declared at an identifier the symbol does not remember (an element of a
             // destructured lambda parameter or of a tuple `for`) is anchored by the declaration
             // node the binder built for it.
@@ -483,6 +490,20 @@ partial class SemanticModel {
             for getter in SemanticModel.GetAccessors(node.GetType()).SymbolProperties {
                 if getter(node) is Symbol symbol {
                     SemanticModel.RecordDeclarations(symbol, tree, declaredBySyntax)
+                }
+            }
+        }
+
+        private func RecordFailedCall(error BoundErrorExpression) {
+            if error.CallSyntax is {} callSyntax && !error.MemberGroup.IsDefaultOrEmpty && object.ReferenceEquals(
+                callSyntax.SyntaxTree,
+                tree
+            ) {
+                failedCalls.TryAdd(callSyntax, error)
+            }
+            if !error.FailedChildren.IsDefaultOrEmpty {
+                for child in error.FailedChildren {
+                    RecordFailedCall(child)
                 }
             }
         }
@@ -544,6 +565,7 @@ partial class SemanticModel {
         ) SemanticModel
             .Index {
             let typeClauseTokens = Dictionary[SyntaxToken, TypeSymbol](ReferenceEqualityComparer.Instance)
+            let failedCalls = Dictionary[SyntaxNode, BoundErrorExpression](ReferenceEqualityComparer.Instance)
             for symbol in EnumerateDeclaredSymbols(program, globalScope) {
                 RecordDeclarations(symbol, tree, declaredBySyntax)
             }
@@ -641,7 +663,8 @@ partial class SemanticModel {
                 declaredBySyntax,
                 staticQualifierReads,
                 logicalCompletions,
-                staticQualifierTypes
+                staticQualifierTypes,
+                failedCalls
             )
             for (function, body) in program.Functions {
                 if function.Declaration is {} declaration && !object.ReferenceEquals(declaration.SyntaxTree, tree) {
@@ -673,6 +696,7 @@ partial class SemanticModel {
                 staticQualifierReads,
                 logicalCompletions,
                 staticQualifierTypes,
+                failedCalls,
                 typeClauseTokens,
                 localDeclarations,
                 SemanticModel.GroupByName(localDeclarations),

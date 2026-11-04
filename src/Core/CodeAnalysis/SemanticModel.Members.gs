@@ -35,7 +35,8 @@ partial class SemanticModel {
     /// private helper is listed only where the enclosing declaration may access it.</item>
     /// <item>Interface: the properties, events and methods of the interface and of its base interfaces
     /// (instance), the static members of the interface itself, then the members of each CLR interface the
-    /// declared interfaces extend, nearest first.</item>
+    /// declared interfaces extend, nearest first. The private helpers of the interface are listed only for
+    /// a query inside the interface (issue #5444).</item>
     /// <item>Enum: the enum members, which are static.</item>
     /// <item>Any other type that has a CLR type (imported types, arrays, maps, primitives): the public
     /// properties without index parameters, fields, methods that are not special names, then events, each in
@@ -152,7 +153,8 @@ partial class SemanticModel {
         declared InterfaceSymbol,
         name string?,
         access MemberAccessContext,
-        result ImmutableArray[Symbol].Builder
+        result ImmutableArray[Symbol].Builder,
+        includePrivateHelpers bool = true
     ) {
         let instanceQuery = MemberQuery(
             includeInstance: true,
@@ -161,7 +163,11 @@ partial class SemanticModel {
             MemberKinds.Property | MemberKinds.Event | MemberKinds.Method
         )
         for iface in declared.SelfAndAllBaseInterfaces() {
+            let allowPrivate = includePrivateHelpers && object.ReferenceEquals(iface, declared)
             for member in TypeMemberModel.EnumerateMembers(iface, instanceQuery) {
+                if !allowPrivate && member is FunctionSymbol{Accessibility: Accessibility.Private} {
+                    continue
+                }
                 AddSourceMember(declared, SubstituteSourceMember(iface, member), name, access, result)
             }
         }
@@ -169,6 +175,9 @@ partial class SemanticModel {
             declared,
             MemberQuery.Static(MemberKinds.Property | MemberKinds.Method)
         ) {
+            if !includePrivateHelpers && member is FunctionSymbol{Accessibility: Accessibility.Private} {
+                continue
+            }
             AddSourceMember(declared, SubstituteSourceMember(declared, member), name, access, result)
         }
         let clrInterfaces = ClrTypeUtilities.GetTransitiveClrBaseInterfaces(declared, out var contexts)
@@ -184,7 +193,19 @@ partial class SemanticModel {
         }
     }
 
+    private let substitutedMembers ConcurrentDictionary[(Symbol, TypeSymbol), Symbol] = ConcurrentDictionary[
+        (Symbol, TypeSymbol),
+        Symbol
+    ]()
+
     private func SubstituteSourceMember(owner TypeSymbol, member Symbol) Symbol {
+        return substitutedMembers.GetOrAdd(
+            (member, owner),
+            (key(Symbol, TypeSymbol)) -> CreateSubstitutedSourceMember(key.Item2, key.Item1)
+        )
+    }
+
+    private func CreateSubstitutedSourceMember(owner TypeSymbol, member Symbol) Symbol {
         switch member {
             case property is PropertySymbol when owner is InterfaceSymbol {
                 let substitutedType = SubstituteMemberType(owner, property.Type)
@@ -212,6 +233,7 @@ partial class SemanticModel {
                 copy.ExternalOverriddenAddMethod = clrEvent.ExternalOverriddenAddMethod
                 copy.ExternalOverriddenRemoveMethod = clrEvent.ExternalOverriddenRemoveMethod
                 copy.ExternalOverriddenRaiseMethod = clrEvent.ExternalOverriddenRaiseMethod
+                copy.ImportedMember = clrEvent.ImportedMember
                 if clrEvent.ContainingType is {} containing {
                     copy.AnchorContainingType(containing)
                 }
@@ -257,6 +279,7 @@ partial class SemanticModel {
                 copy.IsUnsafe = function.IsUnsafe
                 copy.OverriddenMethod = function.OverriddenMethod
                 copy.ExternalOverriddenMethod = function.ExternalOverriddenMethod
+                copy.ImportedMember = function.ImportedMember
                 if !function.TypeParameters.IsDefaultOrEmpty {
                     copy.TypeParameters = function.TypeParameters
                 }
@@ -327,7 +350,7 @@ partial class SemanticModel {
         var hasClassConstraint = false
         for parameter in chain {
             if parameter.InterfaceConstraint is {} declared {
-                AddInterfaceMembers(declared, name, access, candidates)
+                AddInterfaceMembers(declared, name, access, candidates, includePrivateHelpers: false)
             }
             if parameter.ClrInterfaceConstraint is {} rawClrInterface {
                 let clrInterface = UnwrapNullability(rawClrInterface)
@@ -425,6 +448,7 @@ partial class SemanticModel {
 
     private func ImportedMemberOf(symbol Symbol) MemberInfo? -> switch symbol {
         case function is ImportedFunctionSymbol: function.Method
+        case function is FunctionSymbol: function.ImportedMember
         case property is PropertySymbol: property.ImportedMember
         case field is FieldSymbol: field.ImportedMember
         case clrEvent is EventSymbol: clrEvent.ImportedMember
@@ -618,9 +642,9 @@ partial class SemanticModel {
                     continue
                 }
                 for member in TypeMemberModel.EnumerateMembers(declared, MemberQuery.Instance(MemberKinds.Method)) {
-                    if member is FunctionSymbol method && InterfaceSymbol.HasDefaultBody(method) && !seen.Contains(
-                        method
-                    ) &&
+                    if member is FunctionSymbol method &&
+                        method.Accessibility != Accessibility.Private &&
+                        InterfaceSymbol.HasDefaultBody(method) && !seen.Contains(method) &&
                         MemberLookup
                         .CollectSourceInstanceMethods(structure, method.Name).IsEmpty {
                         seen.Add(method)
@@ -705,12 +729,16 @@ partial class SemanticModel {
     /// <item>Free source function: the functions of that name in the package, by file path (ordinal), then
     /// by start position.</item>
     /// <item>Method of a class or struct: the methods of that name declared by the receiver's type, then
-    /// those of its base classes, and a call through a constructed base or interface keeps the declaring
-    /// type's signatures.</item>
+    /// those of its base classes, with a constructed generic receiver or base's type arguments
+    /// substituted.</item>
+    /// <item>Base call (`base.M(...)` or `base[T].M(...)`, issue #5444): the methods of that name of the base
+    /// class (and its base classes) or of the named base interface, with a constructed generic base's type
+    /// arguments substituted.</item>
     /// <item>Interface method: the methods of that name of the interface and of its base interfaces; the
     /// private helpers only for a query inside the interface.</item>
     /// <item>Type parameter with constraints: the methods of that name of each constraint, in constraint
-    /// order.</item>
+    /// order, for both instance calls (`t.M(...)`) and constrained static calls (`T.M(...)`, issue
+    /// #5444).</item>
     /// <item>Partial type: the methods of every part, by file path (ordinal), then by start position.</item>
     /// <item>Extension function declared in source (issue #5480): the extension functions of that name in
     /// scope whose receiver type can take the receiver. Order: file path (ordinal), then start
@@ -719,6 +747,8 @@ partial class SemanticModel {
     /// name in the imported namespaces whose first parameter can take the receiver, as imported function
     /// symbols. Order: the holder classes in reference order, then metadata token. Generic methods keep
     /// their open signature.</item>
+    /// <item>Unfinished or failed call (issue #5444): the candidates the call binder collected before
+    /// overload resolution failed, ordered by the same rule as a bound call of that shape.</item>
     /// </list>
     /// Constructor calls are not in the contract.
     /// The compilation must have (cref:Compilation.RecordMemberGroups) set before its first query; a
@@ -750,39 +780,52 @@ partial class SemanticModel {
                 return ImmutableArray[Symbol].Empty
             }
             let extensionCall = CallCandidateRecorder.IsSourceExtensionCall(call, token.Parent)
+            let receiverType TypeSymbol? = switch call {
+                case instanceCall is BoundImportedInstanceCallExpression: instanceCall.ConstrainedInterfaceType ??
+                    instanceCall
+                    .Receiver
+                    .Type
+                case importedCall is BoundImportedCallExpression: importedCall.StaticContainerType
+                case constrainedCall is BoundConstrainedStaticCallExpression: constrainedCall.ConstrainedInterfaceType ??
+                    constrainedCall
+                    .TypeParameter
+                    .ClrInterfaceConstraint ??
+                    constrainedCall
+                    .TypeParameter
+                    .InterfaceConstraint
+                case userCall is BoundUserInstanceCallExpression: userCall.Receiver.Type
+                case baseInterfaceCall is BoundBaseInterfaceCallExpression: baseInterfaceCall.Interface
+                default: default(TypeSymbol?)
+            }
+            let called = SubstituteGroupMember(receiverType, call.CalledFunction)
             if !call.MemberGroup.IsDefaultOrEmpty {
-                let receiverType TypeSymbol? = switch call {
-                    case instanceCall is BoundImportedInstanceCallExpression: instanceCall.ConstrainedInterfaceType ??
-                        instanceCall
-                        .Receiver
-                        .Type
-                    case importedCall is BoundImportedCallExpression: importedCall.StaticContainerType
-                    default: default(TypeSymbol?)
-                }
-                let group = ImmutableArray.CreateBuilder[Symbol]()
-                for candidate in call.MemberGroup {
-                    switch candidate {
-                        case function is FunctionSymbol {
-                            AddGroupMember(group, function, call.CalledFunction)
-                        }
-                        case method is MethodInfo {
-                            AddGroupMember(group, ImportedMemberSymbol(receiverType, method), call.CalledFunction)
-                        }
-                    }
-                }
-                return OrderMemberGroup(group.ToImmutable(), extensionCall)
+                return BuildRecordedMemberGroup(call.MemberGroup, receiverType, called, extensionCall)
             }
             if extensionCall {
                 return ImmutableArray[Symbol].Empty
             }
+            if !object.ReferenceEquals(called, call.CalledFunction) {
+                return ImmutableArray.Create(called)
+            }
+        }
+        if referenced is BoundBaseClassCallExpression{Method: {} baseMethod} baseCall {
+            if !SpellsName(baseMethod, token.ValueText) {
+                return ImmutableArray[Symbol].Empty
+            }
+            let receiverType TypeSymbol = baseCall.Receiver.Type as StructSymbol ?? baseCall.BaseClass
+            let called = SubstituteGroupMember(receiverType, baseMethod)
+            if !baseCall.MemberGroup.IsDefaultOrEmpty {
+                return BuildRecordedMemberGroup(baseCall.MemberGroup, receiverType, called, extensionCall: false)
+            }
+            return ImmutableArray.Create(called)
         }
         let single = GetTokenSymbol(token)
         // A call through a local function value names a variable; any other variable or type is no member.
         let calledVariable = single is VariableSymbol && token.Parent is CallExpressionSyntax{Callee: nil}
-        return if single == nil ||
+        if single != nil &&
             (
-            !calledVariable &&
-                single is not(
+            calledVariable ||
+                single is (
                 FunctionSymbol or
                     ImportedFunctionSymbol or
                     PropertySymbol or
@@ -791,10 +834,74 @@ partial class SemanticModel {
                     EnumMemberSymbol
             )
         ) {
-            ImmutableArray[Symbol].Empty
-        } else {
-            ImmutableArray.Create(single)
+            return ImmutableArray.Create(single)
         }
+        if token.Parent is {} parent {
+            var failed BoundErrorExpression? = nil
+            if index.Value.FailedCalls.TryGetValue(parent, out var indexedFailed) {
+                failed = indexedFailed
+            } else if compilation.FailedCalls.TryGetValue(parent, out var recordedFailed) {
+                failed = recordedFailed
+            }
+            if failed is {} failedCall && !failedCall.MemberGroup.IsDefaultOrEmpty {
+                return BuildRecordedMemberGroup(
+                    failedCall.MemberGroup,
+                    failedCall.ReceiverType,
+                    called: nil,
+                    failedCall.IsExtensionCall
+                )
+            }
+        }
+        return ImmutableArray[Symbol].Empty
+    }
+
+    private func BuildRecordedMemberGroup(
+        recorded ImmutableArray[object],
+        receiverType TypeSymbol?,
+        called Symbol?,
+        extensionCall bool
+    ) ImmutableArray[Symbol] {
+        let group = ImmutableArray.CreateBuilder[Symbol]()
+        for candidate in recorded {
+            switch candidate {
+                case function is FunctionSymbol {
+                    AddGroupMember(group, SubstituteGroupMember(receiverType, function), called)
+                }
+                case method is MethodInfo {
+                    AddGroupMember(group, ImportedMemberSymbol(receiverType, method), called)
+                }
+            }
+        }
+        return OrderMemberGroup(group.ToImmutable(), extensionCall)
+    }
+
+    private func SubstituteGroupMember(receiverType TypeSymbol?, member Symbol) Symbol {
+        if member is not FunctionSymbol function || receiverType == nil {
+            return member
+        }
+        let unwrapped = UnwrapNullability(receiverType)
+        let structReceiver StructSymbol? = switch unwrapped {
+            case structure is StructSymbol: structure
+            case typeParameter is TypeParameterSymbol: typeParameter.ClassConstraint as StructSymbol
+            default: default(StructSymbol?)
+        }
+        if structReceiver != nil && function.ReceiverType is StructSymbol declaredOwner {
+            let owner = TypeMemberModel.ResolveStaticMemberOwner(structReceiver, declaredOwner)
+            return SubstituteSourceMember(owner, function)
+        }
+        if unwrapped is InterfaceSymbol interfaceReceiver &&
+            interfaceReceiver.Definition != nil &&
+            !object.ReferenceEquals(interfaceReceiver.Definition, interfaceReceiver) &&
+            function.ReceiverType is InterfaceSymbol declaredInterface &&
+            object
+            .ReferenceEquals(interfaceReceiver.Definition, declaredInterface.Definition ?? declaredInterface) {
+            for candidate in interfaceReceiver.Methods {
+                if function.Declaration != nil && object.ReferenceEquals(candidate.Declaration, function.Declaration) {
+                    return candidate
+                }
+            }
+        }
+        return member
     }
 
     // An imported member can differ from its G# spelling (`@return` in metadata is `return_`).
@@ -816,6 +923,12 @@ partial class SemanticModel {
                 }
                 case call is CallExpressionSyntax {
                     return call.Identifier
+                }
+                case baseCall is BaseClassCallExpressionSyntax {
+                    return baseCall.Call.Identifier
+                }
+                case baseInterface is BaseInterfaceCallExpressionSyntax {
+                    return baseInterface.MethodIdentifier
                 }
                 case name is NameExpressionSyntax {
                     return name.IdentifierToken
@@ -849,6 +962,8 @@ partial class SemanticModel {
             }
             if member is ImportedFunctionSymbol imported {
                 ordered.Add((member, owner, string.Empty, imported.Method.MetadataToken))
+            } else if member is FunctionSymbol{ImportedMember: {} importedMethod} {
+                ordered.Add((member, owner, string.Empty, importedMethod.MetadataToken))
             } else if member is FunctionSymbol{Declaration: {} declaration} {
                 ordered.Add(
                     (member, owner, declaration.SyntaxTree.Text?.FileName ?? string.Empty, declaration.Span.Start)
@@ -872,10 +987,10 @@ partial class SemanticModel {
         default: cast[object](member)
     }
 
-    private func AddGroupMember(group ImmutableArray[Symbol].Builder, member Symbol, called Symbol) {
+    private func AddGroupMember(group ImmutableArray[Symbol].Builder, member Symbol, called Symbol?) {
         for var i = 0; i < group.Count; i++ {
             if SameMember(group[i], member) {
-                if object.ReferenceEquals(member, called) {
+                if called != nil && object.ReferenceEquals(member, called) {
                     group[i] = member
                 }
                 return
@@ -1182,6 +1297,7 @@ partial class SemanticModel {
     /// Judges whether a member of a source type is accessible from the declaration that encloses a position.
     private class MemberAccessContext {
         private let enclosingType StructSymbol?
+        private let enclosingInterface InterfaceSymbol?
         private let enclosingFunction FunctionSymbol?
 
         init(enclosing Symbol?) {
@@ -1193,6 +1309,10 @@ partial class SemanticModel {
             enclosingType = switch enclosing {
                 case structure is StructSymbol: structure
                 default: enclosing?.ContainingType as StructSymbol
+            }
+            enclosingInterface = switch enclosing {
+                case declared is InterfaceSymbol: declared
+                default: enclosing?.ContainingType as InterfaceSymbol
             }
         }
 
@@ -1269,8 +1389,14 @@ partial class SemanticModel {
             ) {
                 return false
             }
-            if declaring is InterfaceSymbol {
-                return AccessibilityChecker.IsAccessible(accessibility, declaring, enclosingFunction)
+            if declaring is InterfaceSymbol declaringInterface {
+                if enclosingFunction != nil {
+                    return AccessibilityChecker.IsAccessible(accessibility, declaring, enclosingFunction)
+                }
+                return enclosingInterface != nil && AccessibilityChecker.SameDeclaringInterface(
+                    enclosingInterface,
+                    declaringInterface
+                )
             }
             // The function knows its lexical enclosing types, a nested interface's among them.
             if enclosingFunction != nil {

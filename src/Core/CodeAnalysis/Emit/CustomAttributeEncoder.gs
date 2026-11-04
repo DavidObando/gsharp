@@ -1175,10 +1175,15 @@ internal class CustomAttributeEncoder {
                     this.CompilationAssemblyName()
                 )
             }
-            case InterfaceSymbol{ClrType: nil} interfaceType when !interfaceType.TypeArguments.IsDefaultOrEmpty {
+            case InterfaceSymbol{ClrType: nil} interfaceType when !interfaceType
+                .EnclosingTypeArguments
+                .IsDefaultOrEmpty ||
+                !interfaceType
+                .TypeArguments
+                .IsDefaultOrEmpty {
                 return (
-                    GetMetadataTypeName(interfaceType.Definition!!) + this.BuildArgumentList(
-                        interfaceType.TypeArguments
+                    GetMetadataTypeName(interfaceType.Definition ?? interfaceType) + this.BuildArgumentList(
+                        Flatten(interfaceType.EnclosingTypeArguments, interfaceType.TypeArguments)
                     ),
                     this.CompilationAssemblyName()
                 )
@@ -2660,7 +2665,7 @@ internal class CustomAttributeEncoder {
                 case interfaceType is InterfaceSymbol {
                     packageName = interfaceType.PackageName
                     containingType = interfaceType.ContainingType
-                    arity = interfaceType.TypeParameters.Length
+                    arity = (interfaceType.Definition ?? interfaceType).DeclaredTypeParameters.Length
                 }
                 case enumType is EnumSymbol {
                     packageName = enumType.PackageName
