@@ -209,6 +209,234 @@ func Main() {
         Assert.Equal("ctl${Environment.NewLine}ctl${Environment.NewLine}", output)
     }
 
+    @Fact
+    func Issue4774_UnclosedGenericEnclosingNestedStruct_RejectedAtBindWhileConstructedOwnerRuns() {
+        const invalidSource = `package UnqualifiedNested4774
+import System
+class Outer[T] {
+    public struct Inner(Value int32) {
+        private var Seed int32 = 5
+        public func Read() int32 -> Seed
+    }
+}
+func Main() {
+    let item = Inner{Value: 7}
+    Console.WriteLine(item.Read())
+}`
+        let tempDir = Directory.CreateTempSubdirectory("gs_4774_neg_").FullName
+        try {
+            let srcPath = Path.Combine(tempDir, "test.gs")
+            let dllPath = Path.Combine(tempDir, "test.dll")
+            File.WriteAllText(srcPath, invalidSource)
+            let args = []string{"/out:" + dllPath, "/target:exe", "/targetframework:net10.0", srcPath}
+            using let stdoutWriter = StringWriter()
+            using let stderrWriter = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(stdoutWriter)
+            Console.SetError(stderrWriter)
+            var compileExit int32
+            try {
+                compileExit = Program.Main(args)
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            let combined = stdoutWriter.ToString() + stderrWriter.ToString()
+            Assert.NotEqual(0, compileExit)
+            Assert.False(File.Exists(dllPath))
+            Assert.Contains("error GS0157: Cannot find type Inner", combined, StringComparison.Ordinal)
+            Assert.Contains("(10,16,10,21)", combined, StringComparison.Ordinal)
+        } finally {
+            try {
+                Directory.Delete(tempDir, recursive: true)
+            } catch { }
+        }
+
+        const validSource = `package QualifiedNested4774
+import System
+import System.Reflection
+@Attribute
+class TypeTagAttribute(First Type, Second Type) { }
+class Outer[T] {
+    public struct Inner(Value int32) {
+        private var Seed int32 = 5
+        public func Read() int32 -> Seed + Value
+    }
+    public class Middle[U] {
+        public struct Leaf(Value int32) {
+            public func Read() int32 -> Value
+        }
+    }
+    public interface IPlain {
+        prop Tag T { get; }
+        func ReadPlain(seed T) T;
+        func EchoInner(x Inner) Inner;
+    }
+    public interface IMarker {
+        func Code() int32;
+    }
+    public interface IGeneric[U] : IComparable[U] {
+        func ReadGeneric(seed T, suffix U) string;
+    }
+    public enum Kind { A, B }
+    public func EchoIface(x IPlain) Outer[T].IPlain -> x
+    public func UseMiddleLeaf(leaf Middle[string].Leaf) int32 {
+        let localLeaf = Middle[string].Leaf{Value: 3}
+        return leaf.Read() + localLeaf.Read()
+    }
+    public func ReadScoped() int32 {
+        let scopedItem = Inner{Value: 4}
+        return scopedItem.Read()
+    }
+}
+class Left {
+    public class Item { }
+}
+class Right {
+    public class Item { }
+}
+@TypeTag(typeof(Outer.Kind), typeof(Kind))
+class EnumOpenTagHolder { }
+@TypeTag(typeof(Outer[string].IPlain), typeof(Outer[string].IGeneric[int32]))
+class PlainImpl : Outer[string].IPlain, Outer[string].IGeneric[int32], Outer[string].IGeneric[PlainImpl], Outer[string].IMarker, Outer[int32].IMarker, Outer[Left.Item].IMarker, Outer[Right.Item].IMarker, Outer[in chan[int32]].IMarker, Outer[out chan[int32]].IMarker, Outer[(Left.Item) -> void].IMarker, Outer[(Right.Item) -> void].IMarker {
+    public prop Tag string -> "tag"
+    public func ReadPlain(seed string) string -> seed + ":" + Tag + ":21"
+    public func EchoInner(x Outer[string].Inner) Outer[string].Inner -> x
+    public func ReadGeneric(seed string, suffix int32) string -> seed + ":" + suffix.ToString()
+    public func ReadGeneric(seed string, suffix PlainImpl) string -> seed + ":" + suffix.Tag
+    public func CompareTo(other int32) int32 -> other
+    public func CompareTo(other PlainImpl?) int32 -> 0
+    private func (Outer[string].IMarker) Code() int32 -> 101
+    private func (Outer[int32].IMarker) Code() int32 -> 202
+    private func (Outer[Left.Item].IMarker) Code() int32 -> 303
+    private func (Outer[Right.Item].IMarker) Code() int32 -> 404
+    private func (Outer[in chan[int32]].IMarker) Code() int32 -> 505
+    private func (Outer[out chan[int32]].IMarker) Code() int32 -> 606
+    private func (Outer[(Left.Item) -> void].IMarker) Code() int32 -> 707
+    private func (Outer[(Right.Item) -> void].IMarker) Code() int32 -> 808
+}
+func UseSelfRef[T Outer[string].IGeneric[T]](x T) string -> x.ReadGeneric("self", x)
+class SelfOwnerImpl : Outer[SelfOwnerImpl].IPlain, Outer[SelfOwnerImpl].IGeneric[SelfOwnerImpl] {
+    public prop Tag SelfOwnerImpl -> this
+    public func ReadPlain(seed SelfOwnerImpl) SelfOwnerImpl -> seed
+    public func EchoInner(x Outer[SelfOwnerImpl].Inner) Outer[SelfOwnerImpl].Inner -> x
+    public func ReadGeneric(seed SelfOwnerImpl, suffix SelfOwnerImpl) string -> "self-enclosing"
+    public func CompareTo(other SelfOwnerImpl?) int32 -> 0
+}
+func UseSelfEnclosing[T Outer[T].IGeneric[T]](x T) string -> x.ReadGeneric(x, x)
+func UseSelfEnclosingPlain[T Outer[T].IPlain](x T) T -> x.ReadPlain(x)
+func UsePlain(p Outer[string].IPlain, item Outer[string].Inner) string -> p.ReadPlain("p") + ":" + p.EchoInner(item).Read().ToString()
+func UseGeneric(g Outer[string].IGeneric[int32]) string -> g.ReadGeneric("g", 8)
+func UseMarkerString(m Outer[string].IMarker) int32 -> m.Code()
+func UseMarkerInt(m Outer[int32].IMarker) int32 -> m.Code()
+func UseMarkerLeft(m Outer[Left.Item].IMarker) int32 -> m.Code()
+func UseMarkerRight(m Outer[Right.Item].IMarker) int32 -> m.Code()
+func UseMarkerInChan(m Outer[in chan[int32]].IMarker) int32 -> m.Code()
+func UseMarkerOutChan(m Outer[out chan[int32]].IMarker) int32 -> m.Code()
+func UseMarkerLeftFn(m Outer[(Left.Item) -> void].IMarker) int32 -> m.Code()
+func UseMarkerRightFn(m Outer[(Right.Item) -> void].IMarker) int32 -> m.Code()
+func Main() {
+    let item = Outer[string].Inner{Value: 7}
+    let owner = Outer[string]{}
+    let leaf = Outer[string].Middle[string].Leaf{Value: 4}
+    let impl = PlainImpl{}
+    let selfOwner = UseSelfEnclosingPlain(SelfOwnerImpl{})
+    let tag = cast[TypeTagAttribute](typeof(PlainImpl).GetCustomAttributes(typeof(TypeTagAttribute), false)[0])
+    let enumTag = cast[TypeTagAttribute](typeof(EnumOpenTagHolder).GetCustomAttributes(typeof(TypeTagAttribute), false)[0])
+    let baseIface = typeof(Outer[string].IGeneric[int32]).GetInterfaces()[0]
+    let strMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[string].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
+    let intMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[int32].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
+    let leftMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[QualifiedNested4774.Left.Item].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
+    let rightMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[QualifiedNested4774.Right.Item].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
+    let inChanMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[in chan[int32]].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
+    let outChanMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[out chan[int32]].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
+    let leftFnMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[(QualifiedNested4774.Left.Item) -> void].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
+    let rightFnMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[(QualifiedNested4774.Right.Item) -> void].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
+    Console.WriteLine(item.Read())
+    Console.WriteLine(owner.ReadScoped() + owner.UseMiddleLeaf(leaf))
+    Console.WriteLine(UsePlain(owner.EchoIface(impl), item))
+    Console.WriteLine(UseGeneric(impl) + ":" + UseSelfRef(impl) + ":" + UseSelfEnclosing(selfOwner))
+    Console.WriteLine(tag.First == typeof(Outer[string].IPlain) && tag.Second == typeof(Outer[string].IGeneric[int32]) && enumTag.First == typeof(Outer.Kind) && enumTag.Second == typeof(Kind) && enumTag.First.IsGenericTypeDefinition)
+    Console.WriteLine(baseIface == typeof(IComparable[int32]))
+    Console.WriteLine(UseMarkerString(impl).ToString() + ":" + UseMarkerInt(impl).ToString() + ":" + UseMarkerLeft(impl).ToString() + ":" + UseMarkerRight(impl).ToString() + ":" + UseMarkerInChan(impl).ToString() + ":" + UseMarkerOutChan(impl).ToString() + ":" + UseMarkerLeftFn(impl).ToString() + ":" + UseMarkerRightFn(impl).ToString() + ":" + (strMarkerMethod != nil && intMarkerMethod != nil && leftMarkerMethod != nil && rightMarkerMethod != nil && inChanMarkerMethod != nil && outChanMarkerMethod != nil && leftFnMarkerMethod != nil && rightFnMarkerMethod != nil && inChanMarkerMethod != outChanMarkerMethod && leftFnMarkerMethod != rightFnMarkerMethod).ToString())
+}`
+        let output = CompileAndRun(validSource)
+        Assert.Equal(
+            "12${Environment.NewLine}16${Environment.NewLine}p:tag:21:12${Environment.NewLine}g:8:self:tag:self-enclosing${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}101:202:303:404:505:606:707:808:True${Environment.NewLine}",
+            output
+        )
+
+        let nullableDir = Directory.CreateTempSubdirectory("gs_4774_null_").FullName
+        try {
+            let libSrc = Path.Combine(nullableDir, "lib.gs")
+            let libDll = Path.Combine(nullableDir, "lib.dll")
+            let libRefDll = Path.Combine(nullableDir, "lib.ref.dll")
+            File.WriteAllText(libSrc, `package NullableNestedIface4774
+public class Outer[T] {
+    public interface IPlain {
+        func Get() T;
+        func Format(prefix string) string {
+            let fn = (value T) -> prefix + ":" + (value?.ToString() ?? "nil")
+            return fn(Get())
+        }
+    }
+}
+public class Api {
+    shared {
+        public func GetNullable(x Outer[string?].IPlain) Outer[string?].IPlain -> x
+    }
+}`)
+            let libExit = Program.Main(
+                []string{
+                    "/out:" + libDll,
+                    "/refout:" + libRefDll,
+                    "/target:library",
+                    "/targetframework:net10.0",
+                    libSrc
+                }
+            )
+            Assert.Equal(0, libExit)
+            IlVerifier.Verify(libDll)
+            IlVerifier.Verify(libRefDll)
+
+            let consumerSrc = Path.Combine(nullableDir, "consumer.gs")
+            let consumerDll = Path.Combine(nullableDir, "consumer.dll")
+            File.WriteAllText(consumerSrc, `package NullableNestedIfaceConsumer4774
+import NullableNestedIface4774
+func Bad(x Outer[string?].IPlain) string -> Api.GetNullable(x).Get()`)
+            using let outWriter = StringWriter()
+            using let errWriter = StringWriter()
+            let savedOut = Console.Out
+            let savedErr = Console.Error
+            Console.SetOut(outWriter)
+            Console.SetError(errWriter)
+            var consumerExit int32
+            try {
+                consumerExit = Program.Main(
+                    []string{
+                        "/out:" + consumerDll,
+                        "/target:library",
+                        "/targetframework:net10.0",
+                        "/r:" + libDll,
+                        consumerSrc
+                    }
+                )
+            } finally {
+                Console.SetOut(savedOut)
+                Console.SetError(savedErr)
+            }
+            let consumerOutput = outWriter.ToString() + errWriter.ToString()
+            Assert.NotEqual(0, consumerExit)
+            Assert.Contains("GS0155", consumerOutput, StringComparison.Ordinal)
+            Assert.Contains("string?", consumerOutput, StringComparison.Ordinal)
+        } finally {
+            try {
+                Directory.Delete(nullableDir, recursive: true)
+            } catch { }
+        }
+    }
+
     shared {
         private func CompileAndRun(source string) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_1521_exe_").FullName
