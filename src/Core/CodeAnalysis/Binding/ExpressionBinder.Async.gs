@@ -1314,7 +1314,23 @@ internal partial class ExpressionBinder {
         if !ImportedFunctionSymbol.IsSuspendingMethod(method) || call.Type == nil {
             return call
         }
-        let logicalType = if AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(call.Type, out var awaited) {
+        var taskType TypeSymbol = call.Type
+        while true {
+            if taskType is PlatformTypeSymbol platform {
+                taskType = platform.UnderlyingType
+                continue
+            }
+            if taskType is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(nullable) {
+                taskType = nullable.UnderlyingType
+                continue
+            }
+            if taskType is NullabilityAnnotatedTypeSymbol annotated {
+                taskType = annotated.BaseType
+                continue
+            }
+            break
+        }
+        let logicalType = if AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(taskType, out var awaited) {
             awaited!!
         } else {
             TypeSymbol.Void

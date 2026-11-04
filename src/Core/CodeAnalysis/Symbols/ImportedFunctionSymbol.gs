@@ -73,13 +73,33 @@ class ImportedFunctionSymbol : Symbol {
 
     /// Gets the logical G# return type: for a suspending method the awaited `R` (or `void`), otherwise
     /// (cref:Type).
-    prop LogicalReturnType TypeSymbol -> if IsSuspending && AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(
-        Type,
-        out var awaited
-    ) {
-        awaited!!
-    } else {
-        Type
+    prop LogicalReturnType TypeSymbol {
+        get {
+            if !IsSuspending {
+                return Type
+            }
+            var taskType TypeSymbol = Type
+            while true {
+                if taskType is PlatformTypeSymbol platform {
+                    taskType = platform.UnderlyingType
+                    continue
+                }
+                if taskType is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(nullable) {
+                    taskType = nullable.UnderlyingType
+                    continue
+                }
+                if taskType is NullabilityAnnotatedTypeSymbol annotated {
+                    taskType = annotated.BaseType
+                    continue
+                }
+                break
+            }
+            return if AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(taskType, out var awaited) {
+                awaited!!
+            } else {
+                Type
+            }
+        }
     }
 
     /// ```xmldoc
