@@ -257,6 +257,7 @@ internal shared class ExpressionTreeRestrictionValidator {
                     .Op
                     .Kind == BoundUnaryOperatorKind.NullAssertion &&
                     !unary.IsConversionUnwrap &&
+                    !unary.IsNarrowingUnwrap &&
                     IsNullableValueTypeAssertion(unary) {
                     // Issue #3349: `!!` is only unrepresentable in an expression
                     // tree when it strips a nullable VALUE type — `T?` to `T` is a

@@ -608,7 +608,8 @@ abstract class BoundTreeRewriter {
         // lambda, i.e. precisely the frames where attribution matters most.
 
         return BoundUnaryExpression(node.Syntax, node.Op, operand, node.IsChecked, node.PlatformCheckMessage){
-            IsConversionUnwrap = node.IsConversionUnwrap
+            IsConversionUnwrap = node.IsConversionUnwrap,
+            IsNarrowingUnwrap = node.IsNarrowingUnwrap
         }
     }
 

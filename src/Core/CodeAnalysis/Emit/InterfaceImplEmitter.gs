@@ -723,10 +723,10 @@ internal class InterfaceImplEmitter {
                 parameterCount,
                 (returnType ReturnTypeEncoder) -> {
                     if bridge.IsSetter && bridge.Property.IsInitOnly {
-                        returnType.CustomModifiers().AddModifier(
-                            this.outer.wellKnown.GetIsExternalInitTypeRef(),
-                            isOptional: false
-                        )
+                        let isExternalInit = this.outer.wellKnown.GetIsExternalInitTypeRef()
+                        if !isExternalInit.IsNil {
+                            returnType.CustomModifiers().AddModifier(isExternalInit, isOptional: false)
+                        }
                     }
                     this
                         .outer

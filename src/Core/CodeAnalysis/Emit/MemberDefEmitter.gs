@@ -252,17 +252,14 @@ internal class MemberDefEmitter {
     }
 
     private func EmitIsReadOnlyAttribute(handle EntityHandle) {
+        let ctorRef = this.wellKnown.GetIsReadOnlyAttributeCtorRef()
+        if ctorRef.IsNil {
+            return
+        }
         let value = BlobBuilder()
         value.WriteUInt16(1)
         value.WriteUInt16(0)
-        this
-            .emitCtx
-            .Metadata
-            .AddCustomAttribute(
-            handle,
-            this.wellKnown.GetIsReadOnlyAttributeCtorRef(),
-            this.emitCtx.Metadata.GetOrAddBlob(value)
-        )
+        this.emitCtx.Metadata.AddCustomAttribute(handle, ctorRef, this.emitCtx.Metadata.GetOrAddBlob(value))
     }
 
     /// Issue #4988: mints an accessor MethodDef's `Param` rows — the

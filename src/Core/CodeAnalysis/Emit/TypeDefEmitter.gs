@@ -2140,6 +2140,9 @@ internal class TypeDefEmitter {
     /// @param typeHandle The inline struct TypeDef handle.
     private func EmitIsReadOnlyAttribute(typeHandle TypeDefinitionHandle) {
         let ctorRef = this.wellKnown.GetIsReadOnlyAttributeCtorRef()
+        if ctorRef.IsNil {
+            return
+        }
         let valueBlob = BlobBuilder()
         valueBlob.WriteUInt16(0x0001)
         valueBlob.WriteUInt16(0)

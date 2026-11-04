@@ -49,8 +49,12 @@ internal shared class EmbeddedAttributeSource {
     private const MarkerName string = "EmbeddedAttribute"
     private const NullableName string = "NullableAttribute"
     private const NullableContextName string = "NullableContextAttribute"
+    private const IsReadOnlyName string = "IsReadOnlyAttribute"
+    private const IsExternalInitName string = "IsExternalInit"
     private const NullableFullName string = "System.Runtime.CompilerServices.NullableAttribute"
     private const NullableContextFullName string = "System.Runtime.CompilerServices.NullableContextAttribute"
+    private const IsReadOnlyFullName string = "System.Runtime.CompilerServices.IsReadOnlyAttribute"
+    private const IsExternalInitFullName string = "System.Runtime.CompilerServices.IsExternalInit"
 
     /// Returns whether [`tree`](paramref) is the synthetic tree.
     /// @param tree The tree to test.
@@ -59,9 +63,10 @@ internal shared class EmbeddedAttributeSource {
 
     /// Returns whether [`fullName`](paramref) names one of the embeddable attributes.
     /// @param fullName A package-qualified type name.
-    /// @returns `true` for `NullableAttribute` or `NullableContextAttribute` in `System.Runtime.CompilerServices`.
+    /// @returns `true` for `NullableAttribute`, `NullableContextAttribute`, or `IsReadOnlyAttribute` in `System.Runtime.CompilerServices`.
     func IsEmbeddableAttributeName(fullName string) bool -> fullName == NullableFullName ||
-        fullName == NullableContextFullName
+        fullName == NullableContextFullName ||
+        fullName == IsReadOnlyFullName
 
     /// Returns the trees to bind: [`trees`](paramref), plus the synthetic tree when
     /// the target needs embedded copies.
@@ -84,7 +89,19 @@ internal shared class EmbeddedAttributeSource {
             out var publishedContext
         ) &&
             !DeclaresType(trees, CompilerServicesPackage, NullableContextName)
-        if !needNullable && !needContext {
+        let needReadOnly = !references.TryResolvePublishedEmbeddableAttribute(
+            IsReadOnlyFullName,
+            out var _publishedReadOnly
+        ) &&
+            !DeclaresType(trees, CompilerServicesPackage, IsReadOnlyName) &&
+            MayNeedIsReadOnlyAttribute(trees)
+        let needExternalInit = !references.TryResolvePublishedEmbeddableAttribute(
+            IsExternalInitFullName,
+            out var _publishedExternalInit
+        ) &&
+            !DeclaresType(trees, CompilerServicesPackage, IsExternalInitName) &&
+            MayNeedIsExternalInit(trees)
+        if !needNullable && !needContext && !needReadOnly && !needExternalInit {
             return trees
         }
         // One tree per package: a source file declares a single `package`. The marker is
@@ -93,7 +110,9 @@ internal shared class EmbeddedAttributeSource {
         if !DeclaresType(trees, MarkerPackage, MarkerName) {
             result = result.Add(CreateSyntheticTree(BuildMarkerSource(), "-marker>"))
         }
-        return result.Add(CreateSyntheticTree(BuildSource(needNullable, needContext), "-nullable>"))
+        return result.Add(
+            CreateSyntheticTree(BuildSource(needNullable, needContext, needReadOnly, needExternalInit), "-nullable>")
+        )
     }
 
     /// The single decision point for "is this source declaration the framework's attribute
@@ -148,6 +167,68 @@ internal shared class EmbeddedAttributeSource {
                 .ClassPrimaryCtorHandles
                 .TryGetValue(declared, out var primaryHandle) {
                 return primaryHandle
+            }
+        }
+        return default(EntityHandle)
+    }
+
+    /// Finds the parameterless constructor of a source-declared framework attribute (the
+    /// injected copy or a project polyfill), whether it is the default constructor or an
+    /// explicit `init()`.
+    /// @param structs The bound program's classes and structs.
+    /// @param cache The token cache holding the planned constructor MethodDefs.
+    /// @param fullName The framework attribute's fully-qualified name.
+    /// @returns The MethodDef handle, or `default` when no usable constructor is declared.
+    func FindSourceParameterlessConstructor(
+        structs ImmutableArray[StructSymbol],
+        cache MetadataTokenCache,
+        fullName string
+    ) EntityHandle {
+        for declared in structs {
+            if !IsFrameworkAttributeDeclaration(declared, fullName) || !declared.DerivesFromSystemAttribute() {
+                continue
+            }
+            if !declared.ExplicitConstructors.IsDefaultOrEmpty {
+                for ctor in declared.ExplicitConstructors {
+                    if ctor.Parameters.IsDefaultOrEmpty && cache.ExplicitCtorHandles.TryGetValue(
+                        ctor,
+                        out var explicitHandle
+                    ) {
+                        return explicitHandle
+                    }
+                }
+            } else if !declared.HasPrimaryConstructor && !declared.IsSharedClass && cache.ClassCtorHandles.TryGetValue(
+                declared,
+                out var defaultHandle
+            ) {
+                return defaultHandle
+            }
+        }
+        return default(EntityHandle)
+    }
+
+    /// Finds the TypeDef of a source-declared framework type (the injected copy or a
+    /// project polyfill).
+    /// @param structs The bound program's classes and structs.
+    /// @param cache The token cache holding the planned TypeDefs.
+    /// @param fullName The framework type's fully-qualified name.
+    /// @param requireAttributeBase Whether the type must derive from `System.Attribute`.
+    /// @returns The TypeDef handle, or `default` when no usable type is declared.
+    func FindSourceType(
+        structs ImmutableArray[StructSymbol],
+        cache MetadataTokenCache,
+        fullName string,
+        requireAttributeBase bool
+    ) EntityHandle {
+        for declared in structs {
+            if !IsFrameworkAttributeDeclaration(declared, fullName) {
+                continue
+            }
+            if requireAttributeBase && !declared.DerivesFromSystemAttribute() {
+                continue
+            }
+            if cache.StructTypeDefs.TryGetValue(declared, out var handle) {
+                return handle
             }
         }
         return default(EntityHandle)
@@ -226,7 +307,7 @@ internal class EmbeddedAttribute : System.Attribute {
 }
 `
 
-    private func BuildSource(needNullable bool, needContext bool) string {
+    private func BuildSource(needNullable bool, needContext bool, needReadOnly bool, needExternalInit bool) string {
         let source = StringBuilder()
         source.Append(`package System.Runtime.CompilerServices
 
@@ -263,6 +344,66 @@ internal class NullableContextAttribute : System.Attribute {
 }
 `)
         }
+        if needReadOnly {
+            source.Append(`
+@System.Runtime.CompilerServices.CompilerGenerated
+@Microsoft.CodeAnalysis.EmbeddedAttribute
+internal class IsReadOnlyAttribute : System.Attribute {
+}
+`)
+        }
+        if needExternalInit {
+            source.Append(`
+@System.Runtime.CompilerServices.CompilerGenerated
+@Microsoft.CodeAnalysis.EmbeddedAttribute
+internal shared class IsExternalInit {
+}
+`)
+        }
         return source.ToString()
+    }
+
+    private func MayNeedIsReadOnlyAttribute(trees ImmutableArray[SyntaxTree]) bool {
+        for tree in trees {
+            for node in tree.Root.DescendantNodesAndSelf() {
+                switch node {
+                    case structDecl is StructDeclarationSyntax when structDecl.IsInline || structDecl.HasBaseType {
+                        return true
+                    }
+                    case param is ParameterSyntax when param.RefKindModifier?.ValueText == "in" {
+                        return true
+                    }
+                    case fn is FunctionDeclarationSyntax when fn.ReturnReadOnlyModifier != nil {
+                        return true
+                    }
+                    case prop is PropertyDeclarationSyntax when prop.ReturnReadOnlyModifier != nil {
+                        return true
+                    }
+                    case iface is InterfaceDeclarationSyntax when iface.IsProtocol {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    private func MayNeedIsExternalInit(trees ImmutableArray[SyntaxTree]) bool {
+        for tree in trees {
+            for node in tree.Root.DescendantNodesAndSelf() {
+                switch node {
+                    case structDecl is StructDeclarationSyntax when structDecl.IsData || structDecl.HasBaseType {
+                        return true
+                    }
+                    case accessor is PropertyAccessorSyntax when accessor.IsInit {
+                        return true
+                    }
+                    case iface is InterfaceDeclarationSyntax when iface.IsProtocol {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
     }
 }

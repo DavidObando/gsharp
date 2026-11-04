@@ -311,6 +311,149 @@ open class Issue4921HostFallbackEmbeddableAttributeTests {
         }
     }
 
+    /// Issue #4993: a `netstandard2.0` library declaring `data class`, `data struct`,
+    /// `inline struct`, `init` properties, `in` parameters, and `ref readonly` returns
+    /// must reference only `netstandard` (no `System.Private.CoreLib`, no
+    /// `System.Runtime`, and no `System.HashCode` TypeRef), embed internal
+    /// `IsExternalInit` and `IsReadOnlyAttribute` TypeDefs, load cleanly in a
+    /// `netstandard2.0`-only `MetadataLoadContext`, and execute accurately from a
+    /// consumer assembly.
+    @Fact
+    func Issue4993_DataClasses_DataStructs_And_InlineStructs_OnNetStandard20_ReferenceOnlyNetStandard() {
+        let netstandard string? = FindNetStandardReference()
+        Assert.True(netstandard != nil, "could not locate a netstandard.dll reference assembly")
+        let tempDir = Directory.CreateTempSubdirectory("gs_4993_").FullName
+        try {
+            let libPath = Path.Combine(tempDir, "Lib.dll")
+            CompileOrThrow("lib", Issue4993LibrarySource, libPath, tempDir, netstandard!!)
+            {
+                using let stream = File.OpenRead(libPath)
+                using let peReader = PEReader(stream)
+                let reader = peReader.GetMetadataReader()
+                let assemblyRefs = reader
+                    .AssemblyReferences
+                    .Select((h AssemblyReferenceHandle) -> reader.GetString(reader.GetAssemblyReference(h).Name))
+                    .ToArray()
+                Assert.Equal([]string{"netstandard"}, assemblyRefs)
+                for handle in reader.TypeReferences {
+                    let tr = reader.GetTypeReference(handle)
+                    Assert.NotEqual("HashCode", reader.GetString(tr.Name))
+                    Assert.NotEqual("IsExternalInit", reader.GetString(tr.Name))
+                    Assert.NotEqual("IsReadOnlyAttribute", reader.GetString(tr.Name))
+                }
+                let embedded = Dictionary[string, TypeDefinition]()
+                for handle in reader.TypeDefinitions {
+                    let definition = reader.GetTypeDefinition(handle)
+                    embedded[
+                        reader.GetString(definition.Namespace) + "." + reader.GetString(definition.Name)
+                    ] = definition
+                }
+                for name in[]string{
+                    "System.Runtime.CompilerServices.IsExternalInit",
+                    "System.Runtime.CompilerServices.IsReadOnlyAttribute",
+                    "Microsoft.CodeAnalysis.EmbeddedAttribute"
+                } {
+                    Assert.True(embedded.ContainsKey(name), "the library must declare an embedded " + name)
+                    Assert.Equal(TypeAttributes.NotPublic, embedded[name].Attributes & TypeAttributes.VisibilityMask)
+                }
+            }
+            // Load every type, member, custom attribute, and custom modifier in a
+            // MetadataLoadContext that can only see the netstandard2.0 ref directory.
+            let refDir = Path.GetDirectoryName(netstandard!!)!!
+            let resolver = PathAssemblyResolver(Directory.GetFiles(refDir, "*.dll").Concat([]string{libPath}))
+            {
+                using let mlc = MetadataLoadContext(resolver, "netstandard")
+                let loaded = mlc.LoadFromAssemblyPath(libPath)
+                let allFlags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly
+                for type in loaded.GetTypes() {
+                    let _ = type
+                        .GetCustomAttributesData()
+                        .Select((a CustomAttributeData) -> a.AttributeType.FullName)
+                        .ToArray()
+                    for prop in type.GetProperties(allFlags) {
+                        let _ = prop.PropertyType.FullName
+                    }
+                    for method in type.GetMethods(allFlags) {
+                        let _ = method
+                            .ReturnParameter
+                            .GetRequiredCustomModifiers()
+                            .Select((m Type) -> m.FullName)
+                            .ToArray()
+                        for param in method.GetParameters() {
+                            let _ = param.GetRequiredCustomModifiers().Select((m Type) -> m.FullName).ToArray()
+                            let _ = param
+                                .GetCustomAttributesData()
+                                .Select((a CustomAttributeData) -> a.AttributeType.FullName)
+                                .ToArray()
+                        }
+                    }
+                }
+            }
+            // Compile and run a consumer against the netstandard2.0 library.
+            let appPath = Path.Combine(tempDir, "App.dll")
+            let (exit, output) = CompileApp(tempDir, appPath, libPath, Issue4993ConsumerSource)
+            Assert.True(exit == 0, "the consumer must compile:\n" + output)
+            let psi = System
+                .Diagnostics
+                .ProcessStartInfo("dotnet", "\"$appPath\""){
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                WorkingDirectory = tempDir
+            }
+            using let proc = System.Diagnostics.Process.Start(psi)!!
+            let stdout = proc.StandardOutput.ReadToEnd()
+            let stderr = proc.StandardError.ReadToEnd()
+            proc.WaitForExit()
+            Assert.True(proc.ExitCode == 0, "consumer failed ($stderr):\n$stdout")
+            Assert.Equal("True False True True 5" + Environment.NewLine, stdout)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
+    /// Issue #4993: a `netstandard2.0` project that declares its own polyfills for
+    /// `IsExternalInit` and `IsReadOnlyAttribute` reuses those declarations without
+    /// emitting duplicate `TypeDef` rows.
+    @Fact
+    func Issue4993_NetStandardLibraryWithPolyfills_ReusesPolyfillsWithoutDuplicates() {
+        let netstandard string? = FindNetStandardReference()
+        Assert.True(netstandard != nil, "could not locate a netstandard.dll reference assembly")
+        let tempDir = Directory.CreateTempSubdirectory("gs_4993_poly_").FullName
+        try {
+            let libPath = Path.Combine(tempDir, "Lib.dll")
+            CompileOrThrow(
+                "lib",
+                Issue4993LibrarySource,
+                libPath,
+                tempDir,
+                netstandard!!,
+                extraSource: Issue4993PolyfillSource
+            )
+            using let stream = File.OpenRead(libPath)
+            using let peReader = PEReader(stream)
+            let reader = peReader.GetMetadataReader()
+            var isExternalInitCount = 0
+            var isReadOnlyCount = 0
+            for handle in reader.TypeDefinitions {
+                let definition = reader.GetTypeDefinition(handle)
+                if reader.GetString(definition.Namespace) != "System.Runtime.CompilerServices" {
+                    continue
+                }
+                let name = reader.GetString(definition.Name)
+                if name == "IsExternalInit" {
+                    isExternalInitCount++
+                } else if name == "IsReadOnlyAttribute" {
+                    isReadOnlyCount++
+                }
+            }
+            Assert.Equal(1, isExternalInitCount)
+            Assert.Equal(1, isReadOnlyCount)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         private const UserAppliedContextSource string = `
 package Lib
@@ -467,8 +610,76 @@ class Holder {
 }
 `
 
-        // <dotnet-root>/packs/NETStandard.Library.Ref/<version>/ref/<tfm>/netstandard.dll
+        private const Issue4993LibrarySource string = `
+package Lib
+
+data class Rec(V string?)
+
+data struct Pt(X int32, Y int32)
+
+data class Wide(A int32, B int32, C int32, D int32, E int32, F int32, G int32, H int32, I int32)
+
+inline struct Meters(Value float64)
+
+class InRefBox {
+    var item int32 = 5
+    prop Tag string? { get; init; }
+    func Read(in x int32) ref readonly int32 {
+        return ref this.item
+    }
+}
+`
+
+        private const Issue4993PolyfillSource string = `
+package System.Runtime.CompilerServices
+
+import System
+
+internal shared class IsExternalInit {
+}
+
+internal class IsReadOnlyAttribute : Attribute {
+}
+`
+
+        private const Issue4993ConsumerSource string = `
+import System
+import Lib
+
+let r1 = Rec("a")
+let r2 = Rec("a")
+let r3 = r1 with { V = "b" }
+let p1 = Pt(2, 3)
+let p2 = p1 with { Y = 3 }
+let w1 = Wide(1, 2, 3, 4, 5, 6, 7, 8, 9)
+let w2 = Wide(1, 2, 3, 4, 5, 6, 7, 8, 9)
+let m1 = Meters(1.5)
+let m2 = Meters(1.5)
+let box = InRefBox{ Tag: "ok" }
+let k = 1
+Console.WriteLine("${r1 == r2 && r1.GetHashCode() == r2.GetHashCode()} ${r1 == r3} ${p1 == p2 && p1.GetHashCode() == p2.GetHashCode() && w1.GetHashCode() == w2.GetHashCode()} ${m1 == m2 && m1.GetHashCode() == m2.GetHashCode()} ${box.Read(in k)}")
+`
+
+        // NuGet cache NETStandard.Library 2.0 ref assembly, or <dotnet-root>/packs/NETStandard.Library.Ref/<version>/ref/<tfm>/netstandard.dll
         private func FindNetStandardReference() string? {
+            let packages = Environment.GetEnvironmentVariable("NUGET_PACKAGES") ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".nuget",
+                "packages"
+            )
+            let packageRoot = Path.Combine(packages, "netstandard.library")
+            if Directory.Exists(packageRoot) {
+                let packaged string? = Directory
+                    .GetFiles(packageRoot, "netstandard.dll", SearchOption.AllDirectories)
+                    .Where(
+                    (p string) -> p.Contains(Path.Combine("build", "netstandard2.0", "ref"), StringComparison.Ordinal)
+                )
+                    .OrderByDescending((p string) -> p, StringComparer.Ordinal)
+                    .FirstOrDefault()
+                if packaged != nil {
+                    return packaged
+                }
+            }
             var dotnetRoot string? = Path.GetDirectoryName(typeof(object).Assembly.Location)
             while dotnetRoot != nil && !Directory.Exists(Path.Combine(dotnetRoot, "packs")) {
                 dotnetRoot = Path.GetDirectoryName(dotnetRoot)

@@ -183,23 +183,113 @@ func f(s string?) int32 {
         Assert.Equal("GS0158:Length", DiagnoseSource(source))
     }
 
-    /// In an expression-tree lambda the narrowed `int32?` read is rejected in
-    /// both forms, because the expression-tree lowerer does not lower the
-    /// value-type unwrap yet (issue #4974). Before #4964 the ternary form
-    /// compiled and then threw when the tree was built.
+    /// Issue #4974: in an expression-tree lambda a narrowed value-type nullable
+    /// read lowers its synthesized unwrap to `Expression.Convert` in both
+    /// conditional forms, while an explicit user `!!` on a nullable value type
+    /// remains rejected with GS0473.
     @Theory
     @InlineData("v != nil ? v + 1 : 0")
     @InlineData("if v != nil { v + 1 } else { 0 }")
-    func Expression_Tree_Narrowed_Value_Type_Read_Is_Rejected_In_Both_Forms(conditional string) {
-        let source = (`package Issue4964.ExpressionTree
+    func Expression_Tree_Narrowed_Value_Type_Read_Compiles_And_Runs_In_Both_Forms(conditional string) {
+        let result = CompileAndRun(`import System
+import System.Linq.Expressions
+let e Expression[Func[int32?, int32]] = (v int32?) -> ` + conditional + `
+let fn = e.Compile()
+Console.WriteLine("${fn(4)} ${fn(nil)}")
+`)
+        Assert.Equal("5 0" + Environment.NewLine, result.Output)
+    }
+
+    /// Issue #4974: type-test and value-type-nullable narrowed reads inside
+    /// expression-tree lambdas lower to `Expression.Convert` across parameters,
+    /// captured locals, and stable field/property member paths,
+    /// while explicit user `!!` on a value-type nullable still reports GS0473.
+    @Fact
+    func Issue4974_Expression_Tree_Narrowed_Reads_Lower_To_Convert_And_Evaluate() {
+        let result = CompileAndRun(`import System
+import System.Linq.Expressions
+
+open class Animal {
+    let Tag int32 = 1
+}
+
+class Dog : Animal {
+    let BarkLen int32 = 4
+    func Bark() int32 -> this.BarkLen + this.Tag
+}
+
+struct Point {
+    var X int32
+    var Y int32
+}
+
+enum Color { Red, Green }
+
+class Holder {
+    let Pet Animal = Dog()
+    prop CurrentPet Animal { get; init; }
+    let Count int32? = 7
+    prop MaybeCount int32? { get; init; }
+    init() {
+        this.CurrentPet = Dog()
+        this.MaybeCount = 7
+    }
+}
+
+func runCaptured(capturedObj object, capturedInt int32?) int32 {
+    let capTree Expression[Func[int32]] = () -> ((capturedObj is string) ? capturedObj.Length : 0) + (capturedInt != nil ? capturedInt : 0)
+    return capTree.Compile()()
+}
+
+let ifType Expression[Func[object, int32]] = (value object) -> if value is string { value.Length } else { 0 }
+let terType Expression[Func[object, int32]] = (value object) -> (value is string) ? value.Length : 0
+let andType Expression[Func[object, bool]] = (value object) -> value is string && value.Length > 1
+let orType Expression[Func[object, bool]] = (value object) -> !(value is string) || value.Length > 1
+let unboxInt Expression[Func[object, int32]] = (value object) -> (value is int32) ? value + 10 : -1
+let derivedClass Expression[Func[Animal, int32]] = (a Animal) -> (a is Dog) ? a.Bark() : 0
+let fieldPath Expression[Func[Holder, int32]] = (h Holder) -> (h.Pet is Dog) ? h.Pet.Bark() : -1
+let propPath Expression[Func[Holder, int32]] = (h Holder) -> if h.CurrentPet is Dog { h.CurrentPet.Bark() } else { -1 }
+
+let valIf Expression[Func[int32?, int32]] = (v int32?) -> if v != nil { v + 1 } else { 0 }
+let valTer Expression[Func[int32?, int32]] = (v int32?) -> v != nil ? v + 1 : 0
+let valElse Expression[Func[int32?, int32]] = (v int32?) -> v == nil ? -1 : v * 2
+let valStruct Expression[Func[Point?, int32]] = (p Point?) -> p != nil ? p.X + p.Y : -1
+let valEnum Expression[Func[Color?, string]] = (c Color?) -> c == nil ? "none" : c.ToString()
+let valFieldPath Expression[Func[Holder, int32]] = (h Holder) -> h.Count != nil ? h.Count + 1 : 0
+let valPropPath Expression[Func[Holder, int32]] = (h Holder) -> if h.MaybeCount != nil { h.MaybeCount + 2 } else { 0 }
+
+Console.WriteLine("${ifType.Compile()("abc")} ${ifType.Compile()(1)} ${terType.Compile()("abcd")} ${terType.Compile()(1)}")
+Console.WriteLine("${andType.Compile()("ab")} ${andType.Compile()("a")} ${andType.Compile()(1)} ${orType.Compile()(1)} ${orType.Compile()("a")} ${orType.Compile()("ab")}")
+Console.WriteLine("${unboxInt.Compile()(5)} ${unboxInt.Compile()("x")} ${derivedClass.Compile()(Dog())} ${derivedClass.Compile()(Animal())}")
+Console.WriteLine("${fieldPath.Compile()(Holder())} ${propPath.Compile()(Holder())}")
+Console.WriteLine("${valIf.Compile()(4)} ${valIf.Compile()(nil)} ${valTer.Compile()(4)} ${valTer.Compile()(nil)} ${valElse.Compile()(4)} ${valElse.Compile()(nil)}")
+Console.WriteLine("${valStruct.Compile()(Point{X: 2, Y: 5})} ${valStruct.Compile()(nil)} ${valEnum.Compile()(Color.Green)} ${valEnum.Compile()(nil)}")
+Console.WriteLine("${valFieldPath.Compile()(Holder())} ${valPropPath.Compile()(Holder())} ${runCaptured("captured", 9)} ${runCaptured(42, nil)}")
+`)
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "3 0 4 0",
+                "True False False True False True",
+                "15 -1 5 0",
+                "5 5",
+                "5 0 5 0 8 -1",
+                "7 -1 Green none",
+                "8 9 17 0"
+            ) +
+                Environment.NewLine,
+            result.Output
+        )
+
+        let explicitUserBangBang = `package Issue4974.ExplicitAssertion
 import System
 import System.Linq.Expressions
 func f() int32 {
-    let e Expression[Func[int32?, int32]] = (v int32?) -> ` + conditional + `
+    let e Expression[Func[int32?, int32]] = (v int32?) -> v!! + 1
     return e.Compile()(1)
 }
-`)
-        Assert.Equal("GS0473:v", DiagnoseSource(source))
+`
+        Assert.Equal("GS0473:v!!", DiagnoseSource(explicitUserBangBang))
     }
 
     shared {
