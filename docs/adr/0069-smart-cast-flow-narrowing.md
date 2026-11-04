@@ -224,8 +224,8 @@ safe (they decline to narrow rather than narrowing unsoundly):
   stable member paths — including `[NotNullWhen]`-derived member-path facts such
   as `if x.Values.IsNullOrEmpty() { return }` (probe `e21`) — when the function
   contains no user label or `goto` (until row R6), the root cannot be replaced
-  by user code in the statement (`o1`–`o7`), and the surviving branch does not
-  mutate member paths.
+  by user code in the statement (`o1`–`o7`), and neither branch mutates or
+  invalidates member paths (`h2`, `h4`, `h7`; until row R2).
 
 For source compatibility with established G# libraries, an unannotated
 extension named exactly `IsNullOrEmpty` is treated as
@@ -393,7 +393,7 @@ This is intentionally stricter than Kotlin (which keeps `val`-member casts acros
 
 ### Loop back-edges (issue #2943; updated by ADR-0213 slice L1)
 
-> **Updated by [ADR-0213](0213-narrowing-across-loops-and-backward-jumps.md) slice L1 (#5459):** Loops now compute the syntactic region lower bound `Lower(S, R)` (`RegionEffectScanner`) before binding the loop header and body once. The speculative second bind (`BindLoopBody` snapshot/restore), the exit-path write exemption below (ADR-0213 row R7 (a)), and the variable/callee return non-null proof below (row R7 (b)) are superseded; `T{}` struct literals preserve a type-test fact like `T()` does (row R7 (d)), a reassignment from a type-pattern variable bound inside the loop preserves the narrowing where that variable is in scope, and a `break`-free `while`, `for`, or `do` loop joins the condition's false state on exit (row R7 (f)). See [ADR-0213](0213-narrowing-across-loops-and-backward-jumps.md) sections 6–9 and 16 for the current loop rules.
+> **Updated by [ADR-0213](0213-narrowing-across-loops-and-backward-jumps.md) slice L1 (#5459):** Loops now compute the syntactic region lower bound `Lower(S, R)` (`RegionEffectScanner`) before binding the loop header and body once. The speculative second bind (`BindLoopBody` snapshot/restore), the exit-path write exemption below (ADR-0213 row R7 (a)), and the variable/callee return non-null proof below (row R7 (b)) are superseded; `T{}` struct literals preserve a type-test fact like `T()` does (row R7 (d)), a reassignment from a type-pattern variable bound inside the loop preserves the narrowing where that variable is in scope, and a `break`-free `while`, `for`, or `do` loop in a function without a user label or `goto` joins the condition's false state on exit minus any facts that the condition's own effects (or an enclosing `catch ... when` filter) can remove (row R7 (f), §20b). See [ADR-0213](0213-narrowing-across-loops-and-backward-jumps.md) sections 6–9, 16, and 20b for the current loop rules.
 
 A narrowing inherited from outside a loop is invalidated before the body and
 repeated header when an assignment or member-path mutation can reach that loop's back-edge. This
