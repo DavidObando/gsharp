@@ -444,23 +444,21 @@ internal partial class ExpressionBinder {
                 }
                 anyGenericSegment |= DeclaredGenericDefinitionArity(current!!) > 0
             }
-            if resolved &&
-                anyGenericSegment &&
-                IsOpenGenericOrGenericEnclosingDefinition(current!!) &&
-                binderCtx
-                .HasUnclosedEnclosingTypeParameters(current, currentFunction) {
-                let targetLocation = if typeClause.QualifierIdentifierTokens.IsDefaultOrEmpty {
-                    typeClause.Location
-                } else {
-                    typeClause.QualifierIdentifierTokens[typeClause.QualifierIdentifierTokens.Length - 1].Location
-                }
+            if resolved && anyGenericSegment && binderCtx.HasUnclosedEnclosingTypeParameters(current, currentFunction) {
                 let openTarget = (current as StructSymbol)?.Definition ??
                     (current as InterfaceSymbol)?.Definition ??
                     (current as EnumSymbol)?.Definition ??
                     current!!
-                reportObsoleteUseIfApplicable(targetLocation, openTarget, openTarget.Name)
-                type = openTarget
-                return true
+                if IsOpenGenericOrGenericEnclosingDefinition(openTarget) {
+                    let targetLocation = if typeClause.QualifierIdentifierTokens.IsDefaultOrEmpty {
+                        typeClause.Location
+                    } else {
+                        typeClause.QualifierIdentifierTokens[typeClause.QualifierIdentifierTokens.Length - 1].Location
+                    }
+                    reportObsoleteUseIfApplicable(targetLocation, openTarget, openTarget.Name)
+                    type = openTarget
+                    return true
+                }
             }
         }
         return false
@@ -485,6 +483,10 @@ internal partial class ExpressionBinder {
                 .EnclosingTypeArguments
                 .IsDefaultOrEmpty: !StructSymbol
                 .CollectEnclosingTypeParameters(interfaceSymbol).IsDefaultOrEmpty
+            case enumSymbol is EnumSymbol when enumSymbol
+                .EnclosingTypeArguments
+                .IsDefaultOrEmpty: !StructSymbol
+                .CollectEnclosingTypeParameters(enumSymbol).IsDefaultOrEmpty
             default: false
         }
     }

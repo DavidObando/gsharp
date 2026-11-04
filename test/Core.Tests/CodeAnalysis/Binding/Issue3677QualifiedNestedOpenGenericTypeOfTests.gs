@@ -78,12 +78,18 @@ typeof(Inner).IsGenericTypeDefinition &&
 typeof(Inner).Name == "Inner` + "`" + `1" &&
 typeof(PlainInner).IsGenericTypeDefinition &&
 typeof(PlainInner).Name == "PlainInner" &&
+typeof(Kind).IsGenericTypeDefinition &&
+typeof(Kind).Name == "Kind" &&
 typeof(Outer.Inner).IsGenericTypeDefinition &&
 typeof(Outer.Inner).Name == "Inner` + "`" + `1" &&
 typeof(Outer.PlainInner).IsGenericTypeDefinition &&
 typeof(Outer.PlainInner).Name == "PlainInner" &&
+typeof(Outer.Kind).IsGenericTypeDefinition &&
+typeof(Outer.Kind).Name == "Kind" &&
 !typeof(ClosedBaseDerived.PlainInner).IsGenericTypeDefinition &&
-typeof(ClosedBaseDerived.PlainInner) == typeof(Outer[string].PlainInner)
+typeof(ClosedBaseDerived.PlainInner) == typeof(Outer[string].PlainInner) &&
+!typeof(ClosedBaseDerived.Kind).IsGenericTypeDefinition &&
+typeof(ClosedBaseDerived.Kind) == typeof(Outer[string].Kind)
 `)
         Assert.Empty(result.Diagnostics)
         Assert.Equal(true, result.Value)
@@ -215,6 +221,7 @@ class Fixtures {
 open class Outer[T] {
     class Inner[U] {}
     public class PlainInner {}
+    public enum Kind { A, B }
 }
 
 class ClosedBaseDerived[U] : Outer[string] {}

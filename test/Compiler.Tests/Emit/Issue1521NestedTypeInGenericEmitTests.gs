@@ -279,6 +279,7 @@ class Outer[T] {
     public interface IGeneric[U] : IComparable[U] {
         func ReadGeneric(seed T, suffix U) string;
     }
+    public enum Kind { A, B }
     public func EchoIface(x IPlain) Outer[T].IPlain -> x
     public func UseMiddleLeaf(leaf Middle[string].Leaf) int32 {
         let localLeaf = Middle[string].Leaf{Value: 3}
@@ -295,6 +296,8 @@ class Left {
 class Right {
     public class Item { }
 }
+@TypeTag(typeof(Outer.Kind), typeof(Kind))
+class EnumOpenTagHolder { }
 @TypeTag(typeof(Outer[string].IPlain), typeof(Outer[string].IGeneric[int32]))
 class PlainImpl : Outer[string].IPlain, Outer[string].IGeneric[int32], Outer[string].IGeneric[PlainImpl], Outer[string].IMarker, Outer[int32].IMarker, Outer[Left.Item].IMarker, Outer[Right.Item].IMarker, Outer[in chan[int32]].IMarker, Outer[out chan[int32]].IMarker, Outer[(Left.Item) -> void].IMarker, Outer[(Right.Item) -> void].IMarker {
     public prop Tag string -> "tag"
@@ -340,6 +343,7 @@ func Main() {
     let impl = PlainImpl{}
     let selfOwner = UseSelfEnclosingPlain(SelfOwnerImpl{})
     let tag = cast[TypeTagAttribute](typeof(PlainImpl).GetCustomAttributes(typeof(TypeTagAttribute), false)[0])
+    let enumTag = cast[TypeTagAttribute](typeof(EnumOpenTagHolder).GetCustomAttributes(typeof(TypeTagAttribute), false)[0])
     let baseIface = typeof(Outer[string].IGeneric[int32]).GetInterfaces()[0]
     let strMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[string].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
     let intMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[int32].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
@@ -353,7 +357,7 @@ func Main() {
     Console.WriteLine(owner.ReadScoped() + owner.UseMiddleLeaf(leaf))
     Console.WriteLine(UsePlain(owner.EchoIface(impl), item))
     Console.WriteLine(UseGeneric(impl) + ":" + UseSelfRef(impl) + ":" + UseSelfEnclosing(selfOwner))
-    Console.WriteLine(tag.First == typeof(Outer[string].IPlain) && tag.Second == typeof(Outer[string].IGeneric[int32]))
+    Console.WriteLine(tag.First == typeof(Outer[string].IPlain) && tag.Second == typeof(Outer[string].IGeneric[int32]) && enumTag.First == typeof(Outer.Kind) && enumTag.Second == typeof(Kind) && enumTag.First.IsGenericTypeDefinition)
     Console.WriteLine(baseIface == typeof(IComparable[int32]))
     Console.WriteLine(UseMarkerString(impl).ToString() + ":" + UseMarkerInt(impl).ToString() + ":" + UseMarkerLeft(impl).ToString() + ":" + UseMarkerRight(impl).ToString() + ":" + UseMarkerInChan(impl).ToString() + ":" + UseMarkerOutChan(impl).ToString() + ":" + UseMarkerLeftFn(impl).ToString() + ":" + UseMarkerRightFn(impl).ToString() + ":" + (strMarkerMethod != nil && intMarkerMethod != nil && leftMarkerMethod != nil && rightMarkerMethod != nil && inChanMarkerMethod != nil && outChanMarkerMethod != nil && leftFnMarkerMethod != nil && rightFnMarkerMethod != nil && inChanMarkerMethod != outChanMarkerMethod && leftFnMarkerMethod != rightFnMarkerMethod).ToString())
 }`
