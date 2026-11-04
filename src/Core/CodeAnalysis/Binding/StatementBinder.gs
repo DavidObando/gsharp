@@ -374,9 +374,17 @@ internal partial class StatementBinder {
         beforeBind((StatementSyntax) -> void)? = nil,
         trailingStatement(() -> BoundStatement)? = nil
     ) ImmutableArray[BoundStatement] {
-        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-        let _ = BindBlockStatements(statementSyntaxes, 0, statements, beforeBind, trailingStatement)
-        return statements.ToImmutable()
+        let previousTopLevelStatements = topLevelStatementList
+        if statementSyntaxes.Length > 0 && statementSyntaxes[0].Parent is GlobalStatementSyntax {
+            topLevelStatementList = statementSyntaxes
+        }
+        try {
+            let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+            let _ = BindBlockStatements(statementSyntaxes, 0, statements, beforeBind, trailingStatement)
+            return statements.ToImmutable()
+        } finally {
+            topLevelStatementList = previousTopLevelStatements
+        }
     }
 
     /// Shared prepare-then-bind grouping for a consecutive run of local-

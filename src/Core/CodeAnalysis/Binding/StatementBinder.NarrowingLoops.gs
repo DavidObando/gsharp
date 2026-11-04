@@ -3074,6 +3074,8 @@ internal partial class StatementBinder {
         return nil
     }
 
+    private var topLevelStatementList ImmutableArray[StatementSyntax] = ImmutableArray[StatementSyntax].Empty
+
     private func GetEnclosingBackwardJumpSpan(node SyntaxNode) BackwardJumpSpan? {
         if !binderCtx.FunctionContainsUserGotoOrLabel {
             return nil
@@ -3081,6 +3083,26 @@ internal partial class StatementBinder {
         let body = FindEnclosingFunctionBody(node)
         if body == nil {
             return nil
+        }
+        if body is CompilationUnitSyntax && !topLevelStatementList.IsDefaultOrEmpty {
+            let rootKey = topLevelStatementList[0].SyntaxTree.Root
+            if spansByBody.TryGetValue(rootKey, out var cachedTopLevel) {
+                return cachedTopLevel
+            }
+            let topLevelSpan = BackwardJumpSpans.Compute(rootKey, topLevelStatementList)
+            spansByBody[rootKey] = topLevelSpan
+            if topLevelSpan != nil {
+                let key = NarrowingComparison.Format(rootKey.Location) + ":" + rootKey.Span.Start.ToString()
+                if NarrowingComparison.TryRegisterSpanFunction("span:" + key) && NarrowingComparison.LoopsEnabled {
+                    let effects = GetSpanEffects(topLevelSpan)
+                    NarrowingComparison.ReportSpan(
+                        topLevelSpan.FirstStatement.Location,
+                        "labels=${string.Join(",", topLevelSpan.Labels)} gotos=${topLevelSpan.GotoCount}",
+                        effects.ToString()
+                    )
+                }
+            }
+            return topLevelSpan
         }
         if spansByBody.TryGetValue(body, out var cached) {
             return cached
@@ -3157,7 +3179,7 @@ internal partial class StatementBinder {
             ApplySpanEntryLowerBound(span)
             entryState = spanEntryStates[span]
         }
-        if !wasReachable && !hadIncomingForwardJump && span.TargetedLabels.Contains(labelName) {
+        if wasReachable || hadIncomingForwardJump || span.TargetedLabels.Contains(labelName) {
             let limit = Math.Min(entryState.Frames.Length, binderCtx.NarrowedVariables.Count)
             for var i = 0; i < limit; i++ {
                 let frame = binderCtx.NarrowedVariables[i]
@@ -3166,14 +3188,12 @@ internal partial class StatementBinder {
                     frame.Add(entry.Key, entry.Value)
                 }
             }
+            for var i = limit; i < binderCtx.NarrowedVariables.Count; i++ {
+                binderCtx.NarrowedVariables[i].Clear()
+            }
             externalCallableAliases.Clear()
             for alias in entryState.ExternalCallableAliases {
                 externalCallableAliases.Add(alias)
-            }
-        }
-        if span.EnteredFromOutsideLabels.Contains(labelName) {
-            for var i = entryState.Frames.Length; i < binderCtx.NarrowedVariables.Count; i++ {
-                binderCtx.NarrowedVariables[i].Clear()
             }
         }
         JoinPendingForwardJumpsIntoRegion(span.Labels)

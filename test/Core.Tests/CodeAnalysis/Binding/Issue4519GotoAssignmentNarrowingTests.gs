@@ -6809,6 +6809,122 @@ Done:
 Console.WriteLine(Run(func() { }, false))`, "4")
     }
 
+    @Fact
+    func LabeledBreakOutOfInfiniteLoopDoesNotMakeFollowingBackwardGotoDead() {
+        let result = Evaluate(`func Run() int32 {
+    var x string? = nil
+    x = "safe"
+    var retry = true
+Again:
+    let length = x.Length
+Outer:
+    for {
+        for {
+            break Outer
+        }
+    }
+    if retry {
+        retry = false
+        x = nil
+        goto Again
+    }
+    return length
+}
+
+Run()`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func LabeledBreakOutOfSwitchDoesNotMakeFollowingBackwardGotoDead() {
+        let result = Evaluate(`func Run(value object) int32 {
+    var x string? = nil
+    x = "safe"
+    var retry = true
+Again:
+    let length = x.Length
+Outer:
+    for {
+        switch value {
+            case _ {
+                break Outer
+            }
+        }
+    }
+    if retry {
+        retry = false
+        x = nil
+        goto Again
+    }
+    return length
+}
+
+Run(0)`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func CrossFileTopLevelBackwardGotoInvalidatesEarlierFileNarrowing() {
+        let treeA = SyntaxTree.Parse(SourceText.From(`var s string? = nil
+s = "safe"
+var retry = true
+Again:
+let n = s.Length`))
+        let treeB = SyntaxTree.Parse(SourceText.From(`if retry {
+    retry = false
+    s = nil
+    goto Again
+}`))
+        let compilation = Compilation(treeA, treeB)
+        let diagnostic = Assert.Single(compilation.GetDiagnostics(), (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
+    func BackwardGotoFromElseIntoGuardedThenBranchInvalidatesGuard() {
+        let result = Evaluate(`func Run(s string?) int32 {
+    if s != nil {
+    L:
+        return s.Length
+    } else {
+        goto L
+    }
+}
+
+Run(nil)`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func MergedSpanLocalVariableWriteInvalidatesSecondLoopLabel() {
+        let result = Evaluate(`func Run(cond1 bool, cond2 bool) int32 {
+First:
+    if cond1 {
+        goto First
+    }
+    var local string? = nil
+    local = "safe"
+Second:
+    let n = local.Length
+    local = nil
+    if cond2 {
+        goto Second
+    }
+    return n
+}
+
+Run(false, true)`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
     shared {
         private func Evaluate(source string) EmittedOracleResult -> EmittedOracle.Evaluate(source)
 
