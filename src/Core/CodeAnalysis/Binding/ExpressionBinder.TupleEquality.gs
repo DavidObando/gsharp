@@ -48,24 +48,28 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         var left = left
         var right = right
-        var leftTuple = cast[TupleTypeSymbol](left.Type)
-        var rightTuple = cast[TupleTypeSymbol](right.Type)
-        if leftTuple.Arity != rightTuple.Arity {
+        let rawLeftTuple = cast[TupleTypeSymbol](left.Type)
+        let rawRightTuple = cast[TupleTypeSymbol](right.Type)
+        if rawLeftTuple.Arity != rawRightTuple.Arity {
             Diagnostics.ReportTupleEqualityArityMismatch(
                 opLocation,
-                leftTuple,
-                leftTuple.Arity,
-                rightTuple,
-                rightTuple.Arity
+                rawLeftTuple,
+                rawLeftTuple.Arity,
+                rawRightTuple,
+                rawRightTuple.Arity
             )
             return BoundErrorExpression(nil)
         }
-        if leftTuple.HasNilElement {
-            leftTuple = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(leftTuple, rightTuple))
+        let leftSource = left
+        let rightSource = right
+        var leftTuple = rawLeftTuple
+        var rightTuple = rawRightTuple
+        if rawLeftTuple.HasNilElement {
+            leftTuple = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(rawLeftTuple))
             left = conversions.BindConversion(opLocation, left, leftTuple)
         }
-        if rightTuple.HasNilElement {
-            rightTuple = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(rightTuple, leftTuple))
+        if rawRightTuple.HasNilElement {
+            rightTuple = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(rawRightTuple))
             right = conversions.BindConversion(opLocation, right, rightTuple)
         }
         let statements = ImmutableArray.CreateBuilder[BoundStatement](2)
@@ -75,12 +79,14 @@ internal partial class ExpressionBinder {
             operatorKind,
             leftReceiver,
             leftTuple,
+            rawLeftTuple,
             rightReceiver,
             rightTuple,
+            rawRightTuple,
             opLocation,
             operatorText,
-            left,
-            right
+            leftSource,
+            rightSource
         )
         if comparison == nil {
             return BoundErrorExpression(nil)
@@ -113,8 +119,10 @@ internal partial class ExpressionBinder {
         opKind SyntaxKind,
         leftReceiver BoundExpression,
         leftTuple TupleTypeSymbol,
+        rawLeftTuple TupleTypeSymbol,
         rightReceiver BoundExpression,
         rightTuple TupleTypeSymbol,
+        rawRightTuple TupleTypeSymbol,
         opLocation TextLocation,
         opText string,
         leftSource BoundExpression?,
@@ -128,12 +136,22 @@ internal partial class ExpressionBinder {
         var result BoundExpression? = nil
         var failed = false
         for var i = 0; i < leftTuple.Arity; i++ {
-            let leftElement = BoundTupleElementAccessExpression(nil, leftReceiver, leftTuple, i)
-            let rightElement = BoundTupleElementAccessExpression(nil, rightReceiver, rightTuple, i)
+            let leftElement BoundExpression = if rawLeftTuple.ElementTypes[i] == TypeSymbol.Null {
+                BoundLiteralExpression(nil, nil, TypeSymbol.Null)
+            } else {
+                BoundTupleElementAccessExpression(nil, leftReceiver, leftTuple, i)
+            }
+            let rightElement BoundExpression = if rawRightTuple.ElementTypes[i] == TypeSymbol.Null {
+                BoundLiteralExpression(nil, nil, TypeSymbol.Null)
+            } else {
+                BoundTupleElementAccessExpression(nil, rightReceiver, rightTuple, i)
+            }
             let elementComparison BoundExpression? = TryBindElementEquality(
                 opKind,
                 leftElement,
+                rawLeftTuple.ElementTypes[i] as TupleTypeSymbol,
                 rightElement,
+                rawRightTuple.ElementTypes[i] as TupleTypeSymbol,
                 opLocation,
                 opText,
                 if leftSource is BoundTupleLiteralExpression leftLiteral {
@@ -177,7 +195,9 @@ internal partial class ExpressionBinder {
     private func TryBindElementEquality(
         opKind SyntaxKind,
         left BoundExpression,
+        rawLeftTuple TupleTypeSymbol?,
         right BoundExpression,
+        rawRightTuple TupleTypeSymbol?,
         opLocation TextLocation,
         opText string,
         leftSource BoundExpression?,
@@ -186,13 +206,15 @@ internal partial class ExpressionBinder {
         var left = left
         var right = right
         if left.Type is TupleTypeSymbol nestedLeft && right.Type is TupleTypeSymbol nestedRight {
-            if nestedLeft.Arity != nestedRight.Arity {
+            let effectiveRawLeft = rawLeftTuple ?? nestedLeft
+            let effectiveRawRight = rawRightTuple ?? nestedRight
+            if effectiveRawLeft.Arity != effectiveRawRight.Arity {
                 Diagnostics.ReportTupleEqualityArityMismatch(
                     opLocation,
-                    nestedLeft,
-                    nestedLeft.Arity,
-                    nestedRight,
-                    nestedRight.Arity
+                    effectiveRawLeft,
+                    effectiveRawLeft.Arity,
+                    effectiveRawRight,
+                    effectiveRawRight.Arity
                 )
                 return nil
             }
@@ -202,8 +224,10 @@ internal partial class ExpressionBinder {
                 opKind,
                 left,
                 nestedLeft,
+                effectiveRawLeft,
                 right,
                 nestedRight,
+                effectiveRawRight,
                 opLocation,
                 opText,
                 leftSource,

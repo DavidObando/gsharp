@@ -28,6 +28,13 @@ class Ctr {
     var n int32
 }
 
+class AlwaysEqualBox {
+    shared {
+        public operator ==(a AlwaysEqualBox?, b AlwaysEqualBox?) bool -> true
+        public operator !=(a AlwaysEqualBox?, b AlwaysEqualBox?) bool -> false
+    }
+}
+
 func Tick(ctr Ctr, b bool) bool {
     ctr.n++
     return b
@@ -111,6 +118,11 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
     let f = () -> d ? (nil, "g") : (nil, nil)
     let projected = (d ? (nil, "h") : (nil, nil)).Item2
     let eq = (d ? (nil, "x") : (nil, nil)) == (default(object?), default(string?))
+    let liveBox AlwaysEqualBox? = AlwaysEqualBox()
+    let eqLeftNil = (nil, 0) == (liveBox, 0)
+    let eqRightNil = (liveBox, 0) == (nil, 0)
+    let neqLeftNil = (nil, 0) != (liveBox, 0)
+    let neqRightNil = (liveBox, 0) != (nil, 0)
     var pair (string?, string?) = ("p", "q")
     var num = 0
     pair, num = d ? ((nil, "x"), 1) : ((nil, nil), 2)
@@ -122,6 +134,10 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
         f().Item1 == nil &&
         (projected != nil || !d) &&
         (eq == !d) &&
+        !eqLeftNil &&
+        !eqRightNil &&
+        neqLeftNil &&
+        neqRightNil &&
         pair.Item1 == nil &&
         boxed != nil &&
         multiT.Item1 == nil &&
