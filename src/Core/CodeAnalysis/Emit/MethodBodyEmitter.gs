@@ -984,6 +984,9 @@ internal partial class MethodBodyEmitter {
                         }
                     }
                 }
+                if b != nil && Conversion.IsRepresentationPreservingImplicit(srcInterface, b) {
+                    return true
+                }
                 if b?.ClrType is {IsInterface: true} targetClrInterface {
                     for iface in srcInterface.SelfAndAllBaseInterfaces() {
                         for baseClrInterface in iface.BaseClrInterfaces {

@@ -47,11 +47,21 @@ class AsyncSequenceTypeSymbol : TypeSymbol {
         internal func ClearCache() -> Cache.Clear()
 
         private func MakeClrType(elementType TypeSymbol) Type? {
+            if TypeSymbol.ContainsTypeParameter(elementType) || elementType.ClrType == nil {
+                return nil
+            }
             let elementClrType Type? = NullableTypeSymbol.GetEffectiveClrType(elementType)
             if elementClrType == nil {
                 return nil
             }
-            return typeof(IAsyncEnumerable[_]).MakeGenericType(elementClrType)
+            if elementClrType.IsRuntimeProvidedType() {
+                return typeof(IAsyncEnumerable[_]).MakeGenericType(elementClrType)
+            }
+            return MapTypeSymbol.TryMakeSingleArgumentClrTypeInReferenceContext(
+                typeof(IAsyncEnumerable[_]),
+                "GetAsyncEnumerator",
+                elementType
+            )
         }
     }
 }

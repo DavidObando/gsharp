@@ -2037,6 +2037,9 @@ internal class ImportedMemberRefFactory {
             if method == nil {
                 return nil
             }
+            if ClrTypeUtilities.TryGetMappedOpenMethod(method, out var mappedOpenMethod) {
+                return mappedOpenMethod
+            }
             let declaring Type? = method.DeclaringType
             if declaring == nil || !declaring.IsConstructedGenericType {
                 return method
@@ -2049,21 +2052,29 @@ internal class ImportedMemberRefFactory {
                     return candidate
                 }
             }
-            let parameters = method.GetParameters()
             var fallback MethodInfo? = nil
+            var ambiguousFallback = false
             for candidate in open_.GetMethods(
                 BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic
             ) {
                 if candidate.Name == method.Name &&
                     candidate.IsStatic == method.IsStatic &&
-                    candidate.IsGenericMethod == method.IsGenericMethod &&
-                    candidate
-                    .GetParameters().Length == parameters.Length {
-                    fallback = candidate
-                    break
+                    candidate.IsGenericMethod == method
+                    .IsGenericMethod {
+                    var parametersMatch = true
+                    try {
+                        parametersMatch = candidate.GetParameters().Length == method.GetParameters().Length
+                    } catch (NotSupportedException) { }
+                    if parametersMatch {
+                        if fallback != nil {
+                            ambiguousFallback = true
+                            break
+                        }
+                        fallback = candidate
+                    }
                 }
             }
-            if fallback != nil {
+            if fallback != nil && !ambiguousFallback {
                 return fallback
             }
             return method
@@ -2142,7 +2153,7 @@ internal class ImportedMemberRefFactory {
             }
             let openMethod MethodInfo? = GetOpenMethod(method)
             return if openMethod != nil && openMethod.DeclaringType?.IsGenericTypeDefinition == true {
-                TypeBuilder.GetMethod(declaring, openMethod)
+                ClrTypeUtilities.MapConstructedGenericMethod(declaring, openMethod)
             } else {
                 method
             }
@@ -2210,7 +2221,7 @@ internal class ImportedMemberRefFactory {
                 openProperty?.GetGetMethod(nonPublic)
             }
             return if openAccessor != nil {
-                TypeBuilder.GetMethod(declaring, openAccessor)
+                ClrTypeUtilities.MapConstructedGenericMethod(declaring, openAccessor)
             } else {
                 default(MethodInfo?)
             }
@@ -2325,8 +2336,15 @@ internal class ImportedMemberRefFactory {
         }
 
         internal func ResolveMethodOnOpenDefinition(openDefinition Type?, method MethodInfo) MethodInfo? {
+            var method = method
             if openDefinition == nil {
                 return method
+            }
+            if ClrTypeUtilities.TryGetMappedOpenMethod(method, out var mappedOpen) {
+                if SameOpenTypeDefinition(mappedOpen.DeclaringType, openDefinition) {
+                    return mappedOpen
+                }
+                method = mappedOpen
             }
             if method.DeclaringType == openDefinition {
                 return method
@@ -2339,19 +2357,32 @@ internal class ImportedMemberRefFactory {
                 }
             }
             var fallback MethodInfo? = nil
+            var ambiguousFallback = false
             for candidate in openDefinition.GetMethods(
                 BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic
             ) {
                 if candidate.Name == method.Name &&
                     candidate.IsStatic == method.IsStatic &&
-                    candidate.IsGenericMethod == method.IsGenericMethod &&
-                    candidate
-                    .GetParameters().Length == method.GetParameters().Length {
-                    fallback = candidate
-                    break
+                    candidate.IsGenericMethod == method
+                    .IsGenericMethod {
+                    var parametersMatch = true
+                    try {
+                        parametersMatch = candidate.GetParameters().Length == method.GetParameters().Length
+                    } catch (NotSupportedException) { }
+                    if parametersMatch {
+                        if fallback != nil {
+                            ambiguousFallback = true
+                            break
+                        }
+                        fallback = candidate
+                    }
                 }
             }
-            return fallback ?? method
+            return if ambiguousFallback {
+                method
+            } else {
+                fallback ?? method
+            }
         }
 
         internal func ResolvePropertyOnOpenDefinition(openDefinition Type?, property PropertyInfo?) PropertyInfo? {
