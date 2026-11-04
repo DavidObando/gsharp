@@ -159,17 +159,55 @@ internal partial class StatementBinder {
         return firstImplicit && first.GetType() == second.GetType() && first.Name == second.Name
     }
 
-    // Resolves a bare name that is not a variable of the entry scope through the binder's default-interface and
-    // inherited-CLR instance member fallbacks (#5470).
+    // Resolves a bare name that is not a variable of the entry scope through the binder's static-import,
+    // default-interface, and inherited-CLR member fallbacks (#5470).
     private func TryResolveBareFallbackMember(
         name string,
         out type TypeSymbol?,
         out isProperty bool,
-        out getterRunsUserCode bool
+        out getterRunsUserCode bool,
+        out touchesInitializingType bool
     ) bool {
         type = nil
         isProperty = false
         getterRunsUserCode = false
+        touchesInitializingType = false
+        for importedType in binderCtx.GetStaticImportTypes() {
+            if TypeMemberModel.TryGetStaticPropertyIncludingInherited(
+                importedType,
+                name,
+                out var staticProperty,
+                out var propertyOwner
+            ) {
+                type = propertyOwner.SubstituteMemberType(staticProperty.Type)
+                isProperty = true
+                getterRunsUserCode = SourcePropertyRunsUserCode(staticProperty, nil)
+                touchesInitializingType = TypeInitializationRunsUserCode(propertyOwner, true)
+                return true
+            }
+            if TypeMemberModel.TryGetStaticFieldIncludingInherited(
+                importedType,
+                name,
+                out var staticField,
+                out var fieldOwner
+            ) {
+                type = fieldOwner.SubstituteMemberType(staticField.Type)
+                touchesInitializingType = !staticField.IsConst && TypeInitializationRunsUserCode(fieldOwner, true)
+                return true
+            }
+        }
+        for clrType in $scope.EnumerateStaticImportClrTypes() {
+            if TryResolveClrStaticMemberByBareName(clrType, name, out type, out isProperty, out getterRunsUserCode) {
+                return true
+            }
+        }
+        if $scope.SubmissionImports is {} submissions &&
+            $scope.References is {} references &&
+            submissions.TryFindMemberContainer(references, name, out var programType) &&
+            programType != nil &&
+            TryResolveClrStaticMemberByBareName(programType, name, out type, out isProperty, out getterRunsUserCode) {
+            return true
+        }
         if ExpressionBinder.TryResolveInheritedClrInstanceMemberByBareName(
             binderCtx,
             function,
@@ -209,11 +247,39 @@ internal partial class StatementBinder {
         return false
     }
 
+    private func TryResolveClrStaticMemberByBareName(
+        clrType Type,
+        name string,
+        out type TypeSymbol?,
+        out isProperty bool,
+        out getterRunsUserCode bool
+    ) bool {
+        type = nil
+        isProperty = false
+        getterRunsUserCode = false
+        let flags = BindingFlags.Static | BindingFlags.Public
+        for property in ClrTypeUtilities.SafeGetProperties(clrType, flags) {
+            if ClrTypeUtilities.EmittedMemberNameMatches(property, name) && property.GetIndexParameters().Length == 0 {
+                type = ClrNullability.GetPropertyTypeSymbol(property)
+                isProperty = true
+                getterRunsUserCode = !IsStableClrGetter(property)
+                return true
+            }
+        }
+        for field in ClrTypeUtilities.SafeGetFields(clrType, flags) {
+            if ClrTypeUtilities.EmittedMemberNameMatches(field, name) {
+                type = ClrNullability.GetFieldTypeSymbol(field)
+                return true
+            }
+        }
+        return false
+    }
+
     private func TryLookupRegionVariableType(name string) TypeSymbol? {
         if $scope.TryLookupSymbol(name) is VariableSymbol variable {
             return variable.Type
         }
-        return if TryResolveBareFallbackMember(name, out var type, out _, out _) {
+        return if TryResolveBareFallbackMember(name, out var type, out _, out _, out _) {
             type
         } else {
             default(TypeSymbol?)
@@ -282,11 +348,22 @@ internal partial class StatementBinder {
                 resolved.ReadsUserCodeProperty = true
             }
             if symbol is not VariableSymbol &&
-                TryResolveBareFallbackMember(name, out _, out var isProperty, out var getterRunsUserCode) &&
-                isProperty {
-                resolved.ReadsProperty = true
-                if getterRunsUserCode {
-                    resolved.ReadsUserCodeProperty = true
+                TryResolveBareFallbackMember(
+                name,
+                out _,
+                out var isProperty,
+                out var getterRunsUserCode,
+                out var touchesInitializingType
+            ) {
+                if isProperty {
+                    resolved.ReadsProperty = true
+                    if getterRunsUserCode {
+                        resolved.ReadsUserCodeProperty = true
+                    }
+                }
+                if touchesInitializingType {
+                    resolved.TouchesInitializingType = true
+                    resolved.RunsUserCodeOnWrite = true
                 }
             }
             if BareStaticOwnerInitializes(symbol) {
@@ -300,10 +377,19 @@ internal partial class StatementBinder {
             }
             let symbol = $scope.TryLookupSymbol(write.Name)
             if symbol is not VariableSymbol variable {
-                if TryResolveBareFallbackMember(write.Name, out _, out var isProperty, out _) {
+                if TryResolveBareFallbackMember(
+                    write.Name,
+                    out _,
+                    out var isProperty,
+                    out _,
+                    out var touchesInitializingType
+                ) {
                     resolved.ImplicitMemberWrite = true
-                    if isProperty {
+                    if isProperty || touchesInitializingType {
                         resolved.RunsUserCodeOnWrite = true
+                    }
+                    if touchesInitializingType {
+                        resolved.TouchesInitializingType = true
                     }
                 }
                 continue
@@ -434,7 +520,7 @@ internal partial class StatementBinder {
                     shape = shape | TestedMemberShape(test, member)
                 }
             }
-        } else if TryResolveBareFallbackMember(receiverName, out var fallbackType, out _, out _) {
+        } else if TryResolveBareFallbackMember(receiverName, out var fallbackType, out _, out _, out _) {
             declaredType = StripAllNullability(fallbackType)
             shape = MemberShape(declaredType, member) | MemberShape(ResolveTypeName(receiverName), member)
         } else {
@@ -772,7 +858,7 @@ internal partial class StatementBinder {
             return true
         }
         var found = false
-        if TryResolveBareFallbackMember(root, out var fallbackType, out _, out _) {
+        if TryResolveBareFallbackMember(root, out var fallbackType, out _, out _, out _) {
             if !AddSymbolType(fallbackType, types) {
                 return false
             }

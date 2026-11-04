@@ -3603,6 +3603,72 @@ func RunCapturedAndMember(box Box) int32 {
     return local.Value + box.Item.Value + k
 }
 func Main() { }`, "")
+            Add("static-import-bare-getter-and-type-initializer-are-calls (#5470, #5657)", `package T
+import System
+import T.Host
+class C { }
+var g C? = C()
+class Host {
+    shared {
+        var Seed int32 = Init()
+        func Init() int32 {
+            g = nil
+            return 1
+        }
+        prop Level int32 {
+            get {
+                g = nil
+                return 1
+            }
+        }
+    }
+}
+func ReadGetter(ref item C?) int32 {
+    if g == nil || item == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let a C = g
+        let b C = item
+        let v = Level
+        n = n + 1
+    }
+    return n
+}
+func ReadInitializingField(ref item C?) int32 {
+    if g == nil || item == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let a C = g
+        let b C = item
+        let v = Seed
+        n = n + 1
+    }
+    return n
+}
+func Main() { }`, "GS0155@25:19 GS0155@26:19 GS0155@36:19 GS0155@37:19")
+            Add("populated-map-literal-is-a-call (#5657)", `package T
+import System
+class C { }
+var g C? = C()
+class Key {
+    override func GetHashCode() int32 {
+        g = nil
+        return 1
+    }
+    override func Equals(o object?) bool -> true
+}
+func Run(ref item C?, key Key) int32 {
+    if g == nil || item == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let a C = g
+        let b C = item
+        let m = map[Key, int32]{key: 1}
+        n = n + 1
+    }
+    return n
+}
+func Main() { }`, "GS0155@16:19 GS0155@17:19")
             return rows
         }
     }

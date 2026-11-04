@@ -416,6 +416,95 @@ func WithProjection(src ProjSrc) int32 {
 }
 var g C? = C()
 Console.WriteLine(WithDeclaration(Source{Raw: 1}) + WithAssignment(Source{Raw: 1}) + WithProjection(ProjSrc{}))`, "GS0155@28:19 GS0155@41:19 GS0155@52:19", "reject", ""}
+            yield[]object{"static_import_bare_getter_and_initializer_in_loop_and_span_remove_facts_5470", `package T
+import System
+import T.Host
+class C { }
+class Host {
+    shared {
+        var Seed int32 = Init()
+        func Init() int32 {
+            g = nil
+            return 1
+        }
+        prop Level int32 {
+            get {
+                g = nil
+                return 1
+            }
+        }
+    }
+}
+func ReadGetterInLoop(ref item C?) int32 {
+    if g == nil || item == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let a C = g
+        let b C = item
+        let v = Level
+        n = n + 1
+    }
+    return n
+}
+func ReadGetterInSpan(ref item C?) int32 {
+    if g == nil || item == nil { return 0 }
+    var n = 0
+    Again:
+    let a C = g
+    let b C = item
+    let v = Level
+    n = n + 1
+    if n < 2 { goto Again }
+    return n
+}
+func ReadFieldInSpan(ref item C?) int32 {
+    if g == nil || item == nil { return 0 }
+    var n = 0
+    Again:
+    let a C = g
+    let b C = item
+    let v = Seed
+    n = n + 1
+    if n < 2 { goto Again }
+    return n
+}
+var g C? = C()
+var s C? = C()
+Console.WriteLine(ReadGetterInLoop(ref s) + ReadGetterInSpan(ref s) + ReadFieldInSpan(ref s))`, "GS0155@24:19 GS0155@25:19 GS0155@35:15 GS0155@36:15 GS0155@46:15 GS0155@47:15", "reject", ""}
+            yield[]object{"populated_map_literal_in_loop_and_span_removes_global_and_ref_facts_5657", `import System
+class C { }
+class Key {
+    override func GetHashCode() int32 {
+        g = nil
+        return 1
+    }
+    override func Equals(o object?) bool -> true
+}
+func InLoop(ref item C?, key Key) int32 {
+    if g == nil || item == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let a C = g
+        let b C = item
+        let m = map[Key, int32]{key: 1}
+        n = n + 1
+    }
+    return n
+}
+func InSpan(ref item C?, key Key) int32 {
+    if g == nil || item == nil { return 0 }
+    var n = 0
+    Again:
+    let a C = g
+    let b C = item
+    let m = map[Key, int32]{key: 1}
+    n = n + 1
+    if n < 2 { goto Again }
+    return n
+}
+var g C? = C()
+var s C? = C()
+Console.WriteLine(InLoop(ref s, Key{}) + InSpan(ref s, Key{}))`, "GS0155@14:19 GS0155@15:19 GS0155@25:15 GS0155@26:15", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

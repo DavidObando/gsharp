@@ -1303,11 +1303,11 @@ callable alias in force runs `ApplyLoopEntryLowerBound`; the decisions are those
   a literal `false` guard; R7 (a)) and a09 (a field read counts as a call for a mutable global; R7 (e), W5). Row b07
   keeps a global's fact across a `continue` in an `int32` case.
 - *Bare fallback properties and fields (#5470).* When a bare name in a region does not resolve to a variable in the
-  entry scope, `ResolveRegionWrites` and the path/type resolvers reuse the binder's default-interface property
-  (`ExpressionBinder.TryResolveInterfaceInstancePropertyByBareName`) and inherited-CLR member
-  (`ExpressionBinder.TryResolveInheritedClrInstanceMemberByBareName`) fallbacks on the effective `this` receiver, so a
-  bare `P` or `P = 1` inside a default interface method or a class with an imported CLR base has the same effect as
-  `this.P` or `this.P = 1` (including `IsStableClrGetter` under R16 for inherited CLR getters).
+  entry scope, `ResolveRegionWrites` and the path/type resolvers reuse the binder's static-import, default-interface
+  property (`ExpressionBinder.TryResolveInterfaceInstancePropertyByBareName`) and inherited-CLR member
+  (`ExpressionBinder.TryResolveInheritedClrInstanceMemberByBareName`) fallbacks, so a bare `P` or `P = 1` inside a
+  default interface method, a class with an imported CLR base, or a file with a static type import has the same effect
+  as a qualified access (including `IsStableClrGetter` under R16 and static type-initializer checks under R11).
 - *Conversion sites (#5657).* Every non-argument conversion site is recorded as a `RegionConversion` with its source
   and target origins (a typed declaration or `if let`/`guard let`/`while let` binding, an assignment or `??=`, a
   multi-assignment or deconstruction, both operands of `??`, a returned value, an array/stackalloc/map element or
@@ -1317,7 +1317,8 @@ callable alias in force runs `ApplyLoopEntryLowerBound`; the decisions are those
   closure-assigned locals, member-bearing paths, and by-reference storage). An untyped declaration (`let n = 1`) or
   binding (`if let v = maybe`), or a site whose resolved source and target types convert without a user-defined or
   imported conversion operator or structural projection, runs no user code; any site whose source or target the walker
-  cannot resolve still counts. The conversion of a typed `for ... in` variable and the `Deconstruct` call or getter of
+  cannot resolve still counts, and a non-empty map literal (`map[K, V]{k: v}`) counts as a construction because key
+  insertion calls `GetHashCode` and `Equals`. The conversion of a typed `for ... in` variable and the `Deconstruct` call or getter of
   a tuple-target `for ... in` run before every body run, so an indexed iteration with such a prelude runs user code.
 - *Function values.* A call whose callee name the region declares (`let Invoke = callback; Invoke()`) calls a function
   value, which is an indirect call (A3), also when a nested loop's record is composed. A member call whose receiver is

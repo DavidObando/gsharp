@@ -854,6 +854,10 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.MapCreationExpression {
                 let creation = cast[MapCreationExpressionSyntax](node)
+                if creation.Entries.Count > 0 {
+                    // Populating a map calls the key's `GetHashCode` and `Equals` (R17, W4).
+                    RecordConstruction(node)
+                }
                 if Active() {
                     let keyType = TypeOrigin(creation.TypeClause.MapKeyType)
                     let valueType = TypeOrigin(creation.TypeClause.MapValueType)
