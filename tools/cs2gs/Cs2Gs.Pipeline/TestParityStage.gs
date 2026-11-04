@@ -358,7 +358,11 @@ stderr:
         // translation (map-advanced) is complete, an unsupported construct or a
         // round-trip failure means the live library path cannot run yet; the
         // stage records the reason and skips rather than fabricating a pass.
-        let tests = await TranslateProjectAsync(context.App.TestsProjectPath, cancellationToken).ConfigureAwait(false)
+        let tests = await TranslateProjectAsync(
+            context.App.TestsProjectPath,
+            context.Options.Config,
+            cancellationToken
+        ).ConfigureAwait(false)
         if tests.LoadErrors != nil {
             this.Note(context, "library xUnit parity FAILED: .Tests project did not load.")
             let loadArtifact = context.Triage.ProjectLoadFailure(
@@ -759,10 +763,12 @@ stderr:
 
         private async func TranslateProjectAsync(
             projectPath string?,
+            config string?,
             cancellationToken CancellationToken
         ) TranslatedProject {
             let project = (
-                await CSharpProjectLoader.LoadProjectAsync(projectPath, cancellationToken).ConfigureAwait(false)
+                await CSharpProjectLoader.LoadProjectAsync(projectPath, cancellationToken, configuration: config)
+                    .ConfigureAwait(false)
             )
             // Issue #1742: same load-failure gate as TranslateStage, scoped to the
             // MSBuild workspace load failure signal (not every C# semantic error —

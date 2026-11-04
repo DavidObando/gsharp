@@ -334,7 +334,7 @@ class CompileStage : IMigrationStage {
             }
         }
 
-        private func BuildFailureOutcome(
+        internal func BuildFailureOutcome(
             context StageExecutionContext,
             errors IReadOnlyList[GscDiagnostic],
             syntheticMessageOnNoDiagnostics string
@@ -342,13 +342,29 @@ class CompileStage : IMigrationStage {
             let artifacts = List[TriageArtifact]()
             var blockedByReferencedProject = false
             for diagnostic in errors {
-                let file EmittedGsFile? = MatchEmittedFile(context.EmittedFiles, diagnostic.File)
+                let exactFile EmittedGsFile? = MatchExactEmittedFile(
+                    context.EmittedFiles,
+                    diagnostic.File,
+                    context.ProjectOutputDir
+                )
+                if exactFile != nil && !exactFile.IsFromReferencedProject {
+                    artifacts.Add(context.Triage.CompileError(diagnostic, exactFile))
+                    continue
+                }
                 // Errors located in a referenced sibling project's emitted file are
                 // that project's own concern (measured in its own run), not charged
                 // against this app. Sibling files are compile inputs only, so the
-                // app's uses of sibling types resolve (Refs #914).
-                if (file != nil && file.IsFromReferencedProject) ||
-                    (file == nil && IsReferencedProjectDiagnostic(context, diagnostic)) {
+                // app's uses of sibling types resolve (Refs #914). Check referenced
+                // path ownership before falling back to basename-only matching on
+                // EmittedFiles so a same-basename sibling file is not misattributed
+                // to the consumer.
+                if (exactFile != nil && exactFile.IsFromReferencedProject) ||
+                    IsReferencedProjectDiagnostic(context, diagnostic) {
+                    blockedByReferencedProject = true
+                    continue
+                }
+                let file EmittedGsFile? = exactFile ?? MatchEmittedFile(context.EmittedFiles, diagnostic.File)
+                if file != nil && file.IsFromReferencedProject {
                     blockedByReferencedProject = true
                     continue
                 }
@@ -445,20 +461,25 @@ class CompileStage : IMigrationStage {
             if !Path.GetExtension(diagnostic.File).Equals(".gs", StringComparison.OrdinalIgnoreCase) {
                 return false
             }
+            let exactFile = MatchExactEmittedFile(context.EmittedFiles, diagnostic.File, context.ProjectOutputDir)
+            if exactFile != nil {
+                return exactFile.IsFromReferencedProject
+            }
             let diagnosticPath = if Path.IsPathRooted(diagnostic.File) {
                 Path.GetFullPath(diagnostic.File)
             } else {
                 Path.GetFullPath(Path.Combine(context.ProjectOutputDir, diagnostic.File))
             }
             let ownOutputDir = Path.GetFullPath(context.ProjectOutputDir)
-            if IsUnderDirectory(diagnosticPath, ownOutputDir) {
-                return false
+            let ownSourceDir string? = if string.IsNullOrEmpty(context.App.ProjectPath) {
+                default(string?)
+            } else {
+                Path.GetDirectoryName(Path.GetFullPath(context.App.ProjectPath))
             }
             for referencedProjectPath in activeReferences {
                 let fullReferencedPath = Path.GetFullPath(referencedProjectPath)
                 let referencedSourceDir string? = Path.GetDirectoryName(fullReferencedPath)
-                if !string.IsNullOrEmpty(referencedSourceDir) &&
-                    IsUnderDirectory(diagnosticPath, referencedSourceDir!!) {
+                if IsOwnedByReferencedDirectory(diagnosticPath, referencedSourceDir, ownOutputDir, ownSourceDir) {
                     return true
                 }
                 if context.Options.GeneratedProjectPaths != nil && context.Options.GeneratedProjectPaths!!.TryGetValue(
@@ -466,7 +487,7 @@ class CompileStage : IMigrationStage {
                     out var generatedProjectPath
                 ) {
                     let generatedDir string? = Path.GetDirectoryName(Path.GetFullPath(generatedProjectPath))
-                    if !string.IsNullOrEmpty(generatedDir) && IsUnderDirectory(diagnosticPath, generatedDir!!) {
+                    if IsOwnedByReferencedDirectory(diagnosticPath, generatedDir, ownOutputDir, ownSourceDir) {
                         return true
                     }
                 }
@@ -474,9 +495,80 @@ class CompileStage : IMigrationStage {
             return false
         }
 
+        private func MatchExactEmittedFile(
+            files IReadOnlyList[EmittedGsFile]?,
+            diagnosticFile string,
+            projectOutputDir string?
+        ) EmittedGsFile? {
+            if files == nil || files.Count == 0 || string.IsNullOrEmpty(diagnosticFile) {
+                return nil
+            }
+            let candidates = List[string]()
+            if Path.IsPathRooted(diagnosticFile) {
+                candidates.Add(Path.GetFullPath(diagnosticFile))
+            } else {
+                if !string.IsNullOrEmpty(projectOutputDir) {
+                    candidates.Add(Path.GetFullPath(Path.Combine(projectOutputDir, diagnosticFile)))
+                }
+                candidates.Add(Path.GetFullPath(diagnosticFile))
+            }
+            for candidatePath in candidates {
+                let matches = files.Where(
+                    (f EmittedGsFile) -> !string.IsNullOrEmpty(f.GsPath) && string.Equals(
+                        Path.GetFullPath(f.GsPath!!),
+                        candidatePath,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
+                    .ToArray()
+                let matched = PreferOwnProject(matches)
+                if matched != nil {
+                    return matched
+                }
+            }
+            return nil
+        }
+
+        private func IsOwnedByReferencedDirectory(
+            diagnosticPath string,
+            referencedDir string?,
+            ownOutputDir string,
+            ownSourceDir string?
+        ) bool {
+            if string.IsNullOrEmpty(referencedDir) {
+                return false
+            }
+            let fullReferencedDir = Path.GetFullPath(referencedDir)
+            if !IsUnderDirectory(diagnosticPath, fullReferencedDir) {
+                return false
+            }
+            if IsUnderDirectory(diagnosticPath, ownOutputDir) &&
+                !IsStrictlyUnderDirectory(fullReferencedDir, ownOutputDir) {
+                return false
+            }
+            if !string.IsNullOrEmpty(ownSourceDir) {
+                let fullOwnSourceDir = Path.GetFullPath(ownSourceDir)
+                if IsUnderDirectory(diagnosticPath, fullOwnSourceDir) &&
+                    !IsStrictlyUnderDirectory(fullReferencedDir, fullOwnSourceDir) {
+                    return false
+                }
+            }
+            return true
+        }
+
         private func IsUnderDirectory(path string, directory string) bool {
             let relative = Path.GetRelativePath(directory, path)
             return !Path.IsPathRooted(relative) && !relative.Equals("..", StringComparison.Ordinal) &&
+                !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
+                !relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal)
+        }
+
+        private func IsStrictlyUnderDirectory(path string, directory string) bool {
+            let relative = Path.GetRelativePath(directory, path)
+            return !Path.IsPathRooted(relative) && !relative.Equals(".", StringComparison.Ordinal) && !relative.Equals(
+                "..",
+                StringComparison.Ordinal
+            ) &&
                 !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
                 !relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal)
         }

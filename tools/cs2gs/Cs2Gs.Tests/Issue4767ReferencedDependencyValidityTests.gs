@@ -449,6 +449,248 @@ public static class Consumer
         }
     }
 
+    /// Review finding (`PRRT_kwDOCzQNb86zwSsd`): when a producer diagnostic names
+    /// `/mirror/Models/Shared.gs` and the consumer also has `/mirror/Consumer/Shared.gs`,
+    /// `CompileStage.BuildFailureOutcome` must check referenced-path ownership
+    /// before falling back to `MatchEmittedFile`'s basename match, while preserving
+    /// exact own-file matches.
+    @Fact
+    func CompileStage_SameBasenameSiblingDiagnostic_BlocksConsumerWithoutConsumerArtifact() {
+        let mirrorRoot = NewDirectory("same-basename-sibling")
+        try {
+            let modelsDir = Path.Combine(mirrorRoot, "Models")
+            let consumerDir = Path.Combine(mirrorRoot, "Consumer")
+            Directory.CreateDirectory(modelsDir)
+            Directory.CreateDirectory(consumerDir)
+            let modelsProject = Path.Combine(modelsDir, "Models.gsproj")
+            let consumerProject = Path.Combine(consumerDir, "Consumer.gsproj")
+            let modelsShared = Path.Combine(modelsDir, "Shared.gs")
+            let consumerShared = Path.Combine(consumerDir, "Shared.gs")
+            File.WriteAllText(modelsProject, "<Project />\n")
+            File.WriteAllText(consumerProject, "<Project />\n")
+            File.WriteAllText(modelsShared, "package Models\n")
+            File.WriteAllText(consumerShared, "package Consumer\n")
+
+            let options = PipelineOptions{
+                GscPath: "/fake/gsc.dll",
+                OutputRoot: mirrorRoot,
+                SourceRoot: mirrorRoot,
+                OutputLayout: MigrationOutputLayout.Repository
+            }
+            let app = CorpusApp("corpus/Consumer", consumerProject, TargetKind.Library)
+            let context = StageExecutionContext(
+                app,
+                options,
+                GscInvoker(options.GscPath!!),
+                consumerDir,
+                Path.Combine(mirrorRoot, "artifacts"),
+                TriageBuilder("run_basename", "2026-10-05T00:00:00Z", "0.5.0", app.Id)
+            )
+            context.EmittedFiles.Add(
+                EmittedGsFile(
+                    consumerShared,
+                    "Consumer/Shared.gs",
+                    Path.Combine(consumerDir, "Shared.cs"),
+                    "package Consumer\n"
+                )
+            )
+            context.EvaluatedProjectReferencesResolved = true
+            context.EvaluatedProjectReferencePaths.Add(Path.GetFullPath(modelsProject))
+
+            let producerDiagnostic = GscDiagnostic("GS0185", "producer error", "error", modelsShared, 1, 1)
+            Assert.True(CompileStage.IsReferencedProjectDiagnostic(context, producerDiagnostic))
+            let blockedOutcome = CompileStage.BuildFailureOutcome(
+                context,
+                []GscDiagnostic{producerDiagnostic},
+                "synthetic"
+            )
+            Assert.Equal(StageStatus.Failed, blockedOutcome.Status)
+            Assert.Equal("dependency-blocked", blockedOutcome.FailureCategory)
+            Assert.Empty(blockedOutcome.Artifacts)
+
+            // Exact own-file matches (rooted or project-relative) remain consumer-owned.
+            let ownRootedDiagnostic = GscDiagnostic("GS0158", "consumer error", "error", consumerShared, 1, 1)
+            Assert.False(CompileStage.IsReferencedProjectDiagnostic(context, ownRootedDiagnostic))
+            let ownOutcome = CompileStage.BuildFailureOutcome(
+                context,
+                []GscDiagnostic{ownRootedDiagnostic},
+                "synthetic"
+            )
+            Assert.Equal(StageStatus.Failed, ownOutcome.Status)
+            let ownArtifact = Assert.Single(ownOutcome.Artifacts)
+            Assert.Equal("compile-error", ownArtifact.Category)
+            Assert.Equal("Consumer/Shared.gs", ownArtifact.SourceLocation.GsFile)
+        } finally {
+            Directory.Delete(mirrorRoot, recursive: true)
+        }
+    }
+
+    /// Review finding (`PRRT_kwDOCzQNb86zwStS`): when `/mirror/App/App.gsproj`
+    /// references nested `/mirror/App/Models/Models.gsproj`, a diagnostic in
+    /// `Models/Contracts.gs` must resolve to the more-specific nested referenced
+    /// project directory (`dependency-blocked`), while an exact own file in `App`
+    /// (`Contracts.gs`) remains consumer-owned.
+    @Fact
+    func CompileStage_NestedReferencedProjectDiagnostic_BlocksConsumerWhilePreservingExactOwnFile() {
+        let mirrorRoot = NewDirectory("nested-referenced-project")
+        try {
+            let appDir = Path.Combine(mirrorRoot, "App")
+            let modelsDir = Path.Combine(appDir, "Models")
+            Directory.CreateDirectory(modelsDir)
+            let appProject = Path.Combine(appDir, "App.gsproj")
+            let modelsProject = Path.Combine(modelsDir, "Models.gsproj")
+            let appContracts = Path.Combine(appDir, "Contracts.gs")
+            let modelsContracts = Path.Combine(modelsDir, "Contracts.gs")
+            File.WriteAllText(appProject, "<Project />\n")
+            File.WriteAllText(modelsProject, "<Project />\n")
+            File.WriteAllText(appContracts, "package App\n")
+            File.WriteAllText(modelsContracts, "package Models\n")
+
+            let options = PipelineOptions{
+                GscPath: "/fake/gsc.dll",
+                OutputRoot: mirrorRoot,
+                SourceRoot: mirrorRoot,
+                OutputLayout: MigrationOutputLayout.Repository
+            }
+            let app = CorpusApp("corpus/App", appProject, TargetKind.Library)
+            let context = StageExecutionContext(
+                app,
+                options,
+                GscInvoker(options.GscPath!!),
+                appDir,
+                Path.Combine(mirrorRoot, "artifacts"),
+                TriageBuilder("run_nested", "2026-10-05T00:00:00Z", "0.5.0", app.Id)
+            )
+            context.EmittedFiles.Add(
+                EmittedGsFile(appContracts, "App/Contracts.gs", Path.Combine(appDir, "Contracts.cs"), "package App\n")
+            )
+            context.EvaluatedProjectReferencesResolved = true
+            context.EvaluatedProjectReferencePaths.Add(Path.GetFullPath(modelsProject))
+
+            let nestedRelativeDiagnostic = GscDiagnostic(
+                "GS0185",
+                "nested producer error",
+                "error",
+                Path.Combine("Models", "Contracts.gs"),
+                1,
+                1
+            )
+            Assert.True(CompileStage.IsReferencedProjectDiagnostic(context, nestedRelativeDiagnostic))
+            let blockedOutcome = CompileStage.BuildFailureOutcome(
+                context,
+                []GscDiagnostic{nestedRelativeDiagnostic},
+                "synthetic"
+            )
+            Assert.Equal(StageStatus.Failed, blockedOutcome.Status)
+            Assert.Equal("dependency-blocked", blockedOutcome.FailureCategory)
+            Assert.Empty(blockedOutcome.Artifacts)
+
+            let ownRelativeDiagnostic = GscDiagnostic("GS0158", "own consumer error", "error", "Contracts.gs", 1, 1)
+            Assert.False(CompileStage.IsReferencedProjectDiagnostic(context, ownRelativeDiagnostic))
+            let ownOutcome = CompileStage.BuildFailureOutcome(
+                context,
+                []GscDiagnostic{ownRelativeDiagnostic},
+                "synthetic"
+            )
+            Assert.Equal(StageStatus.Failed, ownOutcome.Status)
+            let ownArtifact = Assert.Single(ownOutcome.Artifacts)
+            Assert.Equal("compile-error", ownArtifact.Category)
+            Assert.Equal("App/Contracts.gs", ownArtifact.SourceLocation.GsFile)
+        } finally {
+            Directory.Delete(mirrorRoot, recursive: true)
+        }
+    }
+
+    /// Review finding (`PRRT_kwDOCzQNb86zwSuR`): workspace loading and reference
+    /// evaluation must pass `context.Options.Config` (`Configuration=Release` by
+    /// default) so a Debug-only `ProjectReference` to an unsupported producer
+    /// does not block a Release consumer, while a Debug run is dependency-blocked.
+    @Fact
+    async func DebugOnlyConditionedProjectReference_ToFailedProducer_DoesNotBlockReleaseConsumer() {
+        let compiler string? = FindCompiler()
+        if compiler == nil {
+            return
+        }
+        let corpusRoot = WriteTwoProjectFixture("debug-only-condition", AbstractRefGetterModelsSource)
+        try {
+            let modelsProject = Path.Combine(corpusRoot, "Models", "Models.csproj")
+            let consumerProject = Path.Combine(corpusRoot, "Consumer", "Consumer.csproj")
+            File.WriteAllText(
+                consumerProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <ItemGroup Condition=\"'$$(Configuration)' == 'Debug'\">\n" +
+                    "    <ProjectReference Include=\"../Models/Models.csproj\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            File.WriteAllText(Path.Combine(corpusRoot, "Consumer", "Consumer.cs"), `namespace Consumers;
+
+public static class Consumer
+{
+    public static int Read(int value) => value + 1;
+}
+`)
+            let releaseEval = await CSharpProjectLoader.EvaluateCompileProjectReferencePathsAsync(
+                consumerProject,
+                configuration: "Release"
+            )
+            Assert.Empty(releaseEval)
+            let debugEval = await CSharpProjectLoader.EvaluateCompileProjectReferencePathsAsync(
+                consumerProject,
+                configuration: "Debug"
+            )
+            Assert.Single(debugEval, Path.GetFullPath(modelsProject))
+
+            let releaseOutRoot = Path.Combine(corpusRoot, "runs-release")
+            let releaseOptions = PipelineOptions{
+                GscPath: compiler,
+                Config: "Release",
+                OutputRoot: releaseOutRoot,
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true,
+                ValidatedReferencedProjects: Dictionary[string, bool](StringComparer.OrdinalIgnoreCase)
+            }
+            let app = CorpusApp("corpus/Consumer", consumerProject, TargetKind.Library)
+            let releaseContext = StageExecutionContext(
+                app,
+                releaseOptions,
+                GscInvoker(compiler),
+                releaseOutRoot,
+                TriageBuilder("run_release", "2026-10-05T00:00:00Z", "0.5.0", app.Id)
+            )
+            let releaseOutcome = await TranslateStage().ExecuteAsync(releaseContext)
+            Assert.Equal(StageStatus.Passed, releaseOutcome.Status)
+            Assert.Empty(releaseContext.EvaluatedProjectReferencePaths)
+
+            let debugOutRoot = Path.Combine(corpusRoot, "runs-debug")
+            let debugOptions = PipelineOptions{
+                GscPath: compiler,
+                Config: "Debug",
+                OutputRoot: debugOutRoot,
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true,
+                ValidatedReferencedProjects: Dictionary[string, bool](StringComparer.OrdinalIgnoreCase)
+            }
+            let debugContext = StageExecutionContext(
+                app,
+                debugOptions,
+                GscInvoker(compiler),
+                debugOutRoot,
+                TriageBuilder("run_debug", "2026-10-05T00:00:00Z", "0.5.0", app.Id)
+            )
+            let debugOutcome = await TranslateStage().ExecuteAsync(debugContext)
+            Assert.Equal(StageStatus.Failed, debugOutcome.Status)
+            Assert.Equal("dependency-blocked", debugOutcome.FailureCategory)
+            Assert.Empty(debugOutcome.Artifacts)
+        } finally {
+            Directory.Delete(corpusRoot, recursive: true)
+        }
+    }
+
     private data class CliRunOutcome(ExitCode int32, RunDir string, Run RunResult, Summary ReportModel) : IEquatable[
         Issue4767ReferencedDependencyValidityTests.CliRunOutcome
     ] { }

@@ -102,10 +102,12 @@ internal shared class DeclaredProjectItems {
 
     internal func EvaluateCompileProjectReferencePathsAsync(
         projectPath string,
-        cancellationToken CancellationToken = default(CancellationToken)
+        cancellationToken CancellationToken = default(CancellationToken),
+        configuration string? = nil
     ) Task[IReadOnlyList[string]] -> CSharpProjectLoader.EvaluateCompileProjectReferencePathsAsync(
         projectPath,
-        cancellationToken
+        cancellationToken,
+        configuration
     )
 
     /// Collects the absolute project paths that any of the given projects
