@@ -5960,7 +5960,7 @@ partial class Binder {
     /// exactly the same code. Once (cref:FlushPendingUserGenericConstraintChecks)
     /// has run, later constructions — member bodies, which `BindProgram`
     /// binds through a freshly derived scope chain, and any subsequent
-    /// interactive submission — are answered in place. The deferred base and
+    /// passes — are answered in place. The deferred base and
     /// field initialisers bind BEFORE the flush and so ride the queue.
     /// @param declaredParameters The definition's own type parameters.
     /// @param typeArgs The symbolic arguments, in declaration order.
@@ -6319,25 +6319,8 @@ partial class Binder {
             // let the caller report the dedicated ambiguity diagnostic.
             return nil
         }
-        // ADR-0156 Phase 2: a type declared by a prior interactive submission
-        // resolves as an imported CLR type over that submission's emitted
-        // assembly, newest submission first. Consulted after this
-        // compilation's own source types (the current cell shadows history)
-        // and before ordinary imports.
-        if $scope.SubmissionImports is {} submissionImports && submissionImports.TryResolveType(
-            $scope.References!!,
-            name,
-            preferredArity,
-            out var submissionClrType
-        ) {
-            if ImportedTypeSymbol.TryCreateSemanticAggregate(
-                submissionClrType,
-                $scope.References,
-                out var submissionAggregate
-            ) {
-                return submissionAggregate
-            }
-            return TypeSymbol.FromClrTypeWithoutNullability(submissionClrType, NullabilityFreeReason.ResolvedTypeName)
+        if TryResolvePriorCellType($scope, name, preferredArity, out var priorCellType) {
+            return priorCellType
         }
         if $scope.TryLookupImportedClass(name, declaration: nil, out var importedClass, out importedTypeAmbiguity) {
             if ImportedTypeSymbol.TryCreateSemanticAggregate(
@@ -6725,39 +6708,24 @@ partial class Binder {
             implicitSystemImport bool,
             preprocessorSymbols ImmutableHashSet[string]?,
             isLibrary bool
-        ) BoundGlobalScope -> BindGlobalScope(
+        ) BoundGlobalScope -> BindGlobalScopeWithRoot(
             previous,
             syntaxTrees,
             references,
             implicitSystemImport,
             preprocessorSymbols,
             isLibrary,
-            submission: nil
+            configureRoot: nil
         )
 
-        /// Binds a set of syntax trees to the previous global scope, with full
-        /// control over implicit-import seeding, the active preprocessor symbol
-        /// set, whether the compilation is a library, and — ADR-0156 Phase 2 —
-        /// optional interactive submission options that bind prior REPL
-        /// submissions as metadata-backed imports.
-        /// @param previous The previous global scope.
-        /// @param syntaxTrees The new syntax trees.
-        /// @param references The reference resolver; `null` selects (cref:ReferenceResolver.Default).
-        /// @param implicitSystemImport When `true`, an implicit `import System` is seeded before user imports
-        /// are processed.
-        /// @param preprocessorSymbols The active preprocessor symbol set; `null` means the empty set.
-        /// @param isLibrary When `true`, the compilation produces a library and top-level statements are
-        /// reported as `GS0285` at the first global statement.
-        /// @param submission Interactive submission options, or `null` for an ordinary compilation.
-        /// @returns The new chained bound global scope.
-        func BindGlobalScope(
+        private func BindGlobalScopeWithRoot(
             previous BoundGlobalScope?,
             syntaxTrees ImmutableArray[SyntaxTree],
             references ReferenceResolver?,
             implicitSystemImport bool,
             preprocessorSymbols ImmutableHashSet[string]?,
             isLibrary bool,
-            submission SubmissionBindingOptions?
+            configureRoot((BoundScope) -> void)?
         ) BoundGlobalScope {
             // ADR-0212 Q2 / S8: chaining through `previous` is retired (no caller
             // passed a non-nil value; the REPL chains through emitted metadata).
@@ -6774,7 +6742,7 @@ partial class Binder {
                 implicitSystemImport,
                 preprocessorSymbols,
                 isLibrary,
-                submission,
+                configureRoot,
                 nativeCoverage: nil
             )
             if !result.Interfaces.Any((item InterfaceSymbol) -> item.IsProtocol) &&
@@ -6824,7 +6792,7 @@ partial class Binder {
                     implicitSystemImport,
                     preprocessorSymbols,
                     isLibrary,
-                    submission,
+                    configureRoot,
                     coverage
                 )
             }
@@ -6836,11 +6804,11 @@ partial class Binder {
             implicitSystemImport bool,
             preprocessorSymbols ImmutableHashSet[string]?,
             isLibrary bool,
-            submission SubmissionBindingOptions?,
+            configureRoot((BoundScope) -> void)?,
             nativeCoverage ImmutableDictionary[string, bool]?
         ) BoundGlobalScope {
             let parentScope = CreateRootScope(references, preprocessorSymbols)
-            parentScope.SetSubmissionImports(submission?.Imports)
+            configureRoot?(parentScope)
             let binder = Binder(parentScope, function: nil)
             binder.$scope.GetStructuralAdapterRegistry().ProtocolCoverage = nativeCoverage
             binder.ImportNativeProtocols(syntaxTrees.FirstOrDefault()?.Root.Location ?? default(TextLocation))
@@ -6850,16 +6818,7 @@ partial class Binder {
             // resolved, so the G#-declared generic constraint checks are queued
             // here and answered by FlushPendingUserGenericConstraintChecks below.
             binder.$scope.SetDeferUserGenericConstraintChecks(true)
-            // ADR-0156 Phase 2: replay the session's accumulated imports so an
-            // `import` evaluated in an earlier cell keeps its effect in this one
-            // (each submission is a fresh compilation with no source chaining).
-            // TryImport short-circuits on the first same-name import, so replayed
-            // duplicates and the implicit System seed below coexist harmlessly.
-            if submission?.ReplayImports.IsDefaultOrEmpty == false {
-                for replayed in submission!!.ReplayImports {
-                    binder.$scope.TryImport(ImportSymbol(replayed.Name, replayed.Target, declaration: nil))
-                }
-            }
+            ReplayPriorCellImports(binder.$scope)
             if implicitSystemImport {
                 // Seed an implicit `import System` so common BCL types (Console,
                 // String, Int32, ...) resolve without an explicit import. The user
@@ -6885,7 +6844,7 @@ partial class Binder {
             let packagesByName = Dictionary[string, PackageSymbol](StringComparer.Ordinal)
             let packagesInOrder = ImmutableArray.CreateBuilder[PackageSymbol]()
             let packageByTree = Dictionary[SyntaxTree, PackageSymbol]()
-            let defaultPackageName = submission?.DefaultPackageName ?? "Default"
+            let defaultPackageName = GetDefaultPackageName(binder.$scope)
             for tree in syntaxTrees {
                 let packageSyntax PackageSyntax? = tree.Root.Members.OfType[PackageSyntax]().FirstOrDefault()
                 let packageName = PackageNameOfTree(tree, defaultPackageName)
@@ -7338,7 +7297,7 @@ partial class Binder {
             // recorded during the declaration phase can finally be answered. Asking
             // them at their construction sites made the answer a function of source
             // order — see CheckUserGenericTypeClauseConstraints. Constructions bound
-            // after this point (method bodies, later submissions) are answered in
+            // after this point (method bodies, later passes) are answered in
             // place.
             FlushPendingUserGenericConstraintChecks(binder.$scope)
             // ADR-0149: bind every explicit-interface qualifier clause
@@ -7485,67 +7444,7 @@ partial class Binder {
                         binder.$scope.TryDeclareVariable(v)
                     }
                 }
-                // ADR-0156 Phase 2: capture the submission's trailing value into
-                // the synthesized `<Result>$` global so the REPL echoes it. The
-                // evaluator's historical echo is its `LastValue` after the block;
-                // the two statically-capturable shapes are a trailing expression
-                // statement (its value) and a trailing variable declaration (its
-                // initialized value). ByRefLike values cannot live in a static
-                // field and are skipped (no echo), as are `void`/error results.
-                if submission?.CaptureTrailingExpression == true && statements.Count > 0 {
-                    var resultVariable GlobalVariableSymbol? = nil
-                    let trailing = statements[statements.Count - 1]
-                    if trailing is BoundExpressionStatement trailingExpression &&
-                        IsCapturableEchoType(trailingExpression.Expression.Type) {
-                        resultVariable = GlobalVariableSymbol(
-                            SubmissionImports.ResultFieldName,
-                            isReadOnly: false,
-                            trailingExpression.Expression.Type,
-                            Accessibility.Public
-                        )
-                        statements[statements.Count - 1] = BoundVariableDeclaration(
-                            trailing.Syntax,
-                            resultVariable,
-                            trailingExpression.Expression
-                        )
-                    } else if trailing is BoundVariableDeclaration trailingDeclaration &&
-                        !(trailingDeclaration.Initializer is BoundAddressOfExpression) &&
-                        IsCapturableEchoType(trailingDeclaration.Variable.Type) {
-                        resultVariable = GlobalVariableSymbol(
-                            SubmissionImports.ResultFieldName,
-                            isReadOnly: false,
-                            trailingDeclaration.Variable.Type,
-                            Accessibility.Public
-                        )
-                        statements.Add(
-                            BoundVariableDeclaration(
-                                trailing.Syntax,
-                                resultVariable,
-                                BoundVariableExpression(trailing.Syntax, trailingDeclaration.Variable)
-                            )
-                        )
-                    } else if TryInferTrailingCaptureType(trailing, out var trailingBranchType) {
-                        // Issue #3227: the trailing statement is a value-producing
-                        // branching form — a trailing `if`/`if let` statement whose
-                        // arms all end in a value, a bare block, or an exhaustive
-                        // switch statement. The evaluator's LastValue echoed the
-                        // taken arm's tail value; capture statically by rewriting
-                        // every tail into an assignment of the synthesized
-                        // `<Result>$` global (the static field exists purely by
-                        // virtue of the GlobalVariableSymbol declaration — every
-                        // arm assigns it, so no separate initializer is needed).
-                        resultVariable = GlobalVariableSymbol(
-                            SubmissionImports.ResultFieldName,
-                            isReadOnly: false,
-                            trailingBranchType,
-                            Accessibility.Public
-                        )
-                        statements[statements.Count - 1] = RewriteTrailingCapture(trailing, resultVariable)
-                    }
-                    if resultVariable != nil {
-                        binder.$scope.TryDeclareVariable(resultVariable)
-                    }
-                }
+                CaptureTrailingCellValue(binder.$scope, statements)
             }
             let imports = binder.$scope.GetOwnDeclaredImports()
             var functions = binder.$scope.GetDeclaredFunctions()
@@ -7588,17 +7487,7 @@ partial class Binder {
                     synthesizedEntryPoint
                 )
             }
-            // ADR-0156 Phase 3c (#3176): an interactive submission never runs a
-            // user-declared entry point — `func Main()` in a cell is an ordinary
-            // function declaration (the evaluator engine's RunEntryPoint=false
-            // contract, preserved under emitted execution). Only the synthesized
-            // top-level-statements <Main>$ is invokable, so a declaration-only
-            // submission emits no entry point at all. One-shot script-shaped
-            // submissions (the emitted test oracle) opt back in via
-            // SubmissionBindingOptions.RunUserEntryPoint.
-            if submission != nil && submission.RunUserEntryPoint == false {
-                entryPoint = synthesizedEntryPoint
-            }
+            entryPoint = FilterEntryPointForCell(binder.$scope, entryPoint, synthesizedEntryPoint)
             // Issue #2237/#2815: bind every file-level annotation EXCEPT
             // InternalsVisibleTo (which keeps its own early, syntactic
             // fast path below via FriendAssemblyDeclarations.Collect) through
@@ -7724,167 +7613,8 @@ partial class Binder {
                     AnonymousTypeCache = result.AnonymousTypeCache
                 }
             }
-            // ADR-0156 Phase 2: carry the submission import set on the scope so
-            // BindProgram's freshly-derived scope chain (CreateParentScope) can
-            // rehydrate prior-submission metadata lookup for member bodies.
-            result.SubmissionImports = submission?.Imports
+            AttachPriorCellImports(binder.$scope, result)
             return result
-        }
-
-        // ADR-0156 Phase 2: whether a submission's trailing value can be stored
-        // in the synthesized `<Result>$` static field for the REPL echo.
-        private func IsCapturableEchoType(type TypeSymbol?) bool -> type != nil &&
-            type != TypeSymbol.Void &&
-            type != TypeSymbol.Error &&
-            !TypeSymbol.IsByRefLike(type)
-
-        /// Issue #3227: determines whether a trailing branching statement — a
-        /// value-producing `if`/`if let` statement, a bare block, or an
-        /// exhaustive `switch` statement — has a statically capturable tail
-        /// value on every path, mirroring the shapes for which the retired
-        /// evaluator's LastValue produced the taken arm's tail value. Succeeds
-        /// only when every leaf tail is an expression statement (or variable
-        /// declaration) of one identical, capturable type: an `if` without
-        /// an `else`, an empty block, mixed arm types, or a non-value tail
-        /// on any path all decline the capture (no echo), exactly like the
-        /// historical single-statement shapes declined non-capturable values.
-        private func TryInferTrailingCaptureType(
-            statement BoundStatement,
-            @System.Diagnostics.CodeAnalysis.NotNullWhen(true) out type TypeSymbol?
-        ) bool {
-            switch statement {
-                case expressionStatement is BoundExpressionStatement {
-                    type = expressionStatement.Expression.Type
-                    return IsCapturableEchoType(type)
-                }
-                case declaration is BoundVariableDeclaration when !(
-                    declaration.Initializer is BoundAddressOfExpression
-                ) {
-                    type = declaration.Variable.Type
-                    return IsCapturableEchoType(type)
-                }
-                case block is BoundBlockStatement when block.Statements.Length > 0 {
-                    return TryInferTrailingCaptureType(block.Statements[block.Statements.Length - 1], out type)
-                }
-                case ifStatement is BoundIfStatement when ifStatement.ElseStatement != nil {
-                    if TryInferTrailingCaptureType(ifStatement.ThenStatement, out var thenType) &&
-                        TryInferTrailingCaptureType(ifStatement.ElseStatement!!, out var elseType) &&
-                        thenType == elseType {
-                        type = thenType
-                        return true
-                    }
-                    type = nil
-                    return false
-                }
-                case switchStatement is BoundPatternSwitchStatement when switchStatement
-                    .Arms
-                    .Length > 0 &&
-                    (
-                    switchStatement.IsExhaustive || switchStatement.Arms.Any(
-                        (a BoundPatternSwitchArm) -> a.IsDefault && a.Guard == nil
-                    )
-                ) {
-                    var common TypeSymbol? = nil
-                    for arm in switchStatement.Arms {
-                        if !TryInferTrailingCaptureType(arm.Body, out var armType) ||
-                            (common != nil && armType != common) {
-                            type = nil
-                            return false
-                        }
-                        common = armType
-                    }
-                    type = common
-                    return type != nil
-                }
-                default {
-                    type = nil
-                    return false
-                }
-            }
-        }
-
-        /// Issue #3227: rewrites the tails accepted by
-        /// (cref:TryInferTrailingCaptureType) so every leaf tail stores
-        /// its value into the synthesized `<Result>$` global. Leaf
-        /// expression statements become assignments to the global; leaf variable
-        /// declarations keep the declaration and append the echo assignment
-        /// (matching the historical trailing-declaration echo).
-        private func RewriteTrailingCapture(
-            statement BoundStatement,
-            resultVariable GlobalVariableSymbol
-        ) BoundStatement {
-            switch statement {
-                case expressionStatement is BoundExpressionStatement {
-                    return BoundExpressionStatement(
-                        statement.Syntax,
-                        BoundAssignmentExpression(statement.Syntax, resultVariable, expressionStatement.Expression)
-                    )
-                }
-                case declaration is BoundVariableDeclaration {
-                    return BoundBlockStatement(
-                        statement.Syntax,
-                        ImmutableArray.Create[BoundStatement](
-                            declaration,
-                            BoundExpressionStatement(
-                                statement.Syntax,
-                                BoundAssignmentExpression(
-                                    statement.Syntax,
-                                    resultVariable,
-                                    BoundVariableExpression(statement.Syntax, declaration.Variable)
-                                )
-                            )
-                        )
-                    )
-                }
-                case block is BoundBlockStatement {
-                    return BoundBlockStatement(
-                        block.Syntax,
-                        block.Statements.SetItem(
-                            block.Statements.Length - 1,
-                            RewriteTrailingCapture(block.Statements[block.Statements.Length - 1], resultVariable)
-                        )
-                    )
-                }
-                case ifStatement is BoundIfStatement {
-                    // TryInferTrailingCaptureType only succeeds for a trailing
-                    // BoundIfStatement when ElseStatement is non-null (see its
-                    // `when ifStatement.ElseStatement != null` case guard), and
-                    // this method only runs on a statement that already passed
-                    // that check.
-                    let ifElseStatement = Invariant.Required(
-                        ifStatement.ElseStatement,
-                        "TryInferTrailingCaptureType verified this if-statement has an else branch",
-                        expression: "ifStatement.ElseStatement"
-                    )
-                    return BoundIfStatement(
-                        ifStatement.Syntax,
-                        ifStatement.Condition,
-                        RewriteTrailingCapture(ifStatement.ThenStatement, resultVariable),
-                        RewriteTrailingCapture(ifElseStatement, resultVariable)
-                    )
-                }
-                case switchStatement is BoundPatternSwitchStatement {
-                    return BoundPatternSwitchStatement(
-                        switchStatement.Syntax,
-                        switchStatement.Discriminant,
-                        switchStatement
-                            .Arms
-                            .Select(
-                            (a BoundPatternSwitchArm) -> BoundPatternSwitchArm(
-                                a.Syntax,
-                                a.Pattern,
-                                a.Guard,
-                                RewriteTrailingCapture(a.Body, resultVariable)
-                            )
-                        )
-                            .ToImmutableArray(),
-                        switchStatement.IsExhaustive
-                    )
-                }
-                default {
-                    throw InvalidOperationException("Unexpected trailing-capture statement kind '${statement.Kind}'.")
-                }
-            }
         }
 
         /// Produces a bound program from the specified global scope.
@@ -7896,73 +7626,25 @@ partial class Binder {
         /// referenced libraries or third-party packages) to fail inside bodies.
         /// @returns A bound program.
         func BindProgram(globalScope BoundGlobalScope, references ReferenceResolver? = nil) BoundProgram {
-            return BindProgram(globalScope, references, cache: nil)
+            return BindProgram(globalScope, references, default(BodyBindingOptions), workBudget: nil)
         }
-
-        /// Produces a bound program from the specified global scope, optionally
-        /// reusing previously bound member bodies from [`cache`](paramref)
-        /// (ADR-0105 Phase 1).
-        /// @param globalScope The global scope.
-        /// @param references The reference resolver used to resolve imported CLR types inside function
-        /// and method bodies. See the parameterless overload for details.
-        /// @param cache An optional per-project bound-body cache. When supplied, each member body
-        /// is looked up before binding; a <em>sound</em> hit (see
-        /// (cref:BoundBodyCache) for the soundness gate) reuses the cached
-        /// lowered body and diagnostics verbatim, while a miss binds and lowers from
-        /// scratch and stores the result. When `null`, this method
-        /// behaves exactly like the full-rebuild path. The cache never changes the
-        /// emitted IL or the diagnostics relative to a from-scratch bind.
-        /// @returns A bound program.
-        internal func BindProgram(
-            globalScope BoundGlobalScope,
-            references ReferenceResolver?,
-            cache BoundBodyCache?
-        ) BoundProgram -> BindProgram(globalScope, references, cache, dirtyTrees: nil)
-
-        /// Produces a bound program, optionally reusing previously bound member
-        /// bodies from [`cache`](paramref) and, for ADR-0105 Phase 2 delta
-        /// binding, <em>forcing a fresh re-bind</em> of every member whose body
-        /// syntax belongs to a tree in [`dirtyTrees`](paramref).
-        /// @param globalScope The global scope.
-        /// @param references The reference resolver (see other overloads).
-        /// @param cache The optional per-project bound-body cache.
-        /// @param dirtyTrees ADR-0105 Phase 2: the set of freshly-parsed syntax trees whose member
-        /// bodies must be re-bound from scratch (and re-stored) rather than served
-        /// from [`cache`](paramref). This is how the language server's
-        /// incremental path re-binds <em>only</em> the edited file's bodies while
-        /// the symbol instances are reused: members in an unedited file hit the
-        /// cache by symbol identity, members in the edited (dirty) file are always
-        /// rebound so their lowered bodies and diagnostics reflect the new source
-        /// text and spans exactly as a full rebuild would. `null`
-        /// (or empty) means "no dirty trees" — every member may be served from the
-        /// cache when the soundness gate allows it.
-        /// @returns A bound program.
-        internal func BindProgram(
-            globalScope BoundGlobalScope,
-            references ReferenceResolver?,
-            cache BoundBodyCache?,
-            dirtyTrees ImmutableHashSet[SyntaxTree]?
-        ) BoundProgram -> BindProgram(globalScope, references, cache, dirtyTrees, workBudget: nil)
 
         /// Binds bodies using one request-owned worker budget after declarations have completed.
         internal func BindProgram(
             globalScope BoundGlobalScope,
             references ReferenceResolver?,
-            cache BoundBodyCache?,
-            dirtyTrees ImmutableHashSet[SyntaxTree]?,
-            workBudget CompilationWorkBudget?
+            bodyOptions BodyBindingOptions,
+            workBudget CompilationWorkBudget? = nil
         ) BoundProgram {
-            let cache = if globalScope.HasNativeProtocols {
-                default(BoundBodyCache?)
-            } else {
-                cache
-            }
             let parentScope = CreateParentScope(
                 globalScope,
                 references,
                 preprocessorSymbols: globalScope?.PreprocessorSymbols,
                 preserveLatestImportSyntaxTrees: true
             )
+            if !globalScope.HasNativeProtocols {
+                parentScope.GetBindingServices().BodyBindingOptions = bodyOptions
+            }
             // Issue #3501 A2: reuse the global-scope pass's ref-kind delegate
             // cache on this pass's scope chain, so a shape spelled in a
             // declaration's type clause and the same shape appearing inside a
@@ -8044,8 +7726,6 @@ partial class Binder {
                 let function = member.Function
                 if function.Declaration?.Body != nil && HasInferredRichAnonymousReturn(function, parentScope) {
                     functionBodies[function] = BindDeclaredFunctionBody(
-                        cache,
-                        dirtyTrees,
                         parentScope,
                         function,
                         member.Owner,
@@ -8055,14 +7735,7 @@ partial class Binder {
             }
             // Declarations, field initializers, and rich inferred returns are complete.
             // Workers cannot reach synthesis registries; dependent bodies retain their established order.
-            let independentBodies = BindIndependentBodies(
-                globalScope,
-                parentScope,
-                functionBodies,
-                cache,
-                dirtyTrees,
-                workBudget
-            )
+            let independentBodies = BindIndependentBodies(globalScope, parentScope, functionBodies, workBudget)
             for function in globalScope.Functions {
                 if functionBodies.ContainsKey(function) {
                     continue
@@ -8085,10 +7758,7 @@ partial class Binder {
                     )
                     continue
                 }
-                functionBodies.Add(
-                    function,
-                    BindDeclaredFunctionBody(cache, dirtyTrees, parentScope, function, owner: nil, diagnostics)
-                )
+                functionBodies.Add(function, BindDeclaredFunctionBody(parentScope, function, owner: nil, diagnostics))
             }
             // Phase 3.B.3 sub-step 2b: bind class method bodies. Methods are not
             // in globalScope.Functions (they're addressed via the dot operator),
@@ -8127,10 +7797,7 @@ partial class Binder {
                         )
                         continue
                     }
-                    functionBodies.Add(
-                        method,
-                        BindDeclaredFunctionBody(cache, dirtyTrees, parentScope, method, structSym, diagnostics)
-                    )
+                    functionBodies.Add(method, BindDeclaredFunctionBody(parentScope, method, structSym, diagnostics))
                 }
             }
             // ADR-0085 / issue #726: bind default-interface-method bodies. An
@@ -8151,7 +7818,7 @@ partial class Binder {
                     if functionBodies.ContainsKey(method) {
                         continue
                     }
-                    BindInterfaceMethodBody(cache, dirtyTrees, parentScope, method, functionBodies, diagnostics)
+                    BindInterfaceMethodBody(parentScope, method, functionBodies, diagnostics)
                 }
             }
             // ADR-0089 / issue #755: bind default bodies on static-virtual
@@ -8169,7 +7836,7 @@ partial class Binder {
                     if functionBodies.ContainsKey(method) {
                         continue
                     }
-                    BindInterfaceMethodBody(cache, dirtyTrees, parentScope, method, functionBodies, diagnostics)
+                    BindInterfaceMethodBody(parentScope, method, functionBodies, diagnostics)
                 }
             }
             // Issue #1030 / #2293: bind default bodies on interface *property*
@@ -8186,8 +7853,6 @@ partial class Binder {
                 for prop in ifaceSym.Properties {
                     if prop.GetterSymbol != nil && prop.GetterBodySyntax != nil {
                         BindInterfaceAccessorBody(
-                            cache,
-                            dirtyTrees,
                             parentScope,
                             prop.GetterSymbol!!,
                             prop.GetterBodySyntax!!,
@@ -8198,8 +7863,6 @@ partial class Binder {
                     }
                     if prop.SetterSymbol != nil && prop.SetterBodySyntax != nil {
                         BindInterfaceAccessorBody(
-                            cache,
-                            dirtyTrees,
                             parentScope,
                             prop.SetterSymbol!!,
                             prop.SetterBodySyntax!!,
@@ -8224,7 +7887,7 @@ partial class Binder {
                         if functionBodies.ContainsKey(method) {
                             continue
                         }
-                        BindInterfaceMethodBody(cache, dirtyTrees, parentScope, method, functionBodies, diagnostics)
+                        BindInterfaceMethodBody(parentScope, method, functionBodies, diagnostics)
                     }
                 }
                 if !ifaceSym.StaticPrivateMethods.IsDefaultOrEmpty {
@@ -8235,7 +7898,7 @@ partial class Binder {
                         if functionBodies.ContainsKey(method) {
                             continue
                         }
-                        BindInterfaceMethodBody(cache, dirtyTrees, parentScope, method, functionBodies, diagnostics)
+                        BindInterfaceMethodBody(parentScope, method, functionBodies, diagnostics)
                     }
                 }
             }
@@ -8256,43 +7919,16 @@ partial class Binder {
                     if ctor.IsSynthesizedFromPrimaryConstructor || ctorDeclaration == nil {
                         continue
                     }
-                    let ctorLoweredBody = BindBodyWithPackage(
+                    let ctorLoweredBody = BindBodyWithCache(
                         parentScope,
                         structSym.PackageName,
-                        ctorDeclaration.Body.SyntaxTree,
-                        () -> {
-                            return BindBodyWithCache(
-                                cache,
-                                dirtyTrees,
-                                ctor.Function,
-                                ctorDeclaration.Body,
-                                diagnostics,
-                                () -> {
-                                    let ctorBinder = Binder(parentScope, ctor.Function)
-                                    ctorBinder
-                                        .binderCtx
-                                        .FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(
-                                        ctorDeclaration.Body
-                                    )
-                                    let ctorBody = ctorBinder.statements.BindBlockStatement(ctorDeclaration.Body)
-                                    ctorBinder.statements.FinalizeUserLabels()
-                                    // ADR-0065 §2 Rule 3: a `convenience init` body must begin
-                                    // with a `init(args)` self-delegation expression-statement.
-                                    if ctor.IsConvenience {
-                                        VerifyConvenienceInitDelegatesFirst(ctor, ctorBody, ctorBinder.Diagnostics)
-                                    }
-                                    let lowered = Lowerer.Lower(ctorBody, structSym)
-                                    AnalyzeFunctionBody(
-                                        ctorBody,
-                                        lowered,
-                                        ctor.Function,
-                                        ctorBinder.Diagnostics,
-                                        ctorBinder.binderCtx.References
-                                    )
-                                    return BodyBindResult(lowered, ctorBinder.Diagnostics.ToImmutableArray())
-                                }
-                            )
-                        }
+                        ctor.Function,
+                        ctorDeclaration.Body,
+                        ctorDeclaration.Body,
+                        structSym,
+                        allPathsReturnLocation: nil,
+                        ctor,
+                        diagnostics
                     )
                     functionBodies.Add(ctor.Function, ctorLoweredBody)
                 }
@@ -8308,8 +7944,6 @@ partial class Binder {
                     continue
                 }
                 BindStructMemberBody(
-                    cache,
-                    dirtyTrees,
                     parentScope,
                     deinit.Function,
                     deinit.Declaration.Body,
@@ -8328,8 +7962,6 @@ partial class Binder {
                         }
                         if prop.GetterSymbol != nil && prop.GetterBodySyntax != nil {
                             BindStructMemberBody(
-                                cache,
-                                dirtyTrees,
                                 parentScope,
                                 prop.GetterSymbol!!,
                                 prop.GetterBodySyntax!!,
@@ -8341,8 +7973,6 @@ partial class Binder {
                         }
                         if prop.SetterSymbol != nil && prop.SetterBodySyntax != nil {
                             BindStructMemberBody(
-                                cache,
-                                dirtyTrees,
                                 parentScope,
                                 prop.SetterSymbol!!,
                                 prop.SetterBodySyntax!!,
@@ -8361,8 +7991,6 @@ partial class Binder {
                         }
                         if ev.AddMethodSymbol != nil && ev.AddBodySyntax != nil {
                             BindStructMemberBody(
-                                cache,
-                                dirtyTrees,
                                 parentScope,
                                 ev.AddMethodSymbol!!,
                                 ev.AddBodySyntax!!,
@@ -8373,8 +8001,6 @@ partial class Binder {
                         }
                         if ev.RemoveMethodSymbol != nil && ev.RemoveBodySyntax != nil {
                             BindStructMemberBody(
-                                cache,
-                                dirtyTrees,
                                 parentScope,
                                 ev.RemoveMethodSymbol!!,
                                 ev.RemoveBodySyntax!!,
@@ -8386,8 +8012,6 @@ partial class Binder {
                         // Issue #257: bind raise accessor body.
                         if ev.RaiseMethodSymbol != nil && ev.RaiseBodySyntax != nil {
                             BindStructMemberBody(
-                                cache,
-                                dirtyTrees,
                                 parentScope,
                                 ev.RaiseMethodSymbol!!,
                                 ev.RaiseBodySyntax!!,
@@ -8410,8 +8034,6 @@ partial class Binder {
                     }
                     if prop.GetterSymbol != nil && prop.GetterBodySyntax != nil {
                         BindStructMemberBody(
-                            cache,
-                            dirtyTrees,
                             parentScope,
                             prop.GetterSymbol!!,
                             prop.GetterBodySyntax!!,
@@ -8423,8 +8045,6 @@ partial class Binder {
                     }
                     if prop.SetterSymbol != nil && prop.SetterBodySyntax != nil {
                         BindStructMemberBody(
-                            cache,
-                            dirtyTrees,
                             parentScope,
                             prop.SetterSymbol!!,
                             prop.SetterBodySyntax!!,
@@ -8446,8 +8066,6 @@ partial class Binder {
                     }
                     if ev.AddMethodSymbol != nil && ev.AddBodySyntax != nil {
                         BindStructMemberBody(
-                            cache,
-                            dirtyTrees,
                             parentScope,
                             ev.AddMethodSymbol!!,
                             ev.AddBodySyntax!!,
@@ -8458,8 +8076,6 @@ partial class Binder {
                     }
                     if ev.RemoveMethodSymbol != nil && ev.RemoveBodySyntax != nil {
                         BindStructMemberBody(
-                            cache,
-                            dirtyTrees,
                             parentScope,
                             ev.RemoveMethodSymbol!!,
                             ev.RemoveBodySyntax!!,
@@ -8471,8 +8087,6 @@ partial class Binder {
                     // Issue #257: bind raise accessor body for static events.
                     if ev.RaiseMethodSymbol != nil && ev.RaiseBodySyntax != nil {
                         BindStructMemberBody(
-                            cache,
-                            dirtyTrees,
                             parentScope,
                             ev.RaiseMethodSymbol!!,
                             ev.RaiseBodySyntax!!,
@@ -8528,7 +8142,7 @@ partial class Binder {
                         )
                         continue
                     }
-                    BindStructMethodBody(cache, dirtyTrees, parentScope, method, structSym, functionBodies, diagnostics)
+                    BindStructMethodBody(parentScope, method, structSym, functionBodies, diagnostics)
                 }
             }
             // ADR-0140 / issue #2131: bind `shared { init { … } }` static-initializer
@@ -8714,8 +8328,7 @@ partial class Binder {
         }
 
         /// Asserts that [`function`](paramref) has a source declaration with
-        /// a body, for the member-body binding loops in (cref:BindProgram(BoundGlobalScope, ReferenceResolver?,
-        /// BoundBodyCache?, ImmutableHashSet{SyntaxTree}?))
+        /// a body, for the member-body binding loops in (cref:BindProgram(BoundGlobalScope, ReferenceResolver?))
         /// and (cref:BindInterfaceMethodBody)/(cref:BindStructMemberBody)
         /// and friends. Every caller has already skipped members with no body
         /// (P/Invoke, abstract, or an explicit `Declaration?.Body == null`
@@ -8739,68 +8352,120 @@ partial class Binder {
             return (declaration, body)
         }
 
-        /// ADR-0105 helper shared by every member-body bind site in
-        /// (cref:BindProgram(BoundGlobalScope, ReferenceResolver, BoundBodyCache,
-        /// ImmutableHashSet{SyntaxTree})).
-        /// On a <em>sound</em> cache hit it returns the cached lowered body and
-        /// appends the cached per-body diagnostics; otherwise it invokes
-        /// [`bindAndLower`](paramref) (which performs the exact same
-        /// bind/lower/post-check work the call site would have done inline),
-        /// appends the produced diagnostics, and stores the result for later reuse.
-        /// When [`cache`](paramref) is `null` this is exactly
-        /// the full-rebuild path with no behavioral difference.
-        /// @param cache The optional bound-body cache.
-        /// @param dirtyTrees ADR-0105 Phase 2: when [`bodySyntax`](paramref) belongs to one of
-        /// these freshly-parsed (edited) trees, the cache read is <em>bypassed</em>
-        /// so the body is always rebound from scratch (and re-stored) — its lowered
-        /// form and diagnostics then reflect the new source text and spans exactly
-        /// as a full rebuild would. `null` means no dirty trees.
-        /// @param member The member symbol whose body is being bound.
-        /// @param bodySyntax The body syntax that will be bound and lowered.
-        /// @param diagnostics The program-level diagnostics accumulator to append to.
-        /// @param bindAndLower Produces the freshly bound+lowered body and its diagnostics on a miss.
-        /// @returns The lowered body — reused on a sound hit, freshly produced otherwise.
+        /// ADR-0105 / ADR-0212 slice S8 helper shared by every member-body bind site in
+        /// (cref:BindProgram(BoundGlobalScope, ReferenceResolver?)).
+        /// Sets the declaring package and referencing syntax tree on [`parentScope`](paramref),
+        /// reuses the cached lowered body and per-body diagnostics on a sound cache hit, or binds,
+        /// lowers, and stores the body from scratch.
         private func BindBodyWithCache(
-            cache BoundBodyCache?,
-            dirtyTrees ImmutableHashSet[SyntaxTree]?,
+            parentScope BoundScope,
+            packageName string?,
             member FunctionSymbol,
-            bodySyntax SyntaxNode,
-            diagnostics ImmutableArray[Diagnostic].Builder,
-            bindAndLower() -> BodyBindResult
+            bodySyntax StatementSyntax,
+            blockSyntax BlockStatementSyntax?,
+            owner StructSymbol?,
+            allPathsReturnLocation TextLocation?,
+            convenienceConstructor ConstructorSymbol?,
+            diagnostics ImmutableArray[Diagnostic].Builder
         ) BoundBlockStatement {
-            let isDirty = dirtyTrees != nil && bodySyntax.SyntaxTree != nil && dirtyTrees.Contains(
-                bodySyntax.SyntaxTree
-            )
-            // Without a body cache there is nothing to reuse or store, so the
-            // syntax walk that decides cacheability is skipped (the `gsc` path).
-            if cache == nil {
-                let uncachedResult = bindAndLower()
-                AppendBodyDiagnostics(diagnostics, uncachedResult.Diagnostics, member)
-                return uncachedResult.Body
-            }
-            let cacheable = !ContainsSyntheticBodySideEffects(bodySyntax)
-            if !isDirty && cacheable && cache != nil && cache.TryReuse(
-                member,
-                bodySyntax,
-                out var reusedBody,
-                out var reusedDiagnostics
-            ) {
-                AppendBodyDiagnostics(diagnostics, reusedDiagnostics, member)
-                return reusedBody!!
-            }
-            let bodyFailedCalls = CallCandidateRecorder.BeginBody()
-            var recordedFailedCalls = ImmutableArray[BoundErrorExpression].Empty
-            var result BodyBindResult
+            let previousPackage = parentScope.SetCurrentDeclaringPackage(packageName)
+            let previousTree = parentScope.SetCurrentReferencingSyntaxTree(bodySyntax.SyntaxTree)
             try {
-                result = bindAndLower()
+                let bodyOptions = parentScope.GetBindingServices().BodyBindingOptions
+                let cache = bodyOptions.Cache
+                // Without a body cache there is nothing to reuse or store, so the
+                // syntax walk that decides cacheability is skipped (the `gsc` path).
+                if cache == nil {
+                    let uncachedResult = BindAndLowerMemberBody(
+                        parentScope,
+                        member,
+                        bodySyntax,
+                        blockSyntax,
+                        owner,
+                        allPathsReturnLocation,
+                        convenienceConstructor
+                    )
+                    AppendBodyDiagnostics(diagnostics, uncachedResult.Diagnostics, member)
+                    return uncachedResult.Body
+                }
+                let isDirty = bodyOptions.IsDirty(bodySyntax.SyntaxTree)
+                let cacheable = !ContainsSyntheticBodySideEffects(bodySyntax)
+                if !isDirty && cacheable && cache.TryReuse(
+                    member,
+                    bodySyntax,
+                    out var reusedBody,
+                    out var reusedDiagnostics
+                ) {
+                    AppendBodyDiagnostics(diagnostics, reusedDiagnostics, member)
+                    return reusedBody!!
+                }
+                let bodyFailedCalls = CallCandidateRecorder.BeginBody()
+                var recordedFailedCalls = ImmutableArray[BoundErrorExpression].Empty
+                var result BodyBindResult
+                try {
+                    result = BindAndLowerMemberBody(
+                        parentScope,
+                        member,
+                        bodySyntax,
+                        blockSyntax,
+                        owner,
+                        allPathsReturnLocation,
+                        convenienceConstructor
+                    )
+                } finally {
+                    recordedFailedCalls = CallCandidateRecorder.EndBody(bodyFailedCalls)
+                }
+                AppendBodyDiagnostics(diagnostics, result.Diagnostics, member)
+                if cacheable {
+                    cache.Store(member, bodySyntax, result.Body, result.Diagnostics, recordedFailedCalls)
+                }
+                return result.Body
             } finally {
-                recordedFailedCalls = CallCandidateRecorder.EndBody(bodyFailedCalls)
+                parentScope.SetCurrentDeclaringPackage(previousPackage)
+                parentScope.SetCurrentReferencingSyntaxTree(previousTree)
             }
-            AppendBodyDiagnostics(diagnostics, result.Diagnostics, member)
-            if cacheable {
-                cache.Store(member, bodySyntax, result.Body, result.Diagnostics, recordedFailedCalls)
+        }
+
+        private func BindAndLowerMemberBody(
+            parentScope BoundScope,
+            member FunctionSymbol,
+            bodySyntax StatementSyntax,
+            blockSyntax BlockStatementSyntax?,
+            owner StructSymbol?,
+            allPathsReturnLocation TextLocation?,
+            convenienceConstructor ConstructorSymbol?
+        ) BodyBindResult {
+            let binder = Binder(parentScope, member)
+            binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(bodySyntax)
+            let body = if blockSyntax != nil {
+                binder.statements.BindBlockStatement(blockSyntax)
+            } else {
+                // BindStatement returns null only for a SyntaxKind.CommentToken
+                // node; a member body is never a bare comment.
+                Invariant.Required(
+                    binder.statements.BindStatement(bodySyntax),
+                    "a member body statement is never a bare comment token",
+                    expression: "binder.statements.BindStatement(bodySyntax)"
+                )
             }
-            return result.Body
+            binder.statements.FinalizeUserLabels()
+            // ADR-0065 §2 Rule 3: a `convenience init` body must begin
+            // with a `init(args)` self-delegation expression-statement.
+            if convenienceConstructor != nil && convenienceConstructor.IsConvenience {
+                VerifyConvenienceInitDelegatesFirst(convenienceConstructor, body, binder.Diagnostics)
+            }
+            let lowered = if owner == nil {
+                Lowerer.Lower(body)
+            } else {
+                Lowerer.Lower(body, owner)
+            }
+            if allPathsReturnLocation != nil && !IsIteratorReturnType(member.Type) && !ControlFlowGraph.AllPathsReturn(
+                lowered
+            ) {
+                binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation)
+            }
+            AnalyzeFunctionBody(body, lowered, member, binder.Diagnostics, binder.binderCtx.References)
+            return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
         }
 
         private func ContainsSyntheticBodySideEffects(node SyntaxNode) bool {
@@ -8843,70 +8508,21 @@ partial class Binder {
             }
         }
 
-        /// Issue #2342: runs [`bind`](paramref) with [`packageName`](paramref)
-        /// set as [`parentScope`](paramref)'s ambient "current declaring
-        /// package" (see (cref:BoundScope.SetCurrentDeclaringPackage)) for
-        /// the duration of a single member-body bind, restoring the previous
-        /// value afterwards. This lets an unqualified type-alias reference inside
-        /// the body (e.g. a data-class object literal such as
-        /// `AnonymousType0{...}`) prefer its OWN declaring package's
-        /// same-simple-name type over an unrelated package's homonym — the
-        /// ambiguity that arises when two packages each independently synthesize
-        /// a type with the same simple name (the Oahu.Data EF-migration shape).
-        ///
-        /// Issue #2456 (per-file import scoping / #2395 follow-up): ALSO sets
-        /// [`referencingTree`](paramref) as the ambient "current referencing
-        /// syntax tree" (see (cref:BoundScope.SetCurrentReferencingSyntaxTree))
-        /// for the same duration, so a same-simple-name collision encountered
-        /// while binding this body (e.g. a struct-literal or bare-constructor-call
-        /// reference — issue #2455) is only disambiguated by an import declared in
-        /// THIS body's own file — never a sibling file's import.
-        /// @param parentScope The scope whose ambient declaring-package is set for the duration of the call.
-        /// @param packageName The declaring package of the member whose body is about to be bound, or `null`
-        /// when unknown.
-        /// @param referencingTree The syntax tree (file) the member's body belongs to.
-        /// @param bind Performs the member-body bind/lower work.
-        /// @returns The lowered body produced by [`bind`](paramref).
-        private func BindBodyWithPackage(
-            parentScope BoundScope,
-            packageName string?,
-            referencingTree SyntaxTree,
-            bind() -> BoundBlockStatement
-        ) BoundBlockStatement {
-            let previousPackage = parentScope.SetCurrentDeclaringPackage(packageName)
-            let previousTree = parentScope.SetCurrentReferencingSyntaxTree(referencingTree)
-            try {
-                return bind()
-            } finally {
-                parentScope.SetCurrentDeclaringPackage(previousPackage)
-                parentScope.SetCurrentReferencingSyntaxTree(previousTree)
-            }
-        }
-
-        /// ADR-0105 (Phase 1) helper for the four structurally identical interface
-        /// member-body bind loops (default-interface methods, static-virtual
-        /// defaults, and private instance/static helpers). Each lowers without a
-        /// declaring-type context and runs the all-paths-return check, then routes
-        /// through (cref:BindBodyWithCache) and registers the body.
-        /// @param cache The optional bound-body cache.
-        /// @param dirtyTrees ADR-0105 Phase 2: freshly-parsed (edited) trees whose member bodies must be
-        /// rebound rather than served from the cache.
+        /// Helper for the four structurally identical interface member-body bind loops
+        /// (default-interface methods, static-virtual defaults, and private instance/static helpers).
+        /// Each lowers without a declaring-type context and runs the all-paths-return check, then
+        /// routes through (cref:BindBodyWithCache) and registers the body.
         /// @param parentScope The parent scope bodies are bound against.
         /// @param method The interface method whose body is being bound.
         /// @param functionBodies The function-body map to register the lowered body in.
         /// @param diagnostics The program-level diagnostics accumulator.
         private func BindInterfaceMethodBody(
-            cache BoundBodyCache?,
-            dirtyTrees ImmutableHashSet[SyntaxTree]?,
             parentScope BoundScope,
             method FunctionSymbol,
             functionBodies ImmutableDictionary[FunctionSymbol, BoundBlockStatement].Builder,
             diagnostics ImmutableArray[Diagnostic].Builder
         ) {
-            functionBodies.Add(
-                method,
-                BindDeclaredFunctionBody(cache, dirtyTrees, parentScope, method, owner: nil, diagnostics)
-            )
+            functionBodies.Add(method, BindDeclaredFunctionBody(parentScope, method, owner: nil, diagnostics))
         }
 
         private func HasInferredRichAnonymousReturn(
@@ -8949,8 +8565,6 @@ partial class Binder {
             globalScope BoundGlobalScope,
             parentScope BoundScope,
             boundBodies ImmutableDictionary[FunctionSymbol, BoundBlockStatement].Builder,
-            cache BoundBodyCache?,
-            dirtyTrees ImmutableHashSet[SyntaxTree]?,
             budget CompilationWorkBudget?
         ) Dictionary[FunctionSymbol, BodyBindResult] {
             let results = Dictionary[FunctionSymbol, BodyBindResult]()
@@ -9017,6 +8631,7 @@ partial class Binder {
             }
             CompilationMeasurements.Count("bodies.independent", jobs.Count)
             parentScope.GetDeclaredStructs()
+            parentScope.GetBindingServices()
             let outputs = [jobs.Count]BodyBindResult
             let mode = NullabilityOptions.Mode
             let checks = NullabilityOptions.PlatformNilChecksEnabled
@@ -9027,8 +8642,6 @@ partial class Binder {
                     let job = jobs[index]
                     let bodyDiagnostics = ImmutableArray.CreateBuilder[Diagnostic]()
                     let body = BindDeclaredFunctionBody(
-                        cache,
-                        dirtyTrees,
                         parentScope.CreateIndependentBodyScope(),
                         job.Function,
                         job.Owner,
@@ -9047,53 +8660,27 @@ partial class Binder {
         }
 
         private func BindDeclaredFunctionBody(
-            cache BoundBodyCache?,
-            dirtyTrees ImmutableHashSet[SyntaxTree]?,
             parentScope BoundScope,
             function FunctionSymbol,
             owner StructSymbol?,
             diagnostics ImmutableArray[Diagnostic].Builder
         ) BoundBlockStatement {
             let (declaration, bodySyntax) = RequireDeclaredBody(function)
-            return BindBodyWithPackage(
+            let allPathsReturnLocation = if function.Type != TypeSymbol.Void {
+                declaration.Identifier.Location
+            } else {
+                default(TextLocation?)
+            }
+            return BindBodyWithCache(
                 parentScope,
                 owner?.PackageName ?? function.Package?.Name,
-                bodySyntax.SyntaxTree,
-                () -> {
-                    return BindBodyWithCache(
-                        cache,
-                        dirtyTrees,
-                        function,
-                        bodySyntax,
-                        diagnostics,
-                        () -> {
-                            let binder = Binder(parentScope, function)
-                            binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(
-                                bodySyntax
-                            )
-                            let body = binder.statements.BindBlockStatement(bodySyntax)
-                            binder.statements.FinalizeUserLabels()
-                            let lowered = if owner == nil {
-                                Lowerer.Lower(body)
-                            } else {
-                                Lowerer.Lower(body, owner)
-                            }
-                            if function.Type != TypeSymbol.Void &&
-                                !IsIteratorReturnType(function.Type) &&
-                                !ControlFlowGraph.AllPathsReturn(lowered) {
-                                binder.Diagnostics.ReportAllPathsMustReturn(declaration.Identifier.Location)
-                            }
-                            AnalyzeFunctionBody(
-                                body,
-                                lowered,
-                                function,
-                                binder.Diagnostics,
-                                binder.binderCtx.References
-                            )
-                            return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
-                        }
-                    )
-                }
+                function,
+                bodySyntax,
+                bodySyntax,
+                owner,
+                allPathsReturnLocation,
+                convenienceConstructor: nil,
+                diagnostics
             )
         }
 
@@ -9103,9 +8690,6 @@ partial class Binder {
         /// declaring-type context (a static accessor has no instance `this`),
         /// the getter's value-returning paths are checked, and the lowered body is
         /// registered in [`functionBodies`](paramref) keyed by the accessor.
-        /// @param cache The optional bound-body cache.
-        /// @param dirtyTrees Freshly-parsed (edited) trees whose member bodies must be rebound rather than
-        /// served from the cache.
         /// @param parentScope The parent scope bodies are bound against.
         /// @param accessor The static accessor FunctionSymbol whose body is being bound.
         /// @param bodySyntax The accessor body block syntax.
@@ -9113,8 +8697,6 @@ partial class Binder {
         /// @param diagnostics The program-level diagnostics accumulator.
         /// @param requireAllPathsReturn When true (a getter), all code paths must return a value.
         private func BindInterfaceAccessorBody(
-            cache BoundBodyCache?,
-            dirtyTrees ImmutableHashSet[SyntaxTree]?,
             parentScope BoundScope,
             accessor FunctionSymbol,
             bodySyntax BlockStatementSyntax,
@@ -9122,54 +8704,29 @@ partial class Binder {
             diagnostics ImmutableArray[Diagnostic].Builder,
             requireAllPathsReturn bool
         ) {
-            let loweredBody = BindBodyWithPackage(
+            let allPathsReturnLocation = if requireAllPathsReturn {
+                bodySyntax.OpenBraceToken.Location
+            } else {
+                default(TextLocation?)
+            }
+            let loweredBody = BindBodyWithCache(
                 parentScope,
                 accessor.Package?.Name,
-                bodySyntax.SyntaxTree,
-                () -> {
-                    return BindBodyWithCache(
-                        cache,
-                        dirtyTrees,
-                        accessor,
-                        bodySyntax,
-                        diagnostics,
-                        () -> {
-                            let binder = Binder(parentScope, accessor)
-                            binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(
-                                bodySyntax
-                            )
-                            let body = binder.statements.BindBlockStatement(bodySyntax)
-                            binder.statements.FinalizeUserLabels()
-                            let lowered = Lowerer.Lower(body)
-                            if requireAllPathsReturn &&
-                                !IsIteratorReturnType(accessor.Type) &&
-                                !ControlFlowGraph
-                                .AllPathsReturn(lowered) {
-                                binder.Diagnostics.ReportAllPathsMustReturn(bodySyntax.OpenBraceToken.Location)
-                            }
-                            AnalyzeFunctionBody(
-                                body,
-                                lowered,
-                                accessor,
-                                binder.Diagnostics,
-                                binder.binderCtx.References
-                            )
-                            return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
-                        }
-                    )
-                }
+                accessor,
+                bodySyntax,
+                bodySyntax,
+                owner: nil,
+                allPathsReturnLocation,
+                convenienceConstructor: nil,
+                diagnostics
             )
             functionBodies.Add(accessor, loweredBody)
         }
 
-        /// ADR-0105 (Phase 1) helper for struct/class member bodies bound with a
-        /// declaring-type lowering context (computed-property accessors, event
-        /// accessors and destructors). Optionally runs the all-paths-return check
-        /// at [`allPathsReturnLocation`](paramref) when supplied. Routes
+        /// Helper for struct/class member bodies bound with a declaring-type lowering context
+        /// (computed-property accessors, event accessors and destructors). Optionally runs the
+        /// all-paths-return check at [`allPathsReturnLocation`](paramref) when supplied. Routes
         /// through (cref:BindBodyWithCache) and registers the body.
-        /// @param cache The optional bound-body cache.
-        /// @param dirtyTrees ADR-0105 Phase 2: freshly-parsed (edited) trees whose member bodies must be
-        /// rebound rather than served from the cache.
         /// @param parentScope The parent scope bodies are bound against.
         /// @param member The member whose body is being bound.
         /// @param bodySyntax The body syntax to bind and lower.
@@ -9179,8 +8736,6 @@ partial class Binder {
         /// @param allPathsReturnLocation When non-null, the location at which to report a missing all-paths
         /// return.
         private func BindStructMemberBody(
-            cache BoundBodyCache?,
-            dirtyTrees ImmutableHashSet[SyntaxTree]?,
             parentScope BoundScope,
             member FunctionSymbol,
             bodySyntax StatementSyntax,
@@ -9189,61 +8744,29 @@ partial class Binder {
             diagnostics ImmutableArray[Diagnostic].Builder,
             allPathsReturnLocation TextLocation? = nil
         ) {
-            let loweredBody = BindBodyWithPackage(
+            let loweredBody = BindBodyWithCache(
                 parentScope,
                 structSym.PackageName,
-                bodySyntax.SyntaxTree,
-                () -> {
-                    return BindBodyWithCache(
-                        cache,
-                        dirtyTrees,
-                        member,
-                        bodySyntax,
-                        diagnostics,
-                        () -> {
-                            let binder = Binder(parentScope, member)
-                            binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(
-                                bodySyntax
-                            )
-                            // BindStatement returns null only for a SyntaxKind.CommentToken
-                            // node; a member body is never a bare comment.
-                            let body = Invariant.Required(
-                                binder.statements.BindStatement(bodySyntax),
-                                "a member body statement is never a bare comment token",
-                                expression: "binder.statements.BindStatement(bodySyntax)"
-                            )
-                            binder.statements.FinalizeUserLabels()
-                            let lowered = Lowerer.Lower(body, structSym)
-                            if allPathsReturnLocation != nil &&
-                                !IsIteratorReturnType(member.Type) &&
-                                !ControlFlowGraph.AllPathsReturn(lowered) {
-                                binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation)
-                            }
-                            AnalyzeFunctionBody(body, lowered, member, binder.Diagnostics, binder.binderCtx.References)
-                            return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
-                        }
-                    )
-                }
+                member,
+                bodySyntax,
+                blockSyntax: nil,
+                structSym,
+                allPathsReturnLocation,
+                convenienceConstructor: nil,
+                diagnostics
             )
             functionBodies.Add(member, loweredBody)
         }
 
-        /// ADR-0105 (Phase 1) helper for struct/class <em>method</em> bodies bound
-        /// with a declaring-type lowering context (instance methods and
-        /// `shared` static methods). Runs the void/iterator-guarded
-        /// all-paths-return check, routes through (cref:BindBodyWithCache)
-        /// and registers the body.
-        /// @param cache The optional bound-body cache.
-        /// @param dirtyTrees ADR-0105 Phase 2: freshly-parsed (edited) trees whose member bodies must be
-        /// rebound rather than served from the cache.
+        /// Helper for struct/class <em>method</em> bodies bound with a declaring-type lowering context
+        /// (instance methods and `shared` static methods). Runs the void/iterator-guarded
+        /// all-paths-return check, routes through (cref:BindBodyWithCache) and registers the body.
         /// @param parentScope The parent scope bodies are bound against.
         /// @param method The method whose body is being bound.
         /// @param structSym The declaring type used as the lowering context.
         /// @param functionBodies The function-body map to register the lowered body in.
         /// @param diagnostics The program-level diagnostics accumulator.
         private func BindStructMethodBody(
-            cache BoundBodyCache?,
-            dirtyTrees ImmutableHashSet[SyntaxTree]?,
             parentScope BoundScope,
             method FunctionSymbol,
             structSym StructSymbol,
@@ -9251,36 +8774,21 @@ partial class Binder {
             diagnostics ImmutableArray[Diagnostic].Builder
         ) {
             let (structMethodDeclaration, structMethodBody) = RequireDeclaredBody(method)
-            let loweredBody = BindBodyWithPackage(
+            let allPathsReturnLocation = if method.Type != TypeSymbol.Void {
+                structMethodDeclaration.Identifier.Location
+            } else {
+                default(TextLocation?)
+            }
+            let loweredBody = BindBodyWithCache(
                 parentScope,
                 structSym.PackageName,
-                structMethodBody.SyntaxTree,
-                () -> {
-                    return BindBodyWithCache(
-                        cache,
-                        dirtyTrees,
-                        method,
-                        structMethodBody,
-                        diagnostics,
-                        () -> {
-                            let binder = Binder(parentScope, method)
-                            binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(
-                                structMethodBody
-                            )
-                            let body = binder.statements.BindBlockStatement(structMethodBody)
-                            binder.statements.FinalizeUserLabels()
-                            let lowered = Lowerer.Lower(body, structSym)
-                            if method.Type != TypeSymbol.Void &&
-                                !IsIteratorReturnType(method.Type) &&
-                                !ControlFlowGraph
-                                .AllPathsReturn(lowered) {
-                                binder.Diagnostics.ReportAllPathsMustReturn(structMethodDeclaration.Identifier.Location)
-                            }
-                            AnalyzeFunctionBody(body, lowered, method, binder.Diagnostics, binder.binderCtx.References)
-                            return BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray())
-                        }
-                    )
-                }
+                method,
+                structMethodBody,
+                structMethodBody,
+                structSym,
+                allPathsReturnLocation,
+                convenienceConstructor: nil,
+                diagnostics
             )
             functionBodies.Add(method, loweredBody)
         }
@@ -11712,7 +11220,7 @@ partial class Binder {
             preserveLatestImportSyntaxTrees bool
         ) BoundScope {
             let parent = CreateRootScope(references, preprocessorSymbols)
-            parent.SetSubmissionImports(globalScope.SubmissionImports)
+            CopyPriorCellImports(globalScope, parent)
             let scope_ = BoundScope(parent)
             for package_ in globalScope.Packages {
                 if package_.IsExplicitlyDeclared {

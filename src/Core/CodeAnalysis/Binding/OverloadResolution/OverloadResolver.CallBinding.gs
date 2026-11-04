@@ -515,20 +515,8 @@ internal partial class OverloadResolver {
         ) {
             return true
         }
-        if Scope.SubmissionImports is {} submissions {
-            if submissions.TryFindFunctionContainer(Scope.References!!, name, out _) {
-                return true
-            }
-            if submissions.TryFindGlobalVariable(Scope.References!!, name, out _, out var declared) &&
-                declared is {} previous &&
-                (
-                previous.Type is FunctionPointerTypeSymbol || MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
-                    previous.Type,
-                    out _
-                )
-            ) {
-                return true
-            }
+        if SubmissionBinding.HasCallableCandidate(Scope, name) {
+            return true
         }
         if HasEnclosingMemberCallableCandidate(name) || GetLexicallyEnclosingStaticCallOwner(name) != nil {
             return true
@@ -1400,32 +1388,8 @@ internal partial class OverloadResolver {
                         return bindImportedClrStaticCall!!(matchedClrStaticImport, syntax)
                     }
                 }
-                // ADR-0156 Phase 2: an unqualified call may resolve to a
-                // top-level function of a prior interactive submission — a
-                // static method on that submission's <Program> container.
-                // Submissions are consulted newest first and the first one
-                // declaring the name wins outright (scope-chain shadowing,
-                // not using-static ambiguity).
-                if Scope.SubmissionImports is {} submissionImports {
-                    if bindImportedClrStaticCall != nil && submissionImports.TryFindFunctionContainer(
-                        Scope.References!!,
-                        syntax.Identifier.ValueText,
-                        out var submissionProgramType
-                    ) &&
-                        submissionProgramType != nil {
-                        return bindImportedClrStaticCall!!(submissionProgramType, syntax)
-                    }
-                    // A function-typed global from a prior submission (e.g. a
-                    // closure stored with `let inc = func() { ... }`) invokes
-                    // through the indirect-call path: load the static field,
-                    // then dispatch its Func/Action shape.
-                    if TryBindSubmissionDelegateGlobalCall(syntax, submissionImports, out var submissionDelegateCall) {
-                        return Invariant.Required(
-                            submissionDelegateCall,
-                            "a matched submission delegate global produces a bound invocation",
-                            expression: "submissionDelegateCall"
-                        )
-                    }
+                if SubmissionBinding.TryBindCall(this, syntax, out var submissionCall) {
+                    return submissionCall
                 }
                 // Last resort, reached only when every lookup above failed: a
                 // static method the enclosing class inherits from a base. C#
@@ -3062,51 +3026,6 @@ internal partial class OverloadResolver {
             ){MethodTypeArguments = methodTypeArguments}
         }
         return BoundCallExpression(syntax, function, arguments, returnType){MethodTypeArguments = methodTypeArguments}
-    }
-
-    /// ADR-0156 Phase 2: binds an unqualified call whose name matches a
-    /// function-typed global (a `System.Func`/`System.Action`-shaped
-    /// static field) declared by a prior interactive submission. The field is
-    /// loaded from the submission's `<Program>` container and the
-    /// invocation dispatches through the ordinary indirect-call path.
-    /// @param syntax The call syntax.
-    /// @param submissionImports The active submission import set.
-    /// @param result The bound invocation, when the name matched an invocable global.
-    /// @returns `true` when the call was bound (or errored) against a submission global.
-    private func TryBindSubmissionDelegateGlobalCall(
-        syntax CallExpressionSyntax,
-        submissionImports SubmissionImports,
-        out result BoundExpression?
-    ) bool {
-        result = nil
-        let name = syntax.Identifier.ValueText
-        if !submissionImports.TryFindGlobalVariable(Scope.References!!, name, out var programType, out _) {
-            return false
-        }
-        if programType == nil {
-            return false
-        }
-        let field FieldInfo? = programType.GetField(name, BindingFlags.Public | BindingFlags.Static)
-        if field == nil || !TryMapClrDelegateToFunctionType(field.FieldType, out var functionType) {
-            return false
-        }
-        // Static field access has no instance receiver; this constructor's
-        // non-null annotation predates its use for static fields.
-        let calleeLoad = BoundClrPropertyAccessExpression(
-            syntax,
-            receiver: nil,
-            field,
-            Invariant.Required(functionType, "a mapped CLR delegate has a function type", expression: "functionType")
-        )
-        // The callback uses null to mean that no null-safe invocation token was present.
-        result = BindIndirectCallExpression(
-            syntax,
-            calleeLoad,
-            name,
-            syntax.Identifier.Location,
-            nullSafeInvocation: nil
-        )
-        return true
     }
 
     /// Issue #3760: resolves a user method group against a fully closed input
