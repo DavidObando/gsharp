@@ -585,16 +585,13 @@ partial class CSharpToGSharpTranslator {
                     .CodeAnalysis
                     .CSharp
                     .Syntax
-                    .ParenthesizedExpressionSyntax ||
-                    returnNode.Parent is PostfixUnaryExpressionSyntax{
+                    .ParenthesizedExpressionSyntax parenthesized {
+                    returnNode = parenthesized
+                } else if returnNode.Parent is PostfixUnaryExpressionSyntax{
                     RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)
-                } {
-                    if returnNode.Parent.IsKind(
-                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
-                    ) {
-                        returnIsSuppressed = true
-                    }
-                    returnNode = returnNode.Parent
+                } suppress {
+                    returnIsSuppressed = true
+                    returnNode = suppress
                 } else if returnNode.Parent is Microsoft
                     .CodeAnalysis
                     .CSharp
