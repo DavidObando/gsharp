@@ -641,34 +641,42 @@ partial class SemanticModel {
         }
     }
 
-    private let collidingGlobalTables ConcurrentDictionary[BoundGlobalScope, GlobalTable] = ConcurrentDictionary[
+    private let globalTables ConcurrentDictionary[BoundGlobalScope, GlobalTable] = ConcurrentDictionary[
         BoundGlobalScope,
         GlobalTable
     ](ReferenceEqualityComparer.Instance)
 
-    private func ResolveGlobalTable(globalScope BoundGlobalScope) GlobalTable {
-        if !HasCollidingTypeAliases(globalScope) {
-            return GlobalTables.GetValue(globalScope, (table BoundGlobalScope) -> BuildGlobalTable(table, nil, nil))
-        }
-        return collidingGlobalTables.GetOrAdd(
-            globalScope,
-            (scope_ BoundGlobalScope) -> {
-                let treePackageName = Binder.PackageNameOfTree(
-                    syntaxTree,
-                    compilation.Submission?.DefaultPackageName ?? "Default"
-                )
-                let importedPackages = HashSet[string](StringComparer.Ordinal)
-                for import_ in compilation.GlobalScope.Imports.Concat(scope_.Imports) {
-                    let declaration = import_.Declaration
-                    if !string.IsNullOrEmpty(import_.Target) &&
-                        (declaration == nil || object.ReferenceEquals(declaration.SyntaxTree, syntaxTree)) {
-                        importedPackages.Add(import_.Target)
+    private func ResolveGlobalTable(globalScope BoundGlobalScope) GlobalTable -> globalTables.GetOrAdd(
+        globalScope,
+        (scope_ BoundGlobalScope) -> {
+            let sharedEntry = GlobalTables.GetValue(
+                scope_,
+                (table BoundGlobalScope) -> GlobalScopeTableEntry(
+                    if HasCollidingTypeSymbols(table) {
+                        default(GlobalTable?)
+                    } else {
+                        BuildGlobalTable(table, nil, nil)
                     }
-                }
-                return BuildGlobalTable(scope_, treePackageName, importedPackages)
+                )
+            )
+            if sharedEntry.SharedTable != nil {
+                return sharedEntry.SharedTable
             }
-        )
-    }
+            let treePackageName = Binder.PackageNameOfTree(
+                syntaxTree,
+                compilation.Submission?.DefaultPackageName ?? "Default"
+            )
+            let importedPackages = HashSet[string](StringComparer.Ordinal)
+            for import_ in compilation.GlobalScope.Imports.Concat(scope_.Imports) {
+                let declaration = import_.Declaration
+                if !string.IsNullOrEmpty(import_.Target) &&
+                    (declaration == nil || object.ReferenceEquals(declaration.SyntaxTree, syntaxTree)) {
+                    importedPackages.Add(import_.Target)
+                }
+            }
+            return BuildGlobalTable(scope_, treePackageName, importedPackages)
+        }
+    )
 
     private func StructSymbolOf(
         declaration StructDeclarationSyntax,
@@ -1079,59 +1087,118 @@ partial class SemanticModel {
         ByName Dictionary[string, Symbol]
     ) : IEquatable[GlobalTable] { }
 
+    private sealed data class GlobalScopeTableEntry(SharedTable GlobalTable?) : IEquatable[GlobalScopeTableEntry] { }
+
     shared {
-        /// The global names of each scope, built once. The table is only looked up by name, and
-        /// enumerated in its ordered form, never as the dictionary.
-        private let GlobalTables ConditionalWeakTable[BoundGlobalScope, GlobalTable] = ConditionalWeakTable[
+        /// The global names of each scope, built once when no type/alias names collide. The table is only
+        /// looked up by name, and enumerated in its ordered form, never as the dictionary.
+        private let GlobalTables ConditionalWeakTable[BoundGlobalScope, GlobalScopeTableEntry] = ConditionalWeakTable[
             BoundGlobalScope,
-            GlobalTable
+            GlobalScopeTableEntry
         ]()
 
-        private func HasCollidingTypeAliases(globalScope BoundGlobalScope) bool {
-            let aliases = globalScope.DeclaredTypeAliases
-            if aliases.Length <= 1 {
-                return false
+        private func EnumerateGlobalTypeSymbols(globalScope BoundGlobalScope) IEnumerable[Symbol] {
+            for aggregate in globalScope.Structs {
+                yield aggregate
             }
+            for declaredInterface in globalScope.Interfaces {
+                yield declaredInterface
+            }
+            for declaredEnum in globalScope.Enums {
+                yield declaredEnum
+            }
+            for declaredDelegate in globalScope.Delegates {
+                yield declaredDelegate
+            }
+            for declaredAlias in globalScope.DeclaredTypeAliases {
+                yield declaredAlias
+            }
+        }
+
+        private func HasCollidingTypeSymbols(globalScope BoundGlobalScope) bool {
             let seen = HashSet[string](StringComparer.Ordinal)
-            for alias in aliases {
-                if !seen.Add(alias.Name) {
+            for symbol in EnumerateGlobalTypeSymbols(globalScope) {
+                if !seen.Add(symbol.Name) {
                     return true
                 }
             }
             return false
         }
 
-        private func SelectVisibleTypeAliases(
-            aliases ImmutableArray[TypeAliasSymbol],
+        private func TypeSymbolContainingType(symbol Symbol) TypeSymbol? -> switch symbol {
+            case s is StructSymbol: s.ContainingType
+            case i is InterfaceSymbol: i.ContainingType
+            case e is EnumSymbol: e.ContainingType
+            case d is DelegateTypeSymbol: d.ContainingType
+            default: nil
+        }
+
+        private func TypeSymbolPackageName(symbol Symbol) string? -> switch symbol {
+            case s is StructSymbol: s.PackageName
+            case i is InterfaceSymbol: i.PackageName
+            case e is EnumSymbol: e.PackageName
+            case d is DelegateTypeSymbol: d.PackageName
+            case a is TypeAliasSymbol: a.PackageName
+            default: nil
+        }
+
+        private func ResolvedTypeTarget(symbol Symbol) TypeSymbol? -> switch symbol {
+            case a is TypeAliasSymbol: a.Target
+            case t is TypeSymbol: t
+            default: nil
+        }
+
+        private func SelectVisibleTypeSymbols(
+            globalScope BoundGlobalScope,
             treePackageName string?,
             importedPackages HashSet[string]?
-        ) IEnumerable[TypeAliasSymbol] {
-            if treePackageName == nil || aliases.Length <= 1 {
-                return aliases
+        ) IEnumerable[Symbol] {
+            let allSymbols = EnumerateGlobalTypeSymbols(globalScope)
+            if treePackageName == nil {
+                return allSymbols
             }
-            let selected = List[TypeAliasSymbol](aliases.Length)
-            for group in aliases.GroupBy((a TypeAliasSymbol) -> a.Name, StringComparer.Ordinal) {
-                let own = group.FirstOrDefault(
-                    (a TypeAliasSymbol) -> string.Equals(a.PackageName, treePackageName, StringComparison.Ordinal)
+            let selected = List[Symbol]()
+            for group in allSymbols.GroupBy((s Symbol) -> s.Name, StringComparer.Ordinal) {
+                let topLevel = if group.Any((s Symbol) -> TypeSymbolContainingType(s) == nil) {
+                    group.Where((s Symbol) -> TypeSymbolContainingType(s) == nil).ToList()
+                } else {
+                    group.ToList()
+                }
+                if topLevel.Count == 1 {
+                    selected.Add(topLevel[0])
+                    continue
+                }
+                let own = topLevel.FirstOrDefault(
+                    (s Symbol) -> string.Equals(TypeSymbolPackageName(s), treePackageName, StringComparison.Ordinal)
                 )
                 if own != nil {
                     selected.Add(own)
                     continue
                 }
                 if importedPackages != nil && importedPackages.Count > 0 {
-                    let imported = group.Where((a TypeAliasSymbol) -> importedPackages.Contains(a.PackageName)).ToList()
+                    let imported = List[Symbol]()
+                    let seenImportedPackages = HashSet[string](StringComparer.Ordinal)
+                    for candidate in topLevel {
+                        let pkg = TypeSymbolPackageName(candidate)
+                        if pkg != nil && importedPackages.Contains(pkg) && seenImportedPackages.Add(pkg) {
+                            imported.Add(candidate)
+                        }
+                    }
                     if imported.Count == 1 {
                         selected.Add(imported[0])
                         continue
                     }
                     if imported.Count > 1 {
-                        if imported.All((a TypeAliasSymbol) -> object.ReferenceEquals(a.Target, imported[0].Target)) {
+                        let firstTarget = ResolvedTypeTarget(imported[0])
+                        if firstTarget != nil && imported.All(
+                            (s Symbol) -> object.ReferenceEquals(ResolvedTypeTarget(s), firstTarget)
+                        ) {
                             selected.Add(imported[0])
                         }
                         continue
                     }
                 }
-                selected.Add(group.First())
+                selected.Add(topLevel[0])
             }
             return selected
         }
@@ -1149,24 +1216,8 @@ partial class SemanticModel {
             for variable in globalScope.Variables {
                 AddGlobalEntry(ordered, byName, variable.Name, variable)
             }
-            for aggregate in globalScope.Structs {
-                AddGlobalEntry(ordered, byName, aggregate.Name, aggregate)
-            }
-            for declaredInterface in globalScope.Interfaces {
-                AddGlobalEntry(ordered, byName, declaredInterface.Name, declaredInterface)
-            }
-            for declaredEnum in globalScope.Enums {
-                AddGlobalEntry(ordered, byName, declaredEnum.Name, declaredEnum)
-            }
-            for declaredDelegate in globalScope.Delegates {
-                AddGlobalEntry(ordered, byName, declaredDelegate.Name, declaredDelegate)
-            }
-            for declaredAlias in SelectVisibleTypeAliases(
-                globalScope.DeclaredTypeAliases,
-                treePackageName,
-                importedPackages
-            ) {
-                AddGlobalEntry(ordered, byName, declaredAlias.Name, declaredAlias)
+            for typeSymbol in SelectVisibleTypeSymbols(globalScope, treePackageName, importedPackages) {
+                AddGlobalEntry(ordered, byName, typeSymbol.Name, typeSymbol)
             }
             // Source order across kinds: by file name, then position. A symbol without syntax comes last.
             // The sort is stable, so equal keys keep their kind order.

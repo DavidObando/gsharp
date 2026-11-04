@@ -530,6 +530,35 @@ func Branches(x object, maybe object?) int32 {
         let bothSameModel = Compilation(libTree, sameTargetTree, bothSameTree).GetSemanticModel(bothSameTree)
         let bothSameCoord = Assert.IsType[TypeAliasSymbol](Assert.Single(bothSameModel.LookupSymbols(0, "Coord")))
         Assert.Same(TypeSymbol.Int32, bothSameCoord.Target)
+        let classLibTree = SyntaxTree.Parse(SourceText.From("package Lib\npublic class Coord { }\n", "h-class-lib.gs"))
+        let localAliasAppSource = "package App\ntype Coord = int32\nfunc Use() Coord {\n    return 1 // PLocalAlias\n}\n"
+        let localAliasAppTree = SyntaxTree.Parse(SourceText.From(localAliasAppSource, "i-local-alias-app.gs"))
+        let mixedCompilation = Compilation(classLibTree, otherTree, localAliasAppTree)
+        Assert.Empty(mixedCompilation.GetDiagnostics())
+        let localAliasAppModel = mixedCompilation.GetSemanticModel(localAliasAppTree)
+        let localAliasPos = localAliasAppSource.IndexOf("// PLocalAlias", StringComparison.Ordinal)
+        let localAlias = Assert.IsType[TypeAliasSymbol](
+            Assert.Single(localAliasAppModel.LookupSymbols(localAliasPos, "Coord"))
+        )
+        Assert.Equal("App", localAlias.PackageName)
+        Assert.Same(TypeSymbol.Int32, localAlias.Target)
+        Assert.Contains(
+            localAliasAppModel.LookupSymbols(localAliasPos),
+            (s Symbol) -> object.ReferenceEquals(s, localAlias)
+        )
+        let importedAliasOverClassTree = SyntaxTree.Parse(
+            SourceText.From("package Consumer\nimport Other\nfunc Use() Coord { return 1 }\n", "j-consumer.gs")
+        )
+        let importedAliasOverClassModel = Compilation(
+            classLibTree,
+            otherTree,
+            importedAliasOverClassTree
+        ).GetSemanticModel(importedAliasOverClassTree)
+        let importedOverClass = Assert.IsType[TypeAliasSymbol](
+            Assert.Single(importedAliasOverClassModel.LookupSymbols(0, "Coord"))
+        )
+        Assert.Equal("Other", importedOverClass.PackageName)
+        Assert.Same(TypeSymbol.Int64, importedOverClass.Target)
     }
 
     @Fact

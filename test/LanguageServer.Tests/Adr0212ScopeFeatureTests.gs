@@ -73,6 +73,28 @@ func Run() int32 {
     }
 
     @Fact
+    func Completion_PrefersLocalTypeAliasOverCrossPackageNamedType() {
+        let project = ProjectState("/test/app.gsproj")
+        project.UpdateFile("/test/a_lib.gs", "package Lib\npublic class Coord { }\n")
+        let appSource = "package App\ntype Coord = int32\nfunc Run() Coord {\n    // caret\n    return 0\n}\n"
+        project.UpdateFile("/test/b_app.gs", appSource)
+        project.TryGetSyntaxTree("/test/b_app.gs", out var tree)
+        let lines = List[int32]()
+        for var i = 0; i < appSource.Length; i++ {
+            if appSource[i] == '\n' {
+                lines.Add(i)
+            }
+        }
+        let content = DocumentContent(tree, lines, project)
+        let items = CompletionComputer.ComputeCompletions(
+            content,
+            LanguageServerTestHelpers.PositionOf(appSource, "// caret")
+        )
+        let coord = Assert.Single(items, (i CompletionItem) -> i.Label == "Coord")
+        Assert.Equal("type Coord = int32", coord.Detail)
+    }
+
+    @Fact
     func Completion_WritesAKeywordNamedSymbolWithItsEscape() {
         // The local `$type` is named `type`; written bare it would be the keyword.
         let source = `package P
