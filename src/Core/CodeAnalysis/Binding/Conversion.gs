@@ -1497,6 +1497,11 @@ class Conversion {
                                 return Conversion.Implicit
                             }
                         }
+                        for iface in c.Interfaces {
+                            if IsRepresentationPreservingImplicit(iface, to) {
+                                return Conversion.Implicit
+                            }
+                        }
                     }
                 }
                 if to is StructSymbol toClass && toClass.IsClass {
@@ -4476,6 +4481,24 @@ class Conversion {
                             return true
                         }
                     }
+                    for sourceInterface in level.Interfaces {
+                        for baseInterface in sourceInterface.SelfAndAllBaseInterfaces() {
+                            for implemented in baseInterface.BaseClrInterfaces {
+                                if implemented != nil &&
+                                    TryProjectOntoImportedSupertype(
+                                    implemented,
+                                    to,
+                                    targetDefinition,
+                                    targetArguments,
+                                    out projected,
+                                    out var interfaceTargetArguments
+                                ) {
+                                    targetArguments = interfaceTargetArguments
+                                    return true
+                                }
+                            }
+                        }
+                    }
                 }
                 return false
             }
@@ -6332,32 +6355,38 @@ class Conversion {
             // declared interface list.
             if from is StructSymbol fromStruct && to is InterfaceSymbol toInterface {
                 for i in fromStruct.Interfaces {
-                    if i == toInterface {
-                        return true
+                    for baseInterface in i.SelfAndAllBaseInterfaces() {
+                        if baseInterface == toInterface ||
+                            IsVarianceCompatibleInterfaceConversion(baseInterface, toInterface) {
+                            return true
+                        }
                     }
                 }
                 return false
             }
-            // Issue #976: a user-declared value-type struct → imported CLR
-            // interface declared in its `: …` clause. The struct symbol has no
+            // Issue #976 / #4761: a user-declared value-type struct → imported CLR
+            // interface or symbolic sequence alias declared in its `: …` clause (or
+            // inherited through a source interface). The struct symbol has no
             // ClrType during binding, so the general CLR-assignability path below
-            // cannot fire — match structurally against `ImplementedClrInterfaces`,
-            // mirroring the class reference-upcast rule. This covers both plain
-            // CLR interfaces (e.g. `IComparable`) and CLR generic interfaces closed
-            // over a user G# type (e.g. `IEquatable[Money]`).
+            // cannot fire — match nominally against `ImplementedClrInterfaces` and
+            // `Interfaces`, mirroring the class reference-upcast rule.
             if from is StructSymbol fromValueStruct &&
                 !fromValueStruct.IsClass &&
-                to?.ClrType != nil &&
-                to!!.ClrType!!
-                .IsInterface {
+                to != nil &&
+                !(to is InterfaceSymbol) &&
+                IsInterfaceLikeType(to) {
                 for iface in fromValueStruct.ImplementedClrInterfaces {
-                    let ifaceClr Type? = iface?.ClrType
-                    if ifaceClr == nil {
-                        continue
-                    }
-                    if ifaceClr == to!!.ClrType || ClrTypeUtilities.IsAssignableByName(to!!.ClrType, ifaceClr) {
+                    if IsRepresentationPreservingImplicit(iface, to) {
                         return true
                     }
+                }
+                for iface in fromValueStruct.Interfaces {
+                    if IsRepresentationPreservingImplicit(iface, to) {
+                        return true
+                    }
+                }
+                if fromValueStruct.ClrType == nil {
+                    return false
                 }
             }
             if from is ImportedTypeSymbol &&

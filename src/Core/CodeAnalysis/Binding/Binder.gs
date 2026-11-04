@@ -4068,6 +4068,8 @@ partial class Binder {
                 // BindReturnTypeClause(isAsync=true) at function declarations.
                 if ret is SequenceTypeSymbol seq {
                     ret = AsyncSequenceTypeSymbol.Get(seq.ElementType)
+                } else if ret is PlatformTypeSymbol{UnderlyingType: SequenceTypeSymbol platformSeq} {
+                    ret = PlatformTypeSymbol.Get(AsyncSequenceTypeSymbol.Get(platformSeq.ElementType))
                 } else {
                     let nt = ret as NullableTypeSymbol
                     let innerSeq SequenceTypeSymbol? = nt?.UnderlyingType as SequenceTypeSymbol
@@ -5918,6 +5920,9 @@ partial class Binder {
         }
         if bound is SequenceTypeSymbol seq {
             return AsyncSequenceTypeSymbol.Get(seq.ElementType)
+        }
+        if bound is PlatformTypeSymbol{UnderlyingType: SequenceTypeSymbol platformSeq} {
+            return PlatformTypeSymbol.Get(AsyncSequenceTypeSymbol.Get(platformSeq.ElementType))
         }
         let nt = bound as NullableTypeSymbol
         let innerSeq SequenceTypeSymbol? = nt?.UnderlyingType as SequenceTypeSymbol
@@ -9450,29 +9455,13 @@ partial class Binder {
                     } else {
                         binder.$scope.TryLookupExtensionFunctions(receiverType, name)
                     }
-                    let imported = ImmutableArray.CreateBuilder[MethodInfo]()
-                    let probe = ImportedExtensionProbeReceiver(receiverType)
-                    if probe != nil {
-                        let candidates = if name == nil {
-                            binder.memberLookup.CollectAllImportedExtensionMethods()
-                        } else {
-                            binder.memberLookup.CollectImportedExtensionMethods(name)
-                        }
-                        for candidate in candidates {
-                            // Whether a generic candidate's constraints hold is found by closing it, and a
-                            // closing that the runtime rejects (a `MemoryExtensions` overload over a
-                            // string, say) means the candidate does not apply. One such candidate must not
-                            // drop the others.
-                            try {
-                                if ClrOverloadResolution.MayAcceptExtensionReceiver(candidate, probe, nil, nil) {
-                                    imported.Add(candidate)
-                                }
-                            } catch (ex Exception) when !(ex is OutOfMemoryException) {
-                                continue
-                            }
-                        }
+                    let candidates = if name == nil {
+                        binder.memberLookup.CollectAllImportedExtensionMethods()
+                    } else {
+                        binder.memberLookup.CollectImportedExtensionMethods(name)
                     }
-                    return (source, imported.ToImmutable())
+                    let imported = FilterImportedExtensionMethods(candidates, receiverType)
+                    return (source, imported)
                 } finally {
                     parentScope.SetCurrentDeclaringPackage(previousPackage)
                     parentScope.SetCurrentReferencingSyntaxTree(previousTree)
@@ -9480,6 +9469,68 @@ partial class Binder {
             } catch (Exception) {
                 // The query must never throw into the editor pipeline.
                 return (ImmutableArray[FunctionSymbol].Empty, ImmutableArray[MethodInfo].Empty)
+            }
+        }
+
+        /// Filters [`candidates`](paramref) to the imported extension methods whose first parameter can take
+        /// [`receiverType`](paramref) (ADR-0212 question 12, issue #5480).
+        /// @param candidates The imported extension methods in scope.
+        /// @param receiverType The call or member-access receiver type.
+        /// @returns The applicable extension methods, in the order of [`candidates`](paramref).
+        internal func FilterImportedExtensionMethods(
+            candidates IEnumerable[MethodInfo],
+            receiverType TypeSymbol
+        ) ImmutableArray[MethodInfo] {
+            let probe = ImportedExtensionProbeReceiver(UnwrapReceiverNullability(receiverType))
+            if probe == nil {
+                return ImmutableArray[MethodInfo].Empty
+            }
+            let liftedProbe = if receiverType is NullableTypeSymbol && NullableLifting.GetEffectiveClrType(
+                receiverType
+            ) is {} liftedClr &&
+                (probe.ClrType == nil || !ClrTypeUtilities.AreSame(liftedClr, probe.ClrType)) {
+                ImportedTypeSymbol.GetWithoutNullability(liftedClr, NullabilityFreeReason.TypeStructure)
+            } else {
+                default(TypeSymbol?)
+            }
+            let imported = ImmutableArray.CreateBuilder[MethodInfo]()
+            for candidate in candidates {
+                // Whether a generic candidate's constraints hold is found by closing it, and a
+                // closing that the runtime rejects (a `MemoryExtensions` overload over a
+                // string, say) means the candidate does not apply. One such candidate must not
+                // drop the others.
+                try {
+                    if ClrOverloadResolution.MayAcceptExtensionReceiver(candidate, probe, nil, nil) ||
+                        (
+                        liftedProbe != nil && ClrOverloadResolution.MayAcceptExtensionReceiver(
+                            candidate,
+                            liftedProbe,
+                            nil,
+                            nil
+                        )
+                    ) {
+                        imported.Add(candidate)
+                    }
+                } catch (ex Exception) when !(ex is OutOfMemoryException) {
+                    continue
+                }
+            }
+            return imported.ToImmutable()
+        }
+
+        private func UnwrapReceiverNullability(type TypeSymbol) TypeSymbol {
+            var current = type
+            while true {
+                if current is NullableTypeSymbol nullable && !object.ReferenceEquals(nullable.UnderlyingType, current) {
+                    current = nullable.UnderlyingType
+                } else if current is PlatformTypeSymbol platform && !object.ReferenceEquals(
+                    platform.UnderlyingType,
+                    current
+                ) {
+                    current = platform.UnderlyingType
+                } else {
+                    return current
+                }
             }
         }
 
