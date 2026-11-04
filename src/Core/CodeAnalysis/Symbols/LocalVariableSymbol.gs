@@ -47,6 +47,8 @@ open class LocalVariableSymbol : VariableSymbol {
     /// slot — every read is inlined — so it has no address (issue #4400).
     internal prop IsConst bool
 
+    internal prop ConstantValue object?
+
     internal prop ManagedReferenceOrigin BoundExpression?
     internal prop ManagedReferenceStorage LocalVariableSymbol?
     internal prop ManagedReferenceStorageOrigin BoundExpression?

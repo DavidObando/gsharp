@@ -4,6 +4,7 @@
 
 package GSharp.Core.CodeAnalysis.Syntax
 
+import GSharp.Core.CodeAnalysis.Text
 import System.Collections.Immutable
 
 /// Represents a `shared { … }` block inside a struct/class body (ADR-0053).
@@ -83,5 +84,20 @@ partial class SharedBlockSyntax : SyntaxNode {
     /// Gets the closing brace.
     prop CloseBraceToken SyntaxToken {
         get;
+    }
+
+    /// Gets or sets the whole-node location of each `shared` block of a merged
+    /// `partial` type, in part order. The semantic model resolves a position in
+    /// a merged `shared` block through these locations (#5465). Empty on an
+    /// unmerged block.
+    private var _partialPartExtents ImmutableArray[TextLocation] = ImmutableArray[TextLocation].Empty
+
+    internal prop PartialPartExtents ImmutableArray[TextLocation] {
+        get {
+            return _partialPartExtents
+        }
+        set {
+            _partialPartExtents = value
+        }
     }
 }

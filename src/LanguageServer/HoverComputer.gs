@@ -434,7 +434,23 @@ async sequence[T]
             )
                 .Length
         }
-        return compilation.GlobalScope.Functions.Count((f FunctionSymbol) -> f.Name == function.Name)
+        var count = 0
+        for tree in compilation.SyntaxTrees {
+            let model = BoundSemantics.GetModel(compilation, tree)
+            if model == nil {
+                continue
+            }
+            for declaration in tree.Root.Members.OfType[FunctionDeclarationSyntax]() {
+                if declaration.Identifier.ValueText == function.Name && model.GetDeclaredSymbol(
+                    declaration
+                ) is FunctionSymbol declared &&
+                    declared.Name == function.Name &&
+                    (declared.IsExtension || (declared.ReceiverType == nil && declared.StaticOwnerType == nil)) {
+                    count++
+                }
+            }
+        }
+        return Math.Max(1, count)
     }
 
     // Surfaces ingested CLR documentation (ADR-0057 §6): imported symbols resolve their

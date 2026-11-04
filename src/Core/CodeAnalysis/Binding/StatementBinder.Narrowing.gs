@@ -4210,6 +4210,7 @@ internal partial class StatementBinder {
                     global.SetConstantValue(constValue)
                 } else if declaredVariable is LocalVariableSymbol constLocal {
                     constLocal.IsConst = true
+                    constLocal.ConstantValue = constValue
                 }
             } else if declaredVariable is GlobalVariableSymbol && !(convertedInitializer is BoundErrorExpression) {
                 Diagnostics.ReportConstFieldInitializerNotConstant(

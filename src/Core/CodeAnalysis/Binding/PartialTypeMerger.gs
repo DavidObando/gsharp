@@ -824,7 +824,7 @@ internal shared class PartialTypeMerger {
                 (b SharedBlockSyntax) -> b.InitBlocks
             ),
             first.CloseBraceToken
-        )
+        ){PartialPartExtents = nonNullPresent.Select((b SharedBlockSyntax) -> b.Location).ToImmutableArray()}
     }
 
     private func UnionAnnotations[T MemberSyntax](parts List[T]) ImmutableArray[AnnotationSyntax] {
