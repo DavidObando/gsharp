@@ -260,6 +260,9 @@ open class Adr0208NarrowingCorpusTests {
                 "m11_5301_goto_into_early_exit_condition_does_not_lift_R6",
                 "m12_5301_goto_into_if_join_condition_does_not_lift_R6",
                 "m13_5301_nested_finally_with_break_establishes_narrowing_for_outer_goto_R6",
+                "m14_5301_goto_into_condition_after_callable_alias_assignment_does_not_lift_R6",
+                "m15_5301_goto_into_switch_after_callable_alias_assignment_does_not_lift_R6",
+                "m16_5301_goto_into_try_after_callable_alias_assignment_does_not_lift_R6",
                 "m1_unrelated_interface_refinement",
                 "n1_boxed_value_type_test",
                 "o1_callback_after_test_replaces_root",
@@ -10268,6 +10271,76 @@ func Run(jump bool) int32 {
     return x.Length
 }
 func Main() { Console.WriteLine(Run(true)) }`, "", "run", "4", "R6 (#5301)"}
+            yield[]object{"m14_5301_goto_into_condition_after_callable_alias_assignment_does_not_lift_R6", `import System
+func Run(cb () -> void, skip bool) {
+    var x string? = nil
+    var g () -> void = func() { x = nil }
+    if skip {
+        goto Inside
+    }
+    if ({
+        g = cb
+        Inside:
+        var marker = 0
+        true
+    }) {
+        x = "safe"
+        g()
+    } else {
+        x = "other"
+    }
+    Console.WriteLine(x.Length)
+}
+func Main() { Run(func() {}, true) }`, "GS0158@19:25", "reject", "", "R6 (#5301)"}
+            yield[]object{"m15_5301_goto_into_switch_after_callable_alias_assignment_does_not_lift_R6", `import System
+func Run(cb () -> void, skip bool, flag bool, k int32) {
+    var x string? = nil
+    var g () -> void = func() { x = nil }
+    if skip {
+        goto Inside
+    }
+    if flag {
+        switch k {
+            case 1 {
+                g = cb
+                Inside:
+                Console.WriteLine("in switch")
+            }
+            default {
+                g = cb
+            }
+        }
+        x = "safe"
+        g()
+    } else {
+        x = "other"
+    }
+    Console.WriteLine(x.Length)
+}
+func Main() { Run(func() {}, true, false, 1) }`, "GS0158@24:25", "reject", "", "R6 (#5301)"}
+            yield[]object{"m16_5301_goto_into_try_after_callable_alias_assignment_does_not_lift_R6", `import System
+func Run(cb () -> void, skip bool, flag bool) {
+    var x string? = nil
+    var g () -> void = func() { x = nil }
+    if skip {
+        goto Inside
+    }
+    if flag {
+        try {
+            g = cb
+            Inside:
+            Console.WriteLine("in try")
+        } finally {
+            Console.WriteLine("finally")
+        }
+        x = "safe"
+        g()
+    } else {
+        x = "other"
+    }
+    Console.WriteLine(x.Length)
+}
+func Main() { Run(func() {}, true, false) }`, "GS0158@21:25", "reject", "", "R6 (#5301)"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

@@ -669,14 +669,14 @@ internal partial class StatementBinder {
     }
 
     private func UsesJoinedCallableExitState(statement BoundStatement) bool -> switch statement {
-        case block is BoundBlockStatement: block.Syntax != nil && !ContainsUserGotoOrLabel(block.Syntax)
+        case block is BoundBlockStatement: block.Syntax != nil && !ContainsUserGotoOrLabel(block)
         case _ is BoundIfStatement or
             _ is BoundTryStatement or
             _ is BoundPatternSwitchStatement or
             _ is BoundForInfiniteStatement or
             _ is BoundForEllipsisStatement or
             _ is BoundForRangeStatement or
-            _ is BoundAwaitForRangeStatement: true
+            _ is BoundAwaitForRangeStatement: !ContainsUserLabel(statement)
         default: false
     }
 
@@ -1679,8 +1679,7 @@ internal partial class StatementBinder {
         WhenFalseAliases HashSet[VariableSymbol]
     ) {
         if ContainsUserLabel(condition) {
-            let afterConditionAliases = AliasesAfter(condition, beforeAliases)
-            return (nil, nil, afterConditionAliases, afterConditionAliases)
+            return (nil, nil, HashSet[VariableSymbol](), HashSet[VariableSymbol]())
         }
         switch condition {
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
@@ -1817,6 +1816,10 @@ internal partial class StatementBinder {
     // The one header rule: an alias that [`header`](paramref) assigns, or that an unknown callable in it can assign,
     // is no longer known to be external.
     private func RemoveHeaderAffectedAliases(aliases HashSet[VariableSymbol], header BoundExpression) {
+        if ContainsUserLabel(header) {
+            aliases.Clear()
+            return
+        }
         let collector = NewCollector(nil, aliases)
         collector.VisitExpression(header)
         if collector.MayMutateAnyRootViaPointer {
@@ -2118,11 +2121,19 @@ internal partial class StatementBinder {
         state Dictionary[AccessPath, TypeSymbol],
         aliases HashSet[VariableSymbol]
     ) {
+        let hasUserLabel = ContainsUserLabel(statement)
+        if hasUserLabel {
+            state.Clear()
+            aliases.Clear()
+        }
         let aliasesAtEntry = aliases.ToArray()
         let collector = NewCollector(nil, aliasesAtEntry)
         collector.Visit(statement)
         ClearAssignedRoots(statement, state, collector)
         ApplyCallableAliasExitState(aliases, statement, aliasesAtEntry, collector)
+        if hasUserLabel {
+            aliases.Clear()
+        }
     }
 
     /// Issue #2159: conservatively drops every narrowing on a local that

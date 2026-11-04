@@ -956,6 +956,9 @@ internal partial class StatementBinder {
     // The aliases after [`operand`](paramref) on every path, from the aliases before it. An assignment of an external
     // callable adds the alias.
     private func AliasesAfter(operand BoundExpression, before HashSet[VariableSymbol]) HashSet[VariableSymbol] {
+        if ContainsUserLabel(operand) {
+            return HashSet[VariableSymbol]()
+        }
         let collector = NewCollector(nil, before)
         collector.VisitExpression(operand)
         let after = HashSet[VariableSymbol](collector.DefinitelyExternalFunctionValues)

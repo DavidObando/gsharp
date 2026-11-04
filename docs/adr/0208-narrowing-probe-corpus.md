@@ -255,5 +255,8 @@ d06 when another fact is in force at the loop entry; the row now gets the same r
 | m11 | `if skip { goto Inside }`; `if x == nil \|\| ({ Inside: var marker = 0; false }) { return 0 }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
 | m12 | `if skip { goto Inside }`; `if x != nil && ({ Inside: var marker = 0; true }) { ... } else { x = "fallback" }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
 | m13 | nested `finally` with `for { break }; x = "safe"` before outer `goto Done`; `Done: return x.Length` | accepted, prints `4` | accepted, prints `4` |
+| m14 | `if skip { goto Inside }`; `if ({ g = cb; Inside: true }) { x = "safe"; g() } else { x = "other" }`; `x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m15 | `if skip { goto Inside }`; `if flag { switch k { case 1 { g = cb; Inside: ... } default { g = cb } }; x = "safe"; g() } else { x = "other" }`; `x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m16 | `if skip { goto Inside }`; `if flag { try { g = cb; Inside: ... } finally { ... }; x = "safe"; g() } else { x = "other" }`; `x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
 
 
