@@ -529,6 +529,7 @@ shared class ReferencesComputer {
                 case f is FieldDeclarationSyntax: object.ReferenceEquals(f.Identifier, token)
                 case e is EnumDeclarationSyntax: object.ReferenceEquals(e.Identifier, token)
                 case e is EnumMemberSyntax: object.ReferenceEquals(e.Identifier, token)
+                case ta is TypeAliasDeclarationSyntax: object.ReferenceEquals(ta.Identifier, token)
                 default: false
             }
         }
@@ -552,7 +553,8 @@ shared class ReferencesComputer {
                     current is StructDeclarationSyntax ||
                     current is FieldDeclarationSyntax ||
                     current is EnumDeclarationSyntax ||
-                    current is EnumMemberSyntax {
+                    current is EnumMemberSyntax ||
+                    current is TypeAliasDeclarationSyntax {
                     if best == nil || current.Span.Length < best.Span.Length {
                         best = current
                     }
@@ -795,6 +797,7 @@ shared class DefinitionComputer {
             case m is EnumMemberSymbol: FindEnumMemberToken(m)
             case p is PropertySymbol when p.Declaration != nil: p.Declaration!!.Identifier
             case ev is EventSymbol when ev.Declaration != nil: ev.Declaration!!.Identifier
+            case ta is TypeAliasSymbol when ta.Declaration != nil: ta.Declaration!!.Identifier
             case field is FieldSymbol: FindFieldToken(compilation, field, ct)
             case variable is VariableSymbol: FindVariableToken(compilation, variable, ct)
             default: default(SyntaxToken?)
@@ -1224,7 +1227,7 @@ shared class CompletionComputer {
         }
         let keywordNames = HashSet[string](seen, StringComparer.Ordinal)
         // Add the names visible at the caret: locals and parameters, the enclosing type's
-        // members, then the compilation's functions, variables and types (ADR-0212 slice S3).
+        // members, then the compilation's functions, variables, types and type aliases (ADR-0212 slice S3, #5333).
         let model = BoundSemantics.GetPositionModel(compilation, content.SyntaxTree)
         if model != nil {
             for symbol in model.LookupSymbols(offset, nil, ct) {
@@ -1246,36 +1249,6 @@ shared class CompletionComputer {
                 }
             }
         }
-        // Type aliases (`type A = T`): LookupSymbols answers an alias by name with the type it names but
-        // cannot list it, as that symbol carries the target's name. The names come from the trees'
-        // declarations until an alias symbol exists (follow-up of ADR-0212 slice S3).
-        if model != nil {
-            for tree in compilation.SyntaxTrees {
-                for aliasDeclaration in tree.Root.Members.OfType[TypeAliasDeclarationSyntax]() {
-                    ct.ThrowIfCancellationRequested()
-                    if aliasDeclaration.Identifier is not{} aliasIdentifier || aliasIdentifier.IsMissing {
-                        continue
-                    }
-                    // The semantic name finds the alias; a keyword-named alias is written with its escape.
-                    let aliasName = aliasIdentifier.ValueText
-                    let written = if keywordNames.Contains(aliasName) || SyntaxFacts.IsReservedIdentifier(aliasName) {
-                        "$" + aliasName
-                    } else {
-                        aliasName
-                    }
-                    if !seen.Add(written) {
-                        continue
-                    }
-                    let target = model.LookupSymbols(offset, aliasName, ct)
-                    let item = CompletionItem{Label: written, Kind: CompletionItemKind.Class}
-                    if !target.IsDefaultOrEmpty {
-                        item.Kind = GetCompletionKind(target[0])
-                        item.Detail = HoverComputer.FormatSymbol(target[0])
-                    }
-                    items.Add(item)
-                }
-            }
-        }
         // Add primitive types
         for type in[]string{"bool", "int32", "string", "void"} {
             if seen.Add(type) {
@@ -1294,6 +1267,7 @@ shared class CompletionComputer {
             case FieldSymbol: CompletionItemKind.Field
             case PropertySymbol: CompletionItemKind.Property
             case EventSymbol: CompletionItemKind.Event
+            case typeAlias is TypeAliasSymbol: GetCompletionKind(typeAlias.Target)
             default: CompletionItemKind.Class
         }
     }
