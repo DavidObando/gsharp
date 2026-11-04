@@ -69,7 +69,8 @@ internal partial class StatementBinder {
                 patternThen,
                 () -> {
                     return BindStatementWithNarrowing(syntax.ThenStatement, thenNarrow)
-                }
+                },
+                syntax.ThenStatement
             )
             let restoredConditionKills = if syntax.ElseClause == nil {
                 default(List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?)
@@ -88,7 +89,8 @@ internal partial class StatementBinder {
                     patternElse,
                     () -> {
                         return BindStatementWithNarrowing(syntax.ElseClause!!.ElseStatement, elseNarrow)
-                    }
+                    },
+                    syntax.ElseClause.ElseStatement
                 )
             }
             if restoredConditionKills != nil {
@@ -157,7 +159,8 @@ internal partial class StatementBinder {
             initPatternThen,
             () -> {
                 return BindStatementWithNarrowing(syntax.ThenStatement, initThenNarrow)
-            }
+            },
+            syntax.ThenStatement
         )
         let initRestoredConditionKills = if syntax.ElseClause == nil {
             default(List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?)
@@ -176,7 +179,8 @@ internal partial class StatementBinder {
                 initPatternElse,
                 () -> {
                     return BindStatementWithNarrowing(syntax.ElseClause!!.ElseStatement, initElseNarrow)
-                }
+                },
+                syntax.ElseClause.ElseStatement
             )
         }
         if initRestoredConditionKills != nil {
@@ -294,7 +298,8 @@ internal partial class StatementBinder {
                 callableThenExit = CaptureExternalCallableAliases()
                 RestoreExternalCallableAliases(callableEntry)
                 return then
-            }
+            },
+            syntax.ThenStatement
         )
         testAliasesAt = nil
         // ADR-0208 R18: as for an `if` statement, the else-branch is bound without the facts that the conditions in
@@ -612,8 +617,9 @@ internal partial class StatementBinder {
     /// a fresh child scope (see (cref:PatternVariables.BindInScope{T})).
     private func BindWithPatternVariables(
         variables ImmutableArray[LocalVariableSymbol],
-        bind() -> BoundStatement
-    ) BoundStatement -> PatternVariables.BindInScope(binderCtx, variables, bind)
+        bind() -> BoundStatement,
+        regionSyntax SyntaxNode? = nil
+    ) BoundStatement -> PatternVariables.BindInScope(binderCtx, variables, bind, regionSyntax)
 
     /// ADR-0166: parks the pattern variables that [`ifStatement`](paramref)
     /// leaks into the statements following it: the condition's when-false
@@ -669,10 +675,28 @@ internal partial class StatementBinder {
             return
         }
         for variable in leaked {
-            if !$scope.TryDeclareVariable(variable) && variable.DeclaringSyntax is SyntaxNode declaring {
-                Diagnostics.ReportSymbolAlreadyDeclared(declaring.Location, variable.Name)
+            if !$scope.TryDeclareVariable(variable) {
+                if variable.DeclaringSyntax is SyntaxNode declaring {
+                    Diagnostics.ReportSymbolAlreadyDeclared(declaring.Location, variable.Name)
+                }
+                continue
+            }
+            if variable is PatternVariableSymbol patternVariable && ifStatement.Syntax is {} ifSyntax {
+                let block = EnclosingBlockSyntax(ifSyntax)
+                patternVariable.AddRegion(block, ifSyntax.Span.End, block.Span.End)
             }
         }
+    }
+
+    private func EnclosingBlockSyntax(node SyntaxNode) SyntaxNode {
+        var current SyntaxNode? = node.Parent
+        while current != nil {
+            if current is BlockStatementSyntax or BlockExpressionSyntax {
+                return current
+            }
+            current = current.Parent
+        }
+        return node.SyntaxTree.Root
     }
 
     /// ADR-0069 / issue #700: classify `is` / `!is` tests (and

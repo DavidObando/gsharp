@@ -103,7 +103,160 @@ open class Adr0212ScopeQueryTests {
     @Fact
     func IsPatternVariable_IsScopedToItsStatement() {
         Assert.Contains("text", Names("PInIs"))
+        Assert.DoesNotContain("text", Names("PElseIs"))
         Assert.DoesNotContain("text", Names("PAfterIs"))
+    }
+
+    @Fact
+    func IsPatternVariable_EarlyExitGuardLeaksToTheRestOfTheBlock() {
+        const source = `func Guarded(x object, items []object) int32 {
+    if !(x is string bang) {
+        return 0 // PBangExit
+    }
+    let afterBang = bang.Length // PAfterBang
+    for item in items {
+        if item is not string token {
+            continue // PNotExit
+        }
+        let afterNot = token.Length // PAfterNot
+    }
+    if x is string elseExit {
+        let inThen = elseExit.Length // PElseExitThen
+    } else {
+        return 0 // PElseExitElse
+    }
+    if x == nil {
+    } else if !(x is string elseIfNoLeak) {
+        return 0
+    }
+    return afterBang + elseExit.Length // PAfterElseExit
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "pattern-leak.gs"))
+        let compilation = Compilation(tree)
+        Assert.Empty(compilation.GetDiagnostics())
+        let model = compilation.GetSemanticModel(tree)
+        let NamesAt = func (marker string) List[string] {
+            let at = source.IndexOf("// " + marker + "\n", StringComparison.Ordinal)
+            Assert.True(at >= 0, marker)
+            return model.LookupSymbols(at).Select((s Symbol) -> s.Name).ToList()
+        }
+        Assert.DoesNotContain("bang", NamesAt("PBangExit"))
+        Assert.Contains("bang", NamesAt("PAfterBang"))
+        Assert.DoesNotContain("token", NamesAt("PNotExit"))
+        Assert.Contains("token", NamesAt("PAfterNot"))
+        Assert.DoesNotContain("token", NamesAt("PAfterElseExit"))
+        Assert.Contains("elseExit", NamesAt("PElseExitThen"))
+        Assert.DoesNotContain("elseExit", NamesAt("PElseExitElse"))
+        Assert.Contains("elseExit", NamesAt("PAfterElseExit"))
+        Assert.DoesNotContain("elseIfNoLeak", NamesAt("PAfterElseExit"))
+    }
+
+    @Fact
+    func IsPatternVariable_ShortCircuitAndOrRegions() {
+        const source = `func Logic(x object) bool {
+    let andOk = x is string a && a.Length > 0
+    let orOut = x is string b || x == nil
+    let notOrOk = x is not string c || c.Length == 0
+    let bangOrOk = !(x is string d) || d.Length == 0
+    let notAndOut = x is not string e && x != nil
+    return andOk || orOut || notOrOk || bangOrOk || notAndOut
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "pattern-logic.gs"))
+        let compilation = Compilation(tree)
+        Assert.Empty(compilation.GetDiagnostics())
+        let model = compilation.GetSemanticModel(tree)
+        let NamesAt = func (snippet string) List[string] {
+            let at = source.IndexOf(snippet, StringComparison.Ordinal)
+            Assert.True(at >= 0, snippet)
+            return model.LookupSymbols(at).Select((s Symbol) -> s.Name).ToList()
+        }
+        Assert.Contains("a", NamesAt("a.Length > 0"))
+        Assert.DoesNotContain("b", NamesAt("x == nil"))
+        Assert.Contains("c", NamesAt("c.Length == 0"))
+        Assert.Contains("d", NamesAt("d.Length == 0"))
+        Assert.DoesNotContain("e", NamesAt("x != nil"))
+    }
+
+    @Fact
+    func IsPatternVariable_ConditionalAndIfExpressions() {
+        const source = `import System
+func Branches(x object, maybe object?) int32 {
+    let condPos = x is string a ? a.Length : 10
+    let condNeg = x is not string b ? 20 : b.Length
+    let ifExpr = if x is string c {
+        c.Length // PIfExprTrue
+    } else {
+        30 // PIfExprFalse
+    }
+    if let v = maybe && v is string ifLetPos {
+        let inIfLet = ifLetPos.Length // PIfLetPosThen
+    } else {
+        let outIfLet = 0 // PIfLetPosElse
+    }
+    let ifLetExpr = if let v = maybe && v is string ifLetExprPos {
+        ifLetExprPos.Length // PIfLetExprThen
+    } else {
+        0 // PIfLetExprElse
+    }
+    switch x {
+        case _ when x is string swGuard {
+            let inSw = swGuard.Length // PSwGuard
+        }
+        case _ when !(x is string swNeg) {
+            let inSwNeg = 0 // PSwNeg
+        }
+        default { }
+    }
+    let swExpr = switch x {
+        case _ when x is string armGuard: armGuard.Length
+        case _ when !(x is string armNeg): 40
+        default: 50
+    }
+    try {
+    } catch (e Exception) when e.Message is string catchGuard {
+        let inCatch = catchGuard.Length // PCatchGuard
+    } catch (e Exception) {
+        let inOtherCatch = 0 // PCatchOther
+    }
+    return condPos + condNeg + ifExpr + ifLetExpr + swExpr
+}
+`
+        let tree = SyntaxTree.Parse(SourceText.From(source, "pattern-cond.gs"))
+        let compilation = Compilation(tree)
+        Assert.Empty(compilation.GetDiagnostics())
+        let model = compilation.GetSemanticModel(tree)
+        let NamesAt = func (snippet string) List[string] {
+            let at = source.IndexOf(snippet, StringComparison.Ordinal)
+            Assert.True(at >= 0, snippet)
+            return model.LookupSymbols(at).Select((s Symbol) -> s.Name).ToList()
+        }
+        Assert.Contains("a", NamesAt("a.Length"))
+        Assert.DoesNotContain("a", NamesAt("10"))
+        Assert.DoesNotContain("b", NamesAt("20"))
+        Assert.Contains("b", NamesAt("b.Length"))
+        Assert.Contains("c", NamesAt("// PIfExprTrue\n"))
+        Assert.DoesNotContain("c", NamesAt("// PIfExprFalse\n"))
+        Assert.Contains("ifLetPos", NamesAt("// PIfLetPosThen\n"))
+        Assert.DoesNotContain("ifLetPos", NamesAt("// PIfLetPosElse\n"))
+        Assert.Contains("ifLetExprPos", NamesAt("// PIfLetExprThen\n"))
+        Assert.DoesNotContain("ifLetExprPos", NamesAt("// PIfLetExprElse\n"))
+        Assert.Contains("swGuard", NamesAt("// PSwGuard\n"))
+        Assert.DoesNotContain("swGuard", NamesAt("// PSwNeg\n"))
+        Assert.DoesNotContain("swNeg", NamesAt("// PSwNeg\n"))
+        Assert.Contains("armGuard", NamesAt("armGuard.Length"))
+        Assert.DoesNotContain("armNeg", NamesAt("40"))
+        Assert.Contains("catchGuard", NamesAt("// PCatchGuard\n"))
+        Assert.DoesNotContain("catchGuard", NamesAt("// PCatchOther\n"))
+    }
+
+    @Fact
+    func IsPatternVariable_WhileConditionIsVisibleInTheBodyOnly() {
+        Assert.Contains("whileText", Names("PInWhileIs"))
+        Assert.DoesNotContain("whileText", Names("PAfterWhileIs"))
+        Assert.DoesNotContain("whileNeg", Names("PInWhileNeg"))
+        Assert.DoesNotContain("whileNeg", Names("PAfterWhileIs"))
     }
 
     @Fact
@@ -586,8 +739,19 @@ func Shadow(Total int32, maybe string?, items []int32) int32 {
     }
     if probe is string text {
         let inIs = text // PInIs
+    } else {
+        let elseIs = 0 // PElseIs
     }
     let afterIs = 1 // PAfterIs
+    while probe is string whileText {
+        let inWhileIs = whileText.Length // PInWhileIs
+        break
+    }
+    while !(probe is string whileNeg) {
+        let inWhileNeg = 0 // PInWhileNeg
+        break
+    }
+    let afterWhileIs = 1 // PAfterWhileIs
     let afterPattern = 3 // PAfterPattern
     let fact = func(n int32) int32 {
         if n <= 1 { return 1 }

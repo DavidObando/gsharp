@@ -73,7 +73,10 @@ partial class SemanticModel {
     /// variable through its body; a catch variable through its `when` filter and
     /// body; a parameter (also a destructured, lambda or function-literal
     /// parameter) through its function, constructor, lambda, literal or accessor;
-    /// the pattern variable of a `switch` case or arm through that case or arm; any
+    /// the pattern variable of a `switch` case or arm through that case or arm; the
+    /// pattern variable of a boolean `is` test through the regions where the binder
+    /// proves its match (the when-true or when-false branch, short-circuit operand,
+    /// loop or guard body, and the rest of the enclosing block after an early exit); any
     /// other pattern variable from its declaration to the end of the enclosing
     /// block.</item>
     /// <item>The implicit `ctx` of a `scope` is visible in the scope body.</item>
@@ -158,7 +161,7 @@ partial class SemanticModel {
             // A local function is visible in its whole block, so that local functions can
             // call themselves and each other; every other local follows its declaration.
             let hoisted = local is FunctionSymbol
-            let region = RegionOf(anchor)
+            let region = RegionOf(anchor, local, position)
             if region == nil || IsInGuardElse(anchor, position) {
                 continue
             }
@@ -701,7 +704,7 @@ partial class SemanticModel {
         return node.Span.Start >= constructor.Body.Span.Start && node.Span.Start < constructor.Body.Span.End
     }
 
-    private func RegionOf(anchor SyntaxNode) Region? {
+    private func RegionOf(anchor SyntaxNode, local Symbol, position int32) Region? {
         let parent = anchor.Parent
         // A token the binder synthesized (the implicit `ctx` of a `scope`) has no place in the tree.
         if parent == nil {
@@ -799,6 +802,11 @@ partial class SemanticModel {
             }
             return Region(owner, start, owner.Span.End)
         }
+        // A pattern variable of a boolean `is` test is visible in the flow regions where the binder
+        // declared it (when-true/when-false branches, short-circuit operands, and after an early exit).
+        if local is PatternVariableSymbol patternVariable {
+            return PatternRegionOf(anchor, patternVariable, position)
+        }
         // A pattern variable of a `switch` case or expression arm belongs to that arm alone.
         var ancestor SyntaxNode? = parent
         while ancestor != nil && ancestor is not(BlockStatementSyntax or BlockExpressionSyntax) {
@@ -815,20 +823,28 @@ partial class SemanticModel {
             let block = EnclosingBlock(deconstruction)
             return Region(block, deconstruction.Span.End, block.Span.End)
         }
-        // A pattern variable of an `is` pattern is scoped to the statement that holds the test. The
-        // binder also lets it leak past an early exit (`if !(x is T t) { return }`); that depends on
-        // flow and is not modeled.
-        if parent is TypePatternSyntax or VarPatternSyntax or PropertyPatternSyntax or SlicePatternSyntax {
-            var statement SyntaxNode? = parent
-            while statement != nil && statement is not StatementSyntax {
-                statement = statement.Parent
-            }
-            if statement != nil {
-                return Region(statement, anchor.Span.End, statement.Span.End)
-            }
+        if parent is PatternSyntax {
+            return nil
         }
         let block = EnclosingBlock(anchor)
         return Region(block, anchor.Span.End, block.Span.End)
+    }
+
+    private func PatternRegionOf(anchor SyntaxNode, variable PatternVariableSymbol, position int32) Region? {
+        var best Region? = nil
+        var bestDepth = -1
+        for entry in variable.Regions {
+            let start = Math.Max(entry.Start, anchor.Span.End)
+            if !RegionContains(start, entry.End, position) {
+                continue
+            }
+            let depth = Depth(entry.Owner)
+            if depth > bestDepth {
+                best = Region(entry.Owner, entry.Start, entry.End)
+                bestDepth = depth
+            }
+        }
+        return best
     }
 
     /// Whether [`position`](paramref) is in the `else` body of the `guard let` that declares
