@@ -1159,8 +1159,8 @@ internal partial class ExpressionBinder {
             // first. Runs before the static-import fallbacks so prior cells'
             // declarations shadow static-import members, mirroring the
             // evaluator scope chain.
-            if TryBindSubmissionStaticMember(syntax, out var submissionMember) {
-                return submissionMember!!
+            if SubmissionBinding.TryBindStaticMember(this, syntax, out var submissionMember) {
+                return submissionMember
             }
             // Issue #1201 (C# `using static`): an unqualified identifier may
             // name a `shared` (static) field, property, or method group of a
