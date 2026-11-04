@@ -2427,7 +2427,8 @@ internal partial class StatementBinder {
             if StatementBinder.IsMemberStorageWriteExpression(node.Kind) ||
                 (
                 StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) &&
-                    node is not BoundCallOperationExpression
+                    node is not BoundCallOperationExpression &&
+                    node is not BoundConstructorCallExpression
             ) {
                 MayMutateReferenceStorage = true
             }
@@ -2748,13 +2749,46 @@ internal partial class StatementBinder {
             RestoreCallableState(JoinCallableStates(thenState, CaptureCallableState()))
         }
 
+        private func VisitCondition(expression BoundExpression)(
+            WhenTrue(Normal CallableAliasState, AllEntry CallableAliasState),
+            WhenFalse(Normal CallableAliasState, AllEntry CallableAliasState)
+        ) {
+            switch expression {
+                case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
+                    let (leftTrue, leftFalse) = VisitCondition(binary.Left)
+                    RestoreCallableState(leftTrue)
+                    let (rightTrue, rightFalse) = VisitCondition(binary.Right)
+                    let whenFalse = JoinCallableStates(leftFalse, rightFalse)
+                    RestoreCallableState(JoinCallableStates(rightTrue, whenFalse))
+                    return (rightTrue, whenFalse)
+                }
+                case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
+                    let (leftTrue, leftFalse) = VisitCondition(binary.Left)
+                    RestoreCallableState(leftFalse)
+                    let (rightTrue, rightFalse) = VisitCondition(binary.Right)
+                    let whenTrue = JoinCallableStates(leftTrue, rightTrue)
+                    RestoreCallableState(JoinCallableStates(whenTrue, rightFalse))
+                    return (whenTrue, rightFalse)
+                }
+                case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
+                    let (operandTrue, operandFalse) = VisitCondition(unary.Operand)
+                    return (operandFalse, operandTrue)
+                }
+                default {
+                    VisitExpression(expression)
+                    let after = CaptureCallableState()
+                    return (after, CloneCallableState(after))
+                }
+            }
+        }
+
         protected open override func VisitBinaryExpression(node BoundBinaryExpression) {
+            if node.Op.Kind is BoundBinaryOperatorKind.LogicalAnd or BoundBinaryOperatorKind.LogicalOr {
+                VisitCondition(node)
+                return
+            }
             VisitExpression(node.Left)
-            if node
-                .Op
-                .Kind is BoundBinaryOperatorKind.LogicalAnd or
-                BoundBinaryOperatorKind.LogicalOr or
-                BoundBinaryOperatorKind.NullCoalesce {
+            if node.Op.Kind == BoundBinaryOperatorKind.NullCoalesce {
                 VisitPossiblySkipped(() -> VisitExpression(node.Right))
             } else {
                 VisitExpression(node.Right)
@@ -2774,16 +2808,23 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitConditionalExpression(node BoundConditionalExpression) {
-            VisitExpression(node.Condition)
-            VisitAlternativePaths(() -> VisitExpression(node.WhenTrue), () -> VisitExpression(node.WhenFalse))
+            let (whenTrue, whenFalse) = VisitCondition(node.Condition)
+            RestoreCallableState(whenTrue)
+            VisitExpression(node.WhenTrue)
+            let thenState = CaptureCallableState()
+            RestoreCallableState(whenFalse)
+            VisitExpression(node.WhenFalse)
+            RestoreCallableState(JoinCallableStates(thenState, CaptureCallableState()))
         }
 
         protected open override func VisitConditionalAddressExpression(node BoundConditionalAddressExpression) {
-            VisitExpression(node.Condition)
-            VisitAlternativePaths(
-                () -> VisitExpression(node.WhenTrueOperand),
-                () -> VisitExpression(node.WhenFalseOperand)
-            )
+            let (whenTrue, whenFalse) = VisitCondition(node.Condition)
+            RestoreCallableState(whenTrue)
+            VisitExpression(node.WhenTrueOperand)
+            let thenState = CaptureCallableState()
+            RestoreCallableState(whenFalse)
+            VisitExpression(node.WhenFalseOperand)
+            RestoreCallableState(JoinCallableStates(thenState, CaptureCallableState()))
         }
 
         protected open override func VisitBinaryPattern(node BoundBinaryPattern) {
@@ -3072,12 +3113,58 @@ internal partial class StatementBinder {
             allEntryCallableState.ApplyVariableDeclaration(node, inFunctionLiteral)
         }
 
+        protected open override func VisitBlockStatement(node BoundBlockStatement) {
+            let statements = node.Statements
+            let count = statements.Length
+            if node.Syntax is IfLetStatementSyntax &&
+                count >= 5 &&
+                statements[count - 4] is BoundGotoStatement endGoto &&
+                statements[count - 3] is BoundLabelStatement elseLabel &&
+                statements[count - 1] is BoundLabelStatement endLabel &&
+                endGoto.Label == endLabel
+                .Label {
+                var elseEntry(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
+                for var i = 0; i < count - 5; i++ {
+                    let current = statements[i]
+                    if current is BoundConditionalGotoStatement condGoto &&
+                        condGoto.Label == elseLabel.Label &&
+                        !condGoto
+                        .JumpIfTrue {
+                        let (whenTrue, whenFalse) = VisitCondition(condGoto.Condition)
+                        elseEntry = JoinCallableStates(elseEntry, whenFalse)
+                        RestoreCallableState(whenTrue)
+                    } else {
+                        VisitStatement(current)
+                    }
+                }
+                let afterHeader = CaptureCallableState()
+                let thenStatement = statements[count - 5]
+                let elseStatement = statements[count - 2]
+                VisitStatement(thenStatement)
+                let thenState = CaptureCallableState()
+                RestoreCallableState(elseEntry ?? afterHeader)
+                VisitStatement(elseStatement)
+                let elseState = CaptureCallableState()
+                var joined(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
+                if !StatementBinder.EndsInUnconditionalExit(thenStatement, gotoExits: false) {
+                    joined = JoinCallableStates(joined, thenState)
+                }
+                if !StatementBinder.EndsInUnconditionalExit(elseStatement, gotoExits: false) {
+                    joined = JoinCallableStates(joined, elseState)
+                }
+                RestoreCallableState(joined ?? afterHeader)
+                return
+            }
+            base.VisitBlockStatement(node)
+        }
+
         protected open override func VisitIfStatement(node BoundIfStatement) {
-            VisitExpression(node.Condition)
-            let branchStart = CaptureCallableState()
+            let (whenTrue, whenFalse) = VisitCondition(node.Condition)
+            let afterCondition = CaptureCallableState()
+            RestoreCallableState(whenTrue)
             VisitStatement(node.ThenStatement)
             let thenState = CaptureCallableState()
-            RestoreCallableState(branchStart)
+            RestoreCallableState(whenFalse)
             VisitStatement(node.ElseStatement)
             let elseState = CaptureCallableState()
             var joined(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
@@ -3090,7 +3177,7 @@ internal partial class StatementBinder {
             ) {
                 joined = JoinCallableStates(joined, elseState)
             }
-            RestoreCallableState(joined ?? branchStart)
+            RestoreCallableState(joined ?? afterCondition)
         }
 
         protected open override func VisitConditionalGotoStatement(node BoundConditionalGotoStatement) {
