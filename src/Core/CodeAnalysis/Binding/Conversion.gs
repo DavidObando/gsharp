@@ -497,6 +497,8 @@ class Conversion {
                     Conversion.Identity
                 }
             }
+            let annotatedFrom = from
+            let annotatedTo = to
             // Inner generic nullability metadata does not change the outer CLR type's
             // conversion rules. Expose the symbolic generic/interface shape beneath
             // it before applying identity, hierarchy, and variance classification.
@@ -921,7 +923,7 @@ class Conversion {
             // bind instead of failing GS0155.
             if from is ImportedTypeSymbol fromImported &&
                 to is ImportedTypeSymbol toImported &&
-                AreConstructedGenericShapesIdentical(fromImported, toImported) {
+                AreConstructedGenericShapesIdentical(annotatedFrom!!, annotatedTo!!, fromImported, toImported) {
                 return Conversion.Identity
             }
             // Issue #2523: a constructed imported reference type may carry
@@ -1590,7 +1592,9 @@ class Conversion {
             if from is SliceTypeSymbol sliceSrc && !(to is ArrayTypeSymbol) {
                 let targetArray = to?.ClrType
                 let sourceElement Type? = sliceSrc.ElementType?.ClrType
-                if targetArray?.IsArray == true && targetArray!!.GetArrayRank() == 1 && sourceElement != nil {
+                if targetArray?.IsSZArray == true &&
+                    !(to is ImportedTypeSymbol{TypeArguments: {IsDefaultOrEmpty: false}}) &&
+                    sourceElement != nil {
                     let targetElement Type? = targetArray!!.GetElementType()
                     if targetElement != nil && string.Equals(
                         targetElement.FullName,
@@ -1658,7 +1662,12 @@ class Conversion {
             // `cast[…]` remains available for an author asserting a shape the
             // compiler cannot see, exactly as it is for slice covariance.
             if from is ArrayTypeSymbol fromFixedArray &&
-                (to is SliceTypeSymbol || to is ArrayTypeSymbol || to is RectangularArrayTypeSymbol) {
+                (
+                to is SliceTypeSymbol ||
+                    to is ArrayTypeSymbol ||
+                    to is RectangularArrayTypeSymbol ||
+                    DeclarationBinder.TryGetRankOneNonSzArrayElementType(to, out _)
+            ) {
                 let fixedTargetElement TypeSymbol? = switch to {
                     case toSliceTarget is SliceTypeSymbol: toSliceTarget.ElementType
                     case toArrayTarget is ArrayTypeSymbol: toArrayTarget.ElementType
@@ -1719,36 +1728,87 @@ class Conversion {
             }
             // Imported CLR methods/properties can surface an SZ-array as a plain
             // ImportedTypeSymbol rather than a SliceTypeSymbol. Apply the same
-            // element-invariance guard to that metadata path.
-            if from is ImportedTypeSymbol{ClrType: {IsArray: true} importedArray} &&
+            // element-invariance guard to that metadata path, and compare array
+            // kind (`IsSZArray`) and retained element symbols for non-vector
+            // rank-1 arrays (`T[*]`).
+            if from is ImportedTypeSymbol{ClrType: {IsArray: true} importedArray} fromImportedArray &&
                 importedArray.GetArrayRank() == 1 &&
                 (
                 to is SliceTypeSymbol ||
                     to is ArrayTypeSymbol ||
                     (to?.ClrType is {IsArray: true} targetClrArray && targetClrArray.GetArrayRank() == 1)
             ) {
-                let sourceElement = TypeSymbol.FromClrTypeWithoutNullability(
-                    importedArray.GetElementType(),
-                    NullabilityFreeReason.TypeStructure
-                )
+                let targetIsSzArray = to is SliceTypeSymbol || to is ArrayTypeSymbol || to?.ClrType?.IsSZArray == true
+                if importedArray.IsSZArray != targetIsSzArray {
+                    return Conversion.None
+                }
+                let sourceElement = if !fromImportedArray
+                    .TypeArguments
+                    .IsDefaultOrEmpty &&
+                    fromImportedArray
+                    .TypeArguments
+                    .Length == 1 {
+                    fromImportedArray.TypeArguments[0]
+                } else {
+                    MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
+                        importedArray.GetElementType(),
+                        openDefinition: nil,
+                        ImmutableArray[TypeSymbol].Empty,
+                        openMethodDefinition: nil,
+                        default(ImmutableArray[TypeSymbol?]),
+                        NullabilityFreeReason.TypeStructure,
+                        preserveReferenceTupleIdentity: true
+                    )
+                }
                 let importedTargetElement = switch to {
                     case targetSlice is SliceTypeSymbol: targetSlice.ElementType
                     case targetArray is ArrayTypeSymbol: targetArray.ElementType
-                    default: TypeSymbol.FromClrTypeWithoutNullability(
+                    case targetImported is ImportedTypeSymbol when !targetImported
+                        .TypeArguments
+                        .IsDefaultOrEmpty &&
+                        targetImported
+                        .TypeArguments
+                        .Length == 1: targetImported.TypeArguments[0]
+                    default: MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                         Invariant.Required(
                             to.ClrType,
                             "an imported array target has a CLR representation",
                             expression: "to.ClrType"
                         )
                             .GetElementType(),
-                        NullabilityFreeReason.TypeStructure
+                        openDefinition: nil,
+                        ImmutableArray[TypeSymbol].Empty,
+                        openMethodDefinition: nil,
+                        default(ImmutableArray[TypeSymbol?]),
+                        NullabilityFreeReason.TypeStructure,
+                        preserveReferenceTupleIdentity: true
                     )
                 }
                 if AreTypeArgumentsEquivalent(sourceElement, importedTargetElement) {
                     return Conversion.Implicit
                 }
-                return if allowExplicitReference &&
-                    (HasCheckedReferenceConversion(from, to) || IsCovariantArrayUpcast(from, to)) {
+                if !allowExplicitReference {
+                    return Conversion.None
+                }
+                let canExplicitCast = if TypeSymbol.ContainsSameCompilationUserType(sourceElement) ||
+                    TypeSymbol.ContainsSameCompilationUserType(importedTargetElement) ||
+                    TypeSymbol.ContainsTypeParameter(sourceElement) || TypeSymbol.ContainsTypeParameter(
+                    importedTargetElement
+                ) {
+                    IsReferenceLikeTarget(sourceElement) &&
+                        IsReferenceLikeTarget(importedTargetElement) &&
+                        (
+                        HasCheckedReferenceConversion(sourceElement, importedTargetElement) || ClassifyCore(
+                            sourceElement,
+                            importedTargetElement,
+                            allowStructuralProjection: false,
+                            allowExplicitReference: false
+                        ).IsImplicit
+                    )
+                } else {
+                    HasCheckedReferenceConversion(from, to) || IsCovariantArrayUpcast(from, to)
+                }
+                return if canExplicitCast {
                     Conversion.Explicit
                 } else {
                     Conversion.None
@@ -1829,16 +1889,28 @@ class Conversion {
             // Same rule for an SZ-array returned from imported metadata. Reflection
             // exposes that value as ImportedTypeSymbol(T[]) rather than []T, but G#
             // must not gain broader CLR array covariance because of symbol shape.
-            if from is ImportedTypeSymbol{ClrType: {IsArray: true} importedArrayForIface} &&
-                importedArrayForIface.GetArrayRank() == 1 && to?.ClrType is {IsInterface: true} {
-                if ClrTypeUtilities.ImplementsInterfaceByName(importedArrayForIface, to.ClrType) ||
-                    ArrayElementConvertsToInterfaceSymbolically(
+            if from is ImportedTypeSymbol{ClrType: {IsSZArray: true} importedArrayForIface} fromImportedForIface &&
+                to?.ClrType is {IsInterface: true} {
+                let elementSym = if !fromImportedForIface
+                    .TypeArguments
+                    .IsDefaultOrEmpty &&
+                    fromImportedForIface
+                    .TypeArguments
+                    .Length == 1 {
+                    fromImportedForIface.TypeArguments[0]
+                } else {
                     TypeSymbol.FromClrTypeWithoutNullability(
                         importedArrayForIface.GetElementType(),
                         NullabilityFreeReason.TypeStructure
-                    ),
-                    to
-                ) {
+                    )
+                }
+                if (
+                    !TypeSymbol.RequiresSymbolicProjection(elementSym) && ClrTypeUtilities.ImplementsInterfaceByName(
+                        importedArrayForIface,
+                        to.ClrType
+                    )
+                ) ||
+                    ArrayElementConvertsToInterfaceSymbolically(elementSym, to) {
                     return Conversion.Implicit
                 }
                 return Conversion.None
@@ -1928,7 +2000,12 @@ class Conversion {
                         IsRejectedFixedArrayShapeMismatch(from, to)
                 )
             ) &&
-                TryGetConstructedGenericShape(to, out _, out _) {
+                (
+                TryGetConstructedGenericShape(to, out _, out _) || DeclarationBinder.TryGetRankOneNonSzArrayElementType(
+                    to,
+                    out _
+                )
+            ) {
                 return Conversion.None
             }
             if from?.ClrType != nil &&
@@ -2716,7 +2793,8 @@ class Conversion {
                 ClassifyCore(from, to, allowStructuralProjection: false, allowExplicitReference: false).IsImplicit {
                 return true
             }
-            if from.ClrType is {} fromClr &&
+            if !(RequiresSymbolicTypeArgumentIdentity(from) || RequiresSymbolicTypeArgumentIdentity(to)) &&
+                from.ClrType is {} fromClr &&
                 to.ClrType is {} toClr &&
                 !fromClr.IsValueType &&
                 !toClr.IsValueType &&
@@ -2803,11 +2881,32 @@ class Conversion {
             case slice is SliceTypeSymbol: slice.ElementType
             case array is ArrayTypeSymbol: array.ElementType
             case _ is RectangularArrayTypeSymbol: default(TypeSymbol?)
-            case {
-                ClrType: {IsArray: true} clrArray
-            } when clrArray.GetArrayRank() == 1: TypeSymbol.FromClrTypeWithoutNullability(
+            case imported is ImportedTypeSymbol when imported.ClrType is {IsSZArray: true} clrArray: if !imported
+                .TypeArguments
+                .IsDefaultOrEmpty &&
+                imported
+                .TypeArguments
+                .Length == 1 {
+                imported.TypeArguments[0]
+            } else {
+                MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
+                    clrArray.GetElementType(),
+                    openDefinition: nil,
+                    ImmutableArray[TypeSymbol].Empty,
+                    openMethodDefinition: nil,
+                    default(ImmutableArray[TypeSymbol?]),
+                    NullabilityFreeReason.TypeStructure,
+                    preserveReferenceTupleIdentity: true
+                )
+            }
+            case {ClrType: {IsSZArray: true} clrArray}: MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                 clrArray.GetElementType(),
-                NullabilityFreeReason.TypeStructure
+                openDefinition: nil,
+                ImmutableArray[TypeSymbol].Empty,
+                openMethodDefinition: nil,
+                default(ImmutableArray[TypeSymbol?]),
+                NullabilityFreeReason.TypeStructure,
+                preserveReferenceTupleIdentity: true
             )
             default: default(TypeSymbol?)
         }
@@ -3114,7 +3213,12 @@ class Conversion {
         /// `int32`) resolve to the SAME (cref:TypeSymbol). Requires at
         /// least one side to be symbolic so genuinely CLR-backed comparisons keep
         /// flowing through the existing (variance-aware) rules.
-        private func AreConstructedGenericShapesIdentical(from ImportedTypeSymbol, to ImportedTypeSymbol) bool {
+        private func AreConstructedGenericShapesIdentical(
+            annotatedFrom TypeSymbol,
+            annotatedTo TypeSymbol,
+            from ImportedTypeSymbol,
+            to ImportedTypeSymbol
+        ) bool {
             let fromSymbolic = !from.TypeArguments.IsDefaultOrEmpty
             let toSymbolic = !to.TypeArguments.IsDefaultOrEmpty
             // Scope to the asymmetric case: the symmetric symbolic/symbolic and the
@@ -3122,8 +3226,8 @@ class Conversion {
             if fromSymbolic == toSymbolic {
                 return false
             }
-            if !TryGetConstructedGenericShape(from, out var fromOpen, out var fromArgs) ||
-                !TryGetConstructedGenericShape(to, out var toOpen, out var toArgs) {
+            if !TryGetConstructedGenericShape(annotatedFrom, out var fromOpen, out var fromArgs) ||
+                !TryGetConstructedGenericShape(annotatedTo, out var toOpen, out var toArgs) {
                 return false
             }
             if !fromOpen.IsSameAs(toOpen) || fromArgs.Length != toArgs.Length {
@@ -4376,12 +4480,7 @@ class Conversion {
                 return false
             }
             let sourceIsArray = (from is SliceTypeSymbol or ArrayTypeSymbol) ||
-                (
-                (from is NullabilityAnnotatedTypeSymbol and {ClrType: {IsArray: true}}) &&
-                    from
-                    .ClrType
-                    ?.GetArrayRank() == 1
-            )
+                ((from is NullabilityAnnotatedTypeSymbol and {ClrType: {IsSZArray: true}}))
             if sourceIsArray {
                 if targetArguments.Length == 1 && positions.Length == 1 && IsArrayElementInterface(targetDefinition) {
                     projected = positions
@@ -4832,7 +4931,7 @@ class Conversion {
         /// @param elementType The element type when it is.
         /// @returns `true` for a rank-1 array.
         private func IsSingleDimensionArray(clrType Type?, @NotNullWhen(true) out elementType Type?) bool {
-            if clrType is {IsArray: true} array && array.GetArrayRank() == 1 && array.GetElementType() is {} element {
+            if clrType is {IsSZArray: true} array && array.GetElementType() is {} element {
                 elementType = element
                 return true
             }
@@ -4995,6 +5094,15 @@ class Conversion {
             // and annotation carriers instead of comparing erased CLR envelopes.
             if TryGetConstructedGenericShape(a, out _, out _) && TryGetConstructedGenericShape(b, out _, out _) {
                 return AreConstructedGenericsIdentical(a, b)
+            }
+            let aIsNonSzRankOne = DeclarationBinder.TryGetRankOneNonSzArrayElementType(a, out var aNonSzElement)
+            let bIsNonSzRankOne = DeclarationBinder.TryGetRankOneNonSzArrayElementType(b, out var bNonSzElement)
+            if aIsNonSzRankOne || bIsNonSzRankOne {
+                return aIsNonSzRankOne && bIsNonSzRankOne && AreTypeArgumentsEquivalent(aNonSzElement, bNonSzElement)
+            }
+            if (a is ImportedTypeSymbol{OpenDefinition: nil, TypeArguments: {IsDefaultOrEmpty: false}}) ||
+                (b is ImportedTypeSymbol{OpenDefinition: nil, TypeArguments: {IsDefaultOrEmpty: false}}) {
+                return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(a, b)
             }
             // Issue #3962: a fixed-length array `[N]T` is backed by the plain
             // SZ-array `T[]` — the SAME CLR type as `[]T` and as every other
@@ -5580,8 +5688,12 @@ class Conversion {
                 .TryGetEnumerableInterfaceShape(type!!, out _, out var elementType) {
                 return RequiresSymbolicTypeArgumentIdentity(elementType)
             }
-            if type is not ImportedTypeSymbol{OpenDefinition: not nil} imported {
+            if type is not ImportedTypeSymbol imported ||
+                (imported.OpenDefinition == nil && imported.TypeArguments.IsDefaultOrEmpty) {
                 return false
+            }
+            if imported.OpenDefinition == nil {
+                return true
             }
             if imported.HasSubstitutableTypeArgument {
                 return true

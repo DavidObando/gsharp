@@ -4,8 +4,10 @@
 
 package GSharp.Core.CodeAnalysis.Symbols
 
+import GSharp.Core.CodeAnalysis.Binding
 import System
 import System.Collections.Concurrent
+import System.Collections.Immutable
 import System.Diagnostics.CodeAnalysis
 import System.Threading.Channels
 
@@ -156,9 +158,14 @@ class ChannelTypeSymbol : TypeSymbol {
                             return true
                         }
                         if imported.ClrType is {IsGenericType: true} closedShape {
-                            elementType = TypeSymbol.FromClrTypeWithoutNullability(
+                            elementType = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                                 closedShape.GetGenericArguments()[0],
-                                NullabilityFreeReason.TypeStructure
+                                openDefinition: nil,
+                                ImmutableArray[TypeSymbol].Empty,
+                                openMethodDefinition: nil,
+                                default(ImmutableArray[TypeSymbol?]),
+                                NullabilityFreeReason.TypeStructure,
+                                preserveReferenceTupleIdentity: true
                             )
                             return elementType != nil
                         }

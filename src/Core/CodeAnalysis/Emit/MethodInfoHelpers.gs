@@ -269,6 +269,11 @@ internal shared class MethodInfoHelpers {
                     out var openDefinition,
                     out var symbolicArgs
                 ) {
+                    for slot in MemberLookup.EnumerateClrInterfaceSlots(ifaceSym, includeDefaultMethods: true) {
+                        if slot.Method.Name == method.Name && MemberLookup.MethodSatisfiesClrSlot(method, slot) {
+                            return true
+                        }
+                    }
                     for inherited in MemberLookup.EnumerateSelfAndInterfaces(openDefinition) {
                         for openMethod in inherited.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
                             if openMethod.Name != method.Name || (openMethod.IsSpecialName && !method.IsSpecialName) {
