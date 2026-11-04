@@ -2061,13 +2061,11 @@ internal class ImportedMemberRefFactory {
                     candidate.IsStatic == method.IsStatic &&
                     candidate.IsGenericMethod == method
                     .IsGenericMethod {
+                    var parametersMatch = true
                     try {
-                        if candidate.GetParameters().Length != method.GetParameters().Length {
-                            continue
-                        }
-                        fallback = candidate
-                        break
-                    } catch (NotSupportedException) {
+                        parametersMatch = candidate.GetParameters().Length == method.GetParameters().Length
+                    } catch (NotSupportedException) { }
+                    if parametersMatch {
                         if fallback != nil {
                             ambiguousFallback = true
                             break
@@ -2367,13 +2365,11 @@ internal class ImportedMemberRefFactory {
                     candidate.IsStatic == method.IsStatic &&
                     candidate.IsGenericMethod == method
                     .IsGenericMethod {
+                    var parametersMatch = true
                     try {
-                        if candidate.GetParameters().Length != method.GetParameters().Length {
-                            continue
-                        }
-                        fallback = candidate
-                        break
-                    } catch (NotSupportedException) {
+                        parametersMatch = candidate.GetParameters().Length == method.GetParameters().Length
+                    } catch (NotSupportedException) { }
+                    if parametersMatch {
                         if fallback != nil {
                             ambiguousFallback = true
                             break

@@ -204,7 +204,8 @@ internal shared class IfLetBindingSupport {
         declareLocal(SyntaxToken, bool, TypeSymbol) -> VariableSymbol,
         bindGuard(ExpressionSyntax) -> BoundExpression,
         classifyGuardNarrowing(BoundExpression) -> Dictionary[AccessPath, TypeSymbol]?,
-        bindThen() -> TThen
+        bindThen() -> TThen,
+        thenSyntax SyntaxNode? = nil
     )(Clauses ImmutableArray[BoundIfLetClause], Guard BoundExpression?, Then TThen) {
         let clauses = ImmutableArray.CreateBuilder[BoundIfLetClause](bindings.Count)
         binderCtx.RootScope = BoundScope(binderCtx.RootScope)
@@ -264,7 +265,12 @@ internal shared class IfLetBindingSupport {
                     narrowing[entry.Key] = entry.Value
                 }
             }
-            let then = PatternVariables.BindInScope(binderCtx, PatternVariables.Classify(guard_).WhenTrue, bindThen)
+            let then = PatternVariables.BindInScope(
+                binderCtx,
+                PatternVariables.Classify(guard_).WhenTrue,
+                bindThen,
+                thenSyntax
+            )
             return (clauses.ToImmutable(), guard_, then)
         } finally {
             binderCtx.EndNarrowingProof()

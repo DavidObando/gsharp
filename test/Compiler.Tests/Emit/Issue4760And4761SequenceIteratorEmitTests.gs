@@ -7,6 +7,7 @@ package GSharp.Compiler.Tests.Emit
 import GSharp.Compiler
 import GSharp.Compiler.Tests
 import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Symbols
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
@@ -216,18 +217,24 @@ Console.WriteLine(RunAsync().GetAwaiter().GetResult())
             Assert.Same(openGetEnumerator, unmappedDef)
             Assert.NotNull(decodedReturn)
 
-            let hostOpenList = typeof(List[_])
-            let hybridList = hostOpenList.MakeGenericType(contextString)
-            let openIndexOf3 = Assert.Single(
-                hostOpenList.GetMethods(),
-                (m MethodInfo) -> m.Name == "IndexOf" && m.GetParameters().Length == 3
+            let openReferenceEquals = Assert.Single(
+                typeof(ValueTuple[_]).GetMethods(),
+                (m MethodInfo) -> m.Name == "Equals" && !m.IsStatic && m.GetParameters()
+                    .Length == 1 &&
+                    m
+                    .GetParameters()[0]
+                    .ParameterType == typeof(object)
             )
-            let mappedIndexOf3 = ClrTypeUtilities.MapConstructedGenericMethod(hybridList, openIndexOf3)
-            let rawUnmappedIndexOf3 = TypeBuilder.GetMethod(hybridList, openIndexOf3)
-            Assert.Same(openIndexOf3, ImportedMemberRefFactory.ResolveMethodOnOpenDefinition(hostOpenList, mappedIndexOf3))
+            let hybridValueTuple = typeof(ValueTuple[_]).MakeGenericType(contextString)
+            let rawUnmappedTupleEquals = TypeBuilder.GetMethod(hybridValueTuple, openReferenceEquals)
             Assert.Same(
-                rawUnmappedIndexOf3,
-                ImportedMemberRefFactory.ResolveMethodOnOpenDefinition(hostOpenList, rawUnmappedIndexOf3)
+                rawUnmappedTupleEquals,
+                ImportedMemberRefFactory.ResolveMethodOnOpenDefinition(typeof(ValueTuple[_]), rawUnmappedTupleEquals)
+            )
+            let mappedTupleEquals = ClrTypeUtilities.MapConstructedGenericMethod(hybridValueTuple, openReferenceEquals)
+            Assert.Same(
+                openReferenceEquals,
+                ImportedMemberRefFactory.ResolveMethodOnOpenDefinition(typeof(ValueTuple[_]), mappedTupleEquals)
             )
         } finally {
             mlc.Dispose()
