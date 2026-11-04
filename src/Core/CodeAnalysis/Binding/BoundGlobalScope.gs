@@ -327,6 +327,18 @@ class BoundGlobalScope {
         }
     }
 
+    private var _failedCalls ImmutableArray[BoundErrorExpression] = ImmutableArray[BoundErrorExpression].Empty
+
+    /// Gets the failed-call records collected while binding declaration-phase expressions (field initializers, parameter defaults).
+    internal prop FailedCalls ImmutableArray[BoundErrorExpression] {
+        get {
+            return _failedCalls
+        }
+        set {
+            _failedCalls = value
+        }
+    }
+
     /// Gets the synthesized or explicit entry-point function for this compilation,
     /// or null if the compilation produces a library (no entry point).
     prop EntryPoint FunctionSymbol? {

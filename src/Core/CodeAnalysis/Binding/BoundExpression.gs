@@ -256,6 +256,16 @@ abstract class BoundExpression : BoundNode {
             .CalledFunction
             .Name {
             target.MemberGroup = source.MemberGroup
+        } else if this is BoundBaseClassCallExpression{Method: {} sourceMethod} sourceBase &&
+            copy is BoundBaseClassCallExpression{Method: {} targetMethod} targetBase &&
+            targetBase
+            .MemberGroup
+            .IsDefault &&
+            !sourceBase
+            .MemberGroup
+            .IsDefault &&
+            object.ReferenceEquals(sourceBase.Syntax, targetBase.Syntax) && sourceMethod.Name == targetMethod.Name {
+            targetBase.MemberGroup = sourceBase.MemberGroup
         }
     }
 

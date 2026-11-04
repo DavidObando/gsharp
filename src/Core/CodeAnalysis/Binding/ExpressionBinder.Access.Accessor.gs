@@ -3609,7 +3609,7 @@ internal partial class ExpressionBinder {
     /// correct construction `TypeSpec`. A non-generic owner of either kind
     /// emits a bare `MethodDef` token.
     internal func BindUserTypeStaticCall(ownerType TypeSymbol, ce CallExpressionSyntax) BoundExpression {
-        let frame = CallCandidateRecorder.Begin(ce)
+        let frame = CallCandidateRecorder.Begin(ce, ownerType)
         try {
             let bound = BindUserTypeStaticCallCore(ownerType, ce)
             CallCandidateRecorder.Stamp(frame, bound)

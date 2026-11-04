@@ -29,6 +29,7 @@ internal partial class OverloadResolver {
         receiverType TypeSymbol? = nil
     ) FunctionSymbol? {
         var overloads = overloads
+        CallCandidateRecorder.RecordFunctions(overloads, receiverType)
         if overloads.Length <= 1 {
             return if overloads.Length == 1 {
                 overloads[0]
@@ -36,7 +37,6 @@ internal partial class OverloadResolver {
                 default(FunctionSymbol?)
             }
         }
-        CallCandidateRecorder.RecordFunctions(overloads)
         // Issue #1124: a call may carry an explicit method type-argument list
         // (e.g. `Factory.Make[Box](...)`). Thread its arity into overload
         // selection so generic candidates are filtered for applicability against

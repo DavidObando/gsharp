@@ -367,7 +367,8 @@ class SemanticModel {
 
 - `GetSymbolInfo` for a name that bound to an imported member returns the
   imported member symbol (`ImportedFunctionSymbol`, the imported property,
-  field or event symbol that `MemberLookup` produced); the server renders it
+  field or event symbol that `MemberLookup` produced, or the `FunctionSymbol`
+  of an imported aggregate carrying `ImportedMember`, issue #5444); the server renders it
   through `SymbolDisplay` and `AssemblyDocumentationProvider.Resolve`. The
   server's `MemberInfo`-returning `GetImportedMember` goes; the residual
   `ClrType` reads in the server go with ADR-0209 stage 6.
@@ -404,7 +405,9 @@ class SemanticModel {
   imported interface inherits from its base interfaces, the default methods of
   the interfaces a class implements, and the built-in members of a slice,
   array, map, channel or sequence over a source element type, which has no CLR
-  type. Issue #5488 adds the members of a type parameter: the members of each
+  type. Issue #5444 includes the private instance and static helper methods of
+  an interface when the query position is inside that declaring interface.
+  Issue #5488 adds the members of a type parameter: the members of each
   constraint in constraint order along the forwarded bound chain, then the
   public instance members of `object` when no constraint is a class (instance
   members only for a base-class constraint, each member listed once). Extension
@@ -412,7 +415,9 @@ class SemanticModel {
   #5440): source extension functions by file path then start, then imported
   extension methods by holder class then metadata token.
 - `GetMemberGroup(node)` returns the candidates a call or member-access name
-  resolved among, in declaration order (extension calls included, issue #5480);
+  resolved among, in declaration order (extension calls included, issue #5480;
+  `base.M(...)` and `base[T].M(...)` calls, constrained static `T.M(...)` calls,
+  and unfinished or failed calls included, issue #5444);
   signature help and the hover overload count consume it.
   **Slice note (S2 review, #5314):** the member group is built from the
   candidates the overload resolver considered, recorded on the bound call, not
