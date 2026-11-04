@@ -637,7 +637,7 @@ partial class CSharpToGSharpTranslator {
             if !IsNativelyExpressiblePattern(isPattern.Pattern, topLevel: true) {
                 return false
             }
-            let regions = ComputeNativePatternVariableRegions(isPattern)
+            let regions = this.ComputeNativePatternVariableRegions(isPattern)
             let scope_ = this
                 .state
                 .CurrentBodyScope ??
@@ -1275,6 +1275,258 @@ partial class CSharpToGSharpTranslator {
             return "_"
         }
 
+        /// The syntax regions in which G# scopes the pattern variables of
+        /// [`isPattern`](paramref) — the mirror of the compiler's
+        /// `PatternVariables` classifier and `BindIfStatement` leak rule:
+        /// the right operand of an enclosing `&&` (of `||` under
+        /// negation), the branch a condition selects, the loop body, the guarded
+        /// switch arm, and the statements after an `if` whose other branch
+        /// always exits.
+        private func ComputeNativePatternVariableRegions(isPattern IsPatternExpressionSyntax) List[SyntaxNode] {
+            // `x is not T t` assigns `t` when the whole test is FALSE.
+            StripTopLevelNegation(isPattern.Pattern, out var negated)
+            return this.ComputePatternFlowRegions(isPattern, whenTrue: !negated)
+        }
+
+        private func ComputePatternFlowRegions(
+            isPattern IsPatternExpressionSyntax,
+            whenTrue bool,
+            includeWhenClauseRegion bool = true
+        ) List[SyntaxNode] -> this.ComputeBooleanFlowRegions(isPattern, whenTrue, includeWhenClauseRegion)
+
+        private func ComputeBooleanFlowRegions(
+            condition ExpressionSyntax,
+            whenTrue bool,
+            includeWhenClauseRegion bool = true
+        ) List[SyntaxNode] {
+            var whenTrue = whenTrue
+            let regions = List[SyntaxNode]()
+            var node SyntaxNode? = condition
+            while true {
+                let parent SyntaxNode? = node!!.Parent
+                switch parent {
+                    case ParenthesizedExpressionSyntax {
+                        node = parent
+                        continue
+                    }
+                    case prefix is PrefixUnaryExpressionSyntax when prefix.IsKind(SyntaxKind.LogicalNotExpression) {
+                        whenTrue = !whenTrue
+                        node = parent
+                        continue
+                    }
+                    case binary is BinaryExpressionSyntax when binary.IsKind(SyntaxKind.LogicalAndExpression) {
+                        if !whenTrue {
+                            return regions
+                        }
+                        if binary.Left == node {
+                            regions.Add(binary.Right)
+                        }
+                        node = parent
+                        continue
+                    }
+                    case binary is BinaryExpressionSyntax when binary.IsKind(SyntaxKind.LogicalOrExpression) {
+                        if whenTrue {
+                            return regions
+                        }
+                        if binary.Left == node {
+                            regions.Add(binary.Right)
+                        }
+                        node = parent
+                        continue
+                    }
+                    case conditional is ConditionalExpressionSyntax when conditional.Condition == node {
+                        regions.Add(
+                            if whenTrue {
+                                conditional.WhenTrue
+                            } else {
+                                conditional.WhenFalse
+                            }
+                        )
+                        return regions
+                    }
+                    case ifStatement is IfStatementSyntax when ifStatement.Condition == node {
+                        {
+                            if whenTrue {
+                                regions.Add(ifStatement.Statement)
+                            } else if ifStatement.Else != nil {
+                                regions.Add(ifStatement.Else!!.Statement)
+                            }
+                            let leaks = if whenTrue {
+                                ifStatement.Else != nil && StatementAlwaysExits(ifStatement.Else!!.Statement)
+                            } else {
+                                StatementAlwaysExits(ifStatement.Statement)
+                            }
+                            if leaks {
+                                AddFollowingStatements(ifStatement, regions)
+                            }
+                            return regions
+                        }
+                    }
+                    case whileStatement is WhileStatementSyntax when whileStatement.Condition == node {
+                        if whenTrue {
+                            regions.Add(whileStatement.Statement)
+                        } else if !includeWhenClauseRegion && this.CanNarrowAfterLoopExit(whileStatement) {
+                            AddFollowingStatements(whileStatement, regions)
+                        }
+                        return regions
+                    }
+                    case forStatement is ForStatementSyntax when forStatement.Condition == node {
+                        if whenTrue {
+                            regions.Add(forStatement.Statement)
+                        } else if !includeWhenClauseRegion && this.CanNarrowAfterLoopExit(forStatement) {
+                            AddFollowingStatements(forStatement, regions)
+                        }
+                        return regions
+                    }
+                    case doStatement is DoStatementSyntax when doStatement.Condition == node {
+                        if !whenTrue && !includeWhenClauseRegion && this.CanNarrowAfterLoopExit(doStatement) {
+                            AddFollowingStatements(doStatement, regions)
+                        }
+                        return regions
+                    }
+                    case whenClause is WhenClauseSyntax {
+                        if whenTrue && includeWhenClauseRegion {
+                            if whenClause.Parent is CasePatternSwitchLabelSyntax{Parent: SwitchSectionSyntax section} {
+                                regions.AddRange(section.Statements)
+                            } else if whenClause.Parent is SwitchExpressionArmSyntax arm {
+                                regions.Add(arm.Expression)
+                            }
+                        }
+                        return regions
+                    }
+                    case catchFilter is CatchFilterClauseSyntax when catchFilter.FilterExpression == node {
+                        if whenTrue && catchFilter.Parent is CatchClauseSyntax catchClause {
+                            regions.Add(catchClause.Block)
+                        }
+                        return regions
+                    }
+                    default {
+                        return regions
+                    }
+                }
+            }
+        }
+
+        // ADR-0213 R7 (f) (#5697): gsc narrows after a loop whose exit condition proves a fact when the loop has no
+        // emitted `break` (`ContainsBreakFor`), the function has no user label or `goto`, and the condition stays in
+        // the emitted loop header rather than lowering to a `while true` break guard or a block-wrapped `for`.
+        private func CanNarrowAfterLoopExit(loop StatementSyntax) bool {
+            let condition ExpressionSyntax? = switch loop {
+                case whileLoop is WhileStatementSyntax: whileLoop.Condition
+                case forLoop is ForStatementSyntax: forLoop.Condition
+                case doLoop is DoStatementSyntax: doLoop.Condition
+                default: default(ExpressionSyntax?)
+            }
+            if condition == nil || this.LoopConditionLowersOutOfHeader(loop, condition) {
+                return false
+            }
+            if loop is ForStatementSyntax forLoop &&
+                (
+                (forLoop.Declaration?.Variables.Count ?? 0) > 1 ||
+                    forLoop
+                    .Initializers
+                    .Count > 1 ||
+                    forLoop
+                    .Incrementors
+                    .Count > 1 ||
+                    forLoop
+                    .Initializers
+                    .Concat(forLoop.Incrementors)
+                    .Any(
+                    (expr ExpressionSyntax) -> ClauseContainsAssignment(expr) || this.ClauseRequiresOutPredeclaration(
+                        expr
+                    )
+                )
+            ) {
+                return false
+            }
+            if this.LoopContainsEmittedBreak(loop) {
+                return false
+            }
+            let body = loop.Ancestors().FirstOrDefault(
+                (node SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
+                    node is AccessorDeclarationSyntax ||
+                    node is LocalFunctionStatementSyntax ||
+                    node is AnonymousFunctionExpressionSyntax
+            ) ??
+                loop
+                .SyntaxTree
+                .GetRoot()
+            return !body.DescendantNodes(
+                (node SyntaxNode) -> !(
+                    node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax
+                )
+            )
+                .Any(
+                (node SyntaxNode) -> node is LabeledStatementSyntax ||
+                    (node is GotoStatementSyntax jump && jump.IsKind(SyntaxKind.GotoStatement))
+            )
+        }
+
+        private func LoopConditionLowersOutOfHeader(loop StatementSyntax, condition ExpressionSyntax) bool {
+            if this.ClauseRequiresOutPredeclaration(condition) || ClauseContainsAssignment(condition) {
+                return true
+            }
+            let hasPatternVariables = condition
+                .DescendantNodesAndSelf(
+                (node SyntaxNode) -> !(
+                    node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax
+                )
+            )
+                .OfType[IsPatternExpressionSyntax]()
+                .Any((isPattern IsPatternExpressionSyntax) -> PatternUsesNativeVariableSyntax(isPattern.Pattern))
+            if hasPatternVariables && !this.ConditionUsesNativePatternVariables(condition) {
+                return true
+            }
+            if !this.ClauseRequiresOutPredeclaration(condition) && this.ConditionUsesNativePatternVariables(condition) {
+                return false
+            }
+            if loop is WhileStatementSyntax whileLoop && this.TryBuildWhileLetLoop(
+                condition,
+                whileLoop.Statement,
+                out _
+            ) {
+                return true
+            }
+            return this.ForConditionRequiresHoist(condition)
+        }
+
+        private func LoopContainsEmittedBreak(loop StatementSyntax) bool {
+            for node in loop.DescendantNodes(
+                (child SyntaxNode) -> !(
+                    child is LocalFunctionStatementSyntax || child is AnonymousFunctionExpressionSyntax
+                )
+            ) {
+                if node is BreakStatementSyntax breakStatement {
+                    let target = breakStatement.Ancestors().FirstOrDefault(
+                        (ancestor SyntaxNode) -> ancestor is SwitchStatementSyntax ||
+                            ancestor is WhileStatementSyntax ||
+                            ancestor is DoStatementSyntax ||
+                            ancestor is ForStatementSyntax ||
+                            ancestor is CommonForEachStatementSyntax
+                    )
+                    if target is not SwitchStatementSyntax {
+                        return true
+                    }
+                } else if node is WhileStatementSyntax nestedWhile && this.LoopConditionLowersOutOfHeader(
+                    nestedWhile,
+                    nestedWhile.Condition
+                ) {
+                    return true
+                } else if node is DoStatementSyntax nestedDo && this.LoopConditionLowersOutOfHeader(
+                    nestedDo,
+                    nestedDo.Condition
+                ) {
+                    return true
+                } else if node is ForStatementSyntax nestedFor &&
+                    nestedFor.Condition != nil &&
+                    this.LoopConditionLowersOutOfHeader(nestedFor, nestedFor.Condition!!) {
+                    return true
+                }
+            }
+            return false
+        }
+
         shared {
             private func HasUnsupportedBindingUnderTopLevelNot(pattern PatternSyntax) bool {
                 var pattern = pattern
@@ -1336,148 +1588,6 @@ partial class CSharpToGSharpTranslator {
                         }
                         default {
                             return root
-                        }
-                    }
-                }
-            }
-
-            /// The syntax regions in which G# scopes the pattern variables of
-            /// [`isPattern`](paramref) — the mirror of the compiler's
-            /// `PatternVariables` classifier and `BindIfStatement` leak rule:
-            /// the right operand of an enclosing `&&` (of `||` under
-            /// negation), the branch a condition selects, the loop body, the guarded
-            /// switch arm, and the statements after an `if` whose other branch
-            /// always exits.
-            private func ComputeNativePatternVariableRegions(isPattern IsPatternExpressionSyntax) List[SyntaxNode] {
-                // `x is not T t` assigns `t` when the whole test is FALSE.
-                StripTopLevelNegation(isPattern.Pattern, out var negated)
-                return ComputePatternFlowRegions(isPattern, whenTrue: !negated)
-            }
-
-            private func ComputePatternFlowRegions(
-                isPattern IsPatternExpressionSyntax,
-                whenTrue bool,
-                includeWhenClauseRegion bool = true
-            ) List[SyntaxNode] -> ComputeBooleanFlowRegions(isPattern, whenTrue, includeWhenClauseRegion)
-
-            private func ComputeBooleanFlowRegions(
-                condition ExpressionSyntax,
-                whenTrue bool,
-                includeWhenClauseRegion bool = true
-            ) List[SyntaxNode] {
-                var whenTrue = whenTrue
-                let regions = List[SyntaxNode]()
-                var node SyntaxNode? = condition
-                while true {
-                    let parent SyntaxNode? = node!!.Parent
-                    switch parent {
-                        case ParenthesizedExpressionSyntax {
-                            node = parent
-                            continue
-                        }
-                        case prefix is PrefixUnaryExpressionSyntax when prefix.IsKind(SyntaxKind.LogicalNotExpression) {
-                            whenTrue = !whenTrue
-                            node = parent
-                            continue
-                        }
-                        case binary is BinaryExpressionSyntax when binary.IsKind(SyntaxKind.LogicalAndExpression) {
-                            if !whenTrue {
-                                return regions
-                            }
-                            if binary.Left == node {
-                                regions.Add(binary.Right)
-                            }
-                            node = parent
-                            continue
-                        }
-                        case binary is BinaryExpressionSyntax when binary.IsKind(SyntaxKind.LogicalOrExpression) {
-                            if whenTrue {
-                                return regions
-                            }
-                            if binary.Left == node {
-                                regions.Add(binary.Right)
-                            }
-                            node = parent
-                            continue
-                        }
-                        case conditional is ConditionalExpressionSyntax when conditional.Condition == node {
-                            regions.Add(
-                                if whenTrue {
-                                    conditional.WhenTrue
-                                } else {
-                                    conditional.WhenFalse
-                                }
-                            )
-                            return regions
-                        }
-                        case ifStatement is IfStatementSyntax when ifStatement.Condition == node {
-                            {
-                                if whenTrue {
-                                    regions.Add(ifStatement.Statement)
-                                } else if ifStatement.Else != nil {
-                                    regions.Add(ifStatement.Else!!.Statement)
-                                }
-                                let leaks = if whenTrue {
-                                    ifStatement.Else != nil && StatementAlwaysExits(ifStatement.Else!!.Statement)
-                                } else {
-                                    StatementAlwaysExits(ifStatement.Statement)
-                                }
-                                if leaks {
-                                    AddFollowingStatements(ifStatement, regions)
-                                }
-                                return regions
-                            }
-                        }
-                        case whileStatement is WhileStatementSyntax when whileStatement.Condition == node {
-                            if whenTrue {
-                                regions.Add(whileStatement.Statement)
-                            } else if !includeWhenClauseRegion && CanNarrowAfterLoopExit(whileStatement) {
-                                AddFollowingStatements(whileStatement, regions)
-                            }
-                            return regions
-                        }
-                        case forStatement is ForStatementSyntax when forStatement.Condition == node {
-                            if whenTrue {
-                                regions.Add(forStatement.Statement)
-                            } else if !includeWhenClauseRegion &&
-                                (forStatement.Declaration?.Variables.Count ?? 0) <= 1 &&
-                                forStatement
-                                .Initializers
-                                .Count <= 1 &&
-                                forStatement
-                                .Incrementors
-                                .Count <= 1 &&
-                                CanNarrowAfterLoopExit(forStatement) {
-                                AddFollowingStatements(forStatement, regions)
-                            }
-                            return regions
-                        }
-                        case doStatement is DoStatementSyntax when doStatement.Condition == node {
-                            if !whenTrue && !includeWhenClauseRegion && CanNarrowAfterLoopExit(doStatement) {
-                                AddFollowingStatements(doStatement, regions)
-                            }
-                            return regions
-                        }
-                        case whenClause is WhenClauseSyntax {
-                            if whenTrue && includeWhenClauseRegion {
-                                if whenClause.Parent is CasePatternSwitchLabelSyntax{
-                                    Parent: SwitchSectionSyntax section
-                                } {
-                                    regions.AddRange(section.Statements)
-                                } else if whenClause.Parent is SwitchExpressionArmSyntax arm {
-                                    regions.Add(arm.Expression)
-                                }
-                            }
-                            return regions
-                        }
-                        case catchFilter is CatchFilterClauseSyntax when catchFilter.FilterExpression == node {
-                            if whenTrue && catchFilter.Parent is CatchClauseSyntax catchClause {
-                                regions.Add(catchClause.Block)
-                            }
-                            return regions
-                        }
-                        default {
-                            return regions
                         }
                     }
                 }
@@ -1559,70 +1669,6 @@ partial class CSharpToGSharpTranslator {
                     }
                     return pattern
                 }
-            }
-
-            // ADR-0213 R7 (f) (#5697): gsc narrows after a loop whose exit condition proves a fact when no `break`
-            // targets the loop, the function has no user label or `goto`, and the condition stays in the loop header.
-            private func CanNarrowAfterLoopExit(loop StatementSyntax) bool {
-                let condition ExpressionSyntax? = switch loop {
-                    case whileLoop is WhileStatementSyntax: whileLoop.Condition
-                    case forLoop is ForStatementSyntax: forLoop.Condition
-                    case doLoop is DoStatementSyntax: doLoop.Condition
-                    default: default(ExpressionSyntax?)
-                }
-                if condition == nil || ClauseContainsAssignment(condition) {
-                    return false
-                }
-                if loop is ForStatementSyntax forLoop &&
-                    forLoop
-                    .Initializers
-                    .Concat(forLoop.Incrementors)
-                    .Any(ClauseContainsAssignment) {
-                    return false
-                }
-                if LoopHasBreakTargetingIt(loop) {
-                    return false
-                }
-                let body = loop.Ancestors().FirstOrDefault(
-                    (node SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
-                        node is AccessorDeclarationSyntax ||
-                        node is LocalFunctionStatementSyntax ||
-                        node is AnonymousFunctionExpressionSyntax
-                ) ??
-                    loop
-                    .SyntaxTree
-                    .GetRoot()
-                return !body.DescendantNodes(
-                    (node SyntaxNode) -> !(
-                        node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax
-                    )
-                )
-                    .Any(
-                    (node SyntaxNode) -> node is LabeledStatementSyntax ||
-                        (node is GotoStatementSyntax jump && jump.IsKind(SyntaxKind.GotoStatement))
-                )
-            }
-
-            private func LoopHasBreakTargetingIt(loop StatementSyntax) bool {
-                return loop
-                    .DescendantNodes(
-                    (node SyntaxNode) -> !(
-                        node is LocalFunctionStatementSyntax ||
-                            node is AnonymousFunctionExpressionSyntax ||
-                            node is SwitchStatementSyntax ||
-                            (
-                            !object.ReferenceEquals(node, loop) &&
-                                (
-                                node is WhileStatementSyntax ||
-                                    node is DoStatementSyntax ||
-                                    node is ForStatementSyntax ||
-                                    node is CommonForEachStatementSyntax
-                            )
-                        )
-                    )
-                )
-                    .OfType[BreakStatementSyntax]()
-                    .Any()
             }
 
             // The statements after `target` in its enclosing statement list.

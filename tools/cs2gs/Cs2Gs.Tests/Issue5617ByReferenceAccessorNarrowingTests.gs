@@ -1232,6 +1232,19 @@ public class Demo
         }
         return total + s.Length;
     }
+    public static int ArrayLengthLongToInt(ref string? s, long n)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        var i = 0;
+        while (i < 1)
+        {
+            var buf = new byte[n];
+            total += buf.Length;
+            i++;
+        }
+        return s.Length + total;
+    }
     public static int GuardInsideLoop(ref string? s, string text)
     {
         var total = 0;
@@ -1253,18 +1266,21 @@ public class Demo
     {
         string? text = "abc";
         return ForEachCharToInt(ref text, "xy") + "," + WhileIntToLong(ref text) + "," +
-            GuardInsideLoop(ref text, "z") + "," + OutsideLoop(ref text, 4);
+            ArrayLengthLongToInt(ref text, 2L) + "," + GuardInsideLoop(ref text, "z") + "," +
+            OutsideLoop(ref text, 4);
     }
 }`)
         Assert.Contains("return s!!.Length + total", printed)
         Assert.Contains("total += int64(s!!.Length)", printed)
         Assert.Contains("return total + int64(s!!.Length)", printed)
+        Assert.Contains("[int32(n)]uint8", printed)
         Assert.Contains("total += s.Length + 1", printed)
         Assert.Contains("return int64(s.Length) + wide", printed)
     }
 
     /// Issue #5692 (2): gsc's region scanner gives no origin to the variables of a deconstructing `for (a, b) in items`
-    /// loop, so using a deconstructed variable in the body removes a by-reference fact at loop entry and after it.
+    /// loop, so using a deconstructed variable (or an inferred copy of it) in the body removes a by-reference fact at
+    /// loop entry and after it. Unused deconstructed variables and an unused inferred `var` copy keep the fact.
     @Fact
     func RefParameter_ReadAroundAForEachThatUsesADeconstructedLoopVariable_IsAsserted() {
         let printed = AssertRunsLikeCSharp(`
@@ -1284,6 +1300,17 @@ public class Demo
         foreach (var (a, b) in items) total += a + s.Length;
         return total;
     }
+    public static int UsedThroughCopy(ref string? s, (int, int)[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (a, b) in items)
+        {
+            var copy = a;
+            total += copy;
+        }
+        return s.Length + total + 2;
+    }
     public static int UnusedVariables(ref string? s, (int, int)[] items)
     {
         if (s == null) return 0;
@@ -1291,27 +1318,49 @@ public class Demo
         foreach (var (a, b) in items) total += s.Length + 1;
         return s.Length + total;
     }
+    public static int UnusedCopyOnly(ref string? s, (int, int)[] items)
+    {
+        if (s == null) return 0;
+        foreach (var (a, b) in items)
+        {
+            var copy = a;
+        }
+        return s.Length + 3;
+    }
     public static string Run()
     {
         string? text = "abc";
         var items = new[] { (1, 2) };
-        return AfterLoop(ref text, items) + "," + InsideLoop(ref text, items) + "," + UnusedVariables(ref text, items);
+        return AfterLoop(ref text, items) + "," + InsideLoop(ref text, items) + "," +
+            UsedThroughCopy(ref text, items) + "," + UnusedVariables(ref text, items) + "," +
+            UnusedCopyOnly(ref text, items);
     }
 }`)
-        Assert.Contains("return s!!.Length + total", printed)
+        Assert.Contains("return s!!.Length + total\n", printed.Replace("\r\n", "\n"))
         Assert.Contains("total += a + s!!.Length", printed)
+        Assert.Contains("return s!!.Length + total + 2", printed)
         Assert.Contains("total += s.Length + 1", printed)
-        Assert.Equal(2, Regex.Matches(printed, `s!!`).Count)
+        Assert.Contains("return s.Length + 3", printed)
+        Assert.Equal(3, Regex.Matches(printed, `s!!`).Count)
     }
 
-    /// Issue #5692 (3): gsc's region scanner cannot resolve the element origin of an untyped `for x in call()` loop,
-    /// so reading a member of `x` in the body counts as a read on an untyped receiver (W5) and removes a by-reference
-    /// fact. Over a parameter slice `parts`, the scanner resolves the element and keeps the fact.
+    /// Issue #5692 (3): gsc's region scanner cannot resolve the element origin of an untyped `for x in call()` loop
+    /// when an extension method of that name can bind (`"a,b".Split(',')`) or when the call is an unqualified static
+    /// class method (`Parts()`, emitted as a bare call that `$scope.TryLookupFunctions` does not resolve in a method
+    /// body), so reading a member of `x` in the body counts as a read on an untyped receiver (W5) and removes a
+    /// by-reference fact. Over a parameter slice `parts`, a qualified static call `Box.Parts()`, or an instance member
+    /// call `box.InstanceParts()` whose return type the scanner resolves, the fact stays.
     @Fact
     func RefParameter_ReadAroundAForEachOverACallWhoseLoopVariableIsRead_IsAsserted() {
         let printed = AssertRunsLikeCSharp(`
+public sealed class Box
+{
+    public static string[] Parts() => new[] { "a", "b" };
+    public string[] InstanceParts() => new[] { "c" };
+}
 public class Demo
 {
+    static string[] UnqualifiedParts() => new[] { "d" };
     public static int AfterCallCollection(ref string? s)
     {
         if (s == null) return 0;
@@ -1330,6 +1379,13 @@ public class Demo
         }
         return total;
     }
+    public static int OverUnqualifiedStaticCall(ref string? s)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in UnqualifiedParts()) total += part.Length;
+        return s.Length + total + 3;
+    }
     public static int OverParameterArray(ref string? s, string[] parts)
     {
         if (s == null) return 0;
@@ -1337,23 +1393,35 @@ public class Demo
         foreach (var part in parts) total += part.Length;
         return s.Length + total + 1;
     }
+    public static int OverResolvableMemberCalls(ref string? s, Box box)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in Box.Parts()) total += part.Length;
+        foreach (var part in box.InstanceParts()) total += part.Length;
+        return s.Length + total + 2;
+    }
     public static string Run()
     {
         string? text = "abc";
         return AfterCallCollection(ref text) + "," + InsideCallCollection(ref text) + "," +
-            OverParameterArray(ref text, new[] { "a", "b" });
+            OverUnqualifiedStaticCall(ref text) + "," +
+            OverParameterArray(ref text, new[] { "a", "b" }) + "," + OverResolvableMemberCalls(ref text, new Box());
     }
 }`)
-        Assert.Contains("return s!!.Length + total", printed)
+        Assert.Contains("return s!!.Length + total\n", printed.Replace("\r\n", "\n"))
         Assert.Contains("total += s!!.Length", printed)
+        Assert.Contains("return s!!.Length + total + 3", printed)
         Assert.Contains("return s.Length + total + 1", printed)
-        Assert.Equal(2, Regex.Matches(printed, `s!!`).Count)
+        Assert.Contains("return s.Length + total + 2", printed)
+        Assert.Equal(3, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null
-    /// when no `break` targets the loop (`RecordLoopExitFacts`, ADR-0213 R7 (f)). A loop with a `break` targeting it,
-    /// or whose condition itself runs an accessor that can write by-reference storage, does not get the loop-exit fact
-    /// on main, so its read after the loop stays asserted.
+    /// when the loop has no emitted `break` (`RecordLoopExitFacts`, ADR-0213 R7 (f)). A loop with a `break` (targeting
+    /// it or a nested loop), a loop whose condition lowers to a hoisted `break` guard, or a loop whose condition runs
+    /// an accessor that can write by-reference storage does not get the loop-exit fact on main, so its read after the
+    /// loop stays asserted.
     @Fact
     func RefParameter_ReadAfterALoopWhoseExitConditionProvesNonNull_StaysBare() {
         let printed = AssertRunsLikeCSharp(`
@@ -1364,6 +1432,7 @@ public sealed class Box
 }
 public class Demo
 {
+    static object TryGet(out int value) { value = 1; return 1; }
     public static int DoLoop(ref string? s, Box box)
     {
         do { box.F = 1; s = box.F > 0 ? "abc" : null; } while (s == null);
@@ -1416,13 +1485,36 @@ public class Demo
         }
         return s.Length + 6;
     }
+    public static int WhileLoopWithNestedBreak(ref string? s, Box box)
+    {
+        s = null;
+        while (s == null)
+        {
+            while (true) { break; }
+            box.F = 1;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 7;
+    }
+    public static int WhileConditionHoistsOutPattern(ref string? s, object probe)
+    {
+        s = null;
+        while (!(probe is int y && s != null))
+        {
+            y = 2;
+            s = "abc";
+        }
+        return s.Length + 8;
+    }
     public static string Run()
     {
         string? text = "abc";
         return DoLoop(ref text, new Box()) + "," + DoLoopWithGuardAndForEach(ref text, new Box(), new[] { 1 }) + "," +
             WhileLoop(ref text, new Box()) + "," + ForLoop(ref text, new Box()) + "," +
             WhileLoopWithBreak(ref text, new Box()) + "," +
-            WhileConditionRunsAccessor(ref text, new Lazy<int>(() => 1));
+            WhileConditionRunsAccessor(ref text, new Lazy<int>(() => 1)) + "," +
+            WhileLoopWithNestedBreak(ref text, new Box()) + "," +
+            WhileConditionHoistsOutPattern(ref text, 1);
     }
 }`)
         Assert.Contains("return s.Length + 1", printed)
@@ -1431,7 +1523,9 @@ public class Demo
         Assert.Contains("return s.Length + 4", printed)
         Assert.Contains("return s!!.Length + 5", printed)
         Assert.Contains("return s!!.Length + 6", printed)
-        Assert.Equal(2, Regex.Matches(printed, `s!!`).Count)
+        Assert.Contains("return s!!.Length + 7", printed)
+        Assert.Contains("return s!!.Length + 8", printed)
+        Assert.Equal(4, Regex.Matches(printed, `s!!`).Count)
     }
 
     shared {
