@@ -477,6 +477,17 @@ internal partial class StatementBinder {
         // named fields are added to this frame and remain narrowed for all
         // subsequent statements in the block (until assignment invalidates them).
         let inheritedFallthrough = currentStatementListFallsThrough
+        let blockFrameIndex = binderCtx.NarrowedVariables.Count
+        let blockOwner = if startIndex == 0 && statementSyntaxes.Length > 0 {
+            statementSyntaxes[0].Parent
+        } else {
+            default(SyntaxNode?)
+        }
+        var recordedBlockOwner = false
+        if blockOwner != nil && !blockEntryFrameIndex.ContainsKey(blockOwner) {
+            blockEntryFrameIndex[blockOwner] = blockFrameIndex
+            recordedBlockOwner = true
+        }
         let memberNotNullFrame = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol]())
         let shadowSavedOverlay = ShadowEnterList()
         let shadowSavedBase = binderCtx.ShadowOverlayBase
@@ -791,6 +802,9 @@ internal partial class StatementBinder {
             }
             return currentStatementListFallsThrough
         } finally {
+            if recordedBlockOwner && blockOwner != nil {
+                blockEntryFrameIndex.Remove(blockOwner)
+            }
             ShadowLeaveList(shadowSavedOverlay, shadowSavedBase)
             NoteListExit()
             binderCtx.EndNarrowingProof()

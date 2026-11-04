@@ -394,6 +394,10 @@ func Main() {
 var g string? = "ok"
 func Clear() int32 { g = nil; return 1 }
 func ClearBool() bool { g = nil; return true }
+class Box {
+    func M(x int32) int32 { return x }
+    func ClearAndGet() Box { g = nil; return this }
+}
 func RunAdd() int32 {
     while true {
         if g == nil {
@@ -432,9 +436,46 @@ func RunLabeledOr() int32 {
     }
     return g.Length
 }
+func RunChainedCall(box Box) int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let ignored = box.ClearAndGet().M({
+            break
+            0
+        })
+    }
+    return g.Length
+}
 func Main() {
-    Console.WriteLine(RunAdd() + RunAnd() + RunLabeledOr())
-}`, "GS0158@15:14 GS0158@27:14 GS0158@41:14", "reject", ""}
+    Console.WriteLine(RunAdd() + RunAnd() + RunLabeledOr() + RunChainedCall(Box()))
+}`, "GS0158@19:14 GS0158@31:14 GS0158@45:14 GS0158@57:14", "reject", ""}
+            yield[]object{"control7_killed_branch_and_loop_condition_facts_not_replayed_on_break", `import System
+func Get() string? { return "ok" }
+func RunShortCircuitKilled() int32 {
+    var s string? = Get()
+    while true {
+        let ignored = s != nil && {
+            s = nil
+            break
+            true
+        }
+        return 0
+    }
+    return s.Length
+}
+func RunLoopConditionKilled() int32 {
+    var s string? = Get()
+    while s != nil {
+        s = nil
+        break
+    }
+    return s.Length
+}
+func Main() {
+    Console.WriteLine(RunShortCircuitKilled() + RunLoopConditionKilled())
+}`, "GS0158@13:14 GS0158@21:14", "reject", ""}
             yield[]object{"control6a_labeled_break_crossing_for_in_runs_enumerator_disposal", `import System
 var s string? = "ok"
 func Gen() sequence[int32] {

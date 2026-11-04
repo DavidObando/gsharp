@@ -120,6 +120,7 @@ internal partial class StatementBinder {
         binderCtx.NarrowingFlow.Clear()
         binderCtx.BoundExpressionsInLoop.Clear()
         loopBodyByBreakLabel.Clear()
+        blockEntryFrameIndex.Clear()
         loopExitFacts.Clear()
         ClearBackwardJumpSpanCaches()
         boundFinallyBlocks.Clear()
@@ -154,6 +155,7 @@ internal partial class StatementBinder {
     }
 
     private let loopBodyByBreakLabel Dictionary[BoundLabel, SyntaxNode] = Dictionary[BoundLabel, SyntaxNode]()
+    private let blockEntryFrameIndex Dictionary[SyntaxNode, int32] = Dictionary[SyntaxNode, int32]()
 
     /// Binds a loop body while pushing the loop's break/continue labels (and
     /// optional ADR-0070 label name) onto (cref:BinderContext.LoopStack).
@@ -463,19 +465,26 @@ internal partial class StatementBinder {
         if !loopBodyByBreakLabel.TryGetValue(breakLabel, out var targetLoopBody) {
             return snapshot
         }
-        let steps = List[(Parent SyntaxNode, Child SyntaxNode)]()
+        let steps = List[(Parent SyntaxNode, Child SyntaxNode, ChildMinFrame int32)]()
         var child SyntaxNode = breakSyntax
+        var innerBlockMinFrame = int32.MaxValue
         while !object.ReferenceEquals(child, targetLoopBody) && child.Parent is {} parent {
-            steps.Add((parent, child))
+            if blockEntryFrameIndex.TryGetValue(child, out var childFrame) && childFrame < innerBlockMinFrame {
+                innerBlockMinFrame = childFrame
+            }
+            steps.Add((parent, child, innerBlockMinFrame))
             child = parent
         }
         if object.ReferenceEquals(child, targetLoopBody) && targetLoopBody.Parent is {} loopParent {
-            steps.Add((loopParent, targetLoopBody))
+            if blockEntryFrameIndex.TryGetValue(child, out var loopBodyFrame) && loopBodyFrame < innerBlockMinFrame {
+                innerBlockMinFrame = loopBodyFrame
+            }
+            steps.Add((loopParent, targetLoopBody, innerBlockMinFrame))
         }
         for var i = steps.Count - 1; i >= 0; i-- {
-            let (parent, stepChild) = steps[i]
+            let (parent, stepChild, childMinFrame) = steps[i]
             for (prefix, conditionBranch) in EnumerateEvaluatedPrefixesBeforeChild(parent, stepChild) {
-                ApplyEvaluatedPrefixEffectsToSnapshot(snapshot, prefix, conditionBranch)
+                ApplyEvaluatedPrefixEffectsToSnapshot(snapshot, prefix, conditionBranch, childMinFrame)
             }
         }
         return snapshot
@@ -550,17 +559,17 @@ internal partial class StatementBinder {
             }
             case forClause is ForClauseStatementSyntax {
                 if object.ReferenceEquals(child, forClause.Body) && forClause.Condition is {} cond {
-                    prefixes.Add((cond, true))
+                    prefixes.Add((cond, nil))
                 }
             }
             case whileStmt is WhileStatementSyntax {
                 if object.ReferenceEquals(child, whileStmt.Body) {
-                    prefixes.Add((whileStmt.Condition, true))
+                    prefixes.Add((whileStmt.Condition, nil))
                 }
             }
             case forCondStmt is ForConditionStatementSyntax {
                 if object.ReferenceEquals(child, forCondStmt.Body) {
-                    prefixes.Add((forCondStmt.Condition, true))
+                    prefixes.Add((forCondStmt.Condition, nil))
                 }
             }
             case binExpr is BinaryExpressionSyntax {
@@ -608,7 +617,8 @@ internal partial class StatementBinder {
     private func ApplyEvaluatedPrefixEffectsToSnapshot(
         snapshot NarrowingJumpState,
         prefix SyntaxNode,
-        conditionBranch bool?
+        conditionBranch bool?,
+        childMinFrame int32
     ) {
         EnsureClosureAssignedNames(prefix)
         let aliasesBefore = HashSet[VariableSymbol](snapshot.ExternalCallableAliases)
@@ -637,6 +647,15 @@ internal partial class StatementBinder {
                 }
             }
         }
+        var survivingBranchFacts Dictionary[AccessPath, TypeSymbol]? = nil
+        if conditionBranch is {} whenTrue && boundExpressions.Count == 1 {
+            let (thenNarrow, elseNarrow) = ComputeConditionNarrowing(boundExpressions[0], aliasesBefore)
+            survivingBranchFacts = if whenTrue {
+                thenNarrow
+            } else {
+                elseNarrow
+            }
+        }
         let filterWrites = if collector != nil {
             EnclosingFilterWrites(prefix, collector)
         } else {
@@ -644,6 +663,13 @@ internal partial class StatementBinder {
         }
         for entry in snapshot.NarrowedVariables.ToArray() {
             let key = entry.Key
+            if snapshot.NarrowingFrameIndices.TryGetValue(key, out var frameIndex) && frameIndex >= childMinFrame {
+                continue
+            }
+            if survivingBranchFacts != nil && survivingBranchFacts.TryGetValue(key, out var survivingType) &&
+                survivingType == entry.Value {
+                continue
+            }
             let drop = (
                 filterWrites != nil &&
                     (FilterWritesVariable(filterWrites, key.Root) || MayBeMutatedByUnknownCallable(key))
@@ -665,19 +691,6 @@ internal partial class StatementBinder {
         }
         if collector != nil {
             snapshot.ReplaceExternalCallableAliases(collector.DefinitelyExternalFunctionValues)
-        }
-        if conditionBranch is {} whenTrue && boundExpressions.Count == 1 {
-            let (thenNarrow, elseNarrow) = ComputeConditionNarrowing(boundExpressions[0], aliasesBefore)
-            let branchNarrow = if whenTrue {
-                thenNarrow
-            } else {
-                elseNarrow
-            }
-            if branchNarrow != nil {
-                for entry in branchNarrow {
-                    snapshot.SetNarrowing(entry.Key, entry.Value)
-                }
-            }
         }
     }
 
