@@ -218,14 +218,26 @@ internal shared class ClrOperatorResolution {
             return TryResolveConversion(nullableSource, effectiveTarget, allowExplicit, out method, out isExplicit) ||
                 TryResolveConversion(nullableSource, targetType?.ClrType, allowExplicit, out method, out isExplicit)
         }
-        return sourceType is NullableTypeSymbol sourceNullable && NullableLifting.IsAnyValueTypeNullable(
-            sourceNullable
-        ) &&
+        return sourceType is NullableTypeSymbol source && NullableLifting.IsAnyValueTypeNullable(source) &&
             targetType != nil &&
             BoundClrConversionCallExpression.CanLiftTo(targetType) &&
+            (allowExplicit || BoundClrConversionCallExpression.CanLiftImplicitlyTo(targetType)) &&
+            !TypeSymbol.IsByRefLike(sourceType) && !TypeSymbol.IsByRefLike(targetType) &&
             (
-            TryResolveConversion(sourceType.ClrType, effectiveTarget, allowExplicit, out method, out isExplicit) ||
-                TryResolveConversion(sourceType.ClrType, targetType.ClrType, allowExplicit, out method, out isExplicit)
+            TryResolveConversion(
+                source.UnderlyingType.ClrType,
+                effectiveTarget,
+                allowExplicit,
+                out method,
+                out isExplicit
+            ) ||
+                TryResolveConversion(
+                source.UnderlyingType.ClrType,
+                targetType.ClrType,
+                allowExplicit,
+                out method,
+                out isExplicit
+            )
         )
     }
 

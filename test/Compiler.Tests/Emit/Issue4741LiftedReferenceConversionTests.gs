@@ -577,6 +577,132 @@ func Convert[T](value Wrapper[T]?) ` + "$result" + ` -> ` + "$result" + `(value)
         }
     }
 
+    @Theory
+    @InlineData("shared-object-initializer", "GS0155", "(7,49,7,64)")
+    @InlineData("instance-object-initializer", "GS0155", "(8,45,8,60)")
+    @InlineData("local-object-initializer", "GS0155", "(6,28,6,43)")
+    @InlineData("local-initializer", "GS0155", "(6,25,6,40)")
+    @InlineData("argument", "GS0154", "(7,19,7,34)")
+    @InlineData("explicit-cast", "GS0155", "(6,19,6,34)")
+    func ImportedValueConversion_RejectsNonNullableValueSinksAndVerifiesLiftedAndAssertedInitializers(
+        sink string,
+        expectedDiagnostic string,
+        expectedLocation string
+    ) {
+        let directory = Path.Combine(AppContext.BaseDirectory, "issue5587-fixtures", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let fixturePath = Path.Combine(directory, "Fixture5587.dll")
+            EmitCSharp(`#nullable enable
+namespace Fixture5587;
+public struct Length {
+    public double Value;
+    public static implicit operator Length(double value) => new Length { Value = value };
+    public static implicit operator Length(int value) => new Length { Value = value };
+}
+public struct ActionButton {
+    public double? FontSize;
+}
+public class Style {
+    public Length FontSize { get; set; }
+    public Length? OptionalFontSize { get; set; }
+}
+public struct GenericNullableValueBox<T> where T : struct {
+    public T? Value;
+    public static implicit operator GenericNullableValueBox<T>(T? value) => new GenericNullableValueBox<T> { Value = value };
+}`, fixturePath)
+            let validSourcePath = Path.Combine(directory, "Valid5587.gs")
+            let validAssemblyPath = Path.Combine(directory, "Valid5587.dll")
+            File.WriteAllText(validSourcePath, `package Valid5587
+import Fixture5587
+
+class Theme {
+    shared {
+        let Button ActionButton = ActionButton{FontSize: 14}
+        let EmptyButton ActionButton = ActionButton{FontSize: nil}
+        let ButtonStyle Style = Style{FontSize: Button.FontSize!!, OptionalFontSize: Button.FontSize}
+        let EmptyStyle Style = Style{OptionalFontSize: EmptyButton.FontSize}
+    }
+    var InstanceStyle Style = Style{FontSize: Theme.Button.FontSize!!, OptionalFontSize: Theme.Button.FontSize}
+}
+
+func WrapGeneric[T struct](value T?) GenericNullableValueBox[T] -> value
+
+func Run() string {
+    let instance = Theme()
+    let localStyle = Style{FontSize: Theme.Button.FontSize!!, OptionalFontSize: Theme.Button.FontSize}
+    let hasEmpty = Theme.EmptyStyle.OptionalFontSize == nil
+    let wrappedPresent = WrapGeneric[int32](19)
+    let wrappedEmpty = WrapGeneric[int32](nil)
+    return "${Theme.ButtonStyle.FontSize.Value},${Theme.ButtonStyle.OptionalFontSize!!.Value},${instance.InstanceStyle.FontSize.Value},${localStyle.OptionalFontSize!!.Value},${hasEmpty},${wrappedPresent.Value!!},${wrappedEmpty.Value == nil}"
+}`)
+            let validCompilation = CompileGSharp(validSourcePath, validAssemblyPath, fixturePath)
+            Assert.True(validCompilation.Exit == 0, validCompilation.Diagnostics)
+            IlVerifier.Verify(validAssemblyPath, []string{fixturePath})
+            let validAssembly = EmittedFixture.Load(validAssemblyPath)
+            let validProgram = validAssembly.GetTypes().Single(
+                (type Type) -> type.GetMethod("Run", BindingFlags.Public | BindingFlags.Static) != nil
+            )
+            let actual object? = validProgram.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)?.Invoke(
+                nil,
+                nil
+            )
+            Assert.Equal("14,14,14,14,True,19,True", actual)
+            let invalidBody = switch sink {
+                case "shared-object-initializer": `class Theme {
+    shared {
+        let Button ActionButton = ActionButton{FontSize: 14}
+        let ButtonStyle Style = Style{FontSize: Button.FontSize}
+    }
+}`
+                case "instance-object-initializer": `class Theme {
+    shared {
+        let Button ActionButton = ActionButton{FontSize: 14}
+    }
+    var ButtonStyle Style = Style{FontSize: Button.FontSize}
+}`
+                case "local-object-initializer": `func Build() Style {
+    let Button = ActionButton{FontSize: 14}
+    return Style{FontSize: Button.FontSize}
+}`
+                case "local-initializer": `func Build() Length {
+    let Button = ActionButton{FontSize: 14}
+    let length Length = Button.FontSize
+    return length
+}`
+                case "argument": `func Accept(value Length) Length -> value
+func Build() Length {
+    let Button = ActionButton{FontSize: 14}
+    return Accept(Button.FontSize)
+}`
+                case "explicit-cast": `func Build() Length {
+    let Button = ActionButton{FontSize: 14}
+    return Length(Button.FontSize)
+}`
+                default: throw ArgumentOutOfRangeException("sink")
+            }
+            let invalidSourcePath = Path.Combine(directory, "Invalid5587.gs")
+            let invalidAssemblyPath = Path.Combine(directory, "Invalid5587.dll")
+            File.WriteAllText(invalidSourcePath, `package Invalid5587
+import Fixture5587
+
+` + invalidBody)
+            let invalidCompilation = CompileGSharp(invalidSourcePath, invalidAssemblyPath, fixturePath)
+            Assert.NotEqual(0, invalidCompilation.Exit)
+            Assert.DoesNotContain("GS9998", invalidCompilation.Diagnostics, StringComparison.Ordinal)
+            let errors = invalidCompilation
+                .Diagnostics
+                .Split('\n')
+                .Where((line string) -> line.Contains(": error ", StringComparison.Ordinal))
+                .ToArray()
+            let error = Assert.Single(errors)
+            Assert.Contains(expectedDiagnostic, error, StringComparison.Ordinal)
+            Assert.Contains(expectedLocation, error, StringComparison.Ordinal)
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     shared {
         private func RunPair(
             gsharpConversion string,
