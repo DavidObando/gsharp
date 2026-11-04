@@ -3321,9 +3321,16 @@ internal partial class DeclarationBinder {
                 }
             }
             if a is StructSymbol sa && b is StructSymbol sb {
-                return object.ReferenceEquals(sa.Definition, sb.Definition) &&
-                    EnclosingTypeArgumentsEquivalent(sa, sb, typeParamMap) &&
-                    TypeArgumentsEquivalent(sa.TypeArguments, sb.TypeArguments, typeParamMap)
+                return object.ReferenceEquals(sa.Definition ?? sa, sb.Definition ?? sb) &&
+                    TypeArgumentsEquivalent(
+                    Conversion.GetEffectiveStructTypeArguments(sa),
+                    Conversion.GetEffectiveStructTypeArguments(sb),
+                    typeParamMap
+                )
+            }
+            if a is EnumSymbol ea && b is EnumSymbol eb {
+                return object.ReferenceEquals(ea.Definition ?? ea, eb.Definition ?? eb) &&
+                    TypeArgumentsEquivalent(ea.EnclosingTypeArguments, eb.EnclosingTypeArguments, typeParamMap)
             }
             if a is InterfaceSymbol ia && b is InterfaceSymbol ib {
                 return object.ReferenceEquals(ia.Definition, ib.Definition) &&
@@ -3396,39 +3403,27 @@ internal partial class DeclarationBinder {
                         TryGetSliceElementType(pb, out var pbSliceElem) &&
                         TypeSignaturesEquivalent(paSliceElem, pbSliceElem, typeParamMap)
                 }
-                // Constructed imported generics carrying symbolic arguments (e.g.
-                // `IEnumerator[T]`) are compared by open definition and ordered
-                // arguments so an unbound type parameter compares by identity
-                // rather than by its erased `object` CLR projection.
-                if pa.OpenDefinition != nil && pb.OpenDefinition != nil {
-                    return (
-                        pa.OpenDefinition == pb.OpenDefinition ||
-                            (
-                            conformanceMatchingDepth > 0 && ClrTypeUtilities.AreSame(
-                                pa.OpenDefinition,
-                                pb.OpenDefinition
-                            )
-                        )
-                    ) &&
-                        TypeArgumentsEquivalent(pa.TypeArguments, pb.TypeArguments, typeParamMap)
-                }
-                if pa.OpenDefinition != nil || pb.OpenDefinition != nil {
-                    return TryGetImportedConstructedGenericParts(pa, out var paOpen, out var paArgs) &&
-                        TryGetImportedConstructedGenericParts(pb, out var pbOpen, out var pbArgs) &&
-                        (
-                        paOpen == pbOpen || (conformanceMatchingDepth > 0 && ClrTypeUtilities.AreSame(paOpen, pbOpen))
-                    ) &&
+                if TryGetImportedConstructedGenericParts(pa, out var paOpen, out var paArgs) &&
+                    TryGetImportedConstructedGenericParts(pb, out var pbOpen, out var pbArgs) {
+                    return ClrTypeUtilities.AreSame(paOpen, pbOpen) &&
                         TypeArgumentsEquivalent(paArgs, pbArgs, typeParamMap)
+                }
+                if pa.OpenDefinition != nil ||
+                    pb.OpenDefinition != nil ||
+                    !pa
+                    .TypeArguments
+                    .IsDefaultOrEmpty ||
+                    !pb
+                    .TypeArguments
+                    .IsDefaultOrEmpty {
+                    return false
                 }
                 // Otherwise (both sides expressed as plain closed CLR types)
                 // fall back to a closed-type comparison.
-                if pa
-                    .TypeArguments
-                    .IsDefaultOrEmpty &&
+                if !TypeSymbol.ContainsTypeParameter(pa) && !TypeSymbol.ContainsTypeParameter(pb) &&
+                    !TypeSymbol.ContainsSameCompilationUserType(pa) && !TypeSymbol.ContainsSameCompilationUserType(
                     pb
-                    .TypeArguments
-                    .IsDefaultOrEmpty &&
-                    !TypeSymbol.ContainsTypeParameter(pa) && !TypeSymbol.ContainsTypeParameter(pb) &&
+                ) &&
                     pa
                     .ClrType
                     ?.ContainsGenericParameters != true &&
@@ -3437,12 +3432,7 @@ internal partial class DeclarationBinder {
                     ?.ContainsGenericParameters != true &&
                     (
                     conformanceMatchingDepth == 0 ||
-                        (
-                        !TypeSymbol.ContainsSameCompilationUserType(pa) && !TypeSymbol.ContainsSameCompilationUserType(
-                            pb
-                        ) &&
-                            !TypeSymbol.ContainsFixedLengthArray(pa) && !TypeSymbol.ContainsFixedLengthArray(pb)
-                    )
+                        (!TypeSymbol.ContainsFixedLengthArray(pa) && !TypeSymbol.ContainsFixedLengthArray(pb))
                 ) {
                     return pa.ClrType != nil && pb.ClrType != nil && ClrTypeUtilities.AreSame(pa.ClrType, pb.ClrType)
                 }
@@ -3478,27 +3468,6 @@ internal partial class DeclarationBinder {
                 a.ClrType == b.ClrType ||
                     (conformanceMatchingDepth > 0 && ClrTypeUtilities.AreSame(a.ClrType, b.ClrType))
             )
-        }
-
-        private func EnclosingTypeArgumentsEquivalent(
-            a StructSymbol,
-            b StructSymbol,
-            typeParamMap IReadOnlyDictionary[TypeParameterSymbol, TypeSymbol]?
-        ) bool {
-            if a.EnclosingTypeArguments.IsDefaultOrEmpty && b.EnclosingTypeArguments.IsDefaultOrEmpty {
-                return true
-            }
-            let aEnclosing = if a.EnclosingTypeArguments.IsDefaultOrEmpty {
-                StructSymbol.CollectEnclosingTypeParameters(a).Cast[TypeSymbol]().ToImmutableArray()
-            } else {
-                a.EnclosingTypeArguments
-            }
-            let bEnclosing = if b.EnclosingTypeArguments.IsDefaultOrEmpty {
-                StructSymbol.CollectEnclosingTypeParameters(b).Cast[TypeSymbol]().ToImmutableArray()
-            } else {
-                b.EnclosingTypeArguments
-            }
-            return TypeArgumentsEquivalent(aEnclosing, bEnclosing, typeParamMap)
         }
 
         internal func TryGetImportedConstructedGenericParts(
