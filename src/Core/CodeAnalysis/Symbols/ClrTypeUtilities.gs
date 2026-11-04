@@ -120,7 +120,17 @@ shared class ClrTypeUtilities {
             module = member.Module
         } catch (exception Exception) when exception is InvalidOperationException ||
             exception is NotSupportedException {
-            return FindTokenlessMetadataDefinition(type, member, flags, safeEnumeration)
+            CompilationMeasurements.Count("metadata.definition-scans")
+            for candidate in EnumerateMetadataDefinitions(type, member, flags, safeEnumeration) {
+                CompilationMeasurements.Count("metadata.definition-members")
+                if candidate.MetadataToken == member.MetadataToken && object.ReferenceEquals(
+                    candidate.Module,
+                    member.Module
+                ) {
+                    return candidate
+                }
+            }
+            return nil
         }
         let kind = member.MemberType
         let name = if member is MethodBase {

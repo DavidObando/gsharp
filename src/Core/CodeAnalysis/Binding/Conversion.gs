@@ -4417,6 +4417,17 @@ class Conversion {
             } else {
                 targetClr.GetGenericTypeDefinition()
             }
+            let positions = from.GetElementPositions()
+            if positions.IsDefaultOrEmpty {
+                return false
+            }
+            // Hot path: ordinary generic upcasts carry no platform position, so
+            // decline before any hierarchy walk. The vectors are checked rather
+            // than the outer types, because a flags-annotated array hides its
+            // element from the outer-type test.
+            if !AnyContainsPlatformType(positions) && !AnyContainsPlatformType(targetArguments) {
+                return false
+            }
             // A same-compilation G# interface has no ClrType either; its
             // substituted `BaseClrInterfaces` (across its base interfaces) are
             // what admit the ordinary upcast.
@@ -4489,17 +4500,6 @@ class Conversion {
                         }
                     }
                 }
-                return false
-            }
-            let positions = from.GetElementPositions()
-            if positions.IsDefaultOrEmpty {
-                return false
-            }
-            // Hot path: ordinary generic upcasts carry no platform position, so
-            // decline before any hierarchy walk. The vectors are checked rather
-            // than the outer types, because a flags-annotated array hides its
-            // element from the outer-type test.
-            if !AnyContainsPlatformType(positions) && !AnyContainsPlatformType(targetArguments) {
                 return false
             }
             let sourceIsArray = (from is SliceTypeSymbol or ArrayTypeSymbol) ||
