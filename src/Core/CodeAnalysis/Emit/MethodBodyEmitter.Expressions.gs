@@ -1412,7 +1412,13 @@ internal partial class MethodBodyEmitter {
             .cache
             .ClassCtorHandles
             .ContainsKey(structDefinition) &&
-            ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(structDefinition)
+            (
+            if literal.IsZeroInitialization {
+                structDefinition.UsesOwningZeroInitializerConstructor
+            } else {
+                ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(structDefinition)
+            }
+        )
         if literal.CopySource != nil {
             this.EmitExpression(literal.CopySource)
             this.il.StoreLocal(slot)

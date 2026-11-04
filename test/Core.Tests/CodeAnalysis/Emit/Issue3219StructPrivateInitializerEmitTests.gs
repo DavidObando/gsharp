@@ -224,4 +224,38 @@ p.Marker + p.Value
         }
         Assert.Equal(1, publicLetCtors)
     }
+
+    @Fact
+    func NonMagicExplicitPublicLetFieldInitializer_StillBypassedForBareDeclaration() {
+        // Issue #4742 review: adding public `let` initializers to the owning-ctor
+        // synthesis predicate for explicit `S{}` literals must not cause bare
+        // declarations (`var s S`) to invoke the full synthesized constructor
+        // or run effectful non-magic initializers.
+        let result = EmittedOracle.Evaluate(`
+class Counter {
+    shared {
+        public var Hits int32
+        public func Next() int32 {
+            Hits += 1
+            return 5
+        }
+    }
+}
+
+struct S {
+    public let Count int32 = Counter.Next()
+    public var Items []int32
+}
+
+func run() int32 {
+    var bare S
+    let explicitLiteral = S{}
+    return bare.Count * 1000 + bare.Items.Length * 100 + explicitLiteral.Count * 10 + Counter.Hits
+}
+
+run()
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(51, result.Value)
+    }
 }
