@@ -735,6 +735,11 @@ public shared class CallbackPredicates {
 import Issue4969.CallbackLib
 var g string? = "seed"
 func Consume(x float64, n int32) int32 -> n
+func Consume3(x float64, n int32, extra int32) int32 -> n + extra
+func ConsumeOverloaded(x Token, n int32) int32 -> n
+func ConsumeOverloaded(x float64, b bool) int32 -> b ? 1 : 0
+func CheckOverloadProbeDoesNotInvalidate(token Token) int32 ->
+    !string.IsNullOrEmpty(g) ? ConsumeOverloaded(token, g.Length) : 0
 func Check() int32 -> CallbackPredicates.Has(g, () -> { g = nil }) ? g.Length : 0
 func CheckCondArmConv(flag bool, token Token) float64 ->
     !string.IsNullOrEmpty(g) ? (flag ? token : 0.0) + float64(g.Length) : 0.0
@@ -746,6 +751,8 @@ func CheckIfLetExplicitTypeConvElse(token Token?) int32 ->
     !string.IsNullOrEmpty(g) ? (if let x float64 = token { 0 } else { g.Length }) : 0
 func CheckCallArgImplicitConv(token Token) int32 ->
     !string.IsNullOrEmpty(g) ? Consume(token, g.Length) : 0
+func CheckCallArgImplicitConvWithLaterTernaryArg(token Token, flag bool) int32 ->
+    !string.IsNullOrEmpty(g) ? Consume3(token, g.Length, flag ? 1 : 2) : 0
 func CheckTargetTypedTupleElementConv(token Token) int32 {
     let pair (float64, int32) = !string.IsNullOrEmpty(g) ? (token, g.Length) : (0.0, 0)
     return pair.Item2
@@ -784,7 +791,7 @@ func CheckDirectTargetTypedTupleConv(token Token) int32 ->
             Assert.Equal(0, helperExit)
             Assert.NotEqual(0, exitCode)
             let consumerDiagnostics = standardOut.ToString() + standardError.ToString()
-            Assert.Equal(8, consumerDiagnostics.Split("GS0158").Length - 1)
+            Assert.Equal(9, consumerDiagnostics.Split("GS0158").Length - 1)
         } finally {
             if Directory.Exists(outputDirectory) {
                 Directory.Delete(outputDirectory, recursive: true)
@@ -836,6 +843,22 @@ func CheckDirectTargetTypedTupleConv(token Token) int32 ->
     @InlineData(
         "return dict.TryGetValue(\"missing\", out value) ? 0 : (flag ? \"no\" : (value = \"ok\"), value.Length).Item2",
         "GS0158:Length"
+    )
+    @InlineData(
+        "return (!dict.TryGetValue(\"missing\", out value) && ((value = \"ok\") == \"ok\")) ? value.Length : 0",
+        ""
+    )
+    @InlineData(
+        "return (!dict.TryGetValue(\"missing\", out value) && ((value = \"ok\") == \"ok\")) ? 0 : value.Length",
+        ""
+    )
+    @InlineData(
+        "return (dict.TryGetValue(\"missing\", out value) || ((value = \"ok\") == \"ok\")) ? value.Length : 0",
+        ""
+    )
+    @InlineData(
+        "return (dict.TryGetValue(\"missing\", out value) || ((value = \"ok\") == \"ok\")) ? 0 : value.Length",
+        ""
     )
     func Composed_MaybeNullWhen_Preserves_Widening_Across_And_And_Or(body string, expected string) {
         let source = (`package Issue4969.ComposedMaybeNull

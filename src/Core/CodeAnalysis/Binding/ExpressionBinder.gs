@@ -99,6 +99,10 @@ internal partial class ExpressionBinder {
     private let getCallableAliases() -> HashSet[VariableSymbol]
     private let setCallableAliases(HashSet[VariableSymbol]) -> void
     private let dischargesNullableWidening(BoundExpression, AccessPath, TypeSymbol) -> bool
+    private let classifyConditionNonNullAssignments(
+        BoundExpression,
+        IReadOnlyCollection[VariableSymbol]?
+    ) -> Dictionary[AccessPath, TypeSymbol]?
     private var nextExpressionFrameId int32
     private var expressionNarrowingVersion int32
     private var expressionBindStep int32
@@ -152,6 +156,9 @@ internal partial class ExpressionBinder {
         BoundExpression,
         BoundExpression
     ](ReferenceEqualityComparer.Instance)
+    private var snapshotSiblingCounts Dictionary[object, int32] = Dictionary[object, int32](
+        ReferenceEqualityComparer.Instance
+    )
     private let nestedLambdaExpressionFrameStack Stack[
         (
             Frames List[
@@ -176,6 +183,7 @@ internal partial class ExpressionBinder {
                 )
             ],
             ReboundSiblings Dictionary[BoundExpression, BoundExpression],
+            SnapshotSiblingCounts Dictionary[object, int32],
             BindStep int32,
             TupleConversionDepth int32,
             IsRebinding bool
@@ -204,6 +212,7 @@ internal partial class ExpressionBinder {
                 )
             ],
             ReboundSiblings Dictionary[BoundExpression, BoundExpression],
+            SnapshotSiblingCounts Dictionary[object, int32],
             BindStep int32,
             TupleConversionDepth int32,
             IsRebinding bool
@@ -269,7 +278,11 @@ internal partial class ExpressionBinder {
         recordExpressionNarrowingKill(NarrowingFrame, AccessPath, TypeSymbol) -> void,
         getCallableAliases() -> HashSet[VariableSymbol],
         setCallableAliases(HashSet[VariableSymbol]) -> void,
-        dischargesNullableWidening(BoundExpression, AccessPath, TypeSymbol) -> bool
+        dischargesNullableWidening(BoundExpression, AccessPath, TypeSymbol) -> bool,
+        classifyConditionNonNullAssignments(BoundExpression, IReadOnlyCollection[VariableSymbol]?) -> Dictionary[
+            AccessPath,
+            TypeSymbol
+        ]?
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.memberLookup = memberLookup ?? throw ArgumentNullException("memberLookup")
@@ -302,6 +315,7 @@ internal partial class ExpressionBinder {
         this.getCallableAliases = getCallableAliases
         this.setCallableAliases = setCallableAliases
         this.dischargesNullableWidening = dischargesNullableWidening
+        this.classifyConditionNonNullAssignments = classifyConditionNonNullAssignments
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics
@@ -433,6 +447,7 @@ internal partial class ExpressionBinder {
                 expressionExitSteps,
                 boundSiblingExpressions,
                 reboundInvalidatedExpressions,
+                snapshotSiblingCounts,
                 expressionBindStep,
                 tupleConversionDepth,
                 isRebindingInvalidatedSiblings
@@ -460,6 +475,7 @@ internal partial class ExpressionBinder {
             )
         ]()
         reboundInvalidatedExpressions = Dictionary[BoundExpression, BoundExpression](ReferenceEqualityComparer.Instance)
+        snapshotSiblingCounts = Dictionary[object, int32](ReferenceEqualityComparer.Instance)
         expressionBindStep = 0
         tupleConversionDepth = 0
         isRebindingInvalidatedSiblings = false
@@ -476,6 +492,7 @@ internal partial class ExpressionBinder {
             savedExitSteps,
             savedSiblings,
             savedReboundSiblings,
+            savedSnapshotSiblingCounts,
             savedBindStep,
             savedTupleDepth,
             savedIsRebinding
@@ -486,6 +503,7 @@ internal partial class ExpressionBinder {
         expressionExitSteps = savedExitSteps
         boundSiblingExpressions = savedSiblings
         reboundInvalidatedExpressions = savedReboundSiblings
+        snapshotSiblingCounts = savedSnapshotSiblingCounts
         expressionBindStep = savedBindStep
         tupleConversionDepth = savedTupleDepth
         isRebindingInvalidatedSiblings = savedIsRebinding
@@ -529,6 +547,7 @@ internal partial class ExpressionBinder {
             expressionExitSteps.Clear()
             boundSiblingExpressions.Clear()
             reboundInvalidatedExpressions.Clear()
+            snapshotSiblingCounts.Clear()
             expressionBindStep = 0
         }
         let savedStatementAliases = getCallableAliases()
@@ -563,6 +582,7 @@ internal partial class ExpressionBinder {
             expressionExitSteps.Clear()
             boundSiblingExpressions.Clear()
             reboundInvalidatedExpressions.Clear()
+            snapshotSiblingCounts.Clear()
             expressionBindStep = 0
             setCallableAliases(popped.SavedStatementAliases)
         }
@@ -602,6 +622,7 @@ internal partial class ExpressionBinder {
                 snapshot.Add((entry.Id, frame, entries, HashSet[VariableSymbol](entry.Aliases)))
             }
         }
+        snapshotSiblingCounts[snapshot] = boundSiblingExpressions.Count
         return snapshot
     }
 
@@ -618,7 +639,10 @@ internal partial class ExpressionBinder {
         if snapshot == nil {
             return
         }
-        boundSiblingExpressions.Clear()
+        if snapshotSiblingCounts.TryGetValue(snapshot, out var siblingCount) &&
+            boundSiblingExpressions.Count > siblingCount {
+            boundSiblingExpressions.RemoveRange(siblingCount, boundSiblingExpressions.Count - siblingCount)
+        }
         for (id, frame, entries, aliases) in snapshot {
             if frame != nil && frame.Owner == nil {
                 continue
@@ -2099,6 +2123,7 @@ internal partial class ExpressionBinder {
         // the right operand of `&&`/`||`, mirroring the type-test (`x is T`)
         // cases above. Value-type nullables (`int32?`, struct?, enum?) are
         // unwrapped on read by `BuildNarrowedRead` (#4943).
+        let assignRefinements = classifyConditionNonNullAssignments(condition, beforeAliases)
         if SmartCastStability.TryClassifyNilGuardLeaf(
             condition,
             restrictBareVariableToLocalsAndParams,
@@ -2116,9 +2141,19 @@ internal partial class ExpressionBinder {
                 )
             }
             return if nonNilWhenTrue {
-                (nonNilFrame, nil, afterNilAliases, afterNilAliases)
+                (
+                    StatementBinder.MergeNarrowingFrames(assignRefinements, nonNilFrame),
+                    assignRefinements,
+                    afterNilAliases,
+                    afterNilAliases
+                )
             } else {
-                (nil, nonNilFrame, afterNilAliases, afterNilAliases)
+                (
+                    assignRefinements,
+                    StatementBinder.MergeNarrowingFrames(assignRefinements, nonNilFrame),
+                    afterNilAliases,
+                    afterNilAliases
+                )
             }
         }
         let (boolThen, boolElse) = StatementBinder.TryClassifyBoolCallNarrowingLeaf(
@@ -2130,7 +2165,12 @@ internal partial class ExpressionBinder {
             evolveAliases
         )
         let afterAliases = evolveAliases(condition, beforeAliases)
-        return (boolThen, boolElse, afterAliases, afterAliases)
+        return (
+            StatementBinder.MergeNarrowingFrames(assignRefinements, boolThen),
+            StatementBinder.MergeNarrowingFrames(assignRefinements, boolElse),
+            afterAliases,
+            afterAliases
+        )
     }
 
     /// Binds a name expression to produce its bound form without side effects

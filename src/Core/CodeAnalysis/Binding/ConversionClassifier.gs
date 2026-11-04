@@ -1901,6 +1901,56 @@ internal class ConversionClassifier {
         return false
     }
 
+    func CanApplyUserDefinedImplicitArgumentConversion(argument BoundExpression?, expectedType TypeSymbol?) bool {
+        if argument == nil || expectedType == nil {
+            return false
+        }
+        if argument.Type is NullableTypeSymbol sourceNullable &&
+            TryResolveLiftedUserDefinedSymbolConversion(
+            sourceNullable,
+            expectedType,
+            allowExplicit: false,
+            out _,
+            out _
+        ) {
+            return true
+        }
+        if argument.Type != TypeSymbol.Error &&
+            TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var symbolicConvMethod) &&
+            BoundClrConversionCallExpression
+            .CanApplyImplicitClrConversion(argument.Type, expectedType, symbolicConvMethod!!) {
+            return true
+        }
+        if argument
+            .Type
+            ?.ClrType != nil &&
+            expectedType.ClrType != nil &&
+            argument.Type != TypeSymbol.Error &&
+            ClrOperatorResolution.TryResolveConversionForTypes(
+            argument.Type,
+            expectedType,
+            allowExplicit: false,
+            out var convMethod,
+            out _
+        ) &&
+            BoundClrConversionCallExpression.CanApplyImplicitClrConversion(argument.Type, expectedType, convMethod!!) {
+            return true
+        }
+        if argument.Type != nil &&
+            argument.Type != TypeSymbol.Error &&
+            TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var openConvMethod) &&
+            BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
+            argument.Type,
+            expectedType,
+            openConvMethod!!
+        ) {
+            return true
+        }
+        return argument.Type != nil &&
+            argument.Type != TypeSymbol.Error &&
+            TryResolveUserDefinedSymbolConversion(argument.Type, expectedType, allowExplicit: false, out _, out _)
+    }
+
     private func TryApplyUserDefinedImplicitArgumentConversionCore(
         argument BoundExpression,
         expectedType TypeSymbol?,

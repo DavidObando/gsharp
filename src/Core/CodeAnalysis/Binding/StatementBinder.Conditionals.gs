@@ -66,7 +66,11 @@ internal partial class StatementBinder {
         // nullable / `[NotNullWhen]` frames computed above so a condition
         // that combines both styles narrows on both axes.
         let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition, removedFacts)
-        return (MergeNarrowingFrames(thenNarrow, typeThen), MergeNarrowingFrames(elseNarrow, typeElse))
+        let assignRefinements = TryClassifyConditionNonNullAssignments(condition)
+        return (
+            MergeNarrowingFrames(assignRefinements, MergeNarrowingFrames(thenNarrow, typeThen)),
+            MergeNarrowingFrames(assignRefinements, MergeNarrowingFrames(elseNarrow, typeElse))
+        )
     }
 
     private func BindIfStatement(syntax IfStatementSyntax) BoundStatement {
@@ -1829,7 +1833,7 @@ internal partial class StatementBinder {
             bindings.Select((b(Variable VariableSymbol, Underlying TypeSymbol)) -> b.Variable)
         )
 
-        private func MergeNarrowingFrames(
+        internal func MergeNarrowingFrames(
             a Dictionary[AccessPath, TypeSymbol]?,
             b Dictionary[AccessPath, TypeSymbol]?
         ) Dictionary[AccessPath, TypeSymbol]? {

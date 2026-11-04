@@ -1217,7 +1217,7 @@ internal partial class OverloadResolver {
             if ExpressionBinder.IsImplicitConstantNarrowingArgument(boundArguments[i], paramType) {
                 continue
             }
-            if conversions.TryApplyUserDefinedImplicitArgumentConversion(boundArguments[i], paramType, out _) {
+            if conversions.CanApplyUserDefinedImplicitArgumentConversion(boundArguments[i], paramType) {
                 continue
             }
             return false
@@ -1261,11 +1261,7 @@ internal partial class OverloadResolver {
                     if ExpressionBinder.IsImplicitConstantNarrowingArgument(boundArguments[i], elementType) {
                         continue
                     }
-                    if conversions.TryApplyUserDefinedImplicitArgumentConversion(
-                        boundArguments[i],
-                        elementType,
-                        out _
-                    ) {
+                    if conversions.CanApplyUserDefinedImplicitArgumentConversion(boundArguments[i], elementType) {
                         continue
                     }
                     return false

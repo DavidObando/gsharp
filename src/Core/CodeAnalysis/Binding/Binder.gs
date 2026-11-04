@@ -589,7 +589,11 @@ partial class Binder {
             setCallableAliases: (aliases HashSet[VariableSymbol]) ->
             Statements.SetExternalCallableAliasesFromExpression(aliases),
             dischargesNullableWidening: (bound BoundExpression, path AccessPath, widenedType TypeSymbol) ->
-            Statements.DischargesNullableWidening(bound, path, widenedType)
+            Statements.DischargesNullableWidening(bound, path, widenedType),
+            classifyConditionNonNullAssignments: (
+                condition BoundExpression,
+                aliases IReadOnlyCollection[VariableSymbol]?
+            ) -> Statements.TryClassifyConditionNonNullAssignments(condition, aliases)
         )
         Statements.SetSyncExpressionCallableAliases(
             (aliases IReadOnlyCollection[VariableSymbol]) -> expressions.SyncActiveExpressionCallableAliases(aliases)
