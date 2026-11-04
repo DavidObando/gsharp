@@ -1,9 +1,9 @@
 # ADR-0212: A semantic-query surface for the language server, and the home of server-only code
 
-- **Status**: Proposed
+- **Status**: Accepted (Implemented)
 - **Date**: 2026-10-24
-- **Phase**: Compiler architecture (study roadmap item M10; design only, the
-  implementation is the slice list of section 12, tracked under #5139)
+- **Phase**: Compiler architecture (study roadmap item M10; implemented in
+  slices S0–S8 of section 12, tracked under #5139 and #5140)
 - **Issue**: [#5139](https://github.com/DavidObando/gsharp/issues/5139)
 - **Related**: [#2189](https://github.com/DavidObando/gsharp/issues/2189);
   [#5140](https://github.com/DavidObando/gsharp/issues/5140) (B1, the
