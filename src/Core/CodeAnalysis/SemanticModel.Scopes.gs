@@ -174,12 +174,16 @@ partial class SemanticModel {
                 named = ImmutableArray[(Anchor SyntaxNode, Local Symbol)].Empty
             }
         }
+        let inEntryPoint = IsInEntryPointContext(position)
         for (anchor, local) in named {
             // A local function is visible from the start of its group, so that local functions in a
             // consecutive group can call themselves and each other; every other local follows its declaration.
             let hoisted = IsLocalFunction(local)
             let region = RegionOf(anchor, local, position)
             if region == nil || IsInGuardElse(anchor, position) {
+                continue
+            }
+            if region.Owner is CompilationUnitSyntax && !inEntryPoint {
                 continue
             }
             // The one declaration-order rule: a local is visible from the end of its own
@@ -935,6 +939,9 @@ partial class SemanticModel {
         var best Region? = nil
         var bestDepth = -1
         for entry in variable.Regions {
+            if entry.Owner is CompilationUnitSyntax && !IsInEntryPointContext(position) {
+                continue
+            }
             let start = Math.Max(entry.Start, anchor.Span.End)
             if !RegionContains(start, entry.End, position) {
                 continue
@@ -946,6 +953,22 @@ partial class SemanticModel {
             }
         }
         return best
+    }
+
+    /// Whether [`position`](paramref) is in a top-level entry-point context rather than inside a
+    /// non-statement member declaration.
+    private func IsInEntryPointContext(position int32) bool {
+        var node SyntaxNode? = FindInnermostNode(position)
+        while node is {} current {
+            if current is GlobalStatementSyntax {
+                return true
+            }
+            if current is MemberSyntax || (current is AnnotationSyntax && current.Parent is CompilationUnitSyntax) {
+                return false
+            }
+            node = current.Parent
+        }
+        return true
     }
 
     /// Whether [`position`](paramref) is in the `else` body of the `guard let` that declares

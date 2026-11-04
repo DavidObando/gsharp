@@ -681,22 +681,29 @@ internal partial class StatementBinder {
                 }
                 continue
             }
-            if variable is PatternVariableSymbol patternVariable && ifStatement.Syntax is {} ifSyntax {
-                let block = EnclosingBlockSyntax(ifSyntax)
+            if variable is PatternVariableSymbol patternVariable &&
+                ifStatement.Syntax is {} ifSyntax &&
+                EnclosingBlockSyntax(ifSyntax) is {} block {
                 patternVariable.AddRegion(block, ifSyntax.Span.End, block.Span.End)
             }
         }
     }
 
-    private func EnclosingBlockSyntax(node SyntaxNode) SyntaxNode {
+    private func EnclosingBlockSyntax(node SyntaxNode) SyntaxNode? {
         var current SyntaxNode? = node.Parent
         while current != nil {
             if current is BlockStatementSyntax or BlockExpressionSyntax {
                 return current
             }
+            if current is GlobalStatementSyntax {
+                return node.SyntaxTree.Root
+            }
+            if current is MemberSyntax {
+                return nil
+            }
             current = current.Parent
         }
-        return node.SyntaxTree.Root
+        return nil
     }
 
     /// ADR-0069 / issue #700: classify `is` / `!is` tests (and

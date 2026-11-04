@@ -150,6 +150,27 @@ open class Adr0212ScopeQueryTests {
         Assert.DoesNotContain("elseExit", NamesAt("PElseExitElse"))
         Assert.Contains("elseExit", NamesAt("PAfterElseExit"))
         Assert.DoesNotContain("elseIfNoLeak", NamesAt("PAfterElseExit"))
+
+        const topLevelSource = `let topInput object = "hello"
+if topInput is not string topText {
+    return
+}
+let topUsed = topText.Length // PTopLevelAfterGuard
+func SubsequentFunction() int32 {
+    return 0 // PInSubsequentFunction
+}
+`
+        let topTree = SyntaxTree.Parse(SourceText.From(topLevelSource, "top-level-pattern-leak.gs"))
+        let topCompilation = Compilation(topTree)
+        Assert.Empty(topCompilation.GetDiagnostics())
+        let topModel = topCompilation.GetSemanticModel(topTree)
+        let TopNamesAt = func (marker string) List[string] {
+            let at = topLevelSource.IndexOf("// " + marker + "\n", StringComparison.Ordinal)
+            Assert.True(at >= 0, marker)
+            return topModel.LookupSymbols(at).Select((s Symbol) -> s.Name).ToList()
+        }
+        Assert.Contains("topText", TopNamesAt("PTopLevelAfterGuard"))
+        Assert.DoesNotContain("topText", TopNamesAt("PInSubsequentFunction"))
     }
 
     @Fact

@@ -255,6 +255,26 @@ open class Adr0212SpeculativeTypeInfoTests {
         Assert.Same(TypeSymbol.Int32, Speculate("let inWhile =", "w.Length"))
         Assert.Null(Speculate("let inWhileNeg", "wNeg.Length"))
         Assert.Null(Speculate("let afterWhile", "w.Length"))
+
+        const topLevelSource = `let topInput object = "hello"
+if topInput is not string topText {
+    return
+}
+let topUsed = topText.Length
+func SubsequentFunction() int32 {
+    return 0
+}
+`
+        let (topModel, _) = Create(topLevelSource)
+        let TopSpeculate = func (anchorSnippet string, exprText string) TypeSymbol? {
+            let pos = topLevelSource.IndexOf(anchorSnippet, StringComparison.Ordinal)
+            Assert.True(pos >= 0, anchorSnippet)
+            let parsed = SyntaxTree.Parse(SourceText.From("func f() {\n    " + exprText + "\n}\n", "probe.gs"))
+            let expr = parsed.Root.DescendantNodes().OfType[ExpressionStatementSyntax]().Single().Expression
+            return topModel.GetSpeculativeTypeInfo(pos, expr).Type
+        }
+        Assert.Same(TypeSymbol.Int32, TopSpeculate("let topUsed", "topText.Length"))
+        Assert.Null(TopSpeculate("return 0", "topText.Length"))
     }
 
     // The scope query leaves `this` out of the arguments of `: base(...)`; the speculative bind must not
