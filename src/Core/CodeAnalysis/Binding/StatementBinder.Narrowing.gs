@@ -2700,6 +2700,11 @@ internal partial class StatementBinder {
             } else {
                 VisitExpression(node.Right)
             }
+            if StatementBinder.BinaryEqualityRunsUserCode(node) {
+                // ADR-0208 R19 (#5710): structural equality calls `Equals`, which can be user code. It is a plain
+                // method call, so it does not write by-reference storage (R12, amendment A3).
+                MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+            }
         }
 
         protected open override func VisitNullConditionalAccessExpression(node BoundNullConditionalAccessExpression) {
@@ -5849,6 +5854,45 @@ internal partial class StatementBinder {
             parameter.HasReferenceTypeConstraint && !parameter.HasValueTypeConstraint
         } else {
             Binder.IsReferenceTypeForConstraint(type)
+        }
+
+        private func IsNullOperand(operand BoundExpression) bool {
+            let value = BoundConstantPattern.UnwrapInputConversion(operand.Type, operand)
+            return value.Type == TypeSymbol.Null ||
+                value is BoundLiteralExpression{Value: nil} ||
+                (value is BoundDefaultExpression && IsNullDefault(value.Type))
+        }
+
+        /// ADR-0208 R19 (#5710): whether a binary `==` or `!=` emits `object.Equals(object, object)` on an operand
+        /// whose `Equals` can be user code (structural equality on a data or inline type, or a type parameter). A null
+        /// operand never reaches `Equals`.
+        internal func BinaryEqualityRunsUserCode(node BoundBinaryExpression) bool {
+            if node
+                .Op
+                .Kind is not(BoundBinaryOperatorKind.Equals or BoundBinaryOperatorKind.NotEquals) ||
+                IsNullOperand(node.Left) ||
+                IsNullOperand(node.Right) {
+                return false
+            }
+            if node.Left.Type is TypeParameterSymbol && node.Right.Type is TypeParameterSymbol {
+                return true
+            }
+            if node.Op.IsReferenceEquality {
+                return false
+            }
+            let leftType = if node.Left.Type is NullableTypeSymbol leftNullable {
+                leftNullable.UnderlyingType
+            } else {
+                node.Left.Type
+            }
+            let rightType = if node.Right.Type is NullableTypeSymbol rightNullable {
+                rightNullable.UnderlyingType
+            } else {
+                node.Right.Type
+            }
+            return leftType is StructSymbol structural &&
+                structural == rightType &&
+                (structural.IsData || structural.IsInline)
         }
 
         /// ADR-0208 R19 (#5593): whether the test of a constant pattern can run user code. Only an `ObjectEquals`
