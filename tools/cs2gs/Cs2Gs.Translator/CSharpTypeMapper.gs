@@ -1093,8 +1093,61 @@ class CSharpTypeMapper {
         return true
     }
 
-    internal func HasSourceTopLevelTypeNamed(simpleName string, context TranslationContext) bool -> this
-        .SourceTopLevelSimpleNames(context.Compilation).ContainsKey(simpleName)
+    internal func HasSourceTopLevelTypeNamed(simpleName string, context TranslationContext) bool {
+        for compilation in this.LinkedDocumentCompilations(context) {
+            if this.SourceTopLevelSimpleNames(compilation).ContainsKey(simpleName) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func GetOrCreateImportedNamespaceAlias(
+        namespaceName string,
+        context TranslationContext,
+        location Location?
+    ) string {
+        let names = this.Names(context)
+        for reservedAlias in this.reservedTypeAliases {
+            if reservedAlias.Value.Count == 1 && reservedAlias.Value.Contains(namespaceName) &&
+                !this
+                .reservedTypeParameterNames
+                .Contains(reservedAlias.Key) && !this.reservedInvokedLocalNames.Contains(reservedAlias.Key) &&
+                !this
+                .reservedImportedTypeNames
+                .Contains(reservedAlias.Key) && !this.HasSourceTopLevelTypeNamed(reservedAlias.Key, context) {
+                return reservedAlias.Key
+            }
+        }
+        for existing in this.synthesizedTypeAliases {
+            if existing.Value == namespaceName && !this.reservedTypeParameterNames.Contains(existing.Key) &&
+                !this
+                .reservedInvokedLocalNames
+                .Contains(existing.Key) && !this.reservedImportedTypeNames.Contains(existing.Key) &&
+                !this.HasSourceTopLevelTypeNamed(existing.Key, context) {
+                return existing.Key
+            }
+        }
+        if this.importTrackingSuppression != 0 {
+            return namespaceName
+        }
+        this.sourceDeclaredTypeNames ??= BuildSourceDeclaredTypeNames(context.Compilation, names)
+        let reserved = HashSet[string](this.synthesizedTypeAliases.Keys, StringComparer.Ordinal)
+        reserved.UnionWith(this.reservedTypeAliases.Keys)
+        reserved.UnionWith(this.reservedImportedTypeNames)
+        reserved.UnionWith(this.reservedTypeParameterNames)
+        reserved.UnionWith(this.reservedInvokedLocalNames)
+        reserved.UnionWith(this.sourceDeclaredTypeNames!!)
+        reserved.UnionWith(this.reservedSiblingMemberNames)
+        let baseAlias = string.Concat(namespaceName.Split('.')) + "Namespace"
+        let alias = LiftedLocalFunctionNameAllocator.For(context.Compilation).ClaimAlias(
+            namespaceName,
+            baseAlias,
+            (candidate string) -> reserved.Contains(candidate)
+        )
+        this.synthesizedTypeAliases.Add(alias, namespaceName)
+        return alias
+    }
 
     internal func RenderDestinationSafeTypeName(
         named INamedTypeSymbol,
@@ -1113,16 +1166,13 @@ class CSharpTypeMapper {
         let qualifiedTarget = this.QualifiedAliasTarget(definition)
         let dotIndex = qualifiedTarget.IndexOf('.')
         if dotIndex < 0 {
-            if definition.Arity == 0 &&
-                (
-                this.HasConflictingTypeAlias(qualifiedTarget, definition) || this.reservedImportedTypeNames.Contains(
-                    qualifiedTarget
-                ) ||
-                    this.HasSourceHomonym(definition, context) || this.HasVisibleSourceNestedHomonym(
-                    definition,
-                    context,
-                    location
-                )
+            if this.HasConflictingTypeAlias(qualifiedTarget, definition) || this.reservedImportedTypeNames.Contains(
+                qualifiedTarget
+            ) ||
+                this.HasSourceHomonym(definition, context) || this.HasVisibleSourceNestedHomonym(
+                definition,
+                context,
+                location
             ) {
                 return this.GetOrCreateImportedTypeAlias(
                     definition,
@@ -1135,20 +1185,31 @@ class CSharpTypeMapper {
             return qualifiedTarget
         }
         let leadingSegment = qualifiedTarget[.. dotIndex]
-        if definition.Arity == 0 &&
-            (
-            this.reservedTypeAliases.ContainsKey(leadingSegment) || this.synthesizedTypeAliases.ContainsKey(
-                leadingSegment
-            )
-        ) &&
-            (SupportsMetadataTypeAlias(definition) || definition.Locations.Any((l Location) -> l.IsInSource)) {
-            return this.GetOrCreateImportedTypeAlias(
-                definition,
-                context,
-                location,
-                reuseOnly: false,
-                precomputedTarget: qualifiedTarget
-            )!!
+        if this.reservedTypeAliases.ContainsKey(leadingSegment) || this.synthesizedTypeAliases.ContainsKey(
+            leadingSegment
+        ) {
+            if definition.Arity == 0 &&
+                (SupportsMetadataTypeAlias(definition) || definition.Locations.Any((l Location) -> l.IsInSource)) {
+                return this.GetOrCreateImportedTypeAlias(
+                    definition,
+                    context,
+                    location,
+                    reuseOnly: false,
+                    precomputedTarget: qualifiedTarget
+                )!!
+            }
+            if definition.ContainingNamespace is {IsGlobalNamespace: false} containingNamespace {
+                let namespaceName = this.Names(context).GetNamespaceName(containingNamespace)
+                if !string.IsNullOrEmpty(namespaceName) && qualifiedTarget.StartsWith(
+                    namespaceName + ".",
+                    StringComparison.Ordinal
+                ) {
+                    let namespaceAlias = this.GetOrCreateImportedNamespaceAlias(namespaceName!!, context, location)
+                    return namespaceAlias + qualifiedTarget[namespaceName!!.Length ..]
+                }
+            }
+            let leadingAlias = this.GetOrCreateImportedNamespaceAlias(leadingSegment, context, location)
+            return leadingAlias + qualifiedTarget[dotIndex ..]
         }
         return qualifiedTarget
     }

@@ -1653,6 +1653,11 @@ partial class CSharpToGSharpTranslator {
                         return enumValue
                     }
                 }
+                let constantTargetType ITypeSymbol? = if IsNonNullableValueType(typeInfo.ConvertedType) {
+                    typeInfo.ConvertedType
+                } else {
+                    typeInfo.Type
+                }
                 switch constant.Value {
                     case nil {
                         return IdentifierExpression("nil")
@@ -1675,22 +1680,44 @@ partial class CSharpToGSharpTranslator {
                     case n is int64 when n == int64.MinValue {
                         return MemberAccessExpression(IdentifierExpression("System.Int64"), "MinValue")
                     }
-                    case d is float64 when MapSpecialFloatConstant(d, isDouble: true) is {} specialD {
-                        return specialD
+                    case d is float64 {
+                        if MapSpecialFloatConstant(d, isDouble: true) is {} specialD {
+                            return specialD
+                        }
+                        let literal = LiteralExpression.Float(this.ToFloatLiteralText(d))
+                        return if constantTargetType == nil {
+                            cast[GExpression](literal)
+                        } else {
+                            this.CoerceOperandTo(literal, constantTargetType, destinationLocation)
+                        }
                     }
-                    case f is float32 when MapSpecialFloatConstant(f, isDouble: false) is {} specialF {
-                        return specialF
+                    case f is float32 {
+                        let isDoubleTarget = constantTargetType?.SpecialType == SpecialType.System_Double
+                        if MapSpecialFloatConstant(f, isDouble: isDoubleTarget) is {} specialF {
+                            return specialF
+                        }
+                        let literal = LiteralExpression.Float(
+                            if isDoubleTarget {
+                                this.ToFloatLiteralText(f)
+                            } else {
+                                f.ToString("R", CultureInfo.InvariantCulture) + "f"
+                            }
+                        )
+                        return if constantTargetType == nil {
+                            cast[GExpression](literal)
+                        } else {
+                            this.CoerceOperandTo(literal, constantTargetType, destinationLocation)
+                        }
                     }
                     default {
                         if IsIntegral(constant.Value) {
                             let literal = LiteralExpression.Int(
                                 Convert.ToString(constant.Value, CultureInfo.InvariantCulture)
                             )
-                            let type ITypeSymbol? = typeInfo.Type
-                            return if type == nil {
+                            return if constantTargetType == nil {
                                 cast[GExpression](literal)
                             } else {
-                                this.CoerceOperandTo(literal, type, destinationLocation)
+                                this.CoerceOperandTo(literal, constantTargetType, destinationLocation)
                             }
                         }
                     }
@@ -1724,12 +1751,10 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 case arrayCreation is Microsoft.CodeAnalysis.CSharp.Syntax.ArrayCreationExpressionSyntax {
-                    let arrayType = (
-                        attributeModel.GetTypeInfo(arrayCreation).ConvertedType ?? attributeModel.GetTypeInfo(
-                            arrayCreation
-                        )
-                            .Type
-                    ) as IArrayTypeSymbol
+                    let arrayType = attributeModel.GetTypeInfo(arrayCreation)
+                        .Type as IArrayTypeSymbol ??
+                        attributeModel
+                        .GetTypeInfo(arrayCreation).ConvertedType as IArrayTypeSymbol
                     let elementType = this.typeMapper.MapDestinationSafeType(
                         arrayType?.ElementType,
                         this.context,
@@ -1749,12 +1774,10 @@ partial class CSharpToGSharpTranslator {
                     return ArrayLiteralExpression(elementType, elements)
                 }
                 case implicitArray is ImplicitArrayCreationExpressionSyntax {
-                    let arrayType = (
-                        attributeModel.GetTypeInfo(implicitArray).ConvertedType ?? attributeModel.GetTypeInfo(
-                            implicitArray
-                        )
-                            .Type
-                    ) as IArrayTypeSymbol
+                    let arrayType = attributeModel.GetTypeInfo(implicitArray)
+                        .Type as IArrayTypeSymbol ??
+                        attributeModel
+                        .GetTypeInfo(implicitArray).ConvertedType as IArrayTypeSymbol
                     let elementType = this.typeMapper.MapDestinationSafeType(
                         arrayType?.ElementType,
                         this.context,
@@ -1771,10 +1794,10 @@ partial class CSharpToGSharpTranslator {
                     return ArrayLiteralExpression(elementType, elements)
                 }
                 case collection is CollectionExpressionSyntax {
-                    let arrayType = (
-                        attributeModel.GetTypeInfo(collection).ConvertedType ?? attributeModel.GetTypeInfo(collection)
-                            .Type
-                    ) as IArrayTypeSymbol
+                    let arrayType = attributeModel.GetTypeInfo(collection)
+                        .Type as IArrayTypeSymbol ??
+                        attributeModel
+                        .GetTypeInfo(collection).ConvertedType as IArrayTypeSymbol
                     let elementType = this.typeMapper.MapDestinationSafeType(
                         arrayType?.ElementType,
                         this.context,
@@ -1935,6 +1958,11 @@ partial class CSharpToGSharpTranslator {
                 return this.EmittedName(alias, sourceName, GSharpIdentifierNameContext.Type)
             }
             if isRightmost &&
+                !(
+                syntax is GenericNameSyntax &&
+                    syntax.Parent is QualifiedNameSyntax &&
+                    attributeType?.ContainingType == nil
+            ) &&
                 attributeType != nil &&
                 attributeType.Name == sourceName +
                 "Attribute" &&
@@ -2036,11 +2064,33 @@ partial class CSharpToGSharpTranslator {
                     case n is int64 when n == int64.MinValue {
                         return MemberAccessExpression(IdentifierExpression("System.Int64"), "MinValue")
                     }
-                    case d is float64 when MapSpecialFloatConstant(d, isDouble: true) is {} specialD {
-                        return specialD
+                    case d is float64 {
+                        if MapSpecialFloatConstant(d, isDouble: true) is {} specialD {
+                            return specialD
+                        }
+                        if argument.Expression is not Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax {
+                            let literal = LiteralExpression.Float(this.ToFloatLiteralText(d))
+                            let type ITypeSymbol? = this.context.GetTypeInfo(argument.Expression).Type
+                            return if type == nil {
+                                cast[GExpression](literal)
+                            } else {
+                                this.CoerceOperandTo(literal, type, argument.GetLocation())
+                            }
+                        }
                     }
-                    case f is float32 when MapSpecialFloatConstant(f, isDouble: false) is {} specialF {
-                        return specialF
+                    case f is float32 {
+                        if MapSpecialFloatConstant(f, isDouble: false) is {} specialF {
+                            return specialF
+                        }
+                        if argument.Expression is not Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax {
+                            let literal = LiteralExpression.Float(f.ToString("R", CultureInfo.InvariantCulture) + "f")
+                            let type ITypeSymbol? = this.context.GetTypeInfo(argument.Expression).Type
+                            return if type == nil {
+                                cast[GExpression](literal)
+                            } else {
+                                this.CoerceOperandTo(literal, type, argument.GetLocation())
+                            }
+                        }
                     }
                     default {
                         if IsIntegral(constant.Value) {

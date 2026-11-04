@@ -3446,22 +3446,58 @@ public static class Obj {
         let project = CSharpProjectLoader.LoadInMemory([](string, string){("N1.cs", `using System;
 namespace N1 {
     public enum Choice { First = 1, Second = 2 }
-    public sealed class Helper { }
+    public sealed class Helper {
+        public const float FloatRate = 1.5f;
+        public const double DoubleRate = 2.5;
+    }
+    public sealed class GenericHelper<T> { }
     [AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter | AttributeTargets.Method, AllowMultiple = true)]
     public sealed class TagAttribute : Attribute {
-        public TagAttribute(Type helper, Choice choice) { Helper = helper; Choice = choice; }
+        public TagAttribute(Type helper, Choice choice, float floatRate = 0f, double doubleRate = 0.0, object? payload = null) {
+            Helper = helper;
+            Choice = choice;
+            FloatRate = floatRate;
+            DoubleRate = doubleRate;
+            Payload = payload;
+        }
         public Type Helper { get; }
         public Choice Choice { get; }
+        public float FloatRate { get; }
+        public double DoubleRate { get; }
+        public object? Payload { get; }
+    }
+    [AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter | AttributeTargets.Method, AllowMultiple = true)]
+    public sealed class GenericTagAttribute<T> : Attribute {
+        public GenericTagAttribute(Type helper) { Helper = helper; }
+        public Type Helper { get; }
     }
 }`), ("N2.cs", `using System;
 namespace N2 {
     public enum Choice { First = 10, Second = 20 }
-    public sealed class Helper { }
+    public sealed class Helper {
+        public const float FloatRate = 15.0f;
+        public const double DoubleRate = 25.0;
+    }
+    public sealed class GenericHelper<T> { }
     [AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter | AttributeTargets.Method, AllowMultiple = true)]
     public sealed class TagAttribute : Attribute {
-        public TagAttribute(Type helper, Choice choice) { Helper = helper; Choice = choice; }
+        public TagAttribute(Type helper, Choice choice, float floatRate = 0f, double doubleRate = 0.0, object? payload = null) {
+            Helper = helper;
+            Choice = choice;
+            FloatRate = floatRate;
+            DoubleRate = doubleRate;
+            Payload = payload;
+        }
         public Type Helper { get; }
         public Choice Choice { get; }
+        public float FloatRate { get; }
+        public double DoubleRate { get; }
+        public object? Payload { get; }
+    }
+    [AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter | AttributeTargets.Method, AllowMultiple = true)]
+    public sealed class GenericTagAttribute<T> : Attribute {
+        public GenericTagAttribute(Type helper) { Helper = helper; }
+        public Type Helper { get; }
     }
 }
 namespace N3 {
@@ -3469,20 +3505,30 @@ namespace N3 {
 }`), ("Decl.cs", declImports + `
 namespace Demo {
     public sealed partial class Rows {
-        [Tag(typeof(Helper), Choice.First)]
+        [Tag(typeof(Helper), Choice.First, Helper.FloatRate, Helper.DoubleRate, new int[] { 7 })]
+        [N1.GenericTag<N1.GenericHelper<int>>(typeof(N1.GenericHelper<int>))]
         public partial int Value { get; }
 
-        [Tag(typeof(Helper), Choice.First)]
-        public partial int this[[Tag(typeof(Helper), Choice.First)] int index, int step = 2] { get; }
+        [Tag(typeof(Helper), Choice.First, Helper.FloatRate, Helper.DoubleRate, new[] { 9 })]
+        public partial int this[
+            [Tag(typeof(Helper), Choice.First, Helper.FloatRate, Helper.DoubleRate, new int[] { 11 })]
+            [N1.GenericTag<N1.GenericHelper<int>>(typeof(N1.GenericHelper<int>))]
+            int index,
+            int step = 2] { get; }
     }
 }`), ("Impl.cs", implImports + `
 namespace Demo {
     ` + innerShadowAlias + `public sealed partial class Rows {
-        [Tag(typeof(Helper), Choice.Second)]
+        [Tag(typeof(Helper), Choice.Second, Helper.FloatRate, Helper.DoubleRate, new int[] { 70 })]
+        [N2.GenericTag<N2.GenericHelper<string>>(typeof(N2.GenericHelper<string>))]
         public partial int Value => 40;
 
-        [Tag(typeof(Helper), Choice.Second)]
-        public partial int this[[Tag(typeof(Helper), Choice.Second)] int index, int step] => Value + index + step;
+        [Tag(typeof(Helper), Choice.Second, Helper.FloatRate, Helper.DoubleRate, new[] { 90 })]
+        public partial int this[
+            [Tag(typeof(Helper), Choice.Second, Helper.FloatRate, Helper.DoubleRate, new int[] { 110 })]
+            [N2.GenericTag<N2.GenericHelper<string>>(typeof(N2.GenericHelper<string>))]
+            int index,
+            int step] => Value + index + step;
 
         [Tag(typeof(Helper), Choice.Second)]
         public static int Use(N3.Other other) => other == null ? 0 : 1;
@@ -3491,18 +3537,36 @@ namespace Demo {
 using System.Reflection;
 namespace Demo {
     public static class Program {
-        private static bool HasTags(ICustomAttributeProvider provider) {
+        private static bool HasTags(ICustomAttributeProvider provider, int expectedFirstPayload, int expectedSecondPayload, bool expectGenericTag) {
             var attributes = provider.GetCustomAttributes(inherit: false);
             bool hasN1 = false;
             bool hasN2 = false;
+            bool hasGenericN1 = !expectGenericTag;
+            bool hasGenericN2 = !expectGenericTag;
             foreach (var attribute in attributes) {
                 if (attribute is N1.TagAttribute first) {
-                    hasN1 |= first.Helper == typeof(N1.Helper) && first.Choice == N1.Choice.First;
+                    hasN1 |= first.Helper == typeof(N1.Helper)
+                        && first.Choice == N1.Choice.First
+                        && first.FloatRate == 1.5f
+                        && first.DoubleRate == 2.5
+                        && first.Payload is int[] firstArray
+                        && firstArray.Length == 1
+                        && firstArray[0] == expectedFirstPayload;
                 } else if (attribute is N2.TagAttribute second) {
-                    hasN2 |= second.Helper == typeof(N2.Helper) && second.Choice == N2.Choice.Second;
+                    hasN2 |= second.Helper == typeof(N2.Helper)
+                        && second.Choice == N2.Choice.Second
+                        && second.FloatRate == 15.0f
+                        && second.DoubleRate == 25.0
+                        && second.Payload is int[] secondArray
+                        && secondArray.Length == 1
+                        && secondArray[0] == expectedSecondPayload;
+                } else if (attribute is N1.GenericTagAttribute<N1.GenericHelper<int>> genericFirst) {
+                    hasGenericN1 |= genericFirst.Helper == typeof(N1.GenericHelper<int>);
+                } else if (attribute is N2.GenericTagAttribute<N2.GenericHelper<string>> genericSecond) {
+                    hasGenericN2 |= genericSecond.Helper == typeof(N2.GenericHelper<string>);
                 }
             }
-            return hasN1 && hasN2;
+            return hasN1 && hasN2 && hasGenericN1 && hasGenericN2;
         }
 
         public static void Main() {
@@ -3512,9 +3576,9 @@ namespace Demo {
             var indexParameter = indexerProperty.GetIndexParameters()[0];
             bool ok = rows[3] == 45
                 && Rows.Use(new N3.Other()) == 1
-                && HasTags(valueProperty)
-                && HasTags(indexerProperty)
-                && HasTags(indexParameter);
+                && HasTags(valueProperty, 7, 70, expectGenericTag: true)
+                && HasTags(indexerProperty, 9, 90, expectGenericTag: false)
+                && HasTags(indexParameter, 11, 110, expectGenericTag: true);
             Console.WriteLine(ok ? 15 : -1);
         }
     }
@@ -3537,6 +3601,13 @@ namespace Demo {
         }
         let implPrinted = File.ReadAllText(Path.Combine(dir, "Impl.gs"))
         Assert.DoesNotContain("import N1\n", implPrinted)
+        if shadowLeadingNamespace {
+            Assert.Contains("import N1Namespace = N1\n", implPrinted)
+            Assert.Contains(
+                "@N1Namespace.GenericTagAttribute[N1Namespace.GenericHelper[int32]](typeof(N1Namespace.GenericHelper[int32]))",
+                implPrinted
+            )
+        }
         let assembly = Path.Combine(dir, "SplitAttributes.dll")
         let compiler = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"))
         let args = []string{compiler, "/target:exe", "/targetframework:net10.0", "/out:$assembly"}.Concat(sources)
@@ -3559,6 +3630,90 @@ namespace Demo {
         let executed = RunDotnet(assembly)
         Assert.Equal(0, executed.Exit)
         Assert.Equal("15" + Environment.NewLine, executed.Output)
+    }
+
+    @Fact
+    func RelocatedUnboundGenericTypeOfAndLinkedSourceAliasReuse_PreserveCollisionFreeAndConsistentOutput() {
+        let unboundProject = CSharpProjectLoader.LoadInMemory([](string, string){("Types.cs", `using System;
+namespace N1 {
+    public sealed class GenericHelper<T> { }
+    [AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter, AllowMultiple = true)]
+    public sealed class MarkerAttribute : Attribute {
+        public MarkerAttribute(Type type) { Type = type; }
+        public Type Type { get; }
+    }
+}
+namespace N3 {
+    public sealed class Other { }
+}`), ("Decl.cs", `using N1;
+namespace Demo {
+    public sealed partial class Rows {
+        [Marker(typeof(GenericHelper<>))]
+        public partial int this[[Marker(typeof(GenericHelper<>))] int index] { get; }
+    }
+}`), ("Impl.cs", `namespace Demo {
+    using N1 = N3.Other;
+    public sealed partial class Rows {
+        public partial int this[int index] => index;
+        public static int Use(N1 other) => other == null ? 0 : 1;
+    }
+}`)}, CSharpProjectLoader.RuntimeReferences())
+        Assert.True(
+            unboundProject.BoundWithoutErrors,
+            string.Join(Environment.NewLine, unboundProject.ErrorDiagnostics)
+        )
+        let implDocument = unboundProject.Documents[2]
+        let implContext = TranslationContext(
+            unboundProject.Compilation,
+            implDocument.SemanticModel,
+            implDocument.FilePath
+        )
+        let implPrinted = GSharpPrinter.Print(
+            CSharpToGSharpTranslator(preservePartialParts: true).TranslateDocument(implDocument, implContext)
+        )
+        Assert.Contains("import N1Namespace = N1", implPrinted)
+        Assert.Contains("typeof(N1Namespace.GenericHelper[_])", implPrinted)
+        Assert.DoesNotContain("typeof(N1.GenericHelper[_])", implPrinted)
+
+        let linkedSource = `using Code = System.Exception;
+namespace Shared {
+    public static class Helper {
+        public static Code Create() => new Code();
+    }
+}`
+        let firstProject = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Shared/Helper.cs", linkedSource)},
+            CSharpProjectLoader.RuntimeReferences()
+        )
+        let secondProject = CSharpProjectLoader.LoadInMemory(
+            [](string, string){
+                ("Shared/Helper.cs", linkedSource),
+                ("Other/Code.cs", "namespace Other { public sealed class Code { } }")
+            },
+            CSharpProjectLoader.RuntimeReferences()
+        )
+        Assert.True(firstProject.BoundWithoutErrors, string.Join(Environment.NewLine, firstProject.ErrorDiagnostics))
+        Assert.True(secondProject.BoundWithoutErrors, string.Join(Environment.NewLine, secondProject.ErrorDiagnostics))
+        let repositoryCompilations = []CSharpCompilation{firstProject.Compilation, secondProject.Compilation}
+        let firstDoc = Assert.Single(firstProject.Documents)
+        let secondDoc = secondProject.Documents[0]
+        let firstContext = TranslationContext(
+            firstProject.Compilation,
+            firstDoc.SemanticModel,
+            firstDoc.FilePath,
+            siblingCompilations: repositoryCompilations,
+            repositoryCompilations: repositoryCompilations
+        )
+        let secondContext = TranslationContext(
+            secondProject.Compilation,
+            secondDoc.SemanticModel,
+            secondDoc.FilePath,
+            siblingCompilations: repositoryCompilations,
+            repositoryCompilations: repositoryCompilations
+        )
+        let firstPrinted = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(firstDoc, firstContext))
+        let secondPrinted = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(secondDoc, secondContext))
+        Assert.Equal(firstPrinted, secondPrinted)
     }
 
     @Theory
