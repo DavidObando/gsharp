@@ -52,6 +52,22 @@ class Issue5623TestProgramFileTests : IDisposable {
     }
 
     @Theory
+    @InlineData("Exe", true)
+    @InlineData("WinExe", true)
+    @InlineData("Library", false)
+    func OutputType_PreservesEntryPoint(outputType string, entryPoint bool) {
+        File.WriteAllText(
+            Path.Combine(directory, "Tests.gs"),
+            "package ProbeTests\n\nfunc Main() { System.Console.WriteLine(\"sdk-entry-point\") }\n"
+        )
+        let (exit, output) = Build("false", "false", outputType)
+        Assert.True(exit == 0, output)
+        using let stream = File.OpenRead(Path.Combine(directory, "obj", "Probe.dll"))
+        using let reader = PEReader(stream)
+        Assert.Equal(entryPoint, reader.PEHeaders.CorHeader!!.EntryPointTokenOrRelativeVirtualAddress != 0)
+    }
+
+    @Theory
     @InlineData("true", "false")
     @InlineData("false", "true")
     func Executable_WithoutGeneratedProgram_ReportsGs0634(isTestProject string, generateProgramFile string) {
