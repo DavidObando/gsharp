@@ -249,4 +249,16 @@ class PipelineOptions {
     /// flattening would erase it from the migrated assembly (GS0157 at every
     /// cross-project use site).
     internal prop ProjectsReferencedByOtherApps IReadOnlyCollection[string]?
+
+    /// Gets or sets the absolute project paths that failed the Translate stage
+    /// in this run (issue #4767).
+    internal prop InvalidTranslatedProjectPaths ISet[string]?
+
+    /// Gets or sets the absolute project paths that failed the Compile stage
+    /// in this run (issue #4767).
+    internal prop InvalidCompiledProjectPaths ISet[string]?
+
+    /// Gets or sets cached translation-validity outcomes for unselected
+    /// referenced projects (issue #4767).
+    internal prop ValidatedReferencedProjects IDictionary[string, bool]?
 }

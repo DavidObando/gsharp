@@ -305,6 +305,9 @@ class MigrationPipeline {
             GscPath: gscPath,
             Succeeded: true
         }
+        this.options.InvalidTranslatedProjectPaths = HashSet[string](StringComparer.OrdinalIgnoreCase)
+        this.options.InvalidCompiledProjectPaths = HashSet[string](StringComparer.OrdinalIgnoreCase)
+        this.options.ValidatedReferencedProjects = Dictionary[string, bool](StringComparer.OrdinalIgnoreCase)
         let appResults = Dictionary[string, AppResult](StringComparer.OrdinalIgnoreCase)
         let orderedApps = this.OrderForSdkBuild(apps, evaluatedProjectReferences)
         for app in orderedApps {
@@ -323,6 +326,19 @@ class MigrationPipeline {
             appResults[app.Id] = appResult
             if !appResult.Succeeded {
                 runResult.Succeeded = false
+                let fullProjectPath = Path.GetFullPath(app.ProjectPath)
+                if appResult.Stages.Any(
+                    (s StageResult) -> s.Stage == TriageSerialization.StageName(MigrationStageKind.Translate) &&
+                        s.Status == "failed"
+                ) {
+                    this.options.InvalidTranslatedProjectPaths!!.Add(fullProjectPath)
+                }
+                if appResult.Stages.Any(
+                    (s StageResult) -> s.Stage == TriageSerialization.StageName(MigrationStageKind.Compile) &&
+                        s.Status == "failed"
+                ) {
+                    this.options.InvalidCompiledProjectPaths!!.Add(fullProjectPath)
+                }
             }
         }
         for app in apps {
@@ -769,7 +785,7 @@ class MigrationPipeline {
             let written = this.WriteArtifacts(outcome.Artifacts, artifactDir, runDir, priorHistory, appResult)
             appResult.Stages.Add(StageResult{Stage: stageName, Status: "failed", ArtifactCount: written.Count})
             appResult.Succeeded = false
-            appResult.FailureCategory = written.FirstOrDefault()?.Category
+            appResult.FailureCategory = written.FirstOrDefault()?.Category ?? outcome.FailureCategory
             for artifact in written {
                 appResult.Fingerprints.Add(artifact.Fingerprint)
             }

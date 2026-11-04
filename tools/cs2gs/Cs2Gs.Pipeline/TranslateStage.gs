@@ -173,6 +173,7 @@ class TranslateStage : IMigrationStage {
         // own, and it never touches `projects`/`project`, PE reference capture,
         // or anything the generated `.gsproj` depends on.
         var siblingCompilations IReadOnlyList[CSharpCompilation]
+        var sdkReferencedProjects IReadOnlyList[LoadedCSharpProject]? = nil
         if context.Options.CompileViaSdk {
             var taintOnlyProjects IReadOnlyList[LoadedCSharpProject]
             if !TryResolveRepositoryTransitiveProjects(
@@ -189,6 +190,7 @@ class TranslateStage : IMigrationStage {
                 )
                     .ConfigureAwait(false)
             }
+            sdkReferencedProjects = taintOnlyProjects
             siblingCompilations = taintOnlyProjects.Select((p LoadedCSharpProject) -> p.Compilation).ToList()
             // Source projects often express ProjectReference items through
             // evaluated item lists such as @(GsharpCore). Those expressions
@@ -239,6 +241,7 @@ class TranslateStage : IMigrationStage {
             ?.Values
             .Select((p LoadedCSharpProject) -> p.Compilation)
             .ToList()
+        var referencedDependencyFailed = false
         // Translate the app itself (index 0) plus, in the no-via-sdk path,
         // its transitively referenced sibling projects (Refs #914); under the
         // default SDK-backed path `projects` above contains only the app
@@ -256,6 +259,18 @@ class TranslateStage : IMigrationStage {
         for var projectIndex = 0; projectIndex < projects.Count; projectIndex++ {
             let currentProject = projects[projectIndex]
             let isReferencedProject = projectIndex > 0
+            if isReferencedProject && currentProject.WorkspaceLoadFailed {
+                referencedDependencyFailed = true
+                let loadMessage = string.Join(
+                    " | ",
+                    currentProject.WorkspaceLoadErrors.Select((d Microsoft.CodeAnalysis.Diagnostic) -> d.GetMessage())
+                )
+                Note(
+                    context,
+                    "dependency-blocked: referenced project '${currentProject.ProjectPath}' failed workspace load: $loadMessage"
+                )
+                continue
+            }
             // Capture the external (NuGet package) assemblies each project
             // resolved against so the Compile stage can add them to gsc's
             // reference set. Only on-disk file-backed references are recorded
@@ -659,6 +674,35 @@ class TranslateStage : IMigrationStage {
                         artifacts.Add(context.Triage.RoundTripFailure(emitted, formatFailure))
                     }
                     if isReferencedProject {
+                        // Issue #4767: producer diagnostics remain producer-owned
+                        // (no triage artifact is charged to the consumer), but a
+                        // consumer depending on an invalid required producer must
+                        // fail closed as dependency-blocked instead of reporting
+                        // false success.
+                        if formatFailure != nil {
+                            referencedDependencyFailed = true
+                            Note(
+                                context,
+                                "dependency-blocked: referenced project '${currentProject.ProjectPath}' failed gsfmt post-pass in '${document.FilePath}': $formatFailure"
+                            )
+                        }
+                        for diagnostic in translationContext.Diagnostics.Where(
+                            (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported
+                        ) {
+                            referencedDependencyFailed = true
+                            Note(
+                                context,
+                                "dependency-blocked: referenced project '${currentProject.ProjectPath}' reported unsupported construct '${diagnostic.ConstructKind}' in '${document.FilePath}': ${diagnostic.Message}"
+                            )
+                        }
+                        let referencedRoundTrip = GSharpRoundTrip.Validate(printed)
+                        if !referencedRoundTrip.Success {
+                            referencedDependencyFailed = true
+                            Note(
+                                context,
+                                "dependency-blocked: referenced project '${currentProject.ProjectPath}' emitted G# that did not round-trip-parse in '${document.FilePath}': ${referencedRoundTrip.Errors.FirstOrDefault() ?? "unknown parse error"}"
+                            )
+                        }
                         continue
                     }
                     for diagnostic in translationContext.Diagnostics.Where(
@@ -752,6 +796,12 @@ class TranslateStage : IMigrationStage {
                                 resxPath
                             )
                         )
+                    } else {
+                        referencedDependencyFailed = true
+                        Note(
+                            context,
+                            "dependency-blocked: referenced project '${currentProject.ProjectPath}' failed .resx generation for '$resxPath': ${ex.Message}"
+                        )
                     }
                     continue
                 }
@@ -768,6 +818,14 @@ class TranslateStage : IMigrationStage {
                 }
                 context.EmittedFiles.Add(emittedResx)
                 if isReferencedProject {
+                    let referencedResxRoundTrip = GSharpRoundTrip.Validate(generated)
+                    if !referencedResxRoundTrip.Success {
+                        referencedDependencyFailed = true
+                        Note(
+                            context,
+                            "dependency-blocked: referenced project '${currentProject.ProjectPath}' emitted .resx G# that did not round-trip-parse for '$resxPath': ${referencedResxRoundTrip.Errors.FirstOrDefault() ?? "unknown parse error"}"
+                        )
+                    }
                     continue
                 }
                 let resxRoundTrip = GSharpRoundTrip.Validate(generated)
@@ -781,17 +839,51 @@ class TranslateStage : IMigrationStage {
                 }
             }
         }
+        if context.Options.CompileViaSdk && sdkReferencedProjects != nil {
+            for referencedProject in sdkReferencedProjects.Skip(1) {
+                if string.IsNullOrEmpty(referencedProject.ProjectPath) {
+                    continue
+                }
+                let referencedPath = Path.GetFullPath(referencedProject.ProjectPath!!)
+                if IsExcludedOrPassthroughProject(referencedPath, context.Options) {
+                    continue
+                }
+                if context.Options.InvalidTranslatedProjectPaths?.Contains(referencedPath) == true {
+                    referencedDependencyFailed = true
+                    Note(
+                        context,
+                        "dependency-blocked: referenced project '$referencedPath' failed the translate stage."
+                    )
+                    continue
+                }
+                if context
+                    .Options
+                    .GeneratedProjectPaths
+                    ?.ContainsKey(referencedPath) != true &&
+                    !IsUnselectedReferencedProjectValid(
+                    referencedProject,
+                    siblingCompilations,
+                    repositoryCompilations,
+                    context,
+                    cancellationToken
+                ) {
+                    referencedDependencyFailed = true
+                }
+            }
+        }
         // Issue #2225: nbgv only generates the `ThisAssembly` source for the
         // languages its MSBuild `<Language>` switch supports; G# first shipped in
         // 3.11.13-beta. If the migrated project references an older nbgv it would
         // silently drop `ThisAssembly`. Emit a bumped copy of whichever project /
         // props file pins a below-floor nbgv literal (source is never mutated).
         EmitNerdbankGitVersioningBumps(context)
-        return if artifacts.Count == 0 {
-            StageOutcome.Passed()
-        } else {
-            StageOutcome.Failed(artifacts)
+        if artifacts.Count > 0 {
+            return StageOutcome.Failed(artifacts)
         }
+        if referencedDependencyFailed {
+            return StageOutcome.DependencyBlocked()
+        }
+        return StageOutcome.Passed()
     }
 
     // One source document's translated units (one per namespace in the
@@ -1406,12 +1498,120 @@ class TranslateStage : IMigrationStage {
                 []char{Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar},
                 StringSplitOptions.RemoveEmptyEntries
             )
-            return segments.Any(
+            return RepositoryFileInventory.IsPythonBytecodePath(relativePath) || segments.Any(
                 (s string) -> s.Equals("bin", StringComparison.OrdinalIgnoreCase) || s.Equals(
                     "obj",
                     StringComparison.OrdinalIgnoreCase
-                )
+                ) ||
+                    s.Equals("__pycache__", StringComparison.OrdinalIgnoreCase)
             )
+        }
+
+        private func IsExcludedOrPassthroughProject(projectPath string, options PipelineOptions) bool {
+            let fullPath = Path.GetFullPath(projectPath)
+            return options.ExcludedProjectPaths.Any(
+                (p string) -> string.Equals(Path.GetFullPath(p), fullPath, StringComparison.OrdinalIgnoreCase)
+            ) ||
+                options
+                .PassthroughProjectPaths
+                .Any((p string) -> string.Equals(Path.GetFullPath(p), fullPath, StringComparison.OrdinalIgnoreCase))
+        }
+
+        private func IsUnselectedReferencedProjectValid(
+            referencedProject LoadedCSharpProject,
+            siblingCompilations IReadOnlyList[CSharpCompilation],
+            repositoryCompilations IReadOnlyList[CSharpCompilation]?,
+            context StageExecutionContext,
+            cancellationToken CancellationToken
+        ) bool {
+            let referencedPath = Path.GetFullPath(referencedProject.ProjectPath!!)
+            if context
+                .Options
+                .ValidatedReferencedProjects != nil &&
+                context
+                .Options
+                .ValidatedReferencedProjects!!
+                .TryGetValue(referencedPath, out var cached) {
+                if !cached {
+                    Note(
+                        context,
+                        "dependency-blocked: unselected referenced project '$referencedPath' failed translation."
+                    )
+                }
+                return cached
+            }
+            var valid = true
+            if referencedProject.WorkspaceLoadFailed {
+                valid = false
+                Note(
+                    context,
+                    "dependency-blocked: unselected referenced project '$referencedPath' failed workspace load."
+                )
+            } else {
+                let hasAnalyzerReferences = referencedProject.AnalyzerReferencePaths.Count > 0
+                let retainedFilePaths List[string]? = if hasAnalyzerReferences {
+                    referencedProject.Documents.Select((d LoadedDocument) -> d.FilePath).ToList()
+                } else {
+                    default(List[string]?)
+                }
+                let isAnalyzerProject = AnalyzerProjectDetector.IsAnalyzerProject(referencedProject.Compilation)
+                let isAnalyzerTestProject = !isAnalyzerProject && AnalyzerProjectDetector.IsAnalyzerTestProject(
+                    referencedProject.Compilation
+                )
+                let analyzerApiMode = isAnalyzerProject || isAnalyzerTestProject
+                let preserveEntryType = context.Options.ProjectsReferencedByOtherApps?.Contains(referencedPath) == true
+                let translatedFilePaths = referencedProject
+                    .Documents
+                    .Where((d LoadedDocument) -> !IsResxDesignerCodebehind(d.FilePath))
+                    .Select((d LoadedDocument) -> d.FilePath)
+                    .ToList()
+                let translator = CSharpToGSharpTranslator(
+                    preservePartialParts: true,
+                    retainedFilePaths: retainedFilePaths,
+                    analyzerApiMode: analyzerApiMode,
+                    preserveEntryType: preserveEntryType,
+                    projectDirectory: referencedProject.ProjectDirectory,
+                    emitPartialMethodPairs: true,
+                    translatedFilePaths: translatedFilePaths
+                ){ConditionalCompilation = context.Options.ConditionalCompilation}
+                for document in referencedProject.Documents {
+                    cancellationToken.ThrowIfCancellationRequested()
+                    if IsResxDesignerCodebehind(document.FilePath) {
+                        continue
+                    }
+                    let translationContext = TranslationContext(
+                        referencedProject.Compilation,
+                        document.SemanticModel,
+                        document.FilePath,
+                        siblingCompilations,
+                        repositoryCompilations
+                    )
+                    translationContext.TranslateAnalyzerSnippet = SnippetTranslator.Translate
+                    let unit = translator.TranslateDocument(document, translationContext)
+                    for diagnostic in translationContext.Diagnostics.Where(
+                        (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported
+                    ) {
+                        valid = false
+                        Note(
+                            context,
+                            "dependency-blocked: unselected referenced project '$referencedPath' reported unsupported construct '${diagnostic.ConstructKind}' in '${document.FilePath}': ${diagnostic.Message}"
+                        )
+                    }
+                    let printed = GSharpPrinter.Print(unit)
+                    let roundTrip = GSharpRoundTrip.Validate(printed)
+                    if !roundTrip.Success {
+                        valid = false
+                        Note(
+                            context,
+                            "dependency-blocked: unselected referenced project '$referencedPath' emitted G# that did not round-trip-parse in '${document.FilePath}': ${roundTrip.Errors.FirstOrDefault() ?? "unknown parse error"}"
+                        )
+                    }
+                }
+            }
+            if context.Options.ValidatedReferencedProjects != nil {
+                context.Options.ValidatedReferencedProjects!![referencedPath] = valid
+            }
+            return valid
         }
 
         private func IsOutsideDirectory(relativePath string) bool -> Path.IsPathRooted(relativePath) ||

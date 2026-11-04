@@ -71,6 +71,9 @@ class CompileStage : IMigrationStage {
                 .ToList()
         }
         if context.Options.CompileViaSdk {
+            if HasInvalidProjectReference(context) {
+                return Task.FromResult(StageOutcome.DependencyBlocked())
+            }
             let runner = SdkCompileRunner()
             // Issue #3782: `survey` demotes GS0536 to a warning for this build
             // only, so one compile walks the WHOLE project graph and reports
@@ -189,6 +192,10 @@ class CompileStage : IMigrationStage {
         )
         File.WriteAllText(Path.Combine(context.ArtifactDir, "gsc.compile.log"), result.Output ?? string.Empty)
         if result.Succeeded {
+            if !File.Exists(outputPath) {
+                let missingMessage = "Expected output assembly '${Path.GetFileName(outputPath)}' was not found after a successful gsc build."
+                return Task.FromResult(BuildFailureOutcome(context, Array.Empty[GscDiagnostic](), missingMessage))
+            }
             // Publish the emitted assembly path for the downstream IL-verify stage.
             context.EmittedAssemblyPath = outputPath
             return Task.FromResult(StageOutcome.Passed())
@@ -263,6 +270,9 @@ class CompileStage : IMigrationStage {
                 if nameMatch != nil {
                     return nameMatch
                 }
+                if Path.GetExtension(diagnosticFile).Equals(".gs", StringComparison.OrdinalIgnoreCase) {
+                    return nil
+                }
             }
             return if files.Count == 1 {
                 files[0]
@@ -330,22 +340,25 @@ class CompileStage : IMigrationStage {
             syntheticMessageOnNoDiagnostics string
         ) StageOutcome {
             let artifacts = List[TriageArtifact]()
+            var blockedByReferencedProject = false
             for diagnostic in errors {
                 let file EmittedGsFile? = MatchEmittedFile(context.EmittedFiles, diagnostic.File)
                 // Errors located in a referenced sibling project's emitted file are
                 // that project's own concern (measured in its own run), not charged
                 // against this app. Sibling files are compile inputs only, so the
                 // app's uses of sibling types resolve (Refs #914).
-                if file != nil && file.IsFromReferencedProject {
+                if (file != nil && file.IsFromReferencedProject) ||
+                    (file == nil && IsReferencedProjectDiagnostic(context, diagnostic)) {
+                    blockedByReferencedProject = true
                     continue
                 }
                 artifacts.Add(context.Triage.CompileError(diagnostic, file))
             }
             // Every parsed error was in a referenced sibling file: the app's own G#
-            // compiled cleanly. The whole compilation still produced no assembly,
-            // so IL-verify simply has nothing to read.
-            if artifacts.Count == 0 && errors.Count > 0 {
-                return StageOutcome.Passed()
+            // reported no error, but the required dependency failed to compile so
+            // no consumer assembly was produced (issue #4767).
+            if artifacts.Count == 0 && blockedByReferencedProject {
+                return StageOutcome.DependencyBlocked()
             }
             // Exit was non-zero but no structured GSxxxx error was parsed (e.g. a
             // crash). Capture a synthetic compile-error so the failure is not lost.
@@ -361,6 +374,85 @@ class CompileStage : IMigrationStage {
                 artifacts.Add(context.Triage.CompileError(synthetic, context.EmittedFiles[0]))
             }
             return StageOutcome.Failed(artifacts)
+        }
+
+        private func HasInvalidProjectReference(context StageExecutionContext) bool {
+            let invalidTranslated = context.Options.InvalidTranslatedProjectPaths
+            let invalidCompiled = context.Options.InvalidCompiledProjectPaths
+            if invalidTranslated == nil && invalidCompiled == nil {
+                return false
+            }
+            for reference in context.ProjectReferences {
+                if string.IsNullOrEmpty(reference.SourceInclude) || IsBuildOrderingOnlyReference(reference) {
+                    continue
+                }
+                let fullPath = Path.GetFullPath(reference.SourceInclude!!)
+                if invalidTranslated?.Contains(fullPath) == true || invalidCompiled?.Contains(fullPath) == true {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func IsBuildOrderingOnlyReference(reference DeclaredProjectItem) bool {
+            let referenceOutputAssembly = reference
+                .Element
+                .Attribute(XName?("ReferenceOutputAssembly")!!)
+                ?.Value ??
+                reference
+                .Element
+                .Elements()
+                .FirstOrDefault(
+                (e XElement) -> e.Name.LocalName.Equals("ReferenceOutputAssembly", StringComparison.OrdinalIgnoreCase)
+            )
+                ?.Value
+            return string.Equals(referenceOutputAssembly?.Trim(), "false", StringComparison.OrdinalIgnoreCase)
+        }
+
+        private func IsReferencedProjectDiagnostic(context StageExecutionContext, diagnostic GscDiagnostic) bool {
+            if context.ProjectReferences.Count == 0 || string.IsNullOrEmpty(diagnostic.File) {
+                return false
+            }
+            if !Path.GetExtension(diagnostic.File).Equals(".gs", StringComparison.OrdinalIgnoreCase) {
+                return false
+            }
+            let diagnosticPath = if Path.IsPathRooted(diagnostic.File) {
+                Path.GetFullPath(diagnostic.File)
+            } else {
+                Path.GetFullPath(Path.Combine(context.ProjectOutputDir, diagnostic.File))
+            }
+            let ownOutputDir = Path.GetFullPath(context.ProjectOutputDir)
+            if IsUnderDirectory(diagnosticPath, ownOutputDir) {
+                return false
+            }
+            for reference in context.ProjectReferences {
+                if string.IsNullOrEmpty(reference.SourceInclude) || IsBuildOrderingOnlyReference(reference) {
+                    continue
+                }
+                let referencedProjectPath = Path.GetFullPath(reference.SourceInclude!!)
+                let referencedSourceDir string? = Path.GetDirectoryName(referencedProjectPath)
+                if !string.IsNullOrEmpty(referencedSourceDir) &&
+                    IsUnderDirectory(diagnosticPath, referencedSourceDir!!) {
+                    return true
+                }
+                if context.Options.GeneratedProjectPaths != nil && context.Options.GeneratedProjectPaths!!.TryGetValue(
+                    referencedProjectPath,
+                    out var generatedProjectPath
+                ) {
+                    let generatedDir string? = Path.GetDirectoryName(Path.GetFullPath(generatedProjectPath))
+                    if !string.IsNullOrEmpty(generatedDir) && IsUnderDirectory(diagnosticPath, generatedDir!!) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func IsUnderDirectory(path string, directory string) bool {
+            let relative = Path.GetRelativePath(directory, path)
+            return !Path.IsPathRooted(relative) && !relative.Equals("..", StringComparison.Ordinal) &&
+                !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
+                !relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal)
         }
 
         /// Builds the full `/reference:` set passed to `gsc`. gsc's

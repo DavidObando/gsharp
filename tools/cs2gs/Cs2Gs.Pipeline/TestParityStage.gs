@@ -293,6 +293,21 @@ partial class TestParityStage : IMigrationStage {
     }
 
     private func RunStdoutParity(context StageExecutionContext) StageOutcome {
+        if string.IsNullOrEmpty(context.EmittedAssemblyPath) || !File.Exists(context.EmittedAssemblyPath) {
+            let missingAssembly = if string.IsNullOrEmpty(context.EmittedAssemblyPath) {
+                Path.GetFileNameWithoutExtension(context.App.ProjectPath) + ".dll"
+            } else {
+                context.EmittedAssemblyPath!!
+            }
+            this.Note(context, "stdout parity FAILED: required output assembly '$missingAssembly' was not emitted.")
+            let missingDiff = StdoutParityResult.Mismatch(
+                0,
+                "emitted executable assembly",
+                "missing output assembly '$missingAssembly'"
+            )
+            let missingArtifact = context.Triage.TestParityStdoutFailure(missingDiff, EmittedGsRelative(context))
+            return StageOutcome.Failed([]TriageArtifact{missingArtifact})
+        }
         let (exit, stdout, stderr, timedOut) = RunProgram(context.EmittedAssemblyPath, context.ProjectOutputDir)
         let parity = StdoutParity.CompareFile(context.App.StdoutGolden, stdout)
         let note = "stdout parity: exit=$exit; match=${parity.IsMatch}; timedOut=$timedOut." +
@@ -671,8 +686,7 @@ stderr:
         private func IsStdoutEligible(context StageExecutionContext) bool -> context
             .App
             .TargetKind == TargetKind.Exe &&
-            !string.IsNullOrEmpty(context.App.StdoutGolden) && File.Exists(context.App.StdoutGolden) &&
-            !string.IsNullOrEmpty(context.EmittedAssemblyPath) && File.Exists(context.EmittedAssemblyPath)
+            !string.IsNullOrEmpty(context.App.StdoutGolden) && File.Exists(context.App.StdoutGolden)
 
         private func IsLibraryEligible(context StageExecutionContext) bool -> !string.IsNullOrEmpty(
             context.App.TestsProjectPath
