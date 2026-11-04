@@ -139,24 +139,58 @@ partial class SemanticModel {
         access MemberAccessContext,
         result ImmutableArray[Symbol].Builder
     ) {
-        AddSourceMembers(
-            declared,
-            MemberQuery.Instance(MemberKinds.Property | MemberKinds.Event | MemberKinds.Method),
-            MemberQuery.Static(MemberKinds.Property | MemberKinds.Method),
-            name,
-            access,
-            result
+        let instanceQuery = MemberQuery(
+            includeInstance: true,
+            includeStatic: false,
+            includeInherited: false,
+            MemberKinds.Property | MemberKinds.Event | MemberKinds.Method
         )
-        for clrInterface in ClrTypeUtilities.GetTransitiveClrBaseInterfaces(declared) {
+        for iface in declared.SelfAndAllBaseInterfaces() {
+            for member in TypeMemberModel.EnumerateMembers(iface, instanceQuery) {
+                AddSourceMember(declared, SubstituteInterfaceMember(iface, member), name, access, result)
+            }
+        }
+        for member in TypeMemberModel.EnumerateMembers(
+            declared,
+            MemberQuery.Static(MemberKinds.Property | MemberKinds.Method)
+        ) {
+            AddSourceMember(declared, SubstituteInterfaceMember(declared, member), name, access, result)
+        }
+        let clrInterfaces = ClrTypeUtilities.GetTransitiveClrBaseInterfaces(declared, out var contexts)
+        for var i = 0; i < clrInterfaces.Count; i++ {
             // The walk is already transitive, so each interface contributes only its own members.
             AddClrMembersOf(
-                ImportedTypeSymbol.GetWithoutNullability(clrInterface, NullabilityFreeReason.TypeStructure),
-                clrInterface,
+                contexts[i],
+                clrInterfaces[i],
                 BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static,
                 name,
                 result
             )
         }
+    }
+
+    private func SubstituteInterfaceMember(iface InterfaceSymbol, member Symbol) Symbol {
+        if member is not PropertySymbol property {
+            return member
+        }
+        let substitutedType = iface.SubstituteMemberType(property.Type)
+        var parameters = property.Parameters
+        var parametersChanged = false
+        if !parameters.IsDefaultOrEmpty {
+            let builder = ImmutableArray.CreateBuilder[ParameterSymbol](parameters.Length)
+            for parameter in parameters {
+                let parameterType = iface.SubstituteMemberType(parameter.Type)
+                parametersChanged |= !object.ReferenceEquals(parameterType, parameter.Type)
+                builder.Add(ParameterSymbol(parameter, parameterType, parameter.DeclaringSyntax))
+            }
+            if parametersChanged {
+                parameters = builder.MoveToImmutable()
+            }
+        }
+        if object.ReferenceEquals(substitutedType, property.Type) && !parametersChanged {
+            return property
+        }
+        return property.WithSignature(substitutedType, parameters)
     }
 
     /// Adds the members that a type parameter takes from its constraints, in constraint order along the

@@ -273,6 +273,14 @@ open class Adr0212InheritedMemberTests {
         Assert.Equal("IBase", Assert.Single(Query("PTSubIface", "Hello")).ContainingType!!.Name)
         Assert.Single(Query("PTCounted", "Count"))
         Assert.Single(Query("PTCounted", "Add"))
+        let maybeEnumerator = Query("PTIMaybes", "GetEnumerator").OfType[ImportedFunctionSymbol]().First(
+            (f ImportedFunctionSymbol) -> f.Method.DeclaringType!!.IsGenericType
+        )
+        Assert.Contains("[string?]", SymbolDisplay.ToTypeDisplayString(maybeEnumerator.Type), StringComparison.Ordinal)
+        let boxValue = cast[PropertySymbol](Assert.Single(Query("PTBox", "Value")))
+        Assert.Equal(TypeSymbol.String, boxValue.Type)
+        let subBoxValue = cast[PropertySymbol](Assert.Single(Query("PTSubBox", "Value")))
+        Assert.Equal(TypeSymbol.Int32, subBoxValue.Type)
         let addStatic = cast[FunctionSymbol](Assert.Single(Query("PTAdd", "Add")))
         Assert.True(addStatic.IsStatic)
     }
@@ -505,6 +513,14 @@ class Faulty : Exception {
 
 interface ICounted : IList[string] { }
 
+interface IMaybes : IEnumerable[string?] { }
+
+interface IBox[U] {
+    prop Value U { get; }
+}
+
+interface ISubBox[V] : IBox[V] { }
+
 interface IShape {
     func Area() int32 { return 1 }
     func Perimeter() int32;
@@ -597,6 +613,9 @@ func UseTypeParameters[
     TShape IShape,
     TSubIface ISub,
     TCounted ICounted,
+    TIMaybes IMaybes,
+    TBox IBox[string],
+    TSubBox ISubBox[int32],
     TAdd IAdd,
     TBuffer Buffer,
     TShown Shown,
@@ -614,6 +633,9 @@ func UseTypeParameters[
     shape TShape,
     subIface TSubIface,
     counted TCounted,
+    imaybes TIMaybes,
+    box TBox,
+    subBox TSubBox,
     addWitness TAdd,
     buf TBuffer,
     shown TShown,
@@ -640,6 +662,9 @@ func UseTypeParameters[
     let c12 = deep.ToString() // PTDeepChain
     let c13 = anyVal.ToString() // PTAny
     let c14 = asyncLocal.Value // PTAsync
+    let c15 = imaybes.ToString() // PTIMaybes
+    let c16 = box.Value // PTBox
+    let c17 = subBox.Value // PTSubBox
 }
 `
 
