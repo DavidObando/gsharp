@@ -556,6 +556,42 @@ Console.WriteLine(viaMethodRefused[SchemeOptions]())`
         }
     }
 
+    @Fact
+    func ImportedGenericHierarchyWithRectangularArrayAndNullableStruct_SatisfiesProjectedBounds() {
+        const Source = `package P
+import System
+import System.Collections.Generic
+import HelperLib2
+
+class MatrixBox[X IList[[,]int32]] {
+    public var Tag string = "m"
+}
+
+class MatrixHolder {
+    public var Box MatrixBox[MatrixItems[int32]]
+}
+
+func countOptional[X IList[int32?]](x X) int32 -> 2
+
+Console.WriteLine(countOptional[OptionalItems[int32]](OptionalItems[int32]()))`
+        let tempDir = Directory.CreateTempSubdirectory("gs_4070_proj_").FullName
+        try {
+            let libPath = CompileCSharpLibrary(tempDir)
+            let appPath = Path.Combine(tempDir, "Proj.dll")
+            let appLog = Compile(tempDir, "App.gs", Source, appPath, "/target:exe", "/reference:" + libPath)
+            Assert.DoesNotContain("GS0152", appLog, StringComparison.Ordinal)
+            Assert.True(File.Exists(appPath), (`projected hierarchy bounds must bind. Log:
+` + "$appLog"))
+            IlVerifier.Verify(appPath, []string{libPath})
+            let (exit, output) = RunDotnet(appPath)
+            Assert.True(exit == 0, (`the program must run. Exit ` + "$exit" + `:
+` + "$output"))
+            Assert.Equal([]string{"2"}, SplitLines(output))
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         /// Timeout for running an emitted sample.
         private const RunTimeout int32 = 60_000
@@ -620,6 +656,15 @@ public class MyCmp : System.IComparable<MyCmp>
 // A CONSTRUCTED bound whose arguments are all CONCRETE. The erasure
 // loses nothing here, so this one must still forward.
 public class StringBag : System.Collections.Generic.List<string>
+{
+}
+
+public class MatrixItems<T> : System.Collections.Generic.List<T[,]>
+{
+}
+
+public class OptionalItems<T> : System.Collections.Generic.List<T?>
+    where T : struct
 {
 }
 

@@ -533,6 +533,9 @@ Console.WriteLine(readList[string, List[string?]](items))`,
                 "GS0152",
                 "GS0580"
             }
+            yield[]object{"a-nullable-argument-does-not-satisfy-a-non-nullable-dependent-imported-class-constraint", `func read[V, T List[V]](x T) V -> x[0]
+
+Console.WriteLine(read[string, List[string?]](List[string?]{nil}))`, "GS0152", "GS0580"}
             yield[]object{"a-dependent-bound-does-not-propagate-the-default-constructor-constraint", `func makeNew[T init()]() T -> T()
 func forward[A init(), B A]() B -> makeNew[B]()
 
@@ -695,6 +698,7 @@ func readInferred[V, T IValue4744[V]](seed V, item T) V -> item.Value
 func readBase[V, T ValueBase4744[V]](item T) V -> item.Saved
 func readList[V, T IValue4744[List[V]]](item T) int32 -> item.Value.Count
 func useNullableList[T ValueBase4744[List[string?]]](x T) int32 -> x.Saved.Count
+func cmp9[T IComparable[T]](x T) int32 -> x.CompareTo(x)
 
 class IntListItem4744 : IValue4744[List[int32]] {
     public prop Value List[int32] -> List[int32]{7}
@@ -727,17 +731,8 @@ Console.WriteLine(item.ReadExt(0))
 Console.WriteLine(reader(item))
 Console.WriteLine(readBase[int32, IntDerived4744](IntDerived4744()))
 Console.WriteLine(readList[int32, IntListItem4744](IntListItem4744()))
-Console.WriteLine(useNullableList[NullableListDerived4744](NullableListDerived4744()))`, []string{
-                    "7",
-                    "7",
-                    "7",
-                    "7",
-                    "7",
-                    "7",
-                    "11",
-                    "1",
-                    "1"
-                }}
+Console.WriteLine(useNullableList[NullableListDerived4744](NullableListDerived4744()))
+Console.WriteLine(cmp9((1, 2, 3, 4, 5, 6, 7, 8, 9)))`, []string{"7", "7", "7", "7", "7", "7", "11", "1", "1", "0"}}
             // #4762: satisfied closed and forwarded open generic named-delegate
             // constructions compile, IL-verify, and run.
             yield[]object{"the-4762-control-satisfied-and-forwarded-named-delegate-constructions", `class Holder[U class] {

@@ -13990,15 +13990,11 @@ partial class Binder {
                 }
                 return false
             }
-            // Imported reference class: use CLR assignability when both project to a
-            // CLR type.
+            // Imported reference class: use CLR assignability and compare
+            // symbolic generic arguments when both project to a CLR type.
             if classConstraint.ClrType is {} constraintClr {
-                if typeArgument!!.ClrType is {} argClr {
-                    // Issue #3705 (family 3): the constraint comes from imported
-                    // metadata (MetadataLoadContext) while the argument may be a
-                    // well-known TypeSymbol singleton wrapping a host `typeof(T)`.
-                    // Raw IsAssignableFrom is silently false across that boundary.
-                    return ClrLoadContext.IsAssignable(constraintClr, argClr)
+                if typeArgument!!.ClrType != nil {
+                    return SatisfiesImportedClassConstraint(typeArgument!!, classConstraint, constraintClr)
                 }
                 let constraintFullName = constraintClr.FullName
                 if string.Equals(constraintFullName, "System.Object", StringComparison.Ordinal) {
@@ -14017,18 +14013,82 @@ partial class Binder {
                 // Issue #3501: a SOURCE class deriving (possibly through source
                 // bases) from an imported CLR base has no ClrType of its own —
                 // walk the source base chain to the first ImportedBaseType and
-                // check CLR assignability there (`class Derived : ImportedBase`
-                // must satisfy `[T ImportedBase]`).
+                // check CLR assignability and generic arguments there.
                 if typeArgument is StructSymbol sourceClass {
                     for current in sourceClass.GetHierarchy() {
-                        if current.ImportedBaseType?.ClrType is {} importedBaseClr && ClrLoadContext.IsAssignable(
-                            constraintClr,
-                            importedBaseClr
-                        ) {
+                        if current.ImportedBaseType is {} importedBase &&
+                            SatisfiesImportedClassConstraint(importedBase, classConstraint, constraintClr) {
                             return true
                         }
                     }
                 }
+            }
+            return false
+        }
+
+        private func SatisfiesImportedClassConstraint(
+            candidate TypeSymbol,
+            classConstraint TypeSymbol,
+            constraintClr Type
+        ) bool {
+            if candidate.ClrType is not{} candidateClr || !ClrLoadContext.IsAssignable(constraintClr, candidateClr) {
+                return false
+            }
+            if !constraintClr.IsGenericType || constraintClr.IsGenericTypeDefinition {
+                return true
+            }
+            let constraintPositions = GetClrSlotAlignedArguments(classConstraint)
+            if constraintPositions.IsDefaultOrEmpty || TypeSymbol.ContainsTypeParameter(classConstraint) {
+                return true
+            }
+            let openConstraintDefName = constraintClr.GetGenericTypeDefinition().FullName
+            var currentOpenDef Type? = nil
+            var currentPositions = ImmutableArray[TypeSymbol].Empty
+            if candidateClr.IsGenericType && !candidateClr.IsGenericTypeDefinition {
+                currentOpenDef = candidateClr.GetGenericTypeDefinition()
+                currentPositions = GetClrSlotAlignedArguments(candidate)
+            } else {
+                var currentClr Type? = candidateClr
+                while currentClr != nil {
+                    if currentClr.IsGenericType {
+                        currentOpenDef = currentClr.GetGenericTypeDefinition()
+                        let clrArgs = currentClr.GetGenericArguments()
+                        let posBuilder = ImmutableArray.CreateBuilder[TypeSymbol](clrArgs.Length)
+                        for clrArg in clrArgs {
+                            posBuilder.Add(
+                                TypeSymbol.FromClrTypeWithoutNullability(clrArg, NullabilityFreeReason.TypeStructure)
+                            )
+                        }
+                        currentPositions = posBuilder.MoveToImmutable()
+                        break
+                    }
+                    currentClr = currentClr.BaseType
+                }
+            }
+            while currentOpenDef != nil {
+                if string.Equals(currentOpenDef.FullName, openConstraintDefName, StringComparison.Ordinal) {
+                    return currentPositions.Length == constraintPositions.Length &&
+                        SameConstraintTypeArguments(currentPositions, constraintPositions)
+                }
+                let baseClr Type? = currentOpenDef.BaseType
+                if baseClr == nil {
+                    break
+                }
+                if !baseClr.IsGenericType {
+                    currentOpenDef = baseClr
+                    currentPositions = ImmutableArray[TypeSymbol].Empty
+                    continue
+                }
+                let baseOpenArgs = baseClr.GetGenericArguments()
+                let nextPositions = ImmutableArray.CreateBuilder[TypeSymbol](baseOpenArgs.Length)
+                for baseOpenArg in baseOpenArgs {
+                    if ProjectOpenClrTypeWithArguments(baseOpenArg, currentPositions) is not{} projected {
+                        return false
+                    }
+                    nextPositions.Add(projected)
+                }
+                currentPositions = nextPositions.MoveToImmutable()
+                currentOpenDef = baseClr.GetGenericTypeDefinition()
             }
             return false
         }
@@ -14362,6 +14422,9 @@ partial class Binder {
             if left is TupleTypeSymbol leftTuple && right is TupleTypeSymbol rightTuple {
                 return SameConstraintTypeArguments(leftTuple.ElementTypes, rightTuple.ElementTypes)
             }
+            if IsValueTupleSymbol(left) && IsValueTupleSymbol(right) {
+                return SameConstraintTypeArguments(left.GetElementPositions(), right.GetElementPositions())
+            }
             if left.ClrType is {IsArray: true} leftClrArr && right.ClrType is {IsArray: true} rightClrArr {
                 return leftClrArr.GetArrayRank() == rightClrArr.GetArrayRank() &&
                     SameConstraintTypeArguments(left.GetElementPositions(), right.GetElementPositions())
@@ -14378,6 +14441,91 @@ partial class Binder {
                 return ClrTypeUtilities.AreSame(leftImp.ClrType, rightImp.ClrType)
             }
             return false
+        }
+
+        private func IsValueTupleSymbol(type TypeSymbol) bool {
+            if type is TupleTypeSymbol {
+                return true
+            }
+            let bare = type.StripToBareShape()
+            let clr = if bare is ImportedTypeSymbol imp {
+                imp.OpenDefinition ?? imp.ClrType
+            } else {
+                bare.ClrType
+            }
+            if clr is not{IsGenericType: true} genericClr {
+                return false
+            }
+            let def = if genericClr.IsGenericTypeDefinition {
+                genericClr
+            } else {
+                genericClr.GetGenericTypeDefinition()
+            }
+            return def.FullName is {} name && name.StartsWith("System.ValueTuple`", StringComparison.Ordinal)
+        }
+
+        private func GetClrSlotAlignedArguments(type TypeSymbol) ImmutableArray[TypeSymbol] {
+            let positions = type.GetElementPositions()
+            if positions.Length < 8 || type.ClrType is not{IsGenericType: true, IsGenericTypeDefinition: false} clr {
+                return positions
+            }
+            let defName = clr.GetGenericTypeDefinition().FullName
+            if defName is not("System.ValueTuple`8" or "System.Tuple`8") {
+                return positions
+            }
+            return PackTupleClrSlotArguments(clr, positions, 0)
+        }
+
+        private func PackTupleClrSlotArguments(
+            tupleClr Type,
+            flatPositions ImmutableArray[TypeSymbol],
+            startIndex int32
+        ) ImmutableArray[TypeSymbol] {
+            let remaining = flatPositions.Length - startIndex
+            let clrArgs = tupleClr.GetGenericArguments()
+            if remaining <= 7 || clrArgs.Length != 8 {
+                let tail = ImmutableArray.CreateBuilder[TypeSymbol](Math.Max(0, remaining))
+                for var i = startIndex; i < flatPositions.Length; i++ {
+                    tail.Add(flatPositions[i])
+                }
+                return tail.MoveToImmutable()
+            }
+            let builder = ImmutableArray.CreateBuilder[TypeSymbol](8)
+            for var i = 0; i < 7; i++ {
+                builder.Add(flatPositions[startIndex + i])
+            }
+            let restClr = clrArgs[7]
+            let restCount = remaining - 7
+            let restSymbol TypeSymbol = if restCount >= 8 && restClr.IsGenericType {
+                ImportedTypeSymbol.GetConstructed(
+                    restClr,
+                    restClr.GetGenericTypeDefinition(),
+                    PackTupleClrSlotArguments(restClr, flatPositions, startIndex + 7)
+                )
+            } else if restCount >= 2 && restClr.IsGenericType && restClr.GetGenericTypeDefinition()
+                .FullName is {} restDefName &&
+                restDefName
+                .StartsWith("System.ValueTuple`", StringComparison.Ordinal) {
+                let restElements = ImmutableArray.CreateBuilder[TypeSymbol](restCount)
+                for var i = startIndex + 7; i < flatPositions.Length; i++ {
+                    restElements.Add(flatPositions[i])
+                }
+                TupleTypeSymbol.Get(restElements.MoveToImmutable())
+            } else if restClr.IsGenericType {
+                let restElements = ImmutableArray.CreateBuilder[TypeSymbol](restCount)
+                for var i = startIndex + 7; i < flatPositions.Length; i++ {
+                    restElements.Add(flatPositions[i])
+                }
+                ImportedTypeSymbol.GetConstructed(
+                    restClr,
+                    restClr.GetGenericTypeDefinition(),
+                    restElements.MoveToImmutable()
+                )
+            } else {
+                flatPositions[startIndex + 7]
+            }
+            builder.Add(restSymbol)
+            return builder.MoveToImmutable()
         }
 
         private func TryGetImportedGenericDefinitionAndArguments(
@@ -14417,14 +14565,30 @@ partial class Binder {
                 }
             }
             if openClr.IsArray {
-                if openClr.GetArrayRank() == 1 && openClr.GetElementType() is {} elemClr &&
+                if openClr.GetElementType() is {} elemClr &&
                     ProjectOpenClrTypeWithArguments(elemClr, outerArguments) is {} elemSym {
-                    return SliceTypeSymbol.Get(elemSym)
+                    let rank = openClr.GetArrayRank()
+                    return if rank == 1 {
+                        cast[TypeSymbol](SliceTypeSymbol.Get(elemSym))
+                    } else {
+                        cast[TypeSymbol](RectangularArrayTypeSymbol.Get(elemSym, rank))
+                    }
                 }
                 return nil
             }
             if openClr.IsGenericType {
+                let openDef = openClr.GetGenericTypeDefinition()
                 let openArgs = openClr.GetGenericArguments()
+                if openArgs.Length == 1 && string.Equals(
+                    openDef.FullName,
+                    "System.Nullable`1",
+                    StringComparison.Ordinal
+                ) {
+                    if ProjectOpenClrTypeWithArguments(openArgs[0], outerArguments) is {} innerSym {
+                        return NullableLifting.WrapValueTypeNullable(innerSym)
+                    }
+                    return nil
+                }
                 let projected = ImmutableArray.CreateBuilder[TypeSymbol](openArgs.Length)
                 for oa in openArgs {
                     if ProjectOpenClrTypeWithArguments(oa, outerArguments) is not{} p {
@@ -14432,11 +14596,7 @@ partial class Binder {
                     }
                     projected.Add(p)
                 }
-                return ImportedTypeSymbol.GetConstructed(
-                    openClr,
-                    openClr.GetGenericTypeDefinition(),
-                    projected.MoveToImmutable()
-                )
+                return ImportedTypeSymbol.GetConstructed(openClr, openDef, projected.MoveToImmutable())
             }
             return TypeSymbol.FromClrTypeWithoutNullability(openClr, NullabilityFreeReason.TypeStructure)
         }
@@ -14524,8 +14684,8 @@ partial class Binder {
                 return false
             }
             let openDefName = constraintClr.GetGenericTypeDefinition().FullName
-            let constraintPositions = constraint.GetElementPositions()
-            let typeArgPositions = typeArgument.GetElementPositions()
+            let constraintPositions = GetClrSlotAlignedArguments(constraint)
+            let typeArgPositions = GetClrSlotAlignedArguments(typeArgument)
             if !constraintPositions.IsDefaultOrEmpty && !typeArgPositions.IsDefaultOrEmpty {
                 if typeArgClr.IsGenericType && !typeArgClr.IsGenericTypeDefinition {
                     let openTypeArgClr = typeArgClr.GetGenericTypeDefinition()
