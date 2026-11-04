@@ -888,7 +888,7 @@ internal class TypeDefEmitter {
                 AccessibilityMap.MapTypeAccessibility(ifaceSym.Accessibility)
             }
         )
-        let typeDefName = MangleGenericName(ifaceSym.Name, ifaceSym.TypeParameters)
+        let typeDefName = MangleGenericName(ifaceSym.Name, ifaceSym.DeclaredTypeParameters)
         let handle = this
             .emitCtx
             .Metadata

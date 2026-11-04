@@ -4729,11 +4729,21 @@ partial class Binder {
                     // was never constraint-checked at all — its type-parameter
                     // constraints are resolved only when its members bind,
                     // which is after every class body (#2519).
-                    CheckUserGenericTypeClauseConstraints(
-                        (iface.Definition ?? iface).TypeParameters,
-                        typeArgs,
-                        identifierToken.Location
-                    )
+                    let def = iface.Definition ?? iface
+                    let ownParams = def.DeclaredTypeParameters
+                    let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(def)
+                    let effectiveEnclosingArgs = if !iface.EnclosingTypeArguments.IsDefaultOrEmpty {
+                        iface.EnclosingTypeArguments
+                    } else {
+                        enclosingParams.CastArray[TypeSymbol]()
+                    }
+                    let (checkParams, checkArgs) = if !enclosingParams.IsDefaultOrEmpty &&
+                        effectiveEnclosingArgs.Length == enclosingParams.Length {
+                        (enclosingParams.AddRange(ownParams), effectiveEnclosingArgs.AddRange(typeArgs))
+                    } else {
+                        (ownParams, typeArgs)
+                    }
+                    CheckUserGenericTypeClauseConstraints(checkParams, checkArgs, identifierToken.Location)
                     element = InterfaceSymbol.Construct(iface, typeArgs, $scope.References!!.MapClrTypeToReferences)
                 } else if element is StructSymbol genericStruct {
                     if !genericStruct.IsGenericDefinition {
@@ -4755,11 +4765,21 @@ partial class Binder {
                     // here, never by `Type.MakeGenericType`, so #4037's
                     // checker never sees it. Issues #4089/#4090: queued rather
                     // than asked here, and now also asks the CLOSED question.
-                    CheckUserGenericTypeClauseConstraints(
-                        (genericStruct.Definition ?? genericStruct).TypeParameters,
-                        typeArgs,
-                        identifierToken.Location
-                    )
+                    let def = genericStruct.Definition ?? genericStruct
+                    let ownParams = def.DeclaredTypeParameters
+                    let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(def)
+                    let effectiveEnclosingArgs = if !genericStruct.EnclosingTypeArguments.IsDefaultOrEmpty {
+                        genericStruct.EnclosingTypeArguments
+                    } else {
+                        enclosingParams.CastArray[TypeSymbol]()
+                    }
+                    let (checkParams, checkArgs) = if !enclosingParams.IsDefaultOrEmpty &&
+                        effectiveEnclosingArgs.Length == enclosingParams.Length {
+                        (enclosingParams.AddRange(ownParams), effectiveEnclosingArgs.AddRange(typeArgs))
+                    } else {
+                        (ownParams, typeArgs)
+                    }
+                    CheckUserGenericTypeClauseConstraints(checkParams, checkArgs, identifierToken.Location)
                     element = StructSymbol.Construct(
                         genericStruct,
                         typeArgs,
@@ -5055,6 +5075,11 @@ partial class Binder {
         let constructedSegments = [segmentTexts.Length]TypeSymbol
         for var i = 0; i < segmentTexts.Length; i++ {
             constructedSegments[i] = ResolvedDefinition(i)
+            let precedingEnclosingArgs = if i > 0 {
+                CollectConstructedEnclosingArguments(constructedSegments, inheritedDeclaringContainers, 0, i)
+            } else {
+                default(ImmutableArray[TypeSymbol])
+            }
             if syntax.SegmentHasTypeArguments(i) {
                 let segmentName = if i == 0 {
                     headIdentifier.ValueText
@@ -5071,7 +5096,8 @@ partial class Binder {
                     ResolvedDefinition(i),
                     SegmentTypeArguments(i),
                     segmentLocation,
-                    segmentName
+                    segmentName,
+                    precedingEnclosingArgs
                 )
                 if constructed == nil {
                     return nil
@@ -5084,29 +5110,21 @@ partial class Binder {
             if inheritedDeclaringContainers[i] is {} declaredOwner &&
                 constructedSegments[i] is StructSymbol constructedContainer {
                 var resolvedContainer = constructedContainer
-                if i > 0 {
-                    let precedingEnclosingArgs = CollectConstructedEnclosingArguments(
-                        constructedSegments,
-                        inheritedDeclaringContainers,
-                        0,
-                        i
-                    )
-                    if !precedingEnclosingArgs.IsDefaultOrEmpty {
-                        let ownArgs = resolvedContainer.TypeArguments
-                        resolvedContainer = if ownArgs.IsDefaultOrEmpty {
-                            StructSymbol.ConstructNested(
-                                resolvedContainer.Definition ?? resolvedContainer,
-                                precedingEnclosingArgs,
-                                $scope.References!!.MapClrTypeToReferences
-                            )!!
-                        } else {
-                            StructSymbol.ConstructNestedGeneric(
-                                resolvedContainer.Definition ?? resolvedContainer,
-                                precedingEnclosingArgs,
-                                ownArgs,
-                                $scope.References!!.MapClrTypeToReferences
-                            )!!
-                        }
+                if !precedingEnclosingArgs.IsDefaultOrEmpty {
+                    let ownArgs = resolvedContainer.TypeArguments
+                    resolvedContainer = if ownArgs.IsDefaultOrEmpty {
+                        StructSymbol.ConstructNested(
+                            resolvedContainer.Definition ?? resolvedContainer,
+                            precedingEnclosingArgs,
+                            $scope.References!!.MapClrTypeToReferences
+                        )!!
+                    } else {
+                        StructSymbol.ConstructNestedGeneric(
+                            resolvedContainer.Definition ?? resolvedContainer,
+                            precedingEnclosingArgs,
+                            ownArgs,
+                            $scope.References!!.MapClrTypeToReferences
+                        )!!
                     }
                 }
                 constructedSegments[i] = TypeMemberModel.ResolveStaticMemberOwner(resolvedContainer, declaredOwner)
@@ -5153,6 +5171,25 @@ partial class Binder {
             }
         } else if deepest is EnumSymbol deepestEnum && !enclosingArgs.IsDefaultOrEmpty {
             deepest = EnumSymbol.ConstructNested(deepestEnum.Definition ?? deepestEnum, enclosingArgs)!!
+        } else if deepest is InterfaceSymbol deepestInterface && !enclosingArgs.IsDefaultOrEmpty {
+            let ownArgs = deepestInterface.TypeArguments
+            deepest = if ownArgs.IsDefaultOrEmpty {
+                InterfaceSymbol.ConstructNested(
+                    deepestInterface.Definition ?? deepestInterface,
+                    enclosingArgs,
+                    $scope.References!!.MapClrTypeToReferences
+                )!!
+            } else {
+                InterfaceSymbol.ConstructNestedGeneric(
+                    deepestInterface.Definition ?? deepestInterface,
+                    enclosingArgs,
+                    ownArgs,
+                    $scope.References!!.MapClrTypeToReferences
+                )!!
+            }
+        }
+        if binderCtx.HasUnclosedEnclosingTypeParameters(deepest, function) {
+            return nil
         }
         return deepest
     }
@@ -5166,7 +5203,8 @@ partial class Binder {
         definition TypeSymbol,
         argumentList GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[TypeClauseSyntax],
         location TextLocation,
-        displayName string
+        displayName string,
+        enclosingArgs ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
     ) TypeSymbol? {
         let typeArgsBuilder = ImmutableArray.CreateBuilder[TypeSymbol](argumentList.Count)
         for taSyntax in argumentList {
@@ -5191,13 +5229,23 @@ partial class Binder {
                 .TypeParameters
                 .Length == typeArgs
                 .Length {
+                let def = genericStruct.Definition ?? genericStruct
+                let ownParams = def.DeclaredTypeParameters
+                let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(def)
+                let effectiveEnclosingArgs = if !enclosingArgs.IsDefaultOrEmpty {
+                    enclosingArgs
+                } else {
+                    enclosingParams.CastArray[TypeSymbol]()
+                }
+                let (checkParams, checkArgs) = if !enclosingParams.IsDefaultOrEmpty &&
+                    effectiveEnclosingArgs.Length == enclosingParams.Length {
+                    (enclosingParams.AddRange(ownParams), effectiveEnclosingArgs.AddRange(typeArgs))
+                } else {
+                    (ownParams, typeArgs)
+                }
                 // Issue #4067: the qualified spelling of the same construction.
                 // Issues #4089/#4090: queued, and the CLOSED question asked too.
-                CheckUserGenericTypeClauseConstraints(
-                    (genericStruct.Definition ?? genericStruct).TypeParameters,
-                    typeArgs,
-                    location
-                )
+                CheckUserGenericTypeClauseConstraints(checkParams, checkArgs, location)
                 return StructSymbol.Construct(genericStruct, typeArgs, $scope.References!!.MapClrTypeToReferences)!!
             }
             case genericIface is InterfaceSymbol when genericIface.IsGenericDefinition &&
@@ -5205,13 +5253,23 @@ partial class Binder {
                 .TypeParameters
                 .Length == typeArgs
                 .Length {
+                let def = genericIface.Definition ?? genericIface
+                let ownParams = def.DeclaredTypeParameters
+                let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(def)
+                let effectiveEnclosingArgs = if !enclosingArgs.IsDefaultOrEmpty {
+                    enclosingArgs
+                } else {
+                    enclosingParams.CastArray[TypeSymbol]()
+                }
+                let (checkParams, checkArgs) = if !enclosingParams.IsDefaultOrEmpty &&
+                    effectiveEnclosingArgs.Length == enclosingParams.Length {
+                    (enclosingParams.AddRange(ownParams), effectiveEnclosingArgs.AddRange(typeArgs))
+                } else {
+                    (ownParams, typeArgs)
+                }
                 // Issues #4089/#4090: the qualified spelling of the interface
                 // construction, which asked nothing at all before.
-                CheckUserGenericTypeClauseConstraints(
-                    (genericIface.Definition ?? genericIface).TypeParameters,
-                    typeArgs,
-                    location
-                )
+                CheckUserGenericTypeClauseConstraints(checkParams, checkArgs, location)
                 return InterfaceSymbol.Construct(genericIface, typeArgs, $scope.References!!.MapClrTypeToReferences)!!
             }
             case genericDelegate is DelegateTypeSymbol when genericDelegate.IsGenericDefinition &&
@@ -5246,7 +5304,7 @@ partial class Binder {
         let segmentTexts = [totalSegments]string
         segmentTexts[0] = qualifiedIdentifier.ValueText
         for var i = 0; i < syntax.QualifierIdentifierTokens.Length; i++ {
-            segmentTexts[1 + i] = syntax.QualifierIdentifierTokens[i].Text
+            segmentTexts[1 + i] = syntax.QualifierIdentifierTokens[i].ValueText
         }
         // HasTypeArguments implies the parser set TypeArguments.
         let qualifiedTypeArguments = syntax.TypeArguments
@@ -5306,6 +5364,7 @@ partial class Binder {
         // Without a metadata homonym, the exact source lookup below handles it.
         let qualifiedName = $scope.ExpandQualifiedTypeName(segmentTexts, totalSegments)
         if $scope.TryLookupQualifiedSourceType(qualifiedName, targetArity, out var packageQualifiedSourceType) &&
+            !binderCtx.HasUnclosedEnclosingTypeParameters(packageQualifiedSourceType, function) &&
             TryResolveOuterPrefix(segmentTexts, totalSegments, targetArity) != nil {
             if targetArity == 0 {
                 return packageQualifiedSourceType!!
@@ -5351,7 +5410,9 @@ partial class Binder {
         }
         // Source types have no CLR representation while binding. Preserve the
         // complete name: an enum member must not resolve as an unrelated type.
-        if $scope.TryLookupQualifiedSourceType(qualifiedName, targetArity, out var sourceType) {
+        if $scope.TryLookupQualifiedSourceType(qualifiedName, targetArity, out var sourceType) &&
+            !binderCtx
+            .HasUnclosedEnclosingTypeParameters(sourceType, function) {
             if targetArity == 0 {
                 return sourceType
             }
@@ -5386,7 +5447,7 @@ partial class Binder {
         }
         var lastGoodName = qualifiedIdentifier.ValueText
         for var i = 0; i < syntax.QualifierIdentifierTokens.Length; i++ {
-            let segmentText = syntax.QualifierIdentifierTokens[i].Text
+            let segmentText = syntax.QualifierIdentifierTokens[i].ValueText
             let isLast = i == syntax.QualifierIdentifierTokens.Length - 1
             var next Type? = nil
             if isLast && targetArity > 0 {
@@ -11807,6 +11868,7 @@ partial class Binder {
             deepestIndex int32
         ) ImmutableArray[TypeSymbol] {
             var builder ImmutableArray[TypeSymbol].Builder? = nil
+            var hasConstructedSegment = false
             for var i = startIndex; i < deepestIndex; i++ {
                 let seg = constructedSegments[i]
                 if seg is StructSymbol nestedConstruction &&
@@ -11820,11 +11882,20 @@ partial class Binder {
                     if !nestedConstruction.EnclosingTypeArguments.IsDefaultOrEmpty {
                         builder ??= ImmutableArray.CreateBuilder[TypeSymbol]()
                         builder!!.AddRange(nestedConstruction.EnclosingTypeArguments)
+                        hasConstructedSegment = true
+                    }
+                } else if i == startIndex {
+                    let headEnclosingParams = StructSymbol.CollectEnclosingTypeParameters(seg)
+                    if !headEnclosingParams.IsDefaultOrEmpty {
+                        builder ??= ImmutableArray.CreateBuilder[TypeSymbol]()
+                        for tp in headEnclosingParams {
+                            builder!!.Add(tp)
+                        }
                     }
                 }
                 let ownParams = switch seg {
                     case s is StructSymbol: (s.Definition ?? s).DeclaredTypeParameters
-                    case iface is InterfaceSymbol: (iface.Definition ?? iface).TypeParameters
+                    case iface is InterfaceSymbol: (iface.Definition ?? iface).DeclaredTypeParameters
                     default: ImmutableArray[TypeParameterSymbol].Empty
                 }
                 if ownParams.IsDefaultOrEmpty {
@@ -11843,8 +11914,9 @@ partial class Binder {
                 }
                 builder ??= ImmutableArray.CreateBuilder[TypeSymbol]()
                 builder!!.AddRange(ownArgs)
+                hasConstructedSegment = true
             }
-            return if builder != nil && builder.Count > 0 {
+            return if hasConstructedSegment && builder != nil && builder.Count > 0 {
                 builder.ToImmutable()
             } else {
                 default(ImmutableArray[TypeSymbol])
@@ -13116,7 +13188,9 @@ partial class Binder {
                             structure.DeclaredTypeParameters
                         )
                         case enumSym is EnumSymbol: StructSymbol.CollectEnclosingTypeParameters(enumSym)
-                        case iface is InterfaceSymbol: iface.TypeParameters
+                        case iface is InterfaceSymbol: StructSymbol.CollectEnclosingTypeParameters(iface).AddRange(
+                            iface.DeclaredTypeParameters
+                        )
                         default: ImmutableArray[TypeParameterSymbol].Empty
                     }
                     for var i = 0; i < userParamArgs.Length; i++ {
@@ -13338,10 +13412,15 @@ partial class Binder {
                     typeArguments = e.EnclosingTypeArguments
                     return true
                 }
-                case i is InterfaceSymbol when !i.TypeArguments.IsDefaultOrEmpty {
-                    definition = i.Definition
-                    typeArguments = i.TypeArguments
-                    return true
+                case i is InterfaceSymbol when !i
+                    .EnclosingTypeArguments
+                    .IsDefaultOrEmpty ||
+                    !i
+                    .TypeArguments
+                    .IsDefaultOrEmpty {
+                    definition = i.Definition ?? i
+                    typeArguments = Conversion.GetEffectiveInterfaceTypeArguments(i)
+                    return !typeArguments.IsDefaultOrEmpty
                 }
                 default {
                     definition = nil
@@ -13560,19 +13639,19 @@ partial class Binder {
                 !ifaceType
                 .TypeArguments
                 .IsDefaultOrEmpty {
-                let newIfaceArgs = ImmutableArray.CreateBuilder[TypeSymbol](ifaceType.TypeArguments.Length)
-                var ifaceChanged = false
-                for arg in ifaceType.TypeArguments {
-                    let substituted = SubstituteType(arg, substitution, mapClrType)
-                    ifaceChanged |= !object.ReferenceEquals(substituted, arg)
-                    newIfaceArgs.Add(substituted)
-                }
-                return if ifaceChanged {
-                    cast[TypeSymbol](
-                        InterfaceSymbol.Construct(ifaceType.Definition, newIfaceArgs.MoveToImmutable(), mapClrType)!!
-                    )
-                } else {
-                    type
+                return InterfaceSymbol.SubstituteConstructionArguments(ifaceType, substituteEnclosingType, mapClrType)
+            }
+            if type is InterfaceSymbol nestedInterfaceRef && nestedInterfaceRef.TypeArguments.IsDefaultOrEmpty {
+                let newEnclosing = InterfaceSymbol.SubstituteEnclosingArguments(
+                    nestedInterfaceRef,
+                    substituteEnclosingType
+                )
+                if !newEnclosing.IsDefault {
+                    return InterfaceSymbol.ConstructNested(
+                        nestedInterfaceRef.Definition ?? nestedInterfaceRef,
+                        newEnclosing,
+                        mapClrType
+                    )!!
                 }
             }
             // Issue #2340 follow-up (sibling to the #1503 branch already present
@@ -14506,7 +14585,10 @@ partial class Binder {
             if !object.ReferenceEquals(defA, defB) {
                 return false
             }
-            return SameConstraintTypeArguments(a.TypeArguments, b.TypeArguments)
+            return SameConstraintTypeArguments(
+                Conversion.GetEffectiveInterfaceTypeArguments(a),
+                Conversion.GetEffectiveInterfaceTypeArguments(b)
+            )
         }
 
         private func SameConstructedStruct(a StructSymbol?, b StructSymbol?) bool {
@@ -15119,7 +15201,9 @@ partial class Binder {
         ) TypeSymbol {
             if !TypeSymbol.ContainsTypeParameter(constraint) &&
                 !(
-                constraint is StructSymbol nestedStruct && !StructSymbol.CollectEnclosingTypeParameters(nestedStruct)
+                constraint is (StructSymbol or InterfaceSymbol) && !StructSymbol.CollectEnclosingTypeParameters(
+                    constraint
+                )
                     .IsDefaultOrEmpty
             ) {
                 return constraint

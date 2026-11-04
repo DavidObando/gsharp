@@ -1927,7 +1927,11 @@ open partial class Parser {
                 // retained in `constraint` for `any`/`comparable` dispatch and
                 // error locations. cs2gs emits fully-qualified constraint names, so
                 // this is the common shape for translated generic-math interfaces.
-                if Peek(1).Kind == SyntaxKind.DotToken {
+                var afterFirstSegment = 1
+                if Peek(1).Kind == SyntaxKind.OpenSquareBracketToken {
+                    let _ = TryScanOptionalTypeArgumentList(&afterFirstSegment, out _)
+                }
+                if Peek(afterFirstSegment).Kind == SyntaxKind.DotToken {
                     constraintTypeClause = ParseTypeClause()
                     constraint = constraintTypeClause.Identifier
                 } else {

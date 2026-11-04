@@ -405,17 +405,7 @@ internal class SignatureEncoder {
                 throw InvalidOperationException("Interface '${ifaceDefSym.Name}' has no emitted TypeDef.")
             }
             if ReflectionMetadataEmitter.IsUserGenericInterfaceReference(ifaceSym) {
-                var ifaceTypeArgs ImmutableArray[TypeSymbol]
-                if !ifaceSym.TypeArguments.IsDefaultOrEmpty {
-                    ifaceTypeArgs = ifaceSym.TypeArguments
-                } else {
-                    let ifaceDefTps = ifaceDefSym.TypeParameters
-                    let ifaceBld = ImmutableArray.CreateBuilder[TypeSymbol](ifaceDefTps.Length)
-                    for defTp in ifaceDefTps {
-                        ifaceBld.Add(defTp)
-                    }
-                    ifaceTypeArgs = ifaceBld.MoveToImmutable()
-                }
+                let ifaceTypeArgs = this.outer.userTokens.ResolveUserInterfaceTypeSpecArguments(ifaceSym, ifaceDefSym)
                 let ifaceGi = encoder.GenericInstantiation(ifaceDef, ifaceTypeArgs.Length, isValueType: false)
                 for arg in ifaceTypeArgs {
                     this.EncodeTypeSymbol(ifaceGi.AddArgument(), arg)

@@ -519,20 +519,25 @@ open partial class TypeSymbol : Symbol {
                         !st
                         .TypeArguments
                         .IsDefaultOrEmpty {
-                        for arg in st.EnclosingTypeArguments {
-                            if AnyTypeParameter(arg, match) {
-                                return true
-                            }
-                        }
-                        for arg in st.TypeArguments {
+                        for arg in GSharp.Core.CodeAnalysis.Binding.Conversion.GetEffectiveStructTypeArguments(st) {
                             if AnyTypeParameter(arg, match) {
                                 return true
                             }
                         }
                         return false
                     }
-                    case iface is InterfaceSymbol when !iface.TypeArguments.IsDefaultOrEmpty {
-                        for arg in iface.TypeArguments {
+                    case iface is InterfaceSymbol when !iface
+                        .EnclosingTypeArguments
+                        .IsDefaultOrEmpty ||
+                        !iface
+                        .TypeArguments
+                        .IsDefaultOrEmpty {
+                        for arg in GSharp
+                            .Core
+                            .CodeAnalysis
+                            .Binding
+                            .Conversion
+                            .GetEffectiveInterfaceTypeArguments(iface) {
                             if AnyTypeParameter(arg, match) {
                                 return true
                             }
@@ -617,7 +622,12 @@ open partial class TypeSymbol : Symbol {
                     .TypeArguments
                     .IsDefaultOrEmpty
                 case enumType is EnumSymbol: enumType.EnclosingTypeArguments.IsDefaultOrEmpty
-                case interfaceType is InterfaceSymbol: interfaceType.TypeArguments.IsDefaultOrEmpty
+                case interfaceType is InterfaceSymbol: interfaceType
+                    .EnclosingTypeArguments
+                    .IsDefaultOrEmpty &&
+                    interfaceType
+                    .TypeArguments
+                    .IsDefaultOrEmpty
                 case delegateType is DelegateTypeSymbol: delegateType.TypeArguments.IsDefaultOrEmpty
                 default: false
             }
@@ -1096,9 +1106,9 @@ open partial class TypeSymbol : Symbol {
             if left is InterfaceSymbol leftInterface && right is InterfaceSymbol rightInterface {
                 return AreSameConstructedUserTypeCore(
                     leftInterface.Definition ?? leftInterface,
-                    leftInterface.TypeArguments,
+                    Conversion.GetEffectiveInterfaceTypeArguments(leftInterface),
                     rightInterface.Definition ?? rightInterface,
-                    rightInterface.TypeArguments
+                    Conversion.GetEffectiveInterfaceTypeArguments(rightInterface)
                 )
             }
             if left is DelegateTypeSymbol leftDelegate && right is DelegateTypeSymbol rightDelegate {
@@ -1714,15 +1724,23 @@ open partial class TypeSymbol : Symbol {
                         }
                         return
                     }
-                    case iface is InterfaceSymbol when !iface.TypeArguments.IsDefaultOrEmpty {
+                    case iface is InterfaceSymbol {
+                        if !iface.EnclosingTypeArguments.IsDefaultOrEmpty {
+                            for arg in iface.EnclosingTypeArguments {
+                                CollectReferencedTypeParameters(arg, visitParameter, signaturePath)
+                            }
+                        } else {
+                            for tp in StructSymbol.CollectEnclosingTypeParameters(iface) {
+                                CollectReferencedTypeParameters(tp, visitParameter, signaturePath)
+                            }
+                        }
                         for arg in iface.TypeArguments {
                             CollectReferencedTypeParameters(arg, visitParameter, signaturePath)
                         }
-                        return
-                    }
-                    case ifaceOpen is InterfaceSymbol when !ifaceOpen.TypeParameters.IsDefaultOrEmpty {
-                        for tp in ifaceOpen.TypeParameters {
-                            CollectReferencedTypeParameters(tp, visitParameter, signaturePath)
+                        if iface.TypeArguments.IsDefaultOrEmpty {
+                            for tp in iface.TypeParameters {
+                                CollectReferencedTypeParameters(tp, visitParameter, signaturePath)
+                            }
                         }
                         return
                     }
