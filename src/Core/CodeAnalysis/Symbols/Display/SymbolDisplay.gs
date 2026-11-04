@@ -802,8 +802,8 @@ shared class SymbolDisplay {
                 return FormatSourceType(
                     interface_.Definition?.Name ?? interface_.Name,
                     interface_.ContainingType,
-                    ImmutableArray[TypeSymbol].Empty,
-                    GetDisplayTypeArguments(interface_.TypeArguments, interface_.TypeParameters)
+                    interface_.EnclosingTypeArguments,
+                    GetDisplayTypeArguments(interface_.TypeArguments, interface_.DeclaredTypeParameters)
                 )
             }
             case delegateType is DelegateTypeSymbol {

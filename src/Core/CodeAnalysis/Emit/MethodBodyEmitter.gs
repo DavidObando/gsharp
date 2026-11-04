@@ -335,15 +335,15 @@ internal partial class MethodBodyEmitter {
                 }
             }
             case ret is BoundReturnStatement {
-                if ret.Expression != nil {
+                if ret.Expression is {} returnExpression {
                     // Issue #490 (ADR-0060 follow-up): a `return ref <lvalue>` arrives
                     // as a BoundAddressOfExpression wrapping the lvalue. Emit the address
                     // (ldloca / ldarga / ldflda / ldelema / dereferenced pointer) so the
                     // returned `T&` slot holds the managed pointer the signature declares.
-                    if ret.IsRef && ret.Expression is BoundAddressOfExpression addrOf {
+                    if ret.IsRef && returnExpression is BoundAddressOfExpression addrOf {
                         this.EmitAddressOf(addrOf)
                     } else {
-                        this.EmitExpression(ret.Expression!!)
+                        this.EmitExpression(returnExpression)
                     }
                 }
                 if this.protectedRegionStack.Count > 0 && this.hasFixedReturns {

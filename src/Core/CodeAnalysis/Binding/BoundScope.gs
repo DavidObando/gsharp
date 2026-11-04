@@ -1925,7 +1925,7 @@ class BoundScope {
         return previous
     }
 
-    private func ApplyEnclosingConstruction(nestedType TypeSymbol, declaringContainer StructSymbol) TypeSymbol {
+    internal func ApplyEnclosingConstruction(nestedType TypeSymbol, declaringContainer StructSymbol) TypeSymbol {
         let enclosingArguments = FlattenConstructedTypeArguments(declaringContainer)
         if enclosingArguments.IsDefaultOrEmpty {
             return nestedType
@@ -1940,6 +1940,13 @@ class BoundScope {
             )
             case nestedEnum is EnumSymbol: cast[TypeSymbol](
                 EnumSymbol.ConstructNested(nestedEnum.Definition ?? nestedEnum, enclosingArguments)!!
+            )
+            case nestedInterface is InterfaceSymbol: cast[TypeSymbol](
+                InterfaceSymbol.ConstructNested(
+                    nestedInterface.Definition ?? nestedInterface,
+                    enclosingArguments,
+                    References!!.MapClrTypeToReferences
+                )!!
             )
             default: nestedType
         }
@@ -3384,7 +3391,12 @@ class BoundScope {
                     ifaceX.Definition ?? ifaceX,
                     ifaceY.Definition ?? ifaceY
                 ) &&
-                    SigTypeArgumentsEquivalent(ifaceX.TypeArguments, ifaceY.TypeArguments, fx, fy)
+                    SigTypeArgumentsEquivalent(
+                    Conversion.GetEffectiveInterfaceTypeArguments(ifaceX),
+                    Conversion.GetEffectiveInterfaceTypeArguments(ifaceY),
+                    fx,
+                    fy
+                )
             }
             if x is EnumSymbol || y is EnumSymbol {
                 return x is EnumSymbol enumX && y is EnumSymbol enumY && object.ReferenceEquals(

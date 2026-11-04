@@ -398,8 +398,8 @@ func Run() int32 {
 
     @Fact
     func AReadInALaterSiblingSeesTheFactAnEarlierSiblingKilled() {
-        // The frames are shared, so the first branch kills `t` for the second one.
-        // The shadow state of the second branch still has it.
+        // Issue #5654: statement-level removals in the then-branch go to the R18 journal and are put back
+        // for the else-branch, so the frames and the shadow state agree on the read.
         let lines = Capture(`package T
 func Get() string? { return "a" }
 func Run(c bool) int32 {
@@ -412,7 +412,7 @@ func Run(c bool) int32 {
         return t.Length
     }
 }`)
-        Assert.Equal([]string{"10|t|string?|string|nullability"}, Rows(lines, "R"))
+        Assert.Empty(Rows(lines, "R"))
     }
 
     @Fact

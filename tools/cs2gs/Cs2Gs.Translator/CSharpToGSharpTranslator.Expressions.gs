@@ -6026,25 +6026,44 @@ partial class CSharpToGSharpTranslator {
                 (element is IdentifierNameSyntax && this.context.GetSymbolInfo(element).Symbol is IDiscardSymbol)
         }
 
-        /// ADR-0208 (#5650): gsc binds the `else` branch of an `if` from the state before the `then` branch for the
-        /// effects of a loop, so a loop in the `then` branch does not reach a read in the `else` branch. A write or an
-        /// accessor in the `then` branch does reach it, and a loop in an earlier `switch` section reaches a later one.
-        private func IsLoopInThenBranchOfElseRead(
+        private let ifHasGotoAffectingElse Dictionary[
+            Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax,
+            bool
+        ] = Dictionary[Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax, bool]()
+
+        private let scopeGotoIndex Dictionary[
+            Microsoft.CodeAnalysis.SyntaxNode,
+            (
+                Jumps List[
+                    (
+                        Jump Microsoft.CodeAnalysis.CSharp.Syntax.GotoStatementSyntax,
+                        Target Microsoft.CodeAnalysis.SyntaxNode?
+                    )
+                ],
+                BackwardSpan(Start int32, End int32)?
+            )
+        ] = Dictionary[
+            Microsoft.CodeAnalysis.SyntaxNode,
+            (
+                Jumps List[
+                    (
+                        Jump Microsoft.CodeAnalysis.CSharp.Syntax.GotoStatementSyntax,
+                        Target Microsoft.CodeAnalysis.SyntaxNode?
+                    )
+                ],
+                BackwardSpan(Start int32, End int32)?
+            )
+        ]()
+
+        /// ADR-0208 (#5650, #5654): gsc binds the `else` branch of an `if` from the state before the `then` branch,
+        /// so a loop, a condition or a statement in the `then` branch does not reach a read in the `else` branch
+        /// unless a jump enters the `else` branch or forms a backward-jump span across the `if`.
+        /// Effects in an earlier `switch` section still reach a later one.
+        private func IsInThenBranchOfElseRead(
             node Microsoft.CodeAnalysis.SyntaxNode,
-            use Microsoft.CodeAnalysis.SyntaxNode
+            use Microsoft.CodeAnalysis.SyntaxNode,
+            $scope Microsoft.CodeAnalysis.SyntaxNode
         ) bool {
-            if !(
-                node is CommonForEachStatementSyntax ||
-                    node is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .WhileStatementSyntax ||
-                    node is DoStatementSyntax ||
-                    node is ForStatementSyntax
-            ) {
-                return false
-            }
             return node.Ancestors().Any(
                 (ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is Microsoft
                     .CodeAnalysis
@@ -6058,8 +6077,268 @@ partial class CSharpToGSharpTranslator {
                     .Contains(node.Span) &&
                     ifStatement.Else!!
                     .Span
-                    .Contains(use.Span)
+                    .Contains(use.Span) && !this.IfHasGotoAffectingElse(ifStatement, $scope)
             )
+        }
+
+        private func IfHasGotoAffectingElse(
+            ifStatement Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax,
+            $scope Microsoft.CodeAnalysis.SyntaxNode
+        ) bool {
+            if this.ifHasGotoAffectingElse.TryGetValue(ifStatement, out var cached) {
+                return cached
+            }
+            let result = this.ComputeIfHasGotoAffectingElse(ifStatement, $scope)
+            this.ifHasGotoAffectingElse[ifStatement] = result
+            return result
+        }
+
+        private func GetScopeGotoIndex($scope Microsoft.CodeAnalysis.SyntaxNode)(
+            Jumps List[
+                (
+                    Jump Microsoft.CodeAnalysis.CSharp.Syntax.GotoStatementSyntax,
+                    Target Microsoft.CodeAnalysis.SyntaxNode?
+                )
+            ],
+            BackwardSpan(Start int32, End int32)?
+        ) {
+            if this.scopeGotoIndex.TryGetValue($scope, out var cached) {
+                return cached
+            }
+            let gotos = List[Microsoft.CodeAnalysis.CSharp.Syntax.GotoStatementSyntax]()
+            let labels = Dictionary[string, Microsoft.CodeAnalysis.CSharp.Syntax.LabeledStatementSyntax](
+                StringComparer.Ordinal
+            )
+            for node in $scope.DescendantNodes(
+                (child Microsoft.CodeAnalysis.SyntaxNode) -> !(
+                    child is LocalFunctionStatementSyntax || child is AnonymousFunctionExpressionSyntax
+                )
+            ) {
+                if node is Microsoft.CodeAnalysis.CSharp.Syntax.GotoStatementSyntax jump {
+                    gotos.Add(jump)
+                } else if node is Microsoft.CodeAnalysis.CSharp.Syntax.LabeledStatementSyntax labeled {
+                    labels[labeled.Identifier.ValueText] = labeled
+                }
+            }
+            let jumps = List[
+                (
+                    Jump Microsoft.CodeAnalysis.CSharp.Syntax.GotoStatementSyntax,
+                    Target Microsoft.CodeAnalysis.SyntaxNode?
+                )
+            ]()
+            let backwardParticipants = List[Microsoft.CodeAnalysis.SyntaxNode]()
+            for jump in gotos {
+                var target Microsoft.CodeAnalysis.SyntaxNode? = nil
+                if jump.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.GotoStatement) &&
+                    jump.Expression is IdentifierNameSyntax targetId &&
+                    labels.TryGetValue(targetId.Identifier.ValueText, out var labeledTarget) {
+                    target = labeledTarget
+                } else if jump.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.GotoCaseStatement) || jump.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.GotoDefaultStatement
+                ) {
+                    if this.IsAdjacentFallthroughGoto(jump) {
+                        continue
+                    }
+                    if this.ResolveGotoCaseOrDefaultTarget(jump) is {} targetSwitchLabel {
+                        if TargetArmIsEmptyBreak(targetSwitchLabel) && !HasInterveningBreakTarget(jump) {
+                            continue
+                        }
+                        target = targetSwitchLabel
+                    }
+                }
+                jumps.Add((jump, target))
+                if target != nil && target.SpanStart <= jump.SpanStart {
+                    if !backwardParticipants.Contains(target) {
+                        backwardParticipants.Add(target)
+                    }
+                    backwardParticipants.Add(jump)
+                }
+            }
+            let backwardSpan = this.ComputeBackwardSpan(backwardParticipants, $scope)
+            let entry = (jumps, backwardSpan)
+            this.scopeGotoIndex[$scope] = entry
+            return entry
+        }
+
+        private func GetStatementSteps(
+            node Microsoft.CodeAnalysis.SyntaxNode,
+            $scope Microsoft.CodeAnalysis.SyntaxNode
+        ) List[
+            (Owner Microsoft.CodeAnalysis.SyntaxNode, Statement Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax)
+        ] {
+            let steps = List[
+                (
+                    Owner Microsoft.CodeAnalysis.SyntaxNode,
+                    Statement Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax
+                )
+            ]()
+            for var current Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = node;
+                current != nil &&
+                current != $scope;
+                current = current!!
+                .Parent {
+                if current is not Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax statement {
+                    continue
+                }
+                let parent = statement.Parent
+                if parent is BlockSyntax || parent is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax {
+                    steps.Add((parent!!, statement))
+                } else if parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .GlobalStatementSyntax{Parent: Microsoft.CodeAnalysis.CSharp.Syntax.CompilationUnitSyntax unit} {
+                    steps.Add((unit, statement))
+                } else if statement !is BlockSyntax &&
+                    (
+                    (
+                        parent is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .IfStatementSyntax ifParent &&
+                            ifParent.Statement == statement
+                    ) ||
+                        (
+                        parent is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .ElseClauseSyntax elseParent &&
+                            elseParent.Statement == statement &&
+                            statement !is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .IfStatementSyntax
+                    ) ||
+                        parent is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .WhileStatementSyntax ||
+                        parent is DoStatementSyntax ||
+                        parent is ForStatementSyntax ||
+                        parent is CommonForEachStatementSyntax ||
+                        parent is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .FixedStatementSyntax ||
+                        parent is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .UsingStatementSyntax ||
+                        parent is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .LockStatementSyntax
+                ) {
+                    steps.Add((statement, statement))
+                }
+            }
+            steps.Reverse()
+            return steps
+        }
+
+        private func ComputeBackwardSpan(
+            participants List[Microsoft.CodeAnalysis.SyntaxNode],
+            $scope Microsoft.CodeAnalysis.SyntaxNode
+        )(Start int32, End int32)? {
+            if participants.Count == 0 {
+                return nil
+            }
+            let paths = List[
+                List[
+                    (
+                        Owner Microsoft.CodeAnalysis.SyntaxNode,
+                        Statement Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax
+                    )
+                ]
+            ]()
+            for participant in participants {
+                let steps = this.GetStatementSteps(participant, $scope)
+                if steps.Count == 0 {
+                    return nil
+                }
+                paths.Add(steps)
+            }
+            var depth = 0
+            while true {
+                var common = true
+                for path in paths {
+                    if path.Count <= depth || !object.ReferenceEquals(path[depth].Owner, paths[0][depth].Owner) {
+                        common = false
+                        break
+                    }
+                }
+                if !common {
+                    break
+                }
+                depth++
+            }
+            if depth == 0 {
+                return nil
+            }
+            let level = depth - 1
+            var start = int32.MaxValue
+            var end = -1
+            for path in paths {
+                let statement = path[level].Statement
+                start = Math.Min(start, statement.SpanStart)
+                end = Math.Max(end, statement.Span.End)
+            }
+            return (start, end)
+        }
+
+        private func ComputeIfHasGotoAffectingElse(
+            ifStatement Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax,
+            $scope Microsoft.CodeAnalysis.SyntaxNode
+        ) bool {
+            if ifStatement.Else == nil {
+                return false
+            }
+            let index = this.GetScopeGotoIndex($scope)
+            if index.Jumps.Count == 0 {
+                return false
+            }
+            // A merged backward-jump span that covers the `if` lowers its entry state in gsc (ADR-0213 L2).
+            if index.BackwardSpan is {} backwardSpan &&
+                backwardSpan.Start <= ifStatement.SpanStart &&
+                backwardSpan.End >= ifStatement
+                .Span
+                .End {
+                return true
+            }
+            let elseSpan = ifStatement.Else!!.Span
+            let thenSpan = ifStatement.Statement.Span
+            for entry in index.Jumps {
+                let jump = entry.Jump
+                if entry.Target is not{} target {
+                    if ifStatement.Span.Contains(jump.Span) {
+                        return true
+                    }
+                    continue
+                }
+                let targetStart = target.SpanStart
+                // A jump targeting a label inside `else` enters the `else` branch.
+                if targetStart >= elseSpan.Start && targetStart < elseSpan.End {
+                    return true
+                }
+                let staysInThen = thenSpan.Contains(jump.Span) &&
+                    targetStart >= thenSpan.Start &&
+                    targetStart < thenSpan.End
+                // A jump inside the `if` to a target before the end of the `if` (outside a jump within `then`)
+                // does not simply exit the `if`.
+                if ifStatement.Span.Contains(jump.Span) && targetStart < ifStatement.Span.End && !staysInThen {
+                    return true
+                }
+            }
+            return false
         }
 
         /// Whether the condition of a `while`, `do` or `for` loop is the literal `false`. gsc does not apply a loop's
@@ -6331,10 +6610,8 @@ partial class CSharpToGSharpTranslator {
                     node
                     .Span
                     .End <= use.SpanStart &&
-                    (
-                    RunsSourceCode(node) ||
-                        (WritesReferenceStorage(node) && !this.IsLoopInThenBranchOfElseRead(node, use))
-                )
+                    (RunsSourceCode(node) || WritesReferenceStorage(node)) &&
+                    !this.IsInThenBranchOfElseRead(node, use, $scope)
             ) {
                 return true
             }
@@ -6763,7 +7040,7 @@ partial class CSharpToGSharpTranslator {
                     node
                     .Span
                     .End <= use!!.SpanStart &&
-                    this.SyntaxNodeWritesSymbol(node, symbol)
+                    this.SyntaxNodeWritesSymbol(node, symbol) && !this.IsInThenBranchOfElseRead(node, use!!, $scope)
             )
         }
 

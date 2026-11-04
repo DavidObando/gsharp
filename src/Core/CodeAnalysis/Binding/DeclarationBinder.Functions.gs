@@ -2901,14 +2901,26 @@ internal partial class DeclarationBinder {
             TypeSymbol
         ]? {
             let def InterfaceSymbol? = iface.Definition
-            if def == nil || object.ReferenceEquals(def, iface) || def.TypeParameters.IsDefaultOrEmpty {
+            if def == nil || object.ReferenceEquals(def, iface) {
+                return nil
+            }
+            let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(def)
+            let ownParams = def.DeclaredTypeParameters
+            if enclosingParams.IsDefaultOrEmpty && ownParams.IsDefaultOrEmpty {
                 return nil
             }
             let map_ = Dictionary[TypeParameterSymbol, TypeSymbol]()
-            for var i = 0; i < def.TypeParameters.Length && i < iface.TypeArguments.Length; i++ {
-                map_[def.TypeParameters[i]] = iface.TypeArguments[i]
+            for var i = 0; i < enclosingParams.Length && i < iface.EnclosingTypeArguments.Length; i++ {
+                map_[enclosingParams[i]] = iface.EnclosingTypeArguments[i]
             }
-            return map_
+            for var i = 0; i < ownParams.Length && i < iface.TypeArguments.Length; i++ {
+                map_[ownParams[i]] = iface.TypeArguments[i]
+            }
+            return if map_.Count > 0 {
+                map_
+            } else {
+                default(Dictionary[TypeParameterSymbol, TypeSymbol]?)
+            }
         }
 
         private func HasAnyExplicitInterfaceClause(methods ImmutableArray[FunctionSymbol]) bool {
@@ -3343,8 +3355,12 @@ internal partial class DeclarationBinder {
                     TypeArgumentsEquivalent(ea.EnclosingTypeArguments, eb.EnclosingTypeArguments, typeParamMap)
             }
             if a is InterfaceSymbol ia && b is InterfaceSymbol ib {
-                return object.ReferenceEquals(ia.Definition, ib.Definition) &&
-                    TypeArgumentsEquivalent(ia.TypeArguments, ib.TypeArguments, typeParamMap)
+                return object.ReferenceEquals(ia.Definition ?? ia, ib.Definition ?? ib) &&
+                    TypeArgumentsEquivalent(
+                    Conversion.GetEffectiveInterfaceTypeArguments(ia),
+                    Conversion.GetEffectiveInterfaceTypeArguments(ib),
+                    typeParamMap
+                )
             }
             // Issue #2340 follow-up: a named delegate constructed over a
             // *method-level* generic parameter (e.g. an interface method

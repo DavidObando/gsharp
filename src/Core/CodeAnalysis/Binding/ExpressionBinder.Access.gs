@@ -570,7 +570,8 @@ internal partial class ExpressionBinder {
             arity,
             out sourceType
         ) &&
-            IsUserAggregateType(sourceType!!)
+            IsUserAggregateType(sourceType!!) &&
+            !binderCtx.HasUnclosedEnclosingTypeParameters(sourceType, getCurrentFunction())
     }
 
     private func BindQualifiedSourceTypeRemainder(remainder ExpressionSyntax, sourceType TypeSymbol) BoundExpression {
