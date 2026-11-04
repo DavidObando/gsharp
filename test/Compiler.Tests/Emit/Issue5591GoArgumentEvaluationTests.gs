@@ -125,6 +125,7 @@ class Spawner : Base {
     var label string = "old"
     var order string = ""
     var spanCreated int32 = 0
+    var posSpanCreated int32 = 0
 
     override func Report(tag string, v int32) { Log.Add(tag + " derived " + v.ToString()) }
 
@@ -137,6 +138,11 @@ class Spawner : Base {
         return "abcd"
     }
     func ReadSpanCreated() int32 -> spanCreated
+    func MakePosSpanString() string {
+        posSpanCreated = 5
+        return "abcde"
+    }
+    func ReadPosSpanCreated() int32 -> posSpanCreated
     func Three(a int32, b int32, c int32) { Log.Add("positional " + a.ToString() + b.ToString() + c.ToString()) }
     func Pair(a int32, b int32) { Log.Add("named a=" + a.ToString() + " b=" + b.ToString()) }
     func PairIn(in a int32, b int32) { Log.Add("named-in a=" + a.ToString() + " b=" + b.ToString()) }
@@ -178,14 +184,16 @@ class Spawner : Base {
                 let n = s.Length
                 let len = n
                 s.Slice(0, len)
-            }, Next("k"))
+            }, 11)
             go ConsumeSpan({
+                let _ = Next("k")
                 var c = Counter{}
                 let s = "abc".AsSpan()
                 c.n = s.Length
                 s
-            }, Next("l"))
-            go ConsumeSpan3(extra: Next("m"), value: MakeSpanString().AsSpan(), last: ReadSpanCreated())
+            }, 12)
+            go ConsumeSpan3(extra: Next("l"), value: MakeSpanString().AsSpan(), last: ReadSpanCreated())
+            go ConsumeSpan(MakePosSpanString().AsSpan(), ReadPosSpanCreated())
             go Show("inferred", label)
             go Show[int32]("explicit", count)
             go Later(count)
@@ -222,8 +230,9 @@ named-in a=7 b=6
 named-span len=3 extra=12
 named-span len=3 extra=8
 named-span len=4 extra=11
-named-span3 len=4 extra=13 last=4
-order abcdefghijklm|
+named-span len=5 extra=5
+named-span3 len=4 extra=12 last=4
+order abcdefghijkl|
 positional 123
 span-block 9
 suspending 7
@@ -535,7 +544,8 @@ scope {
 `
         let (refExit, refOutput) = TryCompile(refReceiverSource, "InvalidRefReceiver")
         Assert.NotEqual(0, refExit)
-        Assert.Contains("GS9011", refOutput, StringComparison.Ordinal)
+        Assert.Contains("(16,8,16,27): error GS9011", refOutput, StringComparison.Ordinal)
+        Assert.Contains("(17,8,17,26): error GS9011", refOutput, StringComparison.Ordinal)
         Assert.DoesNotContain("GS9998", refOutput, StringComparison.Ordinal)
 
         let nestedAwaitSource = `package Issue5591NestedAwait
