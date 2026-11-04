@@ -64,10 +64,6 @@ internal partial class ExpressionBinder {
         // are bound through the header helper the STATEMENT form shares, so
         // scoping (then-region only, never the else branch), progressive
         // narrowing, and the guard rules cannot drift between the forms.
-        // Issue #5613: a narrowed read that a branch yields is captured where it binds, in the narrowing that the
-        // header proves for the then-block.
-        var whenTrueRead NarrowedBranchValue? = nil
-        var whenFalseRead NarrowedBranchValue? = nil
         let (clauses, guard_, whenTrueBound) = IfLetBindingSupport.BindHeader(
             binderCtx,
             syntax.Bindings,
@@ -79,14 +75,7 @@ internal partial class ExpressionBinder {
             DeclareIfLetLocal,
             (guardSyntax ExpressionSyntax) -> BindExpression(guardSyntax, TypeSymbol.Bool),
             (boundGuard BoundExpression) -> ClassifyConditionalNarrowing(boundGuard).WhenTrue,
-            () -> BindBlockExpressionValue(
-                syntax.ThenBlock,
-                canBeVoid,
-                targetType,
-                captureValue: (read NarrowedBranchValue) -> {
-                    whenTrueRead = read
-                }
-            ),
+            () -> BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType),
             syntax.ThenBlock
         )
         var whenTrue = whenTrueBound
@@ -98,14 +87,7 @@ internal partial class ExpressionBinder {
         }
         // Bound AFTER the binding scope/frame is popped: the else branch never
         // sees the bindings.
-        var whenFalse = BindIfLetElseBranch(
-            syntax.ElseExpression!!,
-            canBeVoid,
-            targetType,
-            (read NarrowedBranchValue) -> {
-                whenFalseRead = read
-            }
-        )
+        var whenFalse = BindIfLetElseBranch(syntax.ElseExpression!!, canBeVoid, targetType)
         if anyInvalid ||
             clauses.Length == 0 ||
             guard_ is BoundErrorExpression ||
@@ -138,17 +120,11 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        let convertedTrue = ConvertConditionalBranch(
-            BranchValueLocation(syntax.ThenBlock),
-            whenTrue,
-            resultType,
-            whenTrueRead
-        )
+        let convertedTrue = ConvertConditionalBranch(BranchValueLocation(syntax.ThenBlock), whenTrue, resultType)
         let convertedFalse = ConvertConditionalBranch(
             BranchValueLocation(syntax.ElseExpression!!),
             whenFalse,
-            resultType,
-            whenFalseRead
+            resultType
         )
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
@@ -182,7 +158,6 @@ internal partial class ExpressionBinder {
     private func BindIfLetElseBranch(
         elseSyntax ExpressionSyntax,
         canBeVoid bool,
-        targetType TypeSymbol? = nil,
-        captureValue((NarrowedBranchValue) -> void)? = nil
-    ) BoundExpression -> BindIfExpressionElseBranch(elseSyntax, canBeVoid, targetType, captureValue)
+        targetType TypeSymbol? = nil
+    ) BoundExpression -> BindIfExpressionElseBranch(elseSyntax, canBeVoid, targetType)
 }

@@ -904,11 +904,6 @@ internal partial class OverloadResolver {
         out _
     )
 
-    private func GetNarrowedVariablePath(variable VariableSymbol) AccessPath {
-        TryGetNarrowedVariableAccess(variable, out var path)
-        return path
-    }
-
     /// Looks up the active narrowing for a callee variable and reports the
     /// access path it is recorded under: the bare variable for a local, or the
     /// stable member path (`this.hn`) for a bare implicit field/property.
@@ -1020,14 +1015,6 @@ internal partial class OverloadResolver {
         var callee = callee
         if callee is BoundErrorExpression {
             return callee
-        }
-        if nullSafeInvocation != nil && callee is BoundVariableExpression variableCallee {
-            binderCtx.TrackBackwardGotoNarrowingUse(
-                GetNarrowedVariablePath(variableCallee.Variable),
-                calleeLocation,
-                calleeName,
-                BackwardGotoNarrowingUseKind.Function
-            )
         }
         var nullConditionalCallee BoundNullConditionalAccessExpression? = nil
         let assertions = Stack[BoundUnaryExpression]()

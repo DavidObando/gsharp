@@ -65,7 +65,11 @@ internal partial class OverloadResolver {
                 }
                 // Issue #4043: a DEPENDENT bound is answered on the whole
                 // vector, so build the positional map before asking.
-                let explicitVector = BuildTypeArgumentVector(candidate.TypeParameters, boundTypeArguments)
+                let explicitVector = BuildTypeArgumentVector(
+                    candidate.TypeParameters,
+                    boundTypeArguments,
+                    receiverType ?? candidate.StaticOwnerType ?? candidate.ReceiverType
+                )
                 var constraintsSatisfied = true
                 for var i = 0; i < candidate.TypeParameters.Length; i++ {
                     constraintsSatisfied &= satisfiesConstraint(
@@ -1691,10 +1695,12 @@ internal partial class OverloadResolver {
         /// rather than reading a mismatched map.
         /// @param typeParameters The candidate's type parameters, in order.
         /// @param typeArguments The supplied type arguments, in the same order.
+        /// @param owner Optional owner type whose fixed type arguments seed the vector.
         /// @returns The positional map, or `null`.
         internal func BuildTypeArgumentVector(
             typeParameters ImmutableArray[TypeParameterSymbol],
-            typeArguments ImmutableArray[TypeSymbol]
+            typeArguments ImmutableArray[TypeSymbol],
+            owner TypeSymbol? = nil
         ) IReadOnlyDictionary[TypeParameterSymbol, TypeSymbol]? {
             if typeParameters.IsDefaultOrEmpty ||
                 typeArguments.IsDefaultOrEmpty ||
@@ -1702,6 +1708,9 @@ internal partial class OverloadResolver {
                 return nil
             }
             let vector = Dictionary[TypeParameterSymbol, TypeSymbol](typeParameters.Length)
+            if owner != nil {
+                SeedFixedOwnerTypeParameters(owner, vector)
+            }
             for var i = 0; i < typeParameters.Length; i++ {
                 if typeArguments[i] != nil {
                     vector[typeParameters[i]] = typeArguments[i]
