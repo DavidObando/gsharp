@@ -4068,6 +4068,8 @@ partial class Binder {
                 // BindReturnTypeClause(isAsync=true) at function declarations.
                 if ret is SequenceTypeSymbol seq {
                     ret = AsyncSequenceTypeSymbol.Get(seq.ElementType)
+                } else if ret is PlatformTypeSymbol{UnderlyingType: SequenceTypeSymbol platformSeq} {
+                    ret = PlatformTypeSymbol.Get(AsyncSequenceTypeSymbol.Get(platformSeq.ElementType))
                 } else {
                     let nt = ret as NullableTypeSymbol
                     let innerSeq SequenceTypeSymbol? = nt?.UnderlyingType as SequenceTypeSymbol
@@ -5936,6 +5938,9 @@ partial class Binder {
         }
         if bound is SequenceTypeSymbol seq {
             return AsyncSequenceTypeSymbol.Get(seq.ElementType)
+        }
+        if bound is PlatformTypeSymbol{UnderlyingType: SequenceTypeSymbol platformSeq} {
+            return PlatformTypeSymbol.Get(AsyncSequenceTypeSymbol.Get(platformSeq.ElementType))
         }
         let nt = bound as NullableTypeSymbol
         let innerSeq SequenceTypeSymbol? = nt?.UnderlyingType as SequenceTypeSymbol

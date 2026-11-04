@@ -4092,17 +4092,15 @@ internal partial class ExpressionBinder {
                 return false
             }
             try {
-                for candidate in openDefinition.GetMethods(kindFlag | BindingFlags.Public | BindingFlags.NonPublic) {
-                    if candidate.MetadataToken == closedMethod.MetadataToken &&
-                        candidate.Module == closedMethod.Module {
-                        openMethod = candidate
-                        return true
-                    }
-                }
+                openMethod = ClrTypeUtilities.FindMetadataDefinition(
+                    openDefinition,
+                    closedMethod,
+                    kindFlag | BindingFlags.Public | BindingFlags.NonPublic
+                ) as MethodInfo
+                return openMethod != nil
             } catch (ex Exception) when ClrTypeUtilities.IsMetadataLoadFailure(ex) {
                 return false
             }
-            return false
         }
 
         /// Issue #1330: builds a (cref:FunctionTypeSymbol) for an open
