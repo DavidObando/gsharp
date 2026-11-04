@@ -172,6 +172,77 @@ func Run() string {
         )
     }
 
+    @Fact
+    func Issue4754_EscapedImportedNestedTypeInConstructedOwner_ResolvesAndExecutes() {
+        InDirectory(
+            (directory string) -> {
+                const contractSource = `#nullable enable
+namespace NativeEscape;
+public class Outer<T>
+{
+    public delegate T @delegate<U>(T value, U other);
+    public sealed class @class<U>(T value, U other)
+    {
+        public string Describe() => $"{value}:{other}";
+    }
+}
+public class @event<T>
+{
+    public delegate T @delegate<U>(T value, U other);
+}`
+                let contractPath = Path.Combine(directory, "EscapedContracts.dll")
+                let compilation = CSharpCompilation.Create(
+                    "EscapedContracts",
+                    []SyntaxTree{CSharpSyntaxTree.ParseText(contractSource)},
+                    RuntimeReferences().Select((path string) -> MetadataReference.CreateFromFile(path)),
+                    CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                )
+                let emitResult = compilation.Emit(contractPath)
+                Assert.True(emitResult.Success, string.Join(Environment.NewLine, emitResult.Diagnostics))
+
+                const source = `package Repro4754
+import NativeEscape
+
+func Echo(value Outer[string].$delegate[int32]) Outer[string].$delegate[int32] {
+    return value
+}
+
+func EchoEscapedOuter(value $event[string].$delegate[int32]) $event[string].$delegate[int32] {
+    return value
+}
+
+func Run() string {
+    let first = Echo((v string, n int32) -> v + ":" + n.ToString())
+    let second = EchoEscapedOuter((v string, n int32) -> v + ":" + n.ToString())
+    let third = Outer[string].$class[int32]("box", 7).Describe()
+    let openName = typeof(Outer[_].$delegate[_]).Name
+    return first("hi", 3) + "|" + second("ev", 5) + "|" + third + "|" + openName
+}`
+                let output = Compile(directory, source, true, contractPath)
+                Assert.True(output.Exit == 0, output.Diagnostics)
+                IlVerifier.Verify(output.Path, []string{contractPath})
+                let assemblies = EmittedFixture.LoadTogether(contractPath, output.Path)
+                let program = assemblies[1].GetTypes().Single((type Type) -> type.Name == "<Program>")
+                Assert.Equal(
+                    "hi:3|ev:5|box:7|delegate`1",
+                    program.GetMethod(
+                        "Run",
+                        BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic
+                    )!!.Invoke(nil, nil)
+                )
+
+                const missingSource = `package Repro4754Missing
+import NativeEscape
+func Bad(value Outer[string].$missing[int32]) { }
+`
+                let missingOutput = Compile(directory, missingSource, true, contractPath)
+                Assert.NotEqual(0, missingOutput.Exit)
+                Assert.Contains("GS0113", missingOutput.Diagnostics, StringComparison.Ordinal)
+                Assert.Contains("(3,16,3,21)", missingOutput.Diagnostics, StringComparison.Ordinal)
+            }
+        )
+    }
+
     shared {
         private func Compile(directory string, source string, library bool, references ...string)(
             Exit int32,
