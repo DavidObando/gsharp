@@ -749,7 +749,7 @@ partial class SemanticModel {
             if !SpellsName(call.CalledFunction, token.ValueText) {
                 return ImmutableArray[Symbol].Empty
             }
-            let extensionCall = IsSourceExtensionCall(call, token)
+            let extensionCall = CallCandidateRecorder.IsSourceExtensionCall(call, token.Parent)
             if !call.MemberGroup.IsDefaultOrEmpty {
                 let receiverType TypeSymbol? = switch call {
                     case instanceCall is BoundImportedInstanceCallExpression: instanceCall.ConstrainedInterfaceType ??
@@ -871,12 +871,6 @@ partial class SemanticModel {
         case function is FunctionSymbol: OwnerOf(function, extensionCall)
         default: cast[object](member)
     }
-
-    private func IsSourceExtensionCall(call BoundCallOperationExpression, token SyntaxToken) bool ->
-    call is BoundCallExpression{Function: {IsExtension: true}, StaticQualifierType: nil} &&
-        token.Parent is CallExpressionSyntax ce &&
-        ce.Parent is AccessorExpressionSyntax accessor &&
-        object.ReferenceEquals(accessor.RightPart, ce)
 
     private func AddGroupMember(group ImmutableArray[Symbol].Builder, member Symbol, called Symbol) {
         for var i = 0; i < group.Count; i++ {

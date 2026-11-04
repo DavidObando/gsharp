@@ -161,7 +161,7 @@ internal shared class CallCandidateRecorder {
         if !frame.ExtensionSet.IsDefault && ContainsCallee(frame.ExtensionSet, called) {
             return frame.ExtensionSet
         }
-        if IsSourceExtensionCall(frame.Syntax, call) {
+        if IsSourceExtensionCall(call, frame.Syntax) {
             return default(ImmutableArray[object])
         }
         var best ImmutableArray[object] = default(ImmutableArray[object])
@@ -173,9 +173,13 @@ internal shared class CallCandidateRecorder {
         return best
     }
 
-    private func IsSourceExtensionCall(syntax SyntaxNode, call BoundCallOperationExpression) bool ->
+    /// Reports whether [`call`](paramref) was dispatched as a receiver-form source extension call (`receiver.Ext(...)`)
+    /// rather than a direct free or static call.
+    /// @param call The bound call operation.
+    /// @param fallbackSyntax The call syntax node when [`call`](paramref)'s own syntax is not populated.
+    func IsSourceExtensionCall(call BoundCallOperationExpression, fallbackSyntax SyntaxNode? = nil) bool ->
     call is BoundCallExpression{Function: {IsExtension: true}, StaticQualifierType: nil} &&
-        syntax is CallExpressionSyntax ce &&
+        (call.Syntax ?? fallbackSyntax) is CallExpressionSyntax ce &&
         ce.Parent is AccessorExpressionSyntax accessor &&
         object.ReferenceEquals(accessor.RightPart, ce)
 

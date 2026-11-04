@@ -9511,16 +9511,18 @@ partial class Binder {
 
         private func UnwrapReceiverNullability(type TypeSymbol) TypeSymbol {
             var current = type
-            for var depth = 0; depth < 8; depth++ {
-                if current is NullableTypeSymbol nullable {
+            while true {
+                if current is NullableTypeSymbol nullable && !object.ReferenceEquals(nullable.UnderlyingType, current) {
                     current = nullable.UnderlyingType
-                } else if current is PlatformTypeSymbol platform {
+                } else if current is PlatformTypeSymbol platform && !object.ReferenceEquals(
+                    platform.UnderlyingType,
+                    current
+                ) {
                     current = platform.UnderlyingType
                 } else {
-                    break
+                    return current
                 }
             }
-            return current
         }
 
         // A receiver without a CLR shape of its own is probed through the shape a call projects it to (see
