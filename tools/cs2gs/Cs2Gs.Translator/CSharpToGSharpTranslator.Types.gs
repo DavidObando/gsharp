@@ -888,7 +888,10 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
             }
-            let nullableValue = !(translated is NonNullAssertionExpression) &&
+            let nullableValue = !(translated is NonNullAssertionExpression) && !this.IsGSharpFlowNarrowedLocal(
+                expression
+            ) &&
+                !this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(expression) &&
                 (
                 this
                     .context

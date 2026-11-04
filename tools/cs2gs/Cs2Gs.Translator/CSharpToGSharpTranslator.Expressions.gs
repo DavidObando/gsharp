@@ -684,13 +684,11 @@ partial class CSharpToGSharpTranslator {
                     .Syntax
                     .ArgumentSyntax{Parent: Microsoft.CodeAnalysis.CSharp.Syntax.TupleExpressionSyntax} {
                     let element = cast[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax](node)
-                    if this.ResolveValueSink(element) is {} tupleSink && this.GetFixedElementDestinationType(
-                        element,
-                        tupleSink
-                    ) is {} tupleTargetType {
-                        return (tupleTargetType, tupleSink, isSuppressed, true, false)
+                    let tupleSink = this.ResolveValueSink(element)
+                    if this.GetFixedElementDestinationType(element, tupleSink) is {} tupleTargetType {
+                        return (tupleTargetType, tupleSink, returnIsSuppressed, true, tupleSink is IMethodSymbol)
                     }
-                    return (nil, nil, isSuppressed, true, false)
+                    return (nil, nil, returnIsSuppressed, true, false)
                 }
                 case Microsoft.CodeAnalysis.CSharp.Syntax.ArgumentSyntax argument when argument.RefKindKeyword.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.None
