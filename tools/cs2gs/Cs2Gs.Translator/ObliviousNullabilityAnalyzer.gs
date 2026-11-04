@@ -6506,11 +6506,6 @@ internal shared class ObliviousNullabilityAnalyzer {
                     AddReturnContractEdges(method, overridden, edges)
                     AddParameterContractEdges(method.Parameters, overridden.Parameters, edges)
                 }
-                if method.MethodKind == MethodKind.Ordinary &&
-                    method.PartialImplementationPart is IMethodSymbol implementation {
-                    AddReturnContractEdges(method, implementation, edges)
-                    AddParameterContractEdges(method.Parameters, implementation.Parameters, edges)
-                }
             }
             for property in type.GetMembers().OfType[IPropertySymbol]() {
                 if property.OverriddenProperty is IPropertySymbol overridden {

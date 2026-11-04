@@ -1640,7 +1640,11 @@ partial class CSharpToGSharpTranslator {
             let constant = attributeModel.GetConstantValue(current)
             if constant.HasValue {
                 let typeInfo = attributeModel.GetTypeInfo(current)
-                let argumentType ITypeSymbol? = typeInfo.ConvertedType ?? typeInfo.Type
+                let argumentType ITypeSymbol? = if typeInfo.ConvertedType?.TypeKind == TypeKind.Enum {
+                    typeInfo.ConvertedType
+                } else {
+                    typeInfo.Type ?? typeInfo.ConvertedType
+                }
                 if constant.Value != nil && argumentType?.TypeKind == TypeKind.Enum && IsIntegral(constant.Value) {
                     let enumValue GExpression? = this.MapEnumConstant(
                         argumentType,
@@ -1678,22 +1682,26 @@ partial class CSharpToGSharpTranslator {
                         return LiteralExpression.Char(c.ToString())
                     }
                     case n is int64 when n == int64.MinValue {
-                        return MemberAccessExpression(IdentifierExpression("System.Int64"), "MinValue")
+                        return this.MapInt64MinValueConstant(destinationLocation)
                     }
                     case d is float64 {
-                        if MapSpecialFloatConstant(d, isDouble: true) is {} specialD {
+                        if this.MapSpecialFloatConstant(d, isDouble: true, destinationLocation) is {} specialD {
                             return specialD
                         }
                         let literal = LiteralExpression.Float(this.ToFloatLiteralText(d))
                         return if constantTargetType == nil {
                             cast[GExpression](literal)
                         } else {
-                            this.CoerceOperandTo(literal, constantTargetType, destinationLocation)
+                            this.CoerceRelocatedOperandTo(literal, constantTargetType, destinationLocation)
                         }
                     }
                     case f is float32 {
                         let isDoubleTarget = constantTargetType?.SpecialType == SpecialType.System_Double
-                        if MapSpecialFloatConstant(f, isDouble: isDoubleTarget) is {} specialF {
+                        if this.MapSpecialFloatConstant(
+                            f,
+                            isDouble: isDoubleTarget,
+                            destinationLocation
+                        ) is {} specialF {
                             return specialF
                         }
                         let literal = LiteralExpression.Float(
@@ -1706,7 +1714,7 @@ partial class CSharpToGSharpTranslator {
                         return if constantTargetType == nil {
                             cast[GExpression](literal)
                         } else {
-                            this.CoerceOperandTo(literal, constantTargetType, destinationLocation)
+                            this.CoerceRelocatedOperandTo(literal, constantTargetType, destinationLocation)
                         }
                     }
                     default {
@@ -1717,7 +1725,7 @@ partial class CSharpToGSharpTranslator {
                             return if constantTargetType == nil {
                                 cast[GExpression](literal)
                             } else {
-                                this.CoerceOperandTo(literal, constantTargetType, destinationLocation)
+                                this.CoerceRelocatedOperandTo(literal, constantTargetType, destinationLocation)
                             }
                         }
                     }
@@ -1825,6 +1833,18 @@ partial class CSharpToGSharpTranslator {
             }
             using let fallbackScope = this.context.UseSemanticModelFor(current.SyntaxTree)
             return this.TranslateExpression(current)
+        }
+
+        private func CoerceRelocatedOperandTo(
+            expression GExpression?,
+            targetType ITypeSymbol?,
+            location Location
+        ) GExpression {
+            let mappedTarget = this.typeMapper.MapDestinationSafeType(targetType, this.context, location)
+            if IsNonNullableValueType(targetType) {
+                return ConversionExpression(mappedTarget, expression)
+            }
+            return ParenthesizedExpression(BinaryExpression(expression, "as", TypeExpression(mappedTarget)))
         }
 
         private func IsUnscopedRefAttribute(attributeType INamedTypeSymbol?) bool -> SymbolEqualityComparer
@@ -2062,10 +2082,10 @@ partial class CSharpToGSharpTranslator {
                         return LiteralExpression.Char(c.ToString())
                     }
                     case n is int64 when n == int64.MinValue {
-                        return MemberAccessExpression(IdentifierExpression("System.Int64"), "MinValue")
+                        return this.MapInt64MinValueConstant(argument.GetLocation())
                     }
                     case d is float64 {
-                        if MapSpecialFloatConstant(d, isDouble: true) is {} specialD {
+                        if this.MapSpecialFloatConstant(d, isDouble: true, argument.GetLocation()) is {} specialD {
                             return specialD
                         }
                         if argument.Expression is not Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax {
@@ -2079,7 +2099,7 @@ partial class CSharpToGSharpTranslator {
                         }
                     }
                     case f is float32 {
-                        if MapSpecialFloatConstant(f, isDouble: false) is {} specialF {
+                        if this.MapSpecialFloatConstant(f, isDouble: false, argument.GetLocation()) is {} specialF {
                             return specialF
                         }
                         if argument.Expression is not Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax {

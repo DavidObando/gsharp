@@ -893,14 +893,12 @@ partial class CSharpToGSharpTranslator {
                     return LiteralExpression.Char(c.ToString())
                 }
                 case d is float64 {
-                    return MapSpecialFloatConstant(d, isDouble: true) ?? LiteralExpression.Float(
-                        d.ToString(CultureInfo.InvariantCulture)
-                    )
+                    return this.MapSpecialFloatConstant(d, isDouble: true, fallbackNode?.GetLocation()) ??
+                        LiteralExpression.Float(d.ToString(CultureInfo.InvariantCulture))
                 }
                 case f is float32 {
-                    return MapSpecialFloatConstant(f, isDouble: false) ?? LiteralExpression.Float(
-                        f.ToString(CultureInfo.InvariantCulture)
-                    )
+                    return this.MapSpecialFloatConstant(f, isDouble: false, fallbackNode?.GetLocation()) ??
+                        LiteralExpression.Float(f.ToString(CultureInfo.InvariantCulture))
                 }
                 case m is decimal {
                     return LiteralExpression.Float(m.ToString(CultureInfo.InvariantCulture))
@@ -2290,6 +2288,42 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
+        private func MapSpecialFloatConstant(value float64, isDouble bool, location Location? = nil) GExpression? {
+            if !float64.IsNaN(value) && !float64.IsPositiveInfinity(value) && !float64.IsNegativeInfinity(value) {
+                return nil
+            }
+            let specialType = if isDouble {
+                SpecialType.System_Double
+            } else {
+                SpecialType.System_Single
+            }
+            let ownerSymbol = this.context.Compilation.GetSpecialType(specialType)
+            let owner = if ownerSymbol.TypeKind != TypeKind.Error {
+                this.typeMapper.RenderDestinationSafeTypeName(ownerSymbol, this.context, location)
+            } else if isDouble {
+                "System.Double"
+            } else {
+                "System.Single"
+            }
+            if float64.IsNaN(value) {
+                return MemberAccessExpression(IdentifierExpression(owner), "NaN")
+            }
+            if float64.IsPositiveInfinity(value) {
+                return MemberAccessExpression(IdentifierExpression(owner), "PositiveInfinity")
+            }
+            return MemberAccessExpression(IdentifierExpression(owner), "NegativeInfinity")
+        }
+
+        private func MapInt64MinValueConstant(location Location? = nil) GExpression {
+            let ownerSymbol = this.context.Compilation.GetSpecialType(SpecialType.System_Int64)
+            let owner = if ownerSymbol.TypeKind != TypeKind.Error {
+                this.typeMapper.RenderDestinationSafeTypeName(ownerSymbol, this.context, location)
+            } else {
+                "System.Int64"
+            }
+            return MemberAccessExpression(IdentifierExpression(owner), "MinValue")
+        }
+
         shared {
             // Issue #4350: whether `node` (a simple name, or the member access that
             // carries it) is written: an assignment's left side, an increment or
@@ -2590,39 +2624,6 @@ partial class CSharpToGSharpTranslator {
                         )
                     )
                 )
-            }
-
-            /// Issue #1733: `double`/`float`'s special non-finite values
-            /// (`NaN`, `PositiveInfinity`, `NegativeInfinity`) have no
-            /// numeric-literal spelling — `d.ToString(CultureInfo.InvariantCulture)`
-            /// renders them as the bare words `"NaN"`/`"Infinity"`/
-            /// `"-Infinity"`, which G# reads as unresolved identifiers. G# exposes
-            /// the BCL fields directly (`System.Double.NaN`, `System.Single.NaN`, …;
-            /// see `Issue1616FloatNaNOperatorEmitTests`/`Issue1617…`), so those
-            /// are emitted as a fully-qualified member reference instead — qualified so
-            /// the reference resolves even when the C# source has no `using
-            /// System;` (a bare `double`/`float` default never requires
-            /// one).
-            /// @param value The floating-point value.
-            /// @param isDouble Whether [`value`](paramref) is a `double` (vs. `float`).
-            /// @returns The qualified BCL member reference, or `null` when [`value`](paramref) is an ordinary
-            /// finite value.
-            private func MapSpecialFloatConstant(value float64, isDouble bool) GExpression? {
-                let owner = if isDouble {
-                    "System.Double"
-                } else {
-                    "System.Single"
-                }
-                if float64.IsNaN(value) {
-                    return MemberAccessExpression(IdentifierExpression(owner), "NaN")
-                }
-                if float64.IsPositiveInfinity(value) {
-                    return MemberAccessExpression(IdentifierExpression(owner), "PositiveInfinity")
-                }
-                if float64.IsNegativeInfinity(value) {
-                    return MemberAccessExpression(IdentifierExpression(owner), "NegativeInfinity")
-                }
-                return nil
             }
 
             /// Issue #1733 N2: reinterprets a boxed enum-underlying-type value as its

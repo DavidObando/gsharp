@@ -3468,8 +3468,12 @@ namespace N1 {
     }
     [AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter | AttributeTargets.Method, AllowMultiple = true)]
     public sealed class GenericTagAttribute<T> : Attribute {
-        public GenericTagAttribute(Type helper) { Helper = helper; }
+        public GenericTagAttribute(Type helper, object? boxedChoice = null) {
+            Helper = helper;
+            BoxedChoice = boxedChoice;
+        }
         public Type Helper { get; }
+        public object? BoxedChoice { get; }
     }
 }`), ("N2.cs", `using System;
 namespace N2 {
@@ -3496,23 +3500,32 @@ namespace N2 {
     }
     [AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter | AttributeTargets.Method, AllowMultiple = true)]
     public sealed class GenericTagAttribute<T> : Attribute {
-        public GenericTagAttribute(Type helper) { Helper = helper; }
+        public GenericTagAttribute(Type helper, object? boxedChoice = null) {
+            Helper = helper;
+            BoxedChoice = boxedChoice;
+        }
         public Type Helper { get; }
+        public object? BoxedChoice { get; }
     }
 }
 namespace N3 {
     public sealed class Other { }
+}
+namespace Demo {
+    public sealed class Outer<T> {
+        public delegate int Callback(int x);
+    }
 }`), ("Decl.cs", declImports + `
 namespace Demo {
     public sealed partial class Rows {
         [Tag(typeof(Helper), Choice.First, Helper.FloatRate, Helper.DoubleRate, new int[] { 7 })]
-        [N1.GenericTag<N1.GenericHelper<int>>(typeof(N1.GenericHelper<int>))]
+        [N1.GenericTag<N1.GenericHelper<int>>(typeof(Outer<int>.Callback), Choice.First)]
         public partial int Value { get; }
 
         [Tag(typeof(Helper), Choice.First, Helper.FloatRate, Helper.DoubleRate, new[] { 9 })]
         public partial int this[
             [Tag(typeof(Helper), Choice.First, Helper.FloatRate, Helper.DoubleRate, new int[] { 11 })]
-            [N1.GenericTag<N1.GenericHelper<int>>(typeof(N1.GenericHelper<int>))]
+            [N1.GenericTag<N1.GenericHelper<int>>(typeof(N1.GenericHelper<int>), Choice.First)]
             int index,
             int step = 2] { get; }
     }
@@ -3520,13 +3533,13 @@ namespace Demo {
 namespace Demo {
     ` + innerShadowAlias + `public sealed partial class Rows {
         [Tag(typeof(Helper), Choice.Second, Helper.FloatRate, Helper.DoubleRate, new int[] { 70 })]
-        [N2.GenericTag<N2.GenericHelper<string>>(typeof(N2.GenericHelper<string>))]
+        [N2.GenericTag<N2.GenericHelper<string>>(typeof(N2.GenericHelper<string>), Choice.Second)]
         public partial int Value => 40;
 
         [Tag(typeof(Helper), Choice.Second, Helper.FloatRate, Helper.DoubleRate, new[] { 90 })]
         public partial int this[
             [Tag(typeof(Helper), Choice.Second, Helper.FloatRate, Helper.DoubleRate, new int[] { 110 })]
-            [N2.GenericTag<N2.GenericHelper<string>>(typeof(N2.GenericHelper<string>))]
+            [N2.GenericTag<N2.GenericHelper<string>>(typeof(N2.GenericHelper<string>), Choice.Second)]
             int index,
             int step] => Value + index + step;
 
@@ -3537,7 +3550,7 @@ namespace Demo {
 using System.Reflection;
 namespace Demo {
     public static class Program {
-        private static bool HasTags(ICustomAttributeProvider provider, int expectedFirstPayload, int expectedSecondPayload, bool expectGenericTag) {
+        private static bool HasTags(ICustomAttributeProvider provider, int expectedFirstPayload, int expectedSecondPayload, bool expectGenericTag, bool expectLiftedDelegate) {
             var attributes = provider.GetCustomAttributes(inherit: false);
             bool hasN1 = false;
             bool hasN2 = false;
@@ -3561,9 +3574,14 @@ namespace Demo {
                         && secondArray.Length == 1
                         && secondArray[0] == expectedSecondPayload;
                 } else if (attribute is N1.GenericTagAttribute<N1.GenericHelper<int>> genericFirst) {
-                    hasGenericN1 |= genericFirst.Helper == typeof(N1.GenericHelper<int>);
+                    bool helperOk = expectLiftedDelegate
+                        ? genericFirst.Helper == typeof(Outer<int>.Callback)
+                        : genericFirst.Helper == typeof(N1.GenericHelper<int>);
+                    hasGenericN1 |= helperOk && genericFirst.BoxedChoice is N1.Choice c1 && c1 == N1.Choice.First;
                 } else if (attribute is N2.GenericTagAttribute<N2.GenericHelper<string>> genericSecond) {
-                    hasGenericN2 |= genericSecond.Helper == typeof(N2.GenericHelper<string>);
+                    hasGenericN2 |= genericSecond.Helper == typeof(N2.GenericHelper<string>)
+                        && genericSecond.BoxedChoice is N2.Choice c2
+                        && c2 == N2.Choice.Second;
                 }
             }
             return hasN1 && hasN2 && hasGenericN1 && hasGenericN2;
@@ -3576,9 +3594,9 @@ namespace Demo {
             var indexParameter = indexerProperty.GetIndexParameters()[0];
             bool ok = rows[3] == 45
                 && Rows.Use(new N3.Other()) == 1
-                && HasTags(valueProperty, 7, 70, expectGenericTag: true)
-                && HasTags(indexerProperty, 9, 90, expectGenericTag: false)
-                && HasTags(indexParameter, 11, 110, expectGenericTag: true);
+                && HasTags(valueProperty, 7, 70, expectGenericTag: true, expectLiftedDelegate: true)
+                && HasTags(indexerProperty, 9, 90, expectGenericTag: false, expectLiftedDelegate: false)
+                && HasTags(indexParameter, 11, 110, expectGenericTag: true, expectLiftedDelegate: false);
             Console.WriteLine(ok ? 15 : -1);
         }
     }
@@ -3601,10 +3619,12 @@ namespace Demo {
         }
         let implPrinted = File.ReadAllText(Path.Combine(dir, "Impl.gs"))
         Assert.DoesNotContain("import N1\n", implPrinted)
+        Assert.Contains("typeof(Outer_Callback)", implPrinted)
+        Assert.DoesNotContain("typeof(Outer[int32].Callback)", implPrinted)
         if shadowLeadingNamespace {
             Assert.Contains("import N1Namespace = N1\n", implPrinted)
             Assert.Contains(
-                "@N1Namespace.GenericTagAttribute[N1Namespace.GenericHelper[int32]](typeof(N1Namespace.GenericHelper[int32]))",
+                "@N1Namespace.GenericTagAttribute[N1Namespace.GenericHelper[int32]](typeof(N1Namespace.GenericHelper[int32]), N1Choice.First)",
                 implPrinted
             )
         }
@@ -3639,8 +3659,18 @@ namespace N1 {
     public sealed class GenericHelper<T> { }
     [AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter, AllowMultiple = true)]
     public sealed class MarkerAttribute : Attribute {
-        public MarkerAttribute(Type type) { Type = type; }
+        public MarkerAttribute(Type type, long min = 0, double nan = 0.0, double posInf = 0.0, float negInf = 0f) {
+            Type = type;
+            Min = min;
+            NaN = nan;
+            PosInf = posInf;
+            NegInf = negInf;
+        }
         public Type Type { get; }
+        public long Min { get; }
+        public double NaN { get; }
+        public double PosInf { get; }
+        public float NegInf { get; }
     }
 }
 namespace N3 {
@@ -3648,14 +3678,19 @@ namespace N3 {
 }`), ("Decl.cs", `using N1;
 namespace Demo {
     public sealed partial class Rows {
-        [Marker(typeof(GenericHelper<>))]
-        public partial int this[[Marker(typeof(GenericHelper<>))] int index] { get; }
+        [Marker(typeof(GenericHelper<>), long.MinValue, double.NaN, double.PositiveInfinity, float.NegativeInfinity)]
+        public partial int this[[Marker(typeof(GenericHelper<int>))] int index] { get; }
     }
 }`), ("Impl.cs", `namespace Demo {
+    using NS = N1;
     using N1 = N3.Other;
+    using System = N3.Other;
     public sealed partial class Rows {
+        public static class NS {
+            public sealed class GenericHelper<T> { }
+        }
         public partial int this[int index] => index;
-        public static int Use(N1 other) => other == null ? 0 : 1;
+        public static int Use(N1 other, System sys) => other == null || sys == null ? 0 : 1;
     }
 }`)}, CSharpProjectLoader.RuntimeReferences())
         Assert.True(
@@ -3673,7 +3708,15 @@ namespace Demo {
         )
         Assert.Contains("import N1Namespace = N1", implPrinted)
         Assert.Contains("typeof(N1Namespace.GenericHelper[_])", implPrinted)
+        Assert.Contains("typeof(N1Namespace.GenericHelper[int32])", implPrinted)
+        Assert.DoesNotContain("typeof(NS.GenericHelper[int32])", implPrinted)
         Assert.DoesNotContain("typeof(N1.GenericHelper[_])", implPrinted)
+        Assert.Contains("SystemInt64.MinValue", implPrinted)
+        Assert.Contains("SystemDouble.NaN", implPrinted)
+        Assert.Contains("SystemDouble.PositiveInfinity", implPrinted)
+        Assert.Contains("SystemSingle.NegativeInfinity", implPrinted)
+        Assert.DoesNotContain("System.Int64.MinValue", implPrinted)
+        Assert.DoesNotContain("System.Double.NaN", implPrinted)
 
         let linkedSource = `using Code = System.Exception;
 namespace Shared {

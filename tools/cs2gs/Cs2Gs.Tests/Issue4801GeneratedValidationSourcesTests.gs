@@ -35,7 +35,9 @@ class Issue4801GeneratedValidationSourcesTests : IDisposable {
         let authoritative = Path.Combine(this.root, "authoritative")
         let migrated = Path.Combine(this.root, "migrated")
         let manifests = Path.Combine(this.root, "manifests")
-        let compiler string? = GscInvoker.Resolve(nil, "Release", GsharpTestProjectRunner.FindRepoRoot()!!)
+        let repoRoot = GsharpTestProjectRunner.FindRepoRootAbove(AppContext.BaseDirectory) ??
+            GsharpTestProjectRunner.FindRepoRoot()!!
+        let compiler string? = GscInvoker.Resolve(nil, "Release", repoRoot)
         Assert.NotNull(compiler)
         Console.WriteLine(
             "hydration product: " + typeof(ValidationManifest).Assembly.Location + " SHA256 " + Convert.ToHexString(
@@ -125,15 +127,8 @@ namespace Native.Other {
             framework,
             "Release"
         )
-        let cli = Path.Combine(
-            GsharpTestProjectRunner.FindRepoRoot()!!,
-            "out",
-            "bin",
-            "Release",
-            "Cs2Gs.Cli",
-            "cs2gs.dll"
-        )
-        let sdk = GsharpTestProjectRunner.ResolveLocalSdkPackage(GsharpTestProjectRunner.FindRepoRoot())
+        let cli = Path.Combine(repoRoot, "out", "bin", "Release", "Cs2Gs.Cli", "cs2gs.dll")
+        let sdk = GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot)
         Assert.NotNull(sdk)
         let producerAlias = Path.Combine(this.root, "producer-alias")
         Directory.CreateSymbolicLink(producerAlias, producer)

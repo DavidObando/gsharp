@@ -917,6 +917,48 @@ class CSharpTypeMapper {
         }
     }
 
+    private func HasVisibleSourceTypeName(name string, context TranslationContext, location Location?) bool {
+        if location?.SourceTree == nil {
+            return false
+        }
+        let position = Math.Min(location!!.SourceSpan.Start, location!!.SourceTree!!.GetRoot().FullSpan.End - 1)
+        let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location!!.SourceTree) {
+            context.SemanticModel
+        } else {
+            context.Compilation.GetSemanticModel(location!!.SourceTree!!)
+        }
+        return semanticModel
+            .LookupNamespacesAndTypes(position, name: name)
+            .OfType[INamedTypeSymbol]()
+            .Any((type INamedTypeSymbol) -> type.Locations.Any((candidate Location) -> candidate.IsInSource))
+    }
+
+    private func HasVisibleCallableName(
+        name string,
+        context TranslationContext,
+        location Location?,
+        names EmittedNameAllocator
+    ) bool {
+        if location?.SourceTree == nil {
+            return false
+        }
+        let position = Math.Min(location!!.SourceSpan.Start, location!!.SourceTree!!.GetRoot().FullSpan.End - 1)
+        let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location!!.SourceTree) {
+            context.SemanticModel
+        } else {
+            context.Compilation.GetSemanticModel(location!!.SourceTree!!)
+        }
+        return semanticModel
+            .LookupSymbols(position)
+            .OfType[IMethodSymbol]()
+            .Any(
+            (method IMethodSymbol) -> (
+                method.MethodKind == MethodKind.Ordinary || method.MethodKind == MethodKind.ReducedExtension
+            ) &&
+                names.GetName(method) == name
+        )
+    }
+
     internal func GetOrCreateImportedTypeAlias(
         named INamedTypeSymbol?,
         context TranslationContext,
@@ -930,46 +972,6 @@ class CSharpTypeMapper {
         reuseOnly bool,
         precomputedTarget string?
     ) string? {
-        let HasVisibleSourceTypeName = func (name string, context TranslationContext, location Location?) bool {
-            if location?.SourceTree == nil {
-                return false
-            }
-            let position = Math.Min(location!!.SourceSpan.Start, location!!.SourceTree!!.GetRoot().FullSpan.End - 1)
-            let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location!!.SourceTree) {
-                context.SemanticModel
-            } else {
-                context.Compilation.GetSemanticModel(location!!.SourceTree!!)
-            }
-            return semanticModel
-                .LookupNamespacesAndTypes(position, name: name)
-                .OfType[INamedTypeSymbol]()
-                .Any((type INamedTypeSymbol) -> type.Locations.Any((candidate Location) -> candidate.IsInSource))
-        }
-        let HasVisibleCallableName = func (
-            name string,
-            context TranslationContext,
-            location Location?,
-            names EmittedNameAllocator
-        ) bool {
-            if location?.SourceTree == nil {
-                return false
-            }
-            let position = Math.Min(location!!.SourceSpan.Start, location!!.SourceTree!!.GetRoot().FullSpan.End - 1)
-            let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location!!.SourceTree) {
-                context.SemanticModel
-            } else {
-                context.Compilation.GetSemanticModel(location!!.SourceTree!!)
-            }
-            return semanticModel
-                .LookupSymbols(position)
-                .OfType[IMethodSymbol]()
-                .Any(
-                (method IMethodSymbol) -> (
-                    method.MethodKind == MethodKind.Ordinary || method.MethodKind == MethodKind.ReducedExtension
-                ) &&
-                    names.GetName(method) == name
-            )
-        }
         let names = this.Names(context)
         let simpleName string? = this.Names(context).GetName(named)
         let namespaceName string? = if named!!.ContainingNamespace is {IsGlobalNamespace: false} ns {
@@ -998,8 +1000,8 @@ class CSharpTypeMapper {
                 .reservedTypeParameterNames
                 .Contains(reservedAlias.Key) && !this.reservedInvokedLocalNames.Contains(reservedAlias.Key) &&
                 !ConflictsWithCompilationSourceType(reservedAlias.Key) &&
-                !HasVisibleCallableName(reservedAlias.Key, context, location, names) &&
-                !HasVisibleSourceTypeName(reservedAlias.Key, context, location) {
+                !this.HasVisibleCallableName(reservedAlias.Key, context, location, names) &&
+                !this.HasVisibleSourceTypeName(reservedAlias.Key, context, location) {
                 return reservedAlias.Key
             }
         }
@@ -1009,8 +1011,11 @@ class CSharpTypeMapper {
                 .reservedInvokedLocalNames
                 .Contains(existing.Key) &&
                 !ConflictsWithCompilationSourceType(existing.Key) &&
-                !HasVisibleCallableName(existing.Key, context, location, names) &&
-                !HasVisibleSourceTypeName(existing.Key, context, location) {
+                !this.HasVisibleCallableName(existing.Key, context, location, names) && !this.HasVisibleSourceTypeName(
+                existing.Key,
+                context,
+                location
+            ) {
                 return existing.Key
             }
         }
@@ -1035,8 +1040,13 @@ class CSharpTypeMapper {
         let alias = LiftedLocalFunctionNameAllocator.For(context.Compilation).ClaimAlias(
             target,
             "$namespaceQualifier$simpleName",
-            (candidate string) -> reserved.Contains(candidate) ||
-                HasVisibleCallableName(candidate, context, location, names)
+            (candidate string) -> reserved.Contains(candidate) || this.HasVisibleCallableName(
+                candidate,
+                context,
+                location,
+                names
+            ) ||
+                this.HasVisibleSourceTypeName(candidate, context, location)
         )
         this.synthesizedTypeAliases.Add(alias, target!!)
         return alias
@@ -1115,7 +1125,9 @@ class CSharpTypeMapper {
                 .Contains(reservedAlias.Key) && !this.reservedInvokedLocalNames.Contains(reservedAlias.Key) &&
                 !this
                 .reservedImportedTypeNames
-                .Contains(reservedAlias.Key) && !this.HasSourceTopLevelTypeNamed(reservedAlias.Key, context) {
+                .Contains(reservedAlias.Key) && !this.HasSourceTopLevelTypeNamed(reservedAlias.Key, context) &&
+                !this.HasVisibleCallableName(reservedAlias.Key, context, location, names) &&
+                !this.HasVisibleSourceTypeName(reservedAlias.Key, context, location) {
                 return reservedAlias.Key
             }
         }
@@ -1124,7 +1136,13 @@ class CSharpTypeMapper {
                 !this
                 .reservedInvokedLocalNames
                 .Contains(existing.Key) && !this.reservedImportedTypeNames.Contains(existing.Key) &&
-                !this.HasSourceTopLevelTypeNamed(existing.Key, context) {
+                !this.HasSourceTopLevelTypeNamed(existing.Key, context) && !this.HasVisibleCallableName(
+                existing.Key,
+                context,
+                location,
+                names
+            ) &&
+                !this.HasVisibleSourceTypeName(existing.Key, context, location) {
                 return existing.Key
             }
         }
@@ -1143,7 +1161,13 @@ class CSharpTypeMapper {
         let alias = LiftedLocalFunctionNameAllocator.For(context.Compilation).ClaimAlias(
             namespaceName,
             baseAlias,
-            (candidate string) -> reserved.Contains(candidate)
+            (candidate string) -> reserved.Contains(candidate) || this.HasVisibleCallableName(
+                candidate,
+                context,
+                location,
+                names
+            ) ||
+                this.HasVisibleSourceTypeName(candidate, context, location)
         )
         this.synthesizedTypeAliases.Add(alias, namespaceName)
         return alias
@@ -1292,7 +1316,7 @@ class CSharpTypeMapper {
             return TupleTypeReference(elements)
         }
         if type is INamedTypeSymbol named {
-            if HasGenericContainingType(named) {
+            if !IsLiftedNestedDelegate(named) && HasGenericContainingType(named) {
                 let ownArgs = named
                     .TypeArguments
                     .Select((argument ITypeSymbol) -> this.MapDestinationSafeType(argument, context, location)!!)
@@ -1303,7 +1327,7 @@ class CSharpTypeMapper {
                     this.MapDestinationSafeType(named.ContainingType, context, location)
                 )
             }
-            if named.IsGenericType {
+            if named.TypeArguments.Length > 0 {
                 let args = named
                     .TypeArguments
                     .Select((argument ITypeSymbol) -> this.MapDestinationSafeType(argument, context, location)!!)

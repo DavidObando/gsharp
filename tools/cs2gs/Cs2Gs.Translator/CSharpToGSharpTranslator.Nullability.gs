@@ -2596,7 +2596,6 @@ partial class CSharpToGSharpTranslator {
             switch symbol {
                 case parameter is IParameterSymbol {
                     let owner ISymbol? = switch parameter.ContainingSymbol {
-                        case method is IMethodSymbol: method.PartialImplementationPart ?? method
                         case property is IPropertySymbol: property.PartialImplementationPart ?? property
                         default: parameter.ContainingSymbol
                     }
@@ -2631,13 +2630,8 @@ partial class CSharpToGSharpTranslator {
             ] = ConditionalWeakTable[CSharpCompilation, ConcurrentDictionary[ISymbol, bool]]()
 
             private func PartialCounterpart(symbol ISymbol?) ISymbol? -> switch symbol {
-                case method is IMethodSymbol: method.PartialDefinitionPart ?? method.PartialImplementationPart
                 case property is IPropertySymbol: property.PartialDefinitionPart ?? property.PartialImplementationPart
                 case parameter is IParameterSymbol: switch PartialCounterpart(parameter.ContainingSymbol) {
-                    case method is IMethodSymbol when parameter.Ordinal >= 0 &&
-                        parameter.Ordinal < method
-                        .Parameters
-                        .Length: method.Parameters[parameter.Ordinal]
                     case property is IPropertySymbol when parameter.Ordinal >= 0 &&
                         parameter.Ordinal < property
                         .Parameters
