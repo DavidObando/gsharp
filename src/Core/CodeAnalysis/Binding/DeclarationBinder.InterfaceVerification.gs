@@ -101,13 +101,20 @@ internal partial class DeclarationBinder {
             }
             let ordered = List[InterfaceSymbol]()
             let seen = HashSet[InterfaceSymbol]()
-            let clrSeen = HashSet[Type]()
+            let clrSeen = List[TypeSymbol]()
+            let HasSeenClrInterface = func (candidate TypeSymbol) bool {
+                for existing in clrSeen {
+                    if TypeSignaturesEquivalent(existing, candidate) {
+                        return true
+                    }
+                }
+                clrSeen.Add(candidate)
+                return false
+            }
             let extraClr = ImmutableArray.CreateBuilder[TypeSymbol]()
             if !structSymbol.ImplementedClrInterfaces.IsDefaultOrEmpty {
                 for existing in structSymbol.ImplementedClrInterfaces {
-                    if existing.ClrType != nil {
-                        clrSeen.Add(existing.ClrType)
-                    }
+                    HasSeenClrInterface(existing)
                 }
             }
             for direct in structSymbol.Interfaces {
@@ -117,7 +124,7 @@ internal partial class DeclarationBinder {
                     }
                     if !iface.BaseClrInterfaces.IsDefaultOrEmpty {
                         for clr in iface.BaseClrInterfaces {
-                            if clr.ClrType != nil && clrSeen.Add(clr.ClrType) {
+                            if !HasSeenClrInterface(clr) {
                                 extraClr.Add(clr)
                             }
                         }

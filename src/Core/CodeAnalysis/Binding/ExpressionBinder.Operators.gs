@@ -4185,6 +4185,11 @@ internal partial class ExpressionBinder {
                 }
                 return Conversion.ClassifyNonStructural(sourceType, targetType)
                     .IsImplicit ||
+                    (
+                    sourceType is StructSymbol{IsClass: false} userStruct &&
+                        clrParameterType.IsInterface &&
+                        UserClassImplementsInterface(userStruct, clrParameterType)
+                ) ||
                     StructuralProjectionPlanner.CanProject(sourceType, targetType) ||
                     IsApplicableIgnoringReferenceNullability(sourceType, targetType)
             }

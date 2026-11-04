@@ -680,12 +680,29 @@ partial class SemanticModel {
         case property is BoundPropertyReferenceOperationExpression: property.Instance
         case field is BoundFieldAccessExpression: field.Receiver
         case tuple is BoundTupleElementAccessExpression: tuple.Receiver
-        case call is BoundCallExpression when call.Function.IsExtension && call.Arguments.Length > 0: call.Arguments[0]
-        case call is BoundImportedCallExpression when call
+        case call is BoundCallExpression when call
+            .Function
+            .IsExtension &&
+            call.StaticQualifierType == nil &&
+            call
+            .Arguments
+            .Length > 0: call.Arguments[0]
+        case call is BoundImportedCallExpression when call.StaticQualifierType == nil &&
+            call
             .Arguments
             .Length > 0 &&
-            IsExtensionMethod(call.Function?.Method): call.Arguments[0]
+            IsExtensionMethod(call.Function?.Method): UnwrapExtensionReceiver(call.Arguments[0], call.Syntax)
         default: default(BoundExpression?)
+    }
+
+    private func UnwrapExtensionReceiver(receiver BoundExpression, callSyntax SyntaxNode?) BoundExpression {
+        var current = receiver
+        while current is BoundConversionExpression conversion &&
+            callSyntax is CallExpressionSyntax &&
+            object.ReferenceEquals(conversion.Syntax, callSyntax) {
+            current = conversion.Expression
+        }
+        return current
     }
 
     private func IsExtensionMethod(method MethodInfo?) bool {

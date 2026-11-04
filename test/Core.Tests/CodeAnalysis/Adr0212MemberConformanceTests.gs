@@ -30,6 +30,7 @@ open class Adr0212MemberConformanceTests {
         let mismatches = List[string]()
         var compared = 0
         ExtensionsCompared = 0
+        ExtensionGroupsCompared = 0
         RowsCompared.Clear()
         for file in Directory.GetFiles(Path.Combine(RepositoryRoot(), "samples"), "*.gs").OrderBy(
             (f string) -> f,
@@ -40,6 +41,7 @@ open class Adr0212MemberConformanceTests {
         }
         Assert.True(compared > 500, "compared ${compared} members")
         Assert.True(ExtensionsCompared > 20, "compared ${ExtensionsCompared} extension members")
+        Assert.True(ExtensionGroupsCompared > 20, "compared ${ExtensionGroupsCompared} extension groups")
         AssertRowsReached()
         AssertNoMismatches(mismatches)
     }
@@ -48,6 +50,7 @@ open class Adr0212MemberConformanceTests {
     func MemberQueries_AgreeWithTheBinder_OnTheLanguageServerSources() {
         let mismatches = List[string]()
         ExtensionsCompared = 0
+        ExtensionGroupsCompared = 0
         RowsCompared.Clear()
         let directory = Path.Combine(RepositoryRoot(), "src", "LanguageServer")
         let trees = Directory
@@ -58,11 +61,13 @@ open class Adr0212MemberConformanceTests {
         let compared = CompareCompilation(Recording(Compilation(trees)), mismatches)
         Assert.True(compared > 1000, "compared ${compared} members")
         Assert.True(ExtensionsCompared > 20, "compared ${ExtensionsCompared} extension members")
+        Assert.True(ExtensionGroupsCompared > 20, "compared ${ExtensionGroupsCompared} extension groups")
         AssertNoMismatches(mismatches)
     }
 
     shared {
         private var ExtensionsCompared int32 = 0
+        private var ExtensionGroupsCompared int32 = 0
         private const BuiltInRow string = "built-in"
         private const ImportedBaseRow string = "imported base class"
         private const InterfaceBaseRow string = "imported base interface"
@@ -143,15 +148,40 @@ open class Adr0212MemberConformanceTests {
             if called is not(FunctionSymbol or ImportedFunctionSymbol) {
                 return 0
             }
-            if IsExtension(called) {
-                return 0
-            }
             let group = model.GetMemberGroup(call)
             let category = "group of " + called.GetType().Name
             if group.IsDefaultOrEmpty {
                 mismatches.Add(category + " is empty @ ${file}:${token.Span.Start} '${token.Text}'")
             } else if !group.Any((g Symbol) -> Matches(g, called)) {
                 mismatches.Add(category + " misses the callee @ ${file}:${token.Span.Start} '${token.Text}'")
+            } else if IsExtension(called) && call.Parent is AccessorExpressionSyntax accessor && object.ReferenceEquals(
+                accessor.RightPart,
+                call
+            ) &&
+                (
+                model.GetReceiverTypeInfo(accessor.LeftPart)
+                    .Type ??
+                    (model.GetSymbolInfo(accessor.LeftPart).Symbol as TypeParameterSymbol)
+            ) is {} receiverType {
+                ExtensionGroupsCompared++
+                let members = model.LookupMembers(token.Span.Start, receiverType, token.ValueText)
+                if !group.All(
+                    (g Symbol) -> IsExtension(g) &&
+                        (
+                        g is not ImportedFunctionSymbol imported ||
+                            !imported
+                            .Method
+                            .IsGenericMethod ||
+                            imported
+                            .Method
+                            .IsGenericMethodDefinition
+                    ) &&
+                        members.Any((m Symbol) -> Matches(m, g))
+                ) {
+                    mismatches.Add(
+                        category + " disagrees with LookupMembers @ ${file}:${token.Span.Start} '${token.Text}'"
+                    )
+                }
             }
             return 1
         }
@@ -199,8 +229,8 @@ open class Adr0212MemberConformanceTests {
             return 1
         }
 
-        /// A call through an extension is not in the member-group contract (the group holds the candidates of a
-        /// direct call); the members query holds the extension (ADR-0212 question 12).
+        /// Tells whether [`called`](paramref) is a source extension function or an imported extension method
+        /// (ADR-0212 question 12, issue #5480).
         private func IsExtension(called Symbol) bool -> switch called {
             case function is ImportedFunctionSymbol: function.Method.IsDefined(
                 typeof(System.Runtime.CompilerServices.ExtensionAttribute),
