@@ -14017,10 +14017,10 @@ partial class Binder {
             }
             if classConstraint is StructSymbol classDef {
                 let constraintDef = classDef.Definition ?? classDef
-                let checkConstructedArguments = !classDef
-                    .TypeArguments
-                    .IsDefaultOrEmpty &&
-                    !TypeSymbol.ContainsTypeParameter(classDef)
+                let constraintArgs = Conversion.GetEffectiveStructTypeArguments(classDef)
+                let checkConstructedArguments = !constraintArgs.IsDefaultOrEmpty && !constraintArgs.Any(
+                    TypeSymbol.ContainsTypeParameter
+                )
                 if typeArgument is StructSymbol argClass {
                     for current in argClass.GetHierarchy() {
                         let currentDef = current.Definition ?? current
@@ -14030,9 +14030,7 @@ partial class Binder {
                         if !object.ReferenceEquals(currentDef, constraintDef) {
                             continue
                         }
-                        if !checkConstructedArguments ||
-                            current
-                            .TypeArguments
+                        if !checkConstructedArguments || Conversion.GetEffectiveStructTypeArguments(current)
                             .IsDefaultOrEmpty ||
                             SameConstructedStruct(current, classDef) {
                             return true
@@ -14082,15 +14080,15 @@ partial class Binder {
             classConstraint TypeSymbol,
             constraintClr Type
         ) bool {
-            if candidate.ClrType is not{} candidateClr || !ClrLoadContext.IsAssignable(constraintClr, candidateClr) {
+            if candidate.ClrType is not{} candidateClr {
                 return false
             }
             if !constraintClr.IsGenericType || constraintClr.IsGenericTypeDefinition {
-                return true
+                return ClrLoadContext.IsAssignable(constraintClr, candidateClr)
             }
             let constraintPositions = GetClrSlotAlignedArguments(classConstraint)
             if constraintPositions.IsDefaultOrEmpty || TypeSymbol.ContainsTypeParameter(classConstraint) {
-                return true
+                return ClrLoadContext.IsAssignable(constraintClr, candidateClr)
             }
             return TryFindMatchingClrRelationship(
                 candidate,
@@ -14489,6 +14487,14 @@ partial class Binder {
             if left is ArrayTypeSymbol leftArray && right is ArrayTypeSymbol rightArray {
                 return leftArray.Length == rightArray.Length &&
                     SameConstraintType(leftArray.ElementType, rightArray.ElementType)
+            }
+            if left is RectangularArrayTypeSymbol leftRect && right is RectangularArrayTypeSymbol rightRect {
+                return leftRect.Rank == rightRect.Rank &&
+                    SameConstraintType(leftRect.ElementType, rightRect.ElementType)
+            }
+            if (left is SliceTypeSymbol || left is ArrayTypeSymbol || left is RectangularArrayTypeSymbol) &&
+                (right is SliceTypeSymbol || right is ArrayTypeSymbol || right is RectangularArrayTypeSymbol) {
+                return false
             }
             if left is TupleTypeSymbol leftTuple && right is TupleTypeSymbol rightTuple {
                 return SameConstraintTypeArguments(leftTuple.ElementTypes, rightTuple.ElementTypes)
@@ -14959,7 +14965,11 @@ partial class Binder {
             typeArgument TypeSymbol?,
             substitution IReadOnlyDictionary[TypeParameterSymbol, TypeSymbol]? = nil
         ) TypeSymbol {
-            if !TypeSymbol.ContainsTypeParameter(constraint) {
+            if !TypeSymbol.ContainsTypeParameter(constraint) &&
+                !(
+                constraint is StructSymbol nestedStruct && !StructSymbol.CollectEnclosingTypeParameters(nestedStruct)
+                    .IsDefaultOrEmpty
+            ) {
                 return constraint
             }
             let subst = Dictionary[TypeParameterSymbol, TypeSymbol]()
