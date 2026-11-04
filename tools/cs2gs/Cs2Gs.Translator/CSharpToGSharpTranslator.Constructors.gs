@@ -1395,7 +1395,11 @@ partial class CSharpToGSharpTranslator {
             }
             let attributes = List[AttributeUse]()
             for declaration in declarations {
-                attributes.AddRange(this.MapAttributes(declaration.AttributeLists))
+                if object.ReferenceEquals(declaration, node) {
+                    attributes.AddRange(this.MapAttributes(declaration.AttributeLists))
+                } else {
+                    attributes.AddRange(this.MapRelocatedAttributes(declaration.AttributeLists, node))
+                }
             }
             if !declarations.Any((declaration BasePropertyDeclarationSyntax) -> declaration.AccessorList != nil) {
                 return attributes
@@ -1418,8 +1422,12 @@ partial class CSharpToGSharpTranslator {
                 for accessor in declaration.AccessorList!!.Accessors {
                     for list in accessor.AttributeLists {
                         for attribute in list.Attributes {
-                            using let modelScope = this.context.UseSemanticModelFor(attribute.SyntaxTree)
-                            this.ResolveAttributeType(attribute, out var attributeType, out var sourceAlias)
+                            var attributeType INamedTypeSymbol? = nil
+                            var sourceAlias IAliasSymbol? = nil
+                            {
+                                using let modelScope = this.context.UseSemanticModelFor(attribute.SyntaxTree)
+                                this.ResolveAttributeType(attribute, out attributeType, out sourceAlias)
+                            }
                             let isUnscopedRef = this.IsUnscopedRefAttribute(attributeType)
                             // Only a GET-level `[UnscopedRef]` is equivalent to the
                             // member-level placement: the member-level G# annotation
@@ -1430,10 +1438,28 @@ partial class CSharpToGSharpTranslator {
                                 Microsoft.CodeAnalysis.CSharp.SyntaxKind.GetAccessorDeclaration
                             ) {
                                 if !hasUnscopedRef {
-                                    this.typeMapper.TrackAttributeType(attributeType, sourceAlias)
-                                    attributes.Add(
-                                        AttributeUse(this.TranslateAttributeName(attribute, attributeType, sourceAlias))
-                                    )
+                                    if object.ReferenceEquals(declaration, node) &&
+                                        attribute.SyntaxTree == node
+                                        .SyntaxTree {
+                                        this.typeMapper.TrackAttributeType(attributeType, sourceAlias)
+                                        using let modelScope = this.context.UseSemanticModelFor(attribute.SyntaxTree)
+                                        attributes.Add(
+                                            AttributeUse(
+                                                this.TranslateAttributeName(attribute, attributeType, sourceAlias)
+                                            )
+                                        )
+                                    } else {
+                                        attributes.Add(
+                                            AttributeUse(
+                                                this.RenderRelocatedAttributeName(
+                                                    attribute,
+                                                    attributeType,
+                                                    sourceAlias,
+                                                    node
+                                                )
+                                            )
+                                        )
+                                    }
                                     hasUnscopedRef = true
                                 }
                                 continue
@@ -1503,7 +1529,10 @@ partial class CSharpToGSharpTranslator {
                     .CSharp
                     .Syntax
                     .ParameterSyntax{AttributeLists: {Count: > 0}} definitionParameterSyntax {
-                    let combined = this.MapAttributes(definitionParameterSyntax.AttributeLists)
+                    let combined = this.MapRelocatedAttributes(
+                        definitionParameterSyntax.AttributeLists,
+                        spellingSyntax ?? definitionParameterSyntax
+                    )
                     if attributes != nil {
                         combined.AddRange(attributes)
                     }
@@ -1514,6 +1543,265 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             return reconciled
+        }
+
+        private func MapRelocatedAttributes(
+            attributeLists IEnumerable[AttributeListSyntax],
+            destinationNode Microsoft.CodeAnalysis.SyntaxNode
+        ) List[AttributeUse] {
+            let attributes = List[AttributeUse]()
+            for list in attributeLists {
+                let target string? = list.Target?.Identifier.Text
+                for attribute in list.Attributes {
+                    if this.attributeOmission != nil && this.attributeOmission!!(attribute) {
+                        continue
+                    }
+                    var attributeType INamedTypeSymbol? = nil
+                    var sourceAlias IAliasSymbol? = nil
+                    var attributeModel Microsoft.CodeAnalysis.SemanticModel
+                    {
+                        using let modelScope = this.context.UseSemanticModelFor(attribute.SyntaxTree)
+                        if this.TryTranslateAnalyzerAttribute(attribute, out var analyzerAttribute) {
+                            attributes.Add(analyzerAttribute!!)
+                            continue
+                        }
+                        this.ResolveAttributeType(attribute, out attributeType, out sourceAlias)
+                        attributeModel = this.context.SemanticModel
+                    }
+                    let arguments = List[AttributeArgument]()
+                    if attribute.ArgumentList != nil {
+                        for argument in attribute.ArgumentList!!.Arguments {
+                            let value GExpression? = this.MapRelocatedAttributeArgumentValue(
+                                argument.Expression,
+                                attributeModel,
+                                destinationNode
+                            )
+                            var name string? = nil
+                            {
+                                using let modelScope = this.context.UseSemanticModelFor(attribute.SyntaxTree)
+                                name = this.TranslateAttributeArgumentName(argument, attributeType)
+                            }
+                            arguments.Add(
+                                AttributeArgument(value, name, isMemberAssignment: argument.NameEquals != nil)
+                            )
+                        }
+                    }
+                    let attributeName string? = this.RenderRelocatedAttributeName(
+                        attribute,
+                        attributeType,
+                        sourceAlias,
+                        destinationNode
+                    )
+                    attributes.Add(AttributeUse(attributeName, arguments, target))
+                }
+            }
+            return attributes
+        }
+
+        private func RenderRelocatedAttributeName(
+            attribute AttributeSyntax,
+            attributeType INamedTypeSymbol?,
+            sourceAlias IAliasSymbol?,
+            destinationNode Microsoft.CodeAnalysis.SyntaxNode
+        ) string? {
+            if attributeType == nil {
+                using let modelScope = this.context.UseSemanticModelFor(attribute.SyntaxTree)
+                return this.TranslateAttributeName(attribute, nil, sourceAlias)
+            }
+            let destinationLocation = destinationNode.GetLocation()
+            if attribute.SyntaxTree == destinationNode.SyntaxTree && sourceAlias == nil {
+                var candidateName string? = nil
+                {
+                    using let modelScope = this.context.UseSemanticModelFor(attribute.SyntaxTree)
+                    candidateName = this.TranslateAttributeName(attribute, attributeType, nil)
+                }
+                if candidateName != nil && !candidateName.Contains('.', StringComparison.Ordinal) &&
+                    !candidateName.Contains('[', StringComparison.Ordinal) &&
+                    this
+                    .typeMapper
+                    .IsRelocatedAttributeNameSafe(attributeType, candidateName, this.context, destinationLocation) {
+                    this.typeMapper.TrackAttributeType(attributeType, nil)
+                    return candidateName
+                }
+            }
+            return this.typeMapper.RenderDestinationSafeAttributeName(attributeType, this.context, destinationLocation)
+        }
+
+        private func MapRelocatedAttributeArgumentValue(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            attributeModel Microsoft.CodeAnalysis.SemanticModel,
+            destinationNode Microsoft.CodeAnalysis.SyntaxNode
+        ) GExpression? {
+            var current = expression
+            while current is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
+                current = parenthesized.Expression
+            }
+            let destinationLocation = destinationNode.GetLocation()
+            let constant = attributeModel.GetConstantValue(current)
+            if constant.HasValue {
+                let typeInfo = attributeModel.GetTypeInfo(current)
+                let argumentType ITypeSymbol? = typeInfo.ConvertedType ?? typeInfo.Type
+                if constant.Value != nil && argumentType?.TypeKind == TypeKind.Enum && IsIntegral(constant.Value) {
+                    let enumValue GExpression? = this.MapEnumConstant(
+                        argumentType,
+                        constant.Value,
+                        destinationNode,
+                        "attribute argument",
+                        destinationSafe: true
+                    )
+                    if enumValue != nil {
+                        return enumValue
+                    }
+                }
+                switch constant.Value {
+                    case nil {
+                        return IdentifierExpression("nil")
+                    }
+                    case s is string {
+                        return LiteralExpression.String(s)
+                    }
+                    case b is bool {
+                        return IdentifierExpression(
+                            if b {
+                                "true"
+                            } else {
+                                "false"
+                            }
+                        )
+                    }
+                    case c is char {
+                        return LiteralExpression.Char(c.ToString())
+                    }
+                    case n is int64 when n == int64.MinValue {
+                        return MemberAccessExpression(IdentifierExpression("System.Int64"), "MinValue")
+                    }
+                    case d is float64 when MapSpecialFloatConstant(d, isDouble: true) is {} specialD {
+                        return specialD
+                    }
+                    case f is float32 when MapSpecialFloatConstant(f, isDouble: false) is {} specialF {
+                        return specialF
+                    }
+                    default {
+                        if IsIntegral(constant.Value) {
+                            let literal = LiteralExpression.Int(
+                                Convert.ToString(constant.Value, CultureInfo.InvariantCulture)
+                            )
+                            let type ITypeSymbol? = typeInfo.Type
+                            return if type == nil {
+                                cast[GExpression](literal)
+                            } else {
+                                this.CoerceOperandTo(literal, type, destinationLocation)
+                            }
+                        }
+                    }
+                }
+            }
+            switch current {
+                case typeOf is Microsoft.CodeAnalysis.CSharp.Syntax.TypeOfExpressionSyntax {
+                    let operandType ITypeSymbol? = attributeModel.GetTypeInfo(typeOf.Type).Type
+                    if typeOf.Type is NameSyntax nameSyntax &&
+                        HasOmittedTypeArgument(nameSyntax) &&
+                        operandType is INamedTypeSymbol unboundNamed {
+                        if CSharpTypeMapper.IsLiftedNestedDelegate(unboundNamed) &&
+                            CSharpTypeMapper
+                            .HasGenericContainingType(unboundNamed) {
+                            this.context.ReportUnsupported(
+                                typeOf.Type,
+                                "unbound typeof over nested delegate '${unboundNamed.ToDisplayString()}' inside a generic containing type cannot preserve its enclosing generic arity when lifted to top level."
+                            )
+                            return TypeOfExpression(NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType))
+                        }
+                        return TypeOfExpression(
+                            this.typeMapper.MapDestinationSafeUnboundTypeOf(
+                                unboundNamed,
+                                this.context,
+                                destinationLocation
+                            )
+                        )
+                    }
+                    return TypeOfExpression(
+                        this.typeMapper.MapDestinationSafeType(operandType, this.context, destinationLocation)
+                    )
+                }
+                case arrayCreation is Microsoft.CodeAnalysis.CSharp.Syntax.ArrayCreationExpressionSyntax {
+                    let arrayType = (
+                        attributeModel.GetTypeInfo(arrayCreation).ConvertedType ?? attributeModel.GetTypeInfo(
+                            arrayCreation
+                        )
+                            .Type
+                    ) as IArrayTypeSymbol
+                    let elementType = this.typeMapper.MapDestinationSafeType(
+                        arrayType?.ElementType,
+                        this.context,
+                        destinationLocation
+                    )
+                    let elements = if arrayCreation.Initializer == nil {
+                        List[GExpression]()
+                    } else {
+                        arrayCreation.Initializer!!
+                            .Expressions
+                            .Select(
+                            (element Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) ->
+                            this.MapRelocatedAttributeArgumentValue(element, attributeModel, destinationNode)!!
+                        )
+                            .ToList()
+                    }
+                    return ArrayLiteralExpression(elementType, elements)
+                }
+                case implicitArray is ImplicitArrayCreationExpressionSyntax {
+                    let arrayType = (
+                        attributeModel.GetTypeInfo(implicitArray).ConvertedType ?? attributeModel.GetTypeInfo(
+                            implicitArray
+                        )
+                            .Type
+                    ) as IArrayTypeSymbol
+                    let elementType = this.typeMapper.MapDestinationSafeType(
+                        arrayType?.ElementType,
+                        this.context,
+                        destinationLocation
+                    )
+                    let elements = implicitArray
+                        .Initializer
+                        .Expressions
+                        .Select(
+                        (element Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) ->
+                        this.MapRelocatedAttributeArgumentValue(element, attributeModel, destinationNode)!!
+                    )
+                        .ToList()
+                    return ArrayLiteralExpression(elementType, elements)
+                }
+                case collection is CollectionExpressionSyntax {
+                    let arrayType = (
+                        attributeModel.GetTypeInfo(collection).ConvertedType ?? attributeModel.GetTypeInfo(collection)
+                            .Type
+                    ) as IArrayTypeSymbol
+                    let elementType = this.typeMapper.MapDestinationSafeType(
+                        arrayType?.ElementType,
+                        this.context,
+                        destinationLocation
+                    )
+                    let elements = collection
+                        .Elements
+                        .OfType[ExpressionElementSyntax]()
+                        .Select(
+                        (element ExpressionElementSyntax) -> this.MapRelocatedAttributeArgumentValue(
+                            element.Expression,
+                            attributeModel,
+                            destinationNode
+                        )!!
+                    )
+                        .ToList()
+                    return ArrayLiteralExpression(elementType, elements)
+                }
+                case explicitDefault is Microsoft.CodeAnalysis.CSharp.Syntax.DefaultExpressionSyntax {
+                    let defaultType ITypeSymbol? = attributeModel.GetTypeInfo(explicitDefault.Type).Type
+                    return DefaultValueExpression(
+                        this.typeMapper.MapDestinationSafeType(defaultType, this.context, destinationLocation)
+                    )
+                }
+            }
+            using let fallbackScope = this.context.UseSemanticModelFor(current.SyntaxTree)
+            return this.TranslateExpression(current)
         }
 
         private func IsUnscopedRefAttribute(attributeType INamedTypeSymbol?) bool -> SymbolEqualityComparer
@@ -1631,6 +1919,19 @@ partial class CSharpToGSharpTranslator {
             let sourceName = identifier.ValueText
             let alias IAliasSymbol? = this.context.SemanticModel.GetAliasInfo(syntax)
             if alias != nil {
+                if isRightmost && alias.Target is INamedTypeSymbol aliasedAttributeType && !sourceName.EndsWith(
+                    "Attribute",
+                    StringComparison.Ordinal
+                ) &&
+                    this
+                    .typeMapper
+                    .HasSourceTopLevelTypeNamed(sourceName + "Attribute", this.context) {
+                    return this.typeMapper.RenderDestinationSafeAttributeName(
+                        aliasedAttributeType,
+                        this.context,
+                        syntax.GetLocation()
+                    )
+                }
                 return this.EmittedName(alias, sourceName, GSharpIdentifierNameContext.Type)
             }
             if isRightmost &&

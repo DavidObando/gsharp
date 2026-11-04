@@ -942,16 +942,15 @@ partial class CSharpToGSharpTranslator {
             enumType ITypeSymbol?,
             rawValue object?,
             node Microsoft.CodeAnalysis.SyntaxNode?,
-            constructDescription string
+            constructDescription string,
+            destinationSafe bool = false
         ) GExpression? {
             if enumType is not INamedTypeSymbol namedEnum || namedEnum.TypeKind != TypeKind.Enum {
                 return nil
             }
-            let enumTypeName string? = if this.typeMapper.Map(
-                namedEnum,
-                this.context,
-                node?.GetLocation()
-            ) is NamedTypeReference typeRef {
+            let enumTypeName string? = if destinationSafe {
+                this.typeMapper.RenderDestinationSafeTypeName(namedEnum, this.context, node?.GetLocation())
+            } else if this.typeMapper.Map(namedEnum, this.context, node?.GetLocation()) is NamedTypeReference typeRef {
                 typeRef.Name
             } else {
                 this.EmittedName(namedEnum, namedEnum.Name)

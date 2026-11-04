@@ -3421,6 +3421,147 @@ public static class Obj {
     }
 
     @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func PartialIndexerAndProperty_SplitFileRelocatedAttributesPreserveDestinationSafeBindings(
+        useAliases bool,
+        shadowLeadingNamespace bool
+    ) {
+        let declImports = if useAliases {
+            "using Tag = N1.TagAttribute;\nusing Helper = N1.Helper;\nusing Choice = N1.Choice;"
+        } else {
+            "using N1;"
+        }
+        let implImports = if useAliases {
+            "using Tag = N2.TagAttribute;\nusing Helper = N2.Helper;\nusing Choice = N2.Choice;"
+        } else {
+            "using N2;"
+        }
+        let innerShadowAlias = if shadowLeadingNamespace {
+            "using N1 = N3.Other;\n    "
+        } else {
+            string.Empty
+        }
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("N1.cs", `using System;
+namespace N1 {
+    public enum Choice { First = 1, Second = 2 }
+    public sealed class Helper { }
+    [AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter | AttributeTargets.Method, AllowMultiple = true)]
+    public sealed class TagAttribute : Attribute {
+        public TagAttribute(Type helper, Choice choice) { Helper = helper; Choice = choice; }
+        public Type Helper { get; }
+        public Choice Choice { get; }
+    }
+}`), ("N2.cs", `using System;
+namespace N2 {
+    public enum Choice { First = 10, Second = 20 }
+    public sealed class Helper { }
+    [AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter | AttributeTargets.Method, AllowMultiple = true)]
+    public sealed class TagAttribute : Attribute {
+        public TagAttribute(Type helper, Choice choice) { Helper = helper; Choice = choice; }
+        public Type Helper { get; }
+        public Choice Choice { get; }
+    }
+}
+namespace N3 {
+    public sealed class Other { }
+}`), ("Decl.cs", declImports + `
+namespace Demo {
+    public sealed partial class Rows {
+        [Tag(typeof(Helper), Choice.First)]
+        public partial int Value { get; }
+
+        [Tag(typeof(Helper), Choice.First)]
+        public partial int this[[Tag(typeof(Helper), Choice.First)] int index, int step = 2] { get; }
+    }
+}`), ("Impl.cs", implImports + `
+namespace Demo {
+    ` + innerShadowAlias + `public sealed partial class Rows {
+        [Tag(typeof(Helper), Choice.Second)]
+        public partial int Value => 40;
+
+        [Tag(typeof(Helper), Choice.Second)]
+        public partial int this[[Tag(typeof(Helper), Choice.Second)] int index, int step] => Value + index + step;
+
+        [Tag(typeof(Helper), Choice.Second)]
+        public static int Use(N3.Other other) => other == null ? 0 : 1;
+    }
+}`), ("Program.cs", `using System;
+using System.Reflection;
+namespace Demo {
+    public static class Program {
+        private static bool HasTags(ICustomAttributeProvider provider) {
+            var attributes = provider.GetCustomAttributes(inherit: false);
+            bool hasN1 = false;
+            bool hasN2 = false;
+            foreach (var attribute in attributes) {
+                if (attribute is N1.TagAttribute first) {
+                    hasN1 |= first.Helper == typeof(N1.Helper) && first.Choice == N1.Choice.First;
+                } else if (attribute is N2.TagAttribute second) {
+                    hasN2 |= second.Helper == typeof(N2.Helper) && second.Choice == N2.Choice.Second;
+                }
+            }
+            return hasN1 && hasN2;
+        }
+
+        public static void Main() {
+            var rows = new Rows();
+            var valueProperty = typeof(Rows).GetProperty("Value")!;
+            var indexerProperty = typeof(Rows).GetProperty("Item")!;
+            var indexParameter = indexerProperty.GetIndexParameters()[0];
+            bool ok = rows[3] == 45
+                && Rows.Use(new N3.Other()) == 1
+                && HasTags(valueProperty)
+                && HasTags(indexerProperty)
+                && HasTags(indexParameter);
+            Console.WriteLine(ok ? 15 : -1);
+        }
+    }
+}`)}, CSharpProjectLoader.RuntimeReferences())
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let translator = CSharpToGSharpTranslator(preservePartialParts: true)
+        let dir = Path.Combine(this.fixtureDirectory, "split-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(dir)
+        let sources = List[string]()
+        for document in project.Documents {
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+            Assert.DoesNotContain(
+                context.Diagnostics,
+                (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported
+            )
+            let path = Path.Combine(dir, Path.ChangeExtension(Path.GetFileName(document.FilePath), ".gs"))
+            File.WriteAllText(path, printed)
+            sources.Add(path)
+        }
+        let implPrinted = File.ReadAllText(Path.Combine(dir, "Impl.gs"))
+        Assert.DoesNotContain("import N1\n", implPrinted)
+        let assembly = Path.Combine(dir, "SplitAttributes.dll")
+        let compiler = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"))
+        let args = []string{compiler, "/target:exe", "/targetframework:net10.0", "/out:$assembly"}.Concat(sources)
+            .ToArray()
+        let compiled = RunDotnet(args)
+        Assert.True(compiled.Exit == 0, implPrinted + Environment.NewLine + compiled.Output)
+        Assert.True(IlVerifyRunner.IsEnabled)
+        let verified = IlVerifyRunner().Verify(assembly, Array.Empty[string]())
+        Assert.Equal(IlVerifyStatus.Passed, verified.Status)
+        Assert.Empty(verified.Errors)
+        File.WriteAllText(
+            Path.ChangeExtension(assembly, ".runtimeconfig.json"),
+            "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"" +
+                Environment
+                .Version
+                .Major
+                .ToString() +
+                ".0.0\"}}}"
+        )
+        let executed = RunDotnet(assembly)
+        Assert.Equal(0, executed.Exit)
+        Assert.Equal("15" + Environment.NewLine, executed.Output)
+    }
+
+    @Theory
     @InlineData("checked", false, false)
     @InlineData("checked", true, false)
     @InlineData("unchecked", false, false)
