@@ -283,8 +283,10 @@ open class Adr0212InheritedMemberTests {
         Assert.Equal(TypeSymbol.Int32, subBoxValue.Type)
         let boxChanged = cast[EventSymbol](Assert.Single(Query("PTBox", "Changed")))
         Assert.Equal("(string) -> void", SymbolDisplay.ToTypeDisplayString(boxChanged.Type))
+        Assert.NotNull(boxChanged.GetDocumentation())
         let subBoxChanged = cast[EventSymbol](Assert.Single(Query("PTSubBox", "Changed")))
         Assert.Equal("(int32) -> void", SymbolDisplay.ToTypeDisplayString(subBoxChanged.Type))
+        Assert.NotNull(subBoxChanged.GetDocumentation())
         let addStatic = cast[FunctionSymbol](Assert.Single(Query("PTAdd", "Add")))
         Assert.True(addStatic.IsStatic)
     }
@@ -312,14 +314,24 @@ open class Adr0212InheritedMemberTests {
         let echoString = cast[FunctionSymbol](Assert.Single(Query("PTGBox", "Echo")))
         Assert.Equal(TypeSymbol.String, echoString.Type)
         Assert.Equal(TypeSymbol.String, echoString.Parameters.Single().Type)
+        Assert.NotNull(echoString.GetDocumentation())
+        let waitString = cast[FunctionSymbol](Assert.Single(Query("PTGBox", "Wait")))
+        Assert.Equal(TypeSymbol.String, waitString.Type)
+        Assert.True(waitString.IsSuspending)
         let gboxChanged = cast[EventSymbol](Assert.Single(Query("PTGBox", "Changed")))
         Assert.Equal("(string) -> void", SymbolDisplay.ToTypeDisplayString(gboxChanged.Type))
+        Assert.NotNull(gboxChanged.GetDocumentation())
 
         let echoInt = cast[FunctionSymbol](Assert.Single(Query("PTGSubBox", "Echo")))
         Assert.Equal(TypeSymbol.Int32, echoInt.Type)
         Assert.Equal(TypeSymbol.Int32, echoInt.Parameters.Single().Type)
         let gsubChanged = cast[EventSymbol](Assert.Single(Query("PTGSubBox", "Changed")))
         Assert.Equal("(int32) -> void", SymbolDisplay.ToTypeDisplayString(gsubChanged.Type))
+
+        // A constructed class's properties are already substituted on the symbol; LookupMembers must not
+        // substitute them a second time when the type argument mentions the class's own type parameter.
+        let nestedProp = cast[PropertySymbol](Assert.Single(Query("PTGBoxNested", "Current")))
+        Assert.Equal("[]U", SymbolDisplay.ToTypeDisplayString(nestedProp.Type))
     }
 
     @Fact
@@ -563,6 +575,7 @@ interface IMaybes : IEnumerable[string?] { }
 
 interface IBox[U] {
     prop Value U { get; }
+    /// Interface event docs.
     event Changed (U) -> void
 }
 
@@ -576,8 +589,16 @@ interface IIndex[K] {
 interface IBothIndex : IIndex[int32], IIndex[string] { }
 
 open class GBox[U] {
+    prop Current U { get; }
+    /// Class event docs.
     event Changed (U) -> void
+    /// Echo docs.
     func Echo(value U) U { return value }
+    suspend func Wait(value U) U { return value }
+    func ProbeNested(nested GBox[[]U]) int32 {
+        let slice = nested.Current // PTGBoxNested
+        return slice.Length
+    }
 }
 
 class GSubBox : GBox[int32] { }

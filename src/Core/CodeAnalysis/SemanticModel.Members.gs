@@ -186,7 +186,7 @@ partial class SemanticModel {
 
     private func SubstituteSourceMember(owner TypeSymbol, member Symbol) Symbol {
         switch member {
-            case property is PropertySymbol {
+            case property is PropertySymbol when owner is InterfaceSymbol {
                 let substitutedType = SubstituteMemberType(owner, property.Type)
                 let parameters = SubstituteParameters(owner, property.Parameters, out var parametersChanged)
                 if object.ReferenceEquals(substitutedType, property.Type) && !parametersChanged {
@@ -214,6 +214,9 @@ partial class SemanticModel {
                 copy.ExternalOverriddenRaiseMethod = clrEvent.ExternalOverriddenRaiseMethod
                 if clrEvent.ContainingType is {} containing {
                     copy.AnchorContainingType(containing)
+                }
+                if clrEvent.GetDocumentation() is {} documentation {
+                    copy.SetDocumentation(documentation)
                 }
                 return copy
             }
@@ -248,6 +251,10 @@ partial class SemanticModel {
                 }
                 copy.IsAbstract = function.IsAbstract
                 copy.IsAsync = function.IsAsync
+                copy.IsAsyncVoid = function.IsAsyncVoid
+                copy.AsyncReturnsValueTask = function.AsyncReturnsValueTask
+                copy.SuspendingKind = function.SuspendingKind
+                copy.IsUnsafe = function.IsUnsafe
                 copy.OverriddenMethod = function.OverriddenMethod
                 copy.ExternalOverriddenMethod = function.ExternalOverriddenMethod
                 if !function.TypeParameters.IsDefaultOrEmpty {
@@ -255,6 +262,9 @@ partial class SemanticModel {
                 }
                 if function.ContainingType is {} containing {
                     copy.AnchorContainingType(containing)
+                }
+                if function.GetDocumentation() is {} documentation {
+                    copy.SetDocumentation(documentation)
                 }
                 return copy
             }
