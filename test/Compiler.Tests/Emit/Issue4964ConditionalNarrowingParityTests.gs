@@ -243,6 +243,7 @@ Console.WriteLine("${viaTernary(1)} ${viaIf(1)} ${viaTernary(nil)} ${viaIf(nil)}
         ""
     )
     @InlineData("s string?, n int32?", "int32", "!string.IsNullOrEmpty(s) && !(n == nil)", "s.Length + n", "0", "")
+    @InlineData("s string?", "int32", "s != nil || !string.IsNullOrEmpty(s)", "s.Length", "0", "")
     @InlineData("s string?", "int32", "string.IsNullOrEmpty(s)", "s.Length", "0", "GS0158:Length")
     @InlineData("a int32?, b int32?", "int32", "a != nil || b != nil", "a + b", "0", "GS0156:a + b")
     @InlineData(
@@ -292,6 +293,19 @@ func f(s string?) int32 {
         Assert.Equal("GS0158:Length", DiagnoseSource(source))
     }
 
+    @Fact
+    func Mixed_NilGuard_And_BoolCall_Or_Narrows_In_If_Statement() {
+        let source = `package Issue4969.MixedOr
+func f(s string?) int32 {
+    if s != nil || !string.IsNullOrEmpty(s) {
+        return s.Length
+    }
+    return 0
+}
+`
+        Assert.Equal("", DiagnoseSource(source))
+    }
+
     @Theory
     @InlineData("if !string.IsNullOrEmpty(g) && Clear() { return g.Length } else { return 0 }")
     @InlineData("if string.IsNullOrEmpty(g) || Clear() { return 0 } else { return g.Length }")
@@ -303,12 +317,25 @@ func f(s string?) int32 {
     @InlineData("return if string.IsNullOrEmpty(g) || Clear() { 0 } else { g.Length }")
     @InlineData("return (g != nil && Clear()) ? g.Length : 0")
     @InlineData("return (g == nil || Clear()) ? 0 : g.Length")
+    @InlineData("return (!string.IsNullOrEmpty(g) && ClearInt() < g.Length) ? 1 : 0")
+    @InlineData("return (string.IsNullOrEmpty(g) || ClearInt() < g.Length) ? 1 : 0")
+    @InlineData("return HasGlobal(g) ? g.Length : 0")
+    @InlineData("if HasGlobal(g) { return g.Length } else { return 0 }")
     func Right_Operand_Invalidation_Clears_Left_Narrowing_In_Statements_And_Expressions(body string) {
         let source = (`package Issue4969.RightInvalidation
+import System.Diagnostics.CodeAnalysis
 var g string? = "seed"
 func Clear() bool {
     g = nil
     return true
+}
+func ClearInt() int32 {
+    g = nil
+    return 0
+}
+func HasGlobal(@NotNullWhen(true) value string?) bool {
+    g = nil
+    return value != nil
 }
 func f() int32 {
     ` + body + `
@@ -318,17 +345,46 @@ func f() int32 {
     }
 
     @Theory
+    @InlineData("Has(s, (s = nil)) ? s.Length : 0")
+    @InlineData("if Has(s, (s = nil)) { s.Length } else { 0 }")
+    @InlineData("Has(s, (s = nil)) && s.Length > 0 ? 1 : 0")
+    func ByValue_NotNullWhen_Invalidated_By_Subsequent_Argument_Does_Not_Narrow(expr string) {
+        let source = (`package Issue4969.ByValueArgInvalidation
+import System.Diagnostics.CodeAnalysis
+func Has(@NotNullWhen(true) value string?, ignored string?) bool -> value != nil
+func Check(ref s string?) int32 -> ` + expr + `
+`)
+        Assert.Equal("GS0158:Length", DiagnoseSource(source))
+    }
+
+    @Theory
     @InlineData("other.TryGet() ? _name.Length : 0")
     @InlineData("if other.TryGet() { _name.Length } else { 0 }")
     @InlineData("other.TryGet() && _name.Length > 0 ? 1 : 0")
-    func MemberNotNullWhen_On_NonThis_Receiver_Does_Not_Narrow_Implicit_This_Field(expr string) {
+    @InlineData("box.HasName((box = empty)) ? box.Name.Length : 0")
+    @InlineData("if box.HasName((box = empty)) { box.Name.Length } else { 0 }")
+    @InlineData("d.Ready() ? d.Name.Length : 0")
+    @InlineData("if d.Ready() { d.Name.Length } else { 0 }")
+    func MemberNotNullWhen_On_NonThis_Or_Mutated_Or_Hidden_Receiver_Does_Not_Narrow(expr string) {
         let source = (`package Issue4969.MemberNotNullReceiver
 import System.Diagnostics.CodeAnalysis
+open class BaseBox {
+    public let Name string?
+    init(name string?) { Name = name }
+    @MemberNotNullWhen(true, "Name")
+    public func Ready() bool -> Name != nil
+    @MemberNotNullWhen(true, "Name")
+    public func HasName(ignored BaseBox) bool -> Name != nil
+}
+class DerivedBox : BaseBox {
+    public let Name string?
+    init(baseName string?, derivedName string?) : base(baseName) { Name = derivedName }
+}
 class Box {
     var _name string?
     @MemberNotNullWhen(true, "_name")
     func TryGet() bool -> _name != nil
-    func Check(other Box) int32 -> ` + expr + `
+    func Check(other Box, ref box BaseBox, empty BaseBox, d DerivedBox) int32 -> ` + expr + `
 }
 `)
         Assert.Equal("GS0158:Length", DiagnoseSource(source))

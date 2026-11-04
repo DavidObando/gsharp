@@ -28,6 +28,34 @@ internal partial class StatementBinder {
         condition BoundExpression,
         removedFacts Dictionary[AccessPath, TypeSymbol]? = nil
     )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
+        switch condition {
+            case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
+                let (inThen, inElse) = ClassifyIfConditionNarrowing(unary.Operand, removedFacts)
+                return (inElse, inThen)
+            }
+            case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
+                var (leftThen, _) = ClassifyIfConditionNarrowing(bin.Left, removedFacts)
+                leftThen = FilterLeftConditionNarrowings(bin.Right, leftThen)
+                let (rightThen, _) = ClassifyIfConditionNarrowing(bin.Right, removedFacts)
+                let combinedThen Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftThen, rightThen)
+                if combinedThen == nil || combinedThen.Count == 0 {
+                    return (nil, nil)
+                }
+                return (combinedThen, nil)
+            }
+            case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
+                var (leftThen, leftElse) = ClassifyIfConditionNarrowing(bin.Left, removedFacts)
+                leftElse = FilterLeftConditionNarrowings(bin.Right, leftElse)
+                let (rightThen, rightElse) = ClassifyIfConditionNarrowing(bin.Right, removedFacts)
+                let combinedThen Dictionary[AccessPath, TypeSymbol]? = IntersectNarrowingFrames(leftThen, rightThen)
+                let combinedElse Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftElse, rightElse)
+                if (combinedThen == nil || combinedThen.Count == 0) &&
+                    (combinedElse == nil || combinedElse.Count == 0) {
+                    return (nil, nil)
+                }
+                return (combinedThen, combinedElse)
+            }
+        }
         // Phase 3.C.4/6.6: recognise one top-level nullable guard. Boolean
         // conjunction/disjunction flow (for example `s != nil && IsValid(s)`)
         // is intentionally deferred for the nil-guard classifier.
@@ -1119,7 +1147,12 @@ internal partial class StatementBinder {
                 return (combinedThen, combinedElse)
             }
         }
-        return TryClassifyBoolCallNarrowingLeaf(condition, $scope)
+        return TryClassifyBoolCallNarrowingLeaf(
+            condition,
+            $scope,
+            restrictBareVariableToLocalsAndParams: false,
+            (node BoundNode, state Dictionary[AccessPath, TypeSymbol]) -> ClearAssignedRoots(node, state)
+        )
     }
 
     private func BindStatementWithNarrowing(
@@ -1839,50 +1872,68 @@ internal partial class StatementBinder {
             return SmartCastStability.IsTypeTestNarrowing(declared, candidate)
         }
 
-        internal func TryClassifyBoolCallNarrowingLeaf(condition BoundExpression, $scope BoundScope? = nil)(
-            Then Dictionary[AccessPath, TypeSymbol]?,
-            Else Dictionary[AccessPath, TypeSymbol]?
-        ) {
+        internal func TryClassifyBoolCallNarrowingLeaf(
+            condition BoundExpression,
+            $scope BoundScope? = nil,
+            restrictBareVariableToLocalsAndParams bool = false,
+            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)? = nil
+        )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
             var inner = condition
             while inner is BoundBlockExpression block {
                 inner = block.Expression
             }
             if inner is BoundImportedCallExpression importedCall && importedCall.Type == TypeSymbol.Bool {
-                return ClassifyImportedBoolCallNarrowing(importedCall, negate: false)
+                return ClassifyImportedBoolCallNarrowing(
+                    importedCall,
+                    negate: false,
+                    restrictBareVariableToLocalsAndParams,
+                    clearAssignedRoots
+                )
             }
             if inner is BoundImportedInstanceCallExpression importedInstanceCall &&
                 importedInstanceCall.Type == TypeSymbol
                 .Bool {
                 var (thenFrame, elseFrame) = ClassifyImportedMethodBoolCallNarrowing(
+                    importedInstanceCall,
                     importedInstanceCall.Method.GetParameters(),
                     importedInstanceCall.Arguments,
-                    negate: false
+                    negate: false,
+                    restrictBareVariableToLocalsAndParams,
+                    clearAssignedRoots
                 )
                 MergeClrMemberNotNullWhenNarrowings(
-                    importedInstanceCall.Receiver,
-                    importedInstanceCall.Method,
+                    importedInstanceCall,
                     negate: false,
                     $scope,
+                    clearAssignedRoots,
                     &thenFrame,
                     &elseFrame
                 )
                 return (thenFrame, elseFrame)
             }
             if inner is BoundCallExpression userCall && userCall.Type == TypeSymbol.Bool {
-                return ClassifyUserBoolCallNarrowing(userCall, negate: false)
+                return ClassifyUserBoolCallNarrowing(
+                    userCall,
+                    negate: false,
+                    restrictBareVariableToLocalsAndParams,
+                    clearAssignedRoots
+                )
             }
             if inner is BoundUserInstanceCallExpression userInstanceCall && userInstanceCall.Type == TypeSymbol.Bool {
-                // Spelled with the declared `?` rather than `var (a, b) = (default(T),
-                // default(T))`: the translated G# gives that tuple form the
-                // non-null type `T`, which differs from these `ref T?` parameters
-                // (GS0612, issue #4422).
-                var thenFrame Dictionary[AccessPath, TypeSymbol]? = nil
-                var elseFrame Dictionary[AccessPath, TypeSymbol]? = nil
+                var (thenFrame, elseFrame) = ClassifyUserMethodBoolCallNarrowing(
+                    userInstanceCall,
+                    userInstanceCall.Method.Parameters,
+                    userInstanceCall.Arguments,
+                    negate: false,
+                    restrictBareVariableToLocalsAndParams,
+                    clearAssignedRoots
+                )
                 MergeUserMemberNotNullWhenNarrowings(
-                    userInstanceCall.Receiver,
-                    userInstanceCall.Method.Attributes,
+                    userInstanceCall,
                     negate: false,
                     $scope,
+                    restrictBareVariableToLocalsAndParams,
+                    clearAssignedRoots,
                     &thenFrame,
                     &elseFrame
                 )
@@ -1893,18 +1944,23 @@ internal partial class StatementBinder {
 
         // Issue #208: merge [MemberNotNullWhen] field narrowings from a CLR-imported method.
         private func MergeClrMemberNotNullWhenNarrowings(
-            receiver BoundExpression?,
-            method MethodInfo,
+            call BoundImportedInstanceCallExpression,
             negate bool,
             $scope BoundScope?,
+            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?,
             ref thenFrame Dictionary[AccessPath, TypeSymbol]?,
             ref elseFrame Dictionary[AccessPath, TypeSymbol]?
         ) {
             if $scope == nil || !ClrNullability.TryGetMemberNotNullWhenData(
-                method,
+                call.Method,
                 out var returnValue,
                 out var members
             ) {
+                return
+            }
+            let receiver = call.Receiver
+            if SmartCastStability.TryGetStablePath(receiver) is not{} receiverPath ||
+                !PreservesReceiverPath(call, call.Arguments, receiverPath, receiver.Type, clearAssignedRoots) {
                 return
             }
             let narrowThen = returnValue != negate
@@ -1930,20 +1986,26 @@ internal partial class StatementBinder {
                 )
             }
             for name in members {
-                NarrowFieldInScope($scope, receiver, name, frame)
+                NarrowClrReceiverMember(receiver.Type, call.Method.DeclaringType, receiverPath, name, frame)
             }
         }
 
         // Issue #208: merge [MemberNotNullWhen] field narrowings from a user-declared method.
         private func MergeUserMemberNotNullWhenNarrowings(
-            receiver BoundExpression?,
-            attributes ImmutableArray[BoundAttribute],
+            call BoundUserInstanceCallExpression,
             negate bool,
             $scope BoundScope?,
+            restrictBareVariableToLocalsAndParams bool,
+            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?,
             ref thenFrame Dictionary[AccessPath, TypeSymbol]?,
             ref elseFrame Dictionary[AccessPath, TypeSymbol]?
         ) {
+            let attributes = call.Method.Attributes
             if $scope == nil || attributes.IsDefaultOrEmpty {
+                return
+            }
+            let declaringStruct = call.Method.ReceiverType as StructSymbol
+            if declaringStruct == nil {
                 return
             }
             for attr in attributes {
@@ -1973,24 +2035,63 @@ internal partial class StatementBinder {
                     )
                 }
                 for name in members {
-                    NarrowFieldInScope($scope, receiver, name, frame)
+                    NarrowUserFieldInScope(
+                        $scope,
+                        call,
+                        declaringStruct,
+                        name,
+                        restrictBareVariableToLocalsAndParams,
+                        clearAssignedRoots,
+                        frame
+                    )
                 }
             }
         }
 
-        private func NarrowFieldInScope(
+        private func NarrowUserFieldInScope(
             $scope BoundScope,
-            receiver BoundExpression?,
+            call BoundUserInstanceCallExpression,
+            declaringStruct StructSymbol,
             fieldName string,
+            restrictBareVariableToLocalsAndParams bool,
+            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?,
             frame Dictionary[AccessPath, TypeSymbol]
         ) {
-            if $scope.TryLookupSymbol(fieldName) is ImplicitFieldVariableSymbol fieldVar &&
+            let receiver = call.Receiver
+            let (resolvedField, resolvedProperty, resolvedOwner) = ResolveDeclaredSourceMember(
+                receiver.Type,
+                declaringStruct,
+                fieldName
+            )
+            if !restrictBareVariableToLocalsAndParams && $scope.TryLookupSymbol(
+                fieldName
+            ) is ImplicitFieldVariableSymbol fieldVar &&
                 TargetsImplicitThis(receiver, fieldVar) &&
-                fieldVar.Type is NullableTypeSymbol nullable {
+                resolvedField != nil &&
+                resolvedOwner != nil &&
+                object.ReferenceEquals(
+                resolvedOwner.Definition ?? resolvedOwner,
+                fieldVar.StructType.Definition ?? fieldVar.StructType
+            ) &&
+                fieldVar.Type is NullableTypeSymbol nullable &&
+                PreservesReceiverPath(
+                call,
+                call.Arguments,
+                AccessPath.ForVariable(fieldVar.Receiver),
+                fieldVar.Receiver.Type,
+                clearAssignedRoots
+            ) {
                 frame[fieldVar] = nullable.UnderlyingType
             }
-            if receiver != nil && SmartCastStability.TryGetStablePath(receiver) is {} receiverPath {
-                NarrowStableReceiverMember(receiver.Type, receiverPath, fieldName, frame)
+            if SmartCastStability.TryGetStablePath(receiver) is {} receiverPath &&
+                PreservesReceiverPath(call, call.Arguments, receiverPath, receiver.Type, clearAssignedRoots) {
+                if resolvedField != nil && SmartCastStability.IsStableField(resolvedField) &&
+                    resolvedField.Type is NullableTypeSymbol fldNullable {
+                    frame[receiverPath.Append(resolvedField)] = fldNullable.UnderlyingType
+                } else if resolvedProperty != nil && SmartCastStability.IsStableProperty(resolvedProperty) &&
+                    resolvedProperty.Type is NullableTypeSymbol propNullable {
+                    frame[receiverPath.Append(resolvedProperty)] = propNullable.UnderlyingType
+                }
             }
         }
 
@@ -2005,12 +2106,11 @@ internal partial class StatementBinder {
             )
         }
 
-        private func NarrowStableReceiverMember(
+        private func ResolveDeclaredSourceMember(
             receiverType TypeSymbol,
-            receiverPath AccessPath,
-            memberName string,
-            frame Dictionary[AccessPath, TypeSymbol]
-        ) {
+            declaringStruct StructSymbol,
+            memberName string
+        )(Field FieldSymbol?, Property PropertySymbol?, Owner StructSymbol?) {
             let unwrappedType = if receiverType is NullableTypeSymbol nullableReceiver {
                 nullableReceiver.UnderlyingType
             } else if receiverType is PlatformTypeSymbol platformReceiver {
@@ -2018,82 +2118,157 @@ internal partial class StatementBinder {
             } else {
                 receiverType
             }
-            if unwrappedType is StructSymbol structType {
-                for owner in structType.GetHierarchy() {
-                    if !owner.Fields.IsDefaultOrEmpty {
-                        for fld in owner.Fields {
-                            if fld.Name == memberName && SmartCastStability.IsStableField(fld) &&
-                                fld.Type is NullableTypeSymbol fldNullable {
-                                frame[receiverPath.Append(fld)] = fldNullable.UnderlyingType
-                                return
-                            }
+            var startStruct = declaringStruct
+            if unwrappedType is StructSymbol receiverStruct {
+                for owner in receiverStruct.GetHierarchy() {
+                    if object.ReferenceEquals(
+                        owner.Definition ?? owner,
+                        declaringStruct.Definition ?? declaringStruct
+                    ) {
+                        startStruct = owner
+                        break
+                    }
+                }
+            }
+            for owner in startStruct.GetHierarchy() {
+                if !owner.Fields.IsDefaultOrEmpty {
+                    for fld in owner.Fields {
+                        if !fld.IsStatic && fld.Name == memberName {
+                            return (fld, nil, owner)
                         }
                     }
-                    if !owner.Properties.IsDefaultOrEmpty {
-                        for prop in owner.Properties {
-                            if prop.Name == memberName && SmartCastStability.IsStableProperty(prop) &&
-                                prop.Type is NullableTypeSymbol propNullable {
-                                frame[receiverPath.Append(prop)] = propNullable.UnderlyingType
-                                return
-                            }
+                }
+                if !owner.Properties.IsDefaultOrEmpty {
+                    for prop in owner.Properties {
+                        if !prop.IsStatic && !prop.IsIndexer && prop.Name == memberName {
+                            return (nil, prop, owner)
                         }
+                    }
+                }
+            }
+            return (nil, nil, nil)
+        }
+
+        private func NarrowClrReceiverMember(
+            receiverType TypeSymbol,
+            declaringClrType Type?,
+            receiverPath AccessPath,
+            memberName string,
+            frame Dictionary[AccessPath, TypeSymbol]
+        ) {
+            if declaringClrType == nil {
+                return
+            }
+            let unwrappedType = if receiverType is NullableTypeSymbol nullableReceiver {
+                nullableReceiver.UnderlyingType
+            } else if receiverType is PlatformTypeSymbol platformReceiver {
+                platformReceiver.UnderlyingType
+            } else {
+                receiverType
+            }
+            let flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+            if declaringClrType.IsInterface {
+                if ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
+                    declaringClrType,
+                    memberName,
+                    flags
+                ) is {} ifaceProp {
+                    if SmartCastStability.IsStableClrMember(ifaceProp) && MemberLookup.GetClrPropertyTypeSymbol(
+                        unwrappedType,
+                        ifaceProp
+                    ) is NullableTypeSymbol ifacePropNullable {
+                        frame[receiverPath.Append(ifaceProp)] = ifacePropNullable.UnderlyingType
+                    }
+                    return
+                }
+                if ClrTypeUtilities.SafeGetFieldIncludingInterfaces(
+                    declaringClrType,
+                    memberName,
+                    flags
+                ) is {} ifaceField {
+                    if SmartCastStability.IsStableClrMember(ifaceField) && MemberLookup.GetClrFieldTypeSymbol(
+                        unwrappedType,
+                        ifaceField
+                    ) is NullableTypeSymbol ifaceFieldNullable {
+                        frame[receiverPath.Append(ifaceField)] = ifaceFieldNullable.UnderlyingType
                     }
                 }
                 return
             }
-            if unwrappedType.ClrType is {} clrType {
-                if ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
-                    clrType,
-                    memberName,
-                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
-                ) is {} clrProp &&
-                    SmartCastStability.IsStableClrMember(clrProp) && MemberLookup.GetClrPropertyTypeSymbol(
-                    unwrappedType,
-                    clrProp
-                ) is NullableTypeSymbol clrPropNullable {
-                    frame[receiverPath.Append(clrProp)] = clrPropNullable.UnderlyingType
+            let declaredFlags = BindingFlags.DeclaredOnly | flags
+            for var current Type? = declaringClrType; current != nil; current = current?.BaseType {
+                if ClrTypeUtilities.SafeGetField(current, memberName, declaredFlags) is {} clrField {
+                    if SmartCastStability.IsStableClrMember(clrField) && MemberLookup.GetClrFieldTypeSymbol(
+                        unwrappedType,
+                        clrField
+                    ) is NullableTypeSymbol clrFieldNullable {
+                        frame[receiverPath.Append(clrField)] = clrFieldNullable.UnderlyingType
+                    }
                     return
                 }
-                if ClrTypeUtilities.SafeGetField(
-                    clrType,
-                    memberName,
-                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
-                ) is {} clrField &&
-                    SmartCastStability.IsStableClrMember(clrField) && MemberLookup.GetClrFieldTypeSymbol(
-                    unwrappedType,
-                    clrField
-                ) is NullableTypeSymbol clrFieldNullable {
-                    frame[receiverPath.Append(clrField)] = clrFieldNullable.UnderlyingType
+                if ClrTypeUtilities.SafeGetProperty(current, memberName, declaredFlags) is {} clrProp {
+                    if SmartCastStability.IsStableClrMember(clrProp) && MemberLookup.GetClrPropertyTypeSymbol(
+                        unwrappedType,
+                        clrProp
+                    ) is NullableTypeSymbol clrPropNullable {
+                        frame[receiverPath.Append(clrProp)] = clrPropNullable.UnderlyingType
+                    }
+                    return
                 }
             }
         }
 
-        private func ClassifyImportedBoolCallNarrowing(call BoundImportedCallExpression, negate bool)(
-            Then Dictionary[AccessPath, TypeSymbol]?,
-            Else Dictionary[AccessPath, TypeSymbol]?
-        ) {
+        private func ClassifyImportedBoolCallNarrowing(
+            call BoundImportedCallExpression,
+            negate bool,
+            restrictBareVariableToLocalsAndParams bool,
+            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?
+        )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
             let parameters = call.Function.Method.GetParameters()
-            var result = ClassifyImportedMethodBoolCallNarrowing(parameters, call.Arguments, negate)
+            var result = ClassifyImportedMethodBoolCallNarrowing(
+                call,
+                parameters,
+                call.Arguments,
+                negate,
+                restrictBareVariableToLocalsAndParams,
+                clearAssignedRoots
+            )
             // Issue #4216: preserve established unannotated IsNullOrEmpty
             // extensions while preferring explicit CLR nullability contracts.
             if MemberLookup.HasExtensionAttribute(call.Function.Method) &&
                 !HasClrNullabilityContract(parameters.FirstOrDefault()) &&
                 IsNullOrEmptyCompatibilityCandidate(call.Function.Name, parameters, call.Arguments) {
-                result = MergeNotNullWhenFalseReceiver(result, call.Arguments[0], negate)
+                result = MergeNotNullWhenFalseReceiver(
+                    result,
+                    call,
+                    call.Arguments,
+                    call.Arguments[0],
+                    IsByRefArgument(
+                        call.Arguments[0],
+                        parameters.Length > 0 ? RefCapabilities.GetParameterRefKind(parameters[0]): RefKind.None
+                    ),
+                    negate,
+                    restrictBareVariableToLocalsAndParams,
+                    clearAssignedRoots
+                )
             }
             return result
         }
 
         private func ClassifyImportedMethodBoolCallNarrowing(
+            call BoundExpression,
             parameters[]ParameterInfo,
             arguments ImmutableArray[BoundExpression],
-            negate bool
+            negate bool,
+            restrictBareVariableToLocalsAndParams bool,
+            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?
         )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
             var thenFrame Dictionary[AccessPath, TypeSymbol]? = nil
             var elseFrame Dictionary[AccessPath, TypeSymbol]? = nil
             let count = Math.Min(parameters.Length, arguments.Length)
             for var i = 0; i < count; i++ {
                 let parameter = parameters[i]
+                let isByRef = IsByRefArgument(arguments[i], RefCapabilities.GetParameterRefKind(parameter))
                 // [MaybeNullWhen(rv)] on a non-nullable argument widens the caller's
                 // variable to its nullable counterpart on the arm where the call returns
                 // rv. The argument may be a plain variable or an address-of expression
@@ -2106,39 +2281,57 @@ internal partial class StatementBinder {
                         rawArg
                     }
                     if widenArg is BoundVariableExpression widenVarExpr &&
+                        (!restrictBareVariableToLocalsAndParams || widenVarExpr.Variable is LocalVariableSymbol) &&
                         !(widenVarExpr.Variable.Type is NullableTypeSymbol) &&
                         widenVarExpr
                         .Variable
                         .Type != TypeSymbol
                         .Null {
-                        let widenThen = maybeNullWhenReturnValue != negate
-                        let widenFrame = if widenThen {
-                            (
+                        let widenedType = NullableTypeSymbol.Get(widenVarExpr.Variable.Type)
+                        if PreservesArgumentTarget(
+                            call,
+                            arguments,
+                            i,
+                            isByRef,
+                            AccessPath.ForVariable(widenVarExpr.Variable),
+                            widenedType,
+                            clearAssignedRoots
+                        ) {
+                            let widenThen = maybeNullWhenReturnValue != negate
+                            let widenFrame = if widenThen {
                                 (
-                                    if thenFrame == nil {
-                                        (thenFrame = Dictionary[AccessPath, TypeSymbol]())
-                                    } else {
-                                        thenFrame
-                                    }
-                                )!!
-                            )
-                        } else {
-                            (
+                                    (
+                                        if thenFrame == nil {
+                                            (thenFrame = Dictionary[AccessPath, TypeSymbol]())
+                                        } else {
+                                            thenFrame
+                                        }
+                                    )!!
+                                )
+                            } else {
                                 (
-                                    if elseFrame == nil {
-                                        (elseFrame = Dictionary[AccessPath, TypeSymbol]())
-                                    } else {
-                                        elseFrame
-                                    }
-                                )!!
-                            )
+                                    (
+                                        if elseFrame == nil {
+                                            (elseFrame = Dictionary[AccessPath, TypeSymbol]())
+                                        } else {
+                                            elseFrame
+                                        }
+                                    )!!
+                                )
+                            }
+                            widenFrame[widenVarExpr.Variable] = widenedType
                         }
-                        widenFrame[widenVarExpr.Variable] = NullableTypeSymbol.Get(widenVarExpr.Variable.Type)
                     }
                     continue
                 }
                 if !ClrNullability.TryGetNotNullWhen(parameter, out var returnValue) ||
-                    !TryGetNullableNarrowingTarget(arguments[i], out var target, out var underlying) {
+                    !TryGetNullableNarrowingTarget(
+                    arguments[i],
+                    restrictBareVariableToLocalsAndParams,
+                    out var target,
+                    out var underlying
+                ) ||
+                    !PreservesArgumentTarget(call, arguments, i, isByRef, target!!, underlying!!, clearAssignedRoots) {
                     continue
                 }
                 let narrowThen = returnValue != negate
@@ -2168,18 +2361,57 @@ internal partial class StatementBinder {
             return (thenFrame, elseFrame)
         }
 
-        private func ClassifyUserBoolCallNarrowing(call BoundCallExpression, negate bool)(
-            Then Dictionary[AccessPath, TypeSymbol]?,
-            Else Dictionary[AccessPath, TypeSymbol]?
-        ) {
+        private func ClassifyUserBoolCallNarrowing(
+            call BoundCallExpression,
+            negate bool,
+            restrictBareVariableToLocalsAndParams bool,
+            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?
+        )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
+            let parameters = call.Function.Parameters
+            var result = ClassifyUserMethodBoolCallNarrowing(
+                call,
+                parameters,
+                call.Arguments,
+                negate,
+                restrictBareVariableToLocalsAndParams,
+                clearAssignedRoots
+            )
+            // Issue #4216: user extensions use the same compatibility rule as
+            // imported extensions; an explicit receiver contract wins.
+            if call
+                .Function
+                .IsExtension &&
+                !HasUserNullabilityContract(parameters.FirstOrDefault()) &&
+                IsNullOrEmptyCompatibilityCandidate(call.Function.Name, parameters, call.Arguments) {
+                result = MergeNotNullWhenFalseReceiver(
+                    result,
+                    call,
+                    call.Arguments,
+                    call.Arguments[0],
+                    IsByRefArgument(call.Arguments[0], parameters.Length > 0 ? parameters[0].RefKind: RefKind.None),
+                    negate,
+                    restrictBareVariableToLocalsAndParams,
+                    clearAssignedRoots
+                )
+            }
+            return result
+        }
+
+        private func ClassifyUserMethodBoolCallNarrowing(
+            call BoundExpression,
+            parameters ImmutableArray[ParameterSymbol],
+            arguments ImmutableArray[BoundExpression],
+            negate bool,
+            restrictBareVariableToLocalsAndParams bool,
+            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?
+        )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
             // Issue #178 / ADR-0047 §6: a user-declared function may carry the
             // same [NotNullWhen] / [MaybeNullWhen] postconditions C# uses.
             // Recognition is type-identity based via KnownAttributes so renaming
             // or shadowing the source name cannot bypass the narrowing rule.
-            let parameters = call.Function.Parameters
             var thenFrame Dictionary[AccessPath, TypeSymbol]? = nil
             var elseFrame Dictionary[AccessPath, TypeSymbol]? = nil
-            let count = Math.Min(parameters.Length, call.Arguments.Length)
+            let count = Math.Min(parameters.Length, arguments.Length)
             for var i = 0; i < count; i++ {
                 let parameter = parameters[i]
                 let attributes = parameter.Attributes
@@ -2195,11 +2427,18 @@ internal partial class StatementBinder {
                         maybeNullWhenReturnValue = mrv
                     }
                 }
-                let argExpr = call.Arguments[i]
+                let argExpr = arguments[i]
+                let isByRef = IsByRefArgument(argExpr, parameter.RefKind)
                 // [NotNullWhen(rv)]: narrow a nullable argument to its underlying
                 // non-nullable type on the arm where the call returns rv.
                 if (notNullWhenReturnValue != nil) &&
-                    TryGetNullableNarrowingTarget(argExpr, out var target, out var underlying) {
+                    TryGetNullableNarrowingTarget(
+                    argExpr,
+                    restrictBareVariableToLocalsAndParams,
+                    out var target,
+                    out var underlying
+                ) &&
+                    PreservesArgumentTarget(call, arguments, i, isByRef, target!!, underlying!!, clearAssignedRoots) {
                     let narrowThen = notNullWhenReturnValue != negate
                     let frame = if narrowThen {
                         (
@@ -2229,47 +2468,297 @@ internal partial class StatementBinder {
                 let widenVarExpr BoundVariableExpression? = argExpr as BoundVariableExpression
                 if (maybeNullWhenReturnValue != nil) &&
                     widenVarExpr != nil &&
+                    (!restrictBareVariableToLocalsAndParams || widenVarExpr.Variable is LocalVariableSymbol) &&
                     !(widenVarExpr.Variable.Type is NullableTypeSymbol) &&
                     widenVarExpr
                     .Variable
                     .Type != TypeSymbol
                     .Null {
-                    let widenThen = maybeNullWhenReturnValue != negate
-                    let widenFrame = if widenThen {
-                        (
+                    let widenedType = NullableTypeSymbol.Get(widenVarExpr.Variable.Type)
+                    if PreservesArgumentTarget(
+                        call,
+                        arguments,
+                        i,
+                        isByRef,
+                        AccessPath.ForVariable(widenVarExpr.Variable),
+                        widenedType,
+                        clearAssignedRoots
+                    ) {
+                        let widenThen = maybeNullWhenReturnValue != negate
+                        let widenFrame = if widenThen {
                             (
-                                if thenFrame == nil {
-                                    (thenFrame = Dictionary[AccessPath, TypeSymbol]())
-                                } else {
-                                    thenFrame
-                                }
-                            )!!
-                        )
-                    } else {
-                        (
+                                (
+                                    if thenFrame == nil {
+                                        (thenFrame = Dictionary[AccessPath, TypeSymbol]())
+                                    } else {
+                                        thenFrame
+                                    }
+                                )!!
+                            )
+                        } else {
                             (
-                                if elseFrame == nil {
-                                    (elseFrame = Dictionary[AccessPath, TypeSymbol]())
-                                } else {
-                                    elseFrame
-                                }
-                            )!!
-                        )
+                                (
+                                    if elseFrame == nil {
+                                        (elseFrame = Dictionary[AccessPath, TypeSymbol]())
+                                    } else {
+                                        elseFrame
+                                    }
+                                )!!
+                            )
+                        }
+                        widenFrame[widenVarExpr.Variable] = widenedType
                     }
-                    widenFrame[widenVarExpr.Variable] = NullableTypeSymbol.Get(widenVarExpr.Variable.Type)
                 }
             }
-            var result = (Then: thenFrame, Else: elseFrame)
-            // Issue #4216: user extensions use the same compatibility rule as
-            // imported extensions; an explicit receiver contract wins.
-            if call
-                .Function
-                .IsExtension &&
-                !HasUserNullabilityContract(parameters.FirstOrDefault()) &&
-                IsNullOrEmptyCompatibilityCandidate(call.Function.Name, parameters, call.Arguments) {
-                result = MergeNotNullWhenFalseReceiver(result, call.Arguments[0], negate)
+            return (Then: thenFrame, Else: elseFrame)
+        }
+
+        private func IsByRefArgument(argument BoundExpression, refKind RefKind) bool {
+            if refKind is RefKind.Ref or RefKind.Out {
+                return true
             }
-            return result
+            var unwrapped = argument
+            while unwrapped is BoundConversionExpression conversion && IsFlowTransparentConversion(conversion) {
+                unwrapped = conversion.Expression
+            }
+            return unwrapped is BoundAddressOfExpression{IsReadOnly: false} or BoundConditionalAddressExpression
+        }
+
+        private func PreservesArgumentTarget(
+            call BoundExpression,
+            arguments ImmutableArray[BoundExpression],
+            argumentIndex int32,
+            isByRef bool,
+            target AccessPath,
+            narrowedType TypeSymbol,
+            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?
+        ) bool {
+            if clearAssignedRoots == nil {
+                return true
+            }
+            if !isByRef {
+                let candidateFrame = Dictionary[AccessPath, TypeSymbol]{[target] = narrowedType}
+                for var j = argumentIndex + 1; j < arguments.Length; j++ {
+                    clearAssignedRoots(arguments[j], candidateFrame)
+                    if candidateFrame.Count == 0 {
+                        return false
+                    }
+                }
+                if BuildCallEffectsShell(call, argumentIndex, includeCallBody: true) is {} shell {
+                    let rootFrame = Dictionary[AccessPath, TypeSymbol]{
+                        [AccessPath.ForVariable(target.Root)] = target.Root.Type
+                    }
+                    clearAssignedRoots(shell, rootFrame)
+                    if rootFrame.Count == 0 {
+                        return false
+                    }
+                }
+                return true
+            }
+            if BuildCallEffectsShell(call, argumentIndex, includeCallBody: false) is {} refShell {
+                let rootFrame = Dictionary[AccessPath, TypeSymbol]{
+                    [AccessPath.ForVariable(target.Root)] = target.Root.Type
+                }
+                clearAssignedRoots(refShell, rootFrame)
+                if rootFrame.Count == 0 {
+                    return false
+                }
+            }
+            return true
+        }
+
+        private func PreservesReceiverPath(
+            call BoundExpression,
+            arguments ImmutableArray[BoundExpression],
+            receiverPath AccessPath,
+            receiverType TypeSymbol,
+            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?
+        ) bool {
+            if clearAssignedRoots == nil {
+                return true
+            }
+            let candidateFrame = Dictionary[AccessPath, TypeSymbol]{[receiverPath] = receiverType}
+            for var j = 0; j < arguments.Length; j++ {
+                clearAssignedRoots(arguments[j], candidateFrame)
+                if candidateFrame.Count == 0 {
+                    return false
+                }
+            }
+            if BuildCallEffectsShell(call, excludeArgumentIndex: -1, includeCallBody: true) is {} shell {
+                let rootFrame = Dictionary[AccessPath, TypeSymbol]{
+                    [AccessPath.ForVariable(receiverPath.Root)] = receiverPath.Root.Type
+                }
+                clearAssignedRoots(shell, rootFrame)
+                if rootFrame.Count == 0 {
+                    return false
+                }
+            }
+            return true
+        }
+
+        private func BuildCallEffectsShell(
+            call BoundExpression,
+            excludeArgumentIndex int32,
+            includeCallBody bool
+        ) BoundExpression? {
+            switch call {
+                case userCall is BoundCallExpression {
+                    let filtered = BuildFilteredRefArguments(
+                        userCall.Arguments,
+                        userCall.Function.Parameters,
+                        excludeArgumentIndex,
+                        out var hasRefArgs
+                    )
+                    let bodyHasEffects = includeCallBody && FunctionBodyMayHaveSideEffects(userCall.Function)
+                    if !bodyHasEffects && !hasRefArgs {
+                        return nil
+                    }
+                    return BoundCallExpression(userCall.Syntax, userCall.Function, filtered)
+                }
+                case userInstanceCall is BoundUserInstanceCallExpression {
+                    let filtered = BuildFilteredRefArguments(
+                        userInstanceCall.Arguments,
+                        userInstanceCall.Method.Parameters,
+                        excludeArgumentIndex,
+                        out var hasRefArgs
+                    )
+                    let bodyHasEffects = includeCallBody && FunctionBodyMayHaveSideEffects(userInstanceCall.Method)
+                    if !bodyHasEffects && !hasRefArgs {
+                        return nil
+                    }
+                    return BoundUserInstanceCallExpression(
+                        userInstanceCall.Syntax,
+                        BoundLiteralExpression(nil, 0, userInstanceCall.Receiver.Type),
+                        userInstanceCall.Method,
+                        filtered
+                    )
+                }
+                case importedCall is BoundImportedCallExpression {
+                    let filtered = BuildFilteredImportedRefArguments(
+                        importedCall.Arguments,
+                        importedCall.Function.Method.GetParameters(),
+                        excludeArgumentIndex,
+                        out var hasRefArgs
+                    )
+                    if !hasRefArgs {
+                        return nil
+                    }
+                    return BoundImportedCallExpression(importedCall.Syntax, importedCall.Function, filtered)
+                }
+                case importedInstanceCall is BoundImportedInstanceCallExpression {
+                    let filtered = BuildFilteredImportedRefArguments(
+                        importedInstanceCall.Arguments,
+                        importedInstanceCall.Method.GetParameters(),
+                        excludeArgumentIndex,
+                        out var hasRefArgs
+                    )
+                    if !hasRefArgs {
+                        return nil
+                    }
+                    return BoundImportedInstanceCallExpression(
+                        importedInstanceCall.Syntax,
+                        BoundLiteralExpression(nil, 0, importedInstanceCall.Receiver.Type),
+                        importedInstanceCall.Method,
+                        importedInstanceCall.Type,
+                        filtered
+                    )
+                }
+                default {
+                    return nil
+                }
+            }
+        }
+
+        private func FunctionBodyMayHaveSideEffects(function FunctionSymbol) bool {
+            if function.IsOpen ||
+                function.IsOverride ||
+                function.HasCaptures ||
+                function
+                .Declaration
+                ?.Body is not{} body {
+                return true
+            }
+            for node in body.DescendantNodesAndSelf() {
+                switch node {
+                    case CallExpressionSyntax or
+                        AccessorExpressionSyntax or
+                        IndexExpressionSyntax or
+                        AssignmentExpressionSyntax or
+                        FieldAssignmentExpressionSyntax or
+                        MemberFieldAssignmentExpressionSyntax or
+                        IndexAssignmentExpressionSyntax or
+                        MemberIndexAssignmentExpressionSyntax or
+                        CompoundIndexAssignmentExpressionSyntax or
+                        IndirectAssignmentExpressionSyntax or
+                        IndirectCompoundAssignmentExpressionSyntax or
+                        MultiAssignmentStatementSyntax or
+                        NullCoalescingAssignmentExpressionSyntax {
+                        return true
+                    }
+                    case unary is UnaryExpressionSyntax when unary
+                        .OperatorToken
+                        .Kind is SyntaxKind.AmpersandToken or
+                        SyntaxKind.PlusPlusToken or
+                        SyntaxKind.MinusMinusToken {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func BuildFilteredRefArguments(
+            arguments ImmutableArray[BoundExpression],
+            parameters ImmutableArray[ParameterSymbol],
+            excludeArgumentIndex int32,
+            out hasRefArgs bool
+        ) ImmutableArray[BoundExpression] {
+            hasRefArgs = false
+            if arguments.IsDefaultOrEmpty {
+                return ImmutableArray[BoundExpression].Empty
+            }
+            let builder = ImmutableArray.CreateBuilder[BoundExpression](arguments.Length)
+            for var i = 0; i < arguments.Length; i++ {
+                let refKind = if i < parameters.Length {
+                    parameters[i].RefKind
+                } else {
+                    RefKind.None
+                }
+                if i != excludeArgumentIndex && IsByRefArgument(arguments[i], refKind) {
+                    hasRefArgs = true
+                    builder.Add(arguments[i])
+                } else {
+                    builder.Add(BoundLiteralExpression(nil, 0, TypeSymbol.Int32))
+                }
+            }
+            return builder.MoveToImmutable()
+        }
+
+        private func BuildFilteredImportedRefArguments(
+            arguments ImmutableArray[BoundExpression],
+            parameters[]ParameterInfo,
+            excludeArgumentIndex int32,
+            out hasRefArgs bool
+        ) ImmutableArray[BoundExpression] {
+            hasRefArgs = false
+            if arguments.IsDefaultOrEmpty {
+                return ImmutableArray[BoundExpression].Empty
+            }
+            let builder = ImmutableArray.CreateBuilder[BoundExpression](arguments.Length)
+            for var i = 0; i < arguments.Length; i++ {
+                let refKind = if i < parameters.Length {
+                    RefCapabilities.GetParameterRefKind(parameters[i])
+                } else {
+                    RefKind.None
+                }
+                if i != excludeArgumentIndex && IsByRefArgument(arguments[i], refKind) {
+                    hasRefArgs = true
+                    builder.Add(arguments[i])
+                } else {
+                    builder.Add(BoundLiteralExpression(nil, 0, TypeSymbol.Int32))
+                }
+            }
+            return builder.MoveToImmutable()
         }
 
         private func IsNullOrEmptyCompatibilityCandidate(
@@ -2330,10 +2819,23 @@ internal partial class StatementBinder {
 
         private func MergeNotNullWhenFalseReceiver(
             frames(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?),
+            call BoundExpression,
+            arguments ImmutableArray[BoundExpression],
             receiver BoundExpression,
-            negate bool
+            isByRef bool,
+            negate bool,
+            restrictBareVariableToLocalsAndParams bool,
+            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?
         )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
-            if !TryGetNullableNarrowingTarget(receiver, out var target, out var underlying) {
+            if !TryGetNullableNarrowingTarget(
+                receiver,
+                restrictBareVariableToLocalsAndParams,
+                out var target,
+                out var underlying
+            ) {
+                return frames
+            }
+            if !PreservesArgumentTarget(call, arguments, 0, isByRef, target, underlying, clearAssignedRoots) {
                 return frames
             }
             var thenFrame Dictionary[AccessPath, TypeSymbol]? = frames.Then
@@ -2366,6 +2868,7 @@ internal partial class StatementBinder {
 
         private func TryGetNullableNarrowingTarget(
             expression BoundExpression,
+            restrictBareVariableToLocalsAndParams bool,
             @System.Diagnostics.CodeAnalysis.NotNullWhen(true) out target AccessPath?,
             @System.Diagnostics.CodeAnalysis.NotNullWhen(true) out underlying TypeSymbol?
         ) bool {
@@ -2382,7 +2885,11 @@ internal partial class StatementBinder {
                 return false
             }
             target = if expression is BoundVariableExpression bve {
-                AccessPath.ForVariable(bve.Variable)
+                if !restrictBareVariableToLocalsAndParams || bve.Variable is LocalVariableSymbol {
+                    AccessPath.ForVariable(bve.Variable)
+                } else {
+                    default(AccessPath?)
+                }
             } else {
                 SmartCastStability.TryGetStablePath(expression)
             }

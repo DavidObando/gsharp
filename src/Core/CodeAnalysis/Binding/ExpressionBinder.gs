@@ -1277,7 +1277,12 @@ internal partial class ExpressionBinder {
                 (nil, nonNilFrame)
             }
         }
-        return StatementBinder.TryClassifyBoolCallNarrowingLeaf(condition, $scope)
+        return StatementBinder.TryClassifyBoolCallNarrowingLeaf(
+            condition,
+            $scope,
+            restrictBareVariableToLocalsAndParams,
+            clearAssignedRoots
+        )
     }
 
     /// Binds a name expression to produce its bound form without side effects
