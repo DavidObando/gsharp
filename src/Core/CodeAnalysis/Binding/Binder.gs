@@ -5898,17 +5898,7 @@ partial class Binder {
         typeArgs ImmutableArray[TypeSymbol],
         location TextLocation
     ) {
-        if declaredParameters.IsDefaultOrEmpty ||
-            typeArgs.IsDefaultOrEmpty ||
-            declaredParameters.Length != typeArgs.Length {
-            return
-        }
-        let pending = PendingUserGenericConstraintCheck(Diagnostics, declaredParameters, typeArgs, location)
-        if !$scope.IsDeferringUserGenericConstraintChecks() {
-            RunUserGenericTypeClauseConstraintCheck(pending)
-            return
-        }
-        $scope.GetPendingUserGenericConstraintChecks().Add(pending)
+        CheckUserGenericTypeClauseConstraints($scope, Diagnostics, declaredParameters, typeArgs, location)
     }
 
     /// ADR-0041: binds the return-type clause of a function (declaration,
@@ -11982,6 +11972,26 @@ partial class Binder {
             }
         }
 
+        internal func CheckUserGenericTypeClauseConstraints(
+            $scope BoundScope,
+            diagnostics DiagnosticBag,
+            declaredParameters ImmutableArray[TypeParameterSymbol],
+            typeArgs ImmutableArray[TypeSymbol],
+            location TextLocation
+        ) bool {
+            if declaredParameters.IsDefaultOrEmpty ||
+                typeArgs.IsDefaultOrEmpty ||
+                declaredParameters.Length != typeArgs.Length {
+                return false
+            }
+            let pending = PendingUserGenericConstraintCheck(diagnostics, declaredParameters, typeArgs, location)
+            if !$scope.IsDeferringUserGenericConstraintChecks() {
+                return RunUserGenericTypeClauseConstraintCheck(pending)
+            }
+            $scope.GetPendingUserGenericConstraintChecks().Add(pending)
+            return false
+        }
+
         /// Issues #4089/#4090: asks the OPEN (forwarding) question first and, only
         /// when it reports nothing, the CLOSED (satisfaction) question. They are
         /// complementary per position — an argument is either a bare type
@@ -11989,16 +11999,16 @@ partial class Binder {
         /// ordering only decides which of two positions in the SAME vector wins the
         /// one-diagnostic-per-construction budget.
         /// @param check The recorded construction.
-        private func RunUserGenericTypeClauseConstraintCheck(check PendingUserGenericConstraintCheck) {
+        private func RunUserGenericTypeClauseConstraintCheck(check PendingUserGenericConstraintCheck) bool {
             if ReportUnforwardedUserGenericConstraint(
                 check.Diagnostics,
                 check.DeclaredParameters,
                 check.TypeArgs,
                 check.Location
             ) {
-                return
+                return true
             }
-            ReportUnsatisfiedUserGenericTypeArgument(
+            return ReportUnsatisfiedUserGenericTypeArgument(
                 check.Diagnostics,
                 check.DeclaredParameters,
                 check.TypeArgs,
@@ -13956,7 +13966,7 @@ partial class Binder {
                             current
                             .TypeArguments
                             .IsDefaultOrEmpty ||
-                            TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(current, classDef) {
+                            SameConstructedStruct(current, classDef) {
                             return true
                         }
                     }
@@ -14013,8 +14023,12 @@ partial class Binder {
             type = PlatformTypeSymbol.StripTopLevel(type)
             if type is TypeParameterSymbol tp {
                 // A class-base constraint proves the parameter is reference-shaped
-                // just as strongly as the explicit `class` flag.
-                return tp.HasReferenceTypeConstraint || tp.ClassConstraint != nil
+                // just as strongly as the explicit `class` flag. Follow dependent
+                // type-parameter bounds too.
+                return AnyParameter(
+                    EnumerateForwardedParameterChain(tp),
+                    (p TypeParameterSymbol) -> p.HasReferenceTypeConstraint || p.ClassConstraint != nil
+                )
             }
             if type is StructSymbol structSym {
                 return structSym.IsClass
@@ -14054,7 +14068,10 @@ partial class Binder {
                 return false
             }
             if type is TypeParameterSymbol tp {
-                return tp.HasValueTypeConstraint
+                return AnyParameter(
+                    EnumerateForwardedParameterChain(tp),
+                    (p TypeParameterSymbol) -> p.HasValueTypeConstraint || p.HasUnmanagedConstraint
+                )
             }
             if type is StructSymbol structSym {
                 return !structSym.IsClass
@@ -14091,7 +14108,10 @@ partial class Binder {
                 return false
             }
             if type is TypeParameterSymbol tp {
-                return tp.HasUnmanagedConstraint
+                return AnyParameter(
+                    EnumerateForwardedParameterChain(tp),
+                    (p TypeParameterSymbol) -> p.HasUnmanagedConstraint
+                )
             }
             return BlittableDetector().IsUnmanaged(type)
         }
@@ -14110,7 +14130,12 @@ partial class Binder {
                 return true
             }
             if type is TypeParameterSymbol tp {
-                return tp.HasDefaultConstructorConstraint || tp.HasValueTypeConstraint
+                return AnyParameter(
+                    EnumerateForwardedParameterChain(tp),
+                    (p TypeParameterSymbol) -> p.HasDefaultConstructorConstraint ||
+                        p.HasValueTypeConstraint ||
+                        p.HasUnmanagedConstraint
+                )
             }
             if type is StructSymbol structSym {
                 // G# structs are value types (already handled above); G# classes
@@ -14209,32 +14234,92 @@ partial class Binder {
             if !object.ReferenceEquals(defA, defB) {
                 return false
             }
-            if a
-                .TypeArguments
-                .IsDefaultOrEmpty ||
-                b
-                .TypeArguments
-                .IsDefaultOrEmpty ||
-                a
-                .TypeArguments
-                .Length != b
-                .TypeArguments
-                .Length {
+            return SameConstraintTypeArguments(a.TypeArguments, b.TypeArguments)
+        }
+
+        private func SameConstructedStruct(a StructSymbol?, b StructSymbol?) bool {
+            if a == nil || b == nil {
                 return false
             }
-            for var k = 0; k < a.TypeArguments.Length; k++ {
-                let ta = a.TypeArguments[k]
-                let tb = b.TypeArguments[k]
-                if ta == tb || object.ReferenceEquals(ta, tb) ||
-                    TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(ta, tb) {
-                    continue
-                }
-                if ta is InterfaceSymbol ia && tb is InterfaceSymbol ib && SameConstructedInterface(ia, ib) {
-                    continue
-                }
+            let defA = a.Definition ?? a
+            let defB = b.Definition ?? b
+            if !object.ReferenceEquals(defA, defB) {
                 return false
+            }
+            return SameConstraintTypeArguments(
+                Conversion.GetEffectiveStructTypeArguments(a),
+                Conversion.GetEffectiveStructTypeArguments(b)
+            )
+        }
+
+        private func SameConstraintTypeArguments(a ImmutableArray[TypeSymbol], b ImmutableArray[TypeSymbol]) bool {
+            if a.IsDefaultOrEmpty || b.IsDefaultOrEmpty || a.Length != b.Length {
+                return false
+            }
+            for var k = 0; k < a.Length; k++ {
+                if !SameConstraintType(a[k], b[k]) {
+                    return false
+                }
             }
             return true
+        }
+
+        // Issue #4744: compares constraint type arguments while preserving
+        // reference and value nullability contracts (`T?` vs `T`).
+        private func SameConstraintType(left TypeSymbol?, right TypeSymbol?) bool {
+            var left = left
+            var right = right
+            if left != nil {
+                left = PlatformTypeSymbol.StripTopLevel(left)
+            }
+            if right != nil {
+                right = PlatformTypeSymbol.StripTopLevel(right)
+            }
+            if left == right || object.ReferenceEquals(left, right) {
+                return true
+            }
+            if left == nil || right == nil {
+                return false
+            }
+            if left is NullableTypeSymbol || right is NullableTypeSymbol {
+                return left is NullableTypeSymbol leftNullable &&
+                    right is NullableTypeSymbol rightNullable &&
+                    SameConstraintType(leftNullable.UnderlyingType, rightNullable.UnderlyingType)
+            }
+            if left is InterfaceSymbol leftIface && right is InterfaceSymbol rightIface {
+                return SameConstructedInterface(leftIface, rightIface)
+            }
+            if left is StructSymbol leftStruct && right is StructSymbol rightStruct {
+                return SameConstructedStruct(leftStruct, rightStruct)
+            }
+            if left is DelegateTypeSymbol leftDel && right is DelegateTypeSymbol rightDel {
+                let defLeft = leftDel.Definition ?? leftDel
+                let defRight = rightDel.Definition ?? rightDel
+                return object.ReferenceEquals(defLeft, defRight) &&
+                    SameConstraintTypeArguments(leftDel.TypeArguments, rightDel.TypeArguments)
+            }
+            if left is ImportedTypeSymbol{OpenDefinition: not nil} leftImported &&
+                right is ImportedTypeSymbol{OpenDefinition: not nil} rightImported &&
+                !leftImported
+                .TypeArguments
+                .IsDefaultOrEmpty &&
+                !rightImported
+                .TypeArguments
+                .IsDefaultOrEmpty {
+                return ClrTypeUtilities.AreSame(leftImported.OpenDefinition, rightImported.OpenDefinition) &&
+                    SameConstraintTypeArguments(leftImported.TypeArguments, rightImported.TypeArguments)
+            }
+            if left is SliceTypeSymbol leftSlice && right is SliceTypeSymbol rightSlice {
+                return SameConstraintType(leftSlice.ElementType, rightSlice.ElementType)
+            }
+            if left is ArrayTypeSymbol leftArray && right is ArrayTypeSymbol rightArray {
+                return leftArray.Length == rightArray.Length &&
+                    SameConstraintType(leftArray.ElementType, rightArray.ElementType)
+            }
+            if left is TupleTypeSymbol leftTuple && right is TupleTypeSymbol rightTuple {
+                return SameConstraintTypeArguments(leftTuple.ElementTypes, rightTuple.ElementTypes)
+            }
+            return false
         }
 
         /// Issue #943: returns `true` when [`typeArgument`](paramref)

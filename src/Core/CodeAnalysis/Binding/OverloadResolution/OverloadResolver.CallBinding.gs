@@ -3002,6 +3002,26 @@ internal partial class OverloadResolver {
             typeArguments.Add(typeArgument)
         }
         let arguments = typeArguments.MoveToImmutable()
+        if type is DelegateTypeSymbol targetDelegate {
+            // Issue #4762: route generic named-delegate conversions through the
+            // shared type-clause checker so forwarded open bounds are accepted
+            // and unforwarded open arguments report GS0580.
+            if GSharp
+                .Core
+                .CodeAnalysis
+                .Binding
+                .Binder
+                .CheckUserGenericTypeClauseConstraints(
+                Scope,
+                Diagnostics,
+                (targetDelegate.Definition ?? targetDelegate).TypeParameters,
+                arguments,
+                syntax.Identifier.Location
+            ) {
+                return nil
+            }
+            return DelegateTypeSymbol.Construct(targetDelegate, arguments)
+        }
         let clauseVector = BuildTypeArgumentVector(typeParameters, arguments)
         for var i = 0; i < typeParameters.Length; i++ {
             if !satisfiesConstraint(arguments[i], typeParameters[i], clauseVector) {
@@ -3028,9 +3048,6 @@ internal partial class OverloadResolver {
                 } else {
                     InterfaceSymbol.Construct(targetInterface, arguments)
                 }
-            )
-            case targetDelegate is DelegateTypeSymbol: cast[TypeSymbol](
-                DelegateTypeSymbol.Construct(targetDelegate, arguments)
             )
             default: type
         }

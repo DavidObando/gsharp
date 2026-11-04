@@ -507,12 +507,19 @@ Console.WriteLine("x")`, "GS0580", "GS0152"}
 delegate LateDelegate[TL SchemeOptions](value TL) TL;
 
 Console.WriteLine("x")`, "GS0580", "GS0152"}
+            yield[]object{"an-unforwarded-named-delegate-conversion", `func bad[U](f (U) -> U) object -> GsRefDelegate[U](f)
+
+Console.WriteLine("x")`, "GS0580", "GS0152"}
             // ---- #4744: dependent source-interface and source-class constraints
             // reject mismatched closed type arguments after substitution.
             yield[]object{"the-4744-negative-a-mismatched-dependent-source-interface-method-constraint", `func readValue[V, T IValue4744[V]](item T) V -> item.Value
 
 let item = Item4744[int32]{Saved: 7}
 Console.WriteLine(readValue[string, Item4744[int32]](item))`, "GS0152", "GS0580"}
+            yield[]object{"a-nullable-argument-does-not-satisfy-a-non-nullable-dependent-source-interface-constraint", `func readValue[V, T IValue4744[V]](item T) V -> item.Value
+
+let item = Item4744[string?]{Saved: nil}
+Console.WriteLine(readValue[string, Item4744[string?]](item))`, "GS0152", "GS0580"}
             yield[]object{"a-mismatched-dependent-source-class-method-constraint", `func readBase[V, T ValueBase4744[V]](item T) V -> item.Saved
 
 Console.WriteLine(readBase[string, IntDerived4744](IntDerived4744()))`, "GS0152", "GS0580"}
@@ -696,10 +703,14 @@ Console.WriteLine(readBase[int32, IntDerived4744](IntDerived4744()))`, []string{
     public var D GsRefDelegate[U]
 }
 
+func MakeForwarded[A class, B A](f (B) -> B) GsRefDelegate[B] -> GsRefDelegate[B](f)
+
 let del GsOptionsDelegate[DerivedOptions] = (x DerivedOptions) -> x
 let res = del(DerivedOptions{Name: "ok", Extra: 3})
+let fwd = MakeForwarded[string, string]((s string) -> s + "!")
 Console.WriteLine(typeof(GsRefDelegate[string]).Name)
-Console.WriteLine(res.Name + ":" + res.Extra.ToString())`, []string{"GsRefDelegate`1", "ok:3"}}
+Console.WriteLine(res.Name + ":" + res.Extra.ToString())
+Console.WriteLine(fwd("hi"))`, []string{"GsRefDelegate`1", "ok:3", "hi!"}}
         }
 
         private func Compile(dir string, fileName string, source string, outPath string, extra ...string) string {
