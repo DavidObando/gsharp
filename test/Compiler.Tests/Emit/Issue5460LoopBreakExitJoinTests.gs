@@ -456,8 +456,91 @@ func RunChainedCall(box Box) int32 {
     }
     return g.Length
 }
+struct Token {
+    shared {
+        func operator implicit(t Token) int32 {
+            g = nil
+            return 1
+        }
+    }
+}
+func Take(a int32, f () -> void, b int32) int32 { return a + b }
+func TakeConverted(a int32, b int32) int32 { return a + b }
+func RunNestedLambdaLoop() int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let ignored = Take(Clear(), func() {
+            while false { }
+        }, {
+            break
+            0
+        })
+    }
+    return g.Length
+}
+func RunImplicitConversion(value Token) int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let ignored = TakeConverted(value, {
+            break
+            0
+        })
+    }
+    return g.Length
+}
 var g string? = "ok"
-Console.WriteLine(RunAdd() + RunAnd() + RunLabeledOr() + RunChainedCall(Box()))`, "GS0158@27:14 GS0158@39:14 GS0158@53:14 GS0158@65:14", "reject", ""}
+Console.WriteLine(RunAdd() + RunAnd() + RunLabeledOr() + RunChainedCall(Box()) + RunNestedLambdaLoop() + RunImplicitConversion(Token{}))`, "GS0158@27:14 GS0158@39:14 GS0158@53:14 GS0158@65:14 GS0158@89:14 GS0158@101:14", "reject", ""}
+            yield[]object{"control8_interpolation_and_reassigned_callable_before_break", `import System
+class C {
+    var Value int32 = 1
+}
+class Noisy {
+    override func ToString() string {
+        cleaner()
+        return "n"
+    }
+}
+func RunInterpolation() int32 {
+    var x C? = C{}
+    cleaner = func() {
+        x = nil
+    }
+    let n = Noisy{}
+    while true {
+        if x == nil {
+            return 0
+        }
+        let ignored = "${n}${{
+            break
+            0
+        }}"
+    }
+    return x.Value
+}
+func RunCallableReassignedAfterCall(cb () -> int32) int32 {
+    var s string? = "ok"
+    var f () -> int32 = () -> {
+        s = nil
+        return 1
+    }
+    while true {
+        if s == nil {
+            return 0
+        }
+        let ignored = f() + {
+            f = cb
+            break
+            0
+        }
+    }
+    return s.Length
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(RunInterpolation() + RunCallableReassignedAfterCall(() -> 1))`, "GS0158@26:14 GS0158@44:14", "reject", ""}
             yield[]object{"control7_killed_branch_and_loop_condition_facts_not_replayed_on_break", `import System
 func Get() string? { return "ok" }
 func RunShortCircuitKilled() int32 {

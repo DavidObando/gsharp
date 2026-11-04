@@ -23,7 +23,9 @@ internal sealed class NarrowingJumpState {
         externalCallableAliases IReadOnlyCollection[VariableSymbol],
         activeFinallyClauses ImmutableArray[FinallyClauseSyntax],
         activeCleanupStatements ImmutableArray[BoundStatement],
-        activeCleanupRegions ImmutableArray[GotoCleanupRegion]
+        activeCleanupRegions ImmutableArray[GotoCleanupRegion],
+        breakSyntax BreakStatementSyntax? = nil,
+        breakBlockEntries[]?(Node SyntaxNode, FrameIndex int32, Aliases ImmutableArray[VariableSymbol]) = nil
     ) {
         this.narrowedVariables = Dictionary[AccessPath, TypeSymbol](narrowedVariables)
         this.narrowingFrameIndices = Dictionary[AccessPath, int32](narrowingFrameIndices)
@@ -33,6 +35,8 @@ internal sealed class NarrowingJumpState {
         ActiveFinallyClauses = activeFinallyClauses
         ActiveCleanupStatements = activeCleanupStatements
         ActiveCleanupRegions = activeCleanupRegions
+        BreakSyntax = breakSyntax
+        BreakBlockEntries = breakBlockEntries
     }
 
     prop NarrowedVariables IReadOnlyDictionary[AccessPath, TypeSymbol] {
@@ -57,13 +61,23 @@ internal sealed class NarrowingJumpState {
         get;
     }
 
+    prop BreakSyntax BreakStatementSyntax? {
+        get;
+    }
+
+    prop BreakBlockEntries[]?(Node SyntaxNode, FrameIndex int32, Aliases ImmutableArray[VariableSymbol]) {
+        get;
+    }
+
     func Clone() NarrowingJumpState -> NarrowingJumpState(
         narrowedVariables,
         NarrowingFrameIndices,
         ExternalCallableAliases,
         ActiveFinallyClauses,
         ActiveCleanupStatements,
-        ActiveCleanupRegions
+        ActiveCleanupRegions,
+        BreakSyntax,
+        BreakBlockEntries
     )
 
     func RemoveNarrowing(path AccessPath) {

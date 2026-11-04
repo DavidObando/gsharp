@@ -120,7 +120,7 @@ internal partial class StatementBinder {
         binderCtx.NarrowingFlow.Clear()
         binderCtx.BoundExpressionsInLoop.Clear()
         loopBodyByBreakLabel.Clear()
-        blockEntryFrameIndex.Clear()
+        blockEntryStates.Clear()
         loopExitFacts.Clear()
         ClearBackwardJumpSpanCaches()
         boundFinallyBlocks.Clear()
@@ -132,7 +132,10 @@ internal partial class StatementBinder {
         userLabelHandlerRegions.Clear()
     }
 
-    private func CaptureJumpState() NarrowingJumpState {
+    private func CaptureJumpState(
+        breakSyntax BreakStatementSyntax? = nil,
+        breakBlockEntries[]?(Node SyntaxNode, FrameIndex int32, Aliases ImmutableArray[VariableSymbol]) = nil
+    ) NarrowingJumpState {
         let narrowedAtSource = Dictionary[AccessPath, TypeSymbol]()
         let narrowingFrameIndices = Dictionary[AccessPath, int32]()
         // Frames are ordered outermost to innermost, so overwriting records
@@ -150,12 +153,17 @@ internal partial class StatementBinder {
             externalCallableAliases,
             activeFinallyClauses.ToImmutableArray(),
             activeCleanupStatements.ToImmutableArray(),
-            activeCleanupRegions.ToImmutableArray()
+            activeCleanupRegions.ToImmutableArray(),
+            breakSyntax,
+            breakBlockEntries
         )
     }
 
     private let loopBodyByBreakLabel Dictionary[BoundLabel, SyntaxNode] = Dictionary[BoundLabel, SyntaxNode]()
-    private let blockEntryFrameIndex Dictionary[SyntaxNode, int32] = Dictionary[SyntaxNode, int32]()
+    private let blockEntryStates Dictionary[
+        SyntaxNode,
+        (FrameIndex int32, Aliases ImmutableArray[VariableSymbol])
+    ] = Dictionary[SyntaxNode, (FrameIndex int32, Aliases ImmutableArray[VariableSymbol])]()
 
     /// Binds a loop body while pushing the loop's break/continue labels (and
     /// optional ADR-0070 label name) onto (cref:BinderContext.LoopStack).
@@ -231,11 +239,11 @@ internal partial class StatementBinder {
         } finally {
             binderCtx.LoopStack.Pop()
             loopBodyByBreakLabel.Remove(breakLabelValue)
-            if binderCtx.LoopStack.Count == 0 {
-                binderCtx.BoundExpressionsInLoop.Clear()
-            }
         }
         RecordLoopExitFacts(body, loopCondition?(), breakLabelValue, continueLabelValue, boundBody, loopEntryState)
+        if binderCtx.LoopStack.Count == 0 {
+            binderCtx.BoundExpressionsInLoop.Clear()
+        }
         return boundBody
     }
 
@@ -461,33 +469,72 @@ internal partial class StatementBinder {
     }
 
     private func CaptureBreakJumpState(breakSyntax BreakStatementSyntax, breakLabel BoundLabel) NarrowingJumpState {
-        let snapshot = CaptureJumpState()
-        if !loopBodyByBreakLabel.TryGetValue(breakLabel, out var targetLoopBody) {
-            return snapshot
+        let entries = List[(Node SyntaxNode, FrameIndex int32, Aliases ImmutableArray[VariableSymbol])]()
+        if loopBodyByBreakLabel.TryGetValue(breakLabel, out var targetLoopBody) {
+            var child SyntaxNode = breakSyntax
+            while !object.ReferenceEquals(child, targetLoopBody) && child.Parent is {} parent {
+                if blockEntryStates.TryGetValue(child, out var childEntry) {
+                    entries.Add((child, childEntry.FrameIndex, childEntry.Aliases))
+                }
+                child = parent
+            }
+            if object.ReferenceEquals(child, targetLoopBody) && blockEntryStates.TryGetValue(
+                child,
+                out var loopBodyEntry
+            ) {
+                entries.Add((child, loopBodyEntry.FrameIndex, loopBodyEntry.Aliases))
+            }
         }
-        let steps = List[(Parent SyntaxNode, Child SyntaxNode, ChildMinFrame int32)]()
+        return CaptureJumpState(breakSyntax, entries.ToArray())
+    }
+
+    internal func ApplyBreakPrefixEffects(snapshot NarrowingJumpState, targetLoopBody SyntaxNode) {
+        if snapshot.BreakSyntax is not{} breakSyntax {
+            return
+        }
+        let blockEntries = Dictionary[SyntaxNode, (FrameIndex int32, Aliases ImmutableArray[VariableSymbol])]()
+        if snapshot.BreakBlockEntries is {} capturedEntries {
+            for entry in capturedEntries {
+                blockEntries[entry.Node] = (entry.FrameIndex, entry.Aliases)
+            }
+        }
+        let steps = List[
+            (Parent SyntaxNode, Child SyntaxNode, ChildMinFrame int32, ChildEntryAliases ImmutableArray[VariableSymbol])
+        ]()
         var child SyntaxNode = breakSyntax
         var innerBlockMinFrame = int32.MaxValue
+        var innerBlockAliases = default(ImmutableArray[VariableSymbol])
         while !object.ReferenceEquals(child, targetLoopBody) && child.Parent is {} parent {
-            if blockEntryFrameIndex.TryGetValue(child, out var childFrame) && childFrame < innerBlockMinFrame {
-                innerBlockMinFrame = childFrame
+            if blockEntries.TryGetValue(child, out var childEntry) && childEntry.FrameIndex < innerBlockMinFrame {
+                innerBlockMinFrame = childEntry.FrameIndex
+                innerBlockAliases = childEntry.Aliases
             }
-            steps.Add((parent, child, innerBlockMinFrame))
+            steps.Add((parent, child, innerBlockMinFrame, innerBlockAliases))
             child = parent
         }
         if object.ReferenceEquals(child, targetLoopBody) && targetLoopBody.Parent is {} loopParent {
-            if blockEntryFrameIndex.TryGetValue(child, out var loopBodyFrame) && loopBodyFrame < innerBlockMinFrame {
-                innerBlockMinFrame = loopBodyFrame
+            if blockEntries.TryGetValue(child, out var loopBodyEntry) && loopBodyEntry.FrameIndex < innerBlockMinFrame {
+                innerBlockMinFrame = loopBodyEntry.FrameIndex
+                innerBlockAliases = loopBodyEntry.Aliases
             }
-            steps.Add((loopParent, targetLoopBody, innerBlockMinFrame))
+            steps.Add((loopParent, targetLoopBody, innerBlockMinFrame, innerBlockAliases))
         }
         for var i = steps.Count - 1; i >= 0; i-- {
-            let (parent, stepChild, childMinFrame) = steps[i]
-            for (prefix, conditionBranch) in EnumerateEvaluatedPrefixesBeforeChild(parent, stepChild) {
-                ApplyEvaluatedPrefixEffectsToSnapshot(snapshot, prefix, conditionBranch, childMinFrame)
+            let (parent, stepChild, childMinFrame, childEntryAliases) = steps[i]
+            let prefixes = EnumerateEvaluatedPrefixesBeforeChild(parent, stepChild)
+            if prefixes.Count == 0 {
+                continue
+            }
+            let prefixAliases = if childEntryAliases.IsDefault {
+                HashSet[VariableSymbol](snapshot.ExternalCallableAliases)
+            } else {
+                HashSet[VariableSymbol](childEntryAliases)
+            }
+            prefixAliases.IntersectWith(snapshot.ExternalCallableAliases)
+            for (prefix, conditionBranch) in prefixes {
+                ApplyEvaluatedPrefixEffectsToSnapshot(snapshot, prefix, conditionBranch, childMinFrame, prefixAliases)
             }
         }
-        return snapshot
     }
 
     private func EnumerateEvaluatedPrefixesBeforeChild(parent SyntaxNode, child SyntaxNode) List[
@@ -606,6 +653,28 @@ internal partial class StatementBinder {
             return
         }
         if binderCtx.BoundExpressionsInLoop.TryGetValue(node, out var bound) {
+            if node is ExpressionSyntax holeExpr &&
+                node.Parent is InterpolatedStringExpressionSyntax parentInterpSyntax {
+                let parentHandler = if binderCtx.BoundExpressionsInLoop.TryGetValue(
+                    parentInterpSyntax,
+                    out var parentInterp
+                ) &&
+                    parentInterp is BoundInterpolatedStringExpression interpExpr {
+                    interpExpr.Handler
+                } else {
+                    default(InterpolatedStringHandlerInfo?)
+                }
+                results.Add(
+                    BoundInterpolatedStringExpression(
+                        parentInterpSyntax,
+                        ImmutableArray.Create(
+                            BoundInterpolatedStringPart.FromHole(bound, alignment: nil, format: nil, holeExpr)
+                        ),
+                        parentHandler
+                    )
+                )
+                return
+            }
             results.Add(bound)
             return
         }
@@ -618,10 +687,11 @@ internal partial class StatementBinder {
         snapshot NarrowingJumpState,
         prefix SyntaxNode,
         conditionBranch bool?,
-        childMinFrame int32
+        childMinFrame int32,
+        prefixAliases HashSet[VariableSymbol]
     ) {
         EnsureClosureAssignedNames(prefix)
-        let aliasesBefore = HashSet[VariableSymbol](snapshot.ExternalCallableAliases)
+        let aliasesBefore = HashSet[VariableSymbol](prefixAliases)
         let boundExpressions = List[BoundExpression]()
         CollectBoundExpressionsInPrefix(prefix, boundExpressions)
         let assignedNames = HashSet[string]()
@@ -633,7 +703,7 @@ internal partial class StatementBinder {
         var collector AssignedRootsCollector? = nil
         var assignedRoots HashSet[VariableSymbol]? = nil
         if boundExpressions.Count > 0 {
-            let exprCollector = NewCollector(AssignmentPreservesNarrowing, snapshot.ExternalCallableAliases)
+            let exprCollector = NewCollector(AssignmentPreservesNarrowing, aliasesBefore)
             for bound in boundExpressions {
                 exprCollector.VisitExpression(bound)
             }
@@ -690,7 +760,13 @@ internal partial class StatementBinder {
             }
         }
         if collector != nil {
-            snapshot.ReplaceExternalCallableAliases(collector.DefinitelyExternalFunctionValues)
+            prefixAliases.Clear()
+            for alias in collector.DefinitelyExternalFunctionValues {
+                prefixAliases.Add(alias)
+            }
+            let updatedSnapshotAliases = HashSet[VariableSymbol](snapshot.ExternalCallableAliases)
+            updatedSnapshotAliases.IntersectWith(prefixAliases)
+            snapshot.ReplaceExternalCallableAliases(updatedSnapshotAliases)
         }
     }
 

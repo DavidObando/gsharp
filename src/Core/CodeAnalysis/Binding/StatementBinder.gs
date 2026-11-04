@@ -484,8 +484,8 @@ internal partial class StatementBinder {
             default(SyntaxNode?)
         }
         var recordedBlockOwner = false
-        if blockOwner != nil && !blockEntryFrameIndex.ContainsKey(blockOwner) {
-            blockEntryFrameIndex[blockOwner] = blockFrameIndex
+        if blockOwner != nil && !blockEntryStates.ContainsKey(blockOwner) {
+            blockEntryStates[blockOwner] = (blockFrameIndex, externalCallableAliases.ToImmutableArray())
             recordedBlockOwner = true
         }
         let memberNotNullFrame = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol]())
@@ -803,7 +803,7 @@ internal partial class StatementBinder {
             return currentStatementListFallsThrough
         } finally {
             if recordedBlockOwner && blockOwner != nil {
-                blockEntryFrameIndex.Remove(blockOwner)
+                blockEntryStates.Remove(blockOwner)
             }
             ShadowLeaveList(shadowSavedOverlay, shadowSavedBase)
             NoteListExit()
