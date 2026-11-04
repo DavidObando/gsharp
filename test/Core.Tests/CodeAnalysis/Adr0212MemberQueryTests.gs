@@ -153,6 +153,7 @@ func UseUnfinished[T IImportedParsable[T]](sb StringBuilder, c Cat) {
     sb.Append( // PUnfinishedImported
     Free( // PUnfinishedFree
     let n = 1 + Free( // PUnfinishedBinary
+    let u = -Free(1, 2, 3) // PFailedUnary
     c.Purr( // PUnfinishedInstance
     T.Parse( // PUnfinishedConstraint
     WriteLine(Console.WriteLine, 1, 2) // PFailedProbe
@@ -221,6 +222,19 @@ class UnfinishedDog : Animal {
         Assert.True(
             isolatedCompilation.GetSemanticModel(unfinishedTree).GetMemberGroup(FindCall("PUnfinishedBinary")).IsEmpty
         )
+        let siblingBefore = SyntaxTree.Parse(
+            SourceText.From("package Members\nfunc SiblingBody() int32 { return 1 }\n", "sibling.gs")
+        )
+        let siblingAfter = SyntaxTree.Parse(
+            SourceText.From("package Members\nfunc SiblingBody() int32 { return 2 }\n", "sibling.gs")
+        )
+        let incrementalFirst = Compilation(Trees[1], Trees[0], unfinishedTree, siblingBefore)
+        incrementalFirst.RecordMemberGroups = true
+        incrementalFirst.IncrementalBodyReuse = true
+        let unaryCall = FindCall("PFailedUnary")
+        Assert.Equal(4, incrementalFirst.GetSemanticModel(unfinishedTree).GetMemberGroup(unaryCall).Length)
+        let incrementalSuccessor = incrementalFirst.ReplaceSyntaxTree(siblingBefore, siblingAfter)
+        Assert.Equal(4, incrementalSuccessor.GetSemanticModel(unfinishedTree).GetMemberGroup(unaryCall).Length)
     }
 
     @Fact

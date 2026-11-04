@@ -121,6 +121,7 @@ internal class BoundBodyCache {
         if entries.TryGetValue(key, out var entry) && object.ReferenceEquals(entry.Member, member) {
             loweredBody = entry.LoweredBody
             diagnostics = entry.Diagnostics
+            CallCandidateRecorder.ReplayFailedCalls(entry.FailedCalls)
             Interlocked.Increment(&hits)
             CompilationMeasurements.Count("bodies.cache-hits")
             return true
@@ -136,11 +137,13 @@ internal class BoundBodyCache {
     /// @param bodySyntax The body syntax that was bound and lowered.
     /// @param loweredBody The lowered body to cache.
     /// @param diagnostics The per-body diagnostics to cache alongside the body.
+    /// @param failedCalls The failed-call records collected while binding the body.
     func Store(
         member FunctionSymbol,
         bodySyntax SyntaxNode,
         loweredBody BoundBlockStatement?,
-        diagnostics ImmutableArray[Diagnostic]
+        diagnostics ImmutableArray[Diagnostic],
+        failedCalls ImmutableArray[BoundErrorExpression] = default(ImmutableArray[BoundErrorExpression])
     ) {
         if loweredBody == nil || !TryCreateKey(member, bodySyntax, out var key) {
             return
@@ -152,6 +155,11 @@ internal class BoundBodyCache {
                 ImmutableArray[Diagnostic].Empty
             } else {
                 diagnostics
+            },
+            if failedCalls.IsDefault {
+                ImmutableArray[BoundErrorExpression].Empty
+            } else {
+                failedCalls
             }
         )
         Interlocked.Increment(&stores)
@@ -166,10 +174,16 @@ internal class BoundBodyCache {
     }
 
     private class Entry {
-        init(member FunctionSymbol, loweredBody BoundBlockStatement, diagnostics ImmutableArray[Diagnostic]) {
+        init(
+            member FunctionSymbol,
+            loweredBody BoundBlockStatement,
+            diagnostics ImmutableArray[Diagnostic],
+            failedCalls ImmutableArray[BoundErrorExpression]
+        ) {
             Member = member
             LoweredBody = loweredBody
             Diagnostics = diagnostics
+            FailedCalls = failedCalls
         }
 
         prop Member FunctionSymbol {
@@ -181,6 +195,10 @@ internal class BoundBodyCache {
         }
 
         prop Diagnostics ImmutableArray[Diagnostic] {
+            get;
+        }
+
+        prop FailedCalls ImmutableArray[BoundErrorExpression] {
             get;
         }
     }

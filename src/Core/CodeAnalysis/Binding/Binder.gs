@@ -4073,17 +4073,18 @@ partial class Binder {
                 }
                 // ADR-0041 iterator carve-out — same logic as
                 // BindReturnTypeClause(isAsync=true) at function declarations.
-                if ret is SequenceTypeSymbol seq {
+                let asyncRet = ret
+                if asyncRet is SequenceTypeSymbol seq {
                     ret = AsyncSequenceTypeSymbol.Get(seq.ElementType)
                 } else if ret is PlatformTypeSymbol{UnderlyingType: SequenceTypeSymbol platformSeq} {
                     ret = PlatformTypeSymbol.Get(AsyncSequenceTypeSymbol.Get(platformSeq.ElementType))
                 } else {
-                    let nt = ret as NullableTypeSymbol
+                    let nt = asyncRet as NullableTypeSymbol
                     let innerSeq SequenceTypeSymbol? = nt?.UnderlyingType as SequenceTypeSymbol
                     if innerSeq != nil {
                         ret = NullableTypeSymbol.Get(AsyncSequenceTypeSymbol.Get(innerSeq.ElementType))
-                    } else if !IsAsyncIteratorReturnType(ret!!) {
-                        ret = lambdas.WrapAsTask(ret!!)
+                    } else if !IsAsyncIteratorReturnType(asyncRet) {
+                        ret = lambdas.WrapAsTask(asyncRet)
                     }
                 }
             }
@@ -8726,10 +8727,17 @@ partial class Binder {
                 AppendBodyDiagnostics(diagnostics, reusedDiagnostics, member)
                 return reusedBody!!
             }
-            let result = bindAndLower()
+            let bodyFailedCalls = CallCandidateRecorder.BeginBody()
+            var recordedFailedCalls = ImmutableArray[BoundErrorExpression].Empty
+            var result BodyBindResult
+            try {
+                result = bindAndLower()
+            } finally {
+                recordedFailedCalls = CallCandidateRecorder.EndBody(bodyFailedCalls)
+            }
             AppendBodyDiagnostics(diagnostics, result.Diagnostics, member)
             if cacheable {
-                cache.Store(member, bodySyntax, result.Body, result.Diagnostics)
+                cache.Store(member, bodySyntax, result.Body, result.Diagnostics, recordedFailedCalls)
             }
             return result.Body
         }

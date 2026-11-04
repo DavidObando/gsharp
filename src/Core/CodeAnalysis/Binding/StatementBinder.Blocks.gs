@@ -530,26 +530,67 @@ internal partial class StatementBinder {
     }
 
     /// ADR-0208 R10 (#5168): removes the external-callable aliases that a filter may reassign: a
-    /// name the filter writes, or a variable that a closure assigns.
+    /// variable the filter writes, or a variable that a closure assigns.
     private func RemoveFilterAffectedAliases(aliases HashSet[VariableSymbol], filters List[ExpressionSyntax]) {
-        let filterNames = CollectEnclosingFilterNames(filters)
+        let filterWrites = CollectEnclosingFilterWrites(filters)
         aliases.RemoveWhere(
-            (alias VariableSymbol) -> filterNames.Contains(alias.Name) || binderCtx.MayBeAssignedByClosure(alias)
+            (alias VariableSymbol) -> FilterWritesVariable(filterWrites, alias) || binderCtx.MayBeAssignedByClosure(
+                alias
+            )
         )
     }
 
-    /// ADR-0208 R10 (#5168): the names that [`filters`](paramref) may write: assignment targets,
-    /// `??=` targets, and `ref`, `out` and `&` operands. A name that a filter only reads is not
-    /// written. Also anchors the closure-assigned name set.
-    private func CollectEnclosingFilterNames(filters List[ExpressionSyntax]) HashSet[string] {
+    /// ADR-0208 R10 (#5168, #5239): for each filter in [`filters`](paramref), the protected block of its
+    /// `try` statement and the names that the filter may write: assignment targets, `??=` targets, and
+    /// `ref`, `out` and `&` operands. A name that a filter only reads is not written. Also anchors the
+    /// closure-assigned name set.
+    private func CollectEnclosingFilterWrites(filters List[ExpressionSyntax]) List[
+        (TryBlock SyntaxNode?, Names HashSet[string])
+    ] {
         EnsureClosureAssignedNames(filters[0])
-        let names = HashSet[string]()
+        let writes = List[(TryBlock SyntaxNode?, Names HashSet[string])](filters.Count)
         for filter in filters {
+            let names = HashSet[string]()
             CollectAssignedNamesAndMemberMutation(filter, names)
             CollectWritableRefArgumentNames(filter, names)
             CollectFilterWriteTargets(filter, names)
+            if names.Count > 0 {
+                let tryBlock = (filter.Parent?.Parent as TryStatementSyntax)?.TryBlock
+                writes.Add((tryBlock, names))
+            }
         }
-        return names
+        return writes
+    }
+
+    /// ADR-0208 R10 (#5168, #5239): whether any filter in [`filterWrites`](paramref) writes [`variable`](paramref)'s
+    /// name and lies outside the `try` block that declares [`variable`](paramref).
+    private func FilterWritesVariable(
+        filterWrites List[(TryBlock SyntaxNode?, Names HashSet[string])],
+        variable VariableSymbol
+    ) bool {
+        if filterWrites.Count == 0 {
+            return false
+        }
+        for target in AliasChain(variable) {
+            for entry in filterWrites {
+                if entry.Names.Contains(target.Name) && !IsDeclaredInside(target, entry.TryBlock) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func IsDeclaredInside(variable VariableSymbol, region SyntaxNode?) bool {
+        if region == nil {
+            return false
+        }
+        for var node SyntaxNode? = variable.DeclaringSyntax; node != nil; node = node!!.Parent {
+            if object.ReferenceEquals(node, region) {
+                return true
+            }
+        }
+        return false
     }
 
     /// ADR-0208 R10 (#5168): collects the targets of `??=` and `&` in a filter. An index input of the
@@ -563,22 +604,6 @@ internal partial class StatementBinder {
         for child in node.GetChildren() {
             CollectFilterWriteTargets(child, names)
         }
-    }
-
-    /// ADR-0208 R10 (#5168): the `when` filters of every `try` at or below [`node`](paramref).
-    private func CollectCatchFiltersWithin(node SyntaxNode) List[ExpressionSyntax] {
-        let filters = List[ExpressionSyntax]()
-        if node is TryStatementSyntax tryStatement {
-            for clause in tryStatement.CatchClauses {
-                if clause.Filter != nil {
-                    filters.Add(clause.Filter)
-                }
-            }
-        }
-        for child in node.GetChildren() {
-            filters.AddRange(CollectCatchFiltersWithin(child))
-        }
-        return filters
     }
 
     /// ADR-0208 R10 (#5168): adds the storage that the `ref` or `out` operand [`operand`](paramref)
@@ -623,7 +648,7 @@ internal partial class StatementBinder {
         if filters.Count == 0 {
             return
         }
-        let names = CollectEnclosingFilterNames(filters)
+        let filterWrites = CollectEnclosingFilterWrites(filters)
         if !HasAnyActiveNarrowings() {
             return
         }
@@ -633,11 +658,12 @@ internal partial class StatementBinder {
             }
             let toRemove = List[AccessPath]()
             for key in frame.Keys {
-                if names.Contains(key.Root.Name) || MayBeMutatedByUnknownCallable(key) {
+                if FilterWritesVariable(filterWrites, key.Root) || MayBeMutatedByUnknownCallable(key) {
                     toRemove.Add(key)
                 }
             }
             for key in toRemove {
+                conditionKillJournal?.Add((frame, key, frame[key]))
                 frame.Remove(key)
             }
         }
@@ -1051,6 +1077,23 @@ internal partial class StatementBinder {
         let prefix = ImmutableArray.CreateBuilder[BoundStatement]()
         let capturedCall = CaptureDeferArguments(expression, prefix)
         return (prefix.ToImmutable(), capturedCall, nil)
+    }
+
+    // Issue #5640: wraps the bound operands of a `defer` in a block with the `defer` syntax.
+    // Narrowing and callable-alias updates see the operands without the synthetic locals or the deferred call.
+    private func DeferPrefixBlock(
+        syntax DeferStatementSyntax,
+        prefixStatements ImmutableArray[BoundStatement]
+    ) BoundBlockStatement {
+        let operands = ImmutableArray.CreateBuilder[BoundStatement](prefixStatements.Length)
+        for statement in prefixStatements {
+            if statement is BoundVariableDeclaration{Initializer: {} initializer} {
+                operands.Add(BoundExpressionStatement(nil, initializer))
+            } else {
+                operands.Add(statement)
+            }
+        }
+        return BoundBlockStatement(syntax, operands.MoveToImmutable())
     }
 
     private func CaptureDeferArguments(

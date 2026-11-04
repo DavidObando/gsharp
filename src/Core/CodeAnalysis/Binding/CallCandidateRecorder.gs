@@ -21,10 +21,47 @@ import System.Threading
 /// inference, a conversion operator search) names other methods or holds fewer candidates. A thread owns its frames, so parallel body binding needs no lock.
 internal shared class CallCandidateRecorder {
     private let current ThreadLocal[Frame?] = ThreadLocal[Frame?]()
+    private let currentBodyFailedCalls ThreadLocal[List[BoundErrorExpression]?] = ThreadLocal[
+        List[BoundErrorExpression]?
+    ]()
     internal let enabled AsyncLocal[bool] = AsyncLocal[bool]()
     private let currentFailedCalls AsyncLocal[ConcurrentDictionary[SyntaxNode, BoundErrorExpression]?] = AsyncLocal[
         ConcurrentDictionary[SyntaxNode, BoundErrorExpression]?
     ]()
+
+    /// Starts collecting failed-call records for a cacheable member body when recording is enabled.
+    func BeginBody() List[BoundErrorExpression]? {
+        let previous = currentBodyFailedCalls.Value
+        currentBodyFailedCalls.Value = if enabled.Value {
+            List[BoundErrorExpression]()
+        } else {
+            default(List[BoundErrorExpression]?)
+        }
+        return previous
+    }
+
+    /// Ends collecting failed-call records for a member body and returns the recorded entries.
+    func EndBody(previous List[BoundErrorExpression]?) ImmutableArray[BoundErrorExpression] {
+        let collected = currentBodyFailedCalls.Value
+        currentBodyFailedCalls.Value = previous
+        return if collected == nil || collected.Count == 0 {
+            ImmutableArray[BoundErrorExpression].Empty
+        } else {
+            collected.ToImmutableArray()
+        }
+    }
+
+    /// Replays the failed-call records of a reused cached body into the active compilation's table.
+    func ReplayFailedCalls(failedCalls ImmutableArray[BoundErrorExpression]) {
+        if !enabled.Value || failedCalls.IsDefaultOrEmpty || currentFailedCalls.Value is not{} table {
+            return
+        }
+        for error in failedCalls {
+            if error.CallSyntax is {} callSyntax {
+                table[callSyntax] = error
+            }
+        }
+    }
 
     /// Turns recording on for the binding that runs in the returned scope, workers included. Only a
     /// compilation made for the semantic model asks for it, so `gsc` allocates nothing here.
@@ -193,6 +230,9 @@ internal shared class CallCandidateRecorder {
                         error.IsExtensionCall = isExtension
                         if currentFailedCalls.Value is {} table {
                             table[frame.Syntax] = error
+                        }
+                        if currentBodyFailedCalls.Value is {} bodyList && !bodyList.Contains(error) {
+                            bodyList.Add(error)
                         }
                     }
                 }
