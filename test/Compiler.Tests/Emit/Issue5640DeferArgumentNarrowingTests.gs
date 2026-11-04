@@ -586,10 +586,12 @@ class C {
     var Value int32 = 7
 }
 func Consume(v int32) { }
-func Run(callback () -> void) int32 {
+func Run(choose bool, callback () -> void) int32 {
     var x C? = C{}
     let clear = func() { x = nil }
     var action = callback
+    var other = callback
+    let readIn = func(in target () -> void) int32 { return 1 }
     defer Consume({
         let invoke = func(f () -> void) int32 {
             f()
@@ -597,13 +599,14 @@ func Run(callback () -> void) int32 {
         }
         invoke(func() { action = clear })
         action = callback
+        readIn(in choose ? action : other)
         invoke(callback)
     })
     if x == nil { return 0 }
     action()
     return x.Value
 }
-Console.WriteLine(Run(func() { }))`, "", "run", "7"}
+Console.WriteLine(Run(true, func() { }))`, "", "run", "7"}
             yield[]object{"d28_5640_defer_conditional_out_argument_invalidates_external_callable_alias", `import System
 class C {
     var Value int32 = 7
