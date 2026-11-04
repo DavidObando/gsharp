@@ -88,7 +88,7 @@ open class Adr0212SpeculativeTypeInfoTests {
         let beforeGroupGlobal = Expression(tree, "ShadowedGlobal(3)", "BeforeLocalFunc")
         let shadowsGlobal = Expression(tree, "ShadowedGlobal(3)", "InLocalFunc")
         let twiceCall = Expression(tree, "Twice(3)", "InLocalFunc")
-        let forwardCall = Expression(tree, "ForwardSecond(3)", "InForwardGroup")
+        let forwardCall = Expression(tree, "ForwardSecond[T](x)", "InForwardGroup")
         let unshadowedGlobal = Expression(tree, "ShadowedGlobal(\"hi\")", "TopLevel")
         let shadowsMethod = Expression(tree, "ShadowedMethod(3)", "InMethod")
         Assert.Same(
@@ -109,6 +109,7 @@ open class Adr0212SpeculativeTypeInfoTests {
         let innerTwoArgCall = Expression(tree, "Scoped(3, 1)", "InInnerBlock")
         let innerDefaultedOuterCall = Expression(tree, "DefaultedOuter(3)", "InInnerBlock")
         let innerConstrainedOuterCall = Expression(tree, "ConstrainedOuter(3)", "InInnerBlock")
+        let innerReclaimedCall = Expression(tree, "Reclaimed(3)", "InReclaimedBlock")
         let siblingCall = Expression(tree, "SiblingOnly(3)", "InSiblingBlock")
         let outerCall = Expression(tree, "Scoped(3)", "AfterBlocks")
         Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(innerCall.Span.Start, innerCall).Type)
@@ -120,6 +121,10 @@ open class Adr0212SpeculativeTypeInfoTests {
         Assert.Same(
             TypeSymbol.String,
             model.GetSpeculativeTypeInfo(innerConstrainedOuterCall.Span.Start, innerConstrainedOuterCall).Type
+        )
+        Assert.Same(
+            TypeSymbol.String,
+            model.GetSpeculativeTypeInfo(innerReclaimedCall.Span.Start, innerReclaimedCall).Type
         )
         Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(siblingCall.Span.Start, siblingCall).Type)
         Assert.Same(TypeSymbol.String, model.GetSpeculativeTypeInfo(outerCall.Span.Start, outerCall).Type)
@@ -337,7 +342,7 @@ func Probe(p Point?, n int32) {
     let Pick[T] = func(x T) T { return x }
     let ForwardFirst[T] = func(x T) int32 {
         // InForwardGroup
-        return ForwardSecond(3)
+        return ForwardSecond[T](x)
     }
     let ForwardSecond[U] = func(x U) int32 { return 7 }
     let ShadowedGlobal[T] = func(x T) T { return x }
@@ -353,6 +358,7 @@ func Probe(p Point?, n int32) {
     let Scoped[T] = func(x T, extra int32 = 0) string { return "outer" }
     let DefaultedOuter[T] = func(x T, extra int32 = 0) string { return "outer-default" }
     let ConstrainedOuter[T] = func(x T) string { return "outer-unconstrained" }
+    let Reclaimed[T] = func(x T, extra int32 = 0) string { return "outer-reclaimed" }
     if true {
         let Scoped[T] = func(x T) T { return x }
         let DefaultedOuter[U] = func(x U, extra int32) int32 { return extra }
@@ -362,6 +368,14 @@ func Probe(p Point?, n int32) {
         Scoped(3, 1)
         DefaultedOuter(3)
         ConstrainedOuter(3)
+    }
+    if true {
+        let Reclaimed = 0
+        if Reclaimed == 0 {
+            let Reclaimed[U] = func(x U, extra int32) int32 { return extra }
+            // InReclaimedBlock
+            Reclaimed(3)
+        }
     }
     if true {
         let SiblingOnly[T] = func(x T) T { return x }

@@ -9293,6 +9293,8 @@ partial class Binder {
         /// @param inConstructorInitializer Whether the expression stands in the arguments of a constructor's
         /// `: base(...)` or `: this(...)`; the binder then applies the restrictions of that context (no receiver,
         /// so instance access is rejected and the static members stay reachable).
+        /// @param additionalTypeParameters Type parameters of enclosing generic local functions from outermost
+        /// to innermost, or `null`.
         /// @returns The non-error, non-void type, or `null` when binding fails.
         internal func BindSpeculativeExpressionType(
             globalScope BoundGlobalScope?,
@@ -9302,7 +9304,8 @@ partial class Binder {
             additionalFunctionScopes IEnumerable[ImmutableArray[FunctionSymbol]]?,
             expression ExpressionSyntax?,
             referencingTree SyntaxTree,
-            inConstructorInitializer bool = false
+            inConstructorInitializer bool = false,
+            additionalTypeParameters IEnumerable[TypeParameterSymbol]? = nil
         ) TypeSymbol? {
             if globalScope == nil || expression == nil {
                 return nil
@@ -9341,6 +9344,14 @@ partial class Binder {
                                 if localFunction != nil {
                                     binder.$scope.TryDeclareFunction(localFunction)
                                 }
+                            }
+                        }
+                    }
+                    if additionalTypeParameters != nil {
+                        for typeParameter in additionalTypeParameters {
+                            if typeParameter != nil {
+                                binder.binderCtx.CurrentTypeParameters ??= Dictionary[string, TypeParameterSymbol]()
+                                binder.binderCtx.CurrentTypeParameters!![typeParameter.Name] = typeParameter
                             }
                         }
                     }

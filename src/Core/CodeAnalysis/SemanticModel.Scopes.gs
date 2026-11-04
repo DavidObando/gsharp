@@ -196,15 +196,17 @@ partial class SemanticModel {
 
     /// Collects the local functions in scope at [`position`](paramref), grouped by lexical scope depth from
     /// outermost to innermost and ordered by declaration position within each scope, excluding any function
-    /// shadowed by a nearer variable or parameter.
+    /// whose nearest declaration at [`position`](paramref) is a variable or parameter.
     private func ScopedLocalFunctionScopes(position int32) List[ImmutableArray[FunctionSymbol]] {
         let visible = List[ScopedLocal]()
+        let claimed = HashSet[string](StringComparer.Ordinal)
         let shadowedByVariable = HashSet[string](StringComparer.Ordinal)
         for candidate in ScopedLocalCandidates(position, nil).OrderByDescending((c ScopedLocal) -> c.Depth)
             .ThenByDescending((c ScopedLocal) -> c.Start) {
-            if candidate.Local is VariableSymbol {
+            if claimed.Add(candidate.Local.Name) && candidate.Local is VariableSymbol {
                 shadowedByVariable.Add(candidate.Local.Name)
-            } else if candidate.Local is FunctionSymbol && !shadowedByVariable.Contains(candidate.Local.Name) {
+            }
+            if candidate.Local is FunctionSymbol && !shadowedByVariable.Contains(candidate.Local.Name) {
                 visible.Add(candidate)
             }
         }
@@ -216,6 +218,20 @@ partial class SemanticModel {
             scopes.Add(group.Select((c ScopedLocal) -> cast[FunctionSymbol](c.Local)).ToImmutableArray())
         }
         return scopes
+    }
+
+    /// Collects the type parameters of any generic local functions whose declarations enclose
+    /// [`position`](paramref), from outermost to innermost so inner type parameters shadow outer ones.
+    private func EnclosingLocalFunctionTypeParameters(position int32) List[TypeParameterSymbol] {
+        let typeParameters = List[TypeParameterSymbol]()
+        for (anchor, local) in index.Value.LocalDeclarations {
+            if local is FunctionSymbol{IsGeneric: true} localFunction &&
+                IsLocalFunction(localFunction) &&
+                RegionContains(anchor.Span.Start, anchor.Span.End, position) {
+                typeParameters.AddRange(localFunction.TypeParameters)
+            }
+        }
+        return typeParameters
     }
 
     /// Gets the start of the consecutive local-function group that contains [`anchor`](paramref),
