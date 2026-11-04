@@ -53,4 +53,15 @@ internal class BindingServices {
     var CachedStaticImportImports ImmutableArray[ImportSymbol]
     var CachedStaticImportStructs ImmutableArray[StructSymbol]
     var CachedStaticImportSyntaxTree SyntaxTree?
+
+    /// Gets or sets the incremental body-binding options (body cache and dirty syntax trees)
+    /// for a (cref:Binder.BindProgram) pass (ADR-0212 slice S8, issue #5312).
+    var BodyBindingOptions BodyBindingOptions
+}
+
+/// Options for incremental member-body binding in (cref:Binder.BindProgram) (ADR-0212 slice S8, issue #5312).
+/// @param Cache The optional per-project bound-body cache.
+/// @param DirtyTrees The freshly-parsed syntax trees whose member bodies must be re-bound from scratch.
+internal data struct BodyBindingOptions(Cache BoundBodyCache?, DirtyTrees ImmutableHashSet[SyntaxTree]?) {
+    func IsDirty(tree SyntaxTree?) bool -> DirtyTrees != nil && tree != nil && DirtyTrees.Contains(tree)
 }
