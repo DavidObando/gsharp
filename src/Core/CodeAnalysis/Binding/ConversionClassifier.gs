@@ -1093,10 +1093,27 @@ internal class ConversionClassifier {
         // element conversion (reference upcast no-op, boxing, numeric widening,
         // nullable-reference upcast, …). The emitter then materialises this as a
         // normal `newobj ValueTuple<…>` over the converted element values.
-        if expression.Type is TupleTypeSymbol sourceTuple &&
-            type is TupleTypeSymbol targetTuple &&
-            sourceTuple.Arity == targetTuple.Arity {
-            return BindTupleConversion(diagnosticLocation, expression, sourceTuple, targetTuple, allowExplicit)
+        if expression.Type is TupleTypeSymbol sourceTuple {
+            if type is TupleTypeSymbol targetTuple && sourceTuple.Arity == targetTuple.Arity {
+                return BindTupleConversion(diagnosticLocation, expression, sourceTuple, targetTuple, allowExplicit)
+            }
+            if sourceTuple.HasNilElement {
+                let resolvedTuple = cast[TupleTypeSymbol](
+                    if type is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol innerTarget} &&
+                        innerTarget.Arity == sourceTuple.Arity {
+                        TupleTypeSymbol.ResolveNilElements(sourceTuple, innerTarget)
+                    } else {
+                        TupleTypeSymbol.ResolveNilElements(sourceTuple)
+                    }
+                )
+                expression = BindTupleConversion(
+                    diagnosticLocation,
+                    expression,
+                    sourceTuple,
+                    resolvedTuple,
+                    allowExplicit
+                )
+            }
         }
         // Issue #1881: a conversion bound inside a `checked(...)`/`checked { }`
         // context traps on narrowing overflow via the emitter's `conv.ovf.*`

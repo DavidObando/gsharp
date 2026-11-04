@@ -1250,11 +1250,15 @@ internal partial class StatementBinder {
                     let _ = bindExpression(values[i], false)
                     continue
                 }
-                let initializer = bindExpression(values[i], false)
+                var initializer = bindExpression(values[i], false)
                 if IsDiscard(nameExpr.IdentifierToken) {
                     continue
                 }
-                let variable = bindLocalVariable(nameExpr.IdentifierToken, false, initializer.Type)
+                let varType = TupleTypeSymbol.ResolveNilElements(initializer.Type)
+                if !object.ReferenceEquals(varType, initializer.Type) {
+                    initializer = conversions.BindConversion(values[i].Location, initializer, varType)
+                }
+                let variable = bindLocalVariable(nameExpr.IdentifierToken, false, varType)
                 declarations.Add(BoundVariableDeclaration(syntax, variable, initializer))
             }
             return BoundBlockStatement(syntax, declarations.ToImmutable())
@@ -1366,13 +1370,12 @@ internal partial class StatementBinder {
             let sourceSyntax = NameExpressionSyntax(syntax.SyntaxTree, sourceToken)
             let plan = BindMultiAssignmentTarget(targets[i], sourceSyntax, syntax.OperatorToken, captures)
             rawPlans[i] = plan
-            if rawElement == TypeSymbol.Null &&
+            if (rawElement == TypeSymbol.Null || rawElement is TupleTypeSymbol{HasNilElement: true}) &&
                 plan.AssignedValue is {Type: var targetElementType} &&
                 targetElementType != TypeSymbol.Error &&
-                !TypeSymbol.ContainsNullLiteralType(targetElementType) {
-                resolvedElements.Add(targetElementType)
-            } else if rawElement == TypeSymbol.Null {
-                resolvedElements.Add(NullableTypeSymbol.Get(TypeSymbol.Object))
+                !TypeSymbol
+                .ContainsNullLiteralType(targetElementType) {
+                resolvedElements.Add(TupleTypeSymbol.ResolveNilElements(rawElement, targetElementType))
             } else {
                 resolvedElements.Add(TupleTypeSymbol.ResolveNilElements(rawElement))
             }
@@ -1392,11 +1395,23 @@ internal partial class StatementBinder {
                 continue
             }
             if plan.AssignedValue != nil && sources[i] is {} source {
-                let replacement = if plan.AssignedValue is BoundConversionExpression{
-                    Expression: BoundVariableExpression v
-                } conv &&
-                    object.ReferenceEquals(v.Variable, source) && conv.Type == tupleElements[i].Type {
-                    tupleElements[i]
+                let rawElement = rawTupleType.ElementTypes[i]
+                let replacement = if (
+                    rawElement == TypeSymbol.Null || rawElement is TupleTypeSymbol{HasNilElement: true}
+                ) &&
+                    syntax
+                    .OperatorToken
+                    .Kind == SyntaxKind.EqualsToken &&
+                    plan
+                    .AssignedValue
+                    .Type != TypeSymbol.Error &&
+                    !TypeSymbol
+                    .ContainsNullLiteralType(plan.AssignedValue.Type) {
+                    if tupleElements[i].Type == plan.AssignedValue.Type {
+                        tupleElements[i]
+                    } else {
+                        conversions.BindConversion(targets[i].Location, tupleElements[i], plan.AssignedValue.Type)
+                    }
                 } else {
                     MultiAssignmentTupleElementRewriter(source, tupleElements[i]).Replace(plan.AssignedValue)
                 }
@@ -1429,13 +1444,21 @@ internal partial class StatementBinder {
     ) {
         let valueTemps = [plans.Count]LocalVariableSymbol?
         for var i = 0; i < plans.Count; i++ {
-            let assignedValue BoundExpression? = plans[i].AssignedValue
+            var assignedValue BoundExpression? = plans[i].AssignedValue
             if assignedValue == nil {
                 continue
             }
             if assignedValue.Type == TypeSymbol.Error {
                 statements.Add(BoundExpressionStatement(syntax, assignedValue))
                 continue
+            }
+            if assignedValue.Type is TupleTypeSymbol{HasNilElement: true} unresolvedTuple {
+                let resolvedTuple = TupleTypeSymbol.ResolveNilElements(unresolvedTuple)
+                assignedValue = conversions.BindConversion(
+                    assignedValue.Syntax?.Location ?? syntax.Location,
+                    assignedValue,
+                    resolvedTuple
+                )
             }
             let valueTemp = DeclareMultiAssignmentTemp("value$i", assignedValue.Type)
             valueTemps[i] = valueTemp

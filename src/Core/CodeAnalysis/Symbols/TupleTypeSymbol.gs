@@ -205,20 +205,31 @@ class TupleTypeSymbol : TypeSymbol {
         }
 
         /// Issue #4316: replaces any unresolved `nil` element (`TypeSymbol.Null`) in [`type`](paramref)
-        /// with `object?` before a local's storage is materialized.
-        internal func ResolveNilElements(type TypeSymbol) TypeSymbol {
+        /// with the corresponding element of [`targetType`](paramref) when `nil` implicitly converts to it,
+        /// or `object?` otherwise, before storage or a runtime receiver is materialized.
+        internal func ResolveNilElements(type TypeSymbol, targetType TypeSymbol? = nil) TypeSymbol {
+            if type == TypeSymbol.Null {
+                return if targetType != nil && targetType != TypeSymbol.Error && !TypeSymbol.ContainsNullLiteralType(
+                    targetType
+                ) &&
+                    Conversion
+                    .Classify(TypeSymbol.Null, targetType).IsImplicit {
+                    targetType
+                } else {
+                    cast[TypeSymbol](NullableTypeSymbol.Get(TypeSymbol.Object))
+                }
+            }
             if type is not TupleTypeSymbol tuple || !tuple.HasNilElement {
                 return type
             }
+            let targetTuple = if targetType is TupleTypeSymbol t && t.Arity == tuple.Arity {
+                t
+            } else {
+                default(TupleTypeSymbol?)
+            }
             let elements = ImmutableArray.CreateBuilder[TypeSymbol](tuple.Arity)
-            for element in tuple.ElementTypes {
-                elements.Add(
-                    if element == TypeSymbol.Null {
-                        cast[TypeSymbol](NullableTypeSymbol.Get(TypeSymbol.Object))
-                    } else {
-                        ResolveNilElements(element)
-                    }
-                )
+            for var i = 0; i < tuple.Arity; i++ {
+                elements.Add(ResolveNilElements(tuple.ElementTypes[i], targetTuple?.ElementTypes[i]))
             }
             return if tuple.HasNames {
                 Get(elements.MoveToImmutable(), tuple.ElementNames)

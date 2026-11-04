@@ -110,7 +110,22 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
     let (da, db) = d ? (nil, "f") : (nil, nil)
     let f = () -> d ? (nil, "g") : (nil, nil)
     let projected = (d ? (nil, "h") : (nil, nil)).Item2
-    return if standalone.Item1 == nil && da == nil && (db != nil || !d) && f().Item1 == nil && (projected != nil || !d) {
+    let eq = (d ? (nil, "x") : (nil, nil)) == (default(object?), default(string?))
+    var pair (string?, string?) = ("p", "q")
+    var num = 0
+    pair, num = d ? ((nil, "x"), 1) : ((nil, nil), 2)
+    let boxed object = (d ? (nil, "x") : (nil, nil))
+    let multiT, let multiN = d ? (nil, "x") : (nil, nil), 0
+    return if standalone.Item1 == nil &&
+        da == nil &&
+        (db != nil || !d) &&
+        f().Item1 == nil &&
+        (projected != nil || !d) &&
+        (eq == !d) &&
+        pair.Item1 == nil &&
+        boxed != nil &&
+        multiT.Item1 == nil &&
+        multiN == 0 {
         (a.Item2, b.Item2)
     } else {
         ("bad", "bad")

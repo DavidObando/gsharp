@@ -46,8 +46,10 @@ internal partial class ExpressionBinder {
         left BoundExpression,
         right BoundExpression
     ) BoundExpression {
-        let leftTuple = cast[TupleTypeSymbol](left.Type)
-        let rightTuple = cast[TupleTypeSymbol](right.Type)
+        var left = left
+        var right = right
+        var leftTuple = cast[TupleTypeSymbol](left.Type)
+        var rightTuple = cast[TupleTypeSymbol](right.Type)
         if leftTuple.Arity != rightTuple.Arity {
             Diagnostics.ReportTupleEqualityArityMismatch(
                 opLocation,
@@ -57,6 +59,14 @@ internal partial class ExpressionBinder {
                 rightTuple.Arity
             )
             return BoundErrorExpression(nil)
+        }
+        if leftTuple.HasNilElement {
+            leftTuple = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(leftTuple, rightTuple))
+            left = conversions.BindConversion(opLocation, left, leftTuple)
+        }
+        if rightTuple.HasNilElement {
+            rightTuple = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(rightTuple, leftTuple))
+            right = conversions.BindConversion(opLocation, right, rightTuple)
         }
         let statements = ImmutableArray.CreateBuilder[BoundStatement](2)
         let leftReceiver = SpillTupleOperand(syntax, left, leftTuple, statements)
