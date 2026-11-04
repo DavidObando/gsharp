@@ -2086,8 +2086,10 @@ internal sealed class RegionEffectScanner {
         while inner is ParenthesizedExpressionSyntax parenthesized {
             inner = parenthesized.Expression
         }
-        return inner is BinaryExpressionSyntax ||
-            (inner is UnaryExpressionSyntax unary && unary.OperatorToken.Kind != SyntaxKind.BangBangToken)
+        if inner is BinaryExpressionSyntax binary {
+            return IsOperatorCandidate(binary)
+        }
+        return inner is UnaryExpressionSyntax unary && IsUnaryOperatorCandidate(unary)
     }
 
     // A value converted to the type of [`target`](paramref). An operator or a literal has a built-in value when
@@ -2106,7 +2108,7 @@ internal sealed class RegionEffectScanner {
         var builtInByForm = inner is BinaryExpressionSyntax ||
             inner is LiteralExpressionSyntax ||
             inner is InterpolatedStringExpressionSyntax
-        if inner is UnaryExpressionSyntax unary && unary.OperatorToken.Kind != SyntaxKind.BangBangToken {
+        if inner is UnaryExpressionSyntax unary && IsUnaryOperatorCandidate(unary) {
             builtInByForm = true
         }
         current.Conversions.Add(RegionConversion(BuildPath(value), target, builtInByForm))
@@ -2198,7 +2200,7 @@ internal sealed class RegionEffectScanner {
         let builtInByForm = arm is BinaryExpressionSyntax ||
             arm is LiteralExpressionSyntax ||
             arm is InterpolatedStringExpressionSyntax ||
-            (arm is UnaryExpressionSyntax unary && unary.OperatorToken.Kind != SyntaxKind.BangBangToken)
+            (arm is UnaryExpressionSyntax unary && IsUnaryOperatorCandidate(unary))
         current.Conversions.Add(RegionConversion(path, target, builtInByForm))
     }
 

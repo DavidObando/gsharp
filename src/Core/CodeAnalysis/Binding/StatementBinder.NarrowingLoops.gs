@@ -1405,6 +1405,7 @@ internal partial class StatementBinder {
     // package or an extension operator) is a plain call that ADR-0208 A3 exempts, as on main; an imported operator is
     // not.
     private func OperatorsRunUserCode(effects RegionEffects, forReferenceStorage bool) bool {
+        let enumTypes = List[EnumSymbol]()
         for candidate in effects.Operators {
             // A known built-in operand type, or `nil` for an operand that is itself an operator expression.
             let operandTypes = List[TypeSymbol?]()
@@ -1416,6 +1417,9 @@ internal partial class StatementBinder {
                     }
                     operandTypes.Add(nil)
                 } else if BuiltInOperandType(operand, effects) is {} operandType {
+                    if operandType is EnumSymbol enumOperand && !enumTypes.Contains(enumOperand) {
+                        enumTypes.Add(enumOperand)
+                    }
                     operandTypes.Add(operandType)
                 } else if !forReferenceStorage || OperandIsImportedType(operand, effects) {
                     return true
@@ -1426,7 +1430,7 @@ internal partial class StatementBinder {
             if operandTypes.Count == 1 {
                 if operandTypes[0] is not{} operandType {
                     if !forReferenceStorage && OperatorNames.TryGetUnaryName(candidate.Kind) is {} unaryName &&
-                        HasAnyBuiltInExtensionOperator(unaryName) {
+                        HasAnyBuiltInOrEnumExtensionOperator(unaryName, enumTypes) {
                         return true
                     }
                     continue
@@ -1441,16 +1445,21 @@ internal partial class StatementBinder {
                 }
             } else if !forReferenceStorage &&
                 !IsPredefinedBinary(candidate.Kind, operandTypes[0], operandTypes[1]) &&
-                HasExtensionOperator(candidate.Kind, operandTypes[0], operandTypes[1]) {
+                HasExtensionOperator(candidate.Kind, operandTypes[0], operandTypes[1], enumTypes) {
                 return true
             }
         }
         return false
     }
 
-    private func HasAnyBuiltInExtensionOperator(name string) bool {
+    private func HasAnyBuiltInOrEnumExtensionOperator(name string, enumTypes List[EnumSymbol]) bool {
         for builtin in BuiltInTypes() {
             if $scope.TryLookupExtensionFunction(builtin, name, out _) {
+                return true
+            }
+        }
+        for enumType in enumTypes {
+            if $scope.TryLookupExtensionFunction(enumType, name, out _) {
                 return true
             }
         }
@@ -1489,7 +1498,12 @@ internal partial class StatementBinder {
         return BoundBinaryOperator.Bind(kind, left, right) != nil
     }
 
-    private func HasExtensionOperator(kind SyntaxKind, left TypeSymbol?, right TypeSymbol?) bool {
+    private func HasExtensionOperator(
+        kind SyntaxKind,
+        left TypeSymbol?,
+        right TypeSymbol?,
+        enumTypes List[EnumSymbol]
+    ) bool {
         if OperatorNames.TryGetBinaryName(kind) is not{} name {
             return false
         }
@@ -1497,14 +1511,14 @@ internal partial class StatementBinder {
             if $scope.TryLookupExtensionFunction(left, name, out _) {
                 return true
             }
-        } else if HasAnyBuiltInExtensionOperator(name) {
+        } else if HasAnyBuiltInOrEnumExtensionOperator(name, enumTypes) {
             return true
         }
         if right != nil {
             if $scope.TryLookupExtensionFunction(right, name, out _) {
                 return true
             }
-        } else if HasAnyBuiltInExtensionOperator(name) {
+        } else if HasAnyBuiltInOrEnumExtensionOperator(name, enumTypes) {
             return true
         }
         return false
@@ -1522,16 +1536,15 @@ internal partial class StatementBinder {
         }
         var first TypeSymbol? = nil
         for candidate in types {
-            var type = if candidate.Clr is {} clr {
+            let type = if candidate.Clr is {} clr {
                 BuiltInType(clr.FullName)
             } else {
                 candidate.Symbol
             }
-            if type is EnumSymbol enumType && !$scope.TryLookupExtensionFunction(enumType, "op_Equality", out _) &&
-                !$scope.TryLookupExtensionFunction(enumType, "op_Inequality", out _) {
-                type = enumType.UnderlyingType
-            }
-            if type == nil || !MetadataTypeKeys.IsBuiltIn(type) || object.Equals(type, TypeSymbol.Object) {
+            if type == nil || (!MetadataTypeKeys.IsBuiltIn(type) && type !is EnumSymbol) || object.Equals(
+                type,
+                TypeSymbol.Object
+            ) {
                 return nil
             }
             first ??= type
@@ -2463,6 +2476,7 @@ internal partial class StatementBinder {
             if !forReferenceStorage &&
                 (
                 object.Equals(type.Symbol, TypeSymbol.Object) ||
+                    type.Symbol is EnumSymbol ||
                     (type.Symbol is StructSymbol structType && !structType.IsClass)
             ) {
                 return true

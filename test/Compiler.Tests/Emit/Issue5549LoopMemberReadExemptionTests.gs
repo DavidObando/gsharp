@@ -347,6 +347,82 @@ func RunSpan(n int32) int32 {
 
 var g C? = C{}
 Console.WriteLine(RunLoop(2) + RunSpan(2))`, "GS0158@17:27 GS0158@17:37 GS0158@32:23", "reject", ""}
+            yield[]object{"dereference_unary_and_enum_extension_operators_in_loop_and_span_rejected_5549", `import System
+
+class C {
+    var Value int32 = 1
+}
+struct Token {
+    var N int32
+}
+func (t Token) operator -() int32 {
+    g = nil
+    return -t.N
+}
+enum Tag {
+    A = 1,
+    B = 2
+}
+func (t Tag) operator -() int32 {
+    g = nil
+    return 0
+}
+func (t Tag) operator ==(o object?) bool {
+    g = nil
+    return false
+}
+func (t Tag) operator !=(o object?) bool -> true
+class Holder {
+    var Kind Tag = Tag.A
+}
+
+func RunDerefUnaryInLoop(h managed[Token], n int32) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + g.Value + -(*h)
+    }
+    return total
+}
+
+func RunEnumUnaryInLoop(n int32) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + g.Value + -Tag.A
+    }
+    return total
+}
+
+func RunEnumNilCompareInLoop(holder Holder, n int32) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + g.Value
+        if holder.Kind == nil { total = total + 1 }
+    }
+    return total
+}
+
+func RunEnumNilCompareInSpan(holder Holder, n int32) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    var i = 0
+    Again:
+    total = total + g.Value
+    if holder.Kind == nil { total = total + 1 }
+    i = i + 1
+    if i < n { goto Again }
+    return total
+}
+
+func CallDeref(n int32) int32 {
+    var tok = Token{N: 1}
+    return RunDerefUnaryInLoop(managed(tok), n)
+}
+
+var g C? = C{}
+Console.WriteLine(CallDeref(2) + RunEnumUnaryInLoop(2) + RunEnumNilCompareInLoop(Holder{}, 2) + RunEnumNilCompareInSpan(Holder{}, 2))`, "GS0158@34:27 GS0158@43:27 GS0158@52:27 GS0158@63:23", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

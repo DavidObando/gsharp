@@ -3921,6 +3921,55 @@ func Run(items List[int32]) int32 {
     return total
 }
 func Main() { }`, "GS0158@20:27")
+            Add("dereference-unary-and-enum-extension-operators-remove-facts (W4, #5549)", `package T
+import System
+class C { var Value int32 = 1 }
+struct Token { var N int32 }
+func (t Token) operator -() int32 {
+    g = nil
+    return -t.N
+}
+enum Tag {
+    A = 1,
+    B = 2
+}
+func (t Tag) operator -() int32 {
+    g = nil
+    return 0
+}
+func (t Tag) operator ==(o object?) bool {
+    g = nil
+    return false
+}
+func (t Tag) operator !=(o object?) bool -> true
+class Holder { var Kind Tag = Tag.A }
+var g C? = C{}
+func RunDeref(h managed[Token]) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + g.Value + -(*h)
+    }
+    return total
+}
+func RunEnumUnary() int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + g.Value + -Tag.A
+    }
+    return total
+}
+func RunEnumNil(holder Holder) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + g.Value
+        if holder.Kind == nil { total = total + 1 }
+    }
+    return total
+}
+func Main() { }`, "GS0158@28:27 GS0158@36:27 GS0158@44:27")
             return rows
         }
     }
