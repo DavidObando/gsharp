@@ -1133,6 +1133,8 @@ namespace Demo
             return f() ?? g() ?? h().Item1;
         }
         public static (BoundSpillSequenceExpression, int) TupleForgiven() => (null!, 1);
+        public static (BoundSpillSequenceExpression, int)? NullableTupleForgiven() => (null!, 1);
+        public static ((BoundSpillSequenceExpression, int)?, int) NestedNullableTupleForgiven() => ((null!, 1), 2);
         public static BoundSpillSequenceExpression? NullableReturn() => null!;
     }
 }`))
@@ -1140,6 +1142,7 @@ namespace Demo
         Assert.Contains("return default(BoundSpillSequenceExpression)", suppressed[0])
         Assert.Contains("() -> default(BoundSpillSequenceExpression)", suppressed[0])
         Assert.Contains("(default(BoundSpillSequenceExpression), 1)", suppressed[0])
+        Assert.Contains("((default(BoundSpillSequenceExpression), 1), 2)", suppressed[0])
         Assert.Contains("(default(BoundSpillSequenceExpression), i)", suppressed[0])
         Assert.DoesNotContain("default(Wrapped)", suppressed[0])
         Assert.Contains("func NullableReturn() BoundSpillSequenceExpression? -> nil", suppressed[0])

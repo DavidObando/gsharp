@@ -35,6 +35,16 @@ class AlwaysEqualBox {
     }
 }
 
+class Token {
+    public var v string
+    public init(v string) {
+        this.v = v
+    }
+    shared {
+        public implicit operator Token(s string?) Token -> Token(s ?? "<nil>")
+    }
+}
+
 func Tick(ctr Ctr, b bool) bool {
     ctr.n++
     return b
@@ -126,6 +136,8 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
     var pair (string?, string?) = ("p", "q")
     var num = 0
     pair, num = d ? ((nil, "x"), 1) : ((nil, nil), 2)
+    var tok = Token("init")
+    tok, num = (nil, 7)
     let boxed object = (d ? (nil, "x") : (nil, nil))
     let multiT, let multiN = d ? (nil, "x") : (nil, nil), 0
     let swExpr = switch (d ? (nil, "x") : (nil, nil)) {
@@ -158,6 +170,8 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
         neqLeftNil &&
         neqRightNil &&
         pair.Item1 == nil &&
+        tok.v == "<nil>" &&
+        num == 7 &&
         boxed != nil &&
         multiT.Item1 == nil &&
         multiN == 0 &&

@@ -557,6 +557,13 @@ partial class CSharpToGSharpTranslator {
             var currentType ITypeSymbol? = returnType
             let path = List[int32](tupleIndices.Count)
             for var i = tupleIndices.Count - 1; i >= 0; i-- {
+                while currentType is INamedTypeSymbol{
+                    OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
+                    TypeArguments: {Length: 1} nullableArguments
+                } {
+                    currentType = nullableArguments[0]
+                    path.Add(0)
+                }
                 if currentType is not INamedTypeSymbol{IsTupleType: true} tupleType ||
                     tupleIndices[i] < 0 ||
                     tupleIndices[i] >= tupleType

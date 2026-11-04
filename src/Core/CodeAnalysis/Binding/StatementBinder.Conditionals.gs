@@ -1370,12 +1370,16 @@ internal partial class StatementBinder {
             let sourceSyntax = NameExpressionSyntax(syntax.SyntaxTree, sourceToken)
             let plan = BindMultiAssignmentTarget(targets[i], sourceSyntax, syntax.OperatorToken, captures)
             rawPlans[i] = plan
+            let sourceTargetType = FindMultiAssignmentSourceConversionType(plan.AssignedValue, source) ??
+                plan
+                .AssignedValue
+                ?.Type
             if (rawElement == TypeSymbol.Null || rawElement is TupleTypeSymbol{HasNilElement: true}) &&
-                plan.AssignedValue is {Type: var targetElementType} &&
-                targetElementType != TypeSymbol.Error &&
+                sourceTargetType != nil &&
+                sourceTargetType != TypeSymbol.Error &&
                 !TypeSymbol
-                .ContainsNullLiteralType(targetElementType) {
-                resolvedElements.Add(TupleTypeSymbol.ResolveNilElements(rawElement, targetElementType))
+                .ContainsNullLiteralType(sourceTargetType) {
+                resolvedElements.Add(TupleTypeSymbol.ResolveNilElements(rawElement, sourceTargetType))
             } else {
                 resolvedElements.Add(TupleTypeSymbol.ResolveNilElements(rawElement))
             }
@@ -1395,27 +1399,14 @@ internal partial class StatementBinder {
                 continue
             }
             if plan.AssignedValue != nil && sources[i] is {} source {
-                let rawElement = rawTupleType.ElementTypes[i]
-                let replacement = if (
-                    rawElement == TypeSymbol.Null || rawElement is TupleTypeSymbol{HasNilElement: true}
-                ) &&
-                    syntax
-                    .OperatorToken
-                    .Kind == SyntaxKind.EqualsToken &&
-                    plan
-                    .AssignedValue
-                    .Type != TypeSymbol.Error &&
-                    !TypeSymbol
-                    .ContainsNullLiteralType(plan.AssignedValue.Type) {
-                    if tupleElements[i].Type == plan.AssignedValue.Type {
-                        tupleElements[i]
-                    } else {
-                        conversions.BindConversion(targets[i].Location, tupleElements[i], plan.AssignedValue.Type)
-                    }
-                } else {
-                    MultiAssignmentTupleElementRewriter(source, tupleElements[i]).Replace(plan.AssignedValue)
-                }
-                plan = plan.WithAssignedValue(replacement)
+                plan = plan.WithAssignedValue(
+                    MultiAssignmentTupleElementRewriter(
+                        source,
+                        tupleElements[i],
+                        conversions,
+                        targets[i].Location
+                    ).Replace(plan.AssignedValue)
+                )
             }
             plans.Add(plan)
         }
@@ -1857,13 +1848,47 @@ internal partial class StatementBinder {
     private class MultiAssignmentTupleElementRewriter : BoundTreeRewriter {
         private let source VariableSymbol
         private let replacement BoundExpression
+        private let conversions ConversionClassifier?
+        private let location TextLocation
 
-        init(source VariableSymbol, replacement BoundExpression) {
+        init(
+            source VariableSymbol,
+            replacement BoundExpression,
+            conversions ConversionClassifier? = nil,
+            location TextLocation = default(TextLocation)
+        ) {
             this.source = source
             this.replacement = replacement
+            this.conversions = conversions
+            this.location = location
         }
 
         func Replace(expression BoundExpression) BoundExpression -> RewriteExpression(expression)
+
+        protected override func RewriteConversionExpression(node BoundConversionExpression) BoundExpression {
+            if node.Expression is BoundVariableExpression v && object.ReferenceEquals(v.Variable, source) &&
+                node.Type == replacement.Type {
+                return replacement
+            }
+            return base.RewriteConversionExpression(node)
+        }
+
+        protected override func RewriteBlockExpression(node BoundBlockExpression) BoundExpression {
+            if node
+                .Statements
+                .Length == 1 &&
+                node.Statements[0] is BoundVariableDeclaration{Initializer: BoundVariableExpression v} &&
+                object
+                .ReferenceEquals(v.Variable, source) {
+                if node.Type == replacement.Type {
+                    return replacement
+                }
+                if conversions != nil && node.Type != TypeSymbol.Error {
+                    return conversions.BindConversion(location, replacement, node.Type)
+                }
+            }
+            return base.RewriteBlockExpression(node)
+        }
 
         protected override func RewriteVariableExpression(
             node BoundVariableExpression
@@ -1871,6 +1896,47 @@ internal partial class StatementBinder {
             replacement
         } else {
             base.RewriteVariableExpression(node)
+        }
+    }
+
+    private func FindMultiAssignmentSourceConversionType(
+        expression BoundExpression?,
+        source VariableSymbol
+    ) TypeSymbol? {
+        switch expression {
+            case nil {
+                return nil
+            }
+            case conv is BoundConversionExpression {
+                if conv.Expression is BoundVariableExpression v && object.ReferenceEquals(v.Variable, source) {
+                    return conv.Type
+                }
+                return FindMultiAssignmentSourceConversionType(conv.Expression, source)
+            }
+            case block is BoundBlockExpression {
+                if block
+                    .Statements
+                    .Length == 1 &&
+                    block.Statements[0] is BoundVariableDeclaration{Initializer: BoundVariableExpression v} &&
+                    object.ReferenceEquals(v.Variable, source) {
+                    return block.Type
+                }
+                return FindMultiAssignmentSourceConversionType(block.Expression, source)
+            }
+            case call is BoundCallExpression {
+                for arg in call.Arguments {
+                    if FindMultiAssignmentSourceConversionType(arg, source) is {} found {
+                        return found
+                    }
+                }
+                return nil
+            }
+            case clrConv is BoundClrConversionCallExpression {
+                return FindMultiAssignmentSourceConversionType(clrConv.Operand, source)
+            }
+            default {
+                return nil
+            }
         }
     }
 

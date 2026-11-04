@@ -4201,21 +4201,27 @@ internal class LambdaBinder {
             if candidates.Count == 0 {
                 return TypeSymbol.Void
             }
-            var result TypeSymbol? = candidates[0]
-            for var i = 1; i < candidates.Count; i++ {
-                result = ComputeLambdaCommonType(result, candidates[i])
-                if result == TypeSymbol.Error {
-                    return TypeSymbol.Error
+            let significant = List[TypeSymbol](candidates.Count)
+            var hasNullCandidate = false
+            for candidate in candidates {
+                if candidate == TypeSymbol.Null {
+                    hasNullCandidate = true
+                } else if candidate != TypeSymbol.Never {
+                    significant.Add(candidate)
                 }
             }
+            var result TypeSymbol? = ExpressionBinder.JoinTupleArmsWithNilElements(significant)
+            if result != nil && hasNullCandidate && !(result is NullableTypeSymbol || result is PlatformTypeSymbol) {
+                result = NullableTypeSymbol.Get(result)
+            }
             if result == nil {
-                let significant = List[TypeSymbol](candidates.Count)
-                for candidate in candidates {
-                    if candidate != TypeSymbol.Never && candidate != TypeSymbol.Null {
-                        significant.Add(candidate)
+                result = candidates[0]
+                for var i = 1; i < candidates.Count; i++ {
+                    result = ComputeLambdaCommonType(result, candidates[i])
+                    if result == TypeSymbol.Error {
+                        return TypeSymbol.Error
                     }
                 }
-                result = ExpressionBinder.JoinTupleArmsWithNilElements(significant)
             }
             // Issue #4965 (ADR-0202): a block body every return of which never
             // completes (`() -> { return { throw e } }`) has no value type
