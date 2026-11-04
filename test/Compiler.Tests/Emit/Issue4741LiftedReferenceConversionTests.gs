@@ -581,10 +581,17 @@ static int? Convert(bool present) => Raw(present);`), expectedOutput)
     @InlineData("Probe.Read[NullAwareImplicitOpaqueValueToken](present)")
     @InlineData("int32(Probe.Read[NumericToken](present))")
     @InlineData("([]uint8(Span[uint8]([]uint8{1}))).Length")
-    @InlineData("RejectNullabilityMismatch(GenericSource[LocalClass?]()).Tag")
-    func ImportedNullableValueSignature_RejectsNonNullableValueTarget(gsharpBody string) {
+    @InlineData("cast[GenericTarget[LocalClass]](GenericSource[LocalClass?]()).Tag")
+    @InlineData(
+        "RejectNullabilityMismatch(GenericSource[LocalClass?]()).Tag",
+        "func RejectNullabilityMismatch(x GenericSource[LocalClass?]) GenericTarget[LocalClass] -> x"
+    )
+    func ImportedNullableValueSignature_RejectsNonNullableValueTarget(
+        gsharpBody string,
+        gsharpDeclaration string = ""
+    ) {
         RunValuePair((`class LocalClass {}
-func RejectNullabilityMismatch(x GenericSource[LocalClass?]) GenericTarget[LocalClass] -> x
+` + "$gsharpDeclaration" + `
 func Raw(present bool) int32 -> ` + "$gsharpBody" + `
 func Convert(present bool) int32? -> Raw(present)`), `static int? Convert(bool present) => null;`, expectedOutput: "1,1", expectedDiagnostic: "GS0155")
     }
