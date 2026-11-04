@@ -1285,6 +1285,42 @@ internal class DataStructSynthesizer {
                 // value.
                 il.LoadConstantI4(unchecked(int32(Fnv1aHash(structSym.Name))))
                 il.OpCode(ILOpCode.Ret)
+            } else if !this.wellKnown.HasHashCodeType() {
+                // Issue #4993: on downlevel targets without System.HashCode
+                // (e.g. netstandard2.0), combine EqualityComparer<T>.Default.GetHashCode
+                // with a multiply-add fold so no host-only System.HashCode reference is emitted.
+                let comparerDefault = Invariant.Required(
+                    typeof(EqualityComparer[object]).GetProperty("Default")?.GetMethod,
+                    "EqualityComparer<T> declares the Default getter"
+                )
+                let comparerGetHashCode = Invariant.Required(
+                    typeof(EqualityComparer[object]).GetMethod("GetHashCode", []Type{typeof(object)}),
+                    "EqualityComparer<T> declares GetHashCode(T)"
+                )
+                for var i = 0; i < fields.Length; i++ {
+                    let field = fields[i]
+                    let comparer = ImportedTypeSymbol.GetConstructed(
+                        typeof(EqualityComparer[object]),
+                        typeof(EqualityComparer[_]),
+                        ImmutableArray.Create(field.Type)
+                    )
+                    let fieldHandle = this.resolveUserFieldToken(structSym, field)
+                    if i > 0 {
+                        il.LoadConstantI4(-1521134295)
+                        il.OpCode(ILOpCode.Mul)
+                    }
+                    il.OpCode(ILOpCode.Call)
+                    il.Token(this.resolveImportedMethodRef(comparerDefault, comparer))
+                    il.LoadArgument(0)
+                    il.OpCode(ILOpCode.Ldfld)
+                    il.Token(fieldHandle)
+                    il.OpCode(ILOpCode.Callvirt)
+                    il.Token(this.resolveImportedMethodRef(comparerGetHashCode, comparer))
+                    if i > 0 {
+                        il.OpCode(ILOpCode.Add)
+                    }
+                }
+                il.OpCode(ILOpCode.Ret)
             } else if !useFold {
                 for field in fields {
                     let fieldHandle = this.resolveUserFieldToken(structSym, field)
