@@ -89,7 +89,7 @@ internal shared class InitializationPlanner {
                 node is BoundStructLiteralExpression &&
                 node
                 .StructType
-                .HasPrimaryConstructor == true &&
+                .HasDeclaredPrimaryConstructor == true &&
                 node
                 .StructType
                 .NeedsSynthesizedValueStructDefaultCtor == true
