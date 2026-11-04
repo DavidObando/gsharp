@@ -1160,6 +1160,7 @@ internal class ReflectionMetadataEmitter {
             ),
             this.userTokens.ResolveUserInstanceMethodToken,
             this.customAttrEncoder.EmitMethodNullability,
+            this.customAttrEncoder.EmitTupleElementNamesAttribute,
             this.memberRefs.GetCtorReference,
             this.userTokens.ResolveUserPropertyAccessorToken
         )

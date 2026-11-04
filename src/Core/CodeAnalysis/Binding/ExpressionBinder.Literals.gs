@@ -2000,7 +2000,7 @@ internal partial class ExpressionBinder {
                             resolveTypeOnly
                         )
                     }
-                    if ImportedTypeSymbol.TryCreateSemanticAggregate(
+                    if !hasSymbolicArgument && ImportedTypeSymbol.TryCreateSemanticAggregate(
                         closedImportedType,
                         $scope.References,
                         out var importedAggregate
@@ -3154,6 +3154,7 @@ internal partial class ExpressionBinder {
                     isReadOnly: true,
                     type
                 )
+                $scope.TryDeclareVariable(temporary)
                 argumentStatements.Add(BoundVariableDeclaration(member, temporary, value))
                 supplied.Add(name, BoundVariableExpression(member, temporary))
             }
@@ -3168,7 +3169,8 @@ internal partial class ExpressionBinder {
                     aggregate!!,
                     parameters[i],
                     out var missingDeclarationShape,
-                    type
+                    type,
+                    constructor
                 )
                 if missingDeclarationShape {
                     Diagnostics.ReportNoApplicableOverload(syntax.TypeIdentifier.Location, aggregate!!.Name)
