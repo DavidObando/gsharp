@@ -127,7 +127,7 @@ internal shared class CallCandidateRecorder {
         if !enabled.Value || frame == nil || candidates.IsDefaultOrEmpty {
             return
         }
-        if receiverType != nil && frame.ReceiverType == nil {
+        if receiverType != nil && (frame.ReceiverType == nil || frame.ReceiverType is TypeParameterSymbol) {
             frame.ReceiverType = receiverType
         }
         let set = ImmutableArray.CreateBuilder[object](candidates.Length)
@@ -145,7 +145,10 @@ internal shared class CallCandidateRecorder {
         if !enabled.Value || frame == nil || candidates.Count == 0 {
             return
         }
-        if receiverType != nil && frame.ReceiverType == nil {
+        if !frame.ExtensionSet.IsDefault && receiverType == nil {
+            return
+        }
+        if receiverType != nil && (frame.ReceiverType == nil || frame.ReceiverType is TypeParameterSymbol) {
             frame.ReceiverType = receiverType
         }
         let set = ImmutableArray.CreateBuilder[object](candidates.Count)

@@ -147,9 +147,16 @@ open class Adr0212MemberQueryTests {
         let unfinishedSource = `package Members
 import GSharp.Core.Tests.CodeAnalysis
 import System
+import System.Collections.Generic
+import System.Linq
 import System.Text
 
-func UseUnfinished[T IImportedParsable[T]](sb StringBuilder, c Cat) {
+func UseUnfinished[T IImportedParsable[T], TEnum IEnumerable[U], U](
+    sb StringBuilder,
+    c Cat,
+    xs []int32,
+    seq TEnum
+) {
     sb.Append( // PUnfinishedImported
     Free( // PUnfinishedFree
     let n = 1 + Free( // PUnfinishedBinary
@@ -157,9 +164,12 @@ func UseUnfinished[T IImportedParsable[T]](sb StringBuilder, c Cat) {
     c.Purr( // PUnfinishedInstance
     T.Parse( // PUnfinishedConstraint
     WriteLine(Console.WriteLine, 1, 2) // PFailedProbe
+    xs.Select(1, 2, 3) // PFailedExtension
+    seq.GetEnumerator(1) // PFailedConstrainedInstance
 }
 
 class UnfinishedDog : Animal {
+    var FieldInit int32 = -Free(1, 2, 3) // PFailedFieldInit
     func Act() {
         base[Animal].Speak(1, 2) // PFailedBracketBase
         base.Speak( // PUnfinishedBase
@@ -217,6 +227,17 @@ class UnfinishedDog : Animal {
         let constraintGroup = model.GetMemberGroup(FindCall("PUnfinishedConstraint"))
         Assert.Equal(2, constraintGroup.Length)
         Assert.All(constraintGroup, (s Symbol) -> Assert.IsType[ImportedFunctionSymbol](s))
+        let failedExtensionGroup = model.GetMemberGroup(FindCall("PFailedExtension"))
+        Assert.NotEmpty(failedExtensionGroup)
+        Assert.All(
+            failedExtensionGroup,
+            (s Symbol) -> Assert.Equal("Enumerable", cast[ImportedFunctionSymbol](s).Method.DeclaringType!!.Name)
+        )
+        let failedConstrainedGroup = model.GetMemberGroup(FindCall("PFailedConstrainedInstance"))
+        let enumeratorCandidate = Assert.Single(
+            failedConstrainedGroup.Where((s Symbol) -> cast[ImportedFunctionSymbol](s).Type.Name.Contains("U"))
+        )
+        Assert.NotNull(enumeratorCandidate)
         let isolatedCompilation = Compilation(unfinishedTree)
         isolatedCompilation.RecordMemberGroups = true
         Assert.True(
@@ -232,9 +253,12 @@ class UnfinishedDog : Animal {
         incrementalFirst.RecordMemberGroups = true
         incrementalFirst.IncrementalBodyReuse = true
         let unaryCall = FindCall("PFailedUnary")
+        let fieldInitCall = FindCall("PFailedFieldInit")
         Assert.Equal(4, incrementalFirst.GetSemanticModel(unfinishedTree).GetMemberGroup(unaryCall).Length)
+        Assert.Equal(4, incrementalFirst.GetSemanticModel(unfinishedTree).GetMemberGroup(fieldInitCall).Length)
         let incrementalSuccessor = incrementalFirst.ReplaceSyntaxTree(siblingBefore, siblingAfter)
         Assert.Equal(4, incrementalSuccessor.GetSemanticModel(unfinishedTree).GetMemberGroup(unaryCall).Length)
+        Assert.Equal(4, incrementalSuccessor.GetSemanticModel(unfinishedTree).GetMemberGroup(fieldInitCall).Length)
     }
 
     @Fact

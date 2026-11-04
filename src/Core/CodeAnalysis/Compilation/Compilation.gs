@@ -425,15 +425,26 @@ open class Compilation {
         // leaf with no Compilation in reach.
         using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
         using let recordingScope = CallCandidateRecorder.Enter(RecordMemberGroups, FailedCalls)
-        let bound = reused ?? Binder.BindGlobalScope(
-            previous: nil,
-            EmbeddedAttributeSource.AddEmbeddedAttributes(SyntaxTrees, References),
-            References,
-            ImplicitSystemImport,
-            PreprocessorSymbols,
-            IsLibrary,
-            Submission
-        )
+        var bound BoundGlobalScope
+        if reused != nil {
+            CallCandidateRecorder.ReplayFailedCalls(reused.FailedCalls)
+            bound = reused
+        } else {
+            let scopeFailedCalls = CallCandidateRecorder.BeginBody()
+            try {
+                bound = Binder.BindGlobalScope(
+                    previous: nil,
+                    EmbeddedAttributeSource.AddEmbeddedAttributes(SyntaxTrees, References),
+                    References,
+                    ImplicitSystemImport,
+                    PreprocessorSymbols,
+                    IsLibrary,
+                    Submission
+                )
+            } finally {
+                bound.FailedCalls = CallCandidateRecorder.EndBody(scopeFailedCalls)
+            }
+        }
         WorkBudget.CancellationToken.ThrowIfCancellationRequested()
         Volatile.Write[BoundGlobalScope?](&this.globalScope, bound)
         return bound
