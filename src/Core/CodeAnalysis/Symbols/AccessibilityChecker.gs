@@ -349,7 +349,7 @@ internal shared class AccessibilityChecker {
         return nil
     }
 
-    private func SameDeclaringInterface(left InterfaceSymbol?, right InterfaceSymbol?) bool {
+    internal func SameDeclaringInterface(left InterfaceSymbol?, right InterfaceSymbol?) bool {
         if left == nil || right == nil {
             return false
         }

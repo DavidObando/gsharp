@@ -894,7 +894,7 @@ class ImportedTypeSymbol : TypeSymbol {
                 } else {
                     aggregate
                 }
-            ){ReturnRefKind = RefCapabilities.GetReturnRefKind(method)}
+            ){ReturnRefKind = RefCapabilities.GetReturnRefKind(method), ImportedMember = method}
         }
 
         private func IsVisible(field FieldInfo, includeInternal bool) bool -> field.IsPublic ||

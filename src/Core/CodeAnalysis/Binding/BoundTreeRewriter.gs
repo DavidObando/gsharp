@@ -2054,13 +2054,15 @@ abstract class BoundTreeRewriter {
         if receiver == node.Receiver && builder == nil {
             return node
         }
-        return BoundBaseInterfaceCallExpression(
+        let copy = BoundBaseInterfaceCallExpression(
             node.Syntax,
             receiver,
             node.Interface,
             node.Method,
             builder?.ToImmutable() ?? node.Arguments
         )
+        node.CopyMemberGroupTo(copy)
+        return copy
     }
 
     /// Issue #986: rewrites a (cref:BoundBaseClassCallExpression).
@@ -2085,7 +2087,7 @@ abstract class BoundTreeRewriter {
         if receiver == node.Receiver && builder == nil {
             return node
         }
-        return BoundBaseClassCallExpression(
+        let copy = BoundBaseClassCallExpression(
             node.Syntax,
             receiver,
             node.BaseClass,
@@ -2095,6 +2097,8 @@ abstract class BoundTreeRewriter {
             node.Property,
             node.IsSetterAccessor
         ){MethodTypeArguments = node.MethodTypeArguments}
+        node.CopyMemberGroupTo(copy)
+        return copy
     }
 
     /// Rewrites a field read.
