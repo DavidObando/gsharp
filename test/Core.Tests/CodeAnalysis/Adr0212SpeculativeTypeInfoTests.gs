@@ -73,17 +73,30 @@ open class Adr0212SpeculativeTypeInfoTests {
         let inferredInt = Expression(tree, "Twice(3)", "InLocalFunc")
         let inferredString = Expression(tree, "Twice(\"abc\")", "InLocalFunc")
         let explicitLong = Expression(tree, "Twice[int64](3)", "InLocalFunc")
+        let overloadedTwo = Expression(tree, "Pick(3, 0)", "InLocalFunc")
+        let overloadedOne = Expression(tree, "Pick(3)", "InLocalFunc")
         Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(inferredInt.Span.Start, inferredInt).Type)
         Assert.Same(TypeSymbol.String, model.GetSpeculativeTypeInfo(inferredString.Span.Start, inferredString).Type)
         Assert.Same(TypeSymbol.Int64, model.GetSpeculativeTypeInfo(explicitLong.Span.Start, explicitLong).Type)
+        Assert.Same(TypeSymbol.String, model.GetSpeculativeTypeInfo(overloadedTwo.Span.Start, overloadedTwo).Type)
+        Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(overloadedOne.Span.Start, overloadedOne).Type)
     }
 
     @Fact
     func LocalFunction_ShadowsGlobalFunctionAndInstanceMethod() {
         let (model, tree) = Create(Program)
+        let beforeGroupGlobal = Expression(tree, "ShadowedGlobal(3)", "BeforeLocalFunc")
         let shadowsGlobal = Expression(tree, "ShadowedGlobal(3)", "InLocalFunc")
+        let twiceCall = Expression(tree, "Twice(3)", "InLocalFunc")
+        let forwardCall = Expression(tree, "ForwardSecond(3)", "InForwardGroup")
         let unshadowedGlobal = Expression(tree, "ShadowedGlobal(\"hi\")", "TopLevel")
         let shadowsMethod = Expression(tree, "ShadowedMethod(3)", "InMethod")
+        Assert.Same(
+            TypeSymbol.String,
+            model.GetSpeculativeTypeInfo(beforeGroupGlobal.Span.Start, beforeGroupGlobal).Type
+        )
+        Assert.Null(model.GetSpeculativeTypeInfo(beforeGroupGlobal.Span.Start, twiceCall).Type)
+        Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(forwardCall.Span.Start, forwardCall).Type)
         Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(shadowsGlobal.Span.Start, shadowsGlobal).Type)
         Assert.Same(TypeSymbol.String, model.GetSpeculativeTypeInfo(unshadowedGlobal.Span.Start, unshadowedGlobal).Type)
         Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(shadowsMethod.Span.Start, shadowsMethod).Type)
@@ -93,9 +106,11 @@ open class Adr0212SpeculativeTypeInfoTests {
     func NestedAndOutOfScopeLocalFunctions_RespectBlockScopes() {
         let (model, tree) = Create(Program)
         let innerCall = Expression(tree, "Scoped(3)", "InInnerBlock")
+        let innerTwoArgCall = Expression(tree, "Scoped(3, 1)", "InInnerBlock")
         let siblingCall = Expression(tree, "SiblingOnly(3)", "InSiblingBlock")
         let outerCall = Expression(tree, "Scoped(3)", "AfterBlocks")
         Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(innerCall.Span.Start, innerCall).Type)
+        Assert.Same(TypeSymbol.String, model.GetSpeculativeTypeInfo(innerTwoArgCall.Span.Start, innerTwoArgCall).Type)
         Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(siblingCall.Span.Start, siblingCall).Type)
         Assert.Same(TypeSymbol.String, model.GetSpeculativeTypeInfo(outerCall.Span.Start, outerCall).Type)
         Assert.Null(model.GetSpeculativeTypeInfo(outerCall.Span.Start, siblingCall).Type)
@@ -303,21 +318,34 @@ func Probe(p Point?, n int32) {
     // BeforeLater
     later
     let later = 2
+    // BeforeLocalFunc
+    ShadowedGlobal(3)
     let Local = func(x int32) int32 { return LocalStep(x) }
     let LocalStep = func(x int32) int32 { return x + 1 }
     let Twice[T] = func(x T) T { return x }
+    let Pick[T] = func(x T, n int32) string { return "two" }
+    let Pick[T] = func(x T) T { return x }
+    let ForwardFirst[T] = func(x T) int32 {
+        // InForwardGroup
+        return ForwardSecond(3)
+    }
+    let ForwardSecond[U] = func(x U) int32 { return 7 }
     let ShadowedGlobal[T] = func(x T) T { return x }
     // InLocalFunc
     Local(3)
     Twice(3)
     Twice("abc")
     Twice[int64](3)
+    Pick(3, 0)
+    Pick(3)
+    ForwardFirst(3)
     ShadowedGlobal(3)
     let Scoped[T] = func(x T, extra int32 = 0) string { return "outer" }
     if true {
         let Scoped[T] = func(x T) T { return x }
         // InInnerBlock
         Scoped(3)
+        Scoped(3, 1)
     }
     if true {
         let SiblingOnly[T] = func(x T) T { return x }

@@ -146,34 +146,7 @@ partial class SemanticModel {
         result ImmutableArray[Symbol].Builder,
         seen HashSet[string]
     ) {
-        let candidates = List[ScopedLocal]()
-        var named ImmutableArray[(Anchor SyntaxNode, Local Symbol)] = index.Value.LocalDeclarations
-        if name != nil {
-            // The name map is only looked up, never enumerated.
-            if !index.Value.LocalDeclarationsByName.TryGetValue(name, out named) {
-                named = ImmutableArray[(Anchor SyntaxNode, Local Symbol)].Empty
-            }
-        }
-        for (anchor, local) in named {
-            // A local function is visible in its whole block, so that local functions can
-            // call themselves and each other; every other local follows its declaration.
-            let hoisted = IsLocalFunction(local)
-            let region = RegionOf(anchor)
-            if region == nil || IsInGuardElse(anchor, position) {
-                continue
-            }
-            // The one declaration-order rule: a local is visible from the end of its own
-            // declaration, or from where its region starts when that is later.
-            let start = if hoisted {
-                region.Owner.Span.Start
-            } else {
-                Math.Max(region.Start, anchor.Span.End)
-            }
-            if !RegionContains(start, region.End, position) {
-                continue
-            }
-            candidates.Add(ScopedLocal(local, Depth(region.Owner), anchor.Span.Start))
-        }
+        let candidates = ScopedLocalCandidates(position, name)
         // The innermost, then the latest, declaration of a name shadows the others.
         let winners = List[ScopedLocal]()
         for candidate in candidates.OrderByDescending((c ScopedLocal) -> c.Depth).ThenByDescending(
@@ -186,6 +159,113 @@ partial class SemanticModel {
         for winner in winners.OrderByDescending((c ScopedLocal) -> c.Depth).ThenBy((c ScopedLocal) -> c.Start) {
             result.Add(winner.Local)
         }
+    }
+
+    /// Collects the local declarations in scope at [`position`](paramref).
+    private func ScopedLocalCandidates(position int32, name string?) List[ScopedLocal] {
+        let candidates = List[ScopedLocal]()
+        var named ImmutableArray[(Anchor SyntaxNode, Local Symbol)] = index.Value.LocalDeclarations
+        if name != nil {
+            // The name map is only looked up, never enumerated.
+            if !index.Value.LocalDeclarationsByName.TryGetValue(name, out named) {
+                named = ImmutableArray[(Anchor SyntaxNode, Local Symbol)].Empty
+            }
+        }
+        for (anchor, local) in named {
+            // A local function is visible from the start of its group, so that local functions in a
+            // consecutive group can call themselves and each other; every other local follows its declaration.
+            let hoisted = IsLocalFunction(local)
+            let region = RegionOf(anchor)
+            if region == nil || IsInGuardElse(anchor, position) {
+                continue
+            }
+            // The one declaration-order rule: a local is visible from the end of its own
+            // declaration, or from where its region starts when that is later.
+            let start = if hoisted {
+                LocalFunctionGroupStart(anchor)
+            } else {
+                Math.Max(region.Start, anchor.Span.End)
+            }
+            if !RegionContains(start, region.End, position) {
+                continue
+            }
+            candidates.Add(ScopedLocal(local, Depth(region.Owner), anchor.Span.Start))
+        }
+        return candidates
+    }
+
+    /// Collects the local functions in scope at [`position`](paramref), including all overloads in the
+    /// current and enclosing blocks that are not shadowed by a nearer variable or parameter.
+    private func ScopedLocalFunctions(position int32) List[FunctionSymbol] {
+        let functions = List[FunctionSymbol]()
+        let shadowedByVariable = HashSet[string](StringComparer.Ordinal)
+        for candidate in ScopedLocalCandidates(position, nil).OrderByDescending((c ScopedLocal) -> c.Depth).ThenBy(
+            (c ScopedLocal) -> c.Start
+        ) {
+            if candidate.Local is VariableSymbol {
+                shadowedByVariable.Add(candidate.Local.Name)
+            } else if candidate.Local is FunctionSymbol localFunction && !shadowedByVariable.Contains(
+                localFunction.Name
+            ) {
+                functions.Add(localFunction)
+            }
+        }
+        return functions
+    }
+
+    /// Gets the start of the consecutive local-function group that contains [`anchor`](paramref),
+    /// matching `StatementBinder.BindLocalFunctionLiteralGroup`.
+    private func LocalFunctionGroupStart(anchor SyntaxNode) int32 {
+        if anchor is not VariableDeclarationSyntax declaration {
+            return anchor.Span.Start
+        }
+        let statements = EnclosingStatements(declaration)
+        var statementIndex = -1
+        for var i = 0; i < statements.Count; i++ {
+            if object.ReferenceEquals(statements[i], declaration) {
+                statementIndex = i
+                break
+            }
+        }
+        if statementIndex <= 0 {
+            return declaration.Span.Start
+        }
+        var start = declaration.Span.Start
+        for var i = statementIndex - 1; i >= 0; i-- {
+            if statements[i] is not VariableDeclarationSyntax previous ||
+                !SameLocalFunctionGroup(previous, declaration) {
+                break
+            }
+            start = previous.Span.Start
+        }
+        return start
+    }
+
+    private func EnclosingStatements(declaration VariableDeclarationSyntax) IReadOnlyList[StatementSyntax] {
+        return switch declaration.Parent {
+            case block is BlockStatementSyntax: block.Statements
+            case blockExpression is BlockExpressionSyntax: blockExpression.Statements
+            case global is GlobalStatementSyntax when global.Parent is CompilationUnitSyntax unit: unit
+                .Members
+                .OfType[GlobalStatementSyntax]()
+                .Select((member GlobalStatementSyntax) -> member.Statement)
+                .ToArray()
+            default: Array.Empty[StatementSyntax]()
+        }
+    }
+
+    private func SameLocalFunctionGroup(first VariableDeclarationSyntax, second VariableDeclarationSyntax) bool {
+        if !object.ReferenceEquals(first.SyntaxTree, second.SyntaxTree) ||
+            !index
+            .Value
+            .DeclaredBySyntax
+            .TryGetValue(first, out var firstSymbol) ||
+            !IsLocalFunction(firstSymbol) {
+            return false
+        }
+        let firstRef = (first.Initializer as FunctionLiteralExpressionSyntax)?.IsRefReturn == true
+        let secondRef = (second.Initializer as FunctionLiteralExpressionSyntax)?.IsRefReturn == true
+        return (first.TypeParameterList != nil) == (second.TypeParameterList != nil) && firstRef == secondRef
     }
 
     /// Adds the implicit `this` parameter of the enclosing instance method, constructor or
