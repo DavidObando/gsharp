@@ -187,7 +187,8 @@ internal partial class ExpressionBinder {
                         },
                         canBeVoid
                     )
-                }
+                },
+                armSyntax.Result
             )
             $scope = $scope.Pop()
             boundArmBuilders.Add((armSyntax, pattern, guard_, armResult))
