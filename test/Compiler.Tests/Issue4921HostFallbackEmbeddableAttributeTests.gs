@@ -454,6 +454,127 @@ open class Issue4921HostFallbackEmbeddableAttributeTests {
         }
     }
 
+    /// Issue #4993 review: a source `struct IsExternalInit {}` polyfill in
+    /// `System.Runtime.CompilerServices` suppresses embedding and is still resolved as the
+    /// `modreq` target for `init` setters on `netstandard2.0`.
+    @Fact
+    func Issue4993_StructIsExternalInitPolyfill_RetainsInitSetterModreq() {
+        let netstandard string? = FindNetStandardReference()
+        Assert.True(netstandard != nil, "could not locate a netstandard.dll reference assembly")
+        let tempDir = Directory.CreateTempSubdirectory("gs_4993_struct_init_").FullName
+        try {
+            let libPath = Path.Combine(tempDir, "Lib.dll")
+            CompileOrThrow("lib", `
+package Lib
+
+public class Config {
+    public prop Name string { get; init; }
+    public init() {
+        this.Name = "ok"
+    }
+}
+`, libPath, tempDir, netstandard!!, extraSource: `
+package System.Runtime.CompilerServices
+
+internal struct IsExternalInit {
+}
+`)
+            let refDir = Path.GetDirectoryName(netstandard!!)!!
+            let resolver = PathAssemblyResolver(Directory.GetFiles(refDir, "*.dll").Concat([]string{libPath}))
+            using let mlc = MetadataLoadContext(resolver, "netstandard")
+            let loaded = mlc.LoadFromAssemblyPath(libPath)
+            let configType = loaded.GetType("Lib.Config", throwOnError: true)!!
+            let setter = configType.GetProperty("Name")!!.GetSetMethod()!!
+            let modreqs = setter.ReturnParameter.GetRequiredCustomModifiers().Select((m Type) -> m.FullName).ToArray()
+            Assert.Equal([]string{"System.Runtime.CompilerServices.IsExternalInit"}, modreqs)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
+    /// Issue #4993 review: when `(in int32) -> int32` or a `ref readonly` function literal
+    /// return is the only readonly construct in a `netstandard2.0` compilation,
+    /// `IsReadOnlyAttribute` is embedded and stamped on the emitted parameter/return rows.
+    @Fact
+    func Issue4993_FunctionTypeInSlotAndFunctionLiteralRefReadOnlyReturn_EmbedAndEmitIsReadOnlyAttribute() {
+        let netstandard string? = FindNetStandardReference()
+        Assert.True(netstandard != nil, "could not locate a netstandard.dll reference assembly")
+        let tempDir = Directory.CreateTempSubdirectory("gs_4993_fn_ro_").FullName
+        try {
+            let fnTypeOnlyPath = Path.Combine(tempDir, "FnTypeOnlyLib.dll")
+            CompileOrThrow("fnTypeOnlyLib", `
+package Lib
+
+public class Holder {
+    public var Callback ((in int32) -> int32)?
+}
+`, fnTypeOnlyPath, tempDir, netstandard!!)
+            let fnLiteralOnlyPath = Path.Combine(tempDir, "FnLiteralOnlyLib.dll")
+            CompileOrThrow("fnLiteralOnlyLib", `
+package Lib
+
+public class Box {
+    shared {
+        private var slot int32 = 42
+
+        public func Run() int32 {
+            let reader = func () ref readonly int32 {
+                return ref Box.slot
+            }
+            return reader()
+        }
+    }
+}
+`, fnLiteralOnlyPath, tempDir, netstandard!!)
+            let refDir = Path.GetDirectoryName(netstandard!!)!!
+            for dllPath in[]string{fnTypeOnlyPath, fnLiteralOnlyPath} {
+                using let stream = File.OpenRead(dllPath)
+                using let peReader = PEReader(stream)
+                let reader = peReader.GetMetadataReader()
+                var hasEmbeddedIsReadOnly = false
+                for handle in reader.TypeDefinitions {
+                    let definition = reader.GetTypeDefinition(handle)
+                    if reader.GetString(definition.Namespace) == "System.Runtime.CompilerServices" && reader.GetString(
+                        definition.Name
+                    ) == "IsReadOnlyAttribute" {
+                        hasEmbeddedIsReadOnly = true
+                    }
+                }
+                Assert.True(hasEmbeddedIsReadOnly, "expected embedded IsReadOnlyAttribute in " + dllPath)
+
+                let resolver = PathAssemblyResolver(Directory.GetFiles(refDir, "*.dll").Concat([]string{dllPath}))
+                using let mlc = MetadataLoadContext(resolver, "netstandard")
+                let loaded = mlc.LoadFromAssemblyPath(dllPath)
+                let allFlags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly
+                var foundReadOnlyStamp = false
+                for type in loaded.GetTypes() {
+                    for method in type.GetMethods(allFlags) {
+                        if method
+                            .ReturnParameter
+                            .GetCustomAttributesData()
+                            .Any(
+                            (a CustomAttributeData) -> a.AttributeType.FullName ==
+                            "System.Runtime.CompilerServices.IsReadOnlyAttribute"
+                        ) {
+                            foundReadOnlyStamp = true
+                        }
+                        for param in method.GetParameters() {
+                            if param.GetCustomAttributesData().Any(
+                                (a CustomAttributeData) -> a.AttributeType.FullName ==
+                                "System.Runtime.CompilerServices.IsReadOnlyAttribute"
+                            ) {
+                                foundReadOnlyStamp = true
+                            }
+                        }
+                    }
+                }
+                Assert.True(foundReadOnlyStamp, "expected IsReadOnlyAttribute stamp in " + dllPath)
+            }
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         private const UserAppliedContextSource string = `
 package Lib

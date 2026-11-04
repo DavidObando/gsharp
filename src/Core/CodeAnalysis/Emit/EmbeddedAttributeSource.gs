@@ -115,6 +115,22 @@ internal shared class EmbeddedAttributeSource {
         )
     }
 
+    /// The single decision point for "is this source declaration the framework's type": a
+    /// top-level, non-generic type whose package-qualified name is exactly
+    /// [`fullName`](paramref). A nested type or a generic type of the same name is a
+    /// different metadata type that consumers do not recognize. The syntax-level check used
+    /// before binding (`DeclaresType`) applies the same rule to declarations.
+    /// @param declared A bound source class or struct.
+    /// @param fullName The framework type's fully-qualified name.
+    /// @returns `true` when the type is that framework type.
+    func IsFrameworkTypeDeclaration(declared StructSymbol, fullName string) bool -> declared.ContainingType == nil &&
+        declared
+        .TypeParameters
+        .IsDefaultOrEmpty &&
+        declared.PackageName +
+        "." +
+        declared.Name == fullName
+
     /// The single decision point for "is this source declaration the framework's attribute
     /// type": a top-level, non-generic class whose package-qualified name is exactly
     /// [`fullName`](paramref). A nested type or a generic type of the same name is a
@@ -124,13 +140,7 @@ internal shared class EmbeddedAttributeSource {
     /// @param fullName The framework attribute's fully-qualified name.
     /// @returns `true` when the class is that attribute type.
     func IsFrameworkAttributeDeclaration(declared StructSymbol, fullName string) bool -> declared.IsClass &&
-        declared.ContainingType == nil &&
-        declared
-        .TypeParameters
-        .IsDefaultOrEmpty &&
-        declared.PackageName +
-        "." +
-        declared.Name == fullName
+        IsFrameworkTypeDeclaration(declared, fullName)
 
     /// Finds the constructor of a source-declared framework attribute (the injected copy or
     /// a project polyfill) that takes one `byte` (or one `byte[]`), whether it is declared
@@ -221,10 +231,10 @@ internal shared class EmbeddedAttributeSource {
         requireAttributeBase bool
     ) EntityHandle {
         for declared in structs {
-            if !IsFrameworkAttributeDeclaration(declared, fullName) {
+            if !IsFrameworkTypeDeclaration(declared, fullName) {
                 continue
             }
-            if requireAttributeBase && !declared.DerivesFromSystemAttribute() {
+            if requireAttributeBase && (!declared.IsClass || !declared.DerivesFromSystemAttribute()) {
                 continue
             }
             if cache.StructTypeDefs.TryGetValue(declared, out var handle) {
@@ -376,7 +386,16 @@ internal shared class IsExternalInit {
                     case fn is FunctionDeclarationSyntax when fn.ReturnReadOnlyModifier != nil {
                         return true
                     }
+                    case fnLit is FunctionLiteralExpressionSyntax when fnLit.ReturnReadOnlyModifier != nil {
+                        return true
+                    }
                     case prop is PropertyDeclarationSyntax when prop.ReturnReadOnlyModifier != nil {
+                        return true
+                    }
+                    case typeClause is TypeClauseSyntax when typeClause.ReadOnlyManagedModifier != nil ||
+                        typeClause
+                        .FunctionParameterRefKindTokens
+                        .Any((token SyntaxToken?) -> token?.ValueText == "in") {
                         return true
                     }
                     case iface is InterfaceDeclarationSyntax when iface.IsProtocol {
