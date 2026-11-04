@@ -180,6 +180,62 @@ Run(true, false)
     }
 
     @Fact
+    func Goto_LandsInsideEarlyExitGuardCondition_DoesNotLiftNarrowing() {
+        let result = Evaluate(`
+import System
+
+func Run(skip bool) int32 {
+    var x string? = nil
+    if skip {
+        goto Inside
+    }
+    if x == nil || ({
+    Inside:
+        var marker = 0
+        false
+    }) {
+        return 0
+    }
+    return x.Length
+}
+
+Run(true)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func Goto_LandsInsideIfJoinCondition_DoesNotLiftNarrowing() {
+        let result = Evaluate(`
+import System
+
+func Run(skip bool) int32 {
+    var x string? = nil
+    if skip {
+        goto Inside
+    }
+    if x != nil && ({
+    Inside:
+        var marker = 0
+        true
+    }) {
+        Console.WriteLine("then")
+    } else {
+        x = "fallback"
+    }
+    return x.Length
+}
+
+Run(true)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
     func Goto_BypassesSwitchArm_DoesNotNarrowFieldPath() {
         // ADR-0208 section 16, row R6 (#5301): when the default arm jumps to
         // `Skip:` via `goto Skip` without narrowing `b.Pet` to `Dog`, the label

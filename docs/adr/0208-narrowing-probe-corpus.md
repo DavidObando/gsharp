@@ -252,5 +252,8 @@ d06 when another fact is in force at the loop entry; the row now gets the same r
 | m08 | `if cond { goto InsideElse }`; `if x == nil { return 0 } else { InsideElse: Console.WriteLine("reached") }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
 | m09 | `if cond { goto InsideSwitch }`; `if flag { x = "a"; switch k { case 1 { InsideSwitch: ... } default { } } } else { x = "b" }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
 | m10 | `if cond { goto AfterDefer }`; `if flag { x = "a"; defer ...; AfterDefer: ... } else { x = "b" }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m11 | `if skip { goto Inside }`; `if x == nil \|\| ({ Inside: var marker = 0; false }) { return 0 }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m12 | `if skip { goto Inside }`; `if x != nil && ({ Inside: var marker = 0; true }) { ... } else { x = "fallback" }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m13 | nested `finally` with `for { break }; x = "safe"` before outer `goto Done`; `Done: return x.Length` | accepted, prints `4` | accepted, prints `4` |
 
 

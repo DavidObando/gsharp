@@ -257,6 +257,9 @@ open class Adr0208NarrowingCorpusTests {
                 "m08_5301_goto_into_else_branch_of_early_exit_guard_does_not_lift_R6",
                 "m09_5301_goto_into_switch_arm_in_if_branch_does_not_lift_R6",
                 "m10_5301_goto_after_defer_in_if_branch_does_not_lift_R6",
+                "m11_5301_goto_into_early_exit_condition_does_not_lift_R6",
+                "m12_5301_goto_into_if_join_condition_does_not_lift_R6",
+                "m13_5301_nested_finally_with_break_establishes_narrowing_for_outer_goto_R6",
                 "m1_unrelated_interface_refinement",
                 "n1_boxed_value_type_test",
                 "o1_callback_after_test_replaces_root",
@@ -10212,6 +10215,59 @@ func Run(cond bool, flag bool) int32 {
     return x.Length
 }
 func Main() { Console.WriteLine(Run(true, false)) }`, "GS0158@15:14", "reject", "", "R6 (#5301)"}
+            yield[]object{"m11_5301_goto_into_early_exit_condition_does_not_lift_R6", `import System
+func Run(skip bool) {
+    var x string? = nil
+    if skip {
+        goto Inside
+    }
+    if x == nil || ({
+        Inside:
+        var marker = 0
+        false
+    }) {
+        return
+    }
+    Console.WriteLine(x.Length)
+}
+func Main() { Run(true) }`, "GS0158@14:25", "reject", "", "R6 (#5301)"}
+            yield[]object{"m12_5301_goto_into_if_join_condition_does_not_lift_R6", `import System
+func Run(skip bool) {
+    var x string? = nil
+    if skip {
+        goto Inside
+    }
+    if x != nil && ({
+        Inside:
+        var marker = 0
+        true
+    }) {
+        Console.WriteLine("then")
+    } else {
+        x = "fallback"
+    }
+    Console.WriteLine(x.Length)
+}
+func Main() { Run(true) }`, "GS0158@16:25", "reject", "", "R6 (#5301)"}
+            yield[]object{"m13_5301_nested_finally_with_break_establishes_narrowing_for_outer_goto_R6", `import System
+func Run(jump bool) int32 {
+    var x string? = nil
+    try {
+        if jump { goto Done }
+    } finally {
+        try {
+        } finally {
+            for {
+                break
+            }
+            x = "safe"
+        }
+    }
+    x = "again"
+    Done:
+    return x.Length
+}
+func Main() { Console.WriteLine(Run(true)) }`, "", "run", "4", "R6 (#5301)"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

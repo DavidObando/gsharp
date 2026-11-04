@@ -28,6 +28,9 @@ internal partial class StatementBinder {
         condition BoundExpression,
         removedFacts Dictionary[AccessPath, TypeSymbol]? = nil
     )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
+        if ContainsUserLabel(condition) {
+            return (nil, nil)
+        }
         // Phase 3.C.4/6.6: recognise one top-level nullable guard. Boolean
         // conjunction/disjunction flow (for example `s != nil && IsValid(s)`)
         // is intentionally deferred for the nil-guard classifier.

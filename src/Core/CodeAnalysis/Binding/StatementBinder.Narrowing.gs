@@ -1342,7 +1342,7 @@ internal partial class StatementBinder {
         updatedAliases HashSet[VariableSymbol]? = nil
     ) Dictionary[AccessPath, TypeSymbol]? {
         var conditionEntry Dictionary[AccessPath, TypeSymbol]? = nil
-        if entry != nil && entry.Count > 0 {
+        if entry != nil && entry.Count > 0 && !ContainsUserLabel(ifStmt.Condition) {
             conditionEntry = Dictionary[AccessPath, TypeSymbol](entry)
             ClearAssignedRoots(ifStmt.Condition, conditionEntry, callableAliases)
         }
@@ -1578,6 +1578,15 @@ internal partial class StatementBinder {
         return finder.Found
     }
 
+    private func ContainsUserLabel(expression BoundExpression?) bool {
+        if !binderCtx.FunctionContainsUserGotoOrLabel || expression == nil {
+            return false
+        }
+        let finder = UserLabelFinder()
+        finder.VisitExpression(expression)
+        return finder.Found
+    }
+
     private func ContainsUserGotoOrLabel(statement BoundStatement?) bool {
         if !binderCtx.FunctionContainsUserGotoOrLabel || statement == nil {
             return false
@@ -1630,10 +1639,6 @@ internal partial class StatementBinder {
             if Found || node == nil || node is BoundLocalFunctionDeclaration {
                 return
             }
-            if node is BoundGotoStatement {
-                Found = true
-                return
-            }
             if node.Syntax != nil && ContainsUserGotoOrLabel(node.Syntax) {
                 Found = true
                 return
@@ -1673,6 +1678,10 @@ internal partial class StatementBinder {
         WhenTrueAliases HashSet[VariableSymbol],
         WhenFalseAliases HashSet[VariableSymbol]
     ) {
+        if ContainsUserLabel(condition) {
+            let afterConditionAliases = AliasesAfter(condition, beforeAliases)
+            return (nil, nil, afterConditionAliases, afterConditionAliases)
+        }
         switch condition {
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
                 let (inThen, inElse, trueAliases, falseAliases) = ComputeConditionNarrowingInOrder(
