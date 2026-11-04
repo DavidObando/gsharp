@@ -1119,12 +1119,14 @@ namespace Demo
             Func<BoundSpillSequenceExpression> g = () => { return null!; };
             return f() ?? g();
         }
+        public static (BoundSpillSequenceExpression, int) TupleForgiven() => (null!, 1);
         public static BoundSpillSequenceExpression? NullableReturn() => null!;
     }
 }`))
         Assert.Contains("-> default(IChain[TEntity, TProperty])", suppressed[0])
         Assert.Contains("return default(BoundSpillSequenceExpression)", suppressed[0])
         Assert.Contains("() -> default(BoundSpillSequenceExpression)", suppressed[0])
+        Assert.Contains("(default(BoundSpillSequenceExpression), 1)", suppressed[0])
         Assert.DoesNotContain("default(Wrapped)", suppressed[0])
         Assert.Contains("func NullableReturn() BoundSpillSequenceExpression? -> nil", suppressed[0])
 
