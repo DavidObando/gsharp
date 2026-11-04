@@ -267,7 +267,8 @@ class PropertySymbol : Symbol {
             ExternalOverrideContainingType = ExternalOverrideContainingType,
             GetterBodySyntax = GetterBodySyntax,
             SetterBodySyntax = SetterBodySyntax,
-            ReturnRefKind = ReturnRefKind
+            ReturnRefKind = ReturnRefKind,
+            ImportedMember = ImportedMember
         }
         // The documentation is binder-attached state, not part of the declaration.
         if this.GetDocumentation() is {} documentation {

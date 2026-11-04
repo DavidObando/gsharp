@@ -8798,10 +8798,17 @@ partial class Binder {
                 AppendBodyDiagnostics(diagnostics, reusedDiagnostics, member)
                 return reusedBody!!
             }
-            let result = bindAndLower()
+            let bodyFailedCalls = CallCandidateRecorder.BeginBody()
+            var recordedFailedCalls = ImmutableArray[BoundErrorExpression].Empty
+            var result BodyBindResult
+            try {
+                result = bindAndLower()
+            } finally {
+                recordedFailedCalls = CallCandidateRecorder.EndBody(bodyFailedCalls)
+            }
             AppendBodyDiagnostics(diagnostics, result.Diagnostics, member)
             if cacheable {
-                cache.Store(member, bodySyntax, result.Body, result.Diagnostics)
+                cache.Store(member, bodySyntax, result.Body, result.Diagnostics, recordedFailedCalls)
             }
             return result.Body
         }

@@ -119,6 +119,12 @@ class BoundBaseClassCallExpression : BoundExpression {
         get;
     }
 
+    /// Gets the candidates overload resolution considered for this call (ADR-0212 issue #5444).
+    internal prop MemberGroup ImmutableArray[object] {
+        get;
+        set;
+    }
+
     /// Gets the method type arguments of a call to a generic base method
     /// (`base.Id[int32](7)`), explicit or inferred, as the binder
     /// resolved them. Default when the method is not generic, or when the

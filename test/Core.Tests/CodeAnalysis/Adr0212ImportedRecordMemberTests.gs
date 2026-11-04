@@ -124,6 +124,35 @@ open class Adr0212ImportedRecordMemberTests {
         }
     }
 
+    @Fact
+    func ImportedRecord_Methods_CarryTheirReflectedMember() {
+        let library = EmitCSharpLibrary(
+            "namespace Records { public record Badge(string Label) { public string Format() => Label; public string Format(string prefix) => prefix + Label; } }",
+            "AsmBadge",
+            "badge"
+        )
+        using let resolver = ReferenceResolver.WithReferences([]string{library})
+        resolver.CurrentAssemblyName = "Consumer"
+        let source = "package Consumer\nimport Records\n\nfunc Run(b Badge) string {\n    return b.Format(\"#\") // PBadge\n}\n"
+        let tree = GsSyntaxTree.Parse(SourceText.From(source, "consumer.gs"))
+        let compilation = GsCompilation(resolver, tree)
+        compilation.RecordMemberGroups = true
+        let model = compilation.GetSemanticModel(tree)
+        let access = tree.Root.DescendantNodes().OfType[AccessorExpressionSyntax]().Single()
+        let call = cast[CallExpressionSyntax](access.RightPart)
+        let receiver = model.GetReceiverTypeInfo(access.LeftPart).Type!!
+        let position = source.IndexOf("// PBadge", StringComparison.Ordinal)
+        let lookedUp = model.LookupMembers(position, receiver, "Format").OfType[FunctionSymbol]().ToList()
+        Assert.Equal(2, lookedUp.Count)
+        Assert.All(lookedUp, (m FunctionSymbol) -> Assert.NotNull(m.ImportedMember))
+        let group = model.GetMemberGroup(call).OfType[FunctionSymbol]().ToList()
+        Assert.Equal(2, group.Count)
+        Assert.All(group, (m FunctionSymbol) -> Assert.NotNull(m.ImportedMember))
+        let bound = Assert.IsType[FunctionSymbol](model.GetSymbolInfo(call.Identifier).Symbol)
+        Assert.NotNull(bound.ImportedMember)
+        Assert.Single(bound.ImportedMember!!.GetParameters())
+    }
+
     shared {
         private func EmitCSharpLibrary(
             recordSource string,

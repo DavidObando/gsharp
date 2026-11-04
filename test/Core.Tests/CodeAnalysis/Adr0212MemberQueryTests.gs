@@ -78,6 +78,190 @@ open class Adr0212MemberQueryTests {
     }
 
     @Fact
+    func MemberGroup_BaseCall_ListsTheBaseOverloadsAndSubstitutesConstructedBase() {
+        let baseCall = CallAt("PBase")
+        let baseModel = ModelOf(baseCall)
+        let baseGroup = baseModel.GetMemberGroup(baseCall)
+        Assert.Equal(
+            []string{"Speak(int32)", "Speak(string)", "Speak()"},
+            baseGroup.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
+        )
+        Assert.Equal(
+            baseGroup.ToArray(),
+            baseModel.GetMemberGroup(cast[BaseClassCallExpressionSyntax](baseCall.Parent!!)).ToArray()
+        )
+        let genericBaseCall = CallAt("PGenericBase")
+        let genericBaseModel = ModelOf(genericBaseCall)
+        let genericBaseGroup = genericBaseModel.GetMemberGroup(genericBaseCall)
+        Assert.Equal(
+            []string{"Echo(int32)", "Echo(int32, string)"},
+            genericBaseGroup.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
+        )
+        Assert.Equal(
+            genericBaseGroup.ToArray(),
+            genericBaseModel.GetMemberGroup(cast[BaseClassCallExpressionSyntax](genericBaseCall.Parent!!)).ToArray()
+        )
+        let baseInterfaceNodes = Trees[0].Root.DescendantNodes().OfType[BaseInterfaceCallExpressionSyntax]().ToArray()
+        let baseInterfaceGroup = genericBaseModel.GetMemberGroup(baseInterfaceNodes[0])
+        Assert.Equal(
+            []string{"Put(int32)", "Put(int32, int32)"},
+            baseInterfaceGroup.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
+        )
+        let baseClrGroup = genericBaseModel.GetMemberGroup(baseInterfaceNodes[1])
+        Assert.Equal(3, baseClrGroup.Length)
+        Assert.All(baseClrGroup, (s Symbol) -> Assert.IsType[ImportedFunctionSymbol](s))
+    }
+
+    @Fact
+    func MemberGroup_TypeParameterStaticConstraintCall_ListsTheStaticOverloads() {
+        for call in[]CallExpressionSyntax{
+            CallAt("PConstraintStatic"),
+            cast[CallExpressionSyntax](
+                cast[AccessorExpressionSyntax](CallAt("PConstraintStaticNested").Arguments[0]).RightPart
+            )
+        } {
+            let group = ModelOf(call).GetMemberGroup(call)
+            Assert.Equal(
+                []string{"Parse(string)", "Parse(string, int32)"},
+                group.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
+            )
+            Assert.All(group, (s Symbol) -> Assert.Equal("T", cast[FunctionSymbol](s).Type.Name))
+        }
+        for call in[]CallExpressionSyntax{
+            CallAt("PClrConstraintStatic"),
+            cast[CallExpressionSyntax](
+                cast[AccessorExpressionSyntax](CallAt("PClrConstraintStaticNested").Arguments[0]).RightPart
+            )
+        } {
+            let group = ModelOf(call).GetMemberGroup(call)
+            Assert.Equal(2, group.Length)
+            Assert.All(group, (s Symbol) -> Assert.IsType[ImportedFunctionSymbol](s))
+            Assert.All(group, (s Symbol) -> Assert.Equal("U", cast[ImportedFunctionSymbol](s).Type.Name))
+            let tokens = group.Select((s Symbol) -> cast[ImportedFunctionSymbol](s).Method.MetadataToken).ToList()
+            Assert.Equal(tokens.OrderBy((t int32) -> t).ToList(), tokens)
+        }
+    }
+
+    @Fact
+    func MemberGroup_UnfinishedCall_ListsTheCandidatesCollectedBeforeFailure() {
+        let unfinishedSource = `package Members
+import GSharp.Core.Tests.CodeAnalysis
+import System
+import System.Collections.Generic
+import System.Linq
+import System.Text
+
+func UseUnfinished[T IImportedParsable[T], TEnum IEnumerable[U], U](
+    sb StringBuilder,
+    c Cat,
+    xs []int32,
+    seq TEnum
+) {
+    sb.Append( // PUnfinishedImported
+    Free( // PUnfinishedFree
+    let n = 1 + Free( // PUnfinishedBinary
+    let u = -Free(1, 2, 3) // PFailedUnary
+    c.Purr( // PUnfinishedInstance
+    T.Parse( // PUnfinishedConstraint
+    WriteLine(Console.WriteLine, 1, 2) // PFailedProbe
+    xs.Select(1, 2, 3) // PFailedExtension
+    seq.GetEnumerator(1) // PFailedConstrainedInstance
+}
+
+class UnfinishedDog : Animal {
+    var FieldInit int32 = -Free(1, 2, 3) // PFailedFieldInit
+    func Act() {
+        base[Animal].Speak(1, 2) // PFailedBracketBase
+        base.Speak( // PUnfinishedBase
+    }
+}
+`
+        let unfinishedTree = SyntaxTree.Parse(SourceText.From(unfinishedSource, "unfinished.gs"))
+        let compilation = Compilation(Trees[1], Trees[0], unfinishedTree)
+        compilation.RecordMemberGroups = true
+        let model = compilation.GetSemanticModel(unfinishedTree)
+        let FindCall = (marker string) -> {
+            let at = unfinishedSource.IndexOf("// " + marker, StringComparison.Ordinal)
+            let lineStart = unfinishedSource.LastIndexOf('\n', at - 1) + 1
+            return unfinishedTree
+                .Root
+                .DescendantNodes()
+                .OfType[CallExpressionSyntax]()
+                .Last((call CallExpressionSyntax) -> call.Span.Start >= lineStart && call.Span.Start <= at)
+        }
+        let appendGroup = model.GetMemberGroup(FindCall("PUnfinishedImported"))
+        Assert.True(appendGroup.Length > 5, "StringBuilder.Append has many overloads: ${appendGroup.Length}")
+        Assert.All(
+            appendGroup,
+            (s Symbol) -> Assert.Equal("StringBuilder", cast[ImportedFunctionSymbol](s).Method.DeclaringType!!.Name)
+        )
+        let freeGroup = model.GetMemberGroup(FindCall("PUnfinishedFree"))
+        Assert.Equal(
+            []string{"Free(int32)", "Free(string)", "Free(int32, int32)", "Free(bool)"},
+            freeGroup.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
+        )
+        let binaryFreeGroup = model.GetMemberGroup(FindCall("PUnfinishedBinary"))
+        Assert.Equal(
+            []string{"Free(int32)", "Free(string)", "Free(int32, int32)", "Free(bool)"},
+            binaryFreeGroup.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
+        )
+        let instanceGroup = model.GetMemberGroup(FindCall("PUnfinishedInstance"))
+        Assert.Equal(
+            []string{"Purr(int32)", "Purr(string)"},
+            instanceGroup.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
+        )
+        let baseGroup = model.GetMemberGroup(FindCall("PUnfinishedBase"))
+        Assert.Equal(
+            []string{"Speak(int32)", "Speak(string)", "Speak()"},
+            baseGroup.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
+        )
+        let bracketBase = unfinishedTree.Root.DescendantNodes().OfType[BaseInterfaceCallExpressionSyntax]().Single()
+        let bracketBaseGroup = model.GetMemberGroup(bracketBase)
+        Assert.Equal(
+            []string{"Speak(int32)", "Speak(string)", "Speak()"},
+            bracketBaseGroup.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
+        )
+        let failedProbeGroup = model.GetMemberGroup(FindCall("PFailedProbe"))
+        Assert.Equal(2, failedProbeGroup.Length)
+        Assert.All(failedProbeGroup, (s Symbol) -> Assert.IsType[FunctionSymbol](s))
+        let constraintGroup = model.GetMemberGroup(FindCall("PUnfinishedConstraint"))
+        Assert.Equal(2, constraintGroup.Length)
+        Assert.All(constraintGroup, (s Symbol) -> Assert.IsType[ImportedFunctionSymbol](s))
+        let failedExtensionGroup = model.GetMemberGroup(FindCall("PFailedExtension"))
+        Assert.NotEmpty(failedExtensionGroup)
+        Assert.All(
+            failedExtensionGroup,
+            (s Symbol) -> Assert.Equal("Enumerable", cast[ImportedFunctionSymbol](s).Method.DeclaringType!!.Name)
+        )
+        let failedConstrainedGroup = model.GetMemberGroup(FindCall("PFailedConstrainedInstance"))
+        let enumeratorCandidate = Assert.Single(
+            failedConstrainedGroup.Where((s Symbol) -> cast[ImportedFunctionSymbol](s).Type.Name.Contains("U"))
+        )
+        Assert.NotNull(enumeratorCandidate)
+        let isolatedCompilation = Compilation(unfinishedTree)
+        isolatedCompilation.RecordMemberGroups = true
+        Assert.True(
+            isolatedCompilation.GetSemanticModel(unfinishedTree).GetMemberGroup(FindCall("PUnfinishedBinary")).IsEmpty
+        )
+        let siblingBefore = SyntaxTree.Parse(
+            SourceText.From("package Members\nfunc SiblingBody() int32 { return 1 }\n", "sibling.gs")
+        )
+        let siblingAfter = SyntaxTree.Parse(
+            SourceText.From("package Members\nfunc SiblingBody() int32 { return 2 }\n", "sibling.gs")
+        )
+        let incrementalFirst = Compilation(Trees[1], Trees[0], unfinishedTree, siblingBefore)
+        incrementalFirst.RecordMemberGroups = true
+        incrementalFirst.IncrementalBodyReuse = true
+        let unaryCall = FindCall("PFailedUnary")
+        let fieldInitCall = FindCall("PFailedFieldInit")
+        Assert.Equal(4, incrementalFirst.GetSemanticModel(unfinishedTree).GetMemberGroup(unaryCall).Length)
+        Assert.Equal(4, incrementalFirst.GetSemanticModel(unfinishedTree).GetMemberGroup(fieldInitCall).Length)
+        let incrementalSuccessor = incrementalFirst.ReplaceSyntaxTree(siblingBefore, siblingAfter)
+        Assert.Equal(4, incrementalSuccessor.GetSemanticModel(unfinishedTree).GetMemberGroup(unaryCall).Length)
+        Assert.Equal(4, incrementalSuccessor.GetSemanticModel(unfinishedTree).GetMemberGroup(fieldInitCall).Length)
+    }
+
+    @Fact
     func MemberGroup_InterfaceCall_ListsTheInterfaceMethodsNotItsPrivateHelpers() {
         let group = Group("PInterface")
         Assert.Equal(
@@ -398,6 +582,27 @@ open class Adr0212MemberQueryTests {
     }
 
     @Fact
+    func LookupMembers_Interface_ListsPrivateHelpersOnlyInsideTheInterface() {
+        let outsideNames = Members("PLookup", "IRead").Select((s Symbol) -> s.Name).ToList()
+        Assert.DoesNotContain("ReadHelper", outsideNames)
+        Assert.DoesNotContain("StaticReadHelper", outsideNames)
+        let subNames = Members("PInsideISub", "ISub").Select((s Symbol) -> s.Name).ToList()
+        Assert.DoesNotContain("ReadHelper", subNames)
+        Assert.DoesNotContain("StaticReadHelper", subNames)
+        let insideNames = Members("PInsideIRead", "IRead").Select((s Symbol) -> s.Name).ToList()
+        Assert.Contains("ReadHelper", insideNames)
+        Assert.Contains("StaticReadHelper", insideNames)
+        Assert.DoesNotContain("SecretPut", Members("PInsideIBoxed", "GDerived").Select((s Symbol) -> s.Name))
+        let boxedCall = CallAt("PBoxed")
+        let model = ModelOf(boxedCall)
+        let boxedAccess = cast[AccessorExpressionSyntax](boxedCall.Parent!!)
+        let boxedType = model.GetReceiverTypeInfo(boxedAccess.LeftPart).Type!!
+        Assert.Empty(model.LookupMembers(Position("PLookup"), boxedType, "SecretPut"))
+        let secretPut = Assert.Single(model.LookupMembers(Position("PInsideIBoxed"), boxedType, "SecretPut"))
+        Assert.Equal("SecretPut(int32)", Describe(cast[FunctionSymbol](secretPut)))
+    }
+
+    @Fact
     func LookupMembers_TypeParameterWithConstraint_ListsConstraintMembersThenObjectMembers() {
         let access = cast[AccessorExpressionSyntax](CallAt("PConstraint").Parent!!)
         let model = ModelOf(access)
@@ -541,19 +746,37 @@ enum Color { Red, Green }
 
 interface IRead {
     func Read(a int32) int32
-    func Read(a string) int32
+    func Read(a string) int32 {
+        return ReadHelper(a.Length) // PInsideIRead
+    }
+    private func ReadHelper(a int32) int32 { return a }
+    shared {
+        private func StaticReadHelper() int32 { return 1 }
+    }
 }
 
 interface ISub : IRead {
-    func Sub() int32
+    func Sub() int32 {
+        return 0 // PInsideISub
+    }
 }
 
 interface IBoxed[T] {
-    func Put(v T) int32
-    func Put(v T, n int32) int32
+    func Put(v T) int32 {
+        return SecretPut(v) // PInsideIBoxed
+    }
+    func Put(v T, n int32) int32 { return n }
+    private func SecretPut(v T) int32 { return 0 }
 }
 
 interface IDualBoxed : IBoxed[int32], IBoxed[string] {
+}
+
+sealed interface IParse[TSelf] {
+    shared {
+        func Parse(s string) TSelf;
+        func Parse(s string, radix int32) TSelf;
+    }
 }
 
 open class Animal {
@@ -575,6 +798,7 @@ class Dog : Animal {
     func Speak(a bool) string { return "" }
     func Use(d Dog) {
         d.Speak(1) // PInherited
+        let s = base.Speak(1) // PBase
         let n = d.Legs // PProperty
     }
     shared {
@@ -587,11 +811,25 @@ class Dog : Animal {
 open class GBase[T] {
     private var Hidden T
     var Shown T
+    func Echo(a T) T { return a }
+    func Echo(a T, label string) T { return a }
 }
 
-class GDerived : GBase[int32] {
+class GDerived : GBase[int32], IBoxed[int32] {
+    func Echo(flag bool) int32 { return 0 }
     func Peek() int32 {
-        return 0 // PInGDerived
+        let e = base.Echo(1) // PGenericBase
+        let p = base[IBoxed[int32]].Put(1) // PBaseInterface
+        return e + p // PInGDerived
+    }
+}
+
+open class ClrListParent : List[int32] {
+}
+
+class ClrListChild : ClrListParent {
+    func FindInBase() int32 {
+        return base[ClrListParent].IndexOf(1) // PBaseClrBracket
     }
 }
 
@@ -621,6 +859,15 @@ func Constrained[T IRead](t T) int32 {
 
 func ConstrainedDual[T IDualBoxed](t T) int32 {
     return t.Put(1) // PDualConstraint
+}
+
+func TakeParsed[T](value T) T { return value }
+
+func ConstrainedStatic[T IParse[T], U IImportedParsable[U]]() {
+    let a = T.Parse("1") // PConstraintStatic
+    let b = TakeParsed(T.Parse("1")) // PConstraintStaticNested
+    let c = U.Parse("1") // PClrConstraintStatic
+    let d = TakeParsed(U.Parse("1")) // PClrConstraintStaticNested
 }
 
 func UseAll(c Cat, r IRead, b IBoxed[int32], dual IDualBoxed, p Parts, sb StringBuilder, n int32, xs []int32, cmp CompareInfo) {
@@ -754,6 +1001,14 @@ partial class Parts {
 }
 
 class ImportedGenericExtensionFixture { }
+
+sealed interface IImportedParsable[TSelf] {
+    shared{
+        func Parse(s string) TSelf;
+
+        func Parse(s string, radix int32) TSelf;
+    }
+}
 
 @ExtensionOwner(typeof(ImportedGenericExtensionFixture))
 func (items IEnumerable[T]) Reproject[T, U]() IEnumerable[U] {

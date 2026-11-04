@@ -1453,7 +1453,7 @@ internal partial class ExpressionBinder {
         receiverSyntax ExpressionSyntax? = nil,
         receiverStart int32? = nil
     ) BoundExpression {
-        let frame = CallCandidateRecorder.Begin(ce)
+        let frame = CallCandidateRecorder.Begin(ce, receiver?.Type ?? classSymbol?.SymbolicReceiver)
         try {
             let bound = BindAccessorCallWithReceiver(receiver, classSymbol, ce, receiverSyntax, receiverStart)
             CallCandidateRecorder.Stamp(frame, bound)
@@ -2806,6 +2806,7 @@ internal partial class ExpressionBinder {
             arguments = repaired.ToImmutable()
         }
         if candidates.Count > 0 {
+            CallCandidateRecorder.RecordMethods(candidates, receiver.Type)
             let argTypes = [arguments.Length]Type?
             var argsAllTyped = true
             var hasUserClassArg = false
