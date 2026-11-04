@@ -311,7 +311,7 @@ shared class BoundSemantics {
             // The model indexes the bound program lazily; binding it here keeps a
             // compilation that cannot be bound on the caller's fallback path
             // instead of throwing from the first query.
-            let _ = compilation.BoundProgram
+            let _ = compilation.GetDiagnostics()
             return compilation.GetSemanticModel(tree)
         } catch (InvalidOperationException) {
             return nil

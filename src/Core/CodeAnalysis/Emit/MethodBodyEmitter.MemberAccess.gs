@@ -1866,6 +1866,19 @@ internal partial class MethodBodyEmitter {
             this.il.Token(fieldHandle)
             return true
         }
+        if this.enclosingClosure is {} enclosingClosure && enclosingClosure.CaptureFields.TryGetValue(
+            variable,
+            out var capField
+        ) {
+            this.il.OpCode(ILOpCode.Ldarg_0)
+            if this.asyncFieldMap?.ThisField is FieldSymbol thisField {
+                this.il.OpCode(ILOpCode.Ldfld)
+                this.il.Token(this.ResolveCurrentStateMachineFieldToken(thisField))
+            }
+            this.il.OpCode(ILOpCode.Ldflda)
+            this.il.Token(this.outer.userTokens.ResolveFieldToken(enclosingClosure.ConstructedClassSym, capField))
+            return true
+        }
         return false
     }
 

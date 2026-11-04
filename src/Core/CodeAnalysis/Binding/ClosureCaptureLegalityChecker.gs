@@ -41,33 +41,48 @@ internal shared class ClosureCaptureLegalityChecker {
         location TextLocation
     ) {
         for capturedVariable in captured {
-            if ManagedReferenceOrigins.IsScopedHandle(capturedVariable) {
-                diagnostics.ReportManagedReference(location, "a scoped managed-reference value cannot be captured")
-            } else if TypeSymbol.IsByRefLike(capturedVariable.Type) {
-                diagnostics.ReportByRefLikeEscape(
-                    location,
-                    capturedVariable.Type,
-                    "be captured by a closure (variable '${capturedVariable.Name}')"
-                )
-            } else if capturedVariable.Type is ByRefTypeSymbol {
-                diagnostics.ReportByRefCannotEscape(
-                    location,
-                    "managed pointer '${capturedVariable.Name}' cannot be captured by a closure; the closure may outlive the pointed-to variable"
-                )
-            } else if capturedVariable.Type is PointerTypeSymbol {
-                diagnostics.ReportFixedPointerCannotEscape(location, capturedVariable.Name)
-            } else if capturedVariable is ParameterSymbol{
-                RefKind: RefKind.Ref or RefKind.Out or RefKind.In
-            } refParameter {
-                diagnostics.ReportRefParameterCannotBeCaptured(
-                    location,
-                    refParameter.Name,
-                    RefKindKeyword(refParameter.RefKind)
-                )
-            } else if capturedVariable is LocalVariableSymbol{RefKind: not RefKind.None} refLocal {
-                diagnostics.ReportRefLocalAliasCannotBeCaptured(location, refLocal.Name)
-            }
+            CheckCapturedVariable(capturedVariable, diagnostics, location)
         }
+    }
+
+    /// Issue #5591: whether a closure may not capture [`variable`](paramref),
+    /// by the same rules (cref:CheckCapturedVariables) reports.
+    /// @param variable The variable a closure would capture.
+    /// @returns `true` when the capture would be rejected.
+    func RejectsCapture(variable VariableSymbol) bool -> CheckCapturedVariable(variable, nil, default(TextLocation))
+
+    private func CheckCapturedVariable(
+        capturedVariable VariableSymbol,
+        diagnostics DiagnosticBag?,
+        location TextLocation
+    ) bool {
+        if ManagedReferenceOrigins.IsScopedHandle(capturedVariable) {
+            diagnostics?.ReportManagedReference(location, "a scoped managed-reference value cannot be captured")
+        } else if TypeSymbol.IsByRefLike(capturedVariable.Type) {
+            diagnostics?.ReportByRefLikeEscape(
+                location,
+                capturedVariable.Type,
+                "be captured by a closure (variable '${capturedVariable.Name}')"
+            )
+        } else if capturedVariable.Type is ByRefTypeSymbol {
+            diagnostics?.ReportByRefCannotEscape(
+                location,
+                "managed pointer '${capturedVariable.Name}' cannot be captured by a closure; the closure may outlive the pointed-to variable"
+            )
+        } else if capturedVariable.Type is PointerTypeSymbol {
+            diagnostics?.ReportFixedPointerCannotEscape(location, capturedVariable.Name)
+        } else if capturedVariable is ParameterSymbol{RefKind: RefKind.Ref or RefKind.Out or RefKind.In} refParameter {
+            diagnostics?.ReportRefParameterCannotBeCaptured(
+                location,
+                refParameter.Name,
+                RefKindKeyword(refParameter.RefKind)
+            )
+        } else if capturedVariable is LocalVariableSymbol{RefKind: not RefKind.None} refLocal {
+            diagnostics?.ReportRefLocalAliasCannotBeCaptured(location, refLocal.Name)
+        } else {
+            return false
+        }
+        return true
     }
 
     /// Issue #4259: human-readable keyword for a captured-parameter diagnostic.

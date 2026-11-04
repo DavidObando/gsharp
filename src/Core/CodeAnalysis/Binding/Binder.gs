@@ -6552,7 +6552,7 @@ partial class Binder {
             // built-in conversions don't apply. Implicit-only here — explicit
             // conversions never participate in overload tie-breaking.
             ClrOverloadResolution.UserDefinedImplicitConversionLookup ??= (source Type, target Type) -> {
-                return ClrOperatorResolution.TryResolveConversion(source, target, allowExplicit: false, out _, out _)
+                return ClrOperatorResolution.HasImplicitConversion(source, target)
             }
         }
 
