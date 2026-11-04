@@ -258,6 +258,7 @@ Console.WriteLine("x")`
         private const Prelude string = (`package P
 import System
 import System.Collections
+import System.Collections.Generic
 
 open class SchemeOptions {
     public var Name string = ""
@@ -347,6 +348,40 @@ class DisposableSource : IDisposable {
 }
 
 class EnumerableSource : ArrayList {
+}
+
+delegate GsRefDelegate[TR class](value TR) TR;
+
+delegate GsOptionsDelegate[TO SchemeOptions](value TO) TO;
+
+interface IValue4744[V] {
+    prop Value V { get; }
+}
+
+data class Item4744[V](Saved V) : IValue4744[V] {
+    public prop Value V -> Saved
+}
+
+open class ValueBase4744[V] {
+    public var Saved V
+}
+
+class IntDerived4744 : ValueBase4744[int32] {
+    init() {
+        Saved = 11
+    }
+}
+
+class Outer4744[V] {
+    open class Base {
+        public var Tag string = "nb"
+    }
+    shared {
+        public func Use[T Base](x T) string -> x.Tag
+    }
+}
+
+class NestedIntDerived4744 : Outer4744[int32].Base {
 }
 `)
 
@@ -463,6 +498,93 @@ Console.WriteLine("x")`, "GS0152", "GS0580"}
 }
 
 Console.WriteLine("x")`, "GS0152", "GS0580"}
+            // ---- #4762: named-delegate constructions validate closed and open
+            // type-parameter constraints just like class and interface clauses.
+            yield[]object{
+                "the-4762-repro-a-closed-violating-argument-at-a-named-delegate-typeof",
+                `Console.WriteLine(typeof(GsRefDelegate[int32]))`,
+                "GS0152",
+                "GS0580"
+            }
+            yield[]object{"a-closed-violating-argument-at-a-qualified-named-delegate", `var d P.GsOptionsDelegate[Unrelated]
+Console.WriteLine("x")`, "GS0152", "GS0580"}
+            yield[]object{"an-unforwarded-named-delegate-at-a-field-type", `class Holder[U] {
+    public var D GsRefDelegate[U]
+}
+
+Console.WriteLine("x")`, "GS0580", "GS0152"}
+            yield[]object{"a-named-delegate-declared-below-the-field-that-uses-it", `class Holder[U] {
+    public var D LateDelegate[U]
+}
+
+delegate LateDelegate[TL SchemeOptions](value TL) TL;
+
+Console.WriteLine("x")`, "GS0580", "GS0152"}
+            yield[]object{"an-unforwarded-named-delegate-conversion", `func bad[U](f (U) -> U) object -> GsRefDelegate[U](f)
+
+Console.WriteLine("x")`, "GS0580", "GS0152"}
+            yield[]object{"a-dependent-bound-on-a-bare-class-parameter-does-not-forward-class", `func bad[A class, B A](f (B) -> B) object -> GsRefDelegate[B](f)
+
+Console.WriteLine("x")`, "GS0580", "GS0152"}
+            // ---- #4744: dependent source-interface and source-class constraints
+            // reject mismatched closed type arguments after substitution.
+            yield[]object{"the-4744-negative-a-mismatched-dependent-source-interface-method-constraint", `func readValue[V, T IValue4744[V]](item T) V -> item.Value
+
+let item = Item4744[int32]{Saved: 7}
+Console.WriteLine(readValue[string, Item4744[int32]](item))`, "GS0152", "GS0580"}
+            yield[]object{"a-nullable-argument-does-not-satisfy-a-non-nullable-dependent-source-interface-constraint", `func readValue[V, T IValue4744[V]](item T) V -> item.Value
+
+let item = Item4744[string?]{Saved: nil}
+Console.WriteLine(readValue[string, Item4744[string?]](item))`, "GS0152", "GS0580"}
+            yield[]object{
+                "a-nullable-argument-does-not-satisfy-a-non-nullable-dependent-imported-interface-constraint",
+                `func readList[V, T IList[V]](items T) V -> items[0]
+
+let items = List[string?]()
+Console.WriteLine(readList[string, List[string?]](items))`,
+                "GS0152",
+                "GS0580"
+            }
+            yield[]object{"a-nullable-argument-does-not-satisfy-a-non-nullable-dependent-imported-class-constraint", `func read[V, T List[V]](x T) int32 -> x.Count
+
+Console.WriteLine(read[string, List[string?]](List[string?]{nil}))`, "GS0152", "GS0580"}
+            yield[]object{"a-dependent-bound-does-not-propagate-the-default-constructor-constraint", `func makeNew[T init()]() T -> T()
+func forward[A init(), B A]() B -> makeNew[B]()
+
+Console.WriteLine(forward[SchemeOptions, SchemeOptions]().Name)`, "GS0152", "GS0580"}
+            yield[]object{"a-mismatched-dependent-source-class-method-constraint", `func readBase[V, T ValueBase4744[V]](item T) V -> item.Saved
+
+Console.WriteLine(readBase[string, IntDerived4744](IntDerived4744()))`, "GS0152", "GS0580"}
+            yield[]object{
+                "a-mismatched-enclosing-generic-argument-on-a-nested-base-constraint",
+                `Console.WriteLine(Outer4744[string].Use[NestedIntDerived4744](NestedIntDerived4744()))`,
+                "GS0152",
+                "GS0580"
+            }
+            yield[]object{"a-slice-argument-does-not-satisfy-a-fixed-array-interface-constraint", `func readFixedArray[T IValue4744[[3]int32]](item T) int32 -> item.Value[0]
+
+let item = Item4744[[]int32]{Saved: []int32{1, 2, 3}}
+Console.WriteLine(readFixedArray[Item4744[[]int32]](item))`, "GS0152", "GS0580"}
+            yield[]object{"a-nullable-self-argument-does-not-satisfy-an-invariant-imported-interface-constraint", `class SelfNullableList : List[SelfNullableList?] {
+}
+
+func first[T IList[T]](x T) T -> x[0]
+
+Console.WriteLine(first[SelfNullableList](SelfNullableList()))`, "GS0152", "GS0580"}
+            yield[]object{"a-nullable-self-argument-does-not-satisfy-an-invariant-imported-class-constraint", `class SelfNullableList : List[SelfNullableList?] {
+}
+
+func first[T List[T]](x T) int32 -> x.Count
+
+Console.WriteLine(first[SelfNullableList](SelfNullableList()))`, "GS0152", "GS0580"}
+            yield[]object{
+                "a-slice-element-list-does-not-satisfy-a-substituted-fixed-array-imported-interface-constraint",
+                `func readFixed[V, T IList[[3]V]](xs T) [3]V -> xs[0]
+
+Console.WriteLine(readFixed[string, List[[]string]](List[[]string]{[]string{"a"}})[0])`,
+                "GS0152",
+                "GS0580"
+            }
         }
 
         /// Every shape the two rules must NOT reject. A false GS0152 or GS0580 is a
@@ -610,6 +732,139 @@ Console.WriteLine(s.Find())`, []string{"Blue"}}
             yield[]object{"the-constructor-spelling-of-a-source-class-carrying-an-imported-interface", `let a = GsDisposable[DisposableSource]()
 let b = GsEnumerable[EnumerableSource]()
 Console.WriteLine(a.Tag + b.Tag)`, []string{"de"}}
+            // #4744: a dependent source-interface or source-class constraint is
+            // substituted with the call's or type clause's type-argument map before
+            // checking satisfaction.
+            yield[]object{"the-4744-repro-a-dependent-source-interface-and-class-constraint", `func readValue[V, T IValue4744[V]](item T) V -> item.Value
+func readInferred[V, T IValue4744[V]](seed V, item T) V -> item.Value
+func readBase[V, T ValueBase4744[V]](item T) V -> item.Saved
+func readList[V, T IValue4744[List[V]]](item T) int32 -> item.Value.Count
+func useNullableList[T ValueBase4744[List[string?]]](x T) int32 -> x.Saved.Count
+func cmp9[T IComparable[T]](x T) int32 -> x.CompareTo(x)
+func readImportedClass[V, T List[V]](x T) int32 -> x.Count
+func acceptCovariantSeq[T IEnumerable[string?]](x T) string -> "cov"
+func acceptContravariantCmp[T IComparer[string]](c T) int32 -> c.Compare("a", "b")
+func useMapBase[T ValueBase4744[Dictionary[string, Item4744[int32]]]](x T) int32 -> x.Saved.Count
+func useSeqBase[T ValueBase4744[IEnumerable[Item4744[int32]]]](x T) string -> "seq"
+func acceptActionDict[T IDictionary[() -> void, string?]](x T) int32 -> x.Count
+
+class MapDerived4744 : ValueBase4744[map[string, Item4744[int32]]] {
+    init() {
+        Saved = map[string, Item4744[int32]]{"k": Item4744[int32]{Saved: 7}}
+    }
+}
+
+class SeqDerived4744 : ValueBase4744[sequence[Item4744[int32]]] {
+    init() {
+        Saved = []Item4744[int32]{Item4744[int32]{Saved: 7}}
+    }
+}
+
+class RectBox4744[T IEnumerable[[,]object]] {
+}
+
+class RectNullableBox4744[T IEnumerable[[,]string?]] {
+}
+
+class DependentRectBox4744[V, T IEnumerable[[,]V]] {
+}
+
+class RectHolder4744 {
+    public var A RectBox4744[List[[,]string]]
+    public var B RectNullableBox4744[List[[,]string]]
+    public var C DependentRectBox4744[object, List[[,]string]]
+    public var D DependentRectBox4744[string?, List[[,]string]]
+    public var Tag string = "ro:rn"
+}
+
+class NullableStrComparer4744 : IComparer[string?] {
+    public func Compare(x string?, y string?) int32 -> 0
+}
+
+class IntListItem4744 : IValue4744[List[int32]] {
+    public prop Value List[int32] -> List[int32]{7}
+}
+
+class NullableListDerived4744 : ValueBase4744[List[string?]] {
+    init() {
+        Saved = List[string?]{nil}
+    }
+}
+
+class Owner4744[V] {
+    public func Read[T IValue4744[V]](item T) V -> item.Value
+    shared {
+        public func ReadStatic[T IValue4744[V]](item T) V -> item.Value
+    }
+}
+
+func (item T) ReadExt[V, T IValue4744[V]](seed V) V -> item.Value
+
+delegate ValueReader4744[V, T IValue4744[V]](item T) V;
+
+let item = Item4744[int32]{Saved: 7}
+let reader ValueReader4744[int32, Item4744[int32]] = (x Item4744[int32]) -> x.Value
+Console.WriteLine(readValue[int32, Item4744[int32]](item))
+Console.WriteLine(readInferred(0, item))
+Console.WriteLine(Owner4744[int32]().Read[Item4744[int32]](item))
+Console.WriteLine(Owner4744[int32].ReadStatic[Item4744[int32]](item))
+Console.WriteLine(item.ReadExt(0))
+Console.WriteLine(reader(item))
+Console.WriteLine(readBase[int32, IntDerived4744](IntDerived4744()))
+Console.WriteLine(readList[int32, IntListItem4744](IntListItem4744()))
+Console.WriteLine(useNullableList[NullableListDerived4744](NullableListDerived4744()))
+Console.WriteLine(cmp9((1, 2, 3, 4, 5, 6, 7, 8, 9)))
+Console.WriteLine(readImportedClass[int32, List[int32]](List[int32]{9}))
+Console.WriteLine(Outer4744[int32].Use[NestedIntDerived4744](NestedIntDerived4744()))
+Console.WriteLine(acceptCovariantSeq[List[string]](List[string]{"a"}) + ":" + acceptCovariantSeq[[]string]([]string{"b"}))
+Console.WriteLine(RectHolder4744().Tag)
+Console.WriteLine(acceptContravariantCmp[NullableStrComparer4744](NullableStrComparer4744()))
+Console.WriteLine(useMapBase[MapDerived4744](MapDerived4744()).ToString() + ":" + useSeqBase[SeqDerived4744](SeqDerived4744()) + ":" + acceptActionDict[Dictionary[Action, string?]](Dictionary[Action, string?]()).ToString())`, []string{
+                    "7",
+                    "7",
+                    "7",
+                    "7",
+                    "7",
+                    "7",
+                    "11",
+                    "1",
+                    "1",
+                    "0",
+                    "1",
+                    "nb",
+                    "cov:cov",
+                    "ro:rn",
+                    "0",
+                    "1:seq:0"
+                }}
+            // #4762: satisfied closed and forwarded open generic named-delegate
+            // constructions compile, IL-verify, and run.
+            yield[]object{"the-4762-control-satisfied-and-forwarded-named-delegate-constructions", `class Holder[U class] {
+    public var D GsRefDelegate[U]
+}
+
+class ClassDependentPair[A class, B A] {
+    public var Tag string = "cp"
+}
+
+class EnumDependentPair[A Enum, B A] {
+    public var Tag string = "ep"
+}
+
+func MakeForwarded[A SchemeOptions, B A](f (B) -> B) GsRefDelegate[B] -> GsRefDelegate[B](f)
+
+let del GsOptionsDelegate[DerivedOptions] = (x DerivedOptions) -> x
+let res = del(DerivedOptions{Name: "ok", Extra: 3})
+let fwd = MakeForwarded[SchemeOptions, DerivedOptions]((x DerivedOptions) -> DerivedOptions{Name: x.Name + "!", Extra: x.Extra})
+Console.WriteLine(typeof(GsRefDelegate[string]).Name)
+Console.WriteLine(res.Name + ":" + res.Extra.ToString())
+Console.WriteLine(fwd(DerivedOptions{Name: "hi", Extra: 1}).Name)
+Console.WriteLine(ClassDependentPair[object, int32]().Tag + ":" + EnumDependentPair[Color, Color]().Tag)`, []string{
+                    "GsRefDelegate`1",
+                    "ok:3",
+                    "hi!",
+                    "cp:ep"
+                }}
         }
 
         private func Compile(dir string, fileName string, source string, outPath string, extra ...string) string {

@@ -1320,7 +1320,8 @@ internal shared class ClrOverloadResolution {
         }
         let argumentDependent = typeParameters
             .Where(
-            (typeParameter Type) -> remainingParameters.Any(
+            (typeParameter Type) -> (argumentCount == nil && !MentionsGenericParameter(parameterType, typeParameter)) ||
+                remainingParameters.Any(
                 (parameter ParameterInfo) -> MentionsGenericParameter(parameter.ParameterType, typeParameter)
             )
         )
