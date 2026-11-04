@@ -272,6 +272,40 @@ func Run(ref text string?) int32 {
     return text.Length
 }
 Console.WriteLine(Run(ref Box.G))`, "", "run", "7"}
+            yield[]object{"d12_5640_defer_uninvoked_function_literal_with_try_filter_keeps_external_callable_alias", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(f () -> void) { }
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    if x == nil { return 0 }
+    defer Consume(func() {
+        try {
+            action = clear
+        } catch (Exception) when true {
+        }
+    })
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(func() { }))`, "", "run", "7"}
+            yield[]object{"d13_5640_defer_eager_target_assigning_external_callable_keeps_alias", `import System
+class C {
+    var Value int32 = 7
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = clear
+    if x == nil { return 0 }
+    defer (action = callback)()
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(func() { }))`, "", "run", "7"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

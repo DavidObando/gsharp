@@ -509,8 +509,7 @@ internal partial class StatementBinder {
 
     private func UpdateExternalCallableAliases(
         statement BoundStatement,
-        aliasesAtEntry IReadOnlyCollection[VariableSymbol],
-        syntaxOverride SyntaxNode? = nil
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol]
     ) {
         var statement = statement
         while statement is BoundBlockStatement labeledBlock &&
@@ -527,9 +526,15 @@ internal partial class StatementBinder {
         ApplyCallableAliasExitState(externalCallableAliases, statement, aliasesAtEntry, collector)
         // A filter of an enclosing try can run between any two statements of its protected block,
         // when a nested handler catches a replacement exception.
-        if externalCallableAliases.Count > 0 && (statement.Syntax ?? syntaxOverride) is {} syntax {
-            let filters = CollectCatchFiltersAbove(syntax)
-            filters.AddRange(CollectCatchFiltersWithin(syntax))
+        if externalCallableAliases.Count > 0 && statement.Syntax is {} syntax {
+            let filters = if collector.MayMutateMemberPaths || collector.ContainsTry {
+                CollectCatchFiltersAbove(syntax)
+            } else {
+                List[ExpressionSyntax]()
+            }
+            if collector.ContainsTry {
+                filters.AddRange(CollectCatchFiltersWithin(syntax))
+            }
             if filters.Count > 0 {
                 RemoveFilterAffectedAliases(externalCallableAliases, filters)
             }

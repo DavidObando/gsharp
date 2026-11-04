@@ -558,9 +558,9 @@ internal partial class StatementBinder {
                         continue
                     }
                     // Issue #5640: the receiver and arguments run at the `defer` statement. The deferred call runs when the block exits.
-                    let prefix = BoundBlockStatement(nil, defer_.PrefixStatements)
+                    let prefix = DeferPrefixBlock(deferSyntax, defer_.PrefixStatements)
                     InvalidateNarrowingsForAssignedVariables(statementSyntax, prefix)
-                    UpdateExternalCallableAliases(prefix, externalCallableAliasesAtEntry, statementSyntax)
+                    UpdateExternalCallableAliases(prefix, externalCallableAliasesAtEntry)
                     ShadowAfterStatement(prefix)
                     let innerStatements = ImmutableArray.CreateBuilder[BoundStatement]()
                     let cleanupEffect = BoundExpressionStatement(nil, defer_.Cleanup!!)

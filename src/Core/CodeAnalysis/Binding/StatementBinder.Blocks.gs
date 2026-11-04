@@ -563,9 +563,13 @@ internal partial class StatementBinder {
         }
     }
 
-    /// ADR-0208 R10 (#5168): the `when` filters of every `try` at or below [`node`](paramref).
+    /// ADR-0208 R10 (#5168): the `when` filters of every `try` at or below [`node`](paramref),
+    /// outside nested function bodies.
     private func CollectCatchFiltersWithin(node SyntaxNode) List[ExpressionSyntax] {
         let filters = List[ExpressionSyntax]()
+        if IsScopeOwner(node) {
+            return filters
+        }
         if node is TryStatementSyntax tryStatement {
             for clause in tryStatement.CatchClauses {
                 if clause.Filter != nil {
@@ -1049,6 +1053,23 @@ internal partial class StatementBinder {
         let prefix = ImmutableArray.CreateBuilder[BoundStatement]()
         let capturedCall = CaptureDeferArguments(expression, prefix)
         return (prefix.ToImmutable(), capturedCall, nil)
+    }
+
+    // Issue #5640: wraps the bound operands of a `defer` in a block with the `defer` syntax.
+    // Narrowing and callable-alias updates see the operands without the synthetic locals or the deferred call.
+    private func DeferPrefixBlock(
+        syntax DeferStatementSyntax,
+        prefixStatements ImmutableArray[BoundStatement]
+    ) BoundBlockStatement {
+        let operands = ImmutableArray.CreateBuilder[BoundStatement](prefixStatements.Length)
+        for statement in prefixStatements {
+            if statement is BoundVariableDeclaration{Initializer: {} initializer} {
+                operands.Add(BoundExpressionStatement(nil, initializer))
+            } else {
+                operands.Add(statement)
+            }
+        }
+        return BoundBlockStatement(syntax, operands.MoveToImmutable())
     }
 
     private func CaptureDeferArguments(
