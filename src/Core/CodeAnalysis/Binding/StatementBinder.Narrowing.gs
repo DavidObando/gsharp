@@ -501,6 +501,7 @@ internal partial class StatementBinder {
         aliasesAtEntry IReadOnlyCollection[VariableSymbol]
     ) {
         var statement = statement
+        var aliasesAtEntry = aliasesAtEntry
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
             labeledBlock
@@ -508,6 +509,7 @@ internal partial class StatementBinder {
             .Length == 2 &&
             labeledBlock.Statements[0] is BoundLabelStatement {
             statement = labeledBlock.Statements[1]
+            aliasesAtEntry = Array.Empty[VariableSymbol]()
         }
         let collector = GetStatementEffects(statement, aliasesAtEntry)
         // The summary serves one statement; later statements recompute it.
@@ -1299,6 +1301,7 @@ internal partial class StatementBinder {
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     ) {
         var statement = statement
+        var callableAliases = callableAliases
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
             labeledBlock
@@ -1306,6 +1309,7 @@ internal partial class StatementBinder {
             .Length == 2 &&
             labeledBlock.Statements[0] is BoundLabelStatement {
             statement = labeledBlock.Statements[1]
+            callableAliases = Array.Empty[VariableSymbol]()
         }
         if statement is not BoundIfStatement ifStmt {
             return
@@ -4115,7 +4119,11 @@ internal partial class StatementBinder {
                 return fallsThrough
             }
             case ifStatement is BoundIfStatement {
-                return HasInternallyReachableFallthrough(ifStatement.ThenStatement) ||
+                return (
+                    HasInternallyReachableExpressionFallthrough(ifStatement.Condition) &&
+                        CanCompleteNormally(ifStatement)
+                ) ||
+                    HasInternallyReachableFallthrough(ifStatement.ThenStatement) ||
                     (ifStatement.ElseStatement != nil && HasInternallyReachableFallthrough(ifStatement.ElseStatement))
             }
             case tryStatement is BoundTryStatement {
@@ -4127,8 +4135,17 @@ internal partial class StatementBinder {
                 )
             }
             case switchStatement is BoundPatternSwitchStatement {
-                return switchStatement.Arms.Any(
-                    (arm BoundPatternSwitchArm) -> HasInternallyReachableFallthrough(arm.Body)
+                return (
+                    HasInternallyReachableExpressionFallthrough(switchStatement.Discriminant) &&
+                        CanCompleteNormally(switchStatement)
+                ) ||
+                    switchStatement
+                    .Arms
+                    .Any(
+                    (arm BoundPatternSwitchArm) -> (
+                        HasInternallyReachableExpressionFallthrough(arm.Guard) && !EndsInUnconditionalExit(arm.Body)
+                    ) ||
+                        HasInternallyReachableFallthrough(arm.Body)
                 )
             }
             case infiniteLoop is BoundForInfiniteStatement {
@@ -4150,8 +4167,64 @@ internal partial class StatementBinder {
                     HasInternallyReachableFallthrough(awaitRangeLoop.Body)
             }
             default {
-                return false
+                return HasInternallyReachableStatementExpressionFallthrough(statement) && CanCompleteNormally(statement)
             }
+        }
+    }
+
+    private func HasInternallyReachableExpressionFallthrough(expression BoundExpression?) bool {
+        if !binderCtx.FunctionContainsUserGotoOrLabel || expression == nil {
+            return false
+        }
+        let finder = ExpressionFallthroughFinder(this)
+        finder.VisitExpression(expression)
+        return finder.Found
+    }
+
+    private func HasInternallyReachableStatementExpressionFallthrough(statement BoundStatement) bool {
+        if !binderCtx.FunctionContainsUserGotoOrLabel {
+            return false
+        }
+        let finder = ExpressionFallthroughFinder(this)
+        finder.VisitStatement(statement)
+        return finder.Found
+    }
+
+    private class ExpressionFallthroughFinder : BoundTreeWalker {
+        private let owner StatementBinder
+
+        init(owner StatementBinder) {
+            this.owner = owner
+        }
+
+        prop Found bool {
+            get;
+            private set;
+        }
+
+        open override func VisitStatement(node BoundStatement?) {
+            if Found || node == nil || node is BoundLocalFunctionDeclaration {
+                return
+            }
+            base.VisitStatement(node)
+        }
+
+        open override func VisitExpression(node BoundExpression?) {
+            if Found || node == nil || node is BoundFunctionLiteralExpression {
+                return
+            }
+            if node is BoundBlockExpression block {
+                var fallsThrough = false
+                for child in block.Statements {
+                    fallsThrough = (fallsThrough || owner.HasInternallyReachableFallthrough(child)) &&
+                        owner.CanCompleteNormally(child)
+                }
+                if fallsThrough {
+                    Found = true
+                    return
+                }
+            }
+            base.VisitExpression(node)
         }
     }
 

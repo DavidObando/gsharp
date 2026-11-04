@@ -339,6 +339,67 @@ Run(func() {}, true, false)
     }
 
     @Fact
+    func Goto_LandsOnLabeledIfAfterCallableAliasAssignment_DoesNotLiftNarrowing() {
+        let result = Evaluate(`
+import System
+
+func Run(cb () -> void, skip bool, flag bool) int32 {
+    var x string? = nil
+    var g () -> void = func() { x = nil }
+    if skip {
+        goto L
+    }
+    g = cb
+L:
+    if flag {
+        x = "safe"
+        g()
+    } else {
+        x = "other"
+    }
+    return x.Length
+}
+
+Run(func() {}, true, true)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func Goto_LandsInsideIfConditionAfterReturnInBranch_DoesNotLiftNarrowing() {
+        let result = Evaluate(`
+import System
+
+func Run(skip bool, flag bool) int32 {
+    var x string? = nil
+    if skip {
+        goto Inside
+    }
+    if flag {
+        return 0
+        if ({
+        Inside:
+            var marker = 0
+            true
+        }) {
+            Console.WriteLine("reached")
+        }
+    } else {
+        x = "other"
+    }
+    return x.Length
+}
+
+Run(true, false)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
     func Goto_BypassesSwitchArm_DoesNotNarrowFieldPath() {
         // ADR-0208 section 16, row R6 (#5301): when the default arm jumps to
         // `Skip:` via `goto Skip` without narrowing `b.Pet` to `Dog`, the label

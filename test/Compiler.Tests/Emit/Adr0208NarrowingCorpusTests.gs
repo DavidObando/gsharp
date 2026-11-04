@@ -263,6 +263,8 @@ open class Adr0208NarrowingCorpusTests {
                 "m14_5301_goto_into_condition_after_callable_alias_assignment_does_not_lift_R6",
                 "m15_5301_goto_into_switch_after_callable_alias_assignment_does_not_lift_R6",
                 "m16_5301_goto_into_try_after_callable_alias_assignment_does_not_lift_R6",
+                "m17_5301_goto_to_labeled_if_after_callable_alias_assignment_does_not_lift_R6",
+                "m18_5301_goto_into_if_condition_after_return_in_branch_does_not_lift_R6",
                 "m1_unrelated_interface_refinement",
                 "n1_boxed_value_type_test",
                 "o1_callback_after_test_replaces_root",
@@ -10341,6 +10343,45 @@ func Run(cb () -> void, skip bool, flag bool) {
     Console.WriteLine(x.Length)
 }
 func Main() { Run(func() {}, true, false) }`, "GS0158@21:25", "reject", "", "R6 (#5301)"}
+            yield[]object{"m17_5301_goto_to_labeled_if_after_callable_alias_assignment_does_not_lift_R6", `import System
+func Run(cb () -> void, skip bool, flag bool) {
+    var x string? = nil
+    var g () -> void = func() { x = nil }
+    if skip {
+        goto L
+    }
+    g = cb
+    L:
+    if flag {
+        x = "safe"
+        g()
+    } else {
+        x = "other"
+    }
+    Console.WriteLine(x.Length)
+}
+func Main() { Run(func() {}, true, true) }`, "GS0158@16:25", "reject", "", "R6 (#5301)"}
+            yield[]object{"m18_5301_goto_into_if_condition_after_return_in_branch_does_not_lift_R6", `import System
+func Run(skip bool, flag bool) {
+    var x string? = nil
+    if skip {
+        goto Inside
+    }
+    if flag {
+        return
+        if ({
+            Inside:
+            var marker = 0
+            true
+        }) {
+            Console.WriteLine("reached")
+        }
+    } else {
+        x = "other"
+    }
+    Console.WriteLine(x.Length)
+}
+func Main() { Run(true, false) }`, "GS0158@19:25", "reject", "", "R6 (#5301)"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

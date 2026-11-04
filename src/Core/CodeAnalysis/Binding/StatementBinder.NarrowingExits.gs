@@ -81,6 +81,7 @@ internal partial class StatementBinder {
         aliasesAtEntry IReadOnlyCollection[VariableSymbol]
     ) {
         var statement = statement
+        var aliasesAtEntry = aliasesAtEntry
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
             labeledBlock
@@ -88,6 +89,7 @@ internal partial class StatementBinder {
             .Length == 2 &&
             labeledBlock.Statements[0] is BoundLabelStatement {
             statement = labeledBlock.Statements[1]
+            aliasesAtEntry = Array.Empty[VariableSymbol]()
         }
         if statement == nil || !object.ReferenceEquals(exitOwner, statement) {
             return
