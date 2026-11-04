@@ -544,6 +544,66 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "GS0158@23:14", "reject", ""}
+            yield[]object{"d25_5640_defer_out_argument_invalidates_external_callable_alias", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(v int32) { }
+func Set(out target () -> void, value () -> void) int32 {
+    target = value
+    return 1
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    defer Consume(Set(out action, func() { x = nil }))
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(func() { }))`, "GS0158@16:14", "reject", ""}
+            yield[]object{"d26_5640_defer_invoked_literal_early_return_joins_pre_return_callable_state", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(v int32) { }
+func Run(stop bool, callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = clear
+    defer Consume((func() int32 {
+        if stop { return 1 }
+        action = callback
+        return 1
+    })())
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(true, func() { }))`, "GS0158@17:14", "reject", ""}
+            yield[]object{"d27_5640_defer_repeated_noncapturing_invocation_replaces_parameter_provenance", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(v int32) { }
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    defer Consume({
+        let invoke = func(f () -> void) int32 {
+            f()
+            return 1
+        }
+        invoke(func() { action = clear })
+        action = callback
+        invoke(callback)
+    })
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(func() { }))`, "", "run", "7"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
