@@ -44,11 +44,74 @@ open class Adr0212ScopeFeatureTests {
 
     @Fact
     func Completion_OffersTypeAliasNames() {
-        // LookupSymbols cannot list an alias (no alias symbol); completion still offers its name.
         let items = Complete(Source, "// caret")
-        Assert.Contains(items, (i CompletionItem) -> i.Label == "Meters")
-        // `type $Feet` is the alias `Feet`; its target is found by the semantic name.
-        Assert.Contains(items, (i CompletionItem) -> i.Label == "Feet" && i.Detail != nil)
+        let meters = Assert.Single(items, (i CompletionItem) -> i.Label == "Meters")
+        Assert.Equal("type Meters = int32", meters.Detail)
+        // `type $Feet` is the alias `Feet`; LookupSymbols lists it under its semantic name.
+        let feet = Assert.Single(items, (i CompletionItem) -> i.Label == "Feet")
+        Assert.Equal("type Feet = int32", feet.Detail)
+    }
+
+    @Fact
+    func Completion_OffersTwoTypeAliasesOfTheSameTargetAndEscapesKeywordAliases() {
+        let source = `package P
+type First = int32
+type Second = int32
+type $type = string
+func Run() int32 {
+    // caret
+    return 0
+}
+`
+        let items = Complete(source, "// caret")
+        let first = Assert.Single(items, (i CompletionItem) -> i.Label == "First")
+        Assert.Equal("type First = int32", first.Detail)
+        let second = Assert.Single(items, (i CompletionItem) -> i.Label == "Second")
+        Assert.Equal("type Second = int32", second.Detail)
+        let escaped = Assert.Single(items, (i CompletionItem) -> i.Label == "$$type")
+        Assert.Equal("type type = string", escaped.Detail)
+    }
+
+    @Fact
+    func Completion_PrefersLocalTypeAliasOverCrossPackageNamedType() {
+        let project = ProjectState("/test/app.gsproj")
+        project.UpdateFile("/test/a_lib.gs", "package Lib\npublic class Coord { }\n")
+        let appSource = "package App\ntype Coord = int32\nfunc Run() Coord {\n    // caret\n    return 0\n}\n"
+        project.UpdateFile("/test/b_app.gs", appSource)
+        project.TryGetSyntaxTree("/test/b_app.gs", out var tree)
+        let lines = List[int32]()
+        for var i = 0; i < appSource.Length; i++ {
+            if appSource[i] == '\n' {
+                lines.Add(i)
+            }
+        }
+        let content = DocumentContent(tree, lines, project)
+        let items = CompletionComputer.ComputeCompletions(
+            content,
+            LanguageServerTestHelpers.PositionOf(appSource, "// caret")
+        )
+        let coord = Assert.Single(items, (i CompletionItem) -> i.Label == "Coord")
+        Assert.Equal("type Coord = int32", coord.Detail)
+
+        let mixedProject = ProjectState("/test/mixed.gsproj")
+        mixedProject.UpdateFile("/test/a_generic.gs", "package GenericPkg\npublic class Coord[T] { }\n")
+        mixedProject.UpdateFile("/test/b_lib.gs", "package Lib\ntype Coord = int32\n")
+        let consumerSource = "package Consumer\nimport GenericPkg\nimport Lib\nfunc Run() Coord {\n    // caret\n    return 0\n}\n"
+        mixedProject.UpdateFile("/test/c_consumer.gs", consumerSource)
+        mixedProject.TryGetSyntaxTree("/test/c_consumer.gs", out var consumerTree)
+        let consumerLines = List[int32]()
+        for var i = 0; i < consumerSource.Length; i++ {
+            if consumerSource[i] == '\n' {
+                consumerLines.Add(i)
+            }
+        }
+        let consumerContent = DocumentContent(consumerTree, consumerLines, mixedProject)
+        let consumerItems = CompletionComputer.ComputeCompletions(
+            consumerContent,
+            LanguageServerTestHelpers.PositionOf(consumerSource, "// caret")
+        )
+        let consumerCoord = Assert.Single(consumerItems, (i CompletionItem) -> i.Label == "Coord")
+        Assert.Equal("type Coord = int32", consumerCoord.Detail)
     }
 
     @Fact

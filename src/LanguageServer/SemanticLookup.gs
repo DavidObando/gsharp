@@ -610,6 +610,7 @@ shared class SemanticLookup {
             private func AsTypeSymbol(symbol Symbol?) TypeSymbol? {
                 return switch symbol {
                     case t is TypeSymbol: t
+                    case ta is TypeAliasSymbol: ta.Target
                     case v is VariableSymbol: v.Type
                     case f is FunctionSymbol: f.Type
                     case p is PropertySymbol: p.Type
@@ -1130,9 +1131,9 @@ shared class SemanticLookup {
                 if aliasId != nil && !aliasId.IsMissing && coreModel.GetDeclaredSymbol(
                     typeAliasSyntax,
                     ct
-                ) is TypeSymbol aliasedType {
-                    globals[aliasId.ValueText] = aliasedType
-                    declarations[aliasId] = aliasedType
+                ) is TypeAliasSymbol typeAlias {
+                    globals[aliasId.ValueText] = typeAlias.Target
+                    declarations[aliasId] = typeAlias.Target
                 }
             }
         }

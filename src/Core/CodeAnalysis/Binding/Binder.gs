@@ -6873,14 +6873,22 @@ partial class Binder {
             }
             let typeAliasDeclarations = syntaxTrees.SelectMany((st SyntaxTree) -> st.Root.Members.AsEnumerable())
                 .OfType[TypeAliasDeclarationSyntax]()
+            let declaredTypeAliases = ImmutableArray.CreateBuilder[TypeAliasSymbol]()
             for typeAlias in typeAliasDeclarations {
                 let owningPackage = packageByTree[typeAlias.SyntaxTree]
                 binder.declarations.ValidateTopLevelProtected(typeAlias.AccessibilityModifier)
+                var aliasSymbol TypeAliasSymbol? = nil
                 RunWithPackage(
                     owningPackage,
                     typeAlias.SyntaxTree,
-                    () -> binder.declarations.BindTypeAliasDeclaration(typeAlias, owningPackage)
+                    () -> {
+                        aliasSymbol = binder.declarations.BindTypeAliasDeclaration(typeAlias, owningPackage)
+                    }
                 )
+                let declaredAlias = aliasSymbol
+                if declaredAlias != nil {
+                    declaredTypeAliases.Add(declaredAlias)
+                }
             }
             // Declare named delegate type-name shells before other type bodies so
             // their members can reference delegates. Signatures are bound after all
@@ -7590,6 +7598,7 @@ partial class Binder {
                 statements.ToImmutable()
             )
             result.PreprocessorSymbols = preprocessorSymbols ?? ImmutableHashSet[string].Empty
+            result.DeclaredTypeAliases = declaredTypeAliases.ToImmutable()
             result.AssemblyAttributes = boundAssemblyAttributes
             result.ModuleAttributes = boundModuleAttributes
             // Issue #2224: anonymous-class literals (`object { let ... }`) bound
@@ -7640,6 +7649,7 @@ partial class Binder {
                     statements.ToImmutable()
                 ){
                     PreprocessorSymbols = result.PreprocessorSymbols,
+                    DeclaredTypeAliases = result.DeclaredTypeAliases,
                     FriendAssemblies = result.FriendAssemblies,
                     AssemblyAttributes = result.AssemblyAttributes,
                     ModuleAttributes = result.ModuleAttributes,
@@ -13669,8 +13679,20 @@ partial class Binder {
                     }
                     if allClr {
                         try {
+                            let closed = it.OpenDefinition!!.MakeGenericType(clrArgs)
+                            if it.OpenDefinition!!.FullName?.StartsWith(
+                                "System.Tuple`",
+                                StringComparison.Ordinal
+                            ) == true ||
+                                substitutedArgs
+                                .Any(
+                                (a TypeSymbol) -> TypeSymbol.ContainsNamedTupleElements(a) ||
+                                    TypeSymbol.ContainsSourceArrayShape(a)
+                            ) {
+                                return ImportedTypeSymbol.GetConstructed(closed, it.OpenDefinition, substitutedArgs)
+                            }
                             return TypeSymbol.FromClrTypeWithoutNullability(
-                                it.OpenDefinition!!.MakeGenericType(clrArgs),
+                                closed,
                                 NullabilityFreeReason.CompilerProduced
                             )
                         } catch (ArgumentException) {

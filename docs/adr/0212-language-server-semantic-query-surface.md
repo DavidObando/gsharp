@@ -383,7 +383,10 @@ class SemanticModel {
   bindings, for-range variables, catch variables and lambda parameters whose
   scope contains `position` and whose declaration precedes it; the enclosing
   function's parameters; the enclosing type's members accessible without a
-  receiver; globals, functions, types and aliases of the compilation visible
+  receiver; globals, functions, types and type aliases (as `TypeAliasSymbol`,
+  `SymbolKind.TypeAlias`, which `GetDeclaredSymbol` and `GetSymbolInfo` also
+  answer for `TypeAliasDeclarationSyntax` and its identifier token, #5333) of
+  the compilation visible
   through the file's imports; and, when `Compilation.Submission` is set, the
   prior submissions' members. One symbol per name: the innermost declaration
   shadows. Order: scope depth innermost first, then declaration order, so

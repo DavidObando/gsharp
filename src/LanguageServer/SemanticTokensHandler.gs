@@ -295,6 +295,9 @@ shared class SemanticTokensComputer {
             case enumMember is EnumMemberSyntax {
                 positions.Add(enumMember.Identifier.Span.Start)
             }
+            case typeAlias is TypeAliasDeclarationSyntax {
+                positions.Add(typeAlias.Identifier.Span.Start)
+            }
             case varPattern is VarPatternSyntax when varPattern.Designation.Text != "_" {
                 positions.Add(varPattern.Designation.Span.Start)
             }
@@ -383,6 +386,7 @@ shared class SemanticTokensComputer {
             case GSharpSymbolKind.LocalVariable: (SemanticTokenType.Variable, modifiers)
             case GSharpSymbolKind.GlobalVariable: (SemanticTokenType.Variable, modifiers)
             case GSharpSymbolKind.Type or GSharpSymbolKind.ImportedClass: ClassifyTypeSymbol(symbol, isDeclaration)
+            case GSharpSymbolKind.TypeAlias: ClassifyTypeSymbol(cast[TypeAliasSymbol](symbol).Target, isDeclaration)
             case GSharpSymbolKind.Package: (SemanticTokenType.Namespace, modifiers)
             case GSharpSymbolKind.Field: (SemanticTokenType.Property, modifiers)
             case GSharpSymbolKind.Property: (SemanticTokenType.Property, modifiers)
