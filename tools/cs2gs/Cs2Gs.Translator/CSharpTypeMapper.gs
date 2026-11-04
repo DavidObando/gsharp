@@ -1115,8 +1115,13 @@ class CSharpTypeMapper {
 
     internal func LiftedNestedDelegateName(named INamedTypeSymbol?, context TranslationContext) string {
         let parts = List[string]()
+        var outermost INamedTypeSymbol? = named
         for var current INamedTypeSymbol? = named; current != nil; current = current!!.ContainingType {
             parts.Insert(0, this.Names(context).GetName(current)!!)
+            outermost = current
+        }
+        if outermost != nil {
+            this.TrackShortenedNamespace(outermost)
         }
         return string.Join("_", parts)
     }
@@ -2695,7 +2700,7 @@ class CSharpTypeMapper {
             )
         }
 
-        private func HasGenericContainingType(named INamedTypeSymbol) bool {
+        internal func HasGenericContainingType(named INamedTypeSymbol) bool {
             for var containing INamedTypeSymbol? = named.ContainingType;
                 containing != nil;
                 containing = containing!!.ContainingType {
