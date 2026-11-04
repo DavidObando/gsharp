@@ -565,22 +565,6 @@ internal partial class StatementBinder {
         }
     }
 
-    /// ADR-0208 R10 (#5168): the `when` filters of every `try` at or below [`node`](paramref).
-    private func CollectCatchFiltersWithin(node SyntaxNode) List[ExpressionSyntax] {
-        let filters = List[ExpressionSyntax]()
-        if node is TryStatementSyntax tryStatement {
-            for clause in tryStatement.CatchClauses {
-                if clause.Filter != nil {
-                    filters.Add(clause.Filter)
-                }
-            }
-        }
-        for child in node.GetChildren() {
-            filters.AddRange(CollectCatchFiltersWithin(child))
-        }
-        return filters
-    }
-
     /// ADR-0208 R10 (#5168): adds the storage that the `ref` or `out` operand [`operand`](paramref)
     /// writes: the variable itself, or the receiver of an index. An index input is only read.
     private func CollectWriteTargetNames(operand SyntaxNode, names HashSet[string]) {
@@ -1051,6 +1035,23 @@ internal partial class StatementBinder {
         let prefix = ImmutableArray.CreateBuilder[BoundStatement]()
         let capturedCall = CaptureDeferArguments(expression, prefix)
         return (prefix.ToImmutable(), capturedCall, nil)
+    }
+
+    // Issue #5640: wraps the bound operands of a `defer` in a block with the `defer` syntax.
+    // Narrowing and callable-alias updates see the operands without the synthetic locals or the deferred call.
+    private func DeferPrefixBlock(
+        syntax DeferStatementSyntax,
+        prefixStatements ImmutableArray[BoundStatement]
+    ) BoundBlockStatement {
+        let operands = ImmutableArray.CreateBuilder[BoundStatement](prefixStatements.Length)
+        for statement in prefixStatements {
+            if statement is BoundVariableDeclaration{Initializer: {} initializer} {
+                operands.Add(BoundExpressionStatement(nil, initializer))
+            } else {
+                operands.Add(statement)
+            }
+        }
+        return BoundBlockStatement(syntax, operands.MoveToImmutable())
     }
 
     private func CaptureDeferArguments(
