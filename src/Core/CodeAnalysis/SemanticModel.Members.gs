@@ -398,6 +398,12 @@ partial class SemanticModel {
         }
         let leftSyntax = DeclarationOf(left)
         let rightSyntax = DeclarationOf(right)
+        if left is FunctionSymbol{ReceiverType: nil} &&
+            right is FunctionSymbol{ReceiverType: nil} &&
+            leftSyntax != nil &&
+            object.ReferenceEquals(leftSyntax, rightSyntax) {
+            return true
+        }
         return left.GetType() == right.GetType() && leftSyntax != nil && object.ReferenceEquals(
             leftSyntax,
             rightSyntax
@@ -678,7 +684,9 @@ partial class SemanticModel {
             .OrderBy((e(Function FunctionSymbol, File string, Start int32)) -> e.File, StringComparer.Ordinal)
             .ThenBy((e(Function FunctionSymbol, File string, Start int32)) -> e.Start)
         for entry in declared {
-            result.Add(entry.Function)
+            if !ContainsMember(result, entry.Function) {
+                result.Add(entry.Function)
+            }
         }
         for method in found.Imported {
             result.Add(ImportedMemberSymbol(default(TypeSymbol?), method))
@@ -704,8 +712,15 @@ partial class SemanticModel {
     /// <item>Type parameter with constraints: the methods of that name of each constraint, in constraint
     /// order.</item>
     /// <item>Partial type: the methods of every part, by file path (ordinal), then by start position.</item>
+    /// <item>Extension function declared in source (issue #5480): the extension functions of that name in
+    /// scope whose receiver type can take the receiver. Order: file path (ordinal), then start
+    /// position.</item>
+    /// <item>Extension method of an imported class (issue #5480): the `static [Extension]` methods of that
+    /// name in the imported namespaces whose first parameter can take the receiver, as imported function
+    /// symbols. Order: the holder classes in reference order, then metadata token. Generic methods keep
+    /// their open signature.</item>
     /// </list>
-    /// Constructor calls and extension methods dispatched as instance calls are not in the contract.
+    /// Constructor calls are not in the contract.
     /// The compilation must have (cref:Compilation.RecordMemberGroups) set before its first query; a
     /// compilation without it answers an empty array for every node.
     /// @param node A call expression, the name of a call or member access, or its identifier token.
@@ -730,30 +745,38 @@ partial class SemanticModel {
             return ImmutableArray[Symbol].Empty
         }
         let referenced = Unwrap(FindReferencedNode(token))
-        if referenced is BoundCallOperationExpression call && !call.MemberGroup.IsDefaultOrEmpty {
+        if referenced is BoundCallOperationExpression call {
             if !SpellsName(call.CalledFunction, token.ValueText) {
                 return ImmutableArray[Symbol].Empty
             }
-            let receiverType TypeSymbol? = switch call {
-                case instanceCall is BoundImportedInstanceCallExpression: instanceCall.ConstrainedInterfaceType ??
-                    instanceCall
-                    .Receiver
-                    .Type
-                case importedCall is BoundImportedCallExpression: importedCall.StaticContainerType
-                default: default(TypeSymbol?)
-            }
-            let group = ImmutableArray.CreateBuilder[Symbol]()
-            for candidate in call.MemberGroup {
-                switch candidate {
-                    case function is FunctionSymbol {
-                        group.Add(function)
-                    }
-                    case method is MethodInfo {
-                        group.Add(ImportedMemberSymbol(receiverType, method))
+            if !call.MemberGroup.IsDefaultOrEmpty {
+                let receiverType TypeSymbol? = switch call {
+                    case instanceCall is BoundImportedInstanceCallExpression: instanceCall.ConstrainedInterfaceType ??
+                        instanceCall
+                        .Receiver
+                        .Type
+                    case importedCall is BoundImportedCallExpression: importedCall.StaticContainerType
+                    default: default(TypeSymbol?)
+                }
+                let group = ImmutableArray.CreateBuilder[Symbol]()
+                for candidate in call.MemberGroup {
+                    switch candidate {
+                        case function is FunctionSymbol {
+                            AddGroupMember(group, function, call.CalledFunction)
+                        }
+                        case method is MethodInfo {
+                            AddGroupMember(group, ImportedMemberSymbol(receiverType, method), call.CalledFunction)
+                        }
                     }
                 }
+                return OrderMemberGroup(group.ToImmutable())
             }
-            return OrderMemberGroup(group.ToImmutable())
+            if call is BoundCallExpression{Function: {IsExtension: true}, StaticQualifierType: nil} &&
+                token.Parent is CallExpressionSyntax ce &&
+                ce.Parent is AccessorExpressionSyntax accessor &&
+                object.ReferenceEquals(accessor.RightPart, ce) {
+                return ImmutableArray[Symbol].Empty
+            }
         }
         let single = GetTokenSymbol(token)
         // A call through a local function value names a variable; any other variable or type is no member.
@@ -851,7 +874,22 @@ partial class SemanticModel {
         default: cast[object](member)
     }
 
+    private func AddGroupMember(group ImmutableArray[Symbol].Builder, member Symbol, called Symbol) {
+        for var i = 0; i < group.Count; i++ {
+            if SameMember(group[i], member) {
+                if object.ReferenceEquals(member, called) {
+                    group[i] = member
+                }
+                return
+            }
+        }
+        group.Add(member)
+    }
+
     private func OwnerOf(function FunctionSymbol) object {
+        if function.IsExtension {
+            return typeof(FunctionSymbol)
+        }
         let owner TypeSymbol? = function.ReceiverType ?? function.StaticOwnerType
         if owner is StructSymbol structure {
             return structure.Definition ?? structure

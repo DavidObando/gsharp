@@ -57,6 +57,121 @@ open class Adr0212ExtensionFeatureTests {
     }
 
     @Fact
+    func Hover_OnASourceExtensionCall_CountsTheOverloadsForTheReceiver() {
+        let content = SourceExtensionProjectContent()
+        let singleHover = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(SourceExtensionFileA, "Shout", 2)
+        )
+        Assert.NotNull(singleHover)
+        Assert.Contains("Shout", singleHover!!.Contents.ToString(), StringComparison.Ordinal)
+        Assert.DoesNotContain("overload", singleHover!!.Contents.ToString(), StringComparison.Ordinal)
+        let overloadedHover = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(SourceExtensionFileA, "Scale", 2)
+        )
+        Assert.NotNull(overloadedHover)
+        Assert.Contains("*(+ 1 overload)*", overloadedHover!!.Contents.ToString(), StringComparison.Ordinal)
+        let genericSingleHover = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(SourceExtensionFileA, "Repeat", 1)
+        )
+        Assert.NotNull(genericSingleHover)
+        Assert.Contains("Repeat", genericSingleHover!!.Contents.ToString(), StringComparison.Ordinal)
+        Assert.DoesNotContain("overload", genericSingleHover!!.Contents.ToString(), StringComparison.Ordinal)
+        let genericOverloadedHover = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(SourceExtensionFileA, "Pick", 1)
+        )
+        Assert.NotNull(genericOverloadedHover)
+        Assert.Contains("*(+ 1 overload)*", genericOverloadedHover!!.Contents.ToString(), StringComparison.Ordinal)
+    }
+
+    @Fact
+    func SignatureHelp_OnASourceExtensionCall_ListsTheOverloadsInFileThenStartOrder() {
+        let content = SourceExtensionProjectContent()
+        let singleHelp = HelpIn(content, SourceExtensionFileA, "n.Shout(")
+        Assert.NotNull(singleHelp)
+        Assert.Contains("Shout", Assert.Single(singleHelp!!.Signatures).Label, StringComparison.Ordinal)
+        let overloadedHelp = HelpIn(content, SourceExtensionFileA, "n.Scale(")
+        Assert.NotNull(overloadedHelp)
+        let scaleLabels = overloadedHelp!!.Signatures.Select((s SignatureInformation) -> s.Label).ToArray()
+        Assert.Equal(2, scaleLabels.Length)
+        Assert.DoesNotContain("bonus", scaleLabels[0], StringComparison.Ordinal)
+        Assert.Contains("bonus", scaleLabels[1], StringComparison.Ordinal)
+        Assert.Equal(0, overloadedHelp!!.ActiveSignature)
+        let genericSingleHelp = HelpIn(content, SourceExtensionFileA, "n.Repeat(")
+        Assert.NotNull(genericSingleHelp)
+        Assert.Contains("Repeat", Assert.Single(genericSingleHelp!!.Signatures).Label, StringComparison.Ordinal)
+        let genericOverloadedHelp = HelpIn(content, SourceExtensionFileA, "xs.Pick(")
+        Assert.NotNull(genericOverloadedHelp)
+        let pickLabels = genericOverloadedHelp!!.Signatures.Select((s SignatureInformation) -> s.Label).ToArray()
+        Assert.Equal(2, pickLabels.Length)
+        Assert.DoesNotContain("fallback", pickLabels[0], StringComparison.Ordinal)
+        Assert.Contains("fallback", pickLabels[1], StringComparison.Ordinal)
+        Assert.Equal(0, genericOverloadedHelp!!.ActiveSignature)
+    }
+
+    @Fact
+    func Hover_OnAnImportedExtensionCall_CountsOnlyTheOverloadsForTheReceiver() {
+        let content = LanguageServerTestHelpers.Content(ImportedExtensionSource)
+        let selectHover = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(ImportedExtensionSource, "Select")
+        )
+        Assert.NotNull(selectHover)
+        Assert.Contains("*(+ 1 overload)*", selectHover!!.Contents.ToString(), StringComparison.Ordinal)
+        let toArrayHover = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(ImportedExtensionSource, "ToArray")
+        )
+        Assert.NotNull(toArrayHover)
+        Assert.Contains("ToArray", toArrayHover!!.Contents.ToString(), StringComparison.Ordinal)
+        Assert.DoesNotContain("overload", toArrayHover!!.Contents.ToString(), StringComparison.Ordinal)
+        let asSpanHover = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(ImportedExtensionSource, "AsSpan")
+        )
+        Assert.NotNull(asSpanHover)
+        Assert.Contains("*(+ 4 overloads)*", asSpanHover!!.Contents.ToString(), StringComparison.Ordinal)
+        let comparerHover = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(ImportedExtensionSource, "GetStringComparer")
+        )
+        Assert.NotNull(comparerHover)
+        Assert.Contains("GetStringComparer", comparerHover!!.Contents.ToString(), StringComparison.Ordinal)
+        Assert.DoesNotContain("overload", comparerHover!!.Contents.ToString(), StringComparison.Ordinal)
+    }
+
+    @Fact
+    func SignatureHelp_OnAnImportedExtensionCall_ListsOnlyTheOverloadsForTheReceiver() {
+        let content = LanguageServerTestHelpers.Content(ImportedExtensionSource)
+        let selectHelp = HelpIn(content, ImportedExtensionSource, "xs.Select(")
+        Assert.NotNull(selectHelp)
+        let selectLabels = selectHelp!!.Signatures.Select((s SignatureInformation) -> s.Label).ToArray()
+        Assert.Equal(2, selectLabels.Length)
+        Assert.All(
+            selectLabels,
+            (label string) -> Assert.Contains("IEnumerable[TSource]", label, StringComparison.Ordinal)
+        )
+        Assert.Equal(0, selectHelp!!.ActiveSignature)
+        let toListHelp = HelpIn(content, ImportedExtensionSource, "xs.ToList(")
+        Assert.NotNull(toListHelp)
+        Assert.Contains("IEnumerable[TSource]", Assert.Single(toListHelp!!.Signatures).Label, StringComparison.Ordinal)
+        let toArrayHelp = HelpIn(content, ImportedExtensionSource, "xs.ToArray(")
+        Assert.NotNull(toArrayHelp)
+        Assert.Contains("IEnumerable[TSource]", Assert.Single(toArrayHelp!!.Signatures).Label, StringComparison.Ordinal)
+        let asSpanHelp = HelpIn(content, ImportedExtensionSource, "s.AsSpan(")
+        Assert.NotNull(asSpanHelp)
+        let asSpanLabels = asSpanHelp!!.Signatures.Select((s SignatureInformation) -> s.Label).ToArray()
+        Assert.Equal(5, asSpanLabels.Length)
+        Assert.All(asSpanLabels, (label string) -> Assert.Contains("text string", label, StringComparison.Ordinal))
+        let comparerHelp = HelpIn(content, ImportedExtensionSource, "cmp.GetStringComparer(")
+        Assert.NotNull(comparerHelp)
+        Assert.Contains("GetStringComparer", Assert.Single(comparerHelp!!.Signatures).Label, StringComparison.Ordinal)
+    }
+
+    @Fact
     func ExtensionClassification_OnAProjectBackedReferenceSet_ReadsMetadataWithoutThrowing() {
         // A project's references load into a MetadataLoadContext, where MethodInfo.IsDefined is not supported.
         let tree = SyntaxTree.Parse(
@@ -127,6 +242,96 @@ func Use(n int32, xs []int32) {
     @@
 }
 `
+
+        private const SourceExtensionFileA string = `package Ext
+import System.Collections.Generic
+
+class HostA {}
+class HostB {}
+
+func (value int32) Shout() int32 {
+    return value
+}
+
+func (text string) Shout() string {
+    return text
+}
+
+@ExtensionOwner(typeof(HostA))
+func (value int32) Scale(factor int32) int32 {
+    return value * factor
+}
+
+func (text string) Scale(factor int32) string {
+    return text
+}
+
+func (value int32) Repeat[T](item T) sequence[T?] {
+    yield item
+}
+
+@ExtensionOwner(typeof(HostA))
+func (items IList[T]) Pick[T](index int32) T {
+    return items[index]
+}
+
+func Use(n int32, xs []int32) {
+    let a = n.Shout()
+    let b = n.Scale(2)
+    let c = n.Repeat("x")
+    let d = xs.Pick(0)
+}
+`
+
+        private const SourceExtensionFileB string = `package Ext
+import System.Collections.Generic
+
+@ExtensionOwner(typeof(HostB))
+func (value int32) Scale(factor int32, bonus int32) int32 {
+    return (value * factor) + bonus
+}
+
+@ExtensionOwner(typeof(HostB))
+func (items IList[T]) Pick[T](index int32, fallback T) T {
+    return fallback
+}
+`
+
+        private const ImportedExtensionSource string = `package Ext
+import System
+import System.Globalization
+import System.Linq
+
+func Use(xs []int32, s string, cmp CompareInfo) {
+    let mapped = xs.Select((x int32) -> x)
+    let list = xs.ToList()
+    let arr = xs.ToArray()
+    let span = s.AsSpan(1)
+    let comparer = cmp.GetStringComparer(CompareOptions.None)
+}
+`
+
+        private func SourceExtensionProjectContent() DocumentContent {
+            let project = ProjectState("/test/ext.gsproj")
+            project.UpdateFile("/test/b.gs", SourceExtensionFileB)
+            project.UpdateFile("/test/a.gs", SourceExtensionFileA)
+            Assert.True(project.TryGetSyntaxTree("/test/a.gs", out var treeA))
+            let lines = List[int32]()
+            for var i = 0; i < SourceExtensionFileA.Length; i++ {
+                if SourceExtensionFileA[i] == '\n' {
+                    lines.Add(i)
+                }
+            }
+            return DocumentContent(treeA, lines, project)
+        }
+
+        private func HelpIn(content DocumentContent, source string, callPrefix string) SignatureHelp? {
+            let at = LanguageServerTestHelpers.PositionOf(source, callPrefix)
+            return SignatureHelpComputer.ComputeSignatureHelp(
+                content,
+                Position(at.Line, at.Character + callPrefix.Length)
+            )
+        }
 
         private func Complete(anchor string) IReadOnlyList[CompletionItem] {
             let text = Template.Replace("@@", anchor, StringComparison.Ordinal)

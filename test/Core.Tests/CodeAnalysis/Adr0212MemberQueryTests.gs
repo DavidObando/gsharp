@@ -12,6 +12,7 @@ import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.Globalization
 import System.Linq
 import System.Text
 import Xunit
@@ -119,6 +120,87 @@ open class Adr0212MemberQueryTests {
             []string{"Make(int32)", "Make(string)"},
             group.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToArray()
         )
+    }
+
+    @Fact
+    func MemberGroup_SourceExtension_IsTheExtensionsForTheReceiverInFileThenStartOrder() {
+        let overloaded = Group("PSourceExt")
+        Assert.Equal(
+            []string{"Scale(int32, int32)", "Scale(int32, string)", "Scale(int32, int32, int32)"},
+            overloaded.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToArray()
+        )
+        let single = Group("PSourceExtSingle")
+        Assert.Equal([]string{"Abs(int32)"}, single.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToArray())
+        let genericSingle = Group("PSourceExtGenericSingle")
+        Assert.Equal(
+            []string{"Repeat(int32, T)"},
+            genericSingle.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToArray()
+        )
+        let genericOverloaded = Group("PSourceExtGeneric")
+        Assert.Equal(
+            []string{
+                "Pick(System.Collections.Generic.IList`1[T], int32)",
+                "Pick(System.Collections.Generic.IList`1[T], int32, T)"
+            },
+            genericOverloaded.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToArray()
+        )
+    }
+
+    @Fact
+    func MemberGroup_ImportedExtension_IsTheMethodsForTheReceiverInHolderThenMetadataOrder() {
+        let selectCall = CallAt("PImportedExt")
+        let selectAccess = cast[AccessorExpressionSyntax](selectCall.Parent!!)
+        let selectModel = ModelOf(selectCall)
+        Assert.Equal(SliceTypeSymbol.Get(TypeSymbol.Int32), selectModel.GetReceiverTypeInfo(selectAccess.LeftPart).Type)
+        let selectGroup = selectModel.GetMemberGroup(selectCall)
+        Assert.Equal(2, selectGroup.Length)
+        Assert.All(selectGroup, (s Symbol) -> Assert.IsType[ImportedFunctionSymbol](s))
+        Assert.All(
+            selectGroup,
+            (s Symbol) -> {
+                let imported = cast[ImportedFunctionSymbol](s)
+                Assert.Equal("Enumerable", imported.Method.DeclaringType!!.Name)
+                Assert.True(imported.Method.IsGenericMethodDefinition)
+            }
+        )
+        let selectTokens = selectGroup.Select((s Symbol) -> cast[ImportedFunctionSymbol](s).Method.MetadataToken)
+            .ToList()
+        Assert.Equal(selectTokens.OrderBy((t int32) -> t).ToList(), selectTokens)
+        let toListCall = CallAt("PImportedExtSingle")
+        let toListModel = ModelOf(toListCall)
+        let toListSingle = Assert.IsType[ImportedFunctionSymbol](Assert.Single(toListModel.GetMemberGroup(toListCall)))
+        Assert.Equal("Enumerable", toListSingle.Method.DeclaringType!!.Name)
+        Assert.True(toListSingle.Method.IsGenericMethodDefinition)
+        let toListLookup = Assert.Single(
+            toListModel.LookupMembers(Position("PImportedExtSingle"), SliceTypeSymbol.Get(TypeSymbol.Int32), "ToList")
+        )
+        Assert.Same(toListLookup, toListSingle)
+        let asSpanGroup = Group("PImportedExtNonGeneric")
+        Assert.NotEmpty(asSpanGroup)
+        Assert.All(
+            asSpanGroup,
+            (s Symbol) -> {
+                let imported = cast[ImportedFunctionSymbol](s)
+                Assert.Equal("MemoryExtensions", imported.Method.DeclaringType!!.Name)
+                Assert.False(imported.Method.IsGenericMethod)
+                Assert.Equal(typeof(string), imported.Method.GetParameters()[0].ParameterType)
+            }
+        )
+        let comparerCall = CallAt("PImportedExtNonGenericSingle")
+        let comparerModel = ModelOf(comparerCall)
+        let comparerSingle = Assert.IsType[ImportedFunctionSymbol](
+            Assert.Single(comparerModel.GetMemberGroup(comparerCall))
+        )
+        Assert.Equal("GlobalizationExtensions", comparerSingle.Method.DeclaringType!!.Name)
+        Assert.False(comparerSingle.Method.IsGenericMethod)
+        let comparerLookup = Assert.Single(
+            comparerModel.LookupMembers(
+                Position("PImportedExtNonGenericSingle"),
+                ImportedTypeSymbol.Get(typeof(CompareInfo)),
+                "GetStringComparer"
+            )
+        )
+        Assert.Same(comparerLookup, comparerSingle)
     }
 
     @Fact
@@ -395,10 +477,30 @@ open class Adr0212MemberQueryTests {
 
         private const FileA string = `package Members
 import System
+import System.Collections.Generic
+import System.Globalization
+import System.Linq
 import System.Text
 
 func Free(x int32) int32 { return x }
 func Free(s string) string { return s }
+
+@ExtensionOwner(typeof(Animal))
+func (value int32) Scale(factor int32) int32 { return value * factor }
+
+@ExtensionOwner(typeof(Animal))
+func (value int32) Scale(factor string) int32 { return value }
+
+func (text string) Scale(factor int32) string { return text }
+
+func (value int32) Abs() int32 { return value }
+
+func (value int32) Repeat[T](item T) sequence[T?] {
+    yield item
+}
+
+@ExtensionOwner(typeof(Animal))
+func (items IList[T]) Pick[T](index int32) T { return items[index] }
 
 enum Color { Red, Green }
 
@@ -479,7 +581,7 @@ func Constrained[T IRead](t T) int32 {
     return t.Read(1) // PConstraint
 }
 
-func UseAll(c Cat, r IRead, b IBoxed[int32], p Parts, sb StringBuilder) {
+func UseAll(c Cat, r IRead, b IBoxed[int32], p Parts, sb StringBuilder, n int32, xs []int32, cmp CompareInfo) {
     Console.WriteLine("x") // PConsole
     sb.Append(1) // PAppend
     let local = func(q int32) int32 { return q }
@@ -491,14 +593,29 @@ func UseAll(c Cat, r IRead, b IBoxed[int32], p Parts, sb StringBuilder) {
     p.Go(1) // PPartial
     Util.Make(1) // PStatic
     WriteLine(Console.WriteLine) // PProbe
+    n.Abs() // PSourceExtSingle
+    n.Scale(2) // PSourceExt
+    n.Repeat("x") // PSourceExtGenericSingle
+    xs.Pick(0) // PSourceExtGeneric
+    ([]int32{1}).Select((x int32) -> x) // PImportedExt
+    xs.ToList() // PImportedExtSingle
+    "abc".AsSpan(1) // PImportedExtNonGeneric
+    cmp.GetStringComparer(CompareOptions.None) // PImportedExtNonGenericSingle
     // PLookup
 }
 `
 
         private const FileB string = `package Members
+import System.Collections.Generic
 
 func Free(x int32, y int32) int32 { return x + y }
 func Free(flag bool) bool { return flag }
+
+@ExtensionOwner(typeof(Cat))
+func (value int32) Scale(factor int32, bonus int32) int32 { return (value * factor) + bonus }
+
+@ExtensionOwner(typeof(Cat))
+func (items IList[T]) Pick[T](index int32, fallback T) T { return fallback }
 
 partial class Parts {
     func Go(a bool) int32 { return 0 }

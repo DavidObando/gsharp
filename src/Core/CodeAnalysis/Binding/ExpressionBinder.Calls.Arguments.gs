@@ -234,6 +234,7 @@ internal partial class ExpressionBinder {
             ce,
             argumentNames
         )
+        CallCandidateRecorder.RecordExtensionFunctions(candidates)
         return true
     }
 
@@ -2080,6 +2081,7 @@ internal partial class ExpressionBinder {
         // `ValueTask[R]` and is coloured suspending by the call. The completion
         // wraps the call itself, before any handler prelude, so an await lands
         // on the call rather than on the prelude around it.
+        CallCandidateRecorder.RecordExtensionMethods(candidates, receiver.Type)
         let extensionCall = CompleteImportedSuspendingCall(
             ConversionClassifier.AutoDereferenceRefReturn(
                 BoundImportedCallExpression(ce, function, bound, refKinds, extensionTypeArgSymbolsForCall)
