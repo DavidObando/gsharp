@@ -378,7 +378,8 @@ class SemanticModel {
   constructor, struct, interface or global whose declaration contains
   `position`; `nil` at top level outside a declaration.
 - `LookupSymbols(position, name)` returns the symbols a simple name resolves
-  to at `position` in this tree: locals, pattern variables, `if let`/`while let`
+  to at `position` in this tree: locals, pattern variables (in the regions
+  where the binder proves their match, including after an early exit), `if let`/`while let`
   bindings, for-range variables, catch variables and lambda parameters whose
   scope contains `position` and whose declaration precedes it; the enclosing
   function's parameters; the enclosing type's members accessible without a
