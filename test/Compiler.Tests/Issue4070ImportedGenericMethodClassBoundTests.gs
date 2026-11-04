@@ -572,8 +572,30 @@ class MatrixHolder {
 }
 
 func countOptional[X IList[int32?]](x X) int32 -> 2
+func countMaybeIface[X IList[string?]](x X) int32 -> 3
+func countMaybeClass[X List[string?]](x X) int32 -> 4
 
-Console.WriteLine(countOptional[OptionalItems[int32]](OptionalItems[int32]()))`
+Console.WriteLine(countOptional[OptionalItems[int32]](OptionalItems[int32]()))
+Console.WriteLine(countMaybeIface[MaybeItems[string]](MaybeItems[string]()))
+Console.WriteLine(countMaybeClass[MaybeItems[string]](MaybeItems[string]()))
+Console.WriteLine(countMaybeIface[NullableStringBag](NullableStringBag()))
+Console.WriteLine(countMaybeClass[NullableStringBag](NullableStringBag()))`
+        const BadMaybeIface = `package P
+import System
+import System.Collections.Generic
+import HelperLib2
+
+func countNonNullIface[X IList[string]](x X) int32 -> 1
+
+Console.WriteLine(countNonNullIface[MaybeItems[string]](MaybeItems[string]()))`
+        const BadMaybeClass = `package P
+import System
+import System.Collections.Generic
+import HelperLib2
+
+func countNonNullClass[X List[string]](x X) int32 -> 1
+
+Console.WriteLine(countNonNullClass[NullableStringBag](NullableStringBag()))`
         let tempDir = Directory.CreateTempSubdirectory("gs_4070_proj_").FullName
         try {
             let libPath = CompileCSharpLibrary(tempDir)
@@ -586,7 +608,29 @@ Console.WriteLine(countOptional[OptionalItems[int32]](OptionalItems[int32]()))`
             let (exit, output) = RunDotnet(appPath)
             Assert.True(exit == 0, (`the program must run. Exit ` + "$exit" + `:
 ` + "$output"))
-            Assert.Equal([]string{"2"}, SplitLines(output))
+            Assert.Equal([]string{"2", "3", "4", "3", "4"}, SplitLines(output))
+            let badIfacePath = Path.Combine(tempDir, "BadIface.dll")
+            let badIfaceLog = Compile(
+                tempDir,
+                "BadIface.gs",
+                BadMaybeIface,
+                badIfacePath,
+                "/target:exe",
+                "/reference:" + libPath
+            )
+            Assert.Contains("GS0152", badIfaceLog, StringComparison.Ordinal)
+            Assert.False(File.Exists(badIfacePath))
+            let badClassPath = Path.Combine(tempDir, "BadClass.dll")
+            let badClassLog = Compile(
+                tempDir,
+                "BadClass.gs",
+                BadMaybeClass,
+                badClassPath,
+                "/target:exe",
+                "/reference:" + libPath
+            )
+            Assert.Contains("GS0152", badClassLog, StringComparison.Ordinal)
+            Assert.False(File.Exists(badClassPath))
         } finally {
             Directory.Delete(tempDir, recursive: true)
         }
@@ -665,6 +709,15 @@ public class MatrixItems<T> : System.Collections.Generic.List<T[,]>
 
 public class OptionalItems<T> : System.Collections.Generic.List<T?>
     where T : struct
+{
+}
+
+public class MaybeItems<T> : System.Collections.Generic.List<T?>
+    where T : class
+{
+}
+
+public class NullableStringBag : System.Collections.Generic.List<string?>
 {
 }
 

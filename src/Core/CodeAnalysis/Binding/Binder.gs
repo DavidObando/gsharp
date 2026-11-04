@@ -13888,7 +13888,7 @@ partial class Binder {
             } catch (Exception) {
                 return false
             }
-            let expected = boundArgument.GetElementPositions()
+            let expected = GetClrSlotAlignedArguments(boundArgument)
             for implemented in EnumerateDeclaredClrInterfaces(typeArgument) {
                 // A NON-generic bound has no arguments to disagree about, so
                 // reaching the interface at all is the whole answer — and reaching
@@ -13903,59 +13903,15 @@ partial class Binder {
                     }
                     continue
                 }
-                // A GENERIC bound is decided on the SYMBOLIC arguments, so
-                // `class Impl : IDep[Bee]` does not satisfy a bound of `IDep[A]`
-                // even though both project to the identical erased
-                // `IDep<object>`, and `IList[string?]` does not satisfy
-                // `IList[string]`.
-                if !TryGetImportedGenericDefinitionAndArguments(implemented, out var implementedOpen, out var actual) ||
-                    implementedOpen == nil {
-                    continue
-                }
-                if string.Equals(
-                    implementedOpen.FullName ?? implementedOpen.Name,
+                if TryFindMatchingClrRelationship(
+                    implemented,
                     openDefinition.FullName ?? openDefinition.Name,
-                    StringComparison.Ordinal
-                ) &&
-                    actual.Length == expected
-                    .Length {
-                    var allMatch = true
-                    for var i = 0; i < expected.Length; i++ {
-                        let expectedArgument = SubstituteSelfReference(expected[i], tp, typeArgument)
-                        if !SameConstraintType(actual[i], expectedArgument) {
-                            allMatch = false
-                            break
-                        }
-                    }
-                    if allMatch {
-                        return true
-                    }
-                    continue
-                }
-                for openCandidate in EnumerateSelfAndInterfaces(implementedOpen) {
-                    if !openCandidate.IsGenericType || !string.Equals(
-                        openCandidate.GetGenericTypeDefinition().FullName,
-                        openDefinition.FullName,
-                        StringComparison.Ordinal
-                    ) {
-                        continue
-                    }
-                    let openCandidateArgs = openCandidate.GetGenericArguments()
-                    if openCandidateArgs.Length != expected.Length {
-                        continue
-                    }
-                    var allMatch = true
-                    for var i = 0; i < openCandidateArgs.Length; i++ {
-                        let actualArg = ProjectOpenClrTypeWithArguments(openCandidateArgs[i], actual)
-                        let expectedArgument = SubstituteSelfReference(expected[i], tp, typeArgument)
-                        if actualArg == nil || !SameConstraintType(actualArg, expectedArgument) {
-                            allMatch = false
-                            break
-                        }
-                    }
-                    if allMatch {
-                        return true
-                    }
+                    requireBaseOnly: false,
+                    expected,
+                    tp,
+                    typeArgument
+                ) {
+                    return true
                 }
             }
             return false
@@ -14136,54 +14092,74 @@ partial class Binder {
             if constraintPositions.IsDefaultOrEmpty || TypeSymbol.ContainsTypeParameter(classConstraint) {
                 return true
             }
-            let openConstraintDefName = constraintClr.GetGenericTypeDefinition().FullName
-            var currentOpenDef Type? = nil
-            var currentPositions = ImmutableArray[TypeSymbol].Empty
-            if candidateClr.IsGenericType && !candidateClr.IsGenericTypeDefinition {
-                currentOpenDef = candidateClr.GetGenericTypeDefinition()
-                currentPositions = GetClrSlotAlignedArguments(candidate)
-            } else {
-                var currentClr Type? = candidateClr
-                while currentClr != nil {
-                    if currentClr.IsGenericType {
-                        currentOpenDef = currentClr.GetGenericTypeDefinition()
-                        let clrArgs = currentClr.GetGenericArguments()
-                        let posBuilder = ImmutableArray.CreateBuilder[TypeSymbol](clrArgs.Length)
-                        for clrArg in clrArgs {
-                            posBuilder.Add(
-                                TypeSymbol.FromClrTypeWithoutNullability(clrArg, NullabilityFreeReason.TypeStructure)
-                            )
-                        }
-                        currentPositions = posBuilder.MoveToImmutable()
-                        break
-                    }
-                    currentClr = currentClr.BaseType
-                }
+            return TryFindMatchingClrRelationship(
+                candidate,
+                constraintClr.GetGenericTypeDefinition().FullName,
+                requireBaseOnly: true,
+                constraintPositions,
+                tp: nil,
+                typeArgument: candidate
+            )
+        }
+
+        private func TryFindMatchingClrRelationship(
+            root TypeSymbol,
+            openTargetDefName string?,
+            requireBaseOnly bool,
+            expectedPositions ImmutableArray[TypeSymbol],
+            tp TypeParameterSymbol?,
+            typeArgument TypeSymbol?
+        ) bool {
+            if string.IsNullOrEmpty(openTargetDefName) {
+                return false
             }
-            while currentOpenDef != nil {
-                if string.Equals(currentOpenDef.FullName, openConstraintDefName, StringComparison.Ordinal) {
-                    return currentPositions.Length == constraintPositions.Length &&
-                        SameConstraintTypeArguments(currentPositions, constraintPositions)
-                }
-                let baseClr Type? = currentOpenDef.BaseType
-                if baseClr == nil {
+            let pending = Queue[(Signature TypeSymbol, Depth int32)]()
+            let seen = HashSet[(Type, string)]()
+            pending.Enqueue((root, 0))
+            while pending.Count > 0 {
+                let (current, depth) = pending.Dequeue()
+                if depth >= 256 {
                     break
                 }
-                if !baseClr.IsGenericType {
-                    currentOpenDef = baseClr
-                    currentPositions = ImmutableArray[TypeSymbol].Empty
-                    continue
-                }
-                let baseOpenArgs = baseClr.GetGenericArguments()
-                let nextPositions = ImmutableArray.CreateBuilder[TypeSymbol](baseOpenArgs.Length)
-                for baseOpenArg in baseOpenArgs {
-                    if ProjectOpenClrTypeWithArguments(baseOpenArg, currentPositions) is not{} projected {
-                        return false
+                if current.ClrType is {} currentClr {
+                    let flags = Convert.ToBase64String(NullableFlagsBuilder.Build(current).ToArray())
+                    if !seen.Add((currentClr, flags)) {
+                        continue
                     }
-                    nextPositions.Add(projected)
                 }
-                currentPositions = nextPositions.MoveToImmutable()
-                currentOpenDef = baseClr.GetGenericTypeDefinition()
+                if TryGetImportedGenericDefinitionAndArguments(current, out var currentOpen, out _) &&
+                    currentOpen != nil &&
+                    string
+                    .Equals(currentOpen.FullName ?? currentOpen.Name, openTargetDefName, StringComparison.Ordinal) {
+                    let alignedActual = GetClrSlotAlignedArguments(current)
+                    if alignedActual.Length == expectedPositions.Length {
+                        var allMatch = true
+                        for var i = 0; i < expectedPositions.Length; i++ {
+                            let expectedArg = SubstituteSelfReference(expectedPositions[i], tp, typeArgument)
+                            if !SameConstraintType(alignedActual[i], expectedArg) &&
+                                !(
+                                typeArgument != nil && object.ReferenceEquals(expectedArg, typeArgument) &&
+                                    alignedActual[i] is NullableTypeSymbol nullableSelf &&
+                                    SameConstraintType(nullableSelf.UnderlyingType, expectedArg)
+                            ) {
+                                allMatch = false
+                                break
+                            }
+                        }
+                        if allMatch {
+                            return true
+                        }
+                    }
+                }
+                for relationship in MemberLookup.GetClrRelationshipTypeSymbols(current) {
+                    if relationship.ClrType is not{} relClr {
+                        continue
+                    }
+                    if requireBaseOnly && relClr.IsInterface {
+                        continue
+                    }
+                    pending.Enqueue((relationship, depth + 1))
+                }
             }
             return false
         }
@@ -14780,6 +14756,18 @@ partial class Binder {
             }
             let openDefName = constraintClr.GetGenericTypeDefinition().FullName
             let constraintPositions = GetClrSlotAlignedArguments(constraint)
+            if !constraintPositions.IsDefaultOrEmpty && MemberLookup.GetProjectionReceiverImportedType(
+                typeArgument
+            ) != nil {
+                return TryFindMatchingClrRelationship(
+                    typeArgument,
+                    openDefName,
+                    requireBaseOnly: false,
+                    constraintPositions,
+                    tp,
+                    typeArgument
+                )
+            }
             let typeArgPositions = GetClrSlotAlignedArguments(typeArgument)
             if !constraintPositions.IsDefaultOrEmpty && !typeArgPositions.IsDefaultOrEmpty {
                 if typeArgClr.IsGenericType && !typeArgClr.IsGenericTypeDefinition {
