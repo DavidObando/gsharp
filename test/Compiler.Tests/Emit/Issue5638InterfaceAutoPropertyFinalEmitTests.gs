@@ -98,11 +98,14 @@ open data class PositionalRecord(Rate int32) : IPositional {
 
     @Fact
     func NonOpenInterfaceEventsAndFieldBackedProperties_HaveVirtualFinalNewSlot_InOutAndRefout() {
-        const csharpContract = `namespace ClrContracts;
+        const clrContractSource = `package ClrContracts
 
-public interface IClrHolder
-{
-    int FieldValue { get; set; }
+interface IClrHolder {
+    prop FieldValue int32 { get; set; }
+    prop DefaultSetValue int32 {
+        get;
+        set { }
+    }
 }`
         const source = `package Issue5638.EventsAndFields
 import System
@@ -120,6 +123,7 @@ interface IParamContract {
 
 open class EventAndFieldBase(ParamValue int32) : IEventContract, IParamContract, IClrHolder {
     var FieldValue int32
+    var DefaultSetValue int32
     event FieldEvent EventHandler?
     event CustomEvent EventHandler? {
         add { }
@@ -130,8 +134,7 @@ open class EventAndFieldBase(ParamValue int32) : IEventContract, IParamContract,
 }`
         let tempDir = CreateTempDirectory()
         try {
-            let clrContractPath = Path.Combine(tempDir, "ClrContracts.dll")
-            EmitCSharp(csharpContract, clrContractPath)
+            let (clrContractPath, _) = CompileGSharpWithReference(tempDir, "ClrContracts", clrContractSource)
             let (implPath, refPath) = CompileGSharpWithReference(
                 tempDir,
                 "Issue5638EventsAndFields",
@@ -148,7 +151,8 @@ open class EventAndFieldBase(ParamValue int32) : IEventContract, IParamContract,
                     "raise_CustomEvent",
                     "get_ParamValue",
                     "get_FieldValue",
-                    "set_FieldValue"
+                    "set_FieldValue",
+                    "get_DefaultSetValue"
                 } {
                     AssertVirtualFinalNewSlot(assemblyPath, "EventAndFieldBase", accessorName)
                 }
@@ -352,21 +356,6 @@ public class GoodDerived : Base
             let (exitCode, output) = RunCompiler(args.ToArray())
             Assert.True(exitCode == 0, "gsc failed:\n" + output)
             return (implPath, refPath)
-        }
-
-        private func EmitCSharp(source string, outputPath string, additionalReferences ...string) {
-            let references = (cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!!))
-                .Split(Path.PathSeparator)
-                .Select((path string) -> MetadataReference.CreateFromFile(path))
-                .Concat(additionalReferences.Select((path string) -> MetadataReference.CreateFromFile(path)))
-            let compilation = CSharpCompilation.Create(
-                Path.GetFileNameWithoutExtension(outputPath),
-                []SyntaxTree{CSharpSyntaxTree.ParseText(source)},
-                references,
-                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
-            )
-            let result = compilation.Emit(outputPath)
-            Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics))
         }
 
         private func CompileCSharpAndGetErrors(source string, additionalReference string) IReadOnlyList[

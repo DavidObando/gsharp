@@ -2028,10 +2028,13 @@ internal class MemberDefEmitter {
                         }
                     ) {
                         let indexParameters = clrProp.GetIndexParameters()
+                        let hasMatchingAccessor = (clrProp.GetMethod != nil && prop.HasGetter) ||
+                            (clrProp.SetMethod != nil && prop.HasSetter)
                         // Nullable reference annotations do not participate in CLR interface slots.
                         if prop.IsIndexer != (indexParameters.Length > 0) ||
-                            (clrProp.GetMethod != nil && !prop.HasGetter) ||
-                            (clrProp.SetMethod != nil && !prop.HasSetter) ||
+                            !hasMatchingAccessor ||
+                            (clrProp.GetMethod?.IsAbstract == true && !prop.HasGetter) ||
+                            (clrProp.SetMethod?.IsAbstract == true && !prop.HasSetter) ||
                             !MemberLookup
                             .PropertyMatchesClrInterfaceSignature(
                             prop,
@@ -2056,6 +2059,12 @@ internal class MemberDefEmitter {
             interfaceProperty PropertySymbol,
             typeParameterMap Dictionary[TypeParameterSymbol, TypeSymbol]?
         ) bool {
+            let hasMatchingAccessor = (interfaceProperty.HasGetter && property.HasGetter) ||
+                (interfaceProperty.HasSetter && property.HasSetter)
+            let requiresGetter = interfaceProperty.HasGetter &&
+                (interfaceProperty.GetterSymbol == nil || interfaceProperty.GetterSymbol!!.IsAbstract)
+            let requiresSetter = interfaceProperty.HasSetter &&
+                (interfaceProperty.SetterSymbol == nil || interfaceProperty.SetterSymbol!!.IsAbstract)
             if property.Name != interfaceProperty.Name ||
                 property.IsIndexer != interfaceProperty.IsIndexer ||
                 property
@@ -2063,13 +2072,14 @@ internal class MemberDefEmitter {
                 .Length != interfaceProperty
                 .Parameters
                 .Length ||
-                (interfaceProperty.HasGetter && !property.HasGetter) ||
-                (interfaceProperty.HasSetter && !property.HasSetter) ||
+                !hasMatchingAccessor ||
+                (requiresGetter && !property.HasGetter) ||
+                (requiresSetter && !property.HasSetter) ||
                 !DeclarationBinder
                 .IsInterfacePropertyTypeCompatible(
                 property.Type,
                 interfaceProperty.Type,
-                interfaceProperty.HasSetter,
+                property.HasSetter && interfaceProperty.HasSetter,
                 typeParameterMap
             ) {
                 return false
