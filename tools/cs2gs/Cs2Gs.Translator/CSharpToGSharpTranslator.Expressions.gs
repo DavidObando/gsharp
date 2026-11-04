@@ -557,22 +557,25 @@ partial class CSharpToGSharpTranslator {
             var currentType ITypeSymbol? = returnType
             let path = List[int32](tupleIndices.Count)
             for var i = tupleIndices.Count - 1; i >= 0; i-- {
-                while currentType is INamedTypeSymbol{
-                    OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
-                    TypeArguments: {Length: 1} nullableArguments
-                } {
-                    currentType = nullableArguments[0]
+                while currentType is INamedTypeSymbol nullableNamed &&
+                    nullableNamed
+                    .OriginalDefinition
+                    .SpecialType == SpecialType.System_Nullable_T &&
+                    nullableNamed
+                    .TypeArguments
+                    .Length == 1 {
+                    currentType = nullableNamed.TypeArguments[0]
                     path.Add(0)
                 }
-                if currentType is not INamedTypeSymbol{IsTupleType: true} tupleType ||
-                    tupleIndices[i] < 0 ||
-                    tupleIndices[i] >= tupleType
-                    .TupleElements
-                    .Length {
+                if currentType is not INamedTypeSymbol tupleType || !tupleType.IsTupleType {
                     return nil
                 }
-                currentType = tupleType.TupleElements[tupleIndices[i]].Type
-                path.Add(tupleIndices[i])
+                let index = tupleIndices[i]
+                if index < 0 || index >= tupleType.TupleElements.Length {
+                    return nil
+                }
+                currentType = tupleType.TupleElements[index].Type
+                path.Add(index)
             }
             return if ObliviousNullabilityAnalyzer.IsTupleElementTainted(
                 this.context.Compilation,
@@ -634,9 +637,9 @@ partial class CSharpToGSharpTranslator {
                     .Syntax
                     .ParenthesizedExpressionSyntax parenthesized {
                     returnNode = parenthesized
-                } else if returnNode.Parent is PostfixUnaryExpressionSyntax{
-                    RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)
-                } suppress {
+                } else if returnNode.Parent is {} suppress && suppress.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+                ) {
                     returnIsSuppressed = true
                     returnNode = suppress
                 } else if returnNode.Parent is Microsoft
