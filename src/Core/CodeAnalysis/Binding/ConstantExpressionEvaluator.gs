@@ -119,11 +119,14 @@ internal shared class ConstantExpressionEvaluator {
                 .IsConst &&
                 fieldAccess
                 .Field
-                .ConstantValue != nil {
+                .HasConstantValue {
                 return TryBuildConstant(fieldAccess.Field.ConstantValue, fieldAccess.Field.Type, out built)
             }
             case BoundVariableExpression{Variable: GlobalVariableSymbol{IsConst: true} global} {
                 return TryBuildConstant(global.ConstantValue, global.Type, out built)
+            }
+            case BoundVariableExpression{Variable: LocalVariableSymbol{IsConst: true} localConst} {
+                return TryBuildConstant(localConst.ConstantValue, localConst.Type, out built)
             }
             case unary is BoundUnaryExpression {
                 return TryBuildUnary(unary, out built)

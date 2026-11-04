@@ -1900,6 +1900,18 @@ internal class UserTokenResolver {
         if propDecl != nil && !propDecl.IsGenericType && propDecl != openDef {
             return false
         }
+        if propDecl != nil && propDecl.IsGenericType && openDef != nil {
+            let receiver = ImportedTypeSymbol.GetConstructed(openDef, openDef, typeArguments)
+            let owner = MemberLookup.GetClrMemberDeclaringTypeSymbol(receiver, property)
+            if ImportedMemberRefFactory.TryNormalizeToSymbolicContainer(
+                owner,
+                out var declaringDefinition,
+                out var declaringArguments
+            ) {
+                openDef = declaringDefinition
+                typeArguments = declaringArguments
+            }
+        }
         let openProp PropertyInfo? = ImportedMemberRefFactory.ResolvePropertyOnOpenDefinition(openDef, property)
         if openProp == nil {
             return false
@@ -1975,6 +1987,18 @@ internal class UserTokenResolver {
         let methodDecl Type? = method.DeclaringType
         if methodDecl != nil && !methodDecl.IsGenericType && methodDecl != openDef {
             return false
+        }
+        if methodDecl != nil && methodDecl.IsGenericType && openDef != nil {
+            let receiver = ImportedTypeSymbol.GetConstructed(openDef, openDef, typeArguments)
+            let owner = MemberLookup.GetClrMemberDeclaringTypeSymbol(receiver, method)
+            if ImportedMemberRefFactory.TryNormalizeToSymbolicContainer(
+                owner,
+                out var declaringDefinition,
+                out var declaringArguments
+            ) {
+                openDef = declaringDefinition
+                typeArguments = declaringArguments
+            }
         }
         let openMethod MethodInfo? = ImportedMemberRefFactory.ResolveMethodOnOpenDefinition(openDef, method)
         if openMethod == nil {

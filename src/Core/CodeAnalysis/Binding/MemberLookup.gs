@@ -2451,6 +2451,14 @@ internal class MemberLookup {
                 // erase to `object`; concrete leaves keep their CLR identity, matching
                 // the selector parameter's erasure and keeping both shapes aligned.
                 let symbolicArgs = symbolic.ToImmutable()
+                if !currentOpenClr.IsGenericTypeDefinition && openDef.FullName?.StartsWith(
+                    "System.ValueTuple`",
+                    StringComparison.Ordinal
+                ) == true &&
+                    symbolicArgs.Length >= 2 &&
+                    symbolicArgs.Length <= 7 {
+                    return TupleTypeSymbol.Get(symbolicArgs)
+                }
                 let erasedClosed = if hasFunctionPointers && !currentOpenClr.ContainsGenericParameters {
                     currentOpenClr
                 } else {
@@ -5558,9 +5566,9 @@ internal class MemberLookup {
                 // ADR-0193 §4: static events too, as for static properties.
                 for candidate in ClrTypeUtilities.SafeGetEvents(
                     openDefinition,
-                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static
                 ) {
-                    if candidate.Name == closedEvent.Name {
+                    if candidate.MetadataToken == closedEvent.MetadataToken || candidate.Name == closedEvent.Name {
                         openEvent = candidate
                         break
                     }
@@ -5636,7 +5644,7 @@ internal class MemberLookup {
         /// @returns The symbolic declaring interface used to parent the emitted member reference.
         @NullabilityFunnel
         internal func GetClrMemberDeclaringTypeSymbol(targetType TypeSymbol, member MemberInfo) TypeSymbol {
-            if GetImportedTypeSymbol(targetType) is ImportedTypeSymbol imported &&
+            if GetProjectionReceiverImportedType(targetType) is ImportedTypeSymbol imported &&
                 member.DeclaringType is Type memberDeclaringType &&
                 TryGetSymbolicDeclaringContext(
                 imported,
@@ -5655,7 +5663,9 @@ internal class MemberLookup {
         }
 
         internal func GetClrFieldReferenceContainer(receiverType TypeSymbol?, member MemberInfo) TypeSymbol? {
-            return if receiverType != nil && member is FieldInfo && GetImportedTypeSymbol(receiverType) != nil {
+            return if receiverType != nil &&
+                member is FieldInfo &&
+                GetProjectionReceiverImportedType(receiverType) != nil {
                 GetClrMemberDeclaringTypeSymbol(receiverType, member)
             } else {
                 default(TypeSymbol?)
@@ -6600,8 +6610,10 @@ internal class MemberLookup {
             return imported ??
                 TryGetClosedMapProjectionView(type) ??
                 (
-                if type is StructSymbol userClass {
-                    TypeMemberModel.GetNearestImportedBase(userClass) as ImportedTypeSymbol
+                if type is StructSymbol userClass && TypeMemberModel.GetNearestImportedBase(
+                    userClass
+                ) is {} importedBase {
+                    GetProjectionReceiverImportedType(importedBase)
                 } else {
                     default(ImportedTypeSymbol?)
                 }
@@ -6656,9 +6668,14 @@ internal class MemberLookup {
             // definition they fell back to the ERASED read and lost the receiver's
             // `?` — the reader-agreement test found every static property of a
             // generic type disagreeing with the merge this way.
+            // Issue #5590: include non-public properties so an inherited
+            // `protected` / `protected internal` / friend `internal` property
+            // or indexer on an imported generic base projects through the
+            // open definition instead of falling back to the erased `object`
+            // closed property.
             let candidates = ClrTypeUtilities.SafeGetProperties(
                 openDefinition,
-                BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static
             )
             let token = closedIndexer.MetadataToken
             for candidate in candidates {

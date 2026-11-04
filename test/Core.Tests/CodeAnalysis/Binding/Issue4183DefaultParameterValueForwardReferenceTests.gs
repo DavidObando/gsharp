@@ -117,11 +117,10 @@ open class Issue4183DefaultParameterValueForwardReferenceTests {
     }
 
     @Fact
-    func InstanceMethodDefault_SiblingConstField_BothOrders_GS0265NotGS0158() {
-        // A `const` field read is ALSO not currently foldable by
-        // TryExtractConstantDefault (a separate, orthogonal gap this issue
-        // does not fix) — so this still fails, but with the same diagnostic
-        // regardless of order, exactly like the `var` case above.
+    func InstanceMethodDefault_SiblingConstField_BothOrders_CompilesCleanly() {
+        // Issue #5586: a `const` field read is a valid compile-time constant
+        // default value regardless of whether the declaring type precedes or
+        // follows the consumer.
         const classBeforeSibling = "package p\n" +
             "class C {\n" +
             "    func M(x int32 = B.Value) int32 { return x }\n" +
@@ -138,10 +137,8 @@ open class Issue4183DefaultParameterValueForwardReferenceTests {
             "}\n"
         let diagnosticsA = GetDiagnostics(classBeforeSibling)
         let diagnosticsB = GetDiagnostics(siblingBeforeClass)
-        Assert.DoesNotContain(diagnosticsA, (d Diagnostic) -> d.Id == "GS0158")
-        Assert.DoesNotContain(diagnosticsB, (d Diagnostic) -> d.Id == "GS0158")
-        Assert.Contains(diagnosticsA, (d Diagnostic) -> d.Id == "GS0265")
-        Assert.Contains(diagnosticsB, (d Diagnostic) -> d.Id == "GS0265")
+        Assert.Empty(diagnosticsA)
+        Assert.Empty(diagnosticsB)
     }
 
     @Fact
