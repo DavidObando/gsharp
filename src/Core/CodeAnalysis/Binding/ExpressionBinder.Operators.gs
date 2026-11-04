@@ -3631,19 +3631,64 @@ internal partial class ExpressionBinder {
                     value = ToBigInteger(lit.Value)
                     return true
                 }
-                case BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.Identity}} identity {
-                    return TryGetConstantIntegerValue(identity.Operand, out value)
-                }
-                case BoundUnaryExpression{
-                    Op: {Kind: BoundUnaryOperatorKind.Negation}
-                } negation when TryGetConstantIntegerValue(negation.Operand, out var inner) {
-                    value = -inner
+                case fieldAccess is BoundFieldAccessExpression when fieldAccess
+                    .Field
+                    .IsConst &&
+                    fieldAccess
+                    .Field
+                    .HasConstantValue &&
+                    IsIntegerLiteralValue(fieldAccess.Field.ConstantValue) {
+                    value = ToBigInteger(fieldAccess.Field.ConstantValue)
                     return true
+                }
+                case BoundVariableExpression{
+                    Variable: GlobalVariableSymbol{IsConst: true} global
+                } when IsIntegerLiteralValue(global.ConstantValue) {
+                    value = ToBigInteger(global.ConstantValue)
+                    return true
+                }
+                case BoundVariableExpression{
+                    Variable: LocalVariableSymbol{IsConst: true} localConst
+                } when IsIntegerLiteralValue(localConst.ConstantValue) {
+                    value = ToBigInteger(localConst.ConstantValue)
+                    return true
+                }
+                case BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.Identity}} identity {
+                    if IsNonNegativeIntegerLiteralOperand(identity.Operand) {
+                        return TryGetConstantIntegerValue(identity.Operand, out value)
+                    }
+                    if ConstantExpressionEvaluator.TryEvaluate(identity, out var evaluatedIdentity) &&
+                        IsIntegerLiteralValue(evaluatedIdentity) {
+                        value = ToBigInteger(evaluatedIdentity)
+                        return true
+                    }
+                    return false
+                }
+                case BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.Negation}} negation {
+                    if IsNonNegativeIntegerLiteralOperand(negation.Operand) &&
+                        TryGetConstantIntegerValue(negation.Operand, out var inner) {
+                        value = -inner
+                        return true
+                    }
+                    if ConstantExpressionEvaluator.TryEvaluate(negation, out var evaluatedNegation) &&
+                        IsIntegerLiteralValue(evaluatedNegation) {
+                        value = ToBigInteger(evaluatedNegation)
+                        return true
+                    }
+                    return false
                 }
                 default {
                     return false
                 }
             }
+        }
+
+        private func IsNonNegativeIntegerLiteralOperand(expression BoundExpression) bool -> switch expression {
+            case lit is BoundLiteralExpression: IsIntegerLiteralValue(lit.Value) &&
+                ToBigInteger(lit.Value) >= BigInteger.Zero
+            case BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.Identity}} identity:
+            IsNonNegativeIntegerLiteralOperand(identity.Operand)
+            default: false
         }
 
         // issue #1144: try to adapt a constant integer literal to the target integer

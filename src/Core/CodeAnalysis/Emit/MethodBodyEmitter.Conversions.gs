@@ -14,6 +14,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Immutable
 import System.Diagnostics
+import System.Diagnostics.CodeAnalysis
 import System.Linq
 import System.Reflection
 import System.Reflection.Metadata
@@ -1330,72 +1331,17 @@ internal partial class MethodBodyEmitter {
             expression: "conv.Method"
         )
         this.EmitExpression(conv.Source)
-        this.il.OpCode(ILOpCode.Call)
-        // Issue #3932: `ConversionClassifier.TryResolveSymbolicImportedConversion`
-        // hands back the OPEN operator (`Memory`1::op_Implicit`) precisely
-        // because the target is symbolic (`Memory[T]` for an open `T`).
-        // Referencing it through the plain MemberRef path parents it at the
-        // OPEN `Memory`1`, which is the same open-vs-closed defect the chained
-        // `.ctor` had; route it through the #671 symbolic-container factory so
-        // the parent is the `Memory`1<!!T>` TypeSpec. An open declaring type is
-        // a shape ordinary CLR operator resolution never produces, so this
-        // cannot re-target an existing conversion.
-        let nativeOwner = if conv.Type is NullableTypeSymbol nullableNativeOwner {
-            nullableNativeOwner.UnderlyingType
-        } else {
-            conv.Type
+        this.EmitCallResolvedConversion(conv)
+        if !TryGetSymbolicConversionReturnType(conv, out _) {
+            this.EmitErasedObjectReturnWidening(method.ReturnType, conv.Type)
         }
-        this.il.Token(
-            if NativeSliceTypes.IsDefinition(method.DeclaringType, out _) && NativeSliceTypes.TryGetElement(
-                nativeOwner,
-                out _,
-                out _
-            ) {
-                this.outer.memberRefs.GetMethodEntityHandle(method, nativeOwner)
-            } else {
-                (
-                    if method.DeclaringType is {IsGenericTypeDefinition: true} {
-                        this
-                            .outer
-                            .memberRefs
-                            .GetMethodEntityHandle(
-                            method,
-                            default(ImmutableArray[TypeSymbol?]),
-                            SymbolicConversionOwner(method, UnwrapNullable(conv.Source.Type), UnwrapNullable(conv.Type))
-                        )
-                    } else {
-                        this.outer.memberRefs.GetMethodReference(method)
-                    }
-                )
-            }
-        )
-        this.EmitErasedObjectReturnWidening(method.ReturnType, conv.Type)
         // Issue #663: when the operator returns a non-nullable value type T but the
         // target type is Nullable<T> (e.g. op_Explicit(JsonNode) → int, target int32?),
         // lift the result into Nullable<T> via newobj.
-        if conv.Type is NullableTypeSymbol targetNullable && ReflectionMetadataEmitter.IsValueTypeNullable(
-            targetNullable
-        ) &&
-            method
-            .ReturnType
-            .IsValueType &&
-            !IsNullableValueType(method.ReturnType) {
-            let innerClr = targetNullable
-                .UnderlyingType
-                .ClrType ??
-                throw InvalidOperationException(
-                "Nullable<${targetNullable.UnderlyingType.Name}> lift has no CLR underlying type."
-            )
-            if !NullableLifting.TryConstructNullable(this.outer.emitCtx.References, innerClr, out var nullableClr) {
-                throw InvalidOperationException(
-                    "Cannot construct Nullable<${innerClr.FullName}>: System.Nullable`1 is not resolvable in the reference set."
-                )
-            }
-            let nullableInnerArg = nullableClr.GetGenericArguments()[0]
-            let ctor = nullableClr.GetConstructor([]Type{nullableInnerArg}) ??
-                throw InvalidOperationException("Nullable<${nullableInnerArg.FullName}> has no single-arg constructor.")
+        if conv.Type is NullableTypeSymbol targetNullable && NullableLifting.IsAnyValueTypeNullable(targetNullable) &&
+            !ReturnsValueTypeNullable(conv) {
             this.il.OpCode(ILOpCode.Newobj)
-            this.il.Token(this.outer.memberRefs.GetCtorReference(ctor))
+            this.il.Token(this.GetNullableResultConstructor(targetNullable))
         }
     }
 
@@ -1418,7 +1364,7 @@ internal partial class MethodBodyEmitter {
         this.il.Branch(ILOpCode.Brfalse, nullBranch)
         this.EmitUnwrappedNullableValue(sourceSlot, sourceNullable)
         this.EmitCallResolvedConversion(conv)
-        if NullableLifting.IsAnyValueTypeNullable(targetNullable) {
+        if NullableLifting.IsAnyValueTypeNullable(targetNullable) && !ReturnsValueTypeNullable(conv) {
             this.il.OpCode(ILOpCode.Newobj)
             this.il.Token(this.GetNullableResultConstructor(targetNullable))
         }
@@ -1457,6 +1403,11 @@ internal partial class MethodBodyEmitter {
         } else {
             conversion.Type
         }
+        let symbolicOwner = SymbolicConversionOwner(
+            conversionMethod,
+            UnwrapNullable(conversion.Source.Type),
+            UnwrapNullable(conversion.Type)
+        )
         this.il.Token(
             if NativeSliceTypes.IsDefinition(conversionMethod.DeclaringType, out _) && NativeSliceTypes.TryGetElement(
                 nativeOwner,
@@ -1466,18 +1417,16 @@ internal partial class MethodBodyEmitter {
                 this.outer.memberRefs.GetMethodEntityHandle(conversionMethod, nativeOwner)
             } else {
                 (
-                    if conversionMethod.DeclaringType is {IsGenericTypeDefinition: true} {
+                    if conversionMethod.DeclaringType is {IsGenericTypeDefinition: true} ||
+                        ConversionClassifier
+                        .NeedsSymbolicConversion(symbolicOwner) {
                         this
                             .outer
                             .memberRefs
                             .GetMethodEntityHandle(
                             conversionMethod,
                             default(ImmutableArray[TypeSymbol?]),
-                            SymbolicConversionOwner(
-                                conversionMethod,
-                                UnwrapNullable(conversion.Source.Type),
-                                UnwrapNullable(conversion.Type)
-                            )
+                            symbolicOwner
                         )
                     } else {
                         this.outer.memberRefs.GetMethodReference(conversionMethod)
@@ -1570,36 +1519,169 @@ internal partial class MethodBodyEmitter {
         // symbolic TypeSpec of whichever side declares it — the target for
         // `Memory`1::op_Implicit(!0[])` (#3932), the source for
         // `Span`1::op_Implicit(Span<!0>) : ReadOnlySpan<!0>`.
-        private func SymbolicConversionOwner(
+        private func SymbolicConversionOwner(method MethodInfo, source TypeSymbol, target TypeSymbol) TypeSymbol {
+            let source = UnwrapNullable(source)
+            let target = UnwrapNullable(target)
+            let declaring = if method.DeclaringType is {IsGenericType: true} genericDeclaring {
+                genericDeclaring.GetGenericTypeDefinition()
+            } else {
+                method.DeclaringType
+            }
+            let sourceMatches = source is ImportedTypeSymbol{OpenDefinition: {} sourceOpen} &&
+                declaring != nil &&
+                ClrTypeUtilities.AreSame(sourceOpen, declaring)
+            let targetMatches = target is ImportedTypeSymbol{OpenDefinition: {} targetOpen} &&
+                declaring != nil &&
+                ClrTypeUtilities.AreSame(targetOpen, declaring)
+            if sourceMatches && !targetMatches {
+                return source
+            }
+            if !sourceMatches {
+                return target
+            }
+            if method.DeclaringType is {IsGenericType: true, IsGenericTypeDefinition: false} closedDeclaring {
+                if ClrTypeUtilities.AreSame(source.ClrType, closedDeclaring) && !ClrTypeUtilities.AreSame(
+                    target.ClrType,
+                    closedDeclaring
+                ) {
+                    return source
+                }
+                if ClrTypeUtilities.AreSame(target.ClrType, closedDeclaring) && !ClrTypeUtilities.AreSame(
+                    source.ClrType,
+                    closedDeclaring
+                ) {
+                    return target
+                }
+            }
+            let importedSource = cast[ImportedTypeSymbol](source)
+            return if SymbolicOperatorMatchesOwner(method, importedSource, source, target) {
+                source
+            } else {
+                target
+            }
+        }
+
+        private func SymbolicOperatorMatchesOwner(
             method MethodInfo,
+            owner ImportedTypeSymbol,
             source TypeSymbol,
             target TypeSymbol
-        ) TypeSymbol -> if source is ImportedTypeSymbol{OpenDefinition: {} sourceOpen} &&
-            method.DeclaringType is {} declaring &&
-            ClrTypeUtilities.AreSame(sourceOpen, declaring) &&
-            !(
-            target is ImportedTypeSymbol{OpenDefinition: {} targetOpen} && ClrTypeUtilities.AreSame(
-                targetOpen,
-                declaring
+        ) bool {
+            if owner.OpenDefinition is not{} openDefinition || owner.TypeArguments.IsDefaultOrEmpty {
+                return false
+            }
+            if ImportedMemberRefFactory.ResolveMethodOnOpenDefinition(openDefinition, method) is not{} openMethod {
+                return false
+            }
+            let parameters = openMethod.GetParameters()
+            if parameters.Length != 1 {
+                return false
+            }
+            let mappedParameter = UnwrapNullable(
+                MemberLookup.GetClrOpenParameterPointeeTypeSymbol(parameters[0], openDefinition, owner.TypeArguments)
+                    .StripToBareShape()
             )
-        ) {
-            source
-        } else {
-            target
+            let mappedReturn = UnwrapNullable(
+                MemberLookup.GetClrOpenMethodReturnTypeSymbol(openMethod, openDefinition, owner.TypeArguments)
+                    .StripToBareShape()
+            )
+            return ConversionClassifier.IsSameSymbolicType(mappedParameter, source) &&
+                ConversionClassifier.IsSameSymbolicType(mappedReturn, target)
         }
 
-        private func UnwrapNullable(type TypeSymbol) TypeSymbol -> if type is NullableTypeSymbol nullable {
-            nullable.UnderlyingType
-        } else {
-            type
+        private func UnwrapNullable(type TypeSymbol) TypeSymbol {
+            let bare = type.StripToBareShape()
+            return if bare is NullableTypeSymbol nullable {
+                nullable.UnderlyingType.StripToBareShape()
+            } else {
+                bare
+            }
         }
 
-        private func IsNullableValueType(t Type) bool {
-            return t.IsGenericType && !t.IsGenericTypeDefinition && string.Equals(
-                t.GetGenericTypeDefinition().FullName,
-                "System.Nullable`1",
-                StringComparison.Ordinal
+        internal func HasMatchingSymbolicConversionOwner(method MethodInfo, source TypeSymbol, target TypeSymbol) bool {
+            if method.DeclaringType is not{IsGenericType: true} genericDeclaring {
+                return true
+            }
+            let unwrappedSource = UnwrapNullable(source)
+            let unwrappedTarget = UnwrapNullable(target)
+            let declaring = if genericDeclaring.IsGenericTypeDefinition {
+                genericDeclaring
+            } else {
+                genericDeclaring.GetGenericTypeDefinition()
+            }
+            let sourceNeedsSymbolic = unwrappedSource is ImportedTypeSymbol{OpenDefinition: {} sourceOpen} &&
+                ClrTypeUtilities.AreSame(sourceOpen, declaring) && ConversionClassifier.NeedsSymbolicConversion(
+                unwrappedSource
             )
+            let targetNeedsSymbolic = unwrappedTarget is ImportedTypeSymbol{OpenDefinition: {} targetOpen} &&
+                ClrTypeUtilities.AreSame(targetOpen, declaring) && ConversionClassifier.NeedsSymbolicConversion(
+                unwrappedTarget
+            )
+            if !sourceNeedsSymbolic && !targetNeedsSymbolic {
+                return true
+            }
+            if sourceNeedsSymbolic &&
+                SymbolicOperatorMatchesOwner(
+                method,
+                cast[ImportedTypeSymbol](unwrappedSource),
+                unwrappedSource,
+                unwrappedTarget
+            ) {
+                return true
+            }
+            return targetNeedsSymbolic &&
+                SymbolicOperatorMatchesOwner(
+                method,
+                cast[ImportedTypeSymbol](unwrappedTarget),
+                unwrappedSource,
+                unwrappedTarget
+            )
+        }
+
+        private func TryGetSymbolicConversionReturnType(
+            conversion BoundClrConversionCallExpression,
+            @NotNullWhen(true) out returnType TypeSymbol?
+        ) bool {
+            returnType = nil
+            if conversion.Method is not{} method {
+                return false
+            }
+            let owner = SymbolicConversionOwner(method, conversion.Source.Type, conversion.Type)
+            if owner is not ImportedTypeSymbol importedOwner ||
+                importedOwner.OpenDefinition is not{} openDefinition ||
+                importedOwner
+                .TypeArguments
+                .IsDefaultOrEmpty ||
+                (
+                method.DeclaringType is not{IsGenericTypeDefinition: true} &&
+                    !ConversionClassifier.NeedsSymbolicConversion(importedOwner)
+            ) {
+                return false
+            }
+            if ImportedMemberRefFactory.ResolveMethodOnOpenDefinition(openDefinition, method) is not{} openMethod {
+                return false
+            }
+            returnType = MemberLookup.GetClrOpenMethodReturnTypeSymbol(
+                openMethod,
+                openDefinition,
+                importedOwner.TypeArguments
+            )
+            return true
+        }
+
+        internal func ReturnsValueTypeNullable(conversion BoundClrConversionCallExpression) bool {
+            if conversion.Function != nil {
+                let resultType = conversion.FunctionOwnerType?.SubstituteMemberType(conversion.Function.Type) ??
+                    conversion
+                    .Function
+                    .Type
+                return resultType is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable)
+            }
+            if TryGetSymbolicConversionReturnType(conversion, out var symbolicReturn) {
+                return symbolicReturn.StripToBareShape() is NullableTypeSymbol nullable &&
+                    NullableLifting.IsAnyValueTypeNullable(nullable)
+            }
+            return conversion.Method != nil && NullableLifting.IsValueTypeNullableClr(conversion.Method.ReturnType)
         }
     }
 }

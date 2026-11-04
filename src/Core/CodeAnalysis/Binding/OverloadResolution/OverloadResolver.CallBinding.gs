@@ -2586,7 +2586,8 @@ internal partial class OverloadResolver {
                         "an argument conversion has a target type",
                         expression: "expectedType"
                     )
-                )
+                ) ||
+                    MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(expectedType, out _)
             ) &&
                 (
                 !Conversion.Classify(

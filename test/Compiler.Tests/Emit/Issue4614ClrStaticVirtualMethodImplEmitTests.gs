@@ -10,9 +10,14 @@ import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Reflection
+import System.Reflection.Metadata
+import System.Reflection.Metadata.Ecma335
+import System.Reflection.PortableExecutable
 import System.Text
 import Xunit
 
@@ -131,6 +136,754 @@ Console.WriteLine("ran")`, appPath, "/target:exe")
         expectedLines[]string
     ) -> CompileVerifyAndRun(name, source, expectedLines)
 
+    /// Issue #4626: symbolic CLR interface signature matching handles async
+    /// `Task<T>` / `ValueTask<T>` / `IAsyncEnumerable<T>` returns, tuple
+    /// positions (including 8+ elements and open generic `NativeRows[T]`),
+    /// function/delegate types, pointers, nested `Nullable<V>`, and `map`/`sequence`
+    /// across instance, explicit, and static-virtual slots.
+    /// @param name The case name.
+    /// @param source The G# source.
+    /// @param expectedLines The expected stdout lines.
+    @Theory
+    @MemberData("SymbolicSignatureMatcherCases")
+    func SymbolicSignatureMatcher_BindsAndExecutes(
+        name string,
+        source string,
+        expectedLines[]string
+    ) -> CompileVerifyAndRun(name, source, expectedLines)
+
+    /// Issue #4626: a non-vector rank-1 array (`T[*]`) in a CLR interface slot
+    /// does not match a G# slice (`[]Shape`) candidate in parameter, return, or
+    /// nested generic positions.
+    @Fact
+    func NonVectorRankOneArraySlot_DoesNotMatchSliceCandidate() {
+        let tempDir = Directory.CreateTempSubdirectory("gs_4626_nonsz_").FullName
+        try {
+            let libPath = Path.Combine(tempDir, "NonSzLib.dll")
+            let metadata = MetadataBuilder()
+            metadata.AddModule(
+                0,
+                metadata.GetOrAddString("NonSzLib.dll"),
+                metadata.GetOrAddGuid(Guid.NewGuid()),
+                GuidHandle(),
+                GuidHandle()
+            )
+            metadata.AddAssembly(
+                metadata.GetOrAddString("NonSzLib"),
+                Version(1, 0, 0, 0),
+                StringHandle(),
+                BlobHandle(),
+                cast[AssemblyFlags](0),
+                AssemblyHashAlgorithm.None
+            )
+            metadata.AddTypeDefinition(
+                cast[TypeAttributes](0),
+                StringHandle(),
+                metadata.GetOrAddString("<Module>"),
+                EntityHandle(),
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(1)
+            )
+            let ifaceHandle = metadata.AddTypeDefinition(
+                TypeAttributes.Public | TypeAttributes.Interface | TypeAttributes.Abstract,
+                metadata.GetOrAddString("NonSzLib"),
+                metadata.GetOrAddString("INonSz`1"),
+                EntityHandle(),
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(1)
+            )
+            metadata.AddGenericParameter(ifaceHandle, GenericParameterAttributes.None, metadata.GetOrAddString("T"), 0)
+            let encodeRankOneNonSzArray = (typeEncoder SignatureTypeEncoder) -> {
+                typeEncoder.Array(
+                    (element SignatureTypeEncoder) -> element.GenericTypeParameter(0),
+                    (shape ArrayShapeEncoder) -> shape.Shape(
+                        1,
+                        ImmutableArray[int32].Empty,
+                        ImmutableArray[int32].Empty
+                    )
+                )
+            }
+            let instanceSig = BlobBuilder()
+            BlobEncoder(instanceSig).MethodSignature(isInstanceMethod: true).Parameters(
+                1,
+                (ret ReturnTypeEncoder) -> ret.Type().Int32(),
+                (pars ParametersEncoder) -> encodeRankOneNonSzArray(pars.AddParameter().Type())
+            )
+            metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.Abstract | MethodAttributes.Virtual | MethodAttributes.HideBySig | MethodAttributes.NewSlot,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("M"),
+                metadata.GetOrAddBlob(instanceSig),
+                -1,
+                MetadataTokens.ParameterHandle(1)
+            )
+            let returnSig = BlobBuilder()
+            BlobEncoder(returnSig).MethodSignature(isInstanceMethod: true).Parameters(
+                0,
+                (ret ReturnTypeEncoder) -> encodeRankOneNonSzArray(ret.Type()),
+                (pars ParametersEncoder) -> { }
+            )
+            metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.Abstract | MethodAttributes.Virtual | MethodAttributes.HideBySig | MethodAttributes.NewSlot,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("R"),
+                metadata.GetOrAddBlob(returnSig),
+                -1,
+                MetadataTokens.ParameterHandle(1)
+            )
+            let staticSig = BlobBuilder()
+            BlobEncoder(staticSig).MethodSignature(isInstanceMethod: false).Parameters(
+                1,
+                (ret ReturnTypeEncoder) -> ret.Type().Int32(),
+                (pars ParametersEncoder) -> encodeRankOneNonSzArray(pars.AddParameter().Type())
+            )
+            metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.Abstract | MethodAttributes.Virtual | MethodAttributes.HideBySig,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("MS"),
+                metadata.GetOrAddBlob(staticSig),
+                -1,
+                MetadataTokens.ParameterHandle(1)
+            )
+            let encodeNestedRankOneNonSzArray = (typeEncoder SignatureTypeEncoder) -> {
+                typeEncoder.Array(
+                    (outer SignatureTypeEncoder) -> encodeRankOneNonSzArray(outer),
+                    (shape ArrayShapeEncoder) -> shape.Shape(
+                        1,
+                        ImmutableArray[int32].Empty,
+                        ImmutableArray[int32].Empty
+                    )
+                )
+            }
+            let nestedInstanceSig = BlobBuilder()
+            BlobEncoder(nestedInstanceSig).MethodSignature(isInstanceMethod: true).Parameters(
+                1,
+                (ret ReturnTypeEncoder) -> ret.Type().Int32(),
+                (pars ParametersEncoder) -> encodeNestedRankOneNonSzArray(pars.AddParameter().Type())
+            )
+            metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.Abstract | MethodAttributes.Virtual | MethodAttributes.HideBySig | MethodAttributes.NewSlot,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("MNested"),
+                metadata.GetOrAddBlob(nestedInstanceSig),
+                -1,
+                MetadataTokens.ParameterHandle(1)
+            )
+            let nestedReturnSig = BlobBuilder()
+            BlobEncoder(nestedReturnSig).MethodSignature(isInstanceMethod: true).Parameters(
+                0,
+                (ret ReturnTypeEncoder) -> encodeNestedRankOneNonSzArray(ret.Type()),
+                (pars ParametersEncoder) -> { }
+            )
+            metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.Abstract | MethodAttributes.Virtual | MethodAttributes.HideBySig | MethodAttributes.NewSlot,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("RNested"),
+                metadata.GetOrAddBlob(nestedReturnSig),
+                -1,
+                MetadataTokens.ParameterHandle(1)
+            )
+            let nullableReturnParam = metadata.AddParameter(ParameterAttributes.None, default(StringHandle), 0)
+            metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.Abstract | MethodAttributes.Virtual | MethodAttributes.HideBySig | MethodAttributes.NewSlot,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("RNullable"),
+                metadata.GetOrAddBlob(returnSig),
+                -1,
+                nullableReturnParam
+            )
+            let runtimeAsmRef = metadata.AddAssemblyReference(
+                metadata.GetOrAddString("System.Runtime"),
+                Version(10, 0, 0, 0),
+                default(StringHandle),
+                metadata.GetOrAddBlob([]uint8{0xB0, 0x3F, 0x5F, 0x7F, 0x11, 0xD5, 0x0A, 0x3A}),
+                default(AssemblyFlags),
+                default(BlobHandle)
+            )
+            let systemObjectRef = metadata.AddTypeReference(
+                runtimeAsmRef,
+                metadata.GetOrAddString("System"),
+                metadata.GetOrAddString("Object")
+            )
+            let systemArrayRef = metadata.AddTypeReference(
+                runtimeAsmRef,
+                metadata.GetOrAddString("System"),
+                metadata.GetOrAddString("Array")
+            )
+            let nullableContextType = metadata.AddTypeDefinition(
+                TypeAttributes.NotPublic,
+                metadata.GetOrAddString("System.Runtime.CompilerServices"),
+                metadata.GetOrAddString("NullableContextAttribute"),
+                systemObjectRef,
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(7)
+            )
+            let nullableContextCtor = metadata.AddMemberReference(
+                nullableContextType,
+                metadata.GetOrAddString(".ctor"),
+                metadata.GetOrAddBlob([]uint8{0x20, 1, 0x01, 0x05})
+            )
+            metadata.AddCustomAttribute(ifaceHandle, nullableContextCtor, metadata.GetOrAddBlob([]uint8{1, 0, 1, 0, 0}))
+            let nullableAttrType = metadata.AddTypeDefinition(
+                TypeAttributes.NotPublic,
+                metadata.GetOrAddString("System.Runtime.CompilerServices"),
+                metadata.GetOrAddString("NullableAttribute"),
+                systemObjectRef,
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(7)
+            )
+            let nullableAttrBytesCtor = metadata.AddMemberReference(
+                nullableAttrType,
+                metadata.GetOrAddString(".ctor"),
+                metadata.GetOrAddBlob([]uint8{0x20, 1, 0x01, 0x1D, 0x05})
+            )
+            metadata.AddCustomAttribute(
+                nullableReturnParam,
+                nullableAttrBytesCtor,
+                metadata.GetOrAddBlob([]uint8{1, 0, 2, 0, 0, 0, 1, 2, 0, 0})
+            )
+            let boxTypeHandle = metadata.AddTypeDefinition(
+                TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.BeforeFieldInit,
+                metadata.GetOrAddString("NonSzLib"),
+                metadata.GetOrAddString("NonSzBox`1"),
+                systemObjectRef,
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(7)
+            )
+            metadata.AddGenericParameter(
+                boxTypeHandle,
+                GenericParameterAttributes.None,
+                metadata.GetOrAddString("T"),
+                0
+            )
+            let ifaceTypeSpecBlob = BlobBuilder()
+            BlobEncoder(ifaceTypeSpecBlob)
+                .TypeSpecificationSignature()
+                .GenericInstantiation(ifaceHandle, 1, isValueType: false)
+                .AddArgument()
+                .GenericTypeParameter(0)
+            let ifaceTypeSpec = metadata.AddTypeSpecification(metadata.GetOrAddBlob(ifaceTypeSpecBlob))
+            metadata.AddInterfaceImplementation(boxTypeHandle, ifaceTypeSpec)
+            let backingFieldSig = BlobBuilder()
+            encodeRankOneNonSzArray(BlobEncoder(backingFieldSig).FieldSignature())
+            metadata.AddFieldDefinition(
+                FieldAttributes.Public,
+                metadata.GetOrAddString("Backing"),
+                metadata.GetOrAddBlob(backingFieldSig)
+            )
+            let backingNestedFieldSig = BlobBuilder()
+            encodeNestedRankOneNonSzArray(BlobEncoder(backingNestedFieldSig).FieldSignature())
+            metadata.AddFieldDefinition(
+                FieldAttributes.Public,
+                metadata.GetOrAddString("BackingNested"),
+                metadata.GetOrAddBlob(backingNestedFieldSig)
+            )
+            let boxTypeSpecBlob = BlobBuilder()
+            BlobEncoder(boxTypeSpecBlob)
+                .TypeSpecificationSignature()
+                .GenericInstantiation(boxTypeHandle, 1, isValueType: false)
+                .AddArgument()
+                .GenericTypeParameter(0)
+            let boxTypeSpec = metadata.AddTypeSpecification(metadata.GetOrAddBlob(boxTypeSpecBlob))
+            let backingFieldRef = metadata.AddMemberReference(
+                boxTypeSpec,
+                metadata.GetOrAddString("Backing"),
+                metadata.GetOrAddBlob(backingFieldSig)
+            )
+            let backingNestedFieldRef = metadata.AddMemberReference(
+                boxTypeSpec,
+                metadata.GetOrAddString("BackingNested"),
+                metadata.GetOrAddBlob(backingNestedFieldSig)
+            )
+            let voidInstanceSig = BlobBuilder()
+            BlobEncoder(voidInstanceSig).MethodSignature(isInstanceMethod: true).Parameters(
+                0,
+                (ret ReturnTypeEncoder) -> ret.Void(),
+                (pars ParametersEncoder) -> { }
+            )
+            let objectCtorRef = metadata.AddMemberReference(
+                systemObjectRef,
+                metadata.GetOrAddString(".ctor"),
+                metadata.GetOrAddBlob(voidInstanceSig)
+            )
+            let intInstanceSig = BlobBuilder()
+            BlobEncoder(intInstanceSig).MethodSignature(isInstanceMethod: true).Parameters(
+                0,
+                (ret ReturnTypeEncoder) -> ret.Type().Int32(),
+                (pars ParametersEncoder) -> { }
+            )
+            let arrayGetLengthRef = metadata.AddMemberReference(
+                systemArrayRef,
+                metadata.GetOrAddString("get_Length"),
+                metadata.GetOrAddBlob(intInstanceSig)
+            )
+            let ilBuilder = BlobBuilder()
+            let bodyStream = MethodBodyStreamEncoder(ilBuilder)
+            let ctorCode = BlobBuilder()
+            let ctorIl = InstructionEncoder(ctorCode)
+            ctorIl.OpCode(ILOpCode.Ldarg_0)
+            ctorIl.Call(objectCtorRef)
+            ctorIl.OpCode(ILOpCode.Ret)
+            let ctorRva = bodyStream.AddMethodBody(ctorIl)
+            let lenMethodCode = BlobBuilder()
+            let lenMethodIl = InstructionEncoder(lenMethodCode)
+            lenMethodIl.OpCode(ILOpCode.Ldarg_1)
+            lenMethodIl.OpCode(ILOpCode.Callvirt)
+            lenMethodIl.Token(arrayGetLengthRef)
+            lenMethodIl.OpCode(ILOpCode.Ret)
+            let lenMethodRva = bodyStream.AddMethodBody(lenMethodIl)
+            let getBackingCode = BlobBuilder()
+            let getBackingIl = InstructionEncoder(getBackingCode)
+            getBackingIl.OpCode(ILOpCode.Ldarg_0)
+            getBackingIl.OpCode(ILOpCode.Ldfld)
+            getBackingIl.Token(backingFieldRef)
+            getBackingIl.OpCode(ILOpCode.Ret)
+            let getBackingRva = bodyStream.AddMethodBody(getBackingIl)
+            let staticLenCode = BlobBuilder()
+            let staticLenIl = InstructionEncoder(staticLenCode)
+            staticLenIl.OpCode(ILOpCode.Ldarg_0)
+            staticLenIl.OpCode(ILOpCode.Callvirt)
+            staticLenIl.Token(arrayGetLengthRef)
+            staticLenIl.OpCode(ILOpCode.Ret)
+            let staticLenRva = bodyStream.AddMethodBody(staticLenIl)
+            let getNestedCode = BlobBuilder()
+            let getNestedIl = InstructionEncoder(getNestedCode)
+            getNestedIl.OpCode(ILOpCode.Ldarg_0)
+            getNestedIl.OpCode(ILOpCode.Ldfld)
+            getNestedIl.Token(backingNestedFieldRef)
+            getNestedIl.OpCode(ILOpCode.Ret)
+            let getNestedRva = bodyStream.AddMethodBody(getNestedIl)
+            metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString(".ctor"),
+                metadata.GetOrAddBlob(voidInstanceSig),
+                ctorRva,
+                MetadataTokens.ParameterHandle(2)
+            )
+            let implMethodAttrs = MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.Final | MethodAttributes.HideBySig | MethodAttributes.NewSlot
+            metadata.AddMethodDefinition(
+                implMethodAttrs,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("M"),
+                metadata.GetOrAddBlob(instanceSig),
+                lenMethodRva,
+                MetadataTokens.ParameterHandle(2)
+            )
+            metadata.AddMethodDefinition(
+                implMethodAttrs,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("R"),
+                metadata.GetOrAddBlob(returnSig),
+                getBackingRva,
+                MetadataTokens.ParameterHandle(2)
+            )
+            let boxMsMethodDef = metadata.AddMethodDefinition(
+                MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("MS"),
+                metadata.GetOrAddBlob(staticSig),
+                staticLenRva,
+                MetadataTokens.ParameterHandle(2)
+            )
+            metadata.AddMethodDefinition(
+                implMethodAttrs,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("MNested"),
+                metadata.GetOrAddBlob(nestedInstanceSig),
+                lenMethodRva,
+                MetadataTokens.ParameterHandle(2)
+            )
+            metadata.AddMethodDefinition(
+                implMethodAttrs,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("RNested"),
+                metadata.GetOrAddBlob(nestedReturnSig),
+                getNestedRva,
+                MetadataTokens.ParameterHandle(2)
+            )
+            metadata.AddMethodDefinition(
+                implMethodAttrs,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString("RNullable"),
+                metadata.GetOrAddBlob(returnSig),
+                getBackingRva,
+                MetadataTokens.ParameterHandle(2)
+            )
+            let ifaceMsRef = metadata.AddMemberReference(
+                ifaceTypeSpec,
+                metadata.GetOrAddString("MS"),
+                metadata.GetOrAddBlob(staticSig)
+            )
+            metadata.AddMethodImplementation(boxTypeHandle, boxMsMethodDef, ifaceMsRef)
+            let peBlob = BlobBuilder()
+            ManagedPEBuilder(PEHeaderBuilder.CreateLibraryHeader(), MetadataRootBuilder(metadata), ilBuilder).Serialize(
+                peBlob
+            )
+            File.WriteAllBytes(libPath, peBlob.ToArray())
+
+            let appPath = Path.Combine(tempDir, "App.dll")
+            let log = Compile(tempDir, "App.gs", `package P
+import System
+import NonSzLib
+
+class Shape { }
+class BadNonSz : INonSz[Shape] {
+    func M(xs []Shape) int32 { return xs.Length }
+    func R() []Shape { return []Shape{} }
+    shared {
+        func MS(xs []Shape) int32 { return xs.Length }
+    }
+}
+Console.WriteLine("x")`, appPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(appPath),
+                "Non-vector rank-1 array mismatch must not emit an assembly. Log:\n" + log
+            )
+            Assert.Contains("error GS0187:", log, StringComparison.Ordinal)
+            Assert.Contains("INonSz[Shape].M", log, StringComparison.Ordinal)
+            Assert.Contains("INonSz[Shape].R", log, StringComparison.Ordinal)
+            Assert.Contains("error GS0331:", log, StringComparison.Ordinal)
+
+            let mismatchPath = Path.Combine(tempDir, "Mismatch.dll")
+            let mismatchLog = Compile(tempDir, "Mismatch.gs", `package P
+import System
+import NonSzLib
+
+func Check(x INonSz[Tuple[int32, int32]], y INonSz[Tuple[string, string]]) int32 {
+    let ok = x.M(x.R())
+    return ok + x.M(y.R())
+}
+Console.WriteLine("x")`, mismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(mismatchPath),
+                "Projected rank-1 non-SZ arrays with different element types must not unify. Log:\n" + mismatchLog
+            )
+            Assert.Contains(" error GS", mismatchLog, StringComparison.Ordinal)
+
+            let nullableMismatchPath = Path.Combine(tempDir, "NullableMismatch.dll")
+            let nullableMismatchLog = Compile(tempDir, "NullableMismatch.gs", `package P
+import System
+import NonSzLib
+
+func CheckNullable(x INonSz[int32?], y INonSz[int32]) int32 {
+    let ok = x.M(x.R())
+    return ok + x.M(y.R())
+}
+Console.WriteLine("x")`, nullableMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(nullableMismatchPath),
+                "Projected rank-1 non-SZ array over int32? must not unify with int32[*]. Log:\n" + nullableMismatchLog
+            )
+            Assert.Contains(" error GS", nullableMismatchLog, StringComparison.Ordinal)
+
+            let userMismatchPath = Path.Combine(tempDir, "UserMismatch.dll")
+            let userMismatchLog = Compile(tempDir, "UserMismatch.gs", `package P
+import System
+import NonSzLib
+
+class ShapeA { }
+class ShapeB { }
+func CheckUser(x INonSz[ShapeA], y INonSz[ShapeB]) int32 {
+    let ok = x.M(x.R())
+    return ok + x.M(y.R())
+}
+Console.WriteLine("x")`, userMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(userMismatchPath),
+                "Projected rank-1 non-SZ arrays over distinct user types must not convert. Log:\n" + userMismatchLog
+            )
+            Assert.Contains(" error GS", userMismatchLog, StringComparison.Ordinal)
+
+            let sliceMismatchPath = Path.Combine(tempDir, "SliceMismatch.dll")
+            let sliceMismatchLog = Compile(tempDir, "SliceMismatch.gs", `package P
+import System
+import NonSzLib
+
+func CheckSlice(x INonSz[int32]) []int32 {
+    return x.R()
+}
+Console.WriteLine("x")`, sliceMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(sliceMismatchPath),
+                "Projected rank-1 non-SZ array must not convert to a G# slice. Log:\n" + sliceMismatchLog
+            )
+            Assert.Contains(" error GS", sliceMismatchLog, StringComparison.Ordinal)
+
+            let nestedUserMismatchPath = Path.Combine(tempDir, "NestedUserMismatch.dll")
+            let nestedUserMismatchLog = Compile(tempDir, "NestedUserMismatch.gs", `package P
+import System
+import NonSzLib
+
+class ShapeA { }
+class ShapeB { }
+func CheckNestedUser(x INonSz[ShapeA], y INonSz[ShapeB]) int32 {
+    let ok = x.MNested(x.RNested())
+    return ok + x.MNested(y.RNested())
+}
+Console.WriteLine("x")`, nestedUserMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(nestedUserMismatchPath),
+                "Nested rank-1 non-SZ arrays T[*][*] over distinct user types must not convert. Log:\n" +
+                    nestedUserMismatchLog
+            )
+            Assert.Contains(" error GS", nestedUserMismatchLog, StringComparison.Ordinal)
+
+            let listUserMismatchPath = Path.Combine(tempDir, "ListUserMismatch.dll")
+            let listUserMismatchLog = Compile(tempDir, "ListUserMismatch.gs", `package P
+import System
+import System.Collections.Generic
+import NonSzLib
+
+class ShapeA { }
+class ShapeB { }
+func CheckListUser(x INonSz[ShapeA], y INonSz[ShapeB]) int32 {
+    var xs = List(){x.R()}
+    xs = List(){y.R()}
+    return xs.Count
+}
+Console.WriteLine("x")`, listUserMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(listUserMismatchPath),
+                "List<T[*]> over distinct user types must not convert. Log:\n" + listUserMismatchLog
+            )
+            Assert.Contains(" error GS", listUserMismatchLog, StringComparison.Ordinal)
+
+            let nullableElementMismatchPath = Path.Combine(tempDir, "NullableElementMismatch.dll")
+            let nullableElementMismatchLog = Compile(tempDir, "NullableElementMismatch.gs", `package P
+import System
+import NonSzLib
+
+class Shape { }
+func UnhandledNullable(x INonSz[Shape]) Shape {
+    return x.RNullable()[0]
+}
+Console.WriteLine("x")`, nullableElementMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(nullableElementMismatchPath),
+                "Nullable element from T?[*] must not implicitly convert to non-null Shape. Log:\n" +
+                    nullableElementMismatchLog
+            )
+            Assert.Contains(" error GS", nullableElementMismatchLog, StringComparison.Ordinal)
+            Assert.Contains("Shape?", nullableElementMismatchLog, StringComparison.Ordinal)
+
+            let listPatternMismatchPath = Path.Combine(tempDir, "ListPatternMismatch.dll")
+            let listPatternMismatchLog = Compile(tempDir, "ListPatternMismatch.gs", `package P
+import System
+import NonSzLib
+
+func CheckListPattern(x INonSz[int32]) bool {
+    return x.R() is [1]
+}
+Console.WriteLine("x")`, listPatternMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(listPatternMismatchPath),
+                "List pattern over rank-1 non-SZ array T[*] must be rejected before emission. Log:\n" +
+                    listPatternMismatchLog
+            )
+            Assert.Contains(" error GS", listPatternMismatchLog, StringComparison.Ordinal)
+
+            let fixedMismatchPath = Path.Combine(tempDir, "FixedMismatch.dll")
+            let fixedMismatchLog = Compile(tempDir, "FixedMismatch.gs", `package P
+import System
+import NonSzLib
+
+unsafe func CheckFixed(x INonSz[int32]) int32 {
+    fixed p *int32 = x.R() {
+        return 0
+    }
+}
+Console.WriteLine("x")`, fixedMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(fixedMismatchPath),
+                "fixed statement over rank-1 non-SZ array T[*] must be rejected before emission. Log:\n" +
+                    fixedMismatchLog
+            )
+            Assert.Contains(" error GS", fixedMismatchLog, StringComparison.Ordinal)
+
+            let enumerableMismatchPath = Path.Combine(tempDir, "EnumerableMismatch.dll")
+            let enumerableMismatchLog = Compile(tempDir, "EnumerableMismatch.gs", `package P
+import System
+import System.Collections.Generic
+import NonSzLib
+
+class Shape { }
+func CheckEnumerable(x INonSz[Shape]) IEnumerable[Shape] {
+    return x.R()
+}
+Console.WriteLine("x")`, enumerableMismatchPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(enumerableMismatchPath),
+                "Rank-1 non-SZ array T[*] must not convert to IEnumerable[T]. Log:\n" + enumerableMismatchLog
+            )
+            Assert.Contains(" error GS", enumerableMismatchLog, StringComparison.Ordinal)
+
+            let validPath = Path.Combine(tempDir, "ValidNonSz.dll")
+            let validLog = Compile(tempDir, "ValidNonSz.gs", `package P
+import System
+import NonSzLib
+
+public class Shape {
+    public var Tag int32
+}
+public class NonSzHolder[T] {
+    internal func MakeAnon(x INonSz[T]) -> object {
+        var Items = x.R()
+        func Tag() int32 -> 1
+    }
+    public func FirstFromConstructed(box INonSz[Shape]) Shape {
+        return NonSzHolder[Shape]().MakeAnon(box).Items[0]
+    }
+}
+public func ForwardNullableArray(x INonSz[Shape]) {
+    let _ = x.RNullable()
+}
+public func Forward(x INonSz[Shape]) int32 {
+    let arr = x.R()
+    return x.M(arr)
+}
+public func ForwardNested(x INonSz[Shape]) int32 {
+    let arr = x.RNested()
+    return x.MNested(arr)
+}
+public func ForwardNullable(x INonSz[int32?]) int32 {
+    let arr = x.R()
+    return x.M(arr)
+}
+public func First(x INonSz[Shape]) Shape {
+    return x.R()[0]
+}
+public func AtIndex(x INonSz[Shape], idx int32) Shape {
+    return x.R()[idx]
+}
+public func TakeRef(ref s Shape) Shape {
+    return s
+}
+public func SetAtZero(x INonSz[Shape], v Shape) Shape {
+    let arr = x.R()
+    arr[0] = v
+    return arr[0]
+}
+public func MutateAt(x INonSz[Shape], idx int32, v Shape) Shape {
+    let arr = x.R()
+    arr[idx] = v
+    return TakeRef(&arr[idx])
+}
+public func ReadNullableElement(x INonSz[Shape], idx int32) Shape? {
+    return x.RNullable()[idx]
+}
+public func CountLoop(x INonSz[Shape]) int32 {
+    var sum = 0
+    for item in x.R() {
+        sum = sum + item.Tag
+    }
+    return sum
+}
+let box = NonSzBox[Shape]()
+let nonSzShapeType = typeof(Shape).MakeArrayType(1)
+let zeroArr = cast[Array](Activator.CreateInstance(nonSzShapeType, []object?{0, 2})!!)
+zeroArr.SetValue(Shape{Tag: 42}, []int32{0})
+zeroArr.SetValue(Shape{Tag: 10}, []int32{1})
+typeof(NonSzBox[Shape]).GetField("Backing")!!.SetValue(box, zeroArr)
+let nestedArr = cast[Array](Activator.CreateInstance(nonSzShapeType.MakeArrayType(1), []object?{0, 1})!!)
+nestedArr.SetValue(zeroArr, []int32{0})
+typeof(NonSzBox[Shape]).GetField("BackingNested")!!.SetValue(box, nestedArr)
+Console.WriteLine(First(box).Tag)
+Console.WriteLine(NonSzHolder[Shape]().FirstFromConstructed(box).Tag)
+Console.WriteLine(SetAtZero(box, Shape{Tag: 99}).Tag)
+Console.WriteLine(ReadNullableElement(box, 0)?.Tag ?? -1)
+Console.WriteLine(Forward(box))
+Console.WriteLine(ForwardNested(box))
+Console.WriteLine(CountLoop(box))
+let offsetArr = Array.CreateInstance(typeof(Shape), []int32{2}, []int32{5})
+offsetArr.SetValue(Shape{Tag: 7}, []int32{5})
+offsetArr.SetValue(Shape{Tag: 8}, []int32{6})
+typeof(NonSzBox[Shape]).GetField("Backing")!!.SetValue(box, offsetArr)
+Console.WriteLine(AtIndex(box, 5).Tag)
+Console.WriteLine(MutateAt(box, 5, Shape{Tag: 30}).Tag)
+Console.WriteLine(CountLoop(box))`, validPath, "/target:exe", "/reference:" + libPath)
+            Assert.DoesNotContain(" error ", validLog, StringComparison.Ordinal)
+            Assert.True(
+                File.Exists(validPath),
+                "Valid rank-1 non-SZ array local and call must compile. Log:\n" + validLog
+            )
+            IlVerifier.Verify(validPath, []string{libPath})
+            let (exit, output) = RunDotnet(validPath)
+            Assert.True(exit == 0, "ValidNonSz must run. Output:\n" + output)
+            let lines = output
+                .Split('\n')
+                .Select((line string) -> line.TrimEnd('\r'))
+                .Where((line string) -> line.Length > 0)
+                .ToArray()
+            Assert.Equal([]string{"42", "42", "99", "99", "2", "1", "109", "7", "30", "38"}, lines)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
+    /// Issue #4626: an imported `[Suspending]` method returning `ValueTask<string?>`
+    /// preserves its nullable result contract across implicit completion and
+    /// `ImportedFunctionSymbol.LogicalReturnType`.
+    @Fact
+    func ImportedSuspendingNullableReturn_PreservesResultNullability() {
+        let tempDir = Directory.CreateTempSubdirectory("gs_4626_susp_").FullName
+        try {
+            let libPath = Path.Combine(tempDir, "SuspLib.dll")
+            let libLog = Compile(tempDir, "SuspLib.gs", `package SuspLib
+
+public class Reader {
+    shared {
+        public suspend func ReadMaybe(s string?) string? {
+            return s
+        }
+    }
+}`, libPath, "/target:library")
+            Assert.DoesNotContain(" error ", libLog, StringComparison.Ordinal)
+            Assert.True(File.Exists(libPath), "SuspLib must compile. Log:\n" + libLog)
+
+            let badPath = Path.Combine(tempDir, "BadSusp.dll")
+            let badLog = Compile(tempDir, "BadSusp.gs", `package P
+import System
+import SuspLib
+
+suspend func Check() string {
+    let bad string = Reader.ReadMaybe(nil)
+    return bad
+}
+Console.WriteLine("x")`, badPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(badPath),
+                "Assigning string? suspending result to string must fail. Log:\n" + badLog
+            )
+            Assert.Contains("error GS0155:", badLog, StringComparison.Ordinal)
+            Assert.Contains("Cannot convert type 'string?' to 'string'", badLog, StringComparison.Ordinal)
+
+            let okPath = Path.Combine(tempDir, "OkSusp.dll")
+            let okLog = Compile(tempDir, "OkSusp.gs", `package P
+import System
+import SuspLib
+
+suspend func Check(s string?) string {
+    let v string? = Reader.ReadMaybe(s)
+    return v ?? "null"
+}
+Console.WriteLine(Check(nil))
+Console.WriteLine(Check("hi"))`, okPath, "/target:exe", "/reference:" + libPath)
+            Assert.DoesNotContain(" error ", okLog, StringComparison.Ordinal)
+            Assert.True(File.Exists(okPath), "OkSusp must compile. Log:\n" + okLog)
+            let (exit, output) = RunDotnet(okPath)
+            Assert.True(exit == 0, "OkSusp must run. Output:\n" + output)
+            let lines = output
+                .Split('\n')
+                .Select((line string) -> line.TrimEnd('\r'))
+                .Where((line string) -> line.Length > 0)
+                .ToArray()
+            Assert.Equal([]string{"null", "hi"}, lines)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     /// Issue #4618: a missing or mismatched implementation of an imported
     /// interface's static abstract member is diagnosed at compile time.
     /// @param name The case name.
@@ -213,6 +966,74 @@ public unsafe interface IFnPtrOverloadDefaultedManagedOnly<T> : IFnPtrOverload<T
     static int IFnPtrOverload<T>.Call(delegate*<int, int> p, T x) => 50;
 }
 
+public interface IAs<T> { System.Threading.Tasks.Task<T> Make(); }
+public interface IAsVt<T> { System.Threading.Tasks.ValueTask<T> MakeVt(); }
+public interface IFactory<TResult> { TResult Create(); }
+public interface ISAs<T> { static abstract System.Threading.Tasks.Task<T> MakeS(); }
+public interface ISAsVt<T> { static abstract System.Threading.Tasks.ValueTask<T> MakeSVt(); }
+public interface IAsyncStream<T> { System.Collections.Generic.IAsyncEnumerable<T> Stream(T seed); }
+public interface ITup<T> {
+    int M((T, int) v);
+    (T, int) Make(T v);
+    (T, U) Pair<U>(T x, (U, int) y);
+}
+public interface ISTup<T> {
+    static abstract (T, int) Pair { get; }
+    static abstract int Take((T, int) v);
+}
+public interface ILongTup<T> {
+    int Sum((int, int, int, int, int, int, int, int, T) v);
+}
+public interface NativeRows<T> where T : class {
+    (T Value, int Code) Required(T value);
+}
+public interface ITupProp<T> {
+    (T, int) Current { get; }
+    int this[(T, int) key] { get; }
+}
+public interface ITupFieldProp<T> {
+    (T, int) Current { get; }
+}
+public interface IFn<T> {
+    int Apply(System.Func<T, int> f);
+    void Run(System.Action<T> a);
+    string Combine<U>(T x, U y, System.Func<T, (U, int), string> f);
+}
+public interface ISFn<T> {
+    static abstract int ApplyS(System.Func<T, int> f);
+}
+public delegate int NominalDel<T>(T x);
+public interface INominalDel<T> {
+    int Apply(NominalDel<T> f);
+}
+public unsafe interface IPtr<T> where T : unmanaged {
+    int Read(T* p);
+    static abstract int ReadS(T* p);
+}
+public unsafe interface IMixedPtr<T> {
+    int Read(T x, int* p);
+}
+public interface INullableNested<T> {
+    int ReadPair((T, int?) v);
+}
+public interface IMapAndSeq<T> {
+    int CountMap(System.Collections.Generic.Dictionary<T, int> m);
+    int CountSeq(System.Collections.Generic.IEnumerable<T> s);
+    static abstract System.Collections.Generic.Dictionary<T, int> MakeMap(T key, int value);
+}
+public interface IListConsumer<T> {
+    int Consume(System.Collections.Generic.List<T> items);
+}
+public interface IRefTup<T> {
+    int M(System.Tuple<T, int> v);
+    int Concrete(System.Tuple<int, int> v);
+    static abstract System.Tuple<T, int> MakeS(T x);
+}
+public interface IRefTupBase<T, U> {
+    int M((T, U) v);
+}
+public interface IRefTupDerived<T> : IRefTupBase<T, System.Tuple<int, int>> { }
+
 public static class Probe
 {
     public static int Z<T>() where T : IS => T.Z();
@@ -228,6 +1049,34 @@ public static class Probe
     public static T Load<T, TImpl>(T x) where TImpl : IAsync<T> => TImpl.Load(x).GetAwaiter().GetResult();
     public static unsafe int CallFnPtrDefault<T, TImpl>(T x) where TImpl : IFnPtrOverload<T> =>
         TImpl.Call((delegate*<int, int>)null, x) + TImpl.Call((delegate* unmanaged[Cdecl]<int, int>)null, x) + TImpl.Call((delegate* unmanaged[Cdecl, SuppressGCTransition]<int, int>)null, x);
+    public static T CallMake<T>(IAs<T> i) => i.Make().GetAwaiter().GetResult();
+    public static T CallMakeVt<T>(IAsVt<T> i) => i.MakeVt().GetAwaiter().GetResult();
+    public static T CallFactoryTask<T>(IFactory<System.Threading.Tasks.Task<T>> f) => f.Create().GetAwaiter().GetResult();
+    public static int CallTupM<T>(ITup<T> i, (T, int) v) => i.M(v);
+    public static (T, int) CallTupMake<T>(ITup<T> i, T v) => i.Make(v);
+    public static (T, U) CallTupPair<T, U>(ITup<T> i, T x, (U, int) y) => i.Pair(x, y);
+    public static int CallLongTup<T>(ILongTup<T> i, T x) => i.Sum((1, 2, 3, 4, 5, 6, 7, 8, x));
+    public static (T Value, int Code) CallNativeRows<T>(NativeRows<T> r, T v) where T : class => r.Required(v);
+    public static (T, int) CallTupPropCurrent<T>(ITupProp<T> p) => p.Current;
+    public static int CallTupPropIndex<T>(ITupProp<T> p, (T, int) k) => p[k];
+    public static (T, int) CallTupFieldPropCurrent<T>(ITupFieldProp<T> p) => p.Current;
+    public static int CallFnApply<T>(IFn<T> i, System.Func<T, int> f) => i.Apply(f);
+    public static void CallFnRun<T>(IFn<T> i, System.Action<T> a) => i.Run(a);
+    public static string CallFnCombine<T, U>(IFn<T> i, T x, U y, System.Func<T, (U, int), string> f) => i.Combine(x, y, f);
+    public static int CallNominalDel<T>(INominalDel<T> i, NominalDel<T> f) => i.Apply(f);
+    public static unsafe int CallMixedPtr<T>(IMixedPtr<T> i, T x, int v) => i.Read(x, &v);
+    public static int CallNullablePair<T>(INullableNested<T> i, (T, int?) v) => i.ReadPair(v);
+    public static int CallMapAndSeq<T, TImpl>(IMapAndSeq<T> i, T key, int val) where TImpl : IMapAndSeq<T> {
+        var m = TImpl.MakeMap(key, val);
+        return i.CountMap(m) * 100 + i.CountSeq(m.Keys);
+    }
+    public static int CallRefTup<T, TImpl>(IRefTup<T> i, T x) where TImpl : IRefTup<T> =>
+        i.M(TImpl.MakeS(x)) + i.Concrete(System.Tuple.Create(3, 4));
+    public static System.Tuple<int, int> MakeRefTupPair(int a, int b) => System.Tuple.Create(a, b);
+    public static System.Threading.Tasks.Task<System.Tuple<string?, int>> MakeNullableRefTupTask(string? s, int n) =>
+        System.Threading.Tasks.Task.FromResult(System.Tuple.Create(s, n));
+    public static int CallRefTupDerived<T>(IRefTupDerived<T> i, T x) =>
+        i.M((x, MakeRefTupPair(5, 6)));
 }`
 
         /// Shapes that failed to load or bound the wrong member before the fix.
@@ -1011,6 +1860,460 @@ import Clib
 struct SFnPtrMissing : IFnPtrOverloadDefaultedManagedOnly[int32] {
 }
 Console.WriteLine("x")`, "GS0331", "'Clib.IFnPtrOverload[int32].Call"}
+            yield[]object{"value-nullable-mismatch-in-symbolic-tuple-instance-slot", `package P
+import System
+import Clib
+
+class Shape { }
+class BadTup : ITup[Shape] {
+    func M(v (Shape, int32?)) int32 { return 1 }
+    func Make(v Shape) (Shape, int32) { return (v, 1) }
+    func Pair[U](x Shape, y (U, int32)) (Shape, U) { return (x, y.Item1) }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.ITup[Shape].M"}
+            yield[]object{"value-nullable-mismatch-in-symbolic-tuple-static-slot", `package P
+import System
+import Clib
+
+class Shape { }
+struct BadSTup : ISTup[Shape] {
+    shared {
+        prop Pair (Shape, int32) { get { return (Shape(), 1) } }
+        func Take(v (Shape, int32?)) int32 { return 1 }
+    }
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.ISTup[Shape].Take"}
+            yield[]object{"fixed-array-does-not-satisfy-symbolic-slice-slot", `package P
+import System
+import Clib
+
+class Shape { }
+class BadArr : IArr[Shape] {
+    func A(xs [3]Shape) int32 { return 3 }
+    func B[U](us []U, x Shape) int32 { return 0 }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.IArr[Shape].A"}
+            yield[]object{"erased-list-object-does-not-satisfy-symbolic-list-slot", `package P
+import System
+import System.Collections.Generic
+import Clib
+
+class Shape { }
+class BadList : IListConsumer[Shape] {
+    func Consume(items List[object]) int32 { return items.Count }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.IListConsumer[Shape].Consume"}
+            yield[]object{"structural-function-type-does-not-satisfy-nominal-delegate-slot", `package P
+import System
+import Clib
+
+class Shape { }
+class BadNominal : INominalDel[Shape] {
+    func Apply(f (Shape) -> int32) int32 { return f(Shape()) }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.INominalDel[Shape].Apply"}
+            yield[]object{"value-tuple-does-not-satisfy-reference-tuple-instance-slot", `package P
+import System
+import Clib
+
+class Shape { }
+class BadRefTup : IRefTup[Shape] {
+    func M(v (Shape, int32)) int32 { return 1 }
+    func Concrete(v Tuple[int32, int32]) int32 { return 1 }
+    shared {
+        func MakeS(x Shape) Tuple[Shape, int32] { return Tuple.Create(x, 1) }
+    }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.IRefTup[Shape].M"}
+            yield[]object{"value-tuple-does-not-satisfy-concrete-reference-tuple-slot", `package P
+import System
+import Clib
+
+class Shape { }
+class BadConcreteRefTup : IRefTup[Shape] {
+    func M(v Tuple[Shape, int32]) int32 { return 1 }
+    func Concrete(v (int32, int32)) int32 { return 1 }
+    shared {
+        func MakeS(x Shape) Tuple[Shape, int32] { return Tuple.Create(x, 1) }
+    }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.IRefTup[Shape].Concrete"}
+            yield[]object{"value-tuple-does-not-satisfy-reference-tuple-static-slot", `package P
+import System
+import Clib
+
+class Shape { }
+class BadStaticRefTup : IRefTup[Shape] {
+    func M(v Tuple[Shape, int32]) int32 { return 1 }
+    func Concrete(v Tuple[int32, int32]) int32 { return 1 }
+    shared {
+        func MakeS(x Shape) (Shape, int32) { return (x, 1) }
+    }
+}
+Console.WriteLine("x")`, "GS0331", "'Clib.IRefTup[Shape].MakeS"}
+            yield[]object{"value-tuple-map-does-not-satisfy-reference-tuple-dictionary-slot", `package P
+import System
+import System.Collections.Generic
+import Clib
+
+class BadRefTupMap : IMapAndSeq[Tuple[int32, int32]] {
+    func CountMap(m map[(int32, int32), int32]) int32 { return m.Count }
+    func CountSeq(s sequence[Tuple[int32, int32]]) int32 { return 0 }
+    shared {
+        func MakeMap(key Tuple[int32, int32], value int32) map[Tuple[int32, int32], int32] {
+            return map[Tuple[int32, int32], int32]{key: value}
+        }
+    }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.IMapAndSeq[System.Tuple[int32, int32]].CountMap"}
+            yield[]object{"value-tuple-sequence-does-not-satisfy-reference-tuple-enumerable-slot", `package P
+import System
+import System.Collections.Generic
+import Clib
+
+class BadRefTupSeq : IMapAndSeq[Tuple[int32, int32]] {
+    func CountMap(m Dictionary[Tuple[int32, int32], int32]) int32 { return m.Count }
+    func CountSeq(s sequence[(int32, int32)]) int32 { return 0 }
+    shared {
+        func MakeMap(key Tuple[int32, int32], value int32) map[Tuple[int32, int32], int32] {
+            return map[Tuple[int32, int32], int32]{key: value}
+        }
+    }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.IMapAndSeq[System.Tuple[int32, int32]].CountSeq"}
+            yield[]object{"value-tuple-map-does-not-satisfy-reference-tuple-dictionary-property", `package P
+import System
+import System.Collections.Generic
+
+interface IRefTupDictProp {
+    prop Items Dictionary[Tuple[int32, int32], int32] { get }
+}
+class BadRefTupDictProp : IRefTupDictProp {
+    prop Items map[(int32, int32), int32] { get { return map[(int32, int32), int32]{} } }
+}
+Console.WriteLine("x")`, "GS0504", "'IRefTupDictProp.Items'"}
+            yield[]object{"slice-does-not-satisfy-fixed-array-equatable-slot", `package P
+import System
+
+class BadFixedEq : IEquatable[[3]int32] {
+    func Equals(other []int32) bool { return true }
+}
+Console.WriteLine("x")`, "GS0187", "'System.IEquatable[[3]int32].Equals"}
+            yield[]object{"wrong-length-fixed-array-does-not-satisfy-fixed-array-equatable-slot", `package P
+import System
+
+class BadFixedLenEq : IEquatable[[3]int32] {
+    func Equals(other [4]int32) bool { return true }
+}
+Console.WriteLine("x")`, "GS0187", "'System.IEquatable[[3]int32].Equals"}
+            yield[]object{"nested-slice-does-not-satisfy-nested-fixed-array-equatable-slot", `package P
+import System
+import System.Collections.Generic
+
+class BadNestedFixedEq : IEquatable[List[[3]int32]] {
+    func Equals(other List[[]int32]) bool { return true }
+}
+Console.WriteLine("x")`, "GS0187", "'System.IEquatable[System.Collections.Generic.List[[3]int32]].Equals"}
+            yield[]object{"inherited-reference-tuple-slot-rejects-value-tuple", `package P
+import System
+import Clib
+
+class Shape { }
+class BadInheritedRefTup : IRefTupDerived[Shape] {
+    func M(v (Shape, (int32, int32))) int32 { return 1 }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.IRefTupBase"}
+            yield[]object{"nullable-task-factory-slot-rejects-erased-object-async-return", `package P
+import System
+import System.Threading.Tasks
+import Clib
+
+class Shape { }
+class BadNullableTaskFactory : IFactory[Task[Shape]?] {
+    async func Create() object { return Shape() }
+}
+Console.WriteLine("x")`, "GS0187", "'Clib.IFactory[System.Threading.Tasks.Task[Shape]?].Create"}
+            yield[]object{"select-await-task-of-nullable-reference-tuple-preserves-nested-nullability", `package P
+import System
+import Clib
+
+async func CheckSelect() string {
+    select {
+        case let tup = await Probe.MakeNullableRefTupTask(nil, 1) {
+            let bad string = tup.Item1
+            return bad
+        }
+    }
+}
+Console.WriteLine("x")`, "GS0155", "Cannot convert type 'string?' to 'string'"}
+        }
+
+        /// Issue #4626: symbolic CLR interface signature matcher end-to-end cases.
+        /// @returns Case name, G# source, expected stdout lines.
+        func SymbolicSignatureMatcherCases() sequence[[]object] {
+            yield[]object{"symbolic-async-task-valuetask-and-async-sequence", (`package P
+import System
+import System.Linq
+import System.Threading.Tasks
+import Clib
+
+class Shape {
+    var Tag int32
+}
+
+class A1 : IAs[Shape] {
+    async func Make() Shape { return Shape{Tag: 10} }
+}
+
+struct SA1 : IAs[Shape] {
+    async func Make() Shape { return Shape{Tag: 11} }
+}
+
+class EA1 : IAs[Shape] {
+    async func (IAs[Shape]) Make() Shape { return Shape{Tag: 12} }
+}
+
+class AVt1 : IAsVt[Shape] {
+    async func MakeVt() ValueTask[Shape] { return Shape{Tag: 13} }
+}
+
+class TaskFactoryImpl : IFactory[Task[Shape]] {
+    async func Create() Shape { return Shape{Tag: 17} }
+}
+
+class NullableTaskFactoryImpl : IFactory[Task[Shape]?] {
+    async func Create() Shape { return Shape{Tag: 18} }
+}
+
+struct A2 : ISAs[Shape] {
+    shared {
+        async func MakeS() Shape { return Shape{Tag: 14} }
+    }
+}
+
+struct AVt2 : ISAsVt[Shape] {
+    shared {
+        async func MakeSVt() ValueTask[Shape] { return Shape{Tag: 15} }
+    }
+}
+
+class StreamImpl : IAsyncStream[Shape] {
+    async func Stream(seed Shape) async sequence[Shape] {
+        yield seed
+    }
+}
+
+Console.WriteLine(Probe.CallMake[Shape](A1()).Tag)
+Console.WriteLine(Probe.CallMake[Shape](SA1{}).Tag)
+Console.WriteLine(Probe.CallMake[Shape](EA1()).Tag)
+Console.WriteLine(Probe.CallMakeVt[Shape](AVt1()).Tag)
+Console.WriteLine(Probe.CallFactoryTask[Shape](TaskFactoryImpl()).Tag)
+Console.WriteLine(Probe.CallFactoryTask[Shape](NullableTaskFactoryImpl()).Tag)
+let ifaceTask = typeof(A2).GetInterfaces().Where((i Type) -> i.Name == "ISAs` + "`" + `1").First()
+let taskRes = cast[Task[Shape]](typeof(A2).GetInterfaceMap(ifaceTask).TargetMethods[0].Invoke(nil, []object?{})!!)
+Console.WriteLine(taskRes.GetAwaiter().GetResult().Tag)
+let ifaceVt = typeof(AVt2).GetInterfaces().Where((i Type) -> i.Name == "ISAsVt` + "`" + `1").First()
+let vtRes = cast[ValueTask[Shape]](typeof(AVt2).GetInterfaceMap(ifaceVt).TargetMethods[0].Invoke(nil, []object?{})!!)
+Console.WriteLine(vtRes.GetAwaiter().GetResult().Tag)
+let streamEnum = StreamImpl().Stream(Shape{Tag: 16}).GetAsyncEnumerator()
+if streamEnum.MoveNextAsync().AsTask().GetAwaiter().GetResult() {
+    Console.WriteLine(streamEnum.Current.Tag)
+}`), []string{"10", "11", "12", "13", "17", "18", "14", "15", "16"}}
+            yield[]object{"symbolic-tuples-long-tuples-and-open-generic-rows", (`package P
+import System
+import System.Linq
+import Clib
+
+class Shape {
+    var Tag int32
+}
+
+class T1 : ITup[Shape] {
+    func M(v (Shape, int32)) int32 { return v.Item1.Tag + v.Item2 }
+    func Make(v Shape) (Shape, int32) { return (v, v.Tag * 2) }
+    func Pair[U](x Shape, y (U, int32)) (Shape, U) { return (x, y.Item1) }
+}
+
+struct STup : ISTup[Shape] {
+    shared {
+        prop Pair (Shape, int32) { get { return (Shape{Tag: 30}, 5) } }
+        func Take(v (Shape, int32)) int32 { return v.Item1.Tag + v.Item2 }
+    }
+}
+
+class LongTup : ILongTup[Shape] {
+    func Sum(v (int32, int32, int32, int32, int32, int32, int32, int32, Shape)) int32 {
+        return v.Item1 + v.Item8 + v.Item9.Tag
+    }
+}
+
+class Rows[T class] : NativeRows[T] {
+    func Required(value T) (Value T, Code int32) -> (value, 15)
+}
+
+class TupPropImpl : ITupProp[Shape] {
+    prop Current (Shape, int32) { get { return (Shape{Tag: 40}, 2) } }
+    prop this[key (Shape, int32)] int32 { get { return key.Item1.Tag + key.Item2 } }
+}
+
+class TupFieldImpl : ITupFieldProp[Shape] {
+    var Current (Shape, int32) = (Shape{Tag: 50}, 3)
+}
+
+class RefTupImpl : IRefTup[Shape] {
+    func M(v Tuple[Shape, int32]) int32 -> v.Item1.Tag + v.Item2
+    func Concrete(v Tuple[int32, int32]) int32 -> v.Item1 + v.Item2
+    shared {
+        func MakeS(x Shape) Tuple[Shape, int32] -> Tuple.Create(x, 10)
+    }
+}
+
+class InheritedRefTupImpl : IRefTupDerived[Shape] {
+    func M(v (Shape, Tuple[int32, int32])) int32 -> v.Item1.Tag + v.Item2.Item1 + v.Item2.Item2
+}
+
+let t1 = T1()
+Console.WriteLine(Probe.CallTupM[Shape](t1, (Shape{Tag: 20}, 1)))
+let made = Probe.CallTupMake[Shape](t1, Shape{Tag: 11})
+Console.WriteLine(made.Item1.Tag + made.Item2)
+let paired = Probe.CallTupPair[Shape, string](t1, Shape{Tag: 7}, ("ok", 9))
+Console.WriteLine("${paired.Item1.Tag}:${paired.Item2}")
+let stIface = typeof(STup).GetInterfaces().Where((i Type) -> i.Name == "ISTup` + "`" + `1").First()
+let stMethods = typeof(STup).GetInterfaceMap(stIface).TargetMethods
+let stProp = cast[(Shape, int32)](stMethods[0].Invoke(nil, []object?{})!!)
+let stTake = cast[int32](stMethods[1].Invoke(nil, []object?{stProp})!!)
+Console.WriteLine(stTake)
+Console.WriteLine(Probe.CallLongTup[Shape](LongTup(), Shape{Tag: 100}))
+let rowStr = Probe.CallNativeRows[string](Rows[string](), "ab")
+Console.WriteLine("${rowStr.Item1}:${rowStr.Item2}")
+let rowShape = Probe.CallNativeRows[Shape](Rows[Shape](), Shape{Tag: 9})
+Console.WriteLine(rowShape.Item1.Tag + rowShape.Item2)
+let tp = TupPropImpl()
+let cur = Probe.CallTupPropCurrent[Shape](tp)
+Console.WriteLine(Probe.CallTupPropIndex[Shape](tp, cur))
+let tf = Probe.CallTupFieldPropCurrent[Shape](TupFieldImpl())
+Console.WriteLine(tf.Item1.Tag + tf.Item2)
+Console.WriteLine(Probe.CallRefTup[Shape, RefTupImpl](RefTupImpl(), Shape{Tag: 60}))
+let nonGenericTup Tuple[int32, int32] = Probe.MakeRefTupPair(12, 34)
+let genericConcreteTup Tuple[int32, int32] = Tuple.Create(1, 2)
+Console.WriteLine(Probe.CallRefTupDerived[Shape](InheritedRefTupImpl(), Shape{Tag: 20}) + nonGenericTup.Item1 + nonGenericTup.Item2 + genericConcreteTup.Item2)`), []string{
+                    "21",
+                    "33",
+                    "7:ok",
+                    "35",
+                    "109",
+                    "ab:15",
+                    "24",
+                    "42",
+                    "53",
+                    "77",
+                    "79"
+                }}
+            yield[]object{"symbolic-function-delegate-pointer-nullable-map-and-sequence", (`package P
+import System
+import System.Collections.Generic
+import System.Linq
+import Clib
+
+class Shape {
+    var Tag int32
+}
+
+struct Point {
+    var X int32
+}
+
+class FnImpl : IFn[Shape], ISFn[Shape] {
+    var observed int32 = 0
+    func Apply(f (Shape) -> int32) int32 -> f(Shape{Tag: 6})
+    func Run(a (Shape) -> void) {
+        a(Shape{Tag: 8})
+    }
+    func Combine[U](x Shape, y U, f (Shape, (U, int32)) -> string) string -> f(x, (y, 3))
+    shared {
+        func ApplyS(f (Shape) -> int32) int32 -> f(Shape{Tag: 9})
+    }
+}
+
+class NominalImpl : INominalDel[Shape] {
+    func Apply(f NominalDel[Shape]) int32 -> f(Shape{Tag: 12})
+}
+
+struct PtrImpl : IPtr[Point] {
+    unsafe func Read(p *Point) int32 -> 21
+    shared {
+        unsafe func ReadS(p *Point) int32 -> 30
+    }
+}
+
+class MixedPtrImpl : IMixedPtr[Shape] {
+    unsafe func Read(x Shape, p *int32) int32 -> x.Tag + 36
+}
+
+class NullableImpl : INullableNested[Shape] {
+    func ReadPair(v (Shape, int32?)) int32 -> v.Item1.Tag + (v.Item2 ?? 5)
+}
+
+class MapSeqImpl : IMapAndSeq[Shape] {
+    func CountMap(m map[Shape, int32]) int32 -> m.Count
+    func CountSeq(s sequence[Shape]) int32 -> s.Count()
+    shared {
+        func MakeMap(key Shape, value int32) map[Shape, int32] -> map[Shape, int32]{key: value}
+    }
+}
+
+class RefTupMapSeqImpl : IMapAndSeq[Tuple[int32, int32]] {
+    func CountMap(m Dictionary[Tuple[int32, int32], int32]) int32 -> m.Count + 5
+    func CountSeq(s IEnumerable[Tuple[int32, int32]]) int32 -> s.Count()
+    shared {
+        func MakeMap(key Tuple[int32, int32], value int32) Dictionary[Tuple[int32, int32], int32] -> map[Tuple[int32, int32], int32]{key: value}
+    }
+}
+
+class FixedEqImpl : IEquatable[[3]int32] {
+    func Equals(other [3]int32) bool -> other[0] == 7 && other[2] == 9
+}
+
+class NestedFixedEqImpl : IEquatable[List[[3]int32]] {
+    func Equals(other List[[3]int32]) bool -> other.Count == 1 && other[0][1] == 8
+}
+
+let fn = FnImpl()
+Console.WriteLine(Probe.CallFnApply[Shape](fn, (s Shape) -> s.Tag * 5))
+var seen = 0
+Probe.CallFnRun[Shape](fn, (s Shape) -> { seen = s.Tag })
+Console.WriteLine(seen)
+Console.WriteLine(Probe.CallFnCombine[Shape, string](fn, Shape{Tag: 4}, "k", (s Shape, p (string, int32)) -> "${s.Tag}-${p.Item1}-${p.Item2}"))
+let sfnIface = typeof(FnImpl).GetInterfaces().Where((i Type) -> i.Name == "ISFn` + "`" + `1").First()
+let sfnDel = cast[Func[Shape, int32]]((s Shape) -> s.Tag + 100)
+Console.WriteLine(typeof(FnImpl).GetInterfaceMap(sfnIface).TargetMethods[0].Invoke(nil, []object?{sfnDel}))
+Console.WriteLine(Probe.CallNominalDel[Shape](NominalImpl(), NominalDel[Shape]((s Shape) -> s.Tag * 2)))
+let ptrIface = typeof(PtrImpl).GetInterfaces().Where((i Type) -> i.Name == "IPtr` + "`" + `1").First()
+let ptrMap = typeof(PtrImpl).GetInterfaceMap(ptrIface).TargetMethods
+Console.WriteLine(cast[int32](ptrMap[0].Invoke(PtrImpl{}, []object?{nil})!!) + cast[int32](ptrMap[1].Invoke(nil, []object?{nil})!!))
+Console.WriteLine(Probe.CallMixedPtr[Shape](MixedPtrImpl(), Shape{Tag: 15}, 36))
+Console.WriteLine(Probe.CallNullablePair[Shape](NullableImpl(), (Shape{Tag: 30}, cast[int32?](nil))))
+Console.WriteLine(Probe.CallNullablePair[Shape](NullableImpl(), (Shape{Tag: 30}, cast[int32?](7))))
+Console.WriteLine(Probe.CallMapAndSeq[Shape, MapSeqImpl](MapSeqImpl(), Shape{Tag: 1}, 99))
+Console.WriteLine(Probe.CallMapAndSeq[Tuple[int32, int32], RefTupMapSeqImpl](RefTupMapSeqImpl(), Tuple[int32, int32](3, 4), 77))
+let fixedEq IEquatable[[3]int32] = FixedEqImpl()
+Console.WriteLine(fixedEq.Equals([3]int32{7, 8, 9}))
+let nestedFixedEq IEquatable[List[[3]int32]] = NestedFixedEqImpl()
+Console.WriteLine(nestedFixedEq.Equals(List[[3]int32]{[3]int32{7, 8, 9}}))`), []string{
+                    "30",
+                    "8",
+                    "4-k-3",
+                    "109",
+                    "24",
+                    "51",
+                    "51",
+                    "35",
+                    "37",
+                    "101",
+                    "601",
+                    "True",
+                    "True"
+                }}
         }
 
         private func CompileVerifyAndRun(name string, source string, expectedLines[]string) {

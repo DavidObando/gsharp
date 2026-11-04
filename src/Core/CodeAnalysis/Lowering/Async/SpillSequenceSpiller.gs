@@ -2916,7 +2916,7 @@ shared class SpillSequenceSpiller {
 
         shared {
             private func IsRectangularArrayType(type TypeSymbol) bool -> type is RectangularArrayTypeSymbol ||
-                (type.ClrType is {IsArray: true} clrArray && clrArray.GetArrayRank() > 1)
+                (type.ClrType is {IsArray: true} clrArray && (clrArray.GetArrayRank() > 1 || !clrArray.IsSZArray))
 
             private func CanDeferAcrossLift(expression BoundExpression) bool -> expression is BoundLiteralExpression ||
                 expression is BoundUtf8StringExpression ||

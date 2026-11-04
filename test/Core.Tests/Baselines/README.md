@@ -291,3 +291,13 @@ attribute are unchanged. Reviewed old and new images repeat byte-for-byte,
 pass unsuppressed IL verification and print the same `1`, `-1`, `0` lines
 without invoking either native declaration. The other sample entries,
 known-null entries, inventory and hashing policy are unchanged.
+
+The #5591 `go` operand evaluation fix intentionally changes the nine samples
+that spawn goroutines with non-literal call arguments: `ChannelOwnership`,
+`FanInMerge`, `GoScope`, `Pipeline`, `PortScan`, `ScopeAll`, `Select`,
+`WebsiteConcurrency`, and `WorkerPool`. `StatementBinder.BindGoStatement` now
+spills each non-literal call operand into a read-only local (`$go$arg$N`) on
+the spawning goroutine before queueing the work item (ADR-0174 D5), and the
+synthesized `<go_N>` display class captures those locals. The other 154 sample
+entries, including the five known-null entries, and the hashing policy are
+unchanged.

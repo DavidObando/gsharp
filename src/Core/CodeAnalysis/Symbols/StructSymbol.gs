@@ -83,10 +83,13 @@ class StructSymbol : TypeSymbol {
     private var substitutedFieldsComputed bool
     private var substitutedProperties ImmutableArray[PropertySymbol]
     private var substitutedPropertiesSource ImmutableArray[PropertySymbol]
+    private var substitutedPropertiesVersion int32 = -1
     private var substitutedPropertiesComputed bool
     private var substitutedStaticProperties ImmutableArray[PropertySymbol]
     private var substitutedStaticPropertiesSource ImmutableArray[PropertySymbol]
+    private var substitutedStaticPropertiesVersion int32 = -1
     private var substitutedStaticPropertiesComputed bool
+    private var memberDefaultVersion int32
     private var primaryConstructorParametersStore ImmutableArray[ParameterSymbol] = ImmutableArray[
         ParameterSymbol
     ].Empty
@@ -1114,6 +1117,38 @@ class StructSymbol : TypeSymbol {
                     ).IsDefaultOrEmpty ||
                         InstanceFieldInitializers
                         .Keys
+                        .Any((member FieldSymbol) -> member.Accessibility != Accessibility.Public || member.IsReadOnly)
+                )
+            }
+        )
+    }
+
+    /// Gets a value indicating whether a zero-initialization (`IsZeroInitialization`)
+    /// value-struct literal routes through the synthesized owning constructor.
+    /// Public `let` explicit initializers synthesize an owning constructor for
+    /// explicit `S{}` literals (#4742), while bare declarations (`var s S`)
+    /// preserve zero-only initialization unless an in-type constructor is
+    /// required by non-public fields, generic ownership, or primary scope.
+    internal prop UsesOwningZeroInitializerConstructor bool -> if Definition != nil && !object.ReferenceEquals(
+        Definition,
+        this
+    ) {
+        Definition!!.UsesOwningZeroInitializerConstructor
+    } else {
+        ClrType == nil &&
+            !IsClass &&
+            !IsInline &&
+            (
+            if IsData {
+                NeedsValueStructZeroHelper
+            } else {
+                !InstanceFieldInitializers.IsEmpty &&
+                    (
+                    IsGenericDefinition || HasPrimaryConstructor || !CollectEnclosingTypeParameters(
+                        this
+                    ).IsDefaultOrEmpty ||
+                        InstanceFieldInitializers
+                        .Keys
                         .Any((member FieldSymbol) -> member.Accessibility != Accessibility.Public)
                 )
             }
@@ -2049,10 +2084,15 @@ class StructSymbol : TypeSymbol {
         return value
     }
 
+    internal func NotifyParameterDefaultAttached() {
+        memberDefaultVersion++
+    }
+
     private func GetSubstitutedPrimaryConstructorParameters() ImmutableArray[ParameterSymbol] {
         let source = Definition!!.PrimaryConstructorParameters
+        let version = Definition!!.memberDefaultVersion
         let snapshot ParameterArraySnapshot? = Volatile.Read(&substitutedPrimaryConstructorParameters)
-        if snapshot != nil && snapshot.Source.Equals(source) {
+        if snapshot != nil && snapshot.Source.Equals(source) && snapshot.Version == version {
             return snapshot.Value
         }
         var value ImmutableArray[ParameterSymbol]
@@ -2072,7 +2112,7 @@ class StructSymbol : TypeSymbol {
             }
             value = builder.MoveToImmutable()
         }
-        Volatile.Write(&substitutedPrimaryConstructorParameters, ParameterArraySnapshot(source, value))
+        Volatile.Write(&substitutedPrimaryConstructorParameters, ParameterArraySnapshot(source, value, version))
         return value
     }
 
@@ -2168,7 +2208,7 @@ class StructSymbol : TypeSymbol {
                     f.IsEventBackingField,
                     f.Declaration
                 )
-                if f.IsConst {
+                if f.IsConst && f.HasConstantValue {
                     substituted.SetConstantValue(f.ConstantValue)
                 }
                 if f.ExplicitOffset is int32 offset {
@@ -2198,12 +2238,15 @@ class StructSymbol : TypeSymbol {
     // property array (see GetSubstitutedFields for the ordering rationale).
     private func GetSubstitutedProperties() ImmutableArray[PropertySymbol] {
         let source = Definition!!.Properties
-        if substitutedPropertiesComputed && substitutedPropertiesSource.Equals(source) {
+        let version = Definition!!.memberDefaultVersion
+        if substitutedPropertiesComputed && substitutedPropertiesSource.Equals(source) &&
+            substitutedPropertiesVersion == version {
             return substitutedProperties
         }
         let result = SubstituteProperties(source, GetSubstitutionMap(), mapClrType)
         substitutedProperties = result
         substitutedPropertiesSource = source
+        substitutedPropertiesVersion = version
         substitutedPropertiesComputed = true
         return result
     }
@@ -2213,12 +2256,15 @@ class StructSymbol : TypeSymbol {
     // property array (see GetSubstitutedFields for the ordering rationale).
     private func GetSubstitutedStaticProperties() ImmutableArray[PropertySymbol] {
         let source = Definition!!.StaticProperties
-        if substitutedStaticPropertiesComputed && substitutedStaticPropertiesSource.Equals(source) {
+        let version = Definition!!.memberDefaultVersion
+        if substitutedStaticPropertiesComputed && substitutedStaticPropertiesSource.Equals(source) &&
+            substitutedStaticPropertiesVersion == version {
             return substitutedStaticProperties
         }
         let result = SubstituteProperties(source, GetSubstitutionMap(), mapClrType)
         substitutedStaticProperties = result
         substitutedStaticPropertiesSource = source
+        substitutedStaticPropertiesVersion = version
         substitutedStaticPropertiesComputed = true
         return result
     }
@@ -2239,9 +2285,10 @@ class StructSymbol : TypeSymbol {
     }
 
     private class ParameterArraySnapshot {
-        init(source ImmutableArray[ParameterSymbol], value ImmutableArray[ParameterSymbol]) {
+        init(source ImmutableArray[ParameterSymbol], value ImmutableArray[ParameterSymbol], version int32 = 0) {
             Source = source
             Value = value
+            Version = version
         }
 
         prop Source ImmutableArray[ParameterSymbol] {
@@ -2249,6 +2296,10 @@ class StructSymbol : TypeSymbol {
         }
 
         prop Value ImmutableArray[ParameterSymbol] {
+            get;
+        }
+
+        prop Version int32 {
             get;
         }
     }
@@ -2861,7 +2912,11 @@ class StructSymbol : TypeSymbol {
                     for par in p.Parameters {
                         let st = SubstituteTypeForConstruction(par.Type, subst, mapClrType)
                         paramsChanged |= !object.ReferenceEquals(st, par.Type)
-                        pb.Add(ParameterSymbol(par, st, par.DeclaringSyntax))
+                        let substitutedParam = ParameterSymbol(par, st, par.DeclaringSyntax)
+                        if par.HasExplicitDefaultValue {
+                            substitutedParam.SetExplicitDefaultValue(par.ExplicitDefaultValue)
+                        }
+                        pb.Add(substitutedParam)
                     }
                     if paramsChanged {
                         newParams = pb.MoveToImmutable()
@@ -3101,7 +3156,18 @@ class StructSymbol : TypeSymbol {
                     }
                     let assertMessage = "StructSymbol.SubstituteTypeForConstruction: MakeGenericType failed for '${imported.OpenDefinition}' with args [${string.Join(", ", renderedArguments)}] even after mapClrType projection."
                     Debug.WriteLine(assertMessage)
-                    return imported
+                    if mapClrType == nil {
+                        return imported
+                    }
+                    return ImportedTypeSymbol.GetConstructed(
+                        Invariant.Required(
+                            imported.ClrType,
+                            "a constructed imported type has a CLR representation",
+                            expression: "imported.ClrType"
+                        ),
+                        imported.OpenDefinition,
+                        substitutedArgs.MoveToImmutable()
+                    )
                 }
             }
             // Issue #1503: a constructed generic named delegate referenced as a

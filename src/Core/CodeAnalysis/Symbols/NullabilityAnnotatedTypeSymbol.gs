@@ -94,7 +94,15 @@ class NullabilityAnnotatedTypeSymbol : TypeSymbol {
                 elementType == targetClrType ||
                     (!elementType.IsGenericParameter && elementType.FullName == targetClrType.FullName)
             ) {
-                ClrNullability.SymbolFromFlagsOffset(elementType, NullableFlags, 1)
+                if BaseType is ImportedTypeSymbol{TypeArguments: {Length: 1} symbolicArrayArgs} {
+                    NullableFlagsBuilder.MergeDeclarationNullability(
+                        symbolicArrayArgs[0],
+                        elementType,
+                        ClrNullability.GetNullableFlagsForSubtree(elementType, NullableFlags, 1)
+                    )
+                } else {
+                    ClrNullability.SymbolFromFlagsOffset(elementType, NullableFlags, 1)
+                }
             } else {
                 TypeSymbol.FromClrType(targetClrType)
             }

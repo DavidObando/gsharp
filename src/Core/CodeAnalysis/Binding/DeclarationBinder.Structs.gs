@@ -1734,7 +1734,7 @@ internal partial class DeclarationBinder {
                         )
                         continue
                     }
-                    indexerParameters = BindIndexerParameters(propSyntax)
+                    indexerParameters = BindIndexerParameters(propSyntax, structSymbol, $package)
                 }
                 let propName = if isIndexer {
                     "Item"
@@ -3530,7 +3530,7 @@ internal partial class DeclarationBinder {
         let savedFieldInitPackage = $scope.SetCurrentDeclaringPackage(fieldInitPackageName)
         let savedFieldInitTree = $scope.SetCurrentReferencingSyntaxTree(structDeclaration.SyntaxTree)
         // Issue #2111: establish the enclosing type as the accessibility context for initializer binding.
-        setCurrentFunction(CreateFieldInitializerAccessibilityContext(structSymbol))
+        setCurrentFunction(CreateFieldInitializerAccessibilityContext(structSymbol, binderCtx.InUnsafeContext))
         // Issue #3812: rebuild the enclosing and own type-parameter scope.
         let initializerEnclosingTypeParameters = CollectEnclosingTypeParameters(structSymbol.ContainingType)
         if !structSymbol.TypeParameters.IsDefaultOrEmpty || initializerEnclosingTypeParameters.Count > 0 {
@@ -3628,7 +3628,7 @@ internal partial class DeclarationBinder {
                 // sibling) type reached from this default-value expression is
                 // evaluated against the RIGHT owner instead of whatever function
                 // happened to be "current" when this closure eventually runs.
-                setCurrentFunction(CreateFieldInitializerAccessibilityContext(structSymbol))
+                setCurrentFunction(CreateFieldInitializerAccessibilityContext(structSymbol, binderCtx.InUnsafeContext))
                 // Issue #3812: rebuild the type-parameter scope the same way the
                 // deferred field-initializer closure does — outermost-enclosing
                 // first, then this type's own, then (uniquely for a parameter
@@ -3659,7 +3659,11 @@ internal partial class DeclarationBinder {
                     this.binderCtx.CurrentTypeParameters = nil
                 }
                 try {
+                    using let _ = PushStaticMemberScope(structSymbol)
                     conversions.BindAndAttachParameterDefaultValue(parameterSyntax, parameter)
+                    if parameter.HasExplicitDefaultValue {
+                        structSymbol.NotifyParameterDefaultAttached()
+                    }
                 } finally {
                     $scope.SetCurrentDeclaringPackage(savedPackage)
                     $scope.SetCurrentReferencingSyntaxTree(savedTree)
@@ -3922,33 +3926,109 @@ internal partial class DeclarationBinder {
     /// `let`/`var`, `shared` field, or `const`) can reference a
     /// sibling `const` or `shared` field regardless of declaration order.
     /// The returned token restores the previous scope when disposed.
-    private func PushStaticMemberScope(structSymbol StructSymbol) StaticMemberScope {
+    private func PushStaticMemberScope(lexicalOwner TypeSymbol) StaticMemberScope {
         let previous = binderCtx.RootScope
         let staticScope = BoundScope(previous)
-        if !structSymbol.StaticFields.IsDefaultOrEmpty {
-            for fld in structSymbol.StaticFields {
-                staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(structSymbol, fld))
+        let seenMembers = HashSet[string](StringComparer.Ordinal)
+        var resolvedMethodOwners Dictionary[string, TypeSymbol?]? = nil
+        let IsVisibleOuterMethod = (owner TypeSymbol, methodName string) -> {
+            if seenMembers.Contains(methodName) {
+                return false
             }
-        }
-        if !structSymbol.ConstFields.IsDefaultOrEmpty {
-            for fld in structSymbol.ConstFields {
-                staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(structSymbol, fld))
+            resolvedMethodOwners ??= Dictionary[string, TypeSymbol?](StringComparer.Ordinal)
+            if !resolvedMethodOwners!!.TryGetValue(methodName, out var methodOwner) {
+                methodOwner = conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, methodName)
+                resolvedMethodOwners!![methodName] = methodOwner
             }
+            return object.ReferenceEquals(methodOwner, owner)
         }
-        if !structSymbol.StaticProperties.IsDefaultOrEmpty {
-            for prop in structSymbol.StaticProperties {
-                staticScope.TryDeclareVariable(ImplicitStaticPropertyVariableSymbol(structSymbol, prop))
+        for var owner TypeSymbol? = lexicalOwner; owner != nil; owner = owner!!.ContainingType {
+            let isOuterOwner = !object.ReferenceEquals(owner, lexicalOwner)
+            if owner is InterfaceSymbol ownerInterface {
+                for fld in ownerInterface.StaticFields.Concat(ownerInterface.ConstFields) {
+                    if !seenMembers.Add(fld.Name) ||
+                        (
+                        isOuterOwner && !object.ReferenceEquals(
+                            conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, fld.Name),
+                            ownerInterface
+                        )
+                    ) {
+                        continue
+                    }
+                    staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerInterface, fld))
+                }
+                for method in ownerInterface.StaticMethods {
+                    if isOuterOwner && !IsVisibleOuterMethod(ownerInterface, method.Name) {
+                        continue
+                    }
+                    staticScope.TryDeclareFunction(method)
+                }
+                for method in ownerInterface.StaticMethods {
+                    seenMembers.Add(method.Name)
+                }
+                continue
             }
-        }
-        // Issue #1194: expose the enclosing type's static methods by bare name so
-        // a field/const/base initializer can call a sibling `static` method
-        // unqualified (matching C#). Declared as functions in the innermost
-        // scope, they shadow any same-named free function — the C# member-lookup
-        // order — and resolve through the normal free-function call path, which
-        // emits a static call on the owning method.
-        if !structSymbol.StaticMethods.IsDefaultOrEmpty {
-            for method in structSymbol.StaticMethods {
-                staticScope.TryDeclareFunction(method)
+            if owner is not StructSymbol ownerStruct {
+                continue
+            }
+            if !ownerStruct.StaticFields.IsDefaultOrEmpty {
+                for fld in ownerStruct.StaticFields {
+                    if !seenMembers.Add(fld.Name) ||
+                        (
+                        isOuterOwner && !object.ReferenceEquals(
+                            conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, fld.Name),
+                            ownerStruct
+                        )
+                    ) {
+                        continue
+                    }
+                    staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
+                }
+            }
+            if !ownerStruct.ConstFields.IsDefaultOrEmpty {
+                for fld in ownerStruct.ConstFields {
+                    if !seenMembers.Add(fld.Name) ||
+                        (
+                        isOuterOwner && !object.ReferenceEquals(
+                            conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, fld.Name),
+                            ownerStruct
+                        )
+                    ) {
+                        continue
+                    }
+                    staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerStruct, fld))
+                }
+            }
+            if !ownerStruct.StaticProperties.IsDefaultOrEmpty {
+                for prop in ownerStruct.StaticProperties {
+                    if !seenMembers.Add(prop.Name) ||
+                        (
+                        isOuterOwner && !object.ReferenceEquals(
+                            conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, prop.Name),
+                            ownerStruct
+                        )
+                    ) {
+                        continue
+                    }
+                    staticScope.TryDeclareVariable(ImplicitStaticPropertyVariableSymbol(ownerStruct, prop))
+                }
+            }
+            // Issue #1194: expose the enclosing type's static methods by bare name so
+            // a field/const/base initializer can call a sibling `static` method
+            // unqualified (matching C#). Declared as functions in the innermost
+            // scope, they shadow any same-named free function — the C# member-lookup
+            // order — and resolve through the normal free-function call path, which
+            // emits a static call on the owning method.
+            if !ownerStruct.StaticMethods.IsDefaultOrEmpty {
+                for method in ownerStruct.StaticMethods {
+                    if isOuterOwner && !IsVisibleOuterMethod(ownerStruct, method.Name) {
+                        continue
+                    }
+                    staticScope.TryDeclareFunction(method)
+                }
+                for method in ownerStruct.StaticMethods {
+                    seenMembers.Add(method.Name)
+                }
             }
         }
         this.binderCtx.RootScope = staticScope
@@ -4077,12 +4157,20 @@ internal partial class DeclarationBinder {
         pendingBaseInitializerBindings.Clear()
     }
 
+    /// Issue #5586: binds and folds every deferred `const` field initializer
+    /// across all structs/classes before parameter default values and top-level
+    /// functions are bound, so optional parameter defaults can reference named
+    /// constants regardless of declaration order.
+    internal func BindPendingConstInitializers() {
+        EnsurePendingConstInitializersBound(reportUnfolded: true)
+    }
+
     /// Issue #1194: binds the deferred field-initializer expressions for every
     /// type, run from `Binder.BindGlobalScope` after all top-level
     /// functions have been declared so a field initializer can resolve an
     /// unqualified free-function or sibling static-member call.
     internal func BindPendingFieldInitializers() {
-        EnsurePendingConstInitializersBound()
+        EnsurePendingConstInitializersBound(reportUnfolded: true)
         EnsurePendingZeroValueInitializersBound()
         for symbol in pendingFieldInitializerStructs {
             EnsureStructFieldInitializerBound(symbol, field: nil)
@@ -4098,8 +4186,8 @@ internal partial class DeclarationBinder {
         deferredInitializerDiagnostics.Clear()
     }
 
-    private func EnsurePendingConstInitializersBound() {
-        if pendingConstInitializerBindings.Count == 0 {
+    private func EnsurePendingConstInitializersBound(reportUnfolded bool = false) {
+        if pendingConstInitializerBindings.Count == 0 && (!reportUnfolded || pendingCrossTypeConstFolds.Count == 0) {
             return
         }
         let bindings = pendingConstInitializerBindings.ToArray()
@@ -4107,7 +4195,7 @@ internal partial class DeclarationBinder {
         for bindConst in bindings {
             bindConst()
         }
-        FoldCrossTypeConstInitializers()
+        FoldCrossTypeConstInitializers(reportUnfolded)
     }
 
     private func EnsurePendingZeroValueInitializersBound() {
@@ -4173,7 +4261,7 @@ internal partial class DeclarationBinder {
     /// independent between types exactly as they already are within one; only a
     /// const still unfolded after this pass is genuinely non-constant (or part
     /// of a cycle) and reported with GS0376.
-    private func FoldCrossTypeConstInitializers() {
+    internal func FoldCrossTypeConstInitializers(reportUnfolded bool = true) {
         var pending = List[(Field FieldSymbol, Bound BoundExpression, Location TextLocation)](
             pendingCrossTypeConstFolds
         )
@@ -4191,6 +4279,10 @@ internal partial class DeclarationBinder {
                 }
             }
             pending = stillPending
+        }
+        if !reportUnfolded {
+            pendingCrossTypeConstFolds.AddRange(pending)
+            return
         }
         for (constField, bound, location) in pending {
             if !(bound is BoundErrorExpression) {
@@ -4298,7 +4390,10 @@ internal partial class DeclarationBinder {
         zeroValueStaticFields List[(Field FieldSymbol, Syntax SyntaxNode)]
     ) {
         let previousFunction = getCurrentFunction()
-        let staticInitializerContext = CreateFieldInitializerAccessibilityContext(structSymbol)
+        let staticInitializerContext = CreateFieldInitializerAccessibilityContext(
+            structSymbol,
+            binderCtx.InUnsafeContext
+        )
         staticInitializerContext.IsStaticInitializer = true
         setCurrentFunction(staticInitializerContext)
         try {
@@ -4515,9 +4610,14 @@ internal partial class DeclarationBinder {
         /// (`Type.Member`) or a constructor call (`Type()`) as accessible — matching
         /// how a `shared` function body already behaves.
         /// @param owner The type whose initializers are being bound.
+        /// @param isUnsafe Whether the initializer is bound in an unsafe context.
         /// @returns A synthetic static function owned by [`owner`](paramref).
-        private func CreateFieldInitializerAccessibilityContext(owner StructSymbol) FunctionSymbol {
+        private func CreateFieldInitializerAccessibilityContext(
+            owner StructSymbol,
+            isUnsafe bool = false
+        ) FunctionSymbol {
             let context = FunctionSymbol("<field-initializer>", ImmutableArray[ParameterSymbol].Empty, TypeSymbol.Void){
+                IsUnsafe = isUnsafe,
                 IsStatic = true,
                 IsExpressionInitializer = true,
                 StaticOwnerType = owner

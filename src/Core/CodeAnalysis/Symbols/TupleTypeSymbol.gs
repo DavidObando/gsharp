@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Symbols
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
 import System
 import System.Collections.Concurrent
 import System.Collections.Generic
@@ -542,9 +543,14 @@ class TupleTypeSymbol : TypeSymbol {
                 }
                 let builder = ImmutableArray.CreateBuilder[TypeSymbol]()
                 for argument in closedShape.GetGenericArguments() {
-                    let symbol TypeSymbol? = TypeSymbol.FromClrTypeWithoutNullability(
+                    let symbol TypeSymbol? = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                         argument,
-                        NullabilityFreeReason.TypeStructure
+                        openDefinition: nil,
+                        ImmutableArray[TypeSymbol].Empty,
+                        openMethodDefinition: nil,
+                        default(ImmutableArray[TypeSymbol?]),
+                        NullabilityFreeReason.TypeStructure,
+                        preserveReferenceTupleIdentity: true
                     )
                     if symbol == nil {
                         return false

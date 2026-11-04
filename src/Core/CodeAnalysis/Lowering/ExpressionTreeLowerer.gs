@@ -10,6 +10,7 @@ import System.Collections.Immutable
 import System.Diagnostics.CodeAnalysis
 import System.Reflection
 import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import ReflectionBinder = System.Reflection.Binder
@@ -842,10 +843,9 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             !literal
             .StructType
             .IsClass &&
-            markerCount == 0 &&
             !literal
             .StructType
-            .NeedsSynthesizedValueStructDefaultCtor {
+            .UsesOwningZeroInitializerConstructor {
             return this.BuildZeroStorageStructLiteralExpression(literal, parameterMap)
         }
         var construction BoundExpression
@@ -1130,24 +1130,6 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             conversion.Expression is BoundClrMethodGroupExpression {
             return BuildRuntimeConstant(conversion, conversion.Type)
         }
-        let methodInfo BoundExpression? = switch conversion {
-            case BoundConversionExpression{
-                Expression: BoundClrConversionCallExpression clrConversion
-            } when clrConversion.Method != nil: BuildMethodInfoConstant(clrConversion.Method!!)
-            default: default(BoundExpression?)
-        }
-        if methodInfo != nil {
-            return BoundClrStaticCallExpression(
-                conversion.Syntax,
-                ExpressionConvertWithMethodMethod,
-                TypeSymbol.FromClrTypeWithoutNullability(typeof(UnaryExpression), NullabilityFreeReason.TypeLiteral),
-                ImmutableArray.Create[BoundExpression](
-                    UpcastToExpression(this.TranslateExpression(conversion.Expression, parameterMap)),
-                    CreateTypeOf(conversion.Type),
-                    methodInfo
-                )
-            )
-        }
         return BoundClrStaticCallExpression(
             conversion.Syntax,
             ExpressionConvertMethod,
@@ -1165,7 +1147,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
     ) BoundExpression {
         var methodInfo BoundExpression
         if conversion.Method != nil {
-            methodInfo = BuildMethodInfoConstant(conversion.Method)
+            methodInfo = BuildConversionMethodInfoConstant(conversion)
         } else {
             let function = conversion.Function ??
                 throw NotSupportedException("A same-compilation expression-tree conversion requires a function symbol.")
@@ -1176,14 +1158,132 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static
             )
         }
-        return BoundClrStaticCallExpression(
+        if conversion.IsLifted && ReturnsValueTypeNullable(conversion) {
+            return this.BuildLiftedNullableReturnConversionExpression(conversion, methodInfo, parameterMap)
+        }
+        let unaryExpressionType = TypeSymbol.FromClrTypeWithoutNullability(
+            typeof(UnaryExpression),
+            NullabilityFreeReason.TypeLiteral
+        )
+        let conversionTarget = if !conversion.IsLifted &&
+            conversion.Type is NullableTypeSymbol targetNullable &&
+            NullableLifting.IsAnyValueTypeNullable(targetNullable) && !ReturnsValueTypeNullable(conversion) {
+            targetNullable.UnderlyingType
+        } else {
+            conversion.Type
+        }
+        let converted BoundExpression = BoundClrStaticCallExpression(
+            conversion.Syntax,
+            ExpressionConvertWithMethodMethod,
+            unaryExpressionType,
+            ImmutableArray.Create[BoundExpression](
+                UpcastToExpression(this.TranslateExpression(conversion.Source, parameterMap)),
+                CreateTypeOf(conversionTarget),
+                methodInfo
+            )
+        )
+        return if object.ReferenceEquals(conversionTarget, conversion.Type) {
+            converted
+        } else {
+            cast[BoundExpression](
+                BoundClrStaticCallExpression(
+                    conversion.Syntax,
+                    ExpressionConvertMethod,
+                    unaryExpressionType,
+                    ImmutableArray.Create[BoundExpression](UpcastToExpression(converted), CreateTypeOf(conversion.Type))
+                )
+            )
+        }
+    }
+
+    private func BuildLiftedNullableReturnConversionExpression(
+        conversion BoundClrConversionCallExpression,
+        methodInfo BoundExpression,
+        parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
+    ) BoundExpression {
+        let local = LocalVariableSymbol("<>lift${this.counter++}", isReadOnly: true, ParameterExpressionTypeSymbol)
+        let declaration = BoundVariableDeclaration(
+            conversion.Syntax,
+            local,
+            BoundClrStaticCallExpression(
+                conversion.Syntax,
+                ExpressionParameterMethod,
+                ParameterExpressionTypeSymbol,
+                ImmutableArray.Create[BoundExpression](
+                    CreateTypeOf(conversion.Source.Type),
+                    BoundLiteralExpression(nil, string.Empty, TypeSymbol.String)
+                )
+            )
+        )
+        let localRead = BoundVariableExpression(conversion.Syntax, local)
+        let assign = BoundClrStaticCallExpression(
+            conversion.Syntax,
+            ExpressionAssignMethod,
+            ExpressionTypeSymbol,
+            ImmutableArray.Create[BoundExpression](
+                UpcastToExpression(localRead),
+                UpcastToExpression(this.TranslateExpression(conversion.Source, parameterMap))
+            )
+        )
+        let memberExpressionType = TypeSymbol.FromClrTypeWithoutNullability(
+            typeof(MemberExpression),
+            NullabilityFreeReason.TypeLiteral
+        )
+        let hasValue = BoundClrStaticCallExpression(
+            conversion.Syntax,
+            ExpressionPropertyInstanceMethod,
+            memberExpressionType,
+            ImmutableArray.Create[BoundExpression](
+                UpcastToExpression(localRead),
+                BoundLiteralExpression(nil, "HasValue", TypeSymbol.String)
+            )
+        )
+        let unwrappedValue = BoundClrStaticCallExpression(
+            conversion.Syntax,
+            ExpressionPropertyInstanceMethod,
+            memberExpressionType,
+            ImmutableArray.Create[BoundExpression](
+                UpcastToExpression(localRead),
+                BoundLiteralExpression(nil, "Value", TypeSymbol.String)
+            )
+        )
+        let convertedValue = BoundClrStaticCallExpression(
             conversion.Syntax,
             ExpressionConvertWithMethodMethod,
             TypeSymbol.FromClrTypeWithoutNullability(typeof(UnaryExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create[BoundExpression](
-                UpcastToExpression(this.TranslateExpression(conversion.Source, parameterMap)),
+                UpcastToExpression(unwrappedValue),
                 CreateTypeOf(conversion.Type),
                 methodInfo
+            )
+        )
+        let defaultResult = BoundClrStaticCallExpression(
+            conversion.Syntax,
+            ExpressionDefaultMethod,
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(DefaultExpression), NullabilityFreeReason.TypeLiteral),
+            ImmutableArray.Create[BoundExpression](CreateTypeOf(conversion.Type))
+        )
+        let condition = BoundClrStaticCallExpression(
+            conversion.Syntax,
+            ExpressionConditionMethod,
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(ConditionalExpression), NullabilityFreeReason.TypeLiteral),
+            ImmutableArray.Create[BoundExpression](
+                UpcastToExpression(hasValue),
+                UpcastToExpression(convertedValue),
+                UpcastToExpression(defaultResult)
+            )
+        )
+        return BoundBlockExpression(
+            conversion.Syntax,
+            ImmutableArray.Create[BoundStatement](declaration),
+            BoundClrStaticCallExpression(
+                conversion.Syntax,
+                ExpressionBlockMethod,
+                ExpressionTypeSymbol,
+                ImmutableArray.Create[BoundExpression](
+                    BuildParameterArray(ImmutableArray.Create(local)),
+                    BuildExpressionArray(ImmutableArray.Create[BoundExpression](assign, condition))
+                )
             )
         )
     }
@@ -1866,6 +1966,12 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             typeof(Expression),
             typeof(FieldInfo)
         )
+        private let ExpressionPropertyInstanceMethod MethodInfo = GetRequiredMethod(
+            typeof(Expression),
+            "Property",
+            typeof(Expression),
+            typeof(string)
+        )
         private let ExpressionPropertyInfoMethod MethodInfo = GetRequiredMethod(
             typeof(Expression),
             "Property",
@@ -2119,6 +2225,37 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             method,
             ReflectionMethodInfoTypeSymbol
         )
+
+        private func BuildConversionMethodInfoConstant(conversion BoundClrConversionCallExpression) BoundExpression {
+            let method = Invariant.Required(
+                conversion.Method,
+                "an imported conversion carries a CLR method",
+                expression: "conversion.Method"
+            )
+            let source = UnwrapConversionOwnerType(conversion.Source.Type)
+            let target = UnwrapConversionOwnerType(conversion.Type)
+            return if method.DeclaringType is {IsGenericTypeDefinition: true} ||
+                ConversionClassifier.NeedsSymbolicConversion(source) || ConversionClassifier.NeedsSymbolicConversion(
+                target
+            ) {
+                BoundLiteralExpression(nil, conversion, ReflectionMethodInfoTypeSymbol)
+            } else {
+                BuildMethodInfoConstant(method)
+            }
+        }
+
+        private func UnwrapConversionOwnerType(type TypeSymbol) TypeSymbol {
+            let bare = type.StripToBareShape()
+            return if bare is NullableTypeSymbol nullable {
+                nullable.UnderlyingType.StripToBareShape()
+            } else {
+                bare
+            }
+        }
+
+        private func ReturnsValueTypeNullable(
+            conversion BoundClrConversionCallExpression
+        ) bool -> MethodBodyEmitter.ReturnsValueTypeNullable(conversion)
 
         private func BuildUserOperatorMethodInfoLookup(expression BoundClrBinaryOperatorExpression) BoundExpression {
             let function = expression.Function ??
