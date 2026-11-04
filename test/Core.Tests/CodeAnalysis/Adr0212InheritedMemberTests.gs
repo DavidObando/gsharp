@@ -381,6 +381,31 @@ open class Adr0212InheritedMemberTests {
         }
         let setLength = Assert.Single(model.LookupMembers(pos, rawParam, "SetLength"))
         Assert.IsType[StructSymbol](setLength.ContainingType)
+
+        // Distinct constructed indexers (IBothIndex : IIndex[int32], IIndex[string]) keep both parameter signatures,
+        // while an overlapping IIndex[int32] constraint is not listed a second time.
+        let iindexDef = cast[InterfaceSymbol](model.LookupSymbols(pos, "IIndex").Single())
+        let iindexInt = InterfaceSymbol.Construct(iindexDef, ImmutableArray.Create[TypeSymbol](TypeSymbol.Int32))
+        let ibothIndex = cast[InterfaceSymbol](model.LookupSymbols(pos, "IBothIndex").Single())
+        let indexBaseParam = TypeParameterSymbol(
+            "A",
+            0,
+            TypeParameterConstraint.Any,
+            TypeParameterVariance.None,
+            iindexInt
+        )
+        let indexDerivedParam = TypeParameterSymbol(
+            "B",
+            1,
+            TypeParameterConstraint.Any,
+            TypeParameterVariance.None,
+            ibothIndex
+        ){TypeParameterBound = indexBaseParam}
+        let indexers = model.LookupMembers(pos, indexDerivedParam, "Item").OfType[PropertySymbol]().ToList()
+        Assert.Equal(
+            []TypeSymbol{TypeSymbol.Int32, TypeSymbol.String},
+            indexers.Select((p PropertySymbol) -> p.Parameters.Single().Type).ToArray()
+        )
     }
 
     @Fact
@@ -520,6 +545,12 @@ interface IBox[U] {
 }
 
 interface ISubBox[V] : IBox[V] { }
+
+interface IIndex[K] {
+    prop this[key K] int32 { get; }
+}
+
+interface IBothIndex : IIndex[int32], IIndex[string] { }
 
 interface IShape {
     func Area() int32 { return 1 }

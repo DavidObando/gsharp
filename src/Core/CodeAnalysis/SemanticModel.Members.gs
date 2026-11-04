@@ -315,17 +315,23 @@ partial class SemanticModel {
     }
 
     private func SameParameters(left Symbol, right Symbol) bool {
-        if left is FunctionSymbol leftFunction && right is FunctionSymbol rightFunction {
-            if leftFunction.Parameters.Length != rightFunction.Parameters.Length {
+        let leftParameters = ParametersOf(left)
+        let rightParameters = ParametersOf(right)
+        if leftParameters.Length != rightParameters.Length {
+            return false
+        }
+        for var i = 0; i < leftParameters.Length; i++ {
+            if !object.Equals(leftParameters[i].Type, rightParameters[i].Type) {
                 return false
-            }
-            for var i = 0; i < leftFunction.Parameters.Length; i++ {
-                if !object.Equals(leftFunction.Parameters[i].Type, rightFunction.Parameters[i].Type) {
-                    return false
-                }
             }
         }
         return true
+    }
+
+    private func ParametersOf(symbol Symbol) ImmutableArray[ParameterSymbol] -> switch symbol {
+        case function is FunctionSymbol: function.Parameters
+        case property is PropertySymbol: property.Parameters
+        default: ImmutableArray[ParameterSymbol].Empty
     }
 
     /// Adds the public instance members that a source class or struct inherits from its imported base class,
