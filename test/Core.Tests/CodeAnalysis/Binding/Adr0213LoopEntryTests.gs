@@ -3669,6 +3669,46 @@ func Run(ref item C?, key Key) int32 {
     return n
 }
 func Main() { }`, "GS0155@16:19 GS0155@17:19")
+            Add("channel-capacity-conversion-and-static-import-lexical-collision-are-calls (#5470, #5657)", `package T
+import System
+import T.Host
+class C { }
+var g C? = C()
+struct Cap { var Raw int32 }
+func operator implicit(c Cap) int32 {
+    g = nil
+    return c.Raw
+}
+class Host {
+    shared {
+        const Message string = "const"
+    }
+}
+class SubError : Exception {
+    func RunCollision(ref item C?) int32 {
+        if g == nil || item == nil { return 0 }
+        var n = 0
+        while n < 2 {
+            let a C = g
+            let b C = item
+            let m = Message
+            n = n + 1
+        }
+        return n
+    }
+}
+func RunChannel(ref item C?, cap Cap) int32 {
+    if g == nil || item == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let a C = g
+        let b C = item
+        let ch = chan[int32](cap)
+        n = n + 1
+    }
+    return n
+}
+func Main() { }`, "GS0155@33:19 GS0155@34:19 GS0155@21:23 GS0155@22:23")
             return rows
         }
     }

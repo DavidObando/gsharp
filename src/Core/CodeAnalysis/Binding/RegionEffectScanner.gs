@@ -868,6 +868,22 @@ internal sealed class RegionEffectScanner {
                 }
                 VisitChildren(node)
             }
+            case SyntaxKind.ChannelCreationExpression {
+                let creation = cast[ChannelCreationExpressionSyntax](node)
+                if Active() {
+                    for argument in creation.Arguments {
+                        RecordLengthConversion(argument)
+                    }
+                }
+                VisitChildren(node)
+            }
+            case SyntaxKind.MakeChannelExpression {
+                let creation = cast[MakeChannelExpressionSyntax](node)
+                if Active() {
+                    RecordLengthConversion(creation.Capacity)
+                }
+                VisitChildren(node)
+            }
             case SyntaxKind.FieldAccessExpression {
                 RecordMemberRead()
                 RecordRead(nil, nil)

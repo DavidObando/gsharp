@@ -505,6 +505,80 @@ func InSpan(ref item C?, key Key) int32 {
 var g C? = C()
 var s C? = C()
 Console.WriteLine(InLoop(ref s, Key{}) + InSpan(ref s, Key{}))`, "GS0155@14:19 GS0155@15:19 GS0155@25:15 GS0155@26:15", "reject", ""}
+            yield[]object{"channel_capacity_conversion_and_static_import_collision_remove_facts_5470_5657", `package T
+import System
+import T.Host
+class C { }
+struct Cap {
+    var Raw int32
+}
+func operator implicit(c Cap) int32 {
+    g = nil
+    return c.Raw
+}
+class Host {
+    shared {
+        const Message string = "const"
+    }
+}
+open class BaseError : Exception {
+    func ReadInLoop(ref item C?) int32 {
+        if g == nil || item == nil { return 0 }
+        var n = 0
+        while n < 2 {
+            let a C = g
+            let b C = item
+            let m = Message
+            n = n + 1
+        }
+        return n
+    }
+    func ReadInSpan(ref item C?) int32 {
+        if g == nil || item == nil { return 0 }
+        var n = 0
+        Again:
+        let a C = g
+        let b C = item
+        let m = Message
+        n = n + 1
+        if n < 2 { goto Again }
+        return n
+    }
+}
+class BadError : BaseError {
+    override prop Message string {
+        get {
+            g = nil
+            return "boom"
+        }
+    }
+}
+func ChannelInLoop(ref item C?, cap Cap) int32 {
+    if g == nil || item == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let a C = g
+        let b C = item
+        let ch = chan[int32](cap)
+        n = n + 1
+    }
+    return n
+}
+func ChannelInSpan(ref item C?, cap Cap) int32 {
+    if g == nil || item == nil { return 0 }
+    var n = 0
+    Again:
+    let a C = g
+    let b C = item
+    let ch = chan[int32](cap)
+    n = n + 1
+    if n < 2 { goto Again }
+    return n
+}
+var g C? = C()
+var s C? = C()
+let err BaseError = BadError()
+Console.WriteLine(err.ReadInLoop(ref s) + err.ReadInSpan(ref s) + ChannelInLoop(ref s, Cap{Raw: 1}) + ChannelInSpan(ref s, Cap{Raw: 1}))`, "GS0155@22:23 GS0155@23:23 GS0155@33:19 GS0155@34:19 GS0155@53:19 GS0155@54:19 GS0155@64:15 GS0155@65:15", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

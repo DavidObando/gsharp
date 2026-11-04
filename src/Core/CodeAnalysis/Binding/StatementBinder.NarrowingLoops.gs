@@ -172,41 +172,90 @@ internal partial class StatementBinder {
         isProperty = false
         getterRunsUserCode = false
         touchesInitializingType = false
-        for importedType in binderCtx.GetStaticImportTypes() {
-            if TypeMemberModel.TryGetStaticPropertyIncludingInherited(
-                importedType,
-                name,
-                out var staticProperty,
-                out var propertyOwner
-            ) {
-                type = propertyOwner.SubstituteMemberType(staticProperty.Type)
-                isProperty = true
-                getterRunsUserCode = SourcePropertyRunsUserCode(staticProperty, nil)
-                touchesInitializingType = TypeInitializationRunsUserCode(propertyOwner, true)
-                return true
-            }
-            if TypeMemberModel.TryGetStaticFieldIncludingInherited(
-                importedType,
-                name,
-                out var staticField,
-                out var fieldOwner
-            ) {
-                type = fieldOwner.SubstituteMemberType(staticField.Type)
-                touchesInitializingType = !staticField.IsConst && TypeInitializationRunsUserCode(fieldOwner, true)
-                return true
-            }
-        }
-        for clrType in $scope.EnumerateStaticImportClrTypes() {
-            if TryResolveClrStaticMemberByBareName(clrType, name, out type, out isProperty, out getterRunsUserCode) {
-                return true
-            }
-        }
         if $scope.SubmissionImports is {} submissions &&
             $scope.References is {} references &&
             submissions.TryFindMemberContainer(references, name, out var programType) &&
             programType != nil &&
             TryResolveClrStaticMemberByBareName(programType, name, out type, out isProperty, out getterRunsUserCode) {
             return true
+        }
+        let hasLexicalOwner = (function?.StaticOwnerType ?? function?.ReceiverType) is {} lexicalOwner && MemberLookup(
+            binderCtx
+        ).FindLexicalMemberOwner(lexicalOwner, name) != nil
+        if !hasLexicalOwner {
+            var match StructSymbol? = nil
+            var ambiguous = false
+            for importedType in binderCtx.GetStaticImportTypes() {
+                if !BinderContext.ImportedTypeExposesStaticMember(importedType, name) {
+                    continue
+                }
+                if match == nil {
+                    match = importedType
+                } else if !object.ReferenceEquals(match, importedType) {
+                    ambiguous = true
+                    break
+                }
+            }
+            if !ambiguous && match != nil {
+                if TypeMemberModel.TryGetStaticFieldIncludingInherited(
+                    match,
+                    name,
+                    out var staticField,
+                    out var fieldOwner
+                ) {
+                    type = fieldOwner.SubstituteMemberType(staticField.Type)
+                    touchesInitializingType = !staticField.IsConst && TypeInitializationRunsUserCode(fieldOwner, true)
+                    return true
+                }
+                if TypeMemberModel.TryGetStaticPropertyIncludingInherited(
+                    match,
+                    name,
+                    out var staticProperty,
+                    out var propertyOwner
+                ) {
+                    type = propertyOwner.SubstituteMemberType(staticProperty.Type)
+                    isProperty = true
+                    getterRunsUserCode = SourcePropertyRunsUserCode(staticProperty, nil)
+                    touchesInitializingType = TypeInitializationRunsUserCode(propertyOwner, true)
+                    return true
+                }
+                if TypeMemberModel.GetNearestImportedBase(match)
+                    ?.ClrType is {} baseClr &&
+                    TryResolveClrStaticMemberByBareName(
+                    baseClr,
+                    name,
+                    out type,
+                    out isProperty,
+                    out getterRunsUserCode
+                ) {
+                    return true
+                }
+            } else if !ambiguous {
+                var clrMatch Type? = nil
+                var clrAmbiguous = false
+                for clrType in $scope.EnumerateStaticImportClrTypes() {
+                    if !BinderContext.ClrTypeExposesStaticMember(clrType, name) {
+                        continue
+                    }
+                    if clrMatch == nil {
+                        clrMatch = clrType
+                    } else if !clrMatch.IsSameAs(clrType) {
+                        clrAmbiguous = true
+                        break
+                    }
+                }
+                if !clrAmbiguous &&
+                    clrMatch != nil &&
+                    TryResolveClrStaticMemberByBareName(
+                    clrMatch,
+                    name,
+                    out type,
+                    out isProperty,
+                    out getterRunsUserCode
+                ) {
+                    return true
+                }
+            }
         }
         if ExpressionBinder.TryResolveInheritedClrInstanceMemberByBareName(
             binderCtx,

@@ -1310,8 +1310,8 @@ callable alias in force runs `ApplyLoopEntryLowerBound`; the decisions are those
   as a qualified access (including `IsStableClrGetter` under R16 and static type-initializer checks under R11).
 - *Conversion sites (#5657).* Every non-argument conversion site is recorded as a `RegionConversion` with its source
   and target origins (a typed declaration or `if let`/`guard let`/`while let` binding, an assignment or `??=`, a
-  multi-assignment or deconstruction, both operands of `??`, a returned value, an array/stackalloc/map element or
-  length, a range bound, a relational pattern operand, the merged arms of a conditional/`if`/`if let`/`switch`
+  multi-assignment or deconstruction, both operands of `??`, a returned value, an array/stackalloc/map/channel element,
+  length or capacity, a range bound, a relational pattern operand, the merged arms of a conditional/`if`/`if let`/`switch`
   expression, and a condition or guard unless it is `bool` by its form: a `true` or `false` literal, `is`, a
   comparison, `!`, `&&` or `||`), and `ConversionsRunUserCode` classifies those sites for every fact (mutable globals,
   closure-assigned locals, member-bearing paths, and by-reference storage). An untyped declaration (`let n = 1`) or
