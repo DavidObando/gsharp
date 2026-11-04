@@ -3245,11 +3245,8 @@ class BoundScope {
                     (xBound.Ordinal != yBound.Ordinal || xBound.IsMethodTypeParameter != yBound.IsMethodTypeParameter) {
                     return false
                 }
-                // The interface / base-class bounds keep the name comparison they
-                // have always had; only the dependent bound is excluded from it.
-                let xRef = (x.ConstraintInterfaceType ?? x.ClassConstraint)?.Name
-                let yRef = (y.ConstraintInterfaceType ?? y.ClassConstraint)?.Name
-                if !string.Equals(xRef, yRef, StringComparison.Ordinal) {
+                if !SigTypesEquivalent(x.ConstraintInterfaceType, y.ConstraintInterfaceType, a, b) ||
+                    !SigTypesEquivalent(x.ClassConstraint, y.ClassConstraint, a, b) {
                     return false
                 }
             }
@@ -3263,12 +3260,204 @@ class BoundScope {
             if x == nil || y == nil {
                 return false
             }
-            if x is TypeParameterSymbol xtp && y is TypeParameterSymbol ytp {
+            if x is TypeParameterSymbol || y is TypeParameterSymbol {
+                if x is not TypeParameterSymbol xtp || y is not TypeParameterSymbol ytp {
+                    return false
+                }
                 let xi = SigIndexOfTypeParameter(fx, xtp)
                 let yi = SigIndexOfTypeParameter(fy, ytp)
                 return xi >= 0 && xi == yi
             }
-            return x.Name == y.Name
+            if x is NullabilityAnnotatedTypeSymbol || y is NullabilityAnnotatedTypeSymbol {
+                return x is NullabilityAnnotatedTypeSymbol ax &&
+                    y is NullabilityAnnotatedTypeSymbol ay &&
+                    ax
+                    .NullableFlags
+                    .SequenceEqual(ay.NullableFlags) && SigTypesEquivalent(ax.BaseType, ay.BaseType, fx, fy)
+            }
+            if x is PlatformTypeSymbol || y is PlatformTypeSymbol {
+                return x is PlatformTypeSymbol px &&
+                    y is PlatformTypeSymbol py &&
+                    SigTypesEquivalent(px.UnderlyingType, py.UnderlyingType, fx, fy)
+            }
+            if x is NullableTypeSymbol || y is NullableTypeSymbol {
+                return x is NullableTypeSymbol nx &&
+                    y is NullableTypeSymbol ny &&
+                    SigTypesEquivalent(nx.UnderlyingType, ny.UnderlyingType, fx, fy)
+            }
+            if x is SliceTypeSymbol || y is SliceTypeSymbol {
+                return x is SliceTypeSymbol sx &&
+                    y is SliceTypeSymbol sy &&
+                    SigTypesEquivalent(sx.ElementType, sy.ElementType, fx, fy)
+            }
+            if x is ArrayTypeSymbol || y is ArrayTypeSymbol {
+                return x is ArrayTypeSymbol ax &&
+                    y is ArrayTypeSymbol ay &&
+                    ax.Length == ay.Length &&
+                    SigTypesEquivalent(ax.ElementType, ay.ElementType, fx, fy)
+            }
+            if x is RectangularArrayTypeSymbol || y is RectangularArrayTypeSymbol {
+                return x is RectangularArrayTypeSymbol rx &&
+                    y is RectangularArrayTypeSymbol ry &&
+                    rx.Rank == ry.Rank &&
+                    SigTypesEquivalent(rx.ElementType, ry.ElementType, fx, fy)
+            }
+            if x is SequenceTypeSymbol || y is SequenceTypeSymbol {
+                return x is SequenceTypeSymbol seqX &&
+                    y is SequenceTypeSymbol seqY &&
+                    SigTypesEquivalent(seqX.ElementType, seqY.ElementType, fx, fy)
+            }
+            if x is AsyncSequenceTypeSymbol || y is AsyncSequenceTypeSymbol {
+                return x is AsyncSequenceTypeSymbol aseqX &&
+                    y is AsyncSequenceTypeSymbol aseqY &&
+                    SigTypesEquivalent(aseqX.ElementType, aseqY.ElementType, fx, fy)
+            }
+            if x is PointerTypeSymbol || y is PointerTypeSymbol {
+                return x is PointerTypeSymbol ptrX &&
+                    y is PointerTypeSymbol ptrY &&
+                    SigTypesEquivalent(ptrX.PointeeType, ptrY.PointeeType, fx, fy)
+            }
+            if x is ByRefTypeSymbol || y is ByRefTypeSymbol {
+                return x is ByRefTypeSymbol refX &&
+                    y is ByRefTypeSymbol refY &&
+                    SigTypesEquivalent(refX.PointeeType, refY.PointeeType, fx, fy)
+            }
+            if x is PinnedTypeSymbol || y is PinnedTypeSymbol {
+                return x is PinnedTypeSymbol pinX &&
+                    y is PinnedTypeSymbol pinY &&
+                    SigTypesEquivalent(pinX.UnderlyingType, pinY.UnderlyingType, fx, fy)
+            }
+            if x is MapTypeSymbol || y is MapTypeSymbol {
+                return x is MapTypeSymbol mx &&
+                    y is MapTypeSymbol my &&
+                    SigTypesEquivalent(mx.KeyType, my.KeyType, fx, fy) &&
+                    SigTypesEquivalent(mx.ValueType, my.ValueType, fx, fy)
+            }
+            if x is ChannelTypeSymbol || y is ChannelTypeSymbol {
+                return x is ChannelTypeSymbol cx &&
+                    y is ChannelTypeSymbol cy &&
+                    cx.Direction == cy.Direction &&
+                    SigTypesEquivalent(cx.ElementType, cy.ElementType, fx, fy)
+            }
+            if x is TupleTypeSymbol || y is TupleTypeSymbol {
+                return x is TupleTypeSymbol tx &&
+                    y is TupleTypeSymbol ty &&
+                    SigTypeArgumentsEquivalent(tx.ElementTypes, ty.ElementTypes, fx, fy)
+            }
+            if x is FunctionTypeSymbol || y is FunctionTypeSymbol {
+                return x is FunctionTypeSymbol fnX && y is FunctionTypeSymbol fnY && fnX.IsVariadic.SequenceEqual(
+                    fnY.IsVariadic
+                ) &&
+                    SigTypeArgumentsEquivalent(fnX.ParameterTypes, fnY.ParameterTypes, fx, fy) &&
+                    SigTypesEquivalent(fnX.ReturnType, fnY.ReturnType, fx, fy)
+            }
+            if x is FunctionPointerTypeSymbol || y is FunctionPointerTypeSymbol {
+                return x is FunctionPointerTypeSymbol fpX && y is FunctionPointerTypeSymbol fpY && fpX.SignatureEquals(
+                    fpY,
+                    (left TypeSymbol, right TypeSymbol) -> SigTypesEquivalent(left, right, fx, fy)
+                )
+            }
+            if x is StructSymbol || y is StructSymbol {
+                if x is not StructSymbol structX || y is not StructSymbol structY {
+                    return false
+                }
+                let defX = structX.Definition ?? structX
+                let defY = structY.Definition ?? structY
+                let sameDef = object.ReferenceEquals(defX, defY) ||
+                    (
+                    structX.Declaration == nil &&
+                        structY.Declaration == nil &&
+                        structX.ClrType != nil &&
+                        structY.ClrType != nil &&
+                        ClrTypeUtilities.AreSame(structX.ClrType, structY.ClrType)
+                )
+                return sameDef &&
+                    SigTypeArgumentsEquivalent(
+                    Conversion.GetEffectiveStructTypeArguments(structX),
+                    Conversion.GetEffectiveStructTypeArguments(structY),
+                    fx,
+                    fy
+                )
+            }
+            if x is InterfaceSymbol || y is InterfaceSymbol {
+                return x is InterfaceSymbol ifaceX && y is InterfaceSymbol ifaceY && object.ReferenceEquals(
+                    ifaceX.Definition ?? ifaceX,
+                    ifaceY.Definition ?? ifaceY
+                ) &&
+                    SigTypeArgumentsEquivalent(ifaceX.TypeArguments, ifaceY.TypeArguments, fx, fy)
+            }
+            if x is EnumSymbol || y is EnumSymbol {
+                return x is EnumSymbol enumX && y is EnumSymbol enumY && object.ReferenceEquals(
+                    enumX.Definition ?? enumX,
+                    enumY.Definition ?? enumY
+                ) &&
+                    SigTypeArgumentsEquivalent(enumX.EnclosingTypeArguments, enumY.EnclosingTypeArguments, fx, fy)
+            }
+            if x is DelegateTypeSymbol || y is DelegateTypeSymbol {
+                return x is DelegateTypeSymbol delX && y is DelegateTypeSymbol delY && object.ReferenceEquals(
+                    delX.Definition ?? delX,
+                    delY.Definition ?? delY
+                ) &&
+                    SigTypeArgumentsEquivalent(delX.TypeArguments, delY.TypeArguments, fx, fy)
+            }
+            if x is ImportedTypeSymbol || y is ImportedTypeSymbol {
+                if x is not ImportedTypeSymbol importedX || y is not ImportedTypeSymbol importedY {
+                    return false
+                }
+                let openX = importedX.OpenDefinition ??
+                    (
+                    if importedX.Type.IsGenericType {
+                        importedX.Type.GetGenericTypeDefinition()
+                    } else {
+                        default(Type?)
+                    }
+                )
+                let openY = importedY.OpenDefinition ??
+                    (
+                    if importedY.Type.IsGenericType {
+                        importedY.Type.GetGenericTypeDefinition()
+                    } else {
+                        default(Type?)
+                    }
+                )
+                if openX != nil || openY != nil {
+                    return openX != nil && openY != nil && ClrTypeUtilities.AreSame(openX, openY) &&
+                        SigTypeArgumentsEquivalent(
+                        importedX.ConstructedTypeArguments,
+                        importedY.ConstructedTypeArguments,
+                        fx,
+                        fy
+                    )
+                }
+                return importedX.ClrType != nil && importedY.ClrType != nil && ClrTypeUtilities.AreSame(
+                    importedX.ClrType,
+                    importedY.ClrType
+                )
+            }
+            if x.ClrType != nil && y.ClrType != nil {
+                return ClrTypeUtilities.AreSame(x.ClrType, y.ClrType)
+            }
+            return x.GetType() == y.GetType() && string.Equals(x.Name, y.Name, StringComparison.Ordinal)
+        }
+
+        private func SigTypeArgumentsEquivalent(
+            a ImmutableArray[TypeSymbol],
+            b ImmutableArray[TypeSymbol],
+            fx FunctionSymbol,
+            fy FunctionSymbol
+        ) bool {
+            if a.IsDefaultOrEmpty && b.IsDefaultOrEmpty {
+                return true
+            }
+            if a.IsDefaultOrEmpty || b.IsDefaultOrEmpty || a.Length != b.Length {
+                return false
+            }
+            for var i = 0; i < a.Length; i++ {
+                if !SigTypesEquivalent(a[i], b[i], fx, fy) {
+                    return false
+                }
+            }
+            return true
         }
 
         private func SigIndexOfTypeParameter(f FunctionSymbol, tp TypeParameterSymbol) int32 {

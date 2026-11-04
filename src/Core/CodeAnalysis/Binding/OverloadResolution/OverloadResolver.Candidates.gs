@@ -327,6 +327,19 @@ internal partial class OverloadResolver {
                 applicable.Add(cand)
             }
         }
+        // Issue #4740: argument ref-kind (`ref`, `out`, `in`, vs by-value) is a
+        // Phase-1 applicability requirement (C# §12.6.4.2). A `ref` or `out`
+        // parameter is never applicable to a by-value argument, and a by-value
+        // parameter is never applicable to a `ref`/`out`/`in` argument.
+        if applicable.Count > 1 {
+            let refApplicable = List[FunctionSymbol](applicable.Count)
+            for cand in applicable {
+                if IsRefKindApplicable(cand, argumentCount, argumentNames, boundArguments, callSyntax) {
+                    refApplicable.Add(cand)
+                }
+            }
+            applicable = refApplicable
+        }
         // Issue #1124: a generic candidate whose method type parameters cannot be
         // determined for the call is not applicable (C# §11.6.4.2 "if type
         // inference fails, the method is not a candidate"). Without an explicit
@@ -1056,8 +1069,32 @@ internal partial class OverloadResolver {
             // `in`), it converts by value first, so fall through to the ordinary
             // convertibility check below.
             if parameter.RefKind != RefKind.None {
-                if (parameter.RefKind != RefKind.In || boundArguments[i]?.Type is ByRefTypeSymbol) &&
-                    ByRefStorageMatching.TryGetStorageType(boundArguments[i]) is {} storageType {
+                let argumentSyntax = if callSyntax != nil && i < callSyntax.Arguments.Count {
+                    UnwrapNamedArgumentValue(callSyntax.Arguments[i])
+                } else {
+                    boundArguments[i]?.Syntax as ExpressionSyntax
+                }
+                let explicitRefKind = if argumentSyntax is RefArgumentExpressionSyntax refArgument {
+                    getRefKindFromModifier(refArgument.RefKindModifier)
+                } else {
+                    RefKind.None
+                }
+                if explicitRefKind != RefKind.None && explicitRefKind != parameter.RefKind {
+                    return false
+                }
+                let hasAddress = explicitRefKind != RefKind.None ||
+                    boundArguments[i]?.Type is ByRefTypeSymbol ||
+                    boundArguments[i] is BoundAddressOfExpression ||
+                    boundArguments[i] is BoundConditionalAddressExpression
+                if hasAddress &&
+                    parameter.RefKind != RefKind.In &&
+                    boundArguments[i] != nil &&
+                    RefCapabilities.IsReadOnlyStorage(boundArguments[i]) {
+                    return false
+                }
+                if (parameter.RefKind != RefKind.In || hasAddress) && ByRefStorageMatching.TryGetStorageType(
+                    boundArguments[i]
+                ) is {} storageType {
                     let byRefParameterType = if substitution != nil {
                         GSharp.Core.CodeAnalysis.Binding.Binder.SubstituteType(parameter.Type, substitution)
                     } else {
@@ -1069,10 +1106,21 @@ internal partial class OverloadResolver {
                     }
                     continue
                 }
-                if parameter.RefKind != RefKind.In {
+                if !hasAddress && parameter.RefKind != RefKind.In {
+                    return false
+                }
+                if hasAddress {
                     continue
                 }
-            } else if boundArguments[i]?.Type is ByRefTypeSymbol {
+            } else if boundArguments[i]?.Type is ByRefTypeSymbol ||
+                boundArguments[i]?.Syntax is RefArgumentExpressionSyntax ||
+                (
+                callSyntax != nil &&
+                    i < callSyntax
+                    .Arguments
+                    .Count &&
+                    UnwrapNamedArgumentValue(callSyntax.Arguments[i]) is RefArgumentExpressionSyntax
+            ) {
                 return false
             }
             let argType TypeSymbol? = boundArguments[i]?.Type
@@ -1564,6 +1612,74 @@ internal partial class OverloadResolver {
             paramReturn = substituteType(paramReturn, candSubstitution) ?? paramReturn
         }
         return paramReturn == TypeSymbol.Void
+    }
+
+    private func IsRefKindApplicable(
+        candidate FunctionSymbol,
+        argumentCount int32,
+        argumentNames ImmutableArray[string],
+        boundArguments ImmutableArray[BoundExpression].Builder,
+        callSyntax CallExpressionSyntax?
+    ) bool {
+        let parameterOffset = if candidate.ExplicitReceiverParameter == nil {
+            0
+        } else {
+            1
+        }
+        let paramLen = candidate.Parameters.Length - parameterOffset
+        let isVariadic = paramLen > 0 && candidate.Parameters[candidate.Parameters.Length - 1].IsVariadic
+        let fixedParamCount = if isVariadic {
+            paramLen - 1
+        } else {
+            paramLen
+        }
+        let count = Math.Min(argumentCount, boundArguments.Count)
+        for var i = 0; i < count; i++ {
+            let parameterSlot = MapArgumentIndexToParameterSlot(candidate, argumentNames, i, parameterOffset, paramLen)
+            if parameterSlot < 0 {
+                return false
+            }
+            let argument = boundArguments[i]
+            let argumentSyntax = if callSyntax != nil && i < callSyntax.Arguments.Count {
+                UnwrapNamedArgumentValue(callSyntax.Arguments[i])
+            } else {
+                argument?.Syntax as ExpressionSyntax
+            }
+            let explicitRefKind = if argumentSyntax is RefArgumentExpressionSyntax refArgument {
+                getRefKindFromModifier(refArgument.RefKindModifier)
+            } else {
+                RefKind.None
+            }
+            let isByRefArgument = explicitRefKind != RefKind.None || argument?.Type is ByRefTypeSymbol
+            if isVariadic && parameterSlot >= fixedParamCount {
+                if isByRefArgument {
+                    return false
+                }
+                continue
+            }
+            let parameter = candidate.Parameters[parameterSlot + parameterOffset]
+            if parameter.RefKind == RefKind.None {
+                if isByRefArgument {
+                    return false
+                }
+                continue
+            }
+            if explicitRefKind != RefKind.None && explicitRefKind != parameter.RefKind {
+                return false
+            }
+            let hasAddress = isByRefArgument ||
+                argument is BoundAddressOfExpression ||
+                argument is BoundConditionalAddressExpression
+            if hasAddress && parameter.RefKind != RefKind.In && argument != nil && RefCapabilities.IsReadOnlyStorage(
+                argument
+            ) {
+                return false
+            }
+            if !hasAddress && parameter.RefKind != RefKind.In {
+                return false
+            }
+        }
+        return true
     }
 
     shared {
