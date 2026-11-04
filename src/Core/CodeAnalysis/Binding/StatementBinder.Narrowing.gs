@@ -5385,10 +5385,10 @@ internal partial class StatementBinder {
         private func StripNullability(type TypeSymbol?) TypeSymbol? {
             var current = type
             while current is NullableTypeSymbol or PlatformTypeSymbol {
-                current = if current is NullableTypeSymbol nullable {
-                    nullable.UnderlyingType
-                } else {
-                    (current as PlatformTypeSymbol)!!.UnderlyingType
+                if current is NullableTypeSymbol nullable {
+                    current = nullable.UnderlyingType
+                } else if current is PlatformTypeSymbol platform {
+                    current = platform.UnderlyingType
                 }
             }
             return current
