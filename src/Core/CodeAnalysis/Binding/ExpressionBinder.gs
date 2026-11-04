@@ -82,8 +82,17 @@ internal partial class ExpressionBinder {
         StatementBinder.SwitchArmHeader
     ) -> HashSet[VariableSymbol]?
     private let bindAfterLaterArmTests(() -> void, bool, () -> BoundNode) -> BoundNode
-    private let clearAssignedRoots(BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void
-    private let expressionNarrowingFrames List[NarrowingFrame] = List[NarrowingFrame]()
+    private let clearAssignedRoots(
+        BoundNode,
+        Dictionary[AccessPath, TypeSymbol],
+        IReadOnlyCollection[VariableSymbol]?
+    ) -> void
+    private let evolveAliases(BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol]
+    private let recordExpressionNarrowingKill(NarrowingFrame, AccessPath, TypeSymbol) -> void
+    private let getCallableAliases() -> HashSet[VariableSymbol]
+    private let expressionNarrowingFrames List[(Frame NarrowingFrame, Aliases HashSet[VariableSymbol])] = List[
+        (Frame NarrowingFrame, Aliases HashSet[VariableSymbol])
+    ]()
 
     // Issue #5569: the diagnostics of each discarded literal target bind in the calls that are binding now.
     private let literalTargetDiagnostics List[ImmutableArray[Diagnostic]] = List[ImmutableArray[Diagnostic]]()
@@ -132,7 +141,10 @@ internal partial class ExpressionBinder {
             VariableSymbol
         ]?,
         bindAfterLaterArmTests(() -> void, bool, () -> BoundNode) -> BoundNode,
-        clearAssignedRoots(BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void
+        clearAssignedRoots(BoundNode, Dictionary[AccessPath, TypeSymbol], IReadOnlyCollection[VariableSymbol]?) -> void,
+        evolveAliases(BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol],
+        recordExpressionNarrowingKill(NarrowingFrame, AccessPath, TypeSymbol) -> void,
+        getCallableAliases() -> HashSet[VariableSymbol]
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.memberLookup = memberLookup ?? throw ArgumentNullException("memberLookup")
@@ -159,6 +171,9 @@ internal partial class ExpressionBinder {
         this.reapplySwitchArmHeaderEffects = reapplySwitchArmHeaderEffects
         this.bindAfterLaterArmTests = bindAfterLaterArmTests
         this.clearAssignedRoots = clearAssignedRoots
+        this.evolveAliases = evolveAliases
+        this.recordExpressionNarrowingKill = recordExpressionNarrowingKill
+        this.getCallableAliases = getCallableAliases
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics
@@ -251,9 +266,27 @@ internal partial class ExpressionBinder {
         )
     }
 
-    private func PushExpressionNarrowingFrame(frame Dictionary[AccessPath, TypeSymbol]) NarrowingFrame {
+    private func GetCurrentExpressionCallableAliases() HashSet[VariableSymbol] {
+        for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
+            let entry = expressionNarrowingFrames[i]
+            if entry.Frame.Owner != nil {
+                return HashSet[VariableSymbol](entry.Aliases)
+            }
+        }
+        return getCallableAliases()
+    }
+
+    private func PushExpressionNarrowingFrame(
+        frame Dictionary[AccessPath, TypeSymbol],
+        aliases HashSet[VariableSymbol]? = nil
+    ) NarrowingFrame {
+        let initialAliases = if aliases != nil {
+            HashSet[VariableSymbol](aliases)
+        } else {
+            GetCurrentExpressionCallableAliases()
+        }
         let pushed = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol](frame))
-        expressionNarrowingFrames.Add(pushed)
+        expressionNarrowingFrames.Add((pushed, initialAliases))
         return pushed
     }
 
@@ -264,7 +297,7 @@ internal partial class ExpressionBinder {
 
     private func HasActiveExpressionNarrowings() bool {
         for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
-            let frame = expressionNarrowingFrames[i]
+            let frame = expressionNarrowingFrames[i].Frame
             if frame.Owner != nil && frame.Count > 0 {
                 return true
             }
@@ -273,35 +306,49 @@ internal partial class ExpressionBinder {
     }
 
     private func CaptureExpressionNarrowingFrames() List[
-        (Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol])
+        (Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol], Aliases HashSet[VariableSymbol])
     ]? {
         if !HasActiveExpressionNarrowings() {
             return nil
         }
-        let snapshot = List[(Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol])](
-            expressionNarrowingFrames.Count
-        )
-        for frame in expressionNarrowingFrames {
-            if frame.Owner != nil {
-                snapshot.Add((frame, Dictionary[AccessPath, TypeSymbol](frame.Entries)))
+        let snapshot = List[
+            (Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol], Aliases HashSet[VariableSymbol])
+        ](expressionNarrowingFrames.Count)
+        for entry in expressionNarrowingFrames {
+            if entry.Frame.Owner != nil {
+                snapshot.Add(
+                    (
+                        entry.Frame,
+                        Dictionary[AccessPath, TypeSymbol](entry.Frame.Entries),
+                        HashSet[VariableSymbol](entry.Aliases)
+                    )
+                )
             }
         }
         return snapshot
     }
 
     private func RestoreExpressionNarrowingFrames(
-        snapshot List[(Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol])]?
+        snapshot List[
+            (Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol], Aliases HashSet[VariableSymbol])
+        ]?
     ) {
         if snapshot == nil {
             return
         }
-        for (frame, entries) in snapshot {
+        for (frame, entries, aliases) in snapshot {
             if frame.Owner == nil {
                 continue
             }
             frame.Clear()
             for kv in entries {
                 frame.Add(kv.Key, kv.Value)
+            }
+            for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
+                if object.ReferenceEquals(expressionNarrowingFrames[i].Frame, frame) {
+                    expressionNarrowingFrames[i] = (frame, HashSet[VariableSymbol](aliases))
+                    break
+                }
             }
         }
     }
@@ -322,20 +369,26 @@ internal partial class ExpressionBinder {
             return
         }
         for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
-            let frame = expressionNarrowingFrames[i]
-            if frame.Owner == nil || frame.Count == 0 {
+            let entry = expressionNarrowingFrames[i]
+            let frame = entry.Frame
+            if frame.Owner == nil {
                 continue
             }
-            let temp = Dictionary[AccessPath, TypeSymbol](frame.Entries)
-            clearAssignedRoots(bound, temp)
-            if temp.Count == frame.Count {
-                continue
-            }
-            for kv in frame.Entries.ToArray() {
-                if !StatementBinder.IsNullableWidening(kv.Key, kv.Value) && !temp.ContainsKey(kv.Key) {
-                    frame.Remove(kv.Key)
+            var aliases = entry.Aliases
+            if frame.Count > 0 {
+                let temp = Dictionary[AccessPath, TypeSymbol](frame.Entries)
+                clearAssignedRoots(bound, temp, aliases)
+                if temp.Count != frame.Count {
+                    for kv in frame.Entries.ToArray() {
+                        if !StatementBinder.IsNullableWidening(kv.Key, kv.Value) && !temp.ContainsKey(kv.Key) {
+                            recordExpressionNarrowingKill(frame, kv.Key, kv.Value)
+                            frame.Remove(kv.Key)
+                        }
+                    }
                 }
             }
+            aliases = evolveAliases(bound, aliases)
+            expressionNarrowingFrames[i] = (frame, aliases)
         }
     }
 
@@ -343,7 +396,8 @@ internal partial class ExpressionBinder {
         syntax ExpressionSyntax,
         frame Dictionary[AccessPath, TypeSymbol]?,
         targetType TypeSymbol? = nil,
-        canBeVoid bool = false
+        canBeVoid bool = false,
+        aliases HashSet[VariableSymbol]? = nil
     ) BoundExpression {
         if frame == nil {
             return if targetType == nil {
@@ -352,7 +406,7 @@ internal partial class ExpressionBinder {
                 BindExpression(syntax, targetType)
             }
         }
-        PushExpressionNarrowingFrame(frame)
+        PushExpressionNarrowingFrame(frame, aliases)
         try {
             return if targetType == nil {
                 BindExpression(syntax, canBeVoid)
@@ -1202,8 +1256,16 @@ internal partial class ExpressionBinder {
     /// the (already-bound) left operand. Recognises `x is T`,
     /// `!(x is T)`, and nested `&&` chains; returns
     /// `null` when no narrowing can be safely inferred.
-    private func TryClassifyTypeTestNarrowingForAnd(boundLeft BoundExpression) Dictionary[AccessPath, TypeSymbol]? {
-        let (thenFrame, _) = ClassifyTypeTestNarrowing(boundLeft, restrictBareVariableToLocalsAndParams: true)
+    private func TryClassifyTypeTestNarrowingForAnd(
+        boundLeft BoundExpression,
+        out whenTrueAliases HashSet[VariableSymbol]
+    ) Dictionary[AccessPath, TypeSymbol]? {
+        let (thenFrame, _, trueAliases, _) = ClassifyTypeTestNarrowingInOrder(
+            boundLeft,
+            GetCurrentExpressionCallableAliases(),
+            restrictBareVariableToLocalsAndParams: true
+        )
+        whenTrueAliases = trueAliases
         return if (thenFrame != nil && thenFrame.Count > 0) {
             thenFrame
         } else {
@@ -1217,8 +1279,16 @@ internal partial class ExpressionBinder {
     /// evaluated when the left was false, so the left operand's
     /// `else` frame (the negation of its narrowing) applies. This
     /// makes `!(x is T) || f(x)` bind `f(x)` with `x` narrowed to `T`.
-    private func TryClassifyTypeTestNarrowingForOr(boundLeft BoundExpression) Dictionary[AccessPath, TypeSymbol]? {
-        let (_, elseFrame) = ClassifyTypeTestNarrowing(boundLeft, restrictBareVariableToLocalsAndParams: true)
+    private func TryClassifyTypeTestNarrowingForOr(
+        boundLeft BoundExpression,
+        out whenFalseAliases HashSet[VariableSymbol]
+    ) Dictionary[AccessPath, TypeSymbol]? {
+        let (_, elseFrame, _, falseAliases) = ClassifyTypeTestNarrowingInOrder(
+            boundLeft,
+            GetCurrentExpressionCallableAliases(),
+            restrictBareVariableToLocalsAndParams: true
+        )
+        whenFalseAliases = falseAliases
         return if (elseFrame != nil && elseFrame.Count > 0) {
             elseFrame
         } else {
@@ -1230,9 +1300,28 @@ internal partial class ExpressionBinder {
         condition BoundExpression,
         restrictBareVariableToLocalsAndParams bool = true
     )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
+        let (thenFrame, elseFrame, _, _) = ClassifyTypeTestNarrowingInOrder(
+            condition,
+            GetCurrentExpressionCallableAliases(),
+            restrictBareVariableToLocalsAndParams
+        )
+        return (thenFrame, elseFrame)
+    }
+
+    private func ClassifyTypeTestNarrowingInOrder(
+        condition BoundExpression,
+        beforeAliases HashSet[VariableSymbol],
+        restrictBareVariableToLocalsAndParams bool = true
+    )(
+        Then Dictionary[AccessPath, TypeSymbol]?,
+        Else Dictionary[AccessPath, TypeSymbol]?,
+        WhenTrueAliases HashSet[VariableSymbol],
+        WhenFalseAliases HashSet[VariableSymbol]
+    ) {
         switch condition {
             case isExpr is BoundIsExpression {
                 {
+                    let afterIsAliases = evolveAliases(condition, beforeAliases)
                     if isExpr.Pattern is BoundNotPattern notPattern {
                         return (
                             nil,
@@ -1240,7 +1329,9 @@ internal partial class ExpressionBinder {
                                 isExpr.Expression,
                                 notPattern.Pattern,
                                 allowReadOnlyGlobals: false
-                            )
+                            ),
+                            afterIsAliases,
+                            afterIsAliases
                         )
                     }
                     return (
@@ -1249,70 +1340,89 @@ internal partial class ExpressionBinder {
                             isExpr.Pattern,
                             allowReadOnlyGlobals: false
                         ),
-                        nil
+                        nil,
+                        afterIsAliases,
+                        afterIsAliases
                     )
                 }
             }
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
                 {
-                    let (inThen, inElse) = ClassifyTypeTestNarrowing(
+                    let (inThen, inElse, trueAliases, falseAliases) = ClassifyTypeTestNarrowingInOrder(
                         unary.Operand,
+                        beforeAliases,
                         restrictBareVariableToLocalsAndParams
                     )
-                    return (inElse, inThen)
+                    return (inElse, inThen, falseAliases, trueAliases)
                 }
             }
             case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
                 {
-                    let (leftThenRaw, leftElse) = ClassifyTypeTestNarrowing(
+                    let (leftThenRaw, leftElse, leftTrueAliases, leftFalseAliases) = ClassifyTypeTestNarrowingInOrder(
                         binary.Left,
+                        beforeAliases,
                         restrictBareVariableToLocalsAndParams
                     )
                     var leftThen = leftThenRaw
                     if leftThen != nil && leftThen.Count > 0 {
                         leftThen = Dictionary[AccessPath, TypeSymbol](leftThen)
-                        clearAssignedRoots(binary.Right, leftThen)
+                        clearAssignedRoots(binary.Right, leftThen, leftTrueAliases)
                         if leftThen.Count == 0 {
                             leftThen = nil
                         }
                     }
-                    let (rightThen, rightElse) = ClassifyTypeTestNarrowing(
+                    let (rightThen, rightElse, rightTrueAliases, rightFalseAliases) = ClassifyTypeTestNarrowingInOrder(
                         binary.Right,
+                        leftTrueAliases,
                         restrictBareVariableToLocalsAndParams
                     )
-                    return StatementBinder.CombineLogicalAndNarrowings(
+                    let (combinedThen, combinedElse) = StatementBinder.CombineLogicalAndNarrowings(
                         leftThenRaw,
                         leftThen,
                         leftElse,
                         rightThen,
                         rightElse
                     )
+                    return (
+                        combinedThen,
+                        combinedElse,
+                        rightTrueAliases,
+                        StatementBinder.JoinCallableAliasSets(leftFalseAliases, rightFalseAliases)
+                    )
                 }
             }
             case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
                 {
-                    let (leftThen, leftElseRaw) = ClassifyTypeTestNarrowing(
+                    let (leftThen, leftElseRaw, leftTrueAliases, leftFalseAliases) = ClassifyTypeTestNarrowingInOrder(
                         binary.Left,
+                        beforeAliases,
                         restrictBareVariableToLocalsAndParams
                     )
                     var leftElse = leftElseRaw
                     if leftElse != nil && leftElse.Count > 0 {
                         leftElse = Dictionary[AccessPath, TypeSymbol](leftElse)
-                        clearAssignedRoots(binary.Right, leftElse)
+                        clearAssignedRoots(binary.Right, leftElse, leftFalseAliases)
                         if leftElse.Count == 0 {
                             leftElse = nil
                         }
                     }
-                    let (rightThen, rightElse) = ClassifyTypeTestNarrowing(
+                    let (rightThen, rightElse, rightTrueAliases, rightFalseAliases) = ClassifyTypeTestNarrowingInOrder(
                         binary.Right,
+                        leftFalseAliases,
                         restrictBareVariableToLocalsAndParams
                     )
-                    return StatementBinder.CombineLogicalOrNarrowings(
+                    let (combinedThen, combinedElse) = StatementBinder.CombineLogicalOrNarrowings(
                         leftThen,
                         leftElseRaw,
                         leftElse,
                         rightThen,
                         rightElse
+                    )
+                    return (
+                        combinedThen,
+                        combinedElse,
+                        StatementBinder.JoinCallableAliasSets(leftTrueAliases, rightTrueAliases),
+                        rightFalseAliases
                     )
                 }
             }
@@ -1330,6 +1440,7 @@ internal partial class ExpressionBinder {
             out var nilUnderlying,
             out var nonNilWhenTrue
         ) {
+            let afterNilAliases = evolveAliases(condition, beforeAliases)
             let nonNilFrame = Dictionary[AccessPath, TypeSymbol]{
                 [nilTarget] = Invariant.Required(
                     nilUnderlying,
@@ -1338,17 +1449,21 @@ internal partial class ExpressionBinder {
                 )
             }
             return if nonNilWhenTrue {
-                (nonNilFrame, nil)
+                (nonNilFrame, nil, afterNilAliases, afterNilAliases)
             } else {
-                (nil, nonNilFrame)
+                (nil, nonNilFrame, afterNilAliases, afterNilAliases)
             }
         }
-        return StatementBinder.TryClassifyBoolCallNarrowingLeaf(
+        let (boolThen, boolElse) = StatementBinder.TryClassifyBoolCallNarrowingLeaf(
             condition,
             $scope,
             restrictBareVariableToLocalsAndParams,
-            clearAssignedRoots
+            beforeAliases,
+            clearAssignedRoots,
+            evolveAliases
         )
+        let afterAliases = evolveAliases(condition, beforeAliases)
+        return (boolThen, boolElse, afterAliases, afterAliases)
     }
 
     /// Binds a name expression to produce its bound form without side effects

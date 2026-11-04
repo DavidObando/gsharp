@@ -658,7 +658,9 @@ internal partial class ExpressionBinder {
         // Issue #4964: each branch is bound under the same smart-cast frames
         // the equivalent if-expression uses (`s != nil ? s.Length : 0`), so
         // the two conditional forms narrow identically.
-        let (whenTrueNarrowing, whenFalseNarrowing) = ClassifyConditionalNarrowing(condition)
+        let (whenTrueNarrowing, whenFalseNarrowing, whenTrueAliases, whenFalseAliases) = ClassifyConditionalNarrowing(
+            condition
+        )
         // ADR-0166: each branch sees the pattern variables the condition
         // definitely assigns on that branch (`x is T t ? t.Name : "none"`).
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
@@ -666,7 +668,12 @@ internal partial class ExpressionBinder {
             return BindWithPatternVariables(
                 patternWhenTrue,
                 () -> {
-                    return BindExpressionWithNarrowing(syntax.WhenTrue, whenTrueNarrowing, branchTargetType)
+                    return BindExpressionWithNarrowing(
+                        syntax.WhenTrue,
+                        whenTrueNarrowing,
+                        branchTargetType,
+                        aliases: whenTrueAliases
+                    )
                 },
                 syntax.WhenTrue
             )
@@ -675,7 +682,12 @@ internal partial class ExpressionBinder {
             return BindWithPatternVariables(
                 patternWhenFalse,
                 () -> {
-                    return BindExpressionWithNarrowing(syntax.WhenFalse, whenFalseNarrowing, branchTargetType)
+                    return BindExpressionWithNarrowing(
+                        syntax.WhenFalse,
+                        whenFalseNarrowing,
+                        branchTargetType,
+                        aliases: whenFalseAliases
+                    )
                 },
                 syntax.WhenFalse
             )
@@ -828,7 +840,9 @@ internal partial class ExpressionBinder {
         let beforeConditional = CaptureExpressionNarrowingFrames()
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
         let afterCondition = CaptureExpressionNarrowingFrames()
-        let (whenTrueNarrowing, whenFalseNarrowing) = ClassifyConditionalNarrowing(condition)
+        let (whenTrueNarrowing, whenFalseNarrowing, whenTrueAliases, whenFalseAliases) = ClassifyConditionalNarrowing(
+            condition
+        )
         // ADR-0166: each arm also sees the pattern variables the condition
         // definitely assigns on that arm.
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
@@ -843,10 +857,10 @@ internal partial class ExpressionBinder {
             }
         }
         let bindWhenTrueNarrowed() -> BoundExpression = () -> {
-            return BindWithNarrowing(whenTrueNarrowing, bindWhenTrue)
+            return BindWithNarrowing(whenTrueNarrowing, bindWhenTrue, whenTrueAliases)
         }
         let bindWhenFalseNarrowed() -> BoundExpression = () -> {
-            return BindWithNarrowing(whenFalseNarrowing, bindWhenFalse)
+            return BindWithNarrowing(whenFalseNarrowing, bindWhenFalse, whenFalseAliases)
         }
         var whenTrue = BindWithPatternVariables(patternWhenTrue, bindWhenTrueNarrowed, syntax.ThenBlock)
         RestoreExpressionNarrowingFrames(afterCondition)
@@ -1001,12 +1015,13 @@ internal partial class ExpressionBinder {
 
     private func BindWithNarrowing(
         narrowing Dictionary[AccessPath, TypeSymbol]?,
-        bind() -> BoundExpression
+        bind() -> BoundExpression,
+        aliases HashSet[VariableSymbol]? = nil
     ) BoundExpression {
         if narrowing == nil {
             return bind()
         }
-        PushExpressionNarrowingFrame(narrowing)
+        PushExpressionNarrowingFrame(narrowing, aliases)
         try {
             return bind()
         } finally {
@@ -1435,23 +1450,23 @@ internal partial class ExpressionBinder {
         // `!(x is T t) || t.Length > 0` likewise through the negation.
         var boundRight BoundExpression
         if syntax.OperatorToken.Kind == SyntaxKind.AmpersandAmpersandToken {
-            let rightFrame = TryClassifyTypeTestNarrowingForAnd(boundLeft)
+            let rightFrame = TryClassifyTypeTestNarrowingForAnd(boundLeft, out var rightAliases)
             let (leftWhenTrue, _) = PatternVariables.Classify(boundLeft)
             boundRight = BindWithPatternVariables(
                 leftWhenTrue,
                 () -> {
-                    return BindExpressionWithNarrowing(syntax.Right, rightFrame)
+                    return BindExpressionWithNarrowing(syntax.Right, rightFrame, aliases: rightAliases)
                 },
                 syntax.Right
             )
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenTrue, leftWhenTrue)
         } else if syntax.OperatorToken.Kind == SyntaxKind.PipePipeToken {
-            let rightFrame = TryClassifyTypeTestNarrowingForOr(boundLeft)
+            let rightFrame = TryClassifyTypeTestNarrowingForOr(boundLeft, out var rightAliases)
             let (_, leftWhenFalse) = PatternVariables.Classify(boundLeft)
             boundRight = BindWithPatternVariables(
                 leftWhenFalse,
                 () -> {
-                    return BindExpressionWithNarrowing(syntax.Right, rightFrame)
+                    return BindExpressionWithNarrowing(syntax.Right, rightFrame, aliases: rightAliases)
                 },
                 syntax.Right
             )
@@ -2774,8 +2789,14 @@ internal partial class ExpressionBinder {
     /// `nil` when that branch narrows nothing.
     private func ClassifyConditionalNarrowing(condition BoundExpression)(
         WhenTrue Dictionary[AccessPath, TypeSymbol]?,
-        WhenFalse Dictionary[AccessPath, TypeSymbol]?
-    ) -> ClassifyTypeTestNarrowing(condition, restrictBareVariableToLocalsAndParams: false)
+        WhenFalse Dictionary[AccessPath, TypeSymbol]?,
+        WhenTrueAliases HashSet[VariableSymbol],
+        WhenFalseAliases HashSet[VariableSymbol]
+    ) -> ClassifyTypeTestNarrowingInOrder(
+        condition,
+        GetCurrentExpressionCallableAliases(),
+        restrictBareVariableToLocalsAndParams: false
+    )
 
     shared {
         /// Issue #5635: gets a value indicating whether [`syntax`](paramref) is a block value, also in parentheses or

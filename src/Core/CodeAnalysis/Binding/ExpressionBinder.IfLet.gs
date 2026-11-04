@@ -66,7 +66,10 @@ internal partial class ExpressionBinder {
         // scoping (then-region only, never the else branch), progressive
         // narrowing, and the guard rules cannot drift between the forms.
         let beforeConditional = CaptureExpressionNarrowingFrames()
-        var afterHeader List[(Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol])]? = nil
+        var afterHeader List[
+            (Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol], Aliases HashSet[VariableSymbol])
+        ]? = nil
+        var guardTrueAliases HashSet[VariableSymbol]? = nil
         let (clauses, guard_, whenTrueBound) = IfLetBindingSupport.BindHeader(
             binderCtx,
             syntax.Bindings,
@@ -77,11 +80,15 @@ internal partial class ExpressionBinder {
             (initializer ExpressionSyntax) -> BindExpression(initializer),
             DeclareIfLetLocal,
             (guardSyntax ExpressionSyntax) -> BindExpression(guardSyntax, TypeSymbol.Bool),
-            (boundGuard BoundExpression) -> ClassifyConditionalNarrowing(boundGuard).WhenTrue,
+            (boundGuard BoundExpression) -> {
+                let classified = ClassifyConditionalNarrowing(boundGuard)
+                guardTrueAliases = classified.WhenTrueAliases
+                return classified.WhenTrue
+            },
             () -> {
                 afterHeader = CaptureExpressionNarrowingFrames()
                 let topFrame = binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1]
-                expressionNarrowingFrames.Add(topFrame)
+                expressionNarrowingFrames.Add((topFrame, guardTrueAliases ?? GetCurrentExpressionCallableAliases()))
                 try {
                     return BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
                 } finally {

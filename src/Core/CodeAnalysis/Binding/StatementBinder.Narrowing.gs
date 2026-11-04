@@ -56,6 +56,18 @@ internal partial class StatementBinder {
         externalCallableAliases
     )
 
+    internal func CaptureExternalCallableAliasesForExpression() HashSet[VariableSymbol] -> HashSet[VariableSymbol](
+        externalCallableAliases
+    )
+
+    internal func EvolveCallableAliases(operand BoundExpression, before HashSet[VariableSymbol]) HashSet[
+        VariableSymbol
+    ] -> AliasesAfter(operand, before)
+
+    internal func RecordExpressionNarrowingKill(frame NarrowingFrame, path AccessPath, type TypeSymbol) {
+        conditionKillJournal?.Add((frame, path, type))
+    }
+
     /// ADR-0208 R12 (#5171): creates an effect collector that decides storage sharing through
     /// (cref:MayShareStorage).
     private func NewCollector(
@@ -1649,7 +1661,7 @@ internal partial class StatementBinder {
             }
         }
         var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition)
-        let (boolThen, boolElse) = TryClassifyBoolCallNarrowing(condition)
+        let (boolThen, boolElse) = TryClassifyBoolCallNarrowing(condition, beforeAliases)
         thenNarrow = MergeNarrowingFrames(thenNarrow, boolThen)
         elseNarrow = MergeNarrowingFrames(elseNarrow, boolElse)
         let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition, removedFacts: nil, beforeAliases)

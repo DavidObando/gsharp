@@ -1105,33 +1105,43 @@ internal partial class StatementBinder {
         return (nonNilFrame, nilFrame)
     }
 
-    private func TryClassifyBoolCallNarrowing(condition BoundExpression)(
-        Then Dictionary[AccessPath, TypeSymbol]?,
-        Else Dictionary[AccessPath, TypeSymbol]?
-    ) {
+    private func TryClassifyBoolCallNarrowing(
+        condition BoundExpression,
+        callableAliases IReadOnlyCollection[VariableSymbol]? = nil
+    )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
         switch condition {
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
-                let (inThen, inElse) = TryClassifyBoolCallNarrowing(unary.Operand)
+                let (inThen, inElse) = TryClassifyBoolCallNarrowing(unary.Operand, callableAliases)
                 return (inElse, inThen)
             }
             case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
-                let (leftThenRaw, leftElse) = TryClassifyBoolCallNarrowing(bin.Left)
-                let leftThen = FilterLeftConditionNarrowings(bin.Right, leftThenRaw)
-                let (rightThen, rightElse) = TryClassifyBoolCallNarrowing(bin.Right)
+                let (leftThenRaw, leftElse) = TryClassifyBoolCallNarrowing(bin.Left, callableAliases)
+                let leftThen = FilterLeftConditionNarrowings(bin.Right, leftThenRaw, callableAliases)
+                let (rightThen, rightElse) = TryClassifyBoolCallNarrowing(bin.Right, callableAliases)
                 return CombineLogicalAndNarrowings(leftThenRaw, leftThen, leftElse, rightThen, rightElse)
             }
             case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
-                let (leftThen, leftElseRaw) = TryClassifyBoolCallNarrowing(bin.Left)
-                let leftElse = FilterLeftConditionNarrowings(bin.Right, leftElseRaw)
-                let (rightThen, rightElse) = TryClassifyBoolCallNarrowing(bin.Right)
+                let (leftThen, leftElseRaw) = TryClassifyBoolCallNarrowing(bin.Left, callableAliases)
+                let leftElse = FilterLeftConditionNarrowings(bin.Right, leftElseRaw, callableAliases)
+                let (rightThen, rightElse) = TryClassifyBoolCallNarrowing(bin.Right, callableAliases)
                 return CombineLogicalOrNarrowings(leftThen, leftElseRaw, leftElse, rightThen, rightElse)
             }
+        }
+        var aliases = callableAliases
+        if aliases == nil && testAliasesAt is {} aliasesAt && aliasesAt.TryGetValue(condition, out var atCond) {
+            aliases = atCond
         }
         return TryClassifyBoolCallNarrowingLeaf(
             condition,
             $scope,
             restrictBareVariableToLocalsAndParams: false,
-            (node BoundNode, state Dictionary[AccessPath, TypeSymbol]) -> ClearAssignedRoots(node, state)
+            aliases ?? externalCallableAliases,
+            (
+                node BoundNode,
+                state Dictionary[AccessPath, TypeSymbol],
+                callAliases IReadOnlyCollection[VariableSymbol]?
+            ) -> ClearAssignedRoots(node, state, callAliases),
+            (expr BoundExpression, current HashSet[VariableSymbol]) -> AliasesAfter(expr, current)
         )
     }
 
@@ -1959,11 +1969,26 @@ internal partial class StatementBinder {
             return SmartCastStability.IsTypeTestNarrowing(declared, candidate)
         }
 
+        internal func JoinCallableAliasSets(first HashSet[VariableSymbol], second HashSet[VariableSymbol]) HashSet[
+            VariableSymbol
+        ] {
+            if object.ReferenceEquals(first, second) {
+                return first
+            }
+            let joined = HashSet[VariableSymbol](first)
+            joined.IntersectWith(second)
+            return joined
+        }
+
         internal func TryClassifyBoolCallNarrowingLeaf(
             condition BoundExpression,
             $scope BoundScope? = nil,
             restrictBareVariableToLocalsAndParams bool = false,
-            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)? = nil
+            callableAliases IReadOnlyCollection[VariableSymbol]? = nil,
+            clearAssignedRoots(
+                (BoundNode, Dictionary[AccessPath, TypeSymbol], IReadOnlyCollection[VariableSymbol]?) -> void
+            )? = nil,
+            evolveAliases((BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol])? = nil
         )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
             var inner = condition
             while inner is BoundBlockExpression block {
@@ -1974,7 +1999,9 @@ internal partial class StatementBinder {
                     importedCall,
                     negate: false,
                     restrictBareVariableToLocalsAndParams,
-                    clearAssignedRoots
+                    callableAliases,
+                    clearAssignedRoots,
+                    evolveAliases
                 )
             }
             if inner is BoundImportedInstanceCallExpression importedInstanceCall &&
@@ -1986,13 +2013,17 @@ internal partial class StatementBinder {
                     importedInstanceCall.Arguments,
                     negate: false,
                     restrictBareVariableToLocalsAndParams,
-                    clearAssignedRoots
+                    callableAliases,
+                    clearAssignedRoots,
+                    evolveAliases
                 )
                 MergeClrMemberNotNullWhenNarrowings(
                     importedInstanceCall,
                     negate: false,
                     $scope,
+                    callableAliases,
                     clearAssignedRoots,
+                    evolveAliases,
                     &thenFrame,
                     &elseFrame
                 )
@@ -2003,7 +2034,9 @@ internal partial class StatementBinder {
                     userCall,
                     negate: false,
                     restrictBareVariableToLocalsAndParams,
-                    clearAssignedRoots
+                    callableAliases,
+                    clearAssignedRoots,
+                    evolveAliases
                 )
             }
             if inner is BoundUserInstanceCallExpression userInstanceCall && userInstanceCall.Type == TypeSymbol.Bool {
@@ -2013,14 +2046,18 @@ internal partial class StatementBinder {
                     userInstanceCall.Arguments,
                     negate: false,
                     restrictBareVariableToLocalsAndParams,
-                    clearAssignedRoots
+                    callableAliases,
+                    clearAssignedRoots,
+                    evolveAliases
                 )
                 MergeUserMemberNotNullWhenNarrowings(
                     userInstanceCall,
                     negate: false,
                     $scope,
                     restrictBareVariableToLocalsAndParams,
+                    callableAliases,
                     clearAssignedRoots,
+                    evolveAliases,
                     &thenFrame,
                     &elseFrame
                 )
@@ -2034,7 +2071,11 @@ internal partial class StatementBinder {
             call BoundImportedInstanceCallExpression,
             negate bool,
             $scope BoundScope?,
-            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?,
+            callableAliases IReadOnlyCollection[VariableSymbol]?,
+            clearAssignedRoots(
+                (BoundNode, Dictionary[AccessPath, TypeSymbol], IReadOnlyCollection[VariableSymbol]?) -> void
+            )?,
+            evolveAliases((BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol])?,
             ref thenFrame Dictionary[AccessPath, TypeSymbol]?,
             ref elseFrame Dictionary[AccessPath, TypeSymbol]?
         ) {
@@ -2047,7 +2088,15 @@ internal partial class StatementBinder {
             }
             let receiver = call.Receiver
             if SmartCastStability.TryGetStablePath(receiver) is not{} receiverPath ||
-                !PreservesReceiverPath(call, call.Arguments, receiverPath, receiver.Type, clearAssignedRoots) {
+                !PreservesReceiverPath(
+                call,
+                call.Arguments,
+                receiverPath,
+                receiver.Type,
+                callableAliases,
+                clearAssignedRoots,
+                evolveAliases
+            ) {
                 return
             }
             let narrowThen = returnValue != negate
@@ -2083,7 +2132,11 @@ internal partial class StatementBinder {
             negate bool,
             $scope BoundScope?,
             restrictBareVariableToLocalsAndParams bool,
-            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?,
+            callableAliases IReadOnlyCollection[VariableSymbol]?,
+            clearAssignedRoots(
+                (BoundNode, Dictionary[AccessPath, TypeSymbol], IReadOnlyCollection[VariableSymbol]?) -> void
+            )?,
+            evolveAliases((BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol])?,
             ref thenFrame Dictionary[AccessPath, TypeSymbol]?,
             ref elseFrame Dictionary[AccessPath, TypeSymbol]?
         ) {
@@ -2128,7 +2181,9 @@ internal partial class StatementBinder {
                         declaringStruct,
                         name,
                         restrictBareVariableToLocalsAndParams,
+                        callableAliases,
                         clearAssignedRoots,
+                        evolveAliases,
                         frame
                     )
                 }
@@ -2141,7 +2196,11 @@ internal partial class StatementBinder {
             declaringStruct StructSymbol,
             fieldName string,
             restrictBareVariableToLocalsAndParams bool,
-            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?,
+            callableAliases IReadOnlyCollection[VariableSymbol]?,
+            clearAssignedRoots(
+                (BoundNode, Dictionary[AccessPath, TypeSymbol], IReadOnlyCollection[VariableSymbol]?) -> void
+            )?,
+            evolveAliases((BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol])?,
             frame Dictionary[AccessPath, TypeSymbol]
         ) {
             let receiver = call.Receiver
@@ -2166,12 +2225,22 @@ internal partial class StatementBinder {
                 call.Arguments,
                 AccessPath.ForVariable(fieldVar.Receiver),
                 fieldVar.Receiver.Type,
-                clearAssignedRoots
+                callableAliases,
+                clearAssignedRoots,
+                evolveAliases
             ) {
                 frame[fieldVar] = nullable.UnderlyingType
             }
             if SmartCastStability.TryGetStablePath(receiver) is {} receiverPath &&
-                PreservesReceiverPath(call, call.Arguments, receiverPath, receiver.Type, clearAssignedRoots) {
+                PreservesReceiverPath(
+                call,
+                call.Arguments,
+                receiverPath,
+                receiver.Type,
+                callableAliases,
+                clearAssignedRoots,
+                evolveAliases
+            ) {
                 if resolvedField != nil && SmartCastStability.IsStableField(resolvedField) &&
                     resolvedField.Type is NullableTypeSymbol fldNullable {
                     frame[receiverPath.Append(resolvedField)] = fldNullable.UnderlyingType
@@ -2309,7 +2378,11 @@ internal partial class StatementBinder {
             call BoundImportedCallExpression,
             negate bool,
             restrictBareVariableToLocalsAndParams bool,
-            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?
+            callableAliases IReadOnlyCollection[VariableSymbol]?,
+            clearAssignedRoots(
+                (BoundNode, Dictionary[AccessPath, TypeSymbol], IReadOnlyCollection[VariableSymbol]?) -> void
+            )?,
+            evolveAliases((BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol])?
         )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
             let parameters = call.Function.Method.GetParameters()
             var result = ClassifyImportedMethodBoolCallNarrowing(
@@ -2318,7 +2391,9 @@ internal partial class StatementBinder {
                 call.Arguments,
                 negate,
                 restrictBareVariableToLocalsAndParams,
-                clearAssignedRoots
+                callableAliases,
+                clearAssignedRoots,
+                evolveAliases
             )
             // Issue #4216: preserve established unannotated IsNullOrEmpty
             // extensions while preferring explicit CLR nullability contracts.
@@ -2336,7 +2411,9 @@ internal partial class StatementBinder {
                     ),
                     negate,
                     restrictBareVariableToLocalsAndParams,
-                    clearAssignedRoots
+                    callableAliases,
+                    clearAssignedRoots,
+                    evolveAliases
                 )
             }
             return result
@@ -2348,7 +2425,11 @@ internal partial class StatementBinder {
             arguments ImmutableArray[BoundExpression],
             negate bool,
             restrictBareVariableToLocalsAndParams bool,
-            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?
+            callableAliases IReadOnlyCollection[VariableSymbol]?,
+            clearAssignedRoots(
+                (BoundNode, Dictionary[AccessPath, TypeSymbol], IReadOnlyCollection[VariableSymbol]?) -> void
+            )?,
+            evolveAliases((BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol])?
         )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
             var thenFrame Dictionary[AccessPath, TypeSymbol]? = nil
             var elseFrame Dictionary[AccessPath, TypeSymbol]? = nil
@@ -2387,7 +2468,9 @@ internal partial class StatementBinder {
                             isByRef,
                             AccessPath.ForVariable(widenVarExpr.Variable),
                             widenedType,
-                            clearAssignedRoots
+                            callableAliases,
+                            clearAssignedRoots,
+                            evolveAliases
                         )
                         let widenThen = maybeNullWhenReturnValue != negate
                         if widenThen || !preserved {
@@ -2414,7 +2497,17 @@ internal partial class StatementBinder {
                     out var target,
                     out var underlying
                 ) ||
-                    !PreservesArgumentTarget(call, arguments, i, isByRef, target!!, underlying!!, clearAssignedRoots) {
+                    !PreservesArgumentTarget(
+                    call,
+                    arguments,
+                    i,
+                    isByRef,
+                    target!!,
+                    underlying!!,
+                    callableAliases,
+                    clearAssignedRoots,
+                    evolveAliases
+                ) {
                     continue
                 }
                 let narrowThen = returnValue != negate
@@ -2448,7 +2541,11 @@ internal partial class StatementBinder {
             call BoundCallExpression,
             negate bool,
             restrictBareVariableToLocalsAndParams bool,
-            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?
+            callableAliases IReadOnlyCollection[VariableSymbol]?,
+            clearAssignedRoots(
+                (BoundNode, Dictionary[AccessPath, TypeSymbol], IReadOnlyCollection[VariableSymbol]?) -> void
+            )?,
+            evolveAliases((BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol])?
         )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
             let parameters = call.Function.Parameters
             var result = ClassifyUserMethodBoolCallNarrowing(
@@ -2457,7 +2554,9 @@ internal partial class StatementBinder {
                 call.Arguments,
                 negate,
                 restrictBareVariableToLocalsAndParams,
-                clearAssignedRoots
+                callableAliases,
+                clearAssignedRoots,
+                evolveAliases
             )
             // Issue #4216: user extensions use the same compatibility rule as
             // imported extensions; an explicit receiver contract wins.
@@ -2474,7 +2573,9 @@ internal partial class StatementBinder {
                     IsByRefArgument(call.Arguments[0], parameters.Length > 0 ? parameters[0].RefKind: RefKind.None),
                     negate,
                     restrictBareVariableToLocalsAndParams,
-                    clearAssignedRoots
+                    callableAliases,
+                    clearAssignedRoots,
+                    evolveAliases
                 )
             }
             return result
@@ -2486,7 +2587,11 @@ internal partial class StatementBinder {
             arguments ImmutableArray[BoundExpression],
             negate bool,
             restrictBareVariableToLocalsAndParams bool,
-            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?
+            callableAliases IReadOnlyCollection[VariableSymbol]?,
+            clearAssignedRoots(
+                (BoundNode, Dictionary[AccessPath, TypeSymbol], IReadOnlyCollection[VariableSymbol]?) -> void
+            )?,
+            evolveAliases((BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol])?
         )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
             // Issue #178 / ADR-0047 §6: a user-declared function may carry the
             // same [NotNullWhen] / [MaybeNullWhen] postconditions C# uses.
@@ -2521,7 +2626,17 @@ internal partial class StatementBinder {
                     out var target,
                     out var underlying
                 ) &&
-                    PreservesArgumentTarget(call, arguments, i, isByRef, target!!, underlying!!, clearAssignedRoots) {
+                    PreservesArgumentTarget(
+                    call,
+                    arguments,
+                    i,
+                    isByRef,
+                    target!!,
+                    underlying!!,
+                    callableAliases,
+                    clearAssignedRoots,
+                    evolveAliases
+                ) {
                     let narrowThen = notNullWhenReturnValue != negate
                     let frame = if narrowThen {
                         (
@@ -2575,7 +2690,9 @@ internal partial class StatementBinder {
                         isByRef,
                         AccessPath.ForVariable(widenVarExpr.Variable),
                         widenedType,
-                        clearAssignedRoots
+                        callableAliases,
+                        clearAssignedRoots,
+                        evolveAliases
                     )
                     let widenThen = maybeNullWhenReturnValue != negate
                     if widenThen || !preserved {
@@ -2608,6 +2725,26 @@ internal partial class StatementBinder {
             return unwrapped is BoundAddressOfExpression{IsReadOnly: false} or BoundConditionalAddressExpression
         }
 
+        private func EvolveCallAliasesBeforeArguments(
+            call BoundExpression,
+            callableAliases IReadOnlyCollection[VariableSymbol]?,
+            evolveAliases((BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol])?
+        ) HashSet[VariableSymbol] {
+            var current = if callableAliases != nil {
+                HashSet[VariableSymbol](callableAliases)
+            } else {
+                HashSet[VariableSymbol]()
+            }
+            if evolveAliases != nil {
+                if call is BoundUserInstanceCallExpression userInstanceCall {
+                    current = evolveAliases(userInstanceCall.Receiver, current)
+                } else if call is BoundImportedInstanceCallExpression importedInstanceCall {
+                    current = evolveAliases(importedInstanceCall.Receiver, current)
+                }
+            }
+            return current
+        }
+
         private func PreservesArgumentTarget(
             call BoundExpression,
             arguments ImmutableArray[BoundExpression],
@@ -2615,35 +2752,53 @@ internal partial class StatementBinder {
             isByRef bool,
             target AccessPath,
             narrowedType TypeSymbol,
-            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?
+            callableAliases IReadOnlyCollection[VariableSymbol]?,
+            clearAssignedRoots(
+                (BoundNode, Dictionary[AccessPath, TypeSymbol], IReadOnlyCollection[VariableSymbol]?) -> void
+            )?,
+            evolveAliases((BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol])?
         ) bool {
             if clearAssignedRoots == nil {
                 return true
             }
+            var currentAliases = EvolveCallAliasesBeforeArguments(call, callableAliases, evolveAliases)
+            if evolveAliases != nil {
+                for var j = 0; j <= argumentIndex && j < arguments.Length; j++ {
+                    currentAliases = evolveAliases(arguments[j], currentAliases)
+                }
+            }
             if !isByRef {
                 let candidateFrame = Dictionary[AccessPath, TypeSymbol]{[target] = narrowedType}
                 for var j = argumentIndex + 1; j < arguments.Length; j++ {
-                    clearAssignedRoots(arguments[j], candidateFrame)
+                    clearAssignedRoots(arguments[j], candidateFrame, currentAliases)
                     if candidateFrame.Count == 0 {
                         return false
+                    }
+                    if evolveAliases != nil {
+                        currentAliases = evolveAliases(arguments[j], currentAliases)
                     }
                 }
                 if BuildCallEffectsShell(call, argumentIndex, includeCallBody: true) is {} shell {
                     let rootFrame = Dictionary[AccessPath, TypeSymbol]{
                         [AccessPath.ForVariable(target.Root)] = target.Root.Type
                     }
-                    clearAssignedRoots(shell, rootFrame)
+                    clearAssignedRoots(shell, rootFrame, currentAliases)
                     if rootFrame.Count == 0 {
                         return false
                     }
                 }
                 return true
             }
+            if evolveAliases != nil {
+                for var j = argumentIndex + 1; j < arguments.Length; j++ {
+                    currentAliases = evolveAliases(arguments[j], currentAliases)
+                }
+            }
             if BuildCallEffectsShell(call, argumentIndex, includeCallBody: false) is {} refShell {
                 let rootFrame = Dictionary[AccessPath, TypeSymbol]{
                     [AccessPath.ForVariable(target.Root)] = target.Root.Type
                 }
-                clearAssignedRoots(refShell, rootFrame)
+                clearAssignedRoots(refShell, rootFrame, currentAliases)
                 if rootFrame.Count == 0 {
                     return false
                 }
@@ -2656,23 +2811,31 @@ internal partial class StatementBinder {
             arguments ImmutableArray[BoundExpression],
             receiverPath AccessPath,
             receiverType TypeSymbol,
-            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?
+            callableAliases IReadOnlyCollection[VariableSymbol]?,
+            clearAssignedRoots(
+                (BoundNode, Dictionary[AccessPath, TypeSymbol], IReadOnlyCollection[VariableSymbol]?) -> void
+            )?,
+            evolveAliases((BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol])?
         ) bool {
             if clearAssignedRoots == nil {
                 return true
             }
+            var currentAliases = EvolveCallAliasesBeforeArguments(call, callableAliases, evolveAliases)
             let candidateFrame = Dictionary[AccessPath, TypeSymbol]{[receiverPath] = receiverType}
             for var j = 0; j < arguments.Length; j++ {
-                clearAssignedRoots(arguments[j], candidateFrame)
+                clearAssignedRoots(arguments[j], candidateFrame, currentAliases)
                 if candidateFrame.Count == 0 {
                     return false
+                }
+                if evolveAliases != nil {
+                    currentAliases = evolveAliases(arguments[j], currentAliases)
                 }
             }
             if BuildCallEffectsShell(call, excludeArgumentIndex: -1, includeCallBody: true) is {} shell {
                 let rootFrame = Dictionary[AccessPath, TypeSymbol]{
                     [AccessPath.ForVariable(receiverPath.Root)] = receiverPath.Root.Type
                 }
-                clearAssignedRoots(shell, rootFrame)
+                clearAssignedRoots(shell, rootFrame, currentAliases)
                 if rootFrame.Count == 0 {
                     return false
                 }
@@ -2687,26 +2850,28 @@ internal partial class StatementBinder {
         ) BoundExpression? {
             switch call {
                 case userCall is BoundCallExpression {
+                    let bodyHasEffects = includeCallBody && !IsPureParameterNullCheckBody(userCall.Function)
                     let filtered = BuildFilteredRefArguments(
                         userCall.Arguments,
                         userCall.Function.Parameters,
                         excludeArgumentIndex,
+                        includeCallBody: bodyHasEffects,
                         out var hasRefArgs
                     )
-                    let bodyHasEffects = includeCallBody && !IsPureParameterNullCheckBody(userCall.Function)
                     if !bodyHasEffects && !hasRefArgs {
                         return nil
                     }
                     return BoundCallExpression(userCall.Syntax, userCall.Function, filtered)
                 }
                 case userInstanceCall is BoundUserInstanceCallExpression {
+                    let bodyHasEffects = includeCallBody && !IsPureParameterNullCheckBody(userInstanceCall.Method)
                     let filtered = BuildFilteredRefArguments(
                         userInstanceCall.Arguments,
                         userInstanceCall.Method.Parameters,
                         excludeArgumentIndex,
+                        includeCallBody: bodyHasEffects,
                         out var hasRefArgs
                     )
-                    let bodyHasEffects = includeCallBody && !IsPureParameterNullCheckBody(userInstanceCall.Method)
                     if !bodyHasEffects && !hasRefArgs {
                         return nil
                     }
@@ -2718,13 +2883,14 @@ internal partial class StatementBinder {
                     )
                 }
                 case importedCall is BoundImportedCallExpression {
+                    let bodyHasEffects = includeCallBody && !IsKnownPureImportedPredicate(importedCall.Function.Method)
                     let filtered = BuildFilteredImportedRefArguments(
                         importedCall.Arguments,
                         importedCall.Function.Method.GetParameters(),
                         excludeArgumentIndex,
+                        includeCallBody: bodyHasEffects,
                         out var hasRefArgs
                     )
-                    let bodyHasEffects = includeCallBody && !IsKnownPureImportedPredicate(importedCall.Function.Method)
                     if !bodyHasEffects && !hasRefArgs {
                         return nil
                     }
@@ -2735,6 +2901,7 @@ internal partial class StatementBinder {
                         importedInstanceCall.Arguments,
                         importedInstanceCall.Method.GetParameters(),
                         excludeArgumentIndex,
+                        includeCallBody,
                         out var hasRefArgs
                     )
                     if !includeCallBody && !hasRefArgs {
@@ -2830,10 +2997,43 @@ internal partial class StatementBinder {
             return false
         }
 
+        private func IsCallableEffectType(type TypeSymbol?) bool -> (
+            type is FunctionTypeSymbol or DelegateTypeSymbol
+        ) ||
+            (type?.ClrType is {} clrType && ClrTypeUtilities.IsDelegateType(clrType))
+
+        private func UnwrapCallableEffectArgument(expression BoundExpression) BoundExpression {
+            var current = expression
+            while current is BoundConversionExpression conversion {
+                current = conversion.Expression
+            }
+            while current is BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.NullAssertion}} assertion {
+                current = assertion.Operand
+            }
+            return current
+        }
+
+        private func BuildCallableShellArgument(argument BoundExpression) BoundExpression {
+            let unwrapped = UnwrapCallableEffectArgument(argument)
+            if unwrapped is BoundFunctionLiteralExpression literal {
+                return literal
+            }
+            if unwrapped is BoundAssignmentExpression assign &&
+                UnwrapCallableEffectArgument(assign.Expression) is BoundFunctionLiteralExpression assignedLiteral {
+                return assignedLiteral
+            }
+            if unwrapped is BoundVariableExpression variable {
+                return variable
+            }
+            let unknownCallable = LocalVariableSymbol("<callable-arg>", isReadOnly: false, argument.Type)
+            return BoundVariableExpression(nil, unknownCallable)
+        }
+
         private func BuildFilteredRefArguments(
             arguments ImmutableArray[BoundExpression],
             parameters ImmutableArray[ParameterSymbol],
             excludeArgumentIndex int32,
+            includeCallBody bool,
             out hasRefArgs bool
         ) ImmutableArray[BoundExpression] {
             hasRefArgs = false
@@ -2850,6 +3050,8 @@ internal partial class StatementBinder {
                 if i != excludeArgumentIndex && IsByRefArgument(arguments[i], refKind) {
                     hasRefArgs = true
                     builder.Add(arguments[i])
+                } else if includeCallBody && IsCallableEffectType(arguments[i].Type) {
+                    builder.Add(BuildCallableShellArgument(arguments[i]))
                 } else if refKind is RefKind.Ref or RefKind.Out {
                     let placeholder = LocalVariableSymbol("<excluded-ref>", isReadOnly: false, TypeSymbol.Int32)
                     builder.Add(BoundVariableExpression(nil, placeholder))
@@ -2864,6 +3066,7 @@ internal partial class StatementBinder {
             arguments ImmutableArray[BoundExpression],
             parameters[]ParameterInfo,
             excludeArgumentIndex int32,
+            includeCallBody bool,
             out hasRefArgs bool
         ) ImmutableArray[BoundExpression] {
             hasRefArgs = false
@@ -2880,6 +3083,8 @@ internal partial class StatementBinder {
                 if i != excludeArgumentIndex && IsByRefArgument(arguments[i], refKind) {
                     hasRefArgs = true
                     builder.Add(arguments[i])
+                } else if includeCallBody && IsCallableEffectType(arguments[i].Type) {
+                    builder.Add(BuildCallableShellArgument(arguments[i]))
                 } else if refKind is RefKind.Ref or RefKind.Out {
                     let placeholder = LocalVariableSymbol("<excluded-ref>", isReadOnly: false, TypeSymbol.Int32)
                     builder.Add(BoundVariableExpression(nil, placeholder))
@@ -2954,7 +3159,11 @@ internal partial class StatementBinder {
             isByRef bool,
             negate bool,
             restrictBareVariableToLocalsAndParams bool,
-            clearAssignedRoots((BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void)?
+            callableAliases IReadOnlyCollection[VariableSymbol]?,
+            clearAssignedRoots(
+                (BoundNode, Dictionary[AccessPath, TypeSymbol], IReadOnlyCollection[VariableSymbol]?) -> void
+            )?,
+            evolveAliases((BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol])?
         )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
             if !TryGetNullableNarrowingTarget(
                 receiver,
@@ -2964,7 +3173,17 @@ internal partial class StatementBinder {
             ) {
                 return frames
             }
-            if !PreservesArgumentTarget(call, arguments, 0, isByRef, target, underlying, clearAssignedRoots) {
+            if !PreservesArgumentTarget(
+                call,
+                arguments,
+                0,
+                isByRef,
+                target,
+                underlying,
+                callableAliases,
+                clearAssignedRoots,
+                evolveAliases
+            ) {
                 return frames
             }
             var thenFrame Dictionary[AccessPath, TypeSymbol]? = frames.Then

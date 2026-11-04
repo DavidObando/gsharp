@@ -444,6 +444,130 @@ False
 0`, output.Replace("\r\n", "\n").TrimEnd('\n'))
     }
 
+    @Fact
+    func Callable_Reassignment_Callback_Writes_And_Nested_Statement_Or_Switch_Branches_Respect_Narrowing() {
+        let callableReassignment = `package Issue4969.CallableReassign
+import System
+import System.Diagnostics.CodeAnalysis
+
+func Has(@NotNullWhen(true) value string?, a () -> bool, b bool) bool -> value != nil
+
+func CheckConditionAnd(external () -> bool, seed string?) int32 {
+    var s = seed
+    var action = external
+    let reset = () -> {
+        s = nil
+        return true
+    }
+    return ((action = reset) is {} a && !string.IsNullOrEmpty(s) && action()) ? s.Length : 0
+}
+
+func CheckConditionOr(external () -> bool, seed string?) int32 {
+    var s = seed
+    var action = external
+    let reset = () -> {
+        s = nil
+        return false
+    }
+    return ((action = reset) is not {} a || string.IsNullOrEmpty(s) || action()) ? 0 : s.Length
+}
+
+@SuppressDiagnostic("GS0524")
+func CheckSubsequentArguments(external () -> bool, seed string?) int32 {
+    var s = seed
+    var action = external
+    let reset = () -> {
+        s = nil
+        return true
+    }
+    return Has(s, (action = reset), action()) ? s.Length : 0
+}
+`
+        Assert.Equal("GS0158:Length;GS0158:Length;GS0158:Length", DiagnoseSource(callableReassignment))
+
+        let nestedIfAndSwitch = `package Issue4969.NestedIfAndSwitch
+func NestedIfInIfExpr(ref s string?, flag bool) int32 -> if s != nil {
+    if flag {
+        s = nil
+        0
+    } else {
+        let n = s.Length
+        n
+    }
+} else {
+    0
+}
+
+func SwitchExprInTernary(ref s string?, flag bool) int32 -> s != nil ? switch flag {
+    case true: (s = nil) == nil ? 0 : 0
+    default: s.Length
+} : 0
+`
+        Assert.Equal("", DiagnoseSource(nestedIfAndSwitch))
+
+        let outputDirectory = Path.Combine(
+            AppContext.BaseDirectory,
+            "Issue4964ConditionalNarrowingParityTests",
+            Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(outputDirectory)
+        try {
+            let helperSourcePath = Path.Combine(outputDirectory, "CallbackHelper.gs")
+            let helperPath = Path.Combine(outputDirectory, "CallbackHelper.dll")
+            File.WriteAllText(helperSourcePath, `package Issue4969.CallbackLib
+import System
+import System.Diagnostics.CodeAnalysis
+
+public shared class CallbackPredicates {
+    public func Has(@NotNullWhen(true) value string?, callback Action) bool {
+        callback()
+        return value != nil
+    }
+}
+`)
+
+            let consumerPath = Path.Combine(outputDirectory, "Consumer.gs")
+            let consumerOut = Path.Combine(outputDirectory, "Consumer.dll")
+            File.WriteAllText(consumerPath, `package Issue4969.CallbackConsumer
+import Issue4969.CallbackLib
+var g string? = "seed"
+func Check() int32 -> CallbackPredicates.Has(g, () -> { g = nil }) ? g.Length : 0
+`)
+            using let standardOut = StringWriter()
+            using let standardError = StringWriter()
+            let previousOut = Console.Out
+            let previousError = Console.Error
+            Console.SetOut(standardOut)
+            Console.SetError(standardError)
+            var helperExit int32
+            var exitCode int32
+            try {
+                helperExit = Program.Main(
+                    []string{"/out:" + helperPath, "/target:library", "/targetframework:net10.0", helperSourcePath}
+                )
+                exitCode = Program.Main(
+                    []string{
+                        "/out:" + consumerOut,
+                        "/target:library",
+                        "/targetframework:net10.0",
+                        "/reference:" + helperPath,
+                        consumerPath
+                    }
+                )
+            } finally {
+                Console.SetOut(previousOut)
+                Console.SetError(previousError)
+            }
+            Assert.Equal(0, helperExit)
+            Assert.NotEqual(0, exitCode)
+            Assert.Contains("GS0158", standardOut.ToString() + standardError.ToString())
+        } finally {
+            if Directory.Exists(outputDirectory) {
+                Directory.Delete(outputDirectory, recursive: true)
+            }
+        }
+    }
+
     @Theory
     @InlineData("return (dict.TryGetValue(\"missing\", out value) && flag) ? 0 : value.Length", "GS0158:Length")
     @InlineData("return (flag && dict.TryGetValue(\"missing\", out value)) ? 0 : value.Length", "GS0158:Length")

@@ -90,6 +90,7 @@ internal partial class ExpressionBinder {
                 let bindDefaultResult = func () BoundExpression {
                     return BindExpressionWithNarrowing(armSyntax.Result, nil, targetType, canBeVoid)
                 }
+                let beforeDefaultArm = CaptureExpressionNarrowingFrames()
                 let result = if defaultIndex == syntax.Arms.Length - 1 {
                     bindDefaultResult()
                 } else {
@@ -126,6 +127,7 @@ internal partial class ExpressionBinder {
                         )
                     )
                 }
+                RestoreExpressionNarrowingFrames(beforeDefaultArm)
                 boundArmBuilders.Add((armSyntax, pattern, default(BoundExpression), result))
                 continue
             }
@@ -140,6 +142,13 @@ internal partial class ExpressionBinder {
             let header = if earlyHeaders[armIndex] is {} early {
                 $scope = earlyScopes[armIndex]!!
                 reapplySwitchArmHeaderEffects(patternSyntax, armSyntax.Guard, early)
+                let evaluatedSwitchValue = LocalVariableSymbol("<switch-value>", true, discriminant.Type)
+                InvalidateExpressionNarrowingFrames(
+                    BoundIsExpression(patternSyntax, BoundVariableExpression(nil, evaluatedSwitchValue), early.Pattern)
+                )
+                if early.Guard is {} earlyGuard {
+                    InvalidateExpressionNarrowingFrames(earlyGuard)
+                }
                 early
             } else {
                 $scope = BoundScope($scope)
@@ -162,6 +171,7 @@ internal partial class ExpressionBinder {
             }
             // ADR-0166: the arm result sees the guard's when-true pattern variables.
             let (guardWhenTrue, _) = PatternVariables.Classify(guard_)
+            let beforeArmResult = CaptureExpressionNarrowingFrames()
             let armResult = BindWithPatternVariables(
                 guardWhenTrue,
                 () -> {
@@ -169,6 +179,7 @@ internal partial class ExpressionBinder {
                 },
                 armSyntax.Result
             )
+            RestoreExpressionNarrowingFrames(beforeArmResult)
             $scope = $scope.Pop()
             boundArmBuilders.Add((armSyntax, pattern, guard_, armResult))
         }

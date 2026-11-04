@@ -565,8 +565,16 @@ partial class Binder {
             ) -> Statements.ReapplySwitchArmHeaderEffects(valueSyntax, guardSyntax, header),
             bindAfterLaterArmTests: (bindLaterTests() -> void, fallsThrough bool, bind() -> BoundNode) ->
             Statements.BindAfterLaterArmTests(bindLaterTests, fallsThrough, bind),
-            clearAssignedRoots: (node BoundNode, state Dictionary[AccessPath, TypeSymbol]) ->
-            Statements.ClearAssignedRoots(node, state)
+            clearAssignedRoots: (
+                node BoundNode,
+                state Dictionary[AccessPath, TypeSymbol],
+                aliases IReadOnlyCollection[VariableSymbol]?
+            ) -> Statements.ClearAssignedRoots(node, state, aliases),
+            evolveAliases: (expr BoundExpression, aliases HashSet[VariableSymbol]) ->
+            Statements.EvolveCallableAliases(expr, aliases),
+            recordExpressionNarrowingKill: (frame NarrowingFrame, path AccessPath, type TypeSymbol) ->
+            Statements.RecordExpressionNarrowingKill(frame, path, type),
+            getCallableAliases: () -> Statements.CaptureExternalCallableAliasesForExpression()
         )
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor
