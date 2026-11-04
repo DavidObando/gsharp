@@ -265,6 +265,7 @@ open class Adr0208NarrowingCorpusTests {
                 "m16_5301_goto_into_try_after_callable_alias_assignment_does_not_lift_R6",
                 "m17_5301_goto_to_labeled_if_after_callable_alias_assignment_does_not_lift_R6",
                 "m18_5301_goto_into_if_condition_after_return_in_branch_does_not_lift_R6",
+                "m19_5301_dead_block_bodied_arrow_lambda_label_does_not_leak_reachability_R6",
                 "m1_unrelated_interface_refinement",
                 "n1_boxed_value_type_test",
                 "o1_callback_after_test_replaces_root",
@@ -10382,6 +10383,25 @@ func Run(skip bool, flag bool) {
     Console.WriteLine(x.Length)
 }
 func Main() { Run(true, false) }`, "GS0158@19:25", "reject", "", "R6 (#5301)"}
+            yield[]object{"m19_5301_dead_block_bodied_arrow_lambda_label_does_not_leak_reachability_R6", `import System
+func Run() int32 {
+    var x string? = nil
+    x = "safe"
+    goto Done
+    let unused = () -> {
+        Again:
+        var marker = 0
+        if false {
+            goto Again
+        }
+        0
+    }
+    x = nil
+    goto Done
+    Done:
+    return x.Length
+}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "4", "R6 (#5301)"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

@@ -400,6 +400,35 @@ Run(true, false)
     }
 
     @Fact
+    func DeadBlockBodiedArrowLambdaLabel_DoesNotMakeSubsequentDeadCodeReachable() {
+        let result = Evaluate(`
+import System
+
+func Run() int32 {
+    var x string? = nil
+    x = "safe"
+    goto Done
+    let unused = () -> {
+    Again:
+        var marker = 0
+        if false {
+            goto Again
+        }
+        0
+    }
+    x = nil
+    goto Done
+Done:
+    return x.Length
+}
+
+Run()
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(4, result.Value)
+    }
+
+    @Fact
     func Goto_BypassesSwitchArm_DoesNotNarrowFieldPath() {
         // ADR-0208 section 16, row R6 (#5301): when the default arm jumps to
         // `Skip:` via `goto Skip` without narrowing `b.Pet` to `Dog`, the label

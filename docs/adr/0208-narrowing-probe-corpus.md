@@ -260,5 +260,6 @@ d06 when another fact is in force at the loop entry; the row now gets the same r
 | m16 | `if skip { goto Inside }`; `if flag { try { g = cb; Inside: ... } finally { ... }; x = "safe"; g() } else { x = "other" }`; `x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
 | m17 | `if skip { goto L }`; `g = cb`; `L: if flag { x = "safe"; g() } else { x = "other" }`; `x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
 | m18 | `if skip { goto Inside }`; `if flag { return; if ({ Inside: var marker = 0; true }) { ... } } else { x = "other" }`; `x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m19 | `var x string? = nil; x = "safe"; goto Done; let unused = () -> { Again: ...; if false { goto Again }; 0 }; x = nil; goto Done; Done: return x.Length` | accepted, prints `4` | accepted, prints `4` |
 
 

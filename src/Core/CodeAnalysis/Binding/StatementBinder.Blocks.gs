@@ -851,12 +851,16 @@ internal partial class StatementBinder {
     /// `throw;` in a lambda.
     /// @param syntax The nested function's block body.
     /// @returns The bound body.
-    internal func BindNestedFunctionBody(syntax BlockStatementSyntax) BoundStatement {
+    internal func BindNestedFunctionBody(syntax BlockStatementSyntax) BoundStatement -> BindNestedFunctionBody(
+        () -> BindBlockStatement(syntax)
+    )
+
+    internal func BindNestedFunctionBody[T](bind() -> T) T {
         let inheritedFallthrough = currentStatementListFallsThrough
         let inheritedReachabilityGeneration = internalReachabilityGeneration
         currentStatementListFallsThrough = true
         try {
-            return OutsideExceptionHandlers(() -> BindBlockStatement(syntax))
+            return OutsideExceptionHandlers(bind)
         } finally {
             currentStatementListFallsThrough = inheritedFallthrough
             internalReachabilityGeneration = inheritedReachabilityGeneration
