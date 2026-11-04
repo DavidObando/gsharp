@@ -5,6 +5,7 @@
 package GSharp.Core.Tests.CodeAnalysis
 
 import GSharp.Core.CodeAnalysis
+import GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree
@@ -27,7 +28,7 @@ open class Adr0212ImportedRecordMemberTests {
         resolver.CurrentAssemblyName = "Consumer"
         let source = "package Consumer\nimport Records\n\nfunc Run(p Person) {\n    p.GetType() // PRecord\n}\n"
         let tree = GsSyntaxTree.Parse(SourceText.From(source, "consumer.gs"))
-        let model = Compilation(resolver, tree).GetSemanticModel(tree)
+        let model = GsCompilation(resolver, tree).GetSemanticModel(tree)
         let access = tree.Root.DescendantNodes().OfType[AccessorExpressionSyntax]().First()
         let receiver = model.GetReceiverTypeInfo(access.LeftPart).Type!!
         Assert.IsType[StructSymbol](receiver)
@@ -58,7 +59,7 @@ open class Adr0212ImportedRecordMemberTests {
         resolver.CurrentAssemblyName = "Consumer"
         let source = "package Consumer\nimport Chain\n\nclass S : Q {\n    override func Bar() { }\n}\n\nfunc Run(s S) {\n    s.Foo() // PChain\n}\n"
         let tree = GsSyntaxTree.Parse(SourceText.From(source, "consumer.gs"))
-        let model = Compilation(resolver, tree).GetSemanticModel(tree)
+        let model = GsCompilation(resolver, tree).GetSemanticModel(tree)
         let access = tree.Root.DescendantNodes().OfType[AccessorExpressionSyntax]().First()
         let receiver = model.GetReceiverTypeInfo(access.LeftPart).Type!!
         let position = source.IndexOf("// PChain", StringComparison.Ordinal)
@@ -77,7 +78,7 @@ open class Adr0212ImportedRecordMemberTests {
         resolver.CurrentAssemblyName = "Consumer"
         let source = "package Consumer\nimport Generic\n\ndata class D : Base {\n    let X int32\n}\n\nfunc Run(d D) {\n    d.ToString() // PGeneric\n}\n"
         let tree = GsSyntaxTree.Parse(SourceText.From(source, "consumer.gs"))
-        let model = Compilation(resolver, tree).GetSemanticModel(tree)
+        let model = GsCompilation(resolver, tree).GetSemanticModel(tree)
         let access = tree.Root.DescendantNodes().OfType[AccessorExpressionSyntax]().First()
         let receiver = model.GetReceiverTypeInfo(access.LeftPart).Type!!
         let position = source.IndexOf("// PGeneric", StringComparison.Ordinal)
@@ -113,7 +114,7 @@ open class Adr0212ImportedRecordMemberTests {
         resolver.CurrentAssemblyName = "Consumer"
         let source = "package Consumer\nimport Gen\n\nclass Payload { var Value int32 = 0 }\n\nclass PayloadConverter : Converter[Payload] {\n    override func Read(item Payload) { }\n    override func Write() Payload { return Payload{} }\n}\n\nfunc Run(c PayloadConverter) {\n    c.Write() // PConverter\n}\n"
         let tree = GsSyntaxTree.Parse(SourceText.From(source, "consumer.gs"))
-        let model = Compilation(resolver, tree).GetSemanticModel(tree)
+        let model = GsCompilation(resolver, tree).GetSemanticModel(tree)
         let access = tree.Root.DescendantNodes().OfType[AccessorExpressionSyntax]().First()
         let receiver = model.GetReceiverTypeInfo(access.LeftPart).Type!!
         let position = source.IndexOf("// PConverter", StringComparison.Ordinal)
