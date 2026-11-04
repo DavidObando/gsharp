@@ -731,11 +731,21 @@ class ImportedTypeSymbol : TypeSymbol {
                         parameter = ParameterSymbol(name, ClrNullability.GetPropertyTypeSymbol(selectedProperty))
                     }
                 } else {
-                    let member = ImportedAssemblySemantics.GetPrimaryConstructorSignatureMember(type, i)
+                    let member = ImportedAssemblySemantics.GetPrimaryConstructorMember(type, i)
                     if member is FieldInfo field {
                         parameter = ParameterSymbol(name, ClrNullability.GetFieldTypeSymbol(field))
                     } else if member is PropertyInfo property {
                         parameter = ParameterSymbol(name, ClrNullability.GetPropertyTypeSymbol(property))
+                    } else if ImportedAssemblySemantics.GetPrimaryConstructorSignatureParameter(
+                        type,
+                        i
+                    ) is {} inheritedParam {
+                        parameter = ParameterSymbol(name, ClrNullability.GetParameterTypeSymbol(inheritedParam))
+                    } else if ImportedAssemblySemantics.GetPrimaryConstructorSignatureMember(
+                        type,
+                        i
+                    ) is PropertyInfo inheritedProperty {
+                        parameter = ParameterSymbol(name, ClrNullability.GetPropertyTypeSymbol(inheritedProperty))
                     }
                 }
                 // Preserve malformed slots so construction cannot select a parameterless fallback.

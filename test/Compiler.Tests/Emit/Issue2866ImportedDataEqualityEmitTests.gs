@@ -89,7 +89,11 @@ open data class Node(Id int32)
 
 data class Leaf(Id int32) : Node(Id)
 
-data class LeafPair(Id int32, Extra int32) : Node(Id)`
+data class LeafPair(Id int32, Extra int32) : Node(Id)
+
+open data class TupleBase(Pair (X int32, Y int32))
+
+data class TupleDerived(Pair (Left int32, Right int32), Extra int32) : TupleBase(Pair)`
         const source = `package i2866d
 import i2866lib4
 
@@ -99,9 +103,11 @@ func Main() {
     let lit = LeafPair{Id: 3, Extra: 4}
     let copied = lit.copy(Id: 5, Extra: 6)
     let (cid, cextra) = copied.copy(Id: 7)
-    System.Console.WriteLine((a == b).ToString() + "|" + cid.ToString() + ":" + cextra.ToString())
+    let td = TupleDerived((Left: 10, Right: 20), 30)
+    let (pair, textra) = td
+    System.Console.WriteLine((a == b).ToString() + "|" + cid.ToString() + ":" + cextra.ToString() + "|" + pair.Left.ToString() + ":" + pair.Right.ToString() + ":" + textra.ToString())
 }`
-        Assert.Equal("False|7:6${Environment.NewLine}", CompileAndRun(source, library, "i2866lib4"))
+        Assert.Equal("False|7:6|10:20:30${Environment.NewLine}", CompileAndRun(source, library, "i2866lib4"))
     }
 
     @Fact

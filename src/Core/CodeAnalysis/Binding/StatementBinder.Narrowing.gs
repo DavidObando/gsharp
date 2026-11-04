@@ -6642,16 +6642,39 @@ internal partial class StatementBinder {
             index int32,
             member Symbol,
             references ReferenceResolver?
-        ) TypeSymbol -> if aggregate.IsData &&
-            aggregate.ClrType == nil &&
-            aggregate.HasPrimaryConstructor &&
-            index >= 0 &&
-            index < aggregate
-            .PrimaryConstructorParameters
-            .Length {
-            aggregate.PrimaryConstructorParameters[index].Type
-        } else {
-            GetDeconstructionMemberType(receiverType, member, references)
+        ) TypeSymbol {
+            if aggregate.IsData &&
+                aggregate.HasPrimaryConstructor &&
+                index >= 0 &&
+                index < aggregate
+                .PrimaryConstructorParameters
+                .Length {
+                if aggregate.ClrType is not{} aggregateClrType {
+                    return aggregate.PrimaryConstructorParameters[index].Type
+                }
+                if member is PropertySymbol{ImportedMember: PropertyInfo importedProperty} && !ClrTypeUtilities.AreSame(
+                    importedProperty.DeclaringType,
+                    aggregateClrType
+                ) {
+                    if receiverType is ImportedTypeSymbol{TypeArguments: {IsDefaultOrEmpty: false}} &&
+                        ImportedTypeSymbol.FindPrimaryConstructor(
+                        aggregateClrType,
+                        aggregate.PrimaryConstructorParameters
+                    ) is {} primaryCtor {
+                        return ImportedTypeSymbol.NormalizeSemanticAggregate(
+                            MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, primaryCtor, index),
+                            importedProperty.PropertyType,
+                            references
+                        )
+                    }
+                    return ImportedTypeSymbol.NormalizeSemanticAggregate(
+                        aggregate.PrimaryConstructorParameters[index].Type,
+                        importedProperty.PropertyType,
+                        references
+                    )
+                }
+            }
+            return GetDeconstructionMemberType(receiverType, member, references)
         }
 
         private func GetDeconstructionMemberType(

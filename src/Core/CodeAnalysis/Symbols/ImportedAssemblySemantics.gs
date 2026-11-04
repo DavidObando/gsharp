@@ -117,6 +117,55 @@ internal shared class ImportedAssemblySemantics {
         }
     }
 
+    internal func GetPrimaryConstructorSignatureParameter(type Type, index int32) ParameterInfo? {
+        if GetPrimaryConstructorMember(type, index) != nil ||
+            GetPrimaryConstructorSignatureMember(type, index) is not PropertyInfo inheritedProp ||
+            !TryGetTypeSemantics(type, out var semantics) {
+            return nil
+        }
+        let names = semantics!!.PrimaryConstructorParameterNames
+        let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly
+        for ctor in ClrTypeUtilities.SafeGetConstructors(type, flags) {
+            let parameters = ctor.GetParameters()
+            if parameters.Length != names.Length ||
+                (parameters.Length == 1 && ClrTypeUtilities.AreSame(parameters[0].ParameterType, type)) {
+                continue
+            }
+            var allNamesMatch = true
+            for var i = 0; i < parameters.Length; i++ {
+                if !string.Equals(parameters[i].Name, names[i], StringComparison.Ordinal) {
+                    allNamesMatch = false
+                    break
+                }
+            }
+            if allNamesMatch && ClrNullability.GetSignatureType(parameters[index]).Equals(
+                ClrNullability.GetSignatureType(inheritedProp)
+            ) {
+                return parameters[index]
+            }
+        }
+        for method in ClrTypeUtilities.SafeGetMethods(type, flags) {
+            if !string.Equals(method.Name, "Deconstruct", StringComparison.Ordinal) {
+                continue
+            }
+            let parameters = method.GetParameters()
+            if parameters.Length != names.Length {
+                continue
+            }
+            var allMatch = true
+            for var i = 0; i < parameters.Length; i++ {
+                if !parameters[i].IsOut || !string.Equals(parameters[i].Name, names[i], StringComparison.Ordinal) {
+                    allMatch = false
+                    break
+                }
+            }
+            if allMatch {
+                return parameters[index]
+            }
+        }
+        return nil
+    }
+
     internal func GetPrimaryConstructorSignatureMember(type Type, index int32) MemberInfo? {
         if GetPrimaryConstructorMember(type, index) is {} declaredMember {
             return declaredMember
