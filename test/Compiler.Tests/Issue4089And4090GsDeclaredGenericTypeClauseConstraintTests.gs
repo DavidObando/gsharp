@@ -734,6 +734,12 @@ func readList[V, T IValue4744[List[V]]](item T) int32 -> item.Value.Count
 func useNullableList[T ValueBase4744[List[string?]]](x T) int32 -> x.Saved.Count
 func cmp9[T IComparable[T]](x T) int32 -> x.CompareTo(x)
 func readImportedClass[V, T List[V]](x T) int32 -> x.Count
+func acceptCovariantSeq[T IEnumerable[string?]](x T) string -> "cov"
+func acceptContravariantCmp[T IComparer[string]](c T) int32 -> c.Compare("a", "b")
+
+class NullableStrComparer4744 : IComparer[string?] {
+    public func Compare(x string?, y string?) int32 -> 0
+}
 
 class IntListItem4744 : IValue4744[List[int32]] {
     public prop Value List[int32] -> List[int32]{7}
@@ -769,7 +775,9 @@ Console.WriteLine(readList[int32, IntListItem4744](IntListItem4744()))
 Console.WriteLine(useNullableList[NullableListDerived4744](NullableListDerived4744()))
 Console.WriteLine(cmp9((1, 2, 3, 4, 5, 6, 7, 8, 9)))
 Console.WriteLine(readImportedClass[int32, List[int32]](List[int32]{9}))
-Console.WriteLine(Outer4744[int32].Use[NestedIntDerived4744](NestedIntDerived4744()))`, []string{
+Console.WriteLine(Outer4744[int32].Use[NestedIntDerived4744](NestedIntDerived4744()))
+Console.WriteLine(acceptCovariantSeq[List[string]](List[string]{"a"}) + ":" + acceptCovariantSeq[[]string]([]string{"b"}))
+Console.WriteLine(acceptContravariantCmp[NullableStrComparer4744](NullableStrComparer4744()))`, []string{
                     "7",
                     "7",
                     "7",
@@ -781,7 +789,9 @@ Console.WriteLine(Outer4744[int32].Use[NestedIntDerived4744](NestedIntDerived474
                     "1",
                     "0",
                     "1",
-                    "nb"
+                    "nb",
+                    "cov:cov",
+                    "0"
                 }}
             // #4762: satisfied closed and forwarded open generic named-delegate
             // constructions compile, IL-verify, and run.

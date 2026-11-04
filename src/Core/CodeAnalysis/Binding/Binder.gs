@@ -14135,19 +14135,12 @@ partial class Binder {
                         var allMatch = true
                         for var i = 0; i < expectedPositions.Length; i++ {
                             let expectedArg = SubstituteSelfReference(expectedPositions[i], tp, typeArgument)
-                            let isContravariant = i < openParameters.Length &&
-                                (
-                                openParameters[i].GenericParameterAttributes & GenericParameterAttributes.Contravariant
-                            ) != 0
-                            if !SameConstraintType(alignedActual[i], expectedArg) &&
-                                !(
-                                isContravariant && typeArgument != nil && object.ReferenceEquals(
-                                    expectedArg,
-                                    typeArgument
-                                ) &&
-                                    alignedActual[i] is NullableTypeSymbol nullableSelf &&
-                                    SameConstraintType(nullableSelf.UnderlyingType, expectedArg)
-                            ) {
+                            let variance = if i < openParameters.Length {
+                                openParameters[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
+                            } else {
+                                GenericParameterAttributes.None
+                            }
+                            if !IsConstraintArgumentCompatible(alignedActual[i], expectedArg, variance) {
                                 allMatch = false
                                 break
                             }
@@ -14453,6 +14446,33 @@ partial class Binder {
                 }
             }
             return true
+        }
+
+        private func IsConstraintArgumentCompatible(
+            actualArg TypeSymbol,
+            expectedArg TypeSymbol,
+            variance GenericParameterAttributes
+        ) bool {
+            if SameConstraintType(actualArg, expectedArg) {
+                return true
+            }
+            let l = PlatformTypeSymbol.StripTopLevel(actualArg)
+            let r = PlatformTypeSymbol.StripTopLevel(expectedArg)
+            if (l is SliceTypeSymbol || l is ArrayTypeSymbol || l is RectangularArrayTypeSymbol) &&
+                (r is SliceTypeSymbol || r is ArrayTypeSymbol || r is RectangularArrayTypeSymbol) {
+                return false
+            }
+            return switch variance & GenericParameterAttributes.VarianceMask {
+                case GenericParameterAttributes.Covariant: Conversion.IsImplicitReferenceVariantSlot(
+                    actualArg,
+                    expectedArg
+                )
+                case GenericParameterAttributes.Contravariant: Conversion.IsImplicitReferenceVariantSlot(
+                    expectedArg,
+                    actualArg
+                )
+                default: false
+            }
         }
 
         // Issue #4744: compares constraint type arguments while preserving
@@ -14798,11 +14818,17 @@ partial class Binder {
                         if openCandidateArgs.Length != constraintPositions.Length {
                             continue
                         }
+                        let openParameters = openCandidate.GetGenericTypeDefinition().GetGenericArguments()
                         var allMatch = true
                         for var i = 0; i < openCandidateArgs.Length; i++ {
                             let actualArg = ProjectOpenClrTypeWithArguments(openCandidateArgs[i], typeArgPositions)
                             let expectedArg = SubstituteSelfReference(constraintPositions[i], tp, typeArgument)
-                            if actualArg == nil || !SameConstraintType(actualArg, expectedArg) {
+                            let variance = if i < openParameters.Length {
+                                openParameters[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
+                            } else {
+                                GenericParameterAttributes.None
+                            }
+                            if actualArg == nil || !IsConstraintArgumentCompatible(actualArg, expectedArg, variance) {
                                 allMatch = false
                                 break
                             }
@@ -14824,8 +14850,14 @@ partial class Binder {
                         ) {
                             continue
                         }
+                        let openParameters = candidate.GetGenericTypeDefinition().GetGenericArguments()
+                        let variance = if openParameters.Length == 1 {
+                            openParameters[0].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
+                        } else {
+                            GenericParameterAttributes.None
+                        }
                         let expectedArg = SubstituteSelfReference(constraintPositions[0], tp, typeArgument)
-                        if SameConstraintType(typeArgPositions[0], expectedArg) {
+                        if IsConstraintArgumentCompatible(typeArgPositions[0], expectedArg, variance) {
                             return true
                         }
                     }
