@@ -1435,21 +1435,22 @@ internal partial class StatementBinder {
     ) {
         let valueTemps = [plans.Count]LocalVariableSymbol?
         for var i = 0; i < plans.Count; i++ {
-            var assignedValue BoundExpression? = plans[i].AssignedValue
-            if assignedValue == nil {
+            if plans[i].AssignedValue is not{} initialValue {
                 continue
             }
-            if assignedValue.Type == TypeSymbol.Error {
-                statements.Add(BoundExpressionStatement(syntax, assignedValue))
+            if initialValue.Type == TypeSymbol.Error {
+                statements.Add(BoundExpressionStatement(syntax, initialValue))
                 continue
             }
-            if assignedValue.Type is TupleTypeSymbol{HasNilElement: true} unresolvedTuple {
+            let assignedValue = if initialValue.Type is TupleTypeSymbol{HasNilElement: true} unresolvedTuple {
                 let resolvedTuple = TupleTypeSymbol.ResolveNilElements(unresolvedTuple)
-                assignedValue = conversions.BindConversion(
-                    assignedValue.Syntax?.Location ?? syntax.Location,
-                    assignedValue,
+                conversions.BindConversion(
+                    initialValue.Syntax?.Location ?? syntax.Location,
+                    initialValue,
                     resolvedTuple
                 )
+            } else {
+                initialValue
             }
             let valueTemp = DeclareMultiAssignmentTemp("value$i", assignedValue.Type)
             valueTemps[i] = valueTemp
