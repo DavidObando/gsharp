@@ -127,6 +127,11 @@ internal partial class StatementBinder {
             set;
         }
 
+        prop ReferenceStorageRunsUserCode bool? {
+            get;
+            set;
+        }
+
         /// Whether a bare static member that the region reads or writes has an owner whose initializer runs user
         /// code (ADR-0208 R11, #5520).
         prop TouchesInitializingType bool {
@@ -381,21 +386,6 @@ internal partial class StatementBinder {
             // A unary operator that is not predefined for a literal or a built-in operand calls a user-defined or
             // an extension operator (`-"x"`), as does a binary one with an extension operator.
             resolved.RunsUserOperator = effects.OperatorHasUnresolvedOperand || OperatorsRunUserCode(effects, false)
-            for name in effects.OperatorOperandNames {
-                // A declaration of the region is not found here, and its type is unknown: it counts.
-                if TryLookupRegionVariableType(name) is {} rawOperandType {
-                    let operandType = StripAllNullability(rawOperandType)
-                    // `object` can hold a value of a type with operators.
-                    if operandType == nil || !MetadataTypeKeys.IsBuiltIn(operandType) || object.Equals(
-                        operandType,
-                        TypeSymbol.Object
-                    ) {
-                        resolved.RunsUserOperator = true
-                    }
-                } else {
-                    resolved.RunsUserOperator = true
-                }
-            }
         }
         for test in effects.PatternTests {
             if PatternTestRunsUserCode(test, effects) {
@@ -559,11 +549,25 @@ internal partial class StatementBinder {
     private func RegionRunsCode(effects RegionEffects, resolved ResolvedRegionWrites) bool -> effects.ContainsCall ||
         effects.ContainsSuspension ||
         effects.ContainsIteration ||
-        effects.ContainsMemberRead ||
+        RunsUserCodeOnMemberRead(effects, resolved) ||
         resolved.RunsUserOperator ||
         resolved.RunsUserCodeOnWrite ||
-        resolved.PatternTestsCallEquals ||
-        resolved.ReadsProperty
+        resolved.PatternTestsCallEquals
+
+    // ADR-0213 W5 (#5549): whether a member, index or bare property read of the region can run user code.
+    private func RunsUserCodeOnMemberRead(effects RegionEffects, resolved ResolvedRegionWrites) bool {
+        if resolved.ReadsUserCodeProperty {
+            return true
+        }
+        if !effects.ContainsMemberRead {
+            return false
+        }
+        if resolved.ReadsRunUserCode == nil {
+            resolved.ReadsRunUserCode = (effects.MemberReads.Count == 0 && effects.PatternReads.Count == 0) ||
+                ReadsRunUserCode(effects, false)
+        }
+        return resolved.ReadsRunUserCode == true
+    }
 
     private func CallIsIndirect(call RegionCall, effects RegionEffects) bool {
         switch call.Kind {
@@ -1022,6 +1026,7 @@ internal partial class StatementBinder {
                 if elementStep {
                     return Outcome(AddSymbolType(array.ElementType, next))
                 }
+                return AddClrStepTypes(typeof(Array), step, ImmutableArray[TypeSymbol].Empty, nil, next)
             }
             case slice is SliceTypeSymbol {
                 if elementStep {
@@ -1037,6 +1042,7 @@ internal partial class StatementBinder {
                 if elementStep {
                     return Outcome(AddSymbolType(rectangular.ElementType, next))
                 }
+                return AddClrStepTypes(typeof(Array), step, ImmutableArray[TypeSymbol].Empty, nil, next)
             }
             case tuple is TupleTypeSymbol {
                 if step.Kind == RegionReceiverStepKind.Member && step.Name is {} elementName {
@@ -1078,7 +1084,17 @@ internal partial class StatementBinder {
                 if hierarchy.Last().ImportedBaseType is {} importedBase {
                     return AddStepTypes(ReceiverType(importedBase, nil), step, next)
                 }
-                return AddClrStepTypes(typeof(object), step, ImmutableArray[TypeSymbol].Empty, nil, next)
+                let objectOutcome = AddClrStepTypes(typeof(object), step, ImmutableArray[TypeSymbol].Empty, nil, next)
+                if objectOutcome != StepAbsent || declared.IsClass {
+                    return objectOutcome
+                }
+                return AddClrStepTypes(
+                    typeof(Nullable[_]),
+                    step,
+                    ImmutableArray.Create[TypeSymbol](declared),
+                    typeof(Nullable[_]),
+                    next
+                )
             }
             case contract is InterfaceSymbol {
                 if step.Kind == RegionReceiverStepKind.Element {
@@ -1109,13 +1125,40 @@ internal partial class StatementBinder {
                 }
                 return AddClrStepTypes(typeof(object), step, ImmutableArray[TypeSymbol].Empty, nil, next)
             }
-            case EnumSymbol {
-                // An enum value has the members of `System.Enum`.
-                return AddClrStepTypes(typeof(Enum), step, ImmutableArray[TypeSymbol].Empty, nil, next)
+            case enumType is EnumSymbol {
+                if step.Kind == RegionReceiverStepKind.Member && step.Name is {} enumMember && enumType.TryGetMember(
+                    enumMember,
+                    out _
+                ) {
+                    next.Add(ReceiverType(enumType, nil))
+                    return StepFound
+                }
+                // An enum value has the members of `System.Enum` and `System.Nullable<T>`.
+                let enumOutcome = AddClrStepTypes(typeof(Enum), step, ImmutableArray[TypeSymbol].Empty, nil, next)
+                if enumOutcome != StepAbsent {
+                    return enumOutcome
+                }
+                return AddClrStepTypes(
+                    typeof(Nullable[_]),
+                    step,
+                    ImmutableArray.Create[TypeSymbol](enumType),
+                    typeof(Nullable[_]),
+                    next
+                )
             }
             case imported is ImportedTypeSymbol {
                 if imported.OpenDefinition is {} definition && !imported.TypeArguments.IsDefaultOrEmpty {
-                    return AddClrStepTypes(definition, step, imported.TypeArguments, definition, next)
+                    let importedOutcome = AddClrStepTypes(definition, step, imported.TypeArguments, definition, next)
+                    if importedOutcome != StepAbsent || !imported.IsValueType {
+                        return importedOutcome
+                    }
+                    return AddClrStepTypes(
+                        typeof(Nullable[_]),
+                        step,
+                        ImmutableArray.Create[TypeSymbol](imported),
+                        typeof(Nullable[_]),
+                        next
+                    )
                 }
             }
             default { }
@@ -1128,7 +1171,17 @@ internal partial class StatementBinder {
         } else {
             ImmutableArray[TypeSymbol].Empty
         }
-        return AddClrStepTypes(clrType, step, arguments, nil, next)
+        let clrOutcome = AddClrStepTypes(clrType, step, arguments, nil, next)
+        if clrOutcome != StepAbsent || symbol == nil || !symbol.IsValueType {
+            return clrOutcome
+        }
+        return AddClrStepTypes(
+            typeof(Nullable[_]),
+            step,
+            ImmutableArray.Create[TypeSymbol](symbol),
+            typeof(Nullable[_]),
+            next
+        )
     }
 
     private func Outcome(resolved bool) int32 -> if resolved {
@@ -1372,6 +1425,10 @@ internal partial class StatementBinder {
             }
             if operandTypes.Count == 1 {
                 if operandTypes[0] is not{} operandType {
+                    if !forReferenceStorage && OperatorNames.TryGetUnaryName(candidate.Kind) is {} unaryName &&
+                        HasAnyBuiltInExtensionOperator(unaryName) {
+                        return true
+                    }
                     continue
                 }
                 var promotedType = operandType
@@ -1385,6 +1442,15 @@ internal partial class StatementBinder {
             } else if !forReferenceStorage &&
                 !IsPredefinedBinary(candidate.Kind, operandTypes[0], operandTypes[1]) &&
                 HasExtensionOperator(candidate.Kind, operandTypes[0], operandTypes[1]) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func HasAnyBuiltInExtensionOperator(name string) bool {
+        for builtin in BuiltInTypes() {
+            if $scope.TryLookupExtensionFunction(builtin, name, out _) {
                 return true
             }
         }
@@ -1427,25 +1493,43 @@ internal partial class StatementBinder {
         if OperatorNames.TryGetBinaryName(kind) is not{} name {
             return false
         }
-        if left != nil && $scope.TryLookupExtensionFunction(left, name, out var leftOperator) {
+        if left != nil {
+            if $scope.TryLookupExtensionFunction(left, name, out _) {
+                return true
+            }
+        } else if HasAnyBuiltInExtensionOperator(name) {
             return true
         }
-        return right != nil && $scope.TryLookupExtensionFunction(right, name, out var rightOperator)
+        if right != nil {
+            if $scope.TryLookupExtensionFunction(right, name, out _) {
+                return true
+            }
+        } else if HasAnyBuiltInExtensionOperator(name) {
+            return true
+        }
+        return false
     }
 
     // The one built-in type of an operand, or `nil` when it does not resolve to one.
     // The built-in type of an operand, or `nil` when it does not resolve to one. Candidates of several built-in types
     // (the overloads of `Math.Max`) give the first, since each has the same operators by kind.
     private func BuiltInOperandType(operand RegionReceiverPath, effects RegionEffects) TypeSymbol? {
-        if ResolveReceiverPath(operand, effects) is not{} types || types.Count == 0 {
+        if (operand.Steps.Length > 0 && (effects.ContainsMemberTypeTest || HasEntryMemberTypeTest())) ||
+            HasTypeTestOnReceiver(operand, effects) ||
+            ResolveReceiverPath(operand, effects) is not{} types ||
+            types.Count == 0 {
             return nil
         }
         var first TypeSymbol? = nil
         for candidate in types {
-            let type = if candidate.Clr is {} clr {
+            var type = if candidate.Clr is {} clr {
                 BuiltInType(clr.FullName)
             } else {
                 candidate.Symbol
+            }
+            if type is EnumSymbol enumType && !$scope.TryLookupExtensionFunction(enumType, "op_Equality", out _) &&
+                !$scope.TryLookupExtensionFunction(enumType, "op_Inequality", out _) {
+                type = enumType.UnderlyingType
             }
             if type == nil || !MetadataTypeKeys.IsBuiltIn(type) || object.Equals(type, TypeSymbol.Object) {
                 return nil
@@ -1565,6 +1649,10 @@ internal partial class StatementBinder {
                 return true
             }
         }
+        return IndexArgumentsRunUserConversion(effects, operatorResultsKnown)
+    }
+
+    private func IndexArgumentsRunUserConversion(effects RegionEffects, operatorResultsKnown bool) bool {
         for access in effects.IndexAccesses {
             if CallArgumentsRunUserConversion(access, effects, operatorResultsKnown) {
                 return true
@@ -2274,7 +2362,7 @@ internal partial class StatementBinder {
             IsExternalStorageAlias(root)
     }
 
-    private func ReadsRunUserCode(effects RegionEffects) bool {
+    private func ReadsRunUserCode(effects RegionEffects, forReferenceStorage bool) bool {
         for read in effects.MemberReads {
             if ReadRunsUserCode(read, effects) {
                 return true
@@ -2286,9 +2374,13 @@ internal partial class StatementBinder {
             }
         }
         for compared in effects.NilCompareOperandPaths {
-            if NilCompareRunsUserOperator(compared, effects) {
+            if NilCompareRunsUserOperator(compared, effects, forReferenceStorage) {
                 return true
             }
+        }
+        if (effects.IndexAccesses.Count > 0 || effects.PatternIndexAccesses.Count > 0) &&
+            IndexArgumentsRunUserConversion(effects, !OperatorsRunUserCode(effects, false)) {
+            return true
         }
         return false
     }
@@ -2359,11 +2451,22 @@ internal partial class StatementBinder {
     // Whether a member or an element compared with `nil` has an imported value type whose `==` or `!=` takes a
     // reference (`operator ==(Token, object)`), which the comparison calls. A source operator is a plain call
     // (A3). An operand that does not resolve can run one.
-    private func NilCompareRunsUserOperator(compared RegionReceiverPath?, effects RegionEffects) bool {
+    private func NilCompareRunsUserOperator(
+        compared RegionReceiverPath?,
+        effects RegionEffects,
+        forReferenceStorage bool
+    ) bool {
         if compared == nil || ResolveReceiverPath(compared, effects) is not{} types {
             return true
         }
         for type in types {
+            if !forReferenceStorage &&
+                (
+                object.Equals(type.Symbol, TypeSymbol.Object) ||
+                    (type.Symbol is StructSymbol structType && !structType.IsClass)
+            ) {
+                return true
+            }
             let clr = type.Clr ??
                 (
                 if type.Symbol is StructSymbol {
@@ -2401,13 +2504,17 @@ internal partial class StatementBinder {
         return false
     }
 
-    // Whether a member or index read can run user code, with the rules of the straight-line pass: a field, a
-    // tuple element, an array element and an enum member run none; a source property runs user code unless it is
-    // an auto property (R14); an imported property or indexer runs user code unless `IsStableClrAccessor` lists it
-    // (R16, R17). A receiver that does not resolve can run user code.
+    // Whether a member or index read can run user code, with the rules of the straight-line pass and the
+    // non-hiding requirement of #5549: a field of a value type or of a class that cannot have a subclass, a tuple
+    // element, an array or slice element or length and an enum member run none; a source property runs user code
+    // unless it is an auto property on a receiver type that cannot have a subclass (R14, #5549); an imported
+    // property or indexer runs user code unless `IsStableClrAccessor` lists it (R16, R17). A receiver that does
+    // not resolve or is type-tested in the region can run user code.
     private func ReadRunsUserCode(read RegionMemberRead, effects RegionEffects) bool {
         let path = read.Receiver
-        if path == nil || path.Steps.Length > 0 && effects.ContainsMemberTypeTest {
+        if path == nil ||
+            (path.Steps.Length > 0 && (effects.ContainsMemberTypeTest || HasEntryMemberTypeTest())) ||
+            HasTypeTestOnReceiver(path, effects) {
             return true
         }
         let types = ResolveReceiverPath(path, effects)
@@ -2417,6 +2524,36 @@ internal partial class StatementBinder {
         for type in types {
             if ReadOfTypeRunsUserCode(type, read.Member) {
                 return true
+            }
+        }
+        return false
+    }
+
+    private func HasTypeTestOnReceiver(path RegionReceiverPath, effects RegionEffects) bool {
+        if path.RootName is not{} root || path.RootIsCall {
+            return false
+        }
+        for test in effects.TypeTests {
+            if test.Name == root {
+                let tested = TestedType(test, out var testsConstant)
+                if tested != nil || !testsConstant {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func HasEntryMemberTypeTest() bool {
+        for var i = 0; i < binderCtx.NarrowedVariables.Count; i++ {
+            for entry in binderCtx.NarrowedVariables[i] {
+                if !entry.Key.HasMembers {
+                    continue
+                }
+                let declared = StripAllNullability(NarrowingState.DeclaredNonNullType(entry.Key))
+                if declared == nil || !object.Equals(declared, StripAllNullability(entry.Value)) {
+                    return true
+                }
             }
         }
         return false
@@ -2444,6 +2581,7 @@ internal partial class StatementBinder {
                 return member == nil
             }
             case declared is StructSymbol {
+                let canHaveSubclass = declared.IsClass && (declared.IsOpen || declared.IsSealedHierarchy)
                 let hierarchy = declared.GetHierarchy()
                 for level in hierarchy {
                     for candidate in level.GetMembers() {
@@ -2454,13 +2592,19 @@ internal partial class StatementBinder {
                         } else if candidate.Name == member {
                             switch candidate {
                                 case field is FieldSymbol {
-                                    // A constant is inlined and initializes nothing.
-                                    return field.IsStatic &&
-                                        !field.IsConst &&
-                                        TypeInitializationRunsUserCode(level, true)
+                                    // A constant is inlined and initializes nothing; an instance field on a class
+                                    // that can have a subclass can be hidden by a derived getter (#5549).
+                                    if !field.IsStatic {
+                                        return canHaveSubclass
+                                    }
+                                    return !field.IsConst && TypeInitializationRunsUserCode(level, true)
                                 }
                                 case property is PropertySymbol {
-                                    // ADR-0208 R14 (#5599): the one accessor decision, on the receiver's type.
+                                    // ADR-0208 R14 (#5599) and #5549: an instance property on a class that can have
+                                    // a subclass can be overridden or hidden by a derived getter.
+                                    if !property.IsStatic && canHaveSubclass {
+                                        return true
+                                    }
                                     return SourcePropertyRunsUserCode(
                                         property,
                                         if property.IsStatic {
@@ -2482,6 +2626,9 @@ internal partial class StatementBinder {
                 if hierarchy.Last().ImportedBaseType is {} importedBase {
                     return ReadOfTypeRunsUserCode(ReceiverType(importedBase, nil), member)
                 }
+                if !declared.IsClass {
+                    return ClrReadRunsUserCode(typeof(Nullable[_]), member, true)
+                }
                 return true
             }
             case imported is ImportedTypeSymbol {
@@ -2501,8 +2648,8 @@ internal partial class StatementBinder {
         return ClrReadRunsUserCode(clrType, member, false)
     }
 
-    // An imported read: a field or a constant runs no user code; a property or an indexer runs user code unless
-    // `IsStableClrAccessor` lists its getter. A member that is not found can run user code.
+    // An imported read: a field of a value type or sealed class or a constant runs no user code; a property or an
+    // indexer runs user code unless `IsStableClrAccessor` lists its getter. A member that is not found can run user code.
     private func ClrReadRunsUserCode(type Type, member string?, isDefinition bool) bool {
         if ReflectionType(type) is not{} reflected {
             return true
@@ -2531,7 +2678,15 @@ internal partial class StatementBinder {
                     }
                 } else {
                     for clrMember in searchedType.GetMember(member, flags) {
-                        if clrMember is FieldInfo {
+                        if clrMember is FieldInfo field {
+                            if !field.IsStatic && !reflected.IsSealed {
+                                return true
+                            }
+                            if field.IsStatic &&
+                                !field.IsLiteral &&
+                                ClrStaticMemberOwnerInitializes(field.DeclaringType ?? reflected) {
+                                return true
+                            }
                             found = true
                         } else if clrMember is PropertyInfo property && property.GetIndexParameters().Length == 0 {
                             found = true
@@ -2543,6 +2698,12 @@ internal partial class StatementBinder {
                         }
                     }
                 }
+            }
+            if !found && reflected.IsValueType && member != nil && !ClrTypeUtilities.AreSame(
+                reflected,
+                typeof(Nullable[_])
+            ) {
+                return ClrReadRunsUserCode(typeof(Nullable[_]), member, true)
             }
             return !found
         } catch (ex NotSupportedException) {
@@ -2960,8 +3121,9 @@ internal partial class StatementBinder {
             resolved.RunsUserOperator ||
             resolved.RunsUserCodeOnWrite ||
             resolved.PatternTestsCallEquals
-        // Rule W5: every member or index read is an unknown getter, which is a call.
-        let readLike = effects.ContainsMemberRead || resolved.ReadsProperty
+        // Rule W5 (#5549): a member, index or bare property read is a call unless it resolves to a member that
+        // runs no user code and cannot be hidden.
+        let readLike = RunsUserCodeOnMemberRead(effects, resolved)
         let memberWrite = effects.ContainsMemberWrite || effects.ContainsPointerWrite || resolved.ImplicitMemberWrite
         let mayMutateMemberPaths = callLike || readLike || memberWrite
         var indirectCall = effects.ContainsIteration || effects.ContainsSuspension
@@ -2985,16 +3147,16 @@ internal partial class StatementBinder {
         // The same holds for a user-defined or imported operator or conversion and a static initializer (ADR-0208
         // A3 exempts only a plain call to a method).
         if !indirectCall && NamesReferenceStorage(path) {
-            if resolved.ReadsRunUserCode == nil {
-                resolved.ReadsRunUserCode = resolved.ReadsUserCodeProperty ||
+            if resolved.ReferenceStorageRunsUserCode == nil {
+                resolved.ReferenceStorageRunsUserCode = resolved.ReadsUserCodeProperty ||
                     resolved.TouchesInitializingType ||
                     resolved.NilCompareRunsUserOperator ||
                     resolved.ConversionsRunUserCode ||
-                    ReadsRunUserCode(effects) ||
+                    ReadsRunUserCode(effects, true) ||
                     OperatorsRunUserCode(effects, true) ||
                     ArgumentsRunUserConversion(effects)
             }
-            indirectCall = resolved.ReadsRunUserCode == true
+            indirectCall = resolved.ReferenceStorageRunsUserCode == true
         }
         // A member read is an unknown getter, which the table classes as a call (ADR-0208 R14). Amendment A3
         // (#5292) keeps the fact of a by-reference parameter across a call, so a read does not write the

@@ -262,4 +262,16 @@ d06 when another fact is in force at the loop entry; the row now gets the same r
 | m18 | `if skip { goto Inside }`; `if flag { return; if ({ Inside: var marker = 0; true }) { ... } } else { x = "other" }`; `x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
 | m19 | `var x string? = nil; x = "safe"; goto Done; let unused = () -> { Again: ...; if false { goto Again }; 0 }; x = nil; goto Done; Done: return x.Length` | accepted, prints `4` | accepted, prints `4` |
 
+## Issue #5549: resolved-member exemption in the loop and backward-jump walker (ADR-0213 W5)
+
+[#5549](https://github.com/DavidObando/gsharp/issues/5549) (follow-up of [#5459](https://github.com/DavidObando/gsharp/pull/5459)): `DecideRegionKill` and `RegionRunsCode` (`StatementBinder.RunsUserCodeOnMemberRead`) exempt a member or index read from rule W5 when its receiver resolves at the region's entry scope without a type test on the receiver inside the region and the resolved member is either (1) on the ADR-0208 R16/R17 stable imported accessor list (`IsStableClrAccessor`), or (2) a field, tuple element, enum member, array/slice `Length`, or auto property (`!SourcePropertyRunsUserCode`) of a type that cannot have a subclass (a value type or a class that is neither `open` nor `sealed`). A type test on the receiver inside the region (`q5d`, `DerivedList : List[int32]`) or a field/auto property on an `open` or `sealed` class disables the exemption.
+
+| Probe | Shape | Result before #5549 | Result now |
+| --- | --- | --- | --- |
+| q5c | `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { let len = sb.Length; total = total + x.Value + len }; clear()` | rejected (`GS0158`) | accepted, prints `2` |
+| t09 | `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { total = total + x.Value + s.Length }` | rejected (`GS0158`) | accepted, prints `8` |
+| a09 | `if g == nil { return 0 }; while true { k = k + g.Value; if k > 3 { break }; switch k { case 1 { continue } default { } }; break }` (`C` a non-`open` class) | rejected (`GS0158`) | accepted, prints `2` |
+| q5d | `open class Base { var Count int32 }`, `class Derived : Base { prop Count int32 { get { clear(); return 0 } } }`; `if b is Derived { let c = b.Count }` in loop | rejected (`GS0158`) | rejected (`GS0158`) |
+
+
 

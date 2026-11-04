@@ -3841,6 +3841,86 @@ func KeepRefAcrossMethodGroup(ref item C?) int32 {
 func Main() { }`,
                 "GS0155@29:27 GS0155@39:23"
             )
+            Add("stable-getters-and-non-hideable-fields-keep-closure-and-global-facts (W5, #5549)", `package T
+import System
+import System.Collections.Generic
+import System.Text
+class C { var Value int32 = 1 }
+class Box {
+    var Value int32 = 2
+    prop Auto int32 { get; set; }
+}
+struct Point { var X int32 }
+var g C? = C{}
+func Run(s string, sb StringBuilder, list List[int32], box Box, pt Point) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil || g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + x.Value + g.Value + s.Length + sb.Length + list.Count + box.Value + box.Auto + pt.X
+    }
+    clear()
+    return total
+}
+func Main() { }`, "")
+            Add("open-and-sealed-hierarchy-class-fields-remove-closure-and-global-facts (W5, #5549)", `package T
+import System
+class C { var Value int32 = 1 }
+open class OpenBox { var Value int32 = 2 }
+sealed class SealedBox { var Value int32 = 3 }
+var g C? = C{}
+func RunOpen(b OpenBox) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil || g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + x.Value + g.Value + b.Value
+    }
+    clear()
+    return total
+}
+func RunSealed(b SealedBox) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + x.Value + b.Value
+    }
+    clear()
+    return total
+}
+func Main() { }`, "GS0158@13:27 GS0158@13:37 GS0158@24:27")
+            Add("type-test-on-stable-getter-receiver-disables-exemption (W5, #5549)", `package T
+import System
+import System.Collections.Generic
+class C { var Value int32 = 1 }
+class DerivedList : List[int32] {
+    var Clear () -> void = func() { }
+    prop Count int32 {
+        get {
+            Clear()
+            return 0
+        }
+    }
+}
+func Run(items List[int32]) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + x.Value
+        if items is DerivedList {
+            total = total + items.Count
+        }
+    }
+    clear()
+    return total
+}
+func Main() { }`, "GS0158@20:27")
             return rows
         }
     }

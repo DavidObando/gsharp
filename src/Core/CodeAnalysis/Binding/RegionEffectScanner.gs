@@ -417,7 +417,6 @@ internal sealed class RegionEffectScanner {
                         }
                     } else {
                         current.ContainsOperatorCandidate = true
-                        RecordOperatorOperand(relational.Expression)
                         let operands = List[RegionReceiverPath?]()
                         let operatorForms = List[bool]()
                         operands.Add(patternSubject)
@@ -530,7 +529,13 @@ internal sealed class RegionEffectScanner {
                 // The typed kind (rule P7) is given where the binder scopes the variable (`RetypePatternNames`).
                 Declare(pattern.Identifier, "pattern")
                 Declare(pattern.Designation, "pattern")
+                let outer = patternSubject
+                let outerIsOperatorForm = patternSubjectIsOperatorForm
+                patternSubject = TypeOrigin(pattern.Type)
+                patternSubjectIsOperatorForm = false
                 Visit(pattern.PropertyPattern)
+                patternSubject = outer
+                patternSubjectIsOperatorForm = outerIsOperatorForm
             }
             case SyntaxKind.TypeOrConstantPattern {
                 let pattern = cast[TypeOrConstantPatternSyntax](node)
@@ -538,7 +543,13 @@ internal sealed class RegionEffectScanner {
                 constantPatternDepth++
                 Visit(pattern.Expression)
                 constantPatternDepth--
+                let outer = patternSubject
+                let outerIsOperatorForm = patternSubjectIsOperatorForm
+                patternSubject = TypeOrigin(pattern.CandidateType)
+                patternSubjectIsOperatorForm = false
                 Visit(pattern.PropertyPattern)
+                patternSubject = outer
+                patternSubjectIsOperatorForm = outerIsOperatorForm
             }
             case SyntaxKind.PropertyPattern {
                 let pattern = cast[PropertyPatternSyntax](node)
@@ -707,8 +718,6 @@ internal sealed class RegionEffectScanner {
                 }
                 if Active() && IsOperatorCandidate(binary) {
                     current.ContainsOperatorCandidate = true
-                    RecordOperatorOperand(binary.Left)
-                    RecordOperatorOperand(binary.Right)
                     RecordOperator(binary.OperatorToken.Kind, binary.Left, binary.Right)
                 } else if Active() &&
                     (
@@ -928,12 +937,20 @@ internal sealed class RegionEffectScanner {
     ) {
         Push()
         Visit(initializer)
+        let classified = ClassifyCondition(condition)
         Push()
         VisitCondition(condition)
-        RetypePatternNames(ClassifyCondition(condition).WhenTrue)
+        RetypePatternNames(classified.WhenTrue)
         Visit(thenBranch)
         Pop()
-        Visit(elseBranch)
+        if elseBranch != nil {
+            Push()
+            for pair in classified.WhenFalse {
+                DeclareName(pair.Key, pair.Value)
+            }
+            Visit(elseBranch)
+            Pop()
+        }
         Pop()
     }
 
@@ -1248,11 +1265,6 @@ internal sealed class RegionEffectScanner {
             for name in record.NilCompareOperandNames {
                 if IsDeclared(name) {
                     current.ContainsOperatorCandidate = true
-                    current.OperatorHasUnresolvedOperand = true
-                }
-            }
-            for name in record.OperatorOperandNames {
-                if IsDeclared(name) {
                     current.OperatorHasUnresolvedOperand = true
                 }
             }
@@ -1678,8 +1690,6 @@ internal sealed class RegionEffectScanner {
             RecordWrite(name.IdentifierToken.ValueText, name.IdentifierToken.Span.Start, nil)
             if Active() {
                 current.ContainsOperatorCandidate = true
-                RecordOperatorOperand(name)
-                RecordOperatorOperand(subscription.Value)
                 if SyntaxFacts.TryGetCompoundAssignmentBaseOperator(subscription.OperatorToken.Kind, out var baseKind) {
                     RecordOperator(baseKind, name, subscription.Value)
                 } else {
@@ -1880,7 +1890,6 @@ internal sealed class RegionEffectScanner {
         }
         if Active() && IsUnaryOperatorCandidate(unary) {
             current.ContainsOperatorCandidate = true
-            RecordOperatorOperand(unary.Operand)
             RecordOperator(unary.OperatorToken.Kind, unary.Operand, nil)
         }
         Visit(unary.Operand)
@@ -1946,34 +1955,6 @@ internal sealed class RegionEffectScanner {
             RecordUnnamedStorageWrite(operand)
             Visit(operand)
         }
-    }
-
-    // An operand of an operator candidate: a name is resolved by the consumer, a literal is ruled out, anything
-    // else may have a user-defined type.
-    private func RecordOperatorOperand(operand ExpressionSyntax?) {
-        if operand == nil {
-            return
-        }
-        var expression ExpressionSyntax? = operand
-        while expression is ParenthesizedExpressionSyntax parenthesized {
-            expression = parenthesized.Expression
-        }
-        if expression is LiteralExpressionSyntax {
-            return
-        }
-        if expression is NameExpressionSyntax name {
-            let text = name.IdentifierToken.ValueText
-            if IsDeclared(text) {
-                // A name of the region may be a variable of any type, and shadow one of the entry scope.
-                current.OperatorHasUnresolvedOperand = true
-                return
-            }
-            if !current.OperatorOperandNames.Contains(text) {
-                current.OperatorOperandNames.Add(text)
-            }
-            return
-        }
-        current.OperatorHasUnresolvedOperand = true
     }
 
     private func IsNilLiteral(expression ExpressionSyntax) bool {
