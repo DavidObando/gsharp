@@ -386,6 +386,16 @@ shared class TypeMemberModel {
                     }
                 }
             }
+            if TryGetInheritedDataPositionalProperty(
+                structSymbol,
+                name,
+                out var inheritedPositional,
+                out var inheritedPositionalOwner
+            ) {
+                property = inheritedPositional
+                declaringType = inheritedPositionalOwner ?? structSymbol
+                return true
+            }
             if explicitFallback != nil {
                 property = explicitFallback
                 declaringType = explicitFallbackOwner
@@ -551,6 +561,28 @@ shared class TypeMemberModel {
                 }
             }
         }
+        if bareLeft is ChannelTypeSymbol leftChannel &&
+            bareRight is ChannelTypeSymbol rightChannel &&
+            leftChannel.Direction != rightChannel.Direction {
+            return false
+        }
+        if bareLeft is ArrayTypeSymbol leftArray &&
+            bareRight is ArrayTypeSymbol rightArray &&
+            leftArray.Length != rightArray.Length {
+            return false
+        }
+        if bareLeft is RectangularArrayTypeSymbol leftRectangular &&
+            bareRight is RectangularArrayTypeSymbol rightRectangular &&
+            leftRectangular.Rank != rightRectangular.Rank {
+            return false
+        }
+        if bareLeft is FunctionTypeSymbol leftFunction &&
+            bareRight is FunctionTypeSymbol rightFunction &&
+            !leftFunction
+            .IsVariadic
+            .SequenceEqual(rightFunction.IsVariadic) {
+            return false
+        }
         let leftElemPositions = left.GetElementPositions()
         let rightElemPositions = right.GetElementPositions()
         if bareLeft.GetType() == bareRight.GetType() &&
@@ -646,7 +678,10 @@ shared class TypeMemberModel {
                     }
                 }
                 for candidate in ancestor.Properties {
-                    if candidate.IsStatic || candidate.IsIndexer || candidate.Name != parameter.Name {
+                    if candidate.IsStatic ||
+                        candidate.IsIndexer ||
+                        candidate.HasExplicitInterfaceClause ||
+                        candidate.Name != parameter.Name {
                         continue
                     }
                     if IsSourcePropertyVisibleFromDerived(candidate, ancestor, type) &&
@@ -690,7 +725,10 @@ shared class TypeMemberModel {
         }
         if owner.ImportedBaseType is StructSymbol importedStruct {
             for ancestor in GetHierarchy(importedStruct) {
-                if ancestor.Properties.Any((candidate PropertySymbol) -> candidate.Name == property.Name) {
+                if ancestor.Properties.Any(
+                    (candidate PropertySymbol) -> !candidate.HasExplicitInterfaceClause &&
+                        candidate.Name == property.Name
+                ) {
                     return ancestor
                 }
             }
@@ -719,7 +757,10 @@ shared class TypeMemberModel {
                     }
                 }
                 for candidate in ancestor.Properties {
-                    if candidate.IsStatic || candidate.IsIndexer || candidate.Name != parameter.Name {
+                    if candidate.IsStatic ||
+                        candidate.IsIndexer ||
+                        candidate.HasExplicitInterfaceClause ||
+                        candidate.Name != parameter.Name {
                         continue
                     }
                     if IsSourcePropertyVisibleFromDerived(candidate, ancestor, type) &&

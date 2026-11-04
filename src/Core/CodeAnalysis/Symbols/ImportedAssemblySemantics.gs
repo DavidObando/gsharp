@@ -181,6 +181,7 @@ internal shared class ImportedAssemblySemantics {
         }
         if type.IsValueType ||
             !TryGetTypeSemantics(type, out var semantics) ||
+            !semantics!!.IsData ||
             index < 0 ||
             index >= semantics!!
             .PrimaryConstructorParameterNames
@@ -191,8 +192,33 @@ internal shared class ImportedAssemblySemantics {
         if !tokens.IsDefaultOrEmpty && index < tokens.Length && tokens[index] != 0 {
             return nil
         }
-        let name = semantics!!.PrimaryConstructorParameterNames[index]
+        let names = semantics!!.PrimaryConstructorParameterNames
         let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly
+        var hasPositionalDeconstruct = false
+        for method in ClrTypeUtilities.SafeGetMethods(type, flags) {
+            if !string.Equals(method.Name, "Deconstruct", StringComparison.Ordinal) {
+                continue
+            }
+            let parameters = method.GetParameters()
+            if parameters.Length != names.Length {
+                continue
+            }
+            var allMatch = true
+            for var i = 0; i < parameters.Length; i++ {
+                if !parameters[i].IsOut || !string.Equals(parameters[i].Name, names[i], StringComparison.Ordinal) {
+                    allMatch = false
+                    break
+                }
+            }
+            if allMatch {
+                hasPositionalDeconstruct = true
+                break
+            }
+        }
+        if !hasPositionalDeconstruct {
+            return nil
+        }
+        let name = names[index]
         var baseType Type? = type.BaseType
         while baseType != nil {
             if ClrTypeUtilities.SafeGetFields(baseType, flags).Any((candidate FieldInfo) -> candidate.Name == name) {

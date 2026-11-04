@@ -715,6 +715,20 @@ open class HiddenMiddle : HiddenBase(31) {
 }
 data class DerivedBehindField(Value int32, Extra int32) : HiddenMiddle()
 
+open data class FixedArrBase(Items [2]int32)
+data class FixedArrDerived(Items [3]int32, Extra int32) : FixedArrBase([2]int32{1, 2})
+
+open class ExplicitOnlyBase : IValueCarrier {
+    prop (IValueCarrier) Value int32 -> 99
+}
+data class DerivedOverExplicitOnly(Value int32) : ExplicitOnlyBase()
+
+open class ExplicitMiddle : HiddenBase(41), IValueCarrier {
+    init(v int32) : super(v) {}
+    prop (IValueCarrier) Value int32 -> 99
+}
+data class DerivedOverExplicitMiddle(Value int32, Extra int32) : ExplicitMiddle(Value)
+
 func Run() string {
     let d = Outer.DerivedBeforeBase("ok", 7)
     let (n, v) = d
@@ -736,7 +750,13 @@ func Run() string {
     let explicitCarrier IValueCarrier = DerivedWithExplicitInterface(51, 52)
     let behind = DerivedBehindField(61, 62)
     let (bv, be) = behind
-    return "${d}|${n}:${v}|${q}|${qn}:${qv}|${msg}|${mn}:${md}|${esc}|${en}:${ev}|${p}|${h}:${e}|${unpacked}|${pv}:${pe}|${pair.Left}:${pair.Right}:${te}|${gd.Name}:${gd.Payload}:${gd.Tag.Kind}|${explicitCarrier.Value}|${behind.Value}:${bv}:${be}"
+    let fa = FixedArrDerived([3]int32{10, 20, 30}, 5)
+    let (faItems, faExtra) = fa
+    let eo = DerivedOverExplicitOnly(77)
+    let (eov) = eo
+    let em = DerivedOverExplicitMiddle(88, 89)
+    let (emv, eme) = em
+    return "${d}|${n}:${v}|${q}|${qn}:${qv}|${msg}|${mn}:${md}|${esc}|${en}:${ev}|${p}|${h}:${e}|${unpacked}|${pv}:${pe}|${pair.Left}:${pair.Right}:${te}|${gd.Name}:${gd.Payload}:${gd.Tag.Kind}|${explicitCarrier.Value}|${behind.Value}:${bv}:${be}|${faItems[0]}:${faItems[2]}:${faExtra}|${eo.Value}:${eov}|${em.Value}:${emv}:${eme}"
 }`
         let assembly = Adr0199RecordAbiWitness.CompileGSharp(source)
         let declared = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
@@ -751,6 +771,12 @@ func Run() string {
         Assert.Equal("W.Token", nonGenericBase.GetField("Tag")!!.FieldType.FullName)
         let behindFieldType = assembly.GetType("W.DerivedBehindField", throwOnError: true)!!
         Assert.Contains(behindFieldType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
+        let fixedArrDerivedType = assembly.GetType("W.FixedArrDerived", throwOnError: true)!!
+        Assert.Contains(fixedArrDerivedType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Items")
+        let explicitOnlyDerivedType = assembly.GetType("W.DerivedOverExplicitOnly", throwOnError: true)!!
+        Assert.Contains(explicitOnlyDerivedType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
+        let explicitMiddleDerivedType = assembly.GetType("W.DerivedOverExplicitMiddle", throwOnError: true)!!
+        Assert.DoesNotContain(explicitMiddleDerivedType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
         const safeBaseLeakCheck = `package W
 class Outer {
     unsafe data class UnsafeDerived(Name string) : SafeBase(Name)
@@ -803,7 +829,7 @@ data class D(Items List[string], Value int32) : B(Items)`
         let protectedGetterDerived = assembly.GetType("W.DerivedFromProtectedGetter", throwOnError: true)!!
         Assert.DoesNotContain(protectedGetterDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
         Assert.Equal(
-            "DerivedBeforeBase { Name = ok, Value = 7 }|ok:7|QualifiedDerivedBeforeBase { Name = qual, Value = 8 }|qual:8|Message { Name = msg, Data = 99 }|msg:99|EscapedDerived { Name = ev, Value = 3 }|ev:3|DerivedFromPrivateGetter { Hidden = 99, Extra = 5 }|99:5|15:25|16:26|3:4:10|tok:payload:7|51|61:61:62",
+            "DerivedBeforeBase { Name = ok, Value = 7 }|ok:7|QualifiedDerivedBeforeBase { Name = qual, Value = 8 }|qual:8|Message { Name = msg, Data = 99 }|msg:99|EscapedDerived { Name = ev, Value = 3 }|ev:3|DerivedFromPrivateGetter { Hidden = 99, Extra = 5 }|99:5|15:25|16:26|3:4:10|tok:payload:7|51|61:61:62|10:30:5|77:77|88:88:89",
             Adr0199RecordAbiWitness.Invoke(assembly, "Run")
         )
     }
@@ -890,6 +916,12 @@ data class ReusesProtGet(Value int32, Extra int32) : ClrProtGetBase(Value)
 data class ReusesProtSet(Value int32, Extra int32) : ClrProtSetBase(Value) {
     func WithUpdated(v int32) ReusesProtSet -> this.copy(Value: v)
 }
+interface IClrValue {
+    prop Value int32 { get; }
+}
+data class ReusesValueWithExplicit(Value int32, Extra int32) : ClrBase(Value), IClrValue {
+    prop (IClrValue) Value int32 -> Value + 100
+}
 data class BehindClrField(Value int32, Extra int32) : ClrMiddleWithField()
 data class DifferentType(IntProp string, Extra int32) : ClrBase()
 data class InaccessibleGetters(InternalProp int32, PrivateProtectedProp int32) : ClrBase()
@@ -912,6 +944,8 @@ func Run() string {
     let pg = ReusesProtGet(12, 34)
     let (pgv, pge) = pg
     let ps = ReusesProtSet(70, 80).WithUpdated(90)
+    let rve = ReusesValueWithExplicit{Value: 2, Extra: 3}.copy(Value: 4)
+    let rveIface IClrValue = rve
     let bf = BehindClrField(81, 82)
     let (bfv, bfe) = bf
     let ctorDefault = ReusesValue()
@@ -920,7 +954,7 @@ func Run() string {
     let (ci, ce) = c
     let d = InaccessibleGetters(1, 2)
     let (di, dp) = d
-    return "${a.Value}:${a.Extra}|${bv}:${be}|${spread.Value}:${spread.Extra}|${spreadRef.RefVal}:${spreadRef.Extra}|${pgv}:${pge}|${ps.Value}:${ps.Extra}|${bf.Value}:${bfv}:${bfe}|${ctorDefault.Value}:${ctorDefault.Extra}|${gen.Value}|${ci}:${ce}|${di}:${dp}"
+    return "${a.Value}:${a.Extra}|${bv}:${be}|${spread.Value}:${spread.Extra}|${spreadRef.RefVal}:${spreadRef.Extra}|${pgv}:${pge}|${ps.Value}:${ps.Extra}|${rve.Value}:${rve.Extra}:${rveIface.Value}|${bf.Value}:${bfv}:${bfe}|${ctorDefault.Value}:${ctorDefault.Extra}|${gen.Value}|${ci}:${ce}|${di}:${dp}"
 }`
             let srcPath = Path.Combine(tempDir, "test.gs")
             let outPath = Path.Combine(tempDir, "test.dll")
@@ -961,7 +995,7 @@ func Run() string {
                 Assert.Contains(inaccType.GetProperties(declared), (p PropertyInfo) -> p.Name == "InternalProp")
                 Assert.Contains(inaccType.GetProperties(declared), (p PropertyInfo) -> p.Name == "PrivateProtectedProp")
                 let result = asm.GetType("W.<Program>", throwOnError: true)!!.GetMethod("Run")!!.Invoke(nil, nil)
-                Assert.Equal("0:0|42:7|42:7|55:66|12:34|90:80|81:81:82|11:22|77|hello:9|1:2", result)
+                Assert.Equal("0:0|42:7|42:7|55:66|12:34|90:80|4:3:104|81:81:82|11:22|77|hello:9|1:2", result)
             } finally {
                 alc.Unload()
             }
