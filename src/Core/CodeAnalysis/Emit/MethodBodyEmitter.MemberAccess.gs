@@ -209,7 +209,10 @@ internal partial class MethodBodyEmitter {
             this.il.OpCode(ILOpCode.Ldelem_r4)
         } else if elementType == TypeSymbol.Float64 {
             this.il.OpCode(ILOpCode.Ldelem_r8)
-        } else if elementType == TypeSymbol.NInt || elementType == TypeSymbol.NUInt {
+        } else if elementType == TypeSymbol.NInt ||
+            elementType == TypeSymbol.NUInt ||
+            elementType is PointerTypeSymbol ||
+            elementType is FunctionPointerTypeSymbol {
             this.il.OpCode(ILOpCode.Ldelem_i)
         } else if elementType == TypeSymbol.String || IsReferenceTypeElement(elementType) {
             // Reference-type element (string or any other class/interface):
@@ -242,7 +245,10 @@ internal partial class MethodBodyEmitter {
             this.il.OpCode(ILOpCode.Stelem_r4)
         } else if elementType == TypeSymbol.Float64 {
             this.il.OpCode(ILOpCode.Stelem_r8)
-        } else if elementType == TypeSymbol.NInt || elementType == TypeSymbol.NUInt {
+        } else if elementType == TypeSymbol.NInt ||
+            elementType == TypeSymbol.NUInt ||
+            elementType is PointerTypeSymbol ||
+            elementType is FunctionPointerTypeSymbol {
             this.il.OpCode(ILOpCode.Stelem_i)
         } else if elementType == TypeSymbol.String || IsReferenceTypeElement(elementType) {
             this.il.OpCode(ILOpCode.Stelem_ref)

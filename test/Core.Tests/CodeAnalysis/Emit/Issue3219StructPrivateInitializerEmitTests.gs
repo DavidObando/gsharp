@@ -185,4 +185,43 @@ h.ReadMarker() + o.Marker
         Assert.Equal(1, hiddenCtors)
         Assert.Equal(0, openCtors)
     }
+
+    @Fact
+    func SynthesizedCtor_IncludedForPublicInitOnlyInitializerStructs() {
+        // Issue #4742: a struct with a public `let` (`initonly`) field initializer
+        // must also synthesize an owning `.ctor` so `stfld` on the `initonly`
+        // field executes inside `.ctor` rather than at the outer literal site.
+        const source = `
+struct PublicLet {
+    let Marker int32 = 11
+    var Value int32
+}
+let p = PublicLet{Value: 2}
+p.Marker + p.Value
+`
+        using let peStream = MemoryStream()
+        let compilation = Compilation(SyntaxTree.Parse(SourceText.From(source)))
+        let emitResult = compilation.Emit(peStream)
+        Assert.True(
+            emitResult.Success,
+            "compilation should succeed: " + string.Join(
+                "; ",
+                emitResult.Diagnostics.Select((diagnostic Diagnostic) -> diagnostic.Message)
+            )
+        )
+        peStream.Position = 0
+        using let peReader = PEReader(peStream)
+        let metadata = peReader.GetMetadataReader()
+        var publicLetCtors = 0
+        for typeHandle in metadata.TypeDefinitions {
+            let typeDef = metadata.GetTypeDefinition(typeHandle)
+            if metadata.GetString(typeDef.Name) != "PublicLet" {
+                continue
+            }
+            publicLetCtors = typeDef.GetMethods().Count(
+                (m MethodDefinitionHandle) -> metadata.GetString(metadata.GetMethodDefinition(m).Name) == ".ctor"
+            )
+        }
+        Assert.Equal(1, publicLetCtors)
+    }
 }

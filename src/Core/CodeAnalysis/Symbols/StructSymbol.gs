@@ -1114,7 +1114,7 @@ class StructSymbol : TypeSymbol {
                     ).IsDefaultOrEmpty ||
                         InstanceFieldInitializers
                         .Keys
-                        .Any((member FieldSymbol) -> member.Accessibility != Accessibility.Public)
+                        .Any((member FieldSymbol) -> member.Accessibility != Accessibility.Public || member.IsReadOnly)
                 )
             }
         )

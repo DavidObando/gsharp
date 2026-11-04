@@ -9521,7 +9521,7 @@ partial class Binder {
                 method.ReceiverType,
                 method.IsOpen,
                 method.IsOverride
-            ){ReturnRefKind = method.ReturnRefKind, IsAsync = method.IsAsync}
+            ){ReturnRefKind = method.ReturnRefKind, IsAsync = method.IsAsync, IsUnsafe = method.IsUnsafe}
             binding.TypeParameters = method.TypeParameters
             for var i = 0; i < parameters.Length; i++ {
                 parameterMap[parameters[i]] = method.Parameters[i]
@@ -11114,9 +11114,11 @@ partial class Binder {
             results List[(Node AnonymousClassExpressionSyntax, Declaration StructDeclarationSyntax)],
             diagnostics DiagnosticBag,
             ref counter int32,
-            enclosingTypeParameters ImmutableArray[TypeParameterListSyntax]
+            enclosingTypeParameters ImmutableArray[TypeParameterListSyntax],
+            inUnsafeContext bool = false
         ) {
             var enclosingTypeParameters = enclosingTypeParameters
+            var inUnsafeContext = inUnsafeContext
             let declaredTypeParameters TypeParameterListSyntax? = switch node {
                 case FunctionDeclarationSyntax{TypeParameterList: {} functionParameters}: functionParameters
                 case StructDeclarationSyntax{TypeParameterList: {} typeParameters}: typeParameters
@@ -11127,13 +11129,20 @@ partial class Binder {
             if declaredTypeParameters != nil {
                 enclosingTypeParameters = enclosingTypeParameters.Add(declaredTypeParameters)
             }
+            inUnsafeContext |= switch node {
+                case StructDeclarationSyntax{IsUnsafe: true}: true
+                case FunctionDeclarationSyntax{IsUnsafe: true}: true
+                case BlockStatementSyntax{IsUnsafe: true}: true
+                default: false
+            }
             if node is AnonymousClassExpressionSyntax anon && IsRichAnonymousObject(anon) {
                 let decl = SynthesizeAnonymousClassDeclaration(
                     anon,
                     tree,
                     counter++,
                     diagnostics,
-                    enclosingTypeParameters
+                    enclosingTypeParameters,
+                    inUnsafeContext
                 )
                 results.Add((anon, decl))
             }
@@ -11144,7 +11153,8 @@ partial class Binder {
                     results,
                     diagnostics,
                     &counter,
-                    enclosingTypeParameters
+                    enclosingTypeParameters,
+                    inUnsafeContext
                 )
             }
         }
@@ -11176,7 +11186,8 @@ partial class Binder {
             tree SyntaxTree,
             index int32,
             diagnostics DiagnosticBag,
-            enclosingTypeParameters ImmutableArray[TypeParameterListSyntax]
+            enclosingTypeParameters ImmutableArray[TypeParameterListSyntax],
+            inUnsafeContext bool = false
         ) StructDeclarationSyntax {
             let position = syntax.ObjectKeyword.Position
             let Tok = func (kind SyntaxKind, text string) SyntaxToken {
@@ -11297,6 +11308,9 @@ partial class Binder {
                 syntax.CloseBraceToken
             )
             decl.IsSynthesizedRichAnonymousObject = true
+            if inUnsafeContext {
+                decl.UnsafeModifier = Tok(SyntaxKind.IdentifierToken, "unsafe")
+            }
             let combinedTypeParameters = CombineRichTypeParameterLists(tree, position, enclosingTypeParameters)
             decl.TypeParameterList = combinedTypeParameters
             decl.RichAnonymousShellTypeParameterCount = combinedTypeParameters?.Parameters.Count ?? 0

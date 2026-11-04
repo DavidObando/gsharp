@@ -3530,7 +3530,7 @@ internal partial class DeclarationBinder {
         let savedFieldInitPackage = $scope.SetCurrentDeclaringPackage(fieldInitPackageName)
         let savedFieldInitTree = $scope.SetCurrentReferencingSyntaxTree(structDeclaration.SyntaxTree)
         // Issue #2111: establish the enclosing type as the accessibility context for initializer binding.
-        setCurrentFunction(CreateFieldInitializerAccessibilityContext(structSymbol))
+        setCurrentFunction(CreateFieldInitializerAccessibilityContext(structSymbol, binderCtx.InUnsafeContext))
         // Issue #3812: rebuild the enclosing and own type-parameter scope.
         let initializerEnclosingTypeParameters = CollectEnclosingTypeParameters(structSymbol.ContainingType)
         if !structSymbol.TypeParameters.IsDefaultOrEmpty || initializerEnclosingTypeParameters.Count > 0 {
@@ -3628,7 +3628,7 @@ internal partial class DeclarationBinder {
                 // sibling) type reached from this default-value expression is
                 // evaluated against the RIGHT owner instead of whatever function
                 // happened to be "current" when this closure eventually runs.
-                setCurrentFunction(CreateFieldInitializerAccessibilityContext(structSymbol))
+                setCurrentFunction(CreateFieldInitializerAccessibilityContext(structSymbol, binderCtx.InUnsafeContext))
                 // Issue #3812: rebuild the type-parameter scope the same way the
                 // deferred field-initializer closure does — outermost-enclosing
                 // first, then this type's own, then (uniquely for a parameter
@@ -4298,7 +4298,10 @@ internal partial class DeclarationBinder {
         zeroValueStaticFields List[(Field FieldSymbol, Syntax SyntaxNode)]
     ) {
         let previousFunction = getCurrentFunction()
-        let staticInitializerContext = CreateFieldInitializerAccessibilityContext(structSymbol)
+        let staticInitializerContext = CreateFieldInitializerAccessibilityContext(
+            structSymbol,
+            binderCtx.InUnsafeContext
+        )
         staticInitializerContext.IsStaticInitializer = true
         setCurrentFunction(staticInitializerContext)
         try {
@@ -4515,9 +4518,14 @@ internal partial class DeclarationBinder {
         /// (`Type.Member`) or a constructor call (`Type()`) as accessible — matching
         /// how a `shared` function body already behaves.
         /// @param owner The type whose initializers are being bound.
+        /// @param isUnsafe Whether the initializer is bound in an unsafe context.
         /// @returns A synthetic static function owned by [`owner`](paramref).
-        private func CreateFieldInitializerAccessibilityContext(owner StructSymbol) FunctionSymbol {
+        private func CreateFieldInitializerAccessibilityContext(
+            owner StructSymbol,
+            isUnsafe bool = false
+        ) FunctionSymbol {
             let context = FunctionSymbol("<field-initializer>", ImmutableArray[ParameterSymbol].Empty, TypeSymbol.Void){
+                IsUnsafe = isUnsafe,
                 IsStatic = true,
                 IsExpressionInitializer = true,
                 StaticOwnerType = owner
