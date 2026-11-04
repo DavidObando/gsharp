@@ -166,6 +166,14 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
         return nil
     }
     let widenedNullableTuple (string?, int64)? = (nil, 1)
+    let interp = "${d ? (nil, "x") : (nil, nil)}"
+    let anonObj = object { let Pair = d ? (nil, "x") : (nil, nil) }
+    let dataObj = data object { let Pair = d ? (nil, "x") : (nil, nil) }
+    let nestedOuterNil = d ? (b.Item1, 1) : nil
+    let cleanupTuple (string?, int32) = ({
+        defer Console.Write("")
+        (nil, 2)
+    })
     return if standalone.Item1 == nil &&
         da == nil &&
         (db != nil || !d) &&
@@ -187,7 +195,12 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
         multiRet(false).Item1 == nil &&
         nullableTupleRet(false, true) == nil &&
         nullableTupleRet(true, true) != nil &&
-        widenedNullableTuple != nil {
+        widenedNullableTuple != nil &&
+        interp.Length > 0 &&
+        anonObj.Pair.Item1 == nil &&
+        dataObj.Pair.Item1 == nil &&
+        (nestedOuterNil != nil || !d) &&
+        cleanupTuple.Item1 == nil {
         (a.Item2, b.Item2)
     } else {
         ("bad", "bad")

@@ -925,10 +925,19 @@ partial class Binder {
             } else {
                 BindTypeClause(member.TypeClause)
             }
-            let value = if declaredType == nil {
+            var value = if declaredType == nil {
                 Expressions.BindExpression(member.Value)
             } else {
                 Expressions.BindExpression(member.Value, declaredType)
+            }
+            if declaredType == nil &&
+                value is not BoundErrorExpression &&
+                value.Type is TupleTypeSymbol{HasNilElement: true} {
+                value = Conversions.BindConversion(
+                    member.Value.Location,
+                    value,
+                    TupleTypeSymbol.ResolveNilElements(value.Type)
+                )
             }
             if value is BoundErrorExpression || value.Type == TypeSymbol.Null || value.Type == TypeSymbol.Void {
                 if declaredType == nil {

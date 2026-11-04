@@ -3430,6 +3430,25 @@ internal class ConversionClassifier {
     ) BoundExpression? {
         switch expression {
             case block is BoundBlockExpression {
+                if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultVar} &&
+                    resultVar
+                    .Name
+                    .StartsWith("<blockResult", StringComparison.Ordinal) &&
+                    TryRewriteCleanupBlockResult(
+                    block.Statements,
+                    resultVar,
+                    diagnosticLocation,
+                    type,
+                    allowExplicit,
+                    out var rewrittenStatements,
+                    out var newResultVar
+                ) {
+                    return BoundBlockExpression(
+                        block.Syntax,
+                        rewrittenStatements,
+                        BoundVariableExpression(block.Expression.Syntax, newResultVar!!)
+                    )
+                }
                 return BoundBlockExpression(
                     block.Syntax,
                     block.Statements,
@@ -3496,6 +3515,77 @@ internal class ConversionClassifier {
                 return nil
             }
         }
+    }
+
+    private func TryRewriteCleanupBlockResult(
+        statements ImmutableArray[BoundStatement],
+        resultVar LocalVariableSymbol,
+        diagnosticLocation TextLocation,
+        type TypeSymbol,
+        allowExplicit bool,
+        out rewritten ImmutableArray[BoundStatement],
+        out newResultVar LocalVariableSymbol?
+    ) bool {
+        let builder = ImmutableArray.CreateBuilder[BoundStatement](statements.Length)
+        newResultVar = nil
+        var changed = false
+        for stmt in statements {
+            if !changed && stmt is BoundVariableDeclaration decl && object.ReferenceEquals(decl.Variable, resultVar) &&
+                decl.Initializer is {} initializer {
+                let updatedVar = LocalVariableSymbol(resultVar.Name, resultVar.IsReadOnly, type)
+                newResultVar = updatedVar
+                builder.Add(
+                    BoundVariableDeclaration(
+                        decl.Syntax,
+                        updatedVar,
+                        BindConversion(diagnosticLocation, initializer, type, allowExplicit)
+                    )
+                )
+                changed = true
+            } else if !changed &&
+                stmt is BoundBlockStatement innerBlock &&
+                TryRewriteCleanupBlockResult(
+                innerBlock.Statements,
+                resultVar,
+                diagnosticLocation,
+                type,
+                allowExplicit,
+                out var innerStatements,
+                out newResultVar
+            ) {
+                builder.Add(BoundBlockStatement(innerBlock.Syntax, innerStatements))
+                changed = true
+            } else if !changed &&
+                stmt is BoundTryStatement tryStmt &&
+                tryStmt.TryBlock is BoundBlockStatement tryBlock &&
+                TryRewriteCleanupBlockResult(
+                tryBlock.Statements,
+                resultVar,
+                diagnosticLocation,
+                type,
+                allowExplicit,
+                out var tryStatements,
+                out newResultVar
+            ) {
+                builder.Add(
+                    BoundTryStatement(
+                        tryStmt.Syntax,
+                        BoundBlockStatement(tryBlock.Syntax, tryStatements),
+                        tryStmt.CatchClauses,
+                        tryStmt.FinallyBlock
+                    )
+                )
+                changed = true
+            } else {
+                builder.Add(stmt)
+            }
+        }
+        rewritten = if changed {
+            builder.MoveToImmutable()
+        } else {
+            statements
+        }
+        return changed
     }
 
     private func BindContextualOpenLiteral(

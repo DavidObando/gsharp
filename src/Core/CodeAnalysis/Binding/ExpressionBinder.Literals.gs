@@ -950,6 +950,13 @@ internal partial class ExpressionBinder {
                     )
                     return BoundErrorExpression(nil)
                 }
+                if bound.Type is TupleTypeSymbol{HasNilElement: true} {
+                    bound = conversions.BindConversion(
+                        segmentExpression.Location,
+                        bound,
+                        TupleTypeSymbol.ResolveNilElements(bound.Type)
+                    )
+                }
                 if bound.Type is StructSymbol{IsRefStruct: true} structType && structType.TryGetMethod(
                     "ToString",
                     out _
@@ -1677,10 +1684,19 @@ internal partial class ExpressionBinder {
             } else {
                 bindTypeClause(member.TypeClause)
             }
-            let value = if memberType == nil {
+            var value = if memberType == nil {
                 BindExpression(member.Value)
             } else {
                 BindExpression(member.Value, memberType)
+            }
+            if memberType == nil &&
+                value is not BoundErrorExpression &&
+                value.Type is TupleTypeSymbol{HasNilElement: true} {
+                value = conversions.BindConversion(
+                    member.Value.Location,
+                    value,
+                    TupleTypeSymbol.ResolveNilElements(value.Type)
+                )
             }
             if value is BoundErrorExpression {
                 hadError = true
