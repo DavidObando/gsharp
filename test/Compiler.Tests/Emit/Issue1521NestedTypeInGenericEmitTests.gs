@@ -255,6 +255,7 @@ func Main() {
 
         const validSource = `package QualifiedNested4774
 import System
+import System.Reflection
 @Attribute
 class TypeTagAttribute(First Type, Second Type) { }
 class Outer[T] {
@@ -267,6 +268,9 @@ class Outer[T] {
         func ReadPlain(seed T) T;
         func EchoInner(x Inner) Inner;
     }
+    public interface IMarker {
+        func Code() int32;
+    }
     public interface IGeneric[U] : IComparable[U] {
         func ReadGeneric(seed T, suffix U) string;
     }
@@ -277,7 +281,7 @@ class Outer[T] {
     }
 }
 @TypeTag(typeof(Outer[string].IPlain), typeof(Outer[string].IGeneric[int32]))
-class PlainImpl : Outer[string].IPlain, Outer[string].IGeneric[int32], Outer[string].IGeneric[PlainImpl] {
+class PlainImpl : Outer[string].IPlain, Outer[string].IGeneric[int32], Outer[string].IGeneric[PlainImpl], Outer[string].IMarker, Outer[int32].IMarker {
     public prop Tag string -> "tag"
     public func ReadPlain(seed string) string -> seed + ":" + Tag + ":21"
     public func EchoInner(x Outer[string].Inner) Outer[string].Inner -> x
@@ -285,6 +289,8 @@ class PlainImpl : Outer[string].IPlain, Outer[string].IGeneric[int32], Outer[str
     public func ReadGeneric(seed string, suffix PlainImpl) string -> seed + ":" + suffix.Tag
     public func CompareTo(other int32) int32 -> other
     public func CompareTo(other PlainImpl?) int32 -> 0
+    private func (Outer[string].IMarker) Code() int32 -> 101
+    private func (Outer[int32].IMarker) Code() int32 -> 202
 }
 func UseSelfRef[T Outer[string].IGeneric[T]](x T) string -> x.ReadGeneric("self", x)
 class SelfOwnerImpl : Outer[SelfOwnerImpl].IPlain, Outer[SelfOwnerImpl].IGeneric[SelfOwnerImpl] {
@@ -298,6 +304,8 @@ func UseSelfEnclosing[T Outer[T].IGeneric[T]](x T) string -> x.ReadGeneric(x, x)
 func UseSelfEnclosingPlain[T Outer[T].IPlain](x T) T -> x.ReadPlain(x)
 func UsePlain(p Outer[string].IPlain, item Outer[string].Inner) string -> p.ReadPlain("p") + ":" + p.EchoInner(item).Read().ToString()
 func UseGeneric(g Outer[string].IGeneric[int32]) string -> g.ReadGeneric("g", 8)
+func UseMarkerString(m Outer[string].IMarker) int32 -> m.Code()
+func UseMarkerInt(m Outer[int32].IMarker) int32 -> m.Code()
 func Main() {
     let item = Outer[string].Inner{Value: 7}
     let owner = Outer[string]{}
@@ -305,16 +313,19 @@ func Main() {
     let selfOwner = UseSelfEnclosingPlain(SelfOwnerImpl{})
     let tag = cast[TypeTagAttribute](typeof(PlainImpl).GetCustomAttributes(typeof(TypeTagAttribute), false)[0])
     let baseIface = typeof(Outer[string].IGeneric[int32]).GetInterfaces()[0]
+    let strMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[string].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
+    let intMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[int32].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
     Console.WriteLine(item.Read())
     Console.WriteLine(owner.ReadScoped())
     Console.WriteLine(UsePlain(owner.EchoIface(impl), item))
     Console.WriteLine(UseGeneric(impl) + ":" + UseSelfRef(impl) + ":" + UseSelfEnclosing(selfOwner))
     Console.WriteLine(tag.First == typeof(Outer[string].IPlain) && tag.Second == typeof(Outer[string].IGeneric[int32]))
     Console.WriteLine(baseIface == typeof(IComparable[int32]))
+    Console.WriteLine(UseMarkerString(impl).ToString() + ":" + UseMarkerInt(impl).ToString() + ":" + (strMarkerMethod != nil && intMarkerMethod != nil && strMarkerMethod != intMarkerMethod).ToString())
 }`
         let output = CompileAndRun(validSource)
         Assert.Equal(
-            "12${Environment.NewLine}9${Environment.NewLine}p:tag:21:12${Environment.NewLine}g:8:self:tag:self-enclosing${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}",
+            "12${Environment.NewLine}9${Environment.NewLine}p:tag:21:12${Environment.NewLine}g:8:self:tag:self-enclosing${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}101:202:True${Environment.NewLine}",
             output
         )
 

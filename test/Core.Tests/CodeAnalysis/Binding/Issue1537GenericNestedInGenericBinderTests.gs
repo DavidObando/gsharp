@@ -233,12 +233,16 @@ interface IConsumerContract {
 class BadConsumer : IConsumerContract {
     public func Accept(x InterfaceOwner[int32].IPlain) { }
 }
-func BadNestedInterfaceOwnerMismatch(x InterfaceOwner[string].I[int32]) InterfaceOwner[int32].I[int32] -> x`)
+func BadNestedInterfaceOwnerMismatch(x InterfaceOwner[string].I[int32]) InterfaceOwner[int32].I[int32] -> x
+func BadNestedInterfaceNullabilityMismatch(x InterfaceOwner[string?].IPlain) InterfaceOwner[string].IPlain -> x
+func BadNestedInterfaceNestedNullabilityMismatch(
+    x InterfaceOwner[InterfaceOwner[string?].IPlain].IPlain
+) InterfaceOwner[InterfaceOwner[string].IPlain].IPlain -> x`)
         let unclosedErrors = unclosedOutsideOwnerDiagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
-        Assert.Equal(10, unclosedErrors.Length)
+        Assert.Equal(12, unclosedErrors.Length)
         Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0157"))
         Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0113"))
-        Assert.Equal(1, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0156"))
+        Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0156"))
         Assert.Equal(1, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0187"))
         Assert.Equal(2, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0202"))
 

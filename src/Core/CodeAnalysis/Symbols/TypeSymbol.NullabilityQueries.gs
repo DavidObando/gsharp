@@ -164,8 +164,23 @@ open partial class TypeSymbol : Symbol {
                     )
                 }
             }
-            case constructedInterface is InterfaceSymbol when !constructedInterface.TypeArguments.IsDefaultOrEmpty {
-                return constructedInterface.TypeArguments
+            case constructedInterface is InterfaceSymbol when !constructedInterface
+                .TypeArguments
+                .IsDefaultOrEmpty ||
+                !constructedInterface
+                .EnclosingTypeArguments
+                .IsDefaultOrEmpty {
+                return if constructedInterface.EnclosingTypeArguments.IsDefaultOrEmpty {
+                    constructedInterface.TypeArguments
+                } else {
+                    constructedInterface.EnclosingTypeArguments.AddRange(
+                        if constructedInterface.TypeArguments.IsDefault {
+                            ImmutableArray[TypeSymbol].Empty
+                        } else {
+                            constructedInterface.TypeArguments
+                        }
+                    )
+                }
             }
             case constructedDelegate is DelegateTypeSymbol when !constructedDelegate.TypeArguments.IsDefaultOrEmpty {
                 return constructedDelegate.TypeArguments

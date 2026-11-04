@@ -40,10 +40,11 @@ internal shared class ExplicitInterfaceMetadataNaming {
             return memberName
         }
         if target is InterfaceSymbol sourceInterface {
+            let qualifiedInterfaceName = FormatSourceInterfaceName(sourceInterface)
             return if string.IsNullOrEmpty(sourceInterface.PackageName) {
-                "${sourceInterface.Name}.$memberName"
+                "$qualifiedInterfaceName.$memberName"
             } else {
-                "${sourceInterface.PackageName}.${sourceInterface.Name}.$memberName"
+                "${sourceInterface.PackageName}.$qualifiedInterfaceName.$memberName"
             }
         }
         let interfaceName string? = if target is ImportedTypeSymbol imported && imported.OpenDefinition != nil {
@@ -52,5 +53,49 @@ internal shared class ExplicitInterfaceMetadataNaming {
             target.ClrType?.FullName
         }
         return "${interfaceName ?? target.Name}.$memberName"
+    }
+
+    private func FormatSourceInterfaceName(sourceInterface InterfaceSymbol) string {
+        let enclosingArgs = sourceInterface.EnclosingTypeArguments
+        if enclosingArgs.IsDefaultOrEmpty {
+            return sourceInterface.Name
+        }
+        let def = sourceInterface.Definition ?? sourceInterface
+        let containers = System.Collections.Generic.List[TypeSymbol]()
+        var current = def.ContainingType
+        while current != nil {
+            containers.Add(current)
+            current = current.ContainingType
+        }
+        if containers.Count == 0 {
+            let argParts = [enclosingArgs.Length]string
+            for var i = 0; i < enclosingArgs.Length; i++ {
+                argParts[i] = enclosingArgs[i].Name
+            }
+            return "${sourceInterface.Name}[${string.Join(", ", argParts)}]"
+        }
+        containers.Reverse()
+        let parts = [containers.Count + 1]string
+        var offset = 0
+        for var i = 0; i < containers.Count; i++ {
+            let containerDef = (containers[i] as StructSymbol)?.Definition ?? containers[i]
+            let arity = if containerDef is StructSymbol structDef {
+                structDef.DeclaredTypeParameters.Length
+            } else {
+                0
+            }
+            if arity > 0 && offset + arity <= enclosingArgs.Length {
+                let argParts = [arity]string
+                for var j = 0; j < arity; j++ {
+                    argParts[j] = enclosingArgs[offset + j].Name
+                }
+                parts[i] = "${containerDef.Name}[${string.Join(", ", argParts)}]"
+                offset += arity
+            } else {
+                parts[i] = containerDef.Name
+            }
+        }
+        parts[containers.Count] = sourceInterface.Name
+        return string.Join(".", parts)
     }
 }

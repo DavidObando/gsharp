@@ -2070,7 +2070,7 @@ class Conversion {
                     return false
                 }
                 for var i = 0; i < fromEnclosing.Length; i++ {
-                    if !AreTypeArgumentsEquivalent(fromEnclosing[i], toEnclosing[i]) {
+                    if !HaveIdenticalTypeArgumentContracts(fromEnclosing[i], toEnclosing[i]) {
                         return false
                     }
                 }
