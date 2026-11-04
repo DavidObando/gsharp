@@ -272,6 +272,126 @@ run().Wait()`
         Assert.Equal("3${Environment.NewLine}7${Environment.NewLine}main${Environment.NewLine}", output)
     }
 
+    /// Issue #4772: G#-emitted Task and ValueTask tuple return labels survive
+    /// cross-assembly import across interface, generic-interface, generic-method,
+    /// property, field, and synthesized Deconstruct signatures.
+    @Fact
+    func Issue4772_GsToGsRoundTrip_TaskAndValueTaskTupleReturnLabels_SurviveCrossAssemblyAndSymbolicProjections() {
+        let libSource = `package TupleLabelProducer
+import System.Threading.Tasks
+
+interface IRows {
+    func Read() Task[(Required string, Code int32)];
+    func ReadValue() ValueTask[(Required string, Code int32)];
+}
+
+interface IRows[T] {
+    func Read() Task[(Required string, Code int32)];
+    func ReadItem() Task[(Required T, Code int32)];
+    func ReadValueItem() ValueTask[(Required T, Code int32)];
+    prop Current Task[(Required string, Code int32)] { get; }
+    prop CurrentItem Task[(Required T, Code int32)] { get; }
+}
+
+interface IGenericMethodRows {
+    func Read[T]() Task[(Required string, Code int32)];
+    func ReadItem[T]() Task[(Required T, Code int32)];
+    func ReadValueItem[T]() ValueTask[(Required T, Code int32)];
+    func ReadTwo[T]() Task[(First T, Second (Label string, Num int32))];
+}
+
+class RowBox[T] {
+    var Field Task[(Required T, Code int32)]
+
+    init(field Task[(Required T, Code int32)]) {
+        Field = field
+    }
+}
+
+data class RowData(Pair (Required string, Code int32), Count int32)
+
+inline struct InlineRow(Pair (Required string, Code int32))
+
+class RowsImpl : IRows, IRows[string], IGenericMethodRows {
+    func Read() Task[(Required string, Code int32)] -> Task.FromResult[(Required string, Code int32)](("plain", 10))
+    func ReadValue() ValueTask[(Required string, Code int32)] -> ValueTask[(Required string, Code int32)](("vplain", 11))
+    func ReadItem() Task[(Required string, Code int32)] -> Task.FromResult[(Required string, Code int32)](("item", 12))
+    func ReadValueItem() ValueTask[(Required string, Code int32)] -> ValueTask[(Required string, Code int32)](("vitem", 13))
+    prop Current Task[(Required string, Code int32)] -> Task.FromResult[(Required string, Code int32)](("cur", 14))
+    prop CurrentItem Task[(Required string, Code int32)] -> Task.FromResult[(Required string, Code int32)](("curitem", 15))
+    func Read[T]() Task[(Required string, Code int32)] -> Task.FromResult[(Required string, Code int32)](("gm", 16))
+    func ReadItem[T]() Task[(Required T, Code int32)] -> Task.FromResult[(Required T, Code int32)]((default(T), 17))
+    func ReadValueItem[T]() ValueTask[(Required T, Code int32)] -> ValueTask[(Required T, Code int32)]((default(T), 18))
+    func ReadTwo[T]() Task[(First T, Second (Label string, Num int32))] -> Task.FromResult[(First T, Second (Label string, Num int32))]((default(T), ("lbl", 19)))
+}`
+        let appSource = `package TupleLabelConsumer
+import System
+import System.Threading.Tasks
+import TupleLabelProducer
+
+class LocalType {
+    var Tag string = "loc"
+}
+
+shared class Consumer[U] {
+    func ReadPlain(rows IRows) string -> rows.Read().GetAwaiter().GetResult().Required
+    async func AwaitPlain(rows IRows) Task[string] -> (await rows.Read()).Required + "|" + (await rows.ReadValue()).Required
+    func ReadGenericPlain(rows IRows[U]) string -> rows.Read().GetAwaiter().GetResult().Required
+    func ReadGenericItem(rows IRows[U]) U -> rows.ReadItem().GetAwaiter().GetResult().Required
+    async func AwaitGenericValueItem(rows IRows[U]) Task[int32] -> (await rows.ReadValueItem()).Code
+    func ReadNullableItem(rows IRows[string?]) int32 -> rows.ReadItem().GetAwaiter().GetResult().Code
+    func ReadLocalItem(rows IRows[LocalType]) int32 -> rows.ReadItem().GetAwaiter().GetResult().Code
+    func ReadMethodItem(rows IGenericMethodRows) int32 -> rows.ReadItem[U]().GetAwaiter().GetResult().Code
+    async func AwaitMethodValueItem(rows IGenericMethodRows) Task[int32] -> (await rows.ReadValueItem[U]()).Code
+    func ReadMethodNullable(rows IGenericMethodRows) int32 -> rows.ReadItem[string?]().GetAwaiter().GetResult().Code
+    func ReadMethodLocal(rows IGenericMethodRows) int32 -> rows.ReadItem[LocalType]().GetAwaiter().GetResult().Code
+    func ReadPropItem(rows IRows[U]) U -> rows.CurrentItem.GetAwaiter().GetResult().Required
+    func ReadBoxField(box RowBox[U]) U -> box.Field.GetAwaiter().GetResult().Required
+    func ReadNestedTupleArg(rows IGenericMethodRows) string {
+        let res = rows.ReadTwo[(InnerA string, InnerB int32)]().GetAwaiter().GetResult()
+        return res.Second.Label + ":" + res.First.InnerB.ToString()
+    }
+    func ReadDeconstructed(data RowData, inlineRow InlineRow) string {
+        var count = 0
+        data.Deconstruct(out var p1, out count)
+        inlineRow.Deconstruct(out var p2)
+        return p1.Required + ":" + p2.Required + ":" + count.ToString()
+    }
+}
+
+let impl = RowsImpl()
+Console.WriteLine(Consumer[string].ReadPlain(impl))
+Console.WriteLine(Consumer[string].AwaitPlain(impl).GetAwaiter().GetResult())
+Console.WriteLine(Consumer[string].ReadGenericPlain(impl))
+Console.WriteLine(Consumer[string].ReadGenericItem(impl))
+Console.WriteLine(Consumer[string].AwaitGenericValueItem(impl).GetAwaiter().GetResult())
+Console.WriteLine(Consumer[string].ReadMethodItem(impl))
+Console.WriteLine(Consumer[string].AwaitMethodValueItem(impl).GetAwaiter().GetResult())
+Console.WriteLine(Consumer[string].ReadPropItem(impl))
+let box = RowBox[string](Task.FromResult[(Required string, Code int32)](("boxed", 20)))
+Console.WriteLine(Consumer[string].ReadBoxField(box))
+Console.WriteLine(Consumer[string].ReadNestedTupleArg(impl))
+Console.WriteLine(Consumer[string].ReadDeconstructed(RowData(("d1", 1), 5), InlineRow(("d2", 2))))`
+        let output = CompileAndRunWithLibrary(libSource, appSource, libraryName: "TupleLabelProducer")
+        let lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+        Assert.Equal(
+            []string{
+                "plain",
+                "plain|vplain",
+                "plain",
+                "item",
+                "13",
+                "17",
+                "18",
+                "curitem",
+                "boxed",
+                "lbl:0",
+                "d1:d2:5"
+            },
+            lines
+        )
+    }
+
     shared {
         private func ReadNames(provider ICustomAttributeProvider)[]string? {
             let data CustomAttributeData? = FindAttribute(provider)

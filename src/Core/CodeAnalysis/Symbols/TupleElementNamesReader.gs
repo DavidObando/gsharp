@@ -31,14 +31,15 @@ shared class TupleElementNamesReader {
     /// absent or carries no names.
     /// @param mapped The already-mapped member type symbol.
     /// @param provider The imported parameter / field / property to read the attribute from.
+    /// @param layoutType Optional open declaration type that defines the metadata positions.
     /// @returns The (possibly) name-enriched type symbol.
-    func ApplyNames(mapped TypeSymbol, provider ICustomAttributeProvider) TypeSymbol {
+    func ApplyNames(mapped TypeSymbol, provider ICustomAttributeProvider, layoutType Type? = nil) TypeSymbol {
         let names = TryGetNames(provider)
         if names.IsDefaultOrEmpty {
             return mapped
         }
         var position = 0
-        return Apply(mapped, names, &position)
+        return Apply(mapped, names, &position, layoutType)
     }
 
     private func TryGetNames(provider ICustomAttributeProvider) ImmutableArray[string?] {
@@ -67,8 +68,20 @@ shared class TupleElementNamesReader {
         return entries.Select((e CustomAttributeTypedArgument) -> cast[string?](e.Value)).ToImmutableArray()
     }
 
-    private func Apply(type TypeSymbol, names ImmutableArray[string?], ref position int32) TypeSymbol {
+    private func Apply(
+        type TypeSymbol,
+        names ImmutableArray[string?],
+        ref position int32,
+        layoutType Type? = nil
+    ) TypeSymbol {
         var type = type
+        var layoutType = layoutType
+        if layoutType != nil && NullableLifting.GetValueTypeNullableUnderlyingClr(layoutType) is {} nullableUnderlying {
+            layoutType = nullableUnderlying
+        }
+        if layoutType?.IsGenericParameter == true {
+            return type
+        }
         // An imported generic type argument surfaces as an imported
         // `System.ValueTuple<…>` rather than a TupleTypeSymbol (issue #813 /
         // #1922 identity bridging covers the two spellings elsewhere).
@@ -91,20 +104,26 @@ shared class TupleElementNamesReader {
                         elementNames.Add(names[position])
                         position++
                     }
+                    let elementLayouts = TryGetTupleElementLayouts(layoutType, tuple.Arity)
                     let elements = ImmutableArray.CreateBuilder[TypeSymbol](tuple.Arity)
                     for var i = 0; i < tuple.Arity; i++ {
                         if i > 0 && i % 7 == 0 {
                             // Skip the unnamed positions of the synthesized Rest node.
                             position = Math.Min(names.Length, position + tuple.Arity - i)
                         }
-                        elements.Add(Apply(tuple.ElementTypes[i], names, &position))
+                        let elementLayout = if elementLayouts != nil {
+                            elementLayouts[i]
+                        } else {
+                            default(Type?)
+                        }
+                        elements.Add(Apply(tuple.ElementTypes[i], names, &position, elementLayout))
                     }
                     return TupleTypeSymbol.Get(elements.MoveToImmutable(), elementNames.MoveToImmutable())
                 }
             }
             case nullable is NullableTypeSymbol {
                 {
-                    let applied = Apply(nullable.UnderlyingType, names, &position)
+                    let applied = Apply(nullable.UnderlyingType, names, &position, layoutType)
                     return if object.ReferenceEquals(applied, nullable.UnderlyingType) {
                         type
                     } else {
@@ -113,7 +132,7 @@ shared class TupleElementNamesReader {
                 }
             }
             case platform is PlatformTypeSymbol {
-                let applied = Apply(platform.UnderlyingType, names, &position)
+                let applied = Apply(platform.UnderlyingType, names, &position, layoutType)
                 return if object.ReferenceEquals(applied, platform.UnderlyingType) {
                     type
                 } else {
@@ -121,23 +140,53 @@ shared class TupleElementNamesReader {
                 }
             }
             case pointer is PointerTypeSymbol {
-                return PointerTypeSymbol.Get(Apply(pointer.PointeeType, names, &position))
+                let pointeeLayout = if layoutType != nil && layoutType.IsPointer {
+                    layoutType.GetElementType()
+                } else {
+                    default(Type?)
+                }
+                return PointerTypeSymbol.Get(Apply(pointer.PointeeType, names, &position, pointeeLayout))
             }
             case byRef is ByRefTypeSymbol {
-                return ByRefTypeSymbol.Get(Apply(byRef.PointeeType, names, &position))
+                let pointeeLayout = if layoutType != nil && layoutType.IsByRef {
+                    layoutType.GetElementType()
+                } else {
+                    default(Type?)
+                }
+                return ByRefTypeSymbol.Get(Apply(byRef.PointeeType, names, &position, pointeeLayout))
             }
             case pointer is FunctionPointerTypeSymbol {
+                let returnLayout = if layoutType != nil && layoutType.IsFunctionPointer {
+                    layoutType.GetFunctionPointerReturnType()
+                } else {
+                    default(Type?)
+                }
+                let parameterLayouts = if layoutType != nil && layoutType.IsFunctionPointer {
+                    layoutType.GetFunctionPointerParameterTypes()
+                } else {
+                    default([]?Type)
+                }
                 // CLR tuple-name metadata visits the return before the parameters.
-                let result = Apply(pointer.ReturnType, names, &position)
+                let result = Apply(pointer.ReturnType, names, &position, returnLayout)
                 let parameters = ImmutableArray.CreateBuilder[TypeSymbol](pointer.ParameterTypes.Length)
-                for parameter in pointer.ParameterTypes {
-                    parameters.Add(Apply(parameter, names, &position))
+                for var i = 0; i < pointer.ParameterTypes.Length; i++ {
+                    let parameterLayout = if parameterLayouts != nil && i < parameterLayouts.Length {
+                        parameterLayouts[i]
+                    } else {
+                        default(Type?)
+                    }
+                    parameters.Add(Apply(pointer.ParameterTypes[i], names, &position, parameterLayout))
                 }
                 return pointer.WithSignature(parameters.MoveToImmutable(), result)
             }
             case array is ArrayTypeSymbol {
                 {
-                    let applied = Apply(array.ElementType, names, &position)
+                    let elementLayout = if layoutType != nil && layoutType.IsArray {
+                        layoutType.GetElementType()
+                    } else {
+                        default(Type?)
+                    }
+                    let applied = Apply(array.ElementType, names, &position, elementLayout)
                     return if object.ReferenceEquals(applied, array.ElementType) {
                         type
                     } else {
@@ -147,7 +196,12 @@ shared class TupleElementNamesReader {
             }
             case slice is SliceTypeSymbol {
                 {
-                    let applied = Apply(slice.ElementType, names, &position)
+                    let elementLayout = if layoutType != nil && layoutType.IsArray {
+                        layoutType.GetElementType()
+                    } else {
+                        default(Type?)
+                    }
+                    let applied = Apply(slice.ElementType, names, &position, elementLayout)
                     return if object.ReferenceEquals(applied, slice.ElementType) {
                         type
                     } else {
@@ -157,7 +211,12 @@ shared class TupleElementNamesReader {
             }
             case rectangular is RectangularArrayTypeSymbol {
                 {
-                    let applied = Apply(rectangular.ElementType, names, &position)
+                    let elementLayout = if layoutType != nil && layoutType.IsArray {
+                        layoutType.GetElementType()
+                    } else {
+                        default(Type?)
+                    }
+                    let applied = Apply(rectangular.ElementType, names, &position, elementLayout)
                     return if object.ReferenceEquals(applied, rectangular.ElementType) {
                         type
                     } else {
@@ -167,8 +226,19 @@ shared class TupleElementNamesReader {
             }
             case map_ is MapTypeSymbol {
                 {
-                    let key = Apply(map_.KeyType, names, &position)
-                    let value = Apply(map_.ValueType, names, &position)
+                    let layoutArguments = TryGetGenericArguments(layoutType)
+                    let keyLayout = if layoutArguments != nil && layoutArguments.Length == 2 {
+                        layoutArguments[0]
+                    } else {
+                        default(Type?)
+                    }
+                    let valueLayout = if layoutArguments != nil && layoutArguments.Length == 2 {
+                        layoutArguments[1]
+                    } else {
+                        default(Type?)
+                    }
+                    let key = Apply(map_.KeyType, names, &position, keyLayout)
+                    let value = Apply(map_.ValueType, names, &position, valueLayout)
                     return if object.ReferenceEquals(key, map_.KeyType) && object.ReferenceEquals(
                         value,
                         map_.ValueType
@@ -181,7 +251,13 @@ shared class TupleElementNamesReader {
             }
             case sequence_ is SequenceTypeSymbol {
                 {
-                    let applied = Apply(sequence_.ElementType, names, &position)
+                    let layoutArguments = TryGetGenericArguments(layoutType)
+                    let elementLayout = if layoutArguments != nil && layoutArguments.Length == 1 {
+                        layoutArguments[0]
+                    } else {
+                        default(Type?)
+                    }
+                    let applied = Apply(sequence_.ElementType, names, &position, elementLayout)
                     return if object.ReferenceEquals(applied, sequence_.ElementType) {
                         type
                     } else {
@@ -191,7 +267,13 @@ shared class TupleElementNamesReader {
             }
             case asyncSequence is AsyncSequenceTypeSymbol {
                 {
-                    let applied = Apply(asyncSequence.ElementType, names, &position)
+                    let layoutArguments = TryGetGenericArguments(layoutType)
+                    let elementLayout = if layoutArguments != nil && layoutArguments.Length == 1 {
+                        layoutArguments[0]
+                    } else {
+                        default(Type?)
+                    }
+                    let applied = Apply(asyncSequence.ElementType, names, &position, elementLayout)
                     return if object.ReferenceEquals(applied, asyncSequence.ElementType) {
                         type
                     } else {
@@ -201,7 +283,13 @@ shared class TupleElementNamesReader {
             }
             case channel is ChannelTypeSymbol {
                 {
-                    let applied = Apply(channel.ElementType, names, &position)
+                    let layoutArguments = TryGetGenericArguments(layoutType)
+                    let elementLayout = if layoutArguments != nil && layoutArguments.Length == 1 {
+                        layoutArguments[0]
+                    } else {
+                        default(Type?)
+                    }
+                    let applied = Apply(channel.ElementType, names, &position, elementLayout)
                     return if object.ReferenceEquals(applied, channel.ElementType) {
                         type
                     } else {
@@ -211,10 +299,17 @@ shared class TupleElementNamesReader {
             }
             case ImportedTypeSymbol{TypeArguments: {IsDefaultOrEmpty: false}} imported {
                 {
+                    let layoutArguments = TryGetGenericArguments(layoutType)
                     let arguments = ImmutableArray.CreateBuilder[TypeSymbol](imported.TypeArguments.Length)
                     var changed = false
-                    for argument in imported.TypeArguments {
-                        let applied = Apply(argument, names, &position)
+                    for var i = 0; i < imported.TypeArguments.Length; i++ {
+                        let argument = imported.TypeArguments[i]
+                        let argumentLayout = if layoutArguments != nil && i < layoutArguments.Length {
+                            layoutArguments[i]
+                        } else {
+                            default(Type?)
+                        }
+                        let applied = Apply(argument, names, &position, argumentLayout)
                         arguments.Add(applied)
                         changed |= !object.ReferenceEquals(applied, argument)
                     }
@@ -233,7 +328,7 @@ shared class TupleElementNamesReader {
             }
             case annotated is NullabilityAnnotatedTypeSymbol {
                 {
-                    let applied = Apply(annotated.BaseType, names, &position)
+                    let applied = Apply(annotated.BaseType, names, &position, layoutType)
                     return if object.ReferenceEquals(applied, annotated.BaseType) {
                         type
                     } else {
@@ -242,8 +337,13 @@ shared class TupleElementNamesReader {
                 }
             }
             case {ClrType: {IsSZArray: true}} {
+                let elementLayout = if layoutType != nil && layoutType.IsArray {
+                    layoutType.GetElementType()
+                } else {
+                    default(Type?)
+                }
                 let element = type.GetElementPositions()[0]
-                let applied = Apply(element, names, &position)
+                let applied = Apply(element, names, &position, elementLayout)
                 return if object.ReferenceEquals(applied, element) {
                     type
                 } else {
@@ -252,23 +352,25 @@ shared class TupleElementNamesReader {
             }
             case {ClrType: {IsGenericType: true, IsGenericTypeDefinition: false} closedClr} {
                 {
-                    var clrArguments[]Type
-                    try {
-                        clrArguments = closedClr.GetGenericArguments()
-                    } catch (ex Exception) when ex is TypeLoadException ||
-                        ex is FileNotFoundException ||
-                        ex is BadImageFormatException {
-                        ClrNullability.RecordMetadataReadFailure()
+                    let clrArguments = TryGetGenericArguments(closedClr)
+                    if clrArguments == nil {
                         return type
                     }
+                    let layoutArguments = TryGetGenericArguments(layoutType)
                     let arguments = ImmutableArray.CreateBuilder[TypeSymbol](clrArguments.Length)
                     var changed = false
-                    for clrArgument in clrArguments {
+                    for var i = 0; i < clrArguments.Length; i++ {
+                        let clrArgument = clrArguments[i]
+                        let argumentLayout = if layoutArguments != nil && i < layoutArguments.Length {
+                            layoutArguments[i]
+                        } else {
+                            default(Type?)
+                        }
                         let argumentSymbol = TypeSymbol.FromClrTypeWithoutNullability(
                             clrArgument,
                             NullabilityFreeReason.TypeStructure
                         )
-                        let applied = Apply(argumentSymbol, names, &position)
+                        let applied = Apply(argumentSymbol, names, &position, argumentLayout)
                         arguments.Add(applied)
                         changed |= !object.ReferenceEquals(applied, argumentSymbol)
                     }
@@ -288,6 +390,52 @@ shared class TupleElementNamesReader {
             default {
                 return type
             }
+        }
+    }
+
+    private func TryGetGenericArguments(type Type?)[]?Type {
+        if type == nil || !type.IsGenericType {
+            return nil
+        }
+        try {
+            return type.GetGenericArguments()
+        } catch (ex Exception) when ex is TypeLoadException ||
+            ex is FileNotFoundException ||
+            ex is BadImageFormatException {
+            ClrNullability.RecordMetadataReadFailure()
+            return nil
+        }
+    }
+
+    private func TryGetTupleElementLayouts(layoutType Type?, arity int32)[]?Type {
+        if layoutType == nil || !layoutType.IsGenericType || arity <= 0 {
+            return nil
+        }
+        let result = List[Type](arity)
+        var current Type? = layoutType
+        while current != nil && current.IsGenericType {
+            let arguments = TryGetGenericArguments(current)
+            if arguments == nil {
+                return nil
+            }
+            let directCount = if arguments.Length == 8 {
+                7
+            } else {
+                arguments.Length
+            }
+            for var i = 0; i < directCount; i++ {
+                result.Add(arguments[i])
+            }
+            current = if arguments.Length == 8 {
+                arguments[7]
+            } else {
+                default(Type?)
+            }
+        }
+        return if result.Count == arity {
+            result.ToArray()
+        } else {
+            default([]?Type)
         }
     }
 }
