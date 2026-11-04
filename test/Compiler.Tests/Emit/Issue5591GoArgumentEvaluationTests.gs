@@ -124,6 +124,7 @@ class Spawner : Base {
     var handler Action[int32] = (v int32) -> Log.Add("callee first " + v.ToString())
     var label string = "old"
     var order string = ""
+    var spanCreated int32 = 0
 
     override func Report(tag string, v int32) { Log.Add(tag + " derived " + v.ToString()) }
 
@@ -131,10 +132,18 @@ class Spawner : Base {
         order += tag
         return order.Length
     }
+    func MakeSpanString() string {
+        spanCreated = 4
+        return "abcd"
+    }
+    func ReadSpanCreated() int32 -> spanCreated
     func Three(a int32, b int32, c int32) { Log.Add("positional " + a.ToString() + b.ToString() + c.ToString()) }
     func Pair(a int32, b int32) { Log.Add("named a=" + a.ToString() + " b=" + b.ToString()) }
     func PairIn(in a int32, b int32) { Log.Add("named-in a=" + a.ToString() + " b=" + b.ToString()) }
     func ConsumeSpan(value ReadOnlySpan[char], extra int32) { Log.Add("named-span len=" + value.Length.ToString() + " extra=" + extra.ToString()) }
+    func ConsumeSpan3(value ReadOnlySpan[char], extra int32, last int32) {
+        Log.Add("named-span3 len=" + value.Length.ToString() + " extra=" + extra.ToString() + " last=" + last.ToString())
+    }
     func Show[T](tag string, value T) { Log.Add(tag + " " + value.ToString()) }
     async func Later(v int32) {
         await Task.Yield()
@@ -176,6 +185,7 @@ class Spawner : Base {
                 c.n = s.Length
                 s
             }, Next("l"))
+            go ConsumeSpan3(extra: Next("m"), value: MakeSpanString().AsSpan(), last: ReadSpanCreated())
             go Show("inferred", label)
             go Show[int32]("explicit", count)
             go Later(count)
@@ -212,7 +222,8 @@ named-in a=7 b=6
 named-span len=3 extra=12
 named-span len=3 extra=8
 named-span len=4 extra=11
-order abcdefghijkl|
+named-span3 len=4 extra=13 last=4
+order abcdefghijklm|
 positional 123
 span-block 9
 suspending 7

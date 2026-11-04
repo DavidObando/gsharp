@@ -43,11 +43,6 @@ internal shared class GoCapturedVariableCollector {
             this.written = written
         }
 
-        prop HasMutation bool {
-            get;
-            private set;
-        }
-
         override func VisitExpression(node BoundExpression?) {
             if node == nil {
                 return
@@ -85,7 +80,6 @@ internal shared class GoCapturedVariableCollector {
 
         protected override func VisitAssignmentExpression(node BoundAssignmentExpression) {
             this.RecordMutationTarget(node.Variable)
-            this.HasMutation = true
             base.VisitAssignmentExpression(node)
         }
 
@@ -93,25 +87,13 @@ internal shared class GoCapturedVariableCollector {
             if node.Receiver != nil {
                 this.RecordMutationTarget(node.Receiver)
             }
-            this.HasMutation = true
             base.VisitFieldAssignmentExpression(node)
-        }
-
-        protected override func VisitPropertyAssignmentExpression(node BoundPropertyAssignmentExpression) {
-            this.HasMutation = true
-            base.VisitPropertyAssignmentExpression(node)
-        }
-
-        protected override func VisitClrPropertyAssignmentExpression(node BoundClrPropertyAssignmentExpression) {
-            this.HasMutation = true
-            base.VisitClrPropertyAssignmentExpression(node)
         }
 
         protected override func VisitIndexAssignmentExpression(node BoundIndexAssignmentExpression) {
             if node.Target != nil {
                 this.RecordMutationTarget(node.Target)
             }
-            this.HasMutation = true
             base.VisitIndexAssignmentExpression(node)
         }
 
@@ -119,13 +101,7 @@ internal shared class GoCapturedVariableCollector {
             if node.Target != nil {
                 this.RecordMutationTarget(node.Target)
             }
-            this.HasMutation = true
             base.VisitClrIndexAssignmentExpression(node)
-        }
-
-        protected override func VisitIndirectAssignmentExpression(node BoundIndirectAssignmentExpression) {
-            this.HasMutation = true
-            base.VisitIndirectAssignmentExpression(node)
         }
 
         protected override func VisitAddressOfExpression(node BoundAddressOfExpression) {
@@ -219,12 +195,11 @@ internal shared class GoCapturedVariableCollector {
         return captured.ToImmutable()
     }
 
-    func CollectWrittenVariables(statement BoundStatement, written HashSet[VariableSymbol]) bool {
+    func CollectWrittenVariables(statement BoundStatement, written HashSet[VariableSymbol]) {
         let seen = HashSet[VariableSymbol]()
         let captured = ImmutableArray.CreateBuilder[VariableSymbol]()
         let declared = HashSet[VariableSymbol]()
         let collector = GoCapturedVariableCollector.Walker(seen, declared, captured, written)
         collector.VisitStatement(statement)
-        return collector.HasMutation
     }
 }

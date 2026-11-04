@@ -1553,16 +1553,15 @@ internal partial class StatementBinder {
     ) BoundExpression {
         let count = block.Statements.Length
         let isRetained = [count]bool
-        let isShared = IsSharedArgumentBlock(block)
         while true {
             var changed = false
-            var hasRetainedMutation = false
+            var hasRetainedStatement = false
             let referencedByRetained = HashSet[VariableSymbol]()
             for var i = 0; i < count; i++ {
                 let statement = block.Statements[i]
                 if !isRetained[i] &&
                     (
-                    hasRetainedMutation ||
+                    hasRetainedStatement ||
                         (
                         statement is BoundVariableDeclaration declaration &&
                             ClosureCaptureLegalityChecker.RejectsCapture(declaration.Variable)
@@ -1573,14 +1572,14 @@ internal partial class StatementBinder {
                     changed = true
                 }
                 if isRetained[i] {
-                    let mutated = GoCapturedVariableCollector.CollectWrittenVariables(statement, retainedVariables)
-                    hasRetainedMutation |= !isShared || mutated
+                    hasRetainedStatement = true
+                    GoCapturedVariableCollector.CollectWrittenVariables(statement, retainedVariables)
                     for variable in GoCapturedVariableCollector.CollectCapturedVariables(statement) {
                         referencedByRetained.Add(variable)
                     }
                 }
             }
-            if hasRetainedMutation || ReadsUncapturableVariable(block.Expression, retainedVariables) {
+            if hasRetainedStatement || ReadsUncapturableVariable(block.Expression, retainedVariables) {
                 for variable in GoCapturedVariableCollector.CollectCapturedVariables(block.Expression) {
                     referencedByRetained.Add(variable)
                 }
@@ -1598,13 +1597,11 @@ internal partial class StatementBinder {
             }
         }
         let retained = ImmutableArray.CreateBuilder[BoundStatement]()
-        var retainTail = false
         for var i = 0; i < count; i++ {
             let statement = block.Statements[i]
             if isRetained[i] {
                 retained.Add(statement)
-                let mutated = GoCapturedVariableCollector.CollectWrittenVariables(statement, retainedVariables)
-                retainTail |= !isShared || mutated
+                GoCapturedVariableCollector.CollectWrittenVariables(statement, retainedVariables)
                 continue
             }
             if statement is BoundVariableDeclaration hoistedDeclaration {
@@ -1612,7 +1609,7 @@ internal partial class StatementBinder {
             }
             prefix.Add(statement)
         }
-        let tail = if retainTail || ReadsUncapturableVariable(block.Expression, retainedVariables) {
+        let tail = if retained.Count != 0 || ReadsUncapturableVariable(block.Expression, retainedVariables) {
             block.Expression
         } else {
             captureTail(block.Expression)
