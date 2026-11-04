@@ -2509,7 +2509,7 @@ internal partial class ExpressionBinder {
             narrowedType TypeSymbol?,
             makeNarrowedNode(TypeSymbol) -> BoundExpression
         ) BoundExpression {
-            if narrowedType == nil {
+            if narrowedType == nil || narrowedType == declaredType {
                 return bareRead
             }
             // A value-type `Nullable<T>` narrowed to its (value-type) underlying `T`

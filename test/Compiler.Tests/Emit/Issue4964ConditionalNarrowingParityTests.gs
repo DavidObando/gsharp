@@ -399,6 +399,22 @@ func Check(ref text string?, ref count int32) int32 -> TryCheck(ref text, ref co
         "return (dict.TryGetValue(\"a\", out value) || dict.TryGetValue(\"b\", out value)) ? value.Length : 0",
         ""
     )
+    @InlineData(
+        "return (dict.TryGetValue(\"a\", out value) || (flag || dict.TryGetValue(\"b\", out value))) ? value.Length : 0",
+        "GS0158:Length"
+    )
+    @InlineData(
+        "return (!dict.TryGetValue(\"a\", out value) && (flag && !dict.TryGetValue(\"b\", out value))) ? 0 : value.Length",
+        "GS0158:Length"
+    )
+    @InlineData(
+        "return (dict.TryGetValue(\"a\", out value) || (dict.TryGetValue(\"b\", out value) || dict.TryGetValue(\"c\", out value))) ? value.Length : 0",
+        ""
+    )
+    @InlineData(
+        "return (!dict.TryGetValue(\"a\", out value) && (!dict.TryGetValue(\"b\", out value) && !dict.TryGetValue(\"c\", out value))) ? 0 : value.Length",
+        ""
+    )
     func Composed_MaybeNullWhen_Preserves_Widening_Across_And_And_Or(body string, expected string) {
         let source = (`package Issue4969.ComposedMaybeNull
 import System.Collections.Generic

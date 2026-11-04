@@ -1820,11 +1820,18 @@ internal partial class StatementBinder {
         )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
             var combinedThen = MergeNarrowingFrames(leftThenFiltered, PreserveNullableWidenings(leftThenRaw))
             combinedThen = MergeNarrowingFrames(combinedThen, rightThen)
-            var combinedElse = PreserveNullableWidenings(leftElse)
+            var combinedElse = IntersectNarrowingFrames(leftElse, MergeNarrowingFrames(leftThenFiltered, rightElse))
+            if leftElse != nil {
+                for kv in leftElse {
+                    if IsNullableWidening(kv.Key, kv.Value) {
+                        combinedElse ??= Dictionary[AccessPath, TypeSymbol]()
+                        combinedElse!![kv.Key] = kv.Value
+                    }
+                }
+            }
             if leftThenRaw != nil {
                 for kv in leftThenRaw {
-                    if IsNullableWidening(kv.Key, kv.Value) &&
-                        !DischargesNullableWidening(rightElse, rightThen, kv.Key) {
+                    if IsNullableWidening(kv.Key, kv.Value) && !HasNonWideningRefinement(rightElse, kv.Key) {
                         combinedElse ??= Dictionary[AccessPath, TypeSymbol]()
                         combinedElse!![kv.Key] = kv.Value
                     }
@@ -1851,7 +1858,7 @@ internal partial class StatementBinder {
             rightThen Dictionary[AccessPath, TypeSymbol]?,
             rightElse Dictionary[AccessPath, TypeSymbol]?
         )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
-            var combinedThen = IntersectNarrowingFrames(leftThen, rightThen)
+            var combinedThen = IntersectNarrowingFrames(leftThen, MergeNarrowingFrames(leftElseFiltered, rightThen))
             if leftThen != nil {
                 for kv in leftThen {
                     if IsNullableWidening(kv.Key, kv.Value) {
@@ -1862,8 +1869,7 @@ internal partial class StatementBinder {
             }
             if leftElseRaw != nil {
                 for kv in leftElseRaw {
-                    if IsNullableWidening(kv.Key, kv.Value) &&
-                        !DischargesNullableWidening(rightThen, rightElse, kv.Key) {
+                    if IsNullableWidening(kv.Key, kv.Value) && !HasNonWideningRefinement(rightThen, kv.Key) {
                         combinedThen ??= Dictionary[AccessPath, TypeSymbol]()
                         combinedThen!![kv.Key] = kv.Value
                     }
@@ -1902,17 +1908,11 @@ internal partial class StatementBinder {
             return result
         }
 
-        private func DischargesNullableWidening(
-            takenBranch Dictionary[AccessPath, TypeSymbol]?,
-            siblingBranch Dictionary[AccessPath, TypeSymbol]?,
+        private func HasNonWideningRefinement(
+            frame Dictionary[AccessPath, TypeSymbol]?,
             path AccessPath
-        ) bool {
-            if takenBranch != nil && takenBranch.TryGetValue(path, out var refined) {
-                return !IsNullableWidening(path, refined)
-            }
-            return siblingBranch != nil && siblingBranch.TryGetValue(path, out var siblingVal) &&
-                IsNullableWidening(path, siblingVal)
-        }
+        ) bool -> frame != nil &&
+            frame.TryGetValue(path, out var refined) && !IsNullableWidening(path, refined)
 
         private func IsNarrowableVariable(expr BoundExpression, out variable VariableSymbol?) bool {
             variable = nil
@@ -2388,10 +2388,16 @@ internal partial class StatementBinder {
                         if widenThen || !preserved {
                             thenFrame ??= Dictionary[AccessPath, TypeSymbol]()
                             thenFrame!![widenVarExpr.Variable] = widenedType
+                        } else {
+                            thenFrame ??= Dictionary[AccessPath, TypeSymbol]()
+                            thenFrame!![widenVarExpr.Variable] = widenVarExpr.Variable.Type
                         }
                         if !widenThen || !preserved {
                             elseFrame ??= Dictionary[AccessPath, TypeSymbol]()
                             elseFrame!![widenVarExpr.Variable] = widenedType
+                        } else {
+                            elseFrame ??= Dictionary[AccessPath, TypeSymbol]()
+                            elseFrame!![widenVarExpr.Variable] = widenVarExpr.Variable.Type
                         }
                     }
                     continue
@@ -2565,10 +2571,16 @@ internal partial class StatementBinder {
                     if widenThen || !preserved {
                         thenFrame ??= Dictionary[AccessPath, TypeSymbol]()
                         thenFrame!![widenVarExpr.Variable] = widenedType
+                    } else {
+                        thenFrame ??= Dictionary[AccessPath, TypeSymbol]()
+                        thenFrame!![widenVarExpr.Variable] = widenVarExpr.Variable.Type
                     }
                     if !widenThen || !preserved {
                         elseFrame ??= Dictionary[AccessPath, TypeSymbol]()
                         elseFrame!![widenVarExpr.Variable] = widenedType
+                    } else {
+                        elseFrame ??= Dictionary[AccessPath, TypeSymbol]()
+                        elseFrame!![widenVarExpr.Variable] = widenVarExpr.Variable.Type
                     }
                 }
             }
