@@ -67,10 +67,11 @@ open class Adr0212MemberConformanceTests {
         private const ImportedBaseRow string = "imported base class"
         private const InterfaceBaseRow string = "imported base interface"
         private const DefaultMethodRow string = "default interface method"
+        private const TypeParameterRow string = "type parameter"
         private let RowsCompared Dictionary[string, int32] = Dictionary[string, int32]()
 
         private func AssertRowsReached() {
-            for row in[]string{BuiltInRow, ImportedBaseRow, InterfaceBaseRow, DefaultMethodRow} {
+            for row in[]string{BuiltInRow, ImportedBaseRow, InterfaceBaseRow, DefaultMethodRow, TypeParameterRow} {
                 Assert.True(RowsCompared.GetValueOrDefault(row) > 0, "the corpus reaches the row '${row}'")
             }
         }
@@ -175,8 +176,10 @@ open class Adr0212MemberConformanceTests {
             if bound is not(FieldSymbol or PropertySymbol or EventSymbol or FunctionSymbol or ImportedFunctionSymbol) {
                 return 0
             }
-            let receiverType = model.GetReceiverTypeInfo(accessor.LeftPart).Type
-            if receiverType == nil || receiverType is TypeParameterSymbol {
+            let receiverType = model.GetReceiverTypeInfo(accessor.LeftPart)
+                .Type ??
+                (model.GetSymbolInfo(accessor.LeftPart).Symbol as TypeParameterSymbol)
+            if receiverType == nil {
                 return 0
             }
             let row = RowOf(bound, receiverType)
@@ -211,6 +214,9 @@ open class Adr0212MemberConformanceTests {
         /// cover, or an empty string. Each row is compared like any other member; the counts only show that the
         /// corpus reaches it.
         private func RowOf(bound Symbol, receiverType TypeSymbol) string {
+            if receiverType is TypeParameterSymbol {
+                return TypeParameterRow
+            }
             if receiverType is SliceTypeSymbol or
                 ArrayTypeSymbol or
                 MapTypeSymbol or

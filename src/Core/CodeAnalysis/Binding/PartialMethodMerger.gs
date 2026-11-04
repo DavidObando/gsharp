@@ -213,7 +213,7 @@ internal shared class PartialMethodMerger {
                     mergedStatic,
                     shared.InitBlocks,
                     shared.CloseBraceToken
-                )
+                ){PartialPartExtents = shared.PartialPartExtents}
             }
         }
         var nestedTypes = declaration.NestedTypes

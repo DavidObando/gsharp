@@ -393,27 +393,27 @@
   "samples/ChannelOwnership.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "FieldDef": [
-      "rows=14 sha256=C8D6151768BDD2B7"
+      "rows=14 sha256=4E4519AFDD40AC69"
     ],
     "MemberRef": [
-      "rows=29 sha256=1E3C8B4204C7596B"
+      "rows=29 sha256=399B01DACC8B0BEB"
     ],
     "MethodBodies": [
-      "rows=8 sha256=5F598BE24A1DFD0E"
+      "rows=8 sha256=B4D7DC22BAF3548A"
     ],
     "MethodDef": [
-      "rows=8 sha256=6E56F84F57A90972"
+      "rows=8 sha256=8491CE1C43175D91"
     ],
     "TypeDef": [
       "rows=4 sha256=4C133658E8E63166"
     ],
     "TypeRef": [
-      "rows=29 sha256=041D4ECED99A1196"
+      "rows=29 sha256=BC1D474863B8A00B"
     ]
   },
   "samples/Channels.gs": {
@@ -935,22 +935,22 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "FieldDef": [
-      "rows=49 sha256=90B0AB7D2AF36E89"
+      "rows=49 sha256=CC82ED29DAD399B3"
     ],
     "MemberRef": [
-      "rows=39 sha256=A0E0ED902B24A2E9"
+      "rows=39 sha256=5CC57EB3A09B3CFB"
     ],
     "MethodBodies": [
-      "rows=22 sha256=9F7FB71797A1FAB8"
+      "rows=22 sha256=46CD6BFDAF0463EF"
     ],
     "MethodDef": [
-      "rows=22 sha256=4259794D2579BE7A"
+      "rows=22 sha256=C6D8AE017B7A4383"
     ],
     "TypeDef": [
       "rows=10 sha256=5D7928C314F62C4B"
     ],
     "TypeRef": [
-      "rows=30 sha256=32D09B9011FC2BE1"
+      "rows=30 sha256=249E45672CD6E06E"
     ]
   },
   "samples/ForIn.gs": {
@@ -1327,13 +1327,13 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "FieldDef": [
-      "rows=16 sha256=90B489B8C0B68983"
+      "rows=16 sha256=3B89FBD620BC89EC"
     ],
     "MemberRef": [
       "rows=25 sha256=89171939ABCBF4FB"
     ],
     "MethodBodies": [
-      "rows=11 sha256=B037A2390F4DABF9"
+      "rows=11 sha256=336222986C0E55C1"
     ],
     "MethodDef": [
       "rows=11 sha256=504E661B38B1855F"
@@ -2393,27 +2393,27 @@
   "samples/Pipeline.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "FieldDef": [
-      "rows=25 sha256=2A43298E7AC42F18"
+      "rows=25 sha256=17A7629216B9B03A"
     ],
     "MemberRef": [
-      "rows=38 sha256=FD31568C3F97F365"
+      "rows=38 sha256=9D23A421B7DC2CDF"
     ],
     "MethodBodies": [
-      "rows=12 sha256=493EC0B6B407EB18"
+      "rows=12 sha256=6D9E2249BF0D6310"
     ],
     "MethodDef": [
-      "rows=12 sha256=8F5B6036D38138EB"
+      "rows=12 sha256=292E52C5EFF49676"
     ],
     "TypeDef": [
       "rows=6 sha256=95CC9B34189A001A"
     ],
     "TypeRef": [
-      "rows=31 sha256=CEC812D35E826DCA"
+      "rows=31 sha256=60AEAAA0C918FF3B"
     ]
   },
   "samples/PortScan.gs": {
@@ -2425,13 +2425,13 @@
       "System.Threading.Thread, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "FieldDef": [
-      "rows=19 sha256=46B9861CAFBA3656"
+      "rows=19 sha256=E089F9EE82D19C79"
     ],
     "MemberRef": [
       "rows=36 sha256=D8CD577721B84416"
     ],
     "MethodBodies": [
-      "rows=13 sha256=0121CF8BD8D5BB97"
+      "rows=13 sha256=591F686F89289458"
     ],
     "MethodDef": [
       "rows=13 sha256=5ECFC39E55F65927"
@@ -2642,27 +2642,27 @@
   "samples/ScopeAll.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "FieldDef": [
-      "rows=30 sha256=F5A0807CC61D6266"
+      "rows=30 sha256=1B5C5FEF605266F5"
     ],
     "MemberRef": [
-      "rows=51 sha256=FF96370C982BE581"
+      "rows=51 sha256=A798ABADC30E7A42"
     ],
     "MethodBodies": [
-      "rows=14 sha256=88A2C521F1FFD0E1"
+      "rows=14 sha256=A4DE6685BB85D3F9"
     ],
     "MethodDef": [
-      "rows=14 sha256=7026EC22593872BD"
+      "rows=14 sha256=687FBAB08478B57F"
     ],
     "TypeDef": [
       "rows=7 sha256=267A936757874F38"
     ],
     "TypeRef": [
-      "rows=39 sha256=3B2A64239ADD17B0"
+      "rows=39 sha256=6F804CC877C940CA"
     ]
   },
   "samples/Sealed.gs": {
@@ -2698,13 +2698,13 @@
       "System.Threading.Thread, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "FieldDef": [
-      "rows=12 sha256=799BD38987989D9E"
+      "rows=12 sha256=EA629FA6B4079C0E"
     ],
     "MemberRef": [
       "rows=41 sha256=9E921FD47CBB8A84"
     ],
     "MethodBodies": [
-      "rows=7 sha256=C3E074540259E035"
+      "rows=7 sha256=8A306458799CB48C"
     ],
     "MethodDef": [
       "rows=7 sha256=58BE7B87451B6E19"
@@ -3233,13 +3233,13 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "FieldDef": [
-      "rows=11 sha256=90E3565405659082"
+      "rows=11 sha256=C1D9ED486D156E9C"
     ],
     "MemberRef": [
       "rows=25 sha256=89171939ABCBF4FB"
     ],
     "MethodBodies": [
-      "rows=9 sha256=24AFDA6AAC6DAA8B"
+      "rows=9 sha256=F7EEAA644D149741"
     ],
     "MethodDef": [
       "rows=9 sha256=C1023BCF8D798716"
@@ -3478,27 +3478,27 @@
   "samples/WorkerPool.gs": {
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
-      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
+      "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "FieldDef": [
-      "rows=23 sha256=9E2E586E173C3FFB"
+      "rows=23 sha256=78130D3DE2F2A255"
     ],
     "MemberRef": [
-      "rows=36 sha256=C4F90F1791DFE28F"
+      "rows=36 sha256=6A6A6D50139723F4"
     ],
     "MethodBodies": [
-      "rows=7 sha256=A9355E0A0213A66B"
+      "rows=7 sha256=B0EB6C01AE258438"
     ],
     "MethodDef": [
-      "rows=7 sha256=4865EA111C2A72D2"
+      "rows=7 sha256=0F7E75EFE03A2720"
     ],
     "TypeDef": [
       "rows=4 sha256=C349CD2A4F74D226"
     ],
     "TypeRef": [
-      "rows=32 sha256=8F4F20DF2F874A89"
+      "rows=32 sha256=B76255720A16E0F8"
     ]
   },
   "samples/ZeroValues.gs": {

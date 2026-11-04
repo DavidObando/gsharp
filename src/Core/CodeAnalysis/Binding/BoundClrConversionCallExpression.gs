@@ -41,12 +41,12 @@ class BoundClrConversionCallExpression : BoundExpression {
         functionOwnerType StructSymbol?,
         resultType TypeSymbol
     ) : base(syntax) {
-        Source = source
+        Source = WrapNonNullableValueOperand(source, method)
         Method = method
         Function = function
         FunctionOwnerType = functionOwnerType
-        IsLifted = ComputeIsLifted(source.Type, resultType, method, function, functionOwnerType)
-        _type = GetEffectiveResultType(source.Type, resultType, method, IsLifted)
+        IsLifted = ComputeIsLifted(Source.Type, resultType, method, function, functionOwnerType)
+        _type = GetEffectiveResultType(Source.Type, resultType, method, IsLifted)
     }
 
     prop Source BoundExpression {
@@ -87,14 +87,37 @@ class BoundClrConversionCallExpression : BoundExpression {
             .ClassifyNonStructural(NullableTypeSymbol.Get(target), target).IsImplicit
 
         internal func CanApplyImplicitClrConversion(source TypeSymbol, target TypeSymbol, method MethodInfo) bool {
-            let isLifted = ComputeIsLifted(source, target, method, nil, nil)
-            if source is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) &&
+            let effectiveSource = GetEffectiveOperandType(source, method)
+            let isLifted = ComputeIsLifted(effectiveSource, target, method, nil, nil)
+            if effectiveSource is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable) &&
                 !isLifted &&
                 !AcceptsNullableValueSource(nullable, target, method, out _) {
                 return false
             }
-            return Conversion.ClassifyNonStructural(GetEffectiveResultType(source, target, method, isLifted), target)
+            return Conversion.ClassifyNonStructural(
+                GetEffectiveResultType(effectiveSource, target, method, isLifted),
+                target
+            )
                 .IsImplicit
+        }
+
+        private func WrapNonNullableValueOperand(source BoundExpression, method MethodInfo?) BoundExpression {
+            let effectiveSource = GetEffectiveOperandType(source.Type, method)
+            return if object.ReferenceEquals(effectiveSource, source.Type) {
+                source
+            } else {
+                cast[BoundExpression](BoundConversionExpression(source.Syntax, effectiveSource, source))
+            }
+        }
+
+        private func GetEffectiveOperandType(source TypeSymbol, method MethodInfo?) TypeSymbol ->
+        if source is not NullableTypeSymbol && !TypeSymbol.IsByRefLike(source) && method?.GetParameters() is {
+            Length: 1
+        } parameters &&
+            NullableLifting.IsValueTypeNullableClr(parameters[0].ParameterType) {
+            NullableTypeSymbol.Get(source.StripToBareShape())
+        } else {
+            source
         }
 
         private func GetEffectiveResultType(
@@ -129,12 +152,13 @@ class BoundClrConversionCallExpression : BoundExpression {
                 return false
             }
             if method.DeclaringType is {IsGenericTypeDefinition: true} openDeclaring {
-                let targetUnderlying = if target is NullableTypeSymbol nullableTarget {
-                    nullableTarget.UnderlyingType
+                let sourceUnderlying = source.UnderlyingType.StripToBareShape()
+                let targetUnderlying = if target.StripToBareShape() is NullableTypeSymbol nullableTarget {
+                    nullableTarget.UnderlyingType.StripToBareShape()
                 } else {
-                    target
+                    target.StripToBareShape()
                 }
-                let symbolicOwner ImportedTypeSymbol? = if source.UnderlyingType is ImportedTypeSymbol{
+                let symbolicOwner ImportedTypeSymbol? = if sourceUnderlying is ImportedTypeSymbol{
                     OpenDefinition: {} sourceOpen
                 } importedSource &&
                     !importedSource
@@ -210,7 +234,10 @@ class BoundClrConversionCallExpression : BoundExpression {
                 let resultType = functionOwnerType?.SubstituteMemberType(function.Type) ?? function.Type
                 return Conversion.ClassifyNonStructural(source.UnderlyingType, parameterType)
                     .IsIdentity &&
-                    TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(resultType, target)
+                    (
+                    TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(resultType, target) ||
+                        TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(resultType, conversionType)
+                )
             }
             let parameters = method?.GetParameters()
             return parameters != nil &&
@@ -223,7 +250,12 @@ class BoundClrConversionCallExpression : BoundExpression {
                 .ReturnType
                 .IsByRef == false &&
                 ClrTypeUtilities.AreSame(parameters[0].ParameterType, source.UnderlyingType.ClrType) &&
-                ClrTypeUtilities.AreSame(method.ReturnType, target.ClrType)
+                (
+                ClrTypeUtilities.AreSame(method.ReturnType, target.ClrType) || ClrTypeUtilities.AreSame(
+                    method.ReturnType,
+                    NullableLifting.GetEffectiveClrType(conversionType)
+                )
+            )
         }
     }
 }
