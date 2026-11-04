@@ -5301,6 +5301,21 @@ internal class ReflectionMetadataEmitter {
             method FunctionSymbol,
             bindingFlags BindingFlags
         ) MethodInfo? {
+            if FindImportedMethodCore(
+                declaringType,
+                method,
+                bindingFlags | BindingFlags.DeclaredOnly
+            ) is {} declaredMatch {
+                return declaredMatch
+            }
+            return FindImportedMethodCore(declaringType, method, bindingFlags)
+        }
+
+        private func FindImportedMethodCore(
+            declaringType Type,
+            method FunctionSymbol,
+            bindingFlags BindingFlags
+        ) MethodInfo? {
             var match MethodInfo? = nil
             for candidate in declaringType.GetMethods(bindingFlags) {
                 if !string.Equals(candidate.Name, method.Name, StringComparison.Ordinal) {

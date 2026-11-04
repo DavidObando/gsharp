@@ -4123,10 +4123,24 @@ internal partial class DeclarationBinder {
         if nestedStructs.Count == 0 {
             return
         }
+        let enclosingChain = BuildNestedEnclosingChain(containerSyntax)
+        let packageSegments = if string.IsNullOrEmpty($package.Name) {
+            Array.Empty[string]()
+        } else {
+            $package.Name.Split('.')
+        }
         let bindingState = [nestedStructs.Count]uint8
         let bindingOrder = List[int32](nestedStructs.Count)
         for var i = 0; i < nestedStructs.Count; i++ {
-            VisitNestedBaseFirst(i, containerSyntax, nestedStructs, nestedStructsByKey, bindingState, bindingOrder)
+            VisitNestedBaseFirst(
+                i,
+                enclosingChain,
+                packageSegments,
+                nestedStructs,
+                nestedStructsByKey,
+                bindingState,
+                bindingOrder
+            )
         }
         for index in bindingOrder {
             let nestedStruct = nestedStructs[index]
@@ -4136,9 +4150,43 @@ internal partial class DeclarationBinder {
         }
     }
 
+    private func BuildNestedEnclosingChain(containerSyntax StructDeclarationSyntax) List[(Name string, Arity int32)] {
+        let chain = List[(Name string, Arity int32)]()
+        if containerSyntax.NestedTypes.IsDefaultOrEmpty {
+            return chain
+        }
+        for nested in containerSyntax.NestedTypes {
+            if nested is StructDeclarationSyntax nestedStruct && nestedStructShells.TryGetValue(
+                nestedStruct,
+                out var nestedSymbol
+            ) {
+                var current TypeSymbol? = nestedSymbol.ContainingType
+                while current is StructSymbol enclosingStruct {
+                    let def = enclosingStruct.Definition ?? enclosingStruct
+                    let arity = def
+                        .Declaration
+                        ?.TypeParameterList
+                        ?.Parameters
+                        .Count ??
+                        def
+                        .DeclaredTypeParameters
+                        .Length
+                    chain.Insert(0, (def.Name, arity))
+                    current = def.ContainingType
+                }
+                break
+            }
+        }
+        if chain.Count == 0 {
+            chain.Add((containerSyntax.Identifier.ValueText, containerSyntax.TypeParameterList?.Parameters.Count ?? 0))
+        }
+        return chain
+    }
+
     private func FindNestedSiblingBaseIndex(
         syntax StructDeclarationSyntax,
-        containerSyntax StructDeclarationSyntax,
+        enclosingChain List[(Name string, Arity int32)],
+        packageSegments[]string,
         nestedStructs List[StructDeclarationSyntax],
         nestedStructsByKey Dictionary[(Name string, Arity int32), int32],
         shadowedNestedKeys HashSet[(Name string, Arity int32)]?
@@ -4153,34 +4201,64 @@ internal partial class DeclarationBinder {
         } else {
             default(TypeClauseSyntax?)
         }
-        if baseClause == nil {
+        if baseClause == nil || baseClause.Identifier == nil {
             return -1
         }
-        var candidateName string? = nil
-        var candidateArity = 0
-        let leadingSegment = baseClause.Identifier?.ValueText
-        let leadingArity = baseClause.GetSegmentTypeArguments(0)?.Count ?? 0
-        if !baseClause.HasQualifier {
-            if leadingSegment != nil &&
-                (shadowedNestedKeys == nil || !shadowedNestedKeys.Contains((leadingSegment, leadingArity))) {
-                candidateName = leadingSegment
-                candidateArity = leadingArity
-            }
-        } else if leadingSegment != nil {
-            let containerArity = containerSyntax.TypeParameterList?.Parameters.Count ?? 0
-            if leadingSegment == containerSyntax.Identifier.ValueText && leadingArity == containerArity {
-                let nextSegment = baseClause.QualifierIdentifierTokens[0].ValueText
-                let nextArity = baseClause.GetSegmentTypeArguments(1)?.Count ?? 0
-                if shadowedNestedKeys == nil || !shadowedNestedKeys.Contains((nextSegment, nextArity)) {
-                    candidateName = nextSegment
-                    candidateArity = nextArity
+        let segments = List[(Name string, Arity int32)](baseClause.SegmentCount)
+        segments.Add((baseClause.Identifier!!.ValueText, baseClause.GetSegmentTypeArguments(0)?.Count ?? 0))
+        for var i = 0; i < baseClause.QualifierIdentifierTokens.Length; i++ {
+            segments.Add(
+                (
+                    baseClause.QualifierIdentifierTokens[i].ValueText,
+                    baseClause.GetSegmentTypeArguments(i + 1)?.Count ?? 0
+                )
+            )
+        }
+        var candidateKey(Name string, Arity int32)? = nil
+        let fullPrefixLen = packageSegments.Length + enclosingChain.Count
+        if packageSegments.Length > 0 && segments.Count > fullPrefixLen {
+            var matchesPackageAndChain = true
+            for var i = 0; i < packageSegments.Length; i++ {
+                if segments[i].Name != packageSegments[i] || segments[i].Arity != 0 {
+                    matchesPackageAndChain = false
+                    break
                 }
-            } else if shadowedNestedKeys == nil || !shadowedNestedKeys.Contains((leadingSegment, leadingArity)) {
-                candidateName = leadingSegment
-                candidateArity = leadingArity
+            }
+            if matchesPackageAndChain {
+                for var i = 0; i < enclosingChain.Count; i++ {
+                    if segments[packageSegments.Length + i] != enclosingChain[i] {
+                        matchesPackageAndChain = false
+                        break
+                    }
+                }
+            }
+            if matchesPackageAndChain {
+                candidateKey = segments[fullPrefixLen]
             }
         }
-        if candidateName != nil && nestedStructsByKey.TryGetValue((candidateName, candidateArity), out var baseIndex) &&
+        if candidateKey == nil && segments.Count > 1 {
+            for var suffixLen = enclosingChain.Count; suffixLen >= 1; suffixLen-- {
+                if segments.Count <= suffixLen {
+                    continue
+                }
+                let startOffset = enclosingChain.Count - suffixLen
+                var matchesSuffix = true
+                for var i = 0; i < suffixLen; i++ {
+                    if segments[i] != enclosingChain[startOffset + i] {
+                        matchesSuffix = false
+                        break
+                    }
+                }
+                if matchesSuffix && (shadowedNestedKeys == nil || !shadowedNestedKeys.Contains(segments[0])) {
+                    candidateKey = segments[suffixLen]
+                    break
+                }
+            }
+        }
+        if candidateKey == nil && (shadowedNestedKeys == nil || !shadowedNestedKeys.Contains(segments[0])) {
+            candidateKey = segments[0]
+        }
+        if candidateKey is {} key && nestedStructsByKey.TryGetValue(key, out var baseIndex) &&
             nestedStructs[baseIndex].IsClass {
             return baseIndex
         }
@@ -4189,7 +4267,8 @@ internal partial class DeclarationBinder {
 
     private func AddDescendantNestedBaseDependencies(
         currentContainer StructDeclarationSyntax,
-        containerSyntax StructDeclarationSyntax,
+        enclosingChain List[(Name string, Arity int32)],
+        packageSegments[]string,
         nestedStructs List[StructDeclarationSyntax],
         nestedStructsByKey Dictionary[(Name string, Arity int32), int32],
         bindingState[]uint8,
@@ -4206,7 +4285,8 @@ internal partial class DeclarationBinder {
         for child in currentContainer.NestedTypes.OfType[StructDeclarationSyntax]() {
             let baseIndex = FindNestedSiblingBaseIndex(
                 child,
-                containerSyntax,
+                enclosingChain,
+                packageSegments,
                 nestedStructs,
                 nestedStructsByKey,
                 shadowedKeys
@@ -4214,7 +4294,8 @@ internal partial class DeclarationBinder {
             if baseIndex >= 0 {
                 VisitNestedBaseFirst(
                     baseIndex,
-                    containerSyntax,
+                    enclosingChain,
+                    packageSegments,
                     nestedStructs,
                     nestedStructsByKey,
                     bindingState,
@@ -4223,7 +4304,8 @@ internal partial class DeclarationBinder {
             }
             AddDescendantNestedBaseDependencies(
                 child,
-                containerSyntax,
+                enclosingChain,
+                packageSegments,
                 nestedStructs,
                 nestedStructsByKey,
                 bindingState,
@@ -4235,7 +4317,8 @@ internal partial class DeclarationBinder {
 
     private func VisitNestedBaseFirst(
         index int32,
-        containerSyntax StructDeclarationSyntax,
+        enclosingChain List[(Name string, Arity int32)],
+        packageSegments[]string,
         nestedStructs List[StructDeclarationSyntax],
         nestedStructsByKey Dictionary[(Name string, Arity int32), int32],
         bindingState[]uint8,
@@ -4248,7 +4331,8 @@ internal partial class DeclarationBinder {
         let nestedStruct = nestedStructs[index]
         let baseIndex = FindNestedSiblingBaseIndex(
             nestedStruct,
-            containerSyntax,
+            enclosingChain,
+            packageSegments,
             nestedStructs,
             nestedStructsByKey,
             nil
@@ -4256,7 +4340,8 @@ internal partial class DeclarationBinder {
         if baseIndex >= 0 {
             VisitNestedBaseFirst(
                 baseIndex,
-                containerSyntax,
+                enclosingChain,
+                packageSegments,
                 nestedStructs,
                 nestedStructsByKey,
                 bindingState,
@@ -4265,7 +4350,8 @@ internal partial class DeclarationBinder {
         }
         AddDescendantNestedBaseDependencies(
             nestedStruct,
-            containerSyntax,
+            enclosingChain,
+            packageSegments,
             nestedStructs,
             nestedStructsByKey,
             bindingState,

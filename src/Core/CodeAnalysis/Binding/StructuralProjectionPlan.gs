@@ -940,22 +940,15 @@ internal shared class StructuralProjectionPlanner {
                         !property.IsIndexer &&
                         !result
                         .ContainsKey(property.Name) {
-                        if property.ImportedMember is {} clrMember {
-                            result.Add(
+                        result.Add(
+                            property.Name,
+                            StructuralProjectionSourceMember(
                                 property.Name,
-                                StructuralProjectionSourceMember(property.Name, property.Type, clrMember: clrMember)
+                                property.Type,
+                                declaringType: TypeMemberModel.ResolveInheritedPropertyOwner(current, property),
+                                property: property
                             )
-                        } else {
-                            result.Add(
-                                property.Name,
-                                StructuralProjectionSourceMember(
-                                    property.Name,
-                                    property.Type,
-                                    declaringType: TypeMemberModel.ResolveInheritedPropertyOwner(current, property),
-                                    property: property
-                                )
-                            )
-                        }
+                        )
                     }
                 }
                 for field in current.Fields {

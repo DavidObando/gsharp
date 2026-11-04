@@ -641,6 +641,11 @@ data class Item(Id int32) {
 class Outer {
     data class DerivedBeforeBase(Name string, Value int32) : BaseAfterDerived(Name)
     data class QualifiedDerivedBeforeBase(Name string, Value int32) : Bases.NestedBase(Name)
+    data class PackageQualifiedDerived(Name string, Value int32) : W.Outer.BaseAfterDerived(Name)
+    class Holder {
+        class BaseAfterDerived
+        data class HolderDerived(Name string, Value int32) : Outer.BaseAfterDerived(Name)
+    }
     data class Message[T](Name string, Data T) : Message(Name)
     open data class Message(Name string)
     data class EscapedDerived(Name string, Value int32) : $event(Name)
@@ -707,6 +712,10 @@ func Run() string {
         Assert.DoesNotContain(nestedDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
         let qualifiedDerived = assembly.GetType("W.Outer+QualifiedDerivedBeforeBase", throwOnError: true)!!
         Assert.DoesNotContain(qualifiedDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let packageQualifiedDerived = assembly.GetType("W.Outer+PackageQualifiedDerived", throwOnError: true)!!
+        Assert.DoesNotContain(packageQualifiedDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let holderDerived = assembly.GetType("W.Outer+Holder+HolderDerived", throwOnError: true)!!
+        Assert.DoesNotContain(holderDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
         let genericMessageDerived = assembly.GetType("W.Outer+Message`1", throwOnError: true)!!
         Assert.DoesNotContain(genericMessageDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
         let escapedDerived = assembly.GetType("W.Outer+EscapedDerived", throwOnError: true)!!
@@ -739,14 +748,26 @@ data class Child(Value int32) : Base(Value) {
         const csharpLib = `namespace ExtLib;
 public record ClrBase
 {
+    private int _refVal;
     public ClrBase() { }
-    public ClrBase(int value) { Value = value; }
+    public ClrBase(int value) { Value = value; _refVal = value; }
     public int Value { get; init; }
+    public ref int RefVal => ref _refVal;
     public int IntProp => 10;
     internal int InternalProp => 20;
     private protected int PrivateProtectedProp => 30;
 }
-public record ClrGenericBase<T>(T Value);`
+public record ClrGenericBase<T>(T Value);
+public record ClrProtGetBase
+{
+    public ClrProtGetBase(int value) { Value = value; }
+    public int Value { protected get; init; }
+}
+public record ClrProtSetBase
+{
+    public ClrProtSetBase(int value) { Value = value; }
+    public int Value { get; protected set; }
+}`
         let tempDir = Directory.CreateTempSubdirectory("gs_adr0199_clrbase_").FullName
         try {
             let extPath = Path.Combine(tempDir, "ExtLib.dll")
@@ -779,11 +800,20 @@ data class ReusesValue(Value int32, Extra int32) : ClrBase(Value) {
         Extra = 22
     }
 }
+data class ReusesRefVal(RefVal int32, Extra int32) : ClrBase(RefVal)
 data class GenericReusesValue[T](Value T) : ClrGenericBase[T](Value)
+data class ReusesProtGet(Value int32, Extra int32) : ClrProtGetBase(Value)
+data class ReusesProtSet(Value int32, Extra int32) : ClrProtSetBase(Value) {
+    func WithUpdated(v int32) ReusesProtSet -> this.copy(Value: v)
+}
 data class DifferentType(IntProp string, Extra int32) : ClrBase()
 data class InaccessibleGetters(InternalProp int32, PrivateProtectedProp int32) : ClrBase()
 class SpreadTarget {
     var Value int32
+    var Extra int32
+}
+class SpreadRefTarget {
+    var RefVal int32
     var Extra int32
 }
 
@@ -792,13 +822,18 @@ func Run() string {
     let b = ReusesValue{Value: 42, Extra: 7}
     let (bv, be) = b
     let spread = SpreadTarget{...b}
+    let refSource = ReusesRefVal(55, 66)
+    let spreadRef = SpreadRefTarget{...refSource}
+    let pg = ReusesProtGet(12, 34)
+    let (pgv, pge) = pg
+    let ps = ReusesProtSet(70, 80).WithUpdated(90)
     let ctorDefault = ReusesValue()
     let gen = GenericReusesValue{Value: 77}
     let c = DifferentType("hello", 9)
     let (ci, ce) = c
     let d = InaccessibleGetters(1, 2)
     let (di, dp) = d
-    return "${a.Value}:${a.Extra}|${bv}:${be}|${spread.Value}:${spread.Extra}|${ctorDefault.Value}:${ctorDefault.Extra}|${gen.Value}|${ci}:${ce}|${di}:${dp}"
+    return "${a.Value}:${a.Extra}|${bv}:${be}|${spread.Value}:${spread.Extra}|${spreadRef.RefVal}:${spreadRef.Extra}|${pgv}:${pge}|${ps.Value}:${ps.Extra}|${ctorDefault.Value}:${ctorDefault.Extra}|${gen.Value}|${ci}:${ce}|${di}:${dp}"
 }`
             let srcPath = Path.Combine(tempDir, "test.gs")
             let outPath = Path.Combine(tempDir, "test.dll")
@@ -824,13 +859,17 @@ func Run() string {
                 let asm = alc.LoadFromAssemblyPath(outPath)
                 let reusesType = asm.GetType("W.ReusesValue", throwOnError: true)!!
                 Assert.DoesNotContain(reusesType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
+                let protGetType = asm.GetType("W.ReusesProtGet", throwOnError: true)!!
+                Assert.DoesNotContain(protGetType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
+                let protSetType = asm.GetType("W.ReusesProtSet", throwOnError: true)!!
+                Assert.DoesNotContain(protSetType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
                 let diffType = asm.GetType("W.DifferentType", throwOnError: true)!!
                 Assert.Contains(diffType.GetProperties(declared), (p PropertyInfo) -> p.Name == "IntProp")
                 let inaccType = asm.GetType("W.InaccessibleGetters", throwOnError: true)!!
                 Assert.Contains(inaccType.GetProperties(declared), (p PropertyInfo) -> p.Name == "InternalProp")
                 Assert.Contains(inaccType.GetProperties(declared), (p PropertyInfo) -> p.Name == "PrivateProtectedProp")
                 let result = asm.GetType("W.<Program>", throwOnError: true)!!.GetMethod("Run")!!.Invoke(nil, nil)
-                Assert.Equal("0:0|42:7|42:7|11:22|77|hello:9|1:2", result)
+                Assert.Equal("0:0|42:7|42:7|55:66|12:34|90:80|11:22|77|hello:9|1:2", result)
             } finally {
                 alc.Unload()
             }

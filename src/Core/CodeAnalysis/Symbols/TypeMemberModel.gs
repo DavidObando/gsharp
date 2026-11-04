@@ -542,6 +542,9 @@ shared class TypeMemberModel {
     }
 
     internal func ResolveInheritedPropertyOwner(owner StructSymbol, property PropertySymbol) StructSymbol {
+        if property.ImportedMember != nil {
+            return owner
+        }
         if owner.ImportedBaseType is StructSymbol importedStruct {
             for ancestor in GetHierarchy(importedStruct) {
                 if ancestor.Properties.Any((candidate PropertySymbol) -> candidate.Name == property.Name) {
@@ -601,28 +604,6 @@ shared class TypeMemberModel {
             if current.ImportedBaseType is not{} importedBase {
                 continue
             }
-            if importedBase is StructSymbol importedStruct {
-                for importedAncestor in GetHierarchy(importedStruct) {
-                    let includeInternal = references != nil &&
-                        importedAncestor.ClrType is {} clrOwner &&
-                        references.CanAccessInternalMembers(clrOwner.Assembly)
-                    for candidate in importedAncestor.Properties {
-                        if candidate.IsStatic || candidate.IsIndexer || candidate.Name != parameter.Name {
-                            continue
-                        }
-                        if candidate.HasGetter &&
-                            IsImportedAccessibilityVisibleFromDerived(candidate.Accessibility, includeInternal) &&
-                            IsImportedAccessibilityVisibleFromDerived(candidate.GetterAccessibility, includeInternal) &&
-                            TypeSymbol
-                            .AreRuntimeEquivalentIgnoringReferenceNullability(candidate.Type, parameter.Type) {
-                            property = candidate
-                            declaringType = importedAncestor
-                            return true
-                        }
-                        return false
-                    }
-                }
-            }
             var clrCurrent Type? = importedBase.ClrType
             while clrCurrent != nil {
                 let includeInternal = references != nil && references.CanAccessInternalMembers(clrCurrent.Assembly)
@@ -641,7 +622,15 @@ shared class TypeMemberModel {
                         return false
                     }
                     let clrPropertyType = MemberLookup.GetClrPropertyTypeSymbol(importedBase, clrProp)
-                    if !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(clrPropertyType, parameter.Type) {
+                    let effectiveClrPropertyType = if clrPropertyType is ByRefTypeSymbol byRefProp {
+                        byRefProp.PointeeType
+                    } else {
+                        clrPropertyType
+                    }
+                    if !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                        effectiveClrPropertyType,
+                        parameter.Type
+                    ) {
                         return false
                     }
                     let getterAcc = MapClrAccessorAccessibility(getter)
