@@ -221,7 +221,7 @@ class CSharpTypeMapper {
     /// @param attributeType The semantically resolved attribute type.
     /// @param alias The alias used by the attribute name, if any.
     func TrackAttributeType(attributeType INamedTypeSymbol?, alias IAliasSymbol?) {
-        if attributeType != nil {
+        if attributeType != nil && alias?.Target is not INamedTypeSymbol {
             this.TrackShortenedNamespace(attributeType)
         }
         let aliasTarget string? = switch alias?.Target {
@@ -917,6 +917,48 @@ class CSharpTypeMapper {
         }
     }
 
+    private func HasVisibleSourceTypeName(name string, context TranslationContext, location Location?) bool {
+        if location?.SourceTree == nil {
+            return false
+        }
+        let position = Math.Min(location!!.SourceSpan.Start, location!!.SourceTree!!.GetRoot().FullSpan.End - 1)
+        let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location!!.SourceTree) {
+            context.SemanticModel
+        } else {
+            context.Compilation.GetSemanticModel(location!!.SourceTree!!)
+        }
+        return semanticModel
+            .LookupNamespacesAndTypes(position, name: name)
+            .OfType[INamedTypeSymbol]()
+            .Any((type INamedTypeSymbol) -> type.Locations.Any((candidate Location) -> candidate.IsInSource))
+    }
+
+    private func HasVisibleCallableName(
+        name string,
+        context TranslationContext,
+        location Location?,
+        names EmittedNameAllocator
+    ) bool {
+        if location?.SourceTree == nil {
+            return false
+        }
+        let position = Math.Min(location!!.SourceSpan.Start, location!!.SourceTree!!.GetRoot().FullSpan.End - 1)
+        let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location!!.SourceTree) {
+            context.SemanticModel
+        } else {
+            context.Compilation.GetSemanticModel(location!!.SourceTree!!)
+        }
+        return semanticModel
+            .LookupSymbols(position)
+            .OfType[IMethodSymbol]()
+            .Any(
+            (method IMethodSymbol) -> (
+                method.MethodKind == MethodKind.Ordinary || method.MethodKind == MethodKind.ReducedExtension
+            ) &&
+                names.GetName(method) == name
+        )
+    }
+
     internal func GetOrCreateImportedTypeAlias(
         named INamedTypeSymbol?,
         context TranslationContext,
@@ -930,48 +972,16 @@ class CSharpTypeMapper {
         reuseOnly bool,
         precomputedTarget string?
     ) string? {
-        let HasVisibleSourceTypeName = func (name string, context TranslationContext, location Location?) bool {
-            if location?.SourceTree == nil {
-                return false
-            }
-            let position = Math.Min(location!!.SourceSpan.Start, location!!.SourceTree!!.GetRoot().FullSpan.End - 1)
-            let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location!!.SourceTree) {
-                context.SemanticModel
-            } else {
-                context.Compilation.GetSemanticModel(location!!.SourceTree!!)
-            }
-            return semanticModel
-                .LookupNamespacesAndTypes(position, name: name)
-                .OfType[INamedTypeSymbol]()
-                .Any((type INamedTypeSymbol) -> type.Locations.Any((candidate Location) -> candidate.IsInSource))
-        }
-        let HasVisibleCallableName = func (
-            name string,
-            context TranslationContext,
-            location Location?,
-            names EmittedNameAllocator
-        ) bool {
-            if location?.SourceTree == nil {
-                return false
-            }
-            let position = Math.Min(location!!.SourceSpan.Start, location!!.SourceTree!!.GetRoot().FullSpan.End - 1)
-            let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location!!.SourceTree) {
-                context.SemanticModel
-            } else {
-                context.Compilation.GetSemanticModel(location!!.SourceTree!!)
-            }
-            return semanticModel
-                .LookupSymbols(position)
-                .OfType[IMethodSymbol]()
-                .Any(
-                (method IMethodSymbol) -> (
-                    method.MethodKind == MethodKind.Ordinary || method.MethodKind == MethodKind.ReducedExtension
-                ) &&
-                    names.GetName(method) == name
-            )
-        }
         let names = this.Names(context)
-        let simpleName string? = this.Names(context).GetName(named)
+        let simpleName string? = if IsLiftedNestedDelegate(named) {
+            let parts = Stack[string]()
+            for var current INamedTypeSymbol? = named; current != nil; current = current!!.ContainingType {
+                parts.Push(names.GetName(current)!!)
+            }
+            string.Join("_", parts)
+        } else {
+            this.Names(context).GetName(named)
+        }
         let namespaceName string? = if named!!.ContainingNamespace is {IsGlobalNamespace: false} ns {
             this.Names(context).GetNamespaceName(ns)
         } else {
@@ -985,13 +995,21 @@ class CSharpTypeMapper {
                 simpleName
             }
         )
+        let ConflictsWithCompilationSourceType = func (aliasName string) bool {
+            return if aliasName == simpleName {
+                this.HasSourceHomonym(named, context)
+            } else {
+                this.HasSourceTopLevelTypeNamed(aliasName, context)
+            }
+        }
         for reservedAlias in this.reservedTypeAliases {
             if reservedAlias.Value.Count == 1 && reservedAlias.Value.Contains(target!!) &&
                 !this
                 .reservedTypeParameterNames
                 .Contains(reservedAlias.Key) && !this.reservedInvokedLocalNames.Contains(reservedAlias.Key) &&
-                !HasVisibleCallableName(reservedAlias.Key, context, location, names) &&
-                !HasVisibleSourceTypeName(reservedAlias.Key, context, location) {
+                !ConflictsWithCompilationSourceType(reservedAlias.Key) &&
+                !this.HasVisibleCallableName(reservedAlias.Key, context, location, names) &&
+                !this.HasVisibleSourceTypeName(reservedAlias.Key, context, location) {
                 return reservedAlias.Key
             }
         }
@@ -1000,8 +1018,12 @@ class CSharpTypeMapper {
                 !this
                 .reservedInvokedLocalNames
                 .Contains(existing.Key) &&
-                !HasVisibleCallableName(existing.Key, context, location, names) &&
-                !HasVisibleSourceTypeName(existing.Key, context, location) {
+                !ConflictsWithCompilationSourceType(existing.Key) &&
+                !this.HasVisibleCallableName(existing.Key, context, location, names) && !this.HasVisibleSourceTypeName(
+                existing.Key,
+                context,
+                location
+            ) {
                 return existing.Key
             }
         }
@@ -1026,11 +1048,303 @@ class CSharpTypeMapper {
         let alias = LiftedLocalFunctionNameAllocator.For(context.Compilation).ClaimAlias(
             target,
             "$namespaceQualifier$simpleName",
-            (candidate string) -> reserved.Contains(candidate) ||
-                HasVisibleCallableName(candidate, context, location, names)
+            (candidate string) -> reserved.Contains(candidate) || this.HasVisibleCallableName(
+                candidate,
+                context,
+                location,
+                names
+            ) ||
+                this.HasVisibleSourceTypeName(candidate, context, location)
         )
         this.synthesizedTypeAliases.Add(alias, target!!)
         return alias
+    }
+
+    private func HasConflictingTypeAlias(simpleName string?, named INamedTypeSymbol?) bool {
+        if string.IsNullOrEmpty(simpleName) || named == nil {
+            return false
+        }
+        let target = this.QualifiedAliasTarget(named.OriginalDefinition)
+        if this.reservedTypeAliases.TryGetValue(simpleName, out var targets) &&
+            (!targets.Contains(target) || targets.Count > 1) {
+            return true
+        }
+        return this.synthesizedTypeAliases.TryGetValue(simpleName, out var synthesizedTarget) &&
+            synthesizedTarget != target
+    }
+
+    internal func IsRelocatedAttributeNameSafe(
+        attributeType INamedTypeSymbol?,
+        shortName string?,
+        context TranslationContext,
+        location Location?
+    ) bool {
+        if attributeType == nil || string.IsNullOrEmpty(shortName) {
+            return false
+        }
+        var outermost INamedTypeSymbol = attributeType
+        while outermost.ContainingType != nil {
+            outermost = outermost.ContainingType!!
+        }
+        let simpleName = this.Names(context).GetName(attributeType)
+        if this.HasSourceHomonym(outermost, context) || this.HasVisibleSourceNestedHomonym(
+            outermost,
+            context,
+            location
+        ) ||
+            this.HasImportedNamespaceHomonym(outermost, context) || this.HasConflictingTypeAlias(
+            shortName,
+            attributeType
+        ) ||
+            this.HasConflictingTypeAlias(simpleName, attributeType) {
+            return false
+        }
+        if shortName != simpleName &&
+            (
+            this.reservedTypeAliases.ContainsKey(shortName!!) || this.synthesizedTypeAliases.ContainsKey(shortName!!) ||
+                this
+                .reservedImportedTypeNames
+                .Contains(shortName!!)
+        ) {
+            return false
+        }
+        return true
+    }
+
+    internal func HasSourceTopLevelTypeNamed(simpleName string, context TranslationContext) bool {
+        for compilation in this.LinkedDocumentCompilations(context) {
+            if this.SourceTopLevelSimpleNames(compilation).ContainsKey(simpleName) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func GetOrCreateImportedNamespaceAlias(
+        namespaceName string,
+        context TranslationContext,
+        location Location?
+    ) string {
+        let names = this.Names(context)
+        for reservedAlias in this.reservedTypeAliases {
+            if reservedAlias.Value.Count == 1 && reservedAlias.Value.Contains(namespaceName) &&
+                !this
+                .reservedTypeParameterNames
+                .Contains(reservedAlias.Key) && !this.reservedInvokedLocalNames.Contains(reservedAlias.Key) &&
+                !this
+                .reservedImportedTypeNames
+                .Contains(reservedAlias.Key) && !this.HasSourceTopLevelTypeNamed(reservedAlias.Key, context) &&
+                !this.HasVisibleCallableName(reservedAlias.Key, context, location, names) &&
+                !this.HasVisibleSourceTypeName(reservedAlias.Key, context, location) {
+                return reservedAlias.Key
+            }
+        }
+        for existing in this.synthesizedTypeAliases {
+            if existing.Value == namespaceName && !this.reservedTypeParameterNames.Contains(existing.Key) &&
+                !this
+                .reservedInvokedLocalNames
+                .Contains(existing.Key) && !this.reservedImportedTypeNames.Contains(existing.Key) &&
+                !this.HasSourceTopLevelTypeNamed(existing.Key, context) && !this.HasVisibleCallableName(
+                existing.Key,
+                context,
+                location,
+                names
+            ) &&
+                !this.HasVisibleSourceTypeName(existing.Key, context, location) {
+                return existing.Key
+            }
+        }
+        if this.importTrackingSuppression != 0 {
+            return namespaceName
+        }
+        this.sourceDeclaredTypeNames ??= BuildSourceDeclaredTypeNames(context.Compilation, names)
+        let reserved = HashSet[string](this.synthesizedTypeAliases.Keys, StringComparer.Ordinal)
+        reserved.UnionWith(this.reservedTypeAliases.Keys)
+        reserved.UnionWith(this.reservedImportedTypeNames)
+        reserved.UnionWith(this.reservedTypeParameterNames)
+        reserved.UnionWith(this.reservedInvokedLocalNames)
+        reserved.UnionWith(this.sourceDeclaredTypeNames!!)
+        reserved.UnionWith(this.reservedSiblingMemberNames)
+        let baseAlias = string.Concat(namespaceName.Split('.')) + "Namespace"
+        let alias = LiftedLocalFunctionNameAllocator.For(context.Compilation).ClaimAlias(
+            namespaceName,
+            baseAlias,
+            (candidate string) -> reserved.Contains(candidate) || this.HasVisibleCallableName(
+                candidate,
+                context,
+                location,
+                names
+            ) ||
+                this.HasVisibleSourceTypeName(candidate, context, location)
+        )
+        this.synthesizedTypeAliases.Add(alias, namespaceName)
+        return alias
+    }
+
+    internal func RenderDestinationSafeTypeName(
+        named INamedTypeSymbol,
+        context TranslationContext,
+        location Location?
+    ) string {
+        if this.AnalyzerApiMode && RoslynAnalyzerApiMap.IsRoslynNamespace(
+            named.ContainingNamespace?.ToDisplayString()
+        ) {
+            return this.QualifiedTypeName(named, context, location)!!
+        }
+        let definition = named.OriginalDefinition
+        let qualifiedTarget = this.QualifiedAliasTarget(definition)
+        let dotIndex = qualifiedTarget.IndexOf('.')
+        if dotIndex < 0 {
+            if this.HasConflictingTypeAlias(qualifiedTarget, definition) || this.reservedImportedTypeNames.Contains(
+                qualifiedTarget
+            ) ||
+                this.HasSourceHomonym(definition, context) || this.HasVisibleSourceNestedHomonym(
+                definition,
+                context,
+                location
+            ) {
+                return this.GetOrCreateImportedTypeAlias(
+                    definition,
+                    context,
+                    location,
+                    reuseOnly: false,
+                    precomputedTarget: qualifiedTarget
+                )!!
+            }
+            return qualifiedTarget
+        }
+        let leadingSegment = qualifiedTarget[.. dotIndex]
+        let leadingNamespaceShadowed = definition.ContainingNamespace is {IsGlobalNamespace: false} &&
+            this.HasVisibleSourceTypeName(leadingSegment, context, location)
+        if this.reservedTypeAliases.ContainsKey(leadingSegment) || this.synthesizedTypeAliases.ContainsKey(
+            leadingSegment
+        ) ||
+            leadingNamespaceShadowed {
+            if definition.Arity == 0 &&
+                (SupportsMetadataTypeAlias(definition) || definition.Locations.Any((l Location) -> l.IsInSource)) {
+                return this.GetOrCreateImportedTypeAlias(
+                    definition,
+                    context,
+                    location,
+                    reuseOnly: false,
+                    precomputedTarget: qualifiedTarget
+                )!!
+            }
+            if definition.ContainingNamespace is {IsGlobalNamespace: false} containingNamespace {
+                let namespaceName = this.Names(context).GetNamespaceName(containingNamespace)
+                if !string.IsNullOrEmpty(namespaceName) && qualifiedTarget.StartsWith(
+                    namespaceName + ".",
+                    StringComparison.Ordinal
+                ) {
+                    let namespaceAlias = this.GetOrCreateImportedNamespaceAlias(namespaceName!!, context, location)
+                    return namespaceAlias + qualifiedTarget[namespaceName!!.Length ..]
+                }
+            }
+            let leadingAlias = this.GetOrCreateImportedNamespaceAlias(leadingSegment, context, location)
+            return leadingAlias + qualifiedTarget[dotIndex ..]
+        }
+        return qualifiedTarget
+    }
+
+    internal func RenderDestinationSafeAttributeName(
+        attributeType INamedTypeSymbol,
+        context TranslationContext,
+        location Location?
+    ) string {
+        if HasGenericContainingType(attributeType) || attributeType.IsGenericType {
+            return GSharpPrinter.RenderTypeReference(this.MapDestinationSafeType(attributeType, context, location))
+        }
+        return this.RenderDestinationSafeTypeName(attributeType, context, location)
+    }
+
+    internal func MapDestinationSafeUnboundTypeOf(
+        unboundNamed INamedTypeSymbol,
+        context TranslationContext,
+        location Location?
+    ) GTypeReference {
+        if IsLiftedNestedDelegate(unboundNamed) {
+            let baseName = this.RenderDestinationSafeTypeName(unboundNamed.OriginalDefinition, context, location)
+            return NamedTypeReference(
+                baseName,
+                Enumerable.Repeat(cast[GTypeReference](NamedTypeReference("_")), unboundNamed.Arity).ToList()
+            )
+        }
+        if unboundNamed.ContainingType != nil {
+            let ownPlaceholders = Enumerable.Repeat(cast[GTypeReference](NamedTypeReference("_")), unboundNamed.Arity)
+                .ToList()
+            return NamedTypeReference(
+                this.Names(context).GetName(unboundNamed),
+                ownPlaceholders,
+                this.MapDestinationSafeUnboundTypeOf(unboundNamed.ContainingType!!, context, location)
+            )
+        }
+        let baseName = this.RenderDestinationSafeTypeName(unboundNamed.OriginalDefinition, context, location)
+        let placeholders = Enumerable.Repeat(cast[GTypeReference](NamedTypeReference("_")), unboundNamed.Arity).ToList()
+        return NamedTypeReference(baseName, placeholders)
+    }
+
+    internal func MapDestinationSafeType(
+        type ITypeSymbol?,
+        context TranslationContext,
+        location Location?
+    ) GTypeReference? {
+        if type == nil || type.TypeKind == TypeKind.Error {
+            return NamedTypeReference(UnsupportedPlaceholderType)
+        }
+        if type.TypeKind == TypeKind.Dynamic {
+            return NamedTypeReference("object")
+        }
+        if type is IPointerTypeSymbol pointer {
+            let pointee ITypeSymbol? = pointer.PointedAtType
+            let element GTypeReference? = if pointee == nil || pointee.SpecialType == SpecialType.System_Void {
+                cast[GTypeReference](NamedTypeReference("void"))
+            } else {
+                this.MapDestinationSafeType(pointee, context, location)
+            }
+            return PointerTypeReference(element)
+        }
+        if type is INamedTypeSymbol nullableValue &&
+            nullableValue
+            .OriginalDefinition
+            .SpecialType == SpecialType
+            .System_Nullable_T {
+            return WithNullable(this.MapDestinationSafeType(nullableValue.TypeArguments[0], context, location), true)
+        }
+        if MapPredefinedName(type.SpecialType) is {} predefined {
+            return NamedTypeReference(predefined)
+        }
+        if type is IArrayTypeSymbol array {
+            return ArrayTypeReference(this.MapDestinationSafeType(array.ElementType, context, location), array.Rank)
+        }
+        if type is INamedTypeSymbol tuple && tuple.IsTupleType {
+            let elements = tuple
+                .TupleElements
+                .Select((element IFieldSymbol) -> this.MapDestinationSafeType(element.Type, context, location)!!)
+                .ToList()
+            return TupleTypeReference(elements)
+        }
+        if type is INamedTypeSymbol named {
+            if !IsLiftedNestedDelegate(named) && HasGenericContainingType(named) {
+                let ownArgs = named
+                    .TypeArguments
+                    .Select((argument ITypeSymbol) -> this.MapDestinationSafeType(argument, context, location)!!)
+                    .ToList()
+                return NamedTypeReference(
+                    this.Names(context).GetName(named),
+                    ownArgs,
+                    this.MapDestinationSafeType(named.ContainingType, context, location)
+                )
+            }
+            if named.TypeArguments.Length > 0 {
+                let args = named
+                    .TypeArguments
+                    .Select((argument ITypeSymbol) -> this.MapDestinationSafeType(argument, context, location)!!)
+                    .ToList()
+                return NamedTypeReference(this.RenderDestinationSafeTypeName(named, context, location), args)
+            }
+            return NamedTypeReference(this.RenderDestinationSafeTypeName(named, context, location))
+        }
+        return NamedTypeReference(this.Names(context).GetName(type))
     }
 
     internal func GetOrCreateAnonymousDataClassShape(
@@ -1293,7 +1607,12 @@ class CSharpTypeMapper {
             parts.Push(nameAllocator.GetName(current)!!)
             outermost = current
         }
-        let typeName = string.Join(".", parts)
+        let separator = if IsLiftedNestedDelegate(type) {
+            "_"
+        } else {
+            "."
+        }
+        let typeName = string.Join(separator, parts)
         return if outermost!!.ContainingNamespace is {IsGlobalNamespace: false} ns {
             "${nameAllocator.GetNamespaceName(ns)}.$typeName"
         } else {
@@ -1635,7 +1954,7 @@ class CSharpTypeMapper {
             let isSourceType = named.Locations.Any((l Location) -> l.IsInSource)
             let ambiguous = this.HasSourceHomonym(named, context) ||
                 visibleNestedHomonym ||
-                this.HasImportedNamespaceHomonym(named, context)
+                this.HasImportedNamespaceHomonym(named, context) || this.HasConflictingTypeAlias(simpleName, named)
             if !ambiguous {
                 return simpleName
             }
@@ -1665,7 +1984,7 @@ class CSharpTypeMapper {
             context,
             location
         ) ||
-            this.HasImportedNamespaceHomonym(outermost, context)
+            this.HasImportedNamespaceHomonym(outermost, context) || this.HasConflictingTypeAlias(parts[0], outermost)
         if !outermostAmbiguous {
             return nestedName
         }
