@@ -604,6 +604,76 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "", "run", "7"}
+            yield[]object{"d28_5640_defer_conditional_out_argument_invalidates_external_callable_alias", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(v int32) { }
+func Run(choose bool, callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    var other = callback
+    let set = func(out target () -> void, value () -> void) int32 {
+        target = value
+        return 1
+    }
+    defer Consume(set(out choose ? action : other, func() { x = nil }))
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(true, func() { }))`, "GS0158@17:14", "reject", ""}
+            yield[]object{"d29_5640_defer_invoked_literal_try_finally_return_preserves_returning_branch_state", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(v int32) { }
+func Run(stop bool, callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    let flip = func() { action = clear }
+    defer Consume((func() int32 {
+        try {
+            if stop {
+                flip()
+                return 1
+            }
+            return 1
+        } finally {
+        }
+    })())
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(true, func() { }))`, "GS0158@23:14", "reject", ""}
+            yield[]object{"d30_5640_defer_repeated_invocation_preserves_captured_local_provenance", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(v int32) { }
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    defer Consume({
+        var saved = callback
+        let invoke = func(f () -> void) int32 {
+            let copy = f
+            saved()
+            saved = func() { copy() }
+            return 1
+        }
+        invoke(func() { action = clear })
+        action = callback
+        invoke(callback)
+    })
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(func() { }))`, "GS0158@24:14", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

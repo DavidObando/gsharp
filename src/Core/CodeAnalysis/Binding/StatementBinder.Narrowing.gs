@@ -2233,8 +2233,8 @@ internal partial class StatementBinder {
         private var escapedClosureProtectedRoots HashSet[VariableSymbol]?
         private var tryAssignedVariables HashSet[VariableSymbol]?
         private var functionLiteralReturnState(Normal CallableAliasState, AllEntry CallableAliasState)?
+        private var functionLiteralTryReturnState(Normal CallableAliasState, AllEntry CallableAliasState)?
         private var functionLiteralFinallyDepth int32
-        private var functionLiteralTryHadReturn bool
         private let mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?
         private let isClosureAssigned((VariableSymbol) -> bool)?
 
@@ -2446,10 +2446,8 @@ internal partial class StatementBinder {
             }
             if node is BoundFunctionLiteralExpression nestedLiteral {
                 for captured in nestedLiteral.CapturedVariables {
-                    if captured is ParameterSymbol {
-                        normalCallableState.CapturedParameters.Add(captured)
-                        allEntryCallableState.CapturedParameters.Add(captured)
-                    }
+                    normalCallableState.CapturedVariables.Add(captured)
+                    allEntryCallableState.CapturedVariables.Add(captured)
                 }
             }
             if node is BoundCallOperationExpression && !IsCallableValueInvocation(node) {
@@ -2687,6 +2685,7 @@ internal partial class StatementBinder {
             VisitExpression(node.Target)
             let targetState = CaptureCallableState()
             let argumentSnapshots = VisitAndSnapshotCallableArguments(node.Arguments)
+            InvalidateRefKindArguments(node.Arguments, node.ArgumentRefKinds)
             ApplyCallableArguments(argumentSnapshots)
             AnalyzeCallableInvocation(node.Target, targetState, argumentSnapshots)
         }
@@ -2814,6 +2813,9 @@ internal partial class StatementBinder {
             }
             VisitExpression(node.Receiver)
             VisitCallableArguments(node.Arguments)
+            if node.Method is {} method {
+                InvalidateParameterRefArguments(node.Arguments, method.Parameters)
+            }
         }
 
         // `callback.Invoke()` on a delegate value: the explicit form of `callback()`.
@@ -2830,6 +2832,7 @@ internal partial class StatementBinder {
             if IsCallableValueInvocation(node) {
                 let targetState = CaptureCallableState()
                 let argumentSnapshots = VisitAndSnapshotCallableArguments(node.Arguments)
+                InvalidateImportedParameterRefArguments(node.Arguments, node.Method.GetParameters())
                 ApplyCallableArguments(argumentSnapshots)
                 AnalyzeCallableInvocation(node.Receiver, targetState, argumentSnapshots)
                 return
@@ -2842,14 +2845,66 @@ internal partial class StatementBinder {
         ) {
             VisitExpression(node.Pointer)
             VisitCallableArguments(node.Arguments)
+            let parameterTypes = node.FunctionPointerType.ParameterTypes
+            let count = Math.Min(node.Arguments.Length, parameterTypes.Length)
+            for var i = 0; i < count; i++ {
+                if parameterTypes[i] is ByRefTypeSymbol {
+                    RecordWritableReference(node.Arguments[i], invalidateCallableState: true)
+                }
+            }
         }
 
         protected open override func VisitConstructorCallExpression(node BoundConstructorCallExpression) {
             VisitCallableArguments(node.Arguments)
+            let parameters = node.SelectedConstructor?.Parameters ?? node.StructType.PrimaryConstructorParameters
+            if !parameters.IsDefaultOrEmpty {
+                InvalidateParameterRefArguments(node.Arguments, parameters)
+            }
         }
 
         protected open override func VisitClrConstructorCallExpression(node BoundClrConstructorCallExpression) {
             VisitCallableArguments(node.Arguments)
+            InvalidateRefKindArguments(node.Arguments, node.ArgumentRefKinds)
+            InvalidateImportedParameterRefArguments(node.Arguments, node.Constructor.GetParameters())
+        }
+
+        private func InvalidateRefKindArguments(
+            arguments ImmutableArray[BoundExpression],
+            refKinds ImmutableArray[RefKind]
+        ) {
+            if refKinds.IsDefaultOrEmpty {
+                return
+            }
+            let count = Math.Min(arguments.Length, refKinds.Length)
+            for var i = 0; i < count; i++ {
+                if refKinds[i] is RefKind.Ref or RefKind.Out {
+                    RecordWritableReference(arguments[i], invalidateCallableState: true)
+                }
+            }
+        }
+
+        private func InvalidateParameterRefArguments(
+            arguments ImmutableArray[BoundExpression],
+            parameters ImmutableArray[ParameterSymbol]
+        ) {
+            let count = Math.Min(arguments.Length, parameters.Length)
+            for var i = 0; i < count; i++ {
+                if parameters[i].RefKind is RefKind.Ref or RefKind.Out {
+                    RecordWritableReference(arguments[i], invalidateCallableState: true)
+                }
+            }
+        }
+
+        private func InvalidateImportedParameterRefArguments(
+            arguments ImmutableArray[BoundExpression],
+            parameters[]ParameterInfo
+        ) {
+            let count = Math.Min(arguments.Length, parameters.Length)
+            for var i = 0; i < count; i++ {
+                if RefCapabilities.GetParameterRefKind(parameters[i]) is RefKind.Ref or RefKind.Out {
+                    RecordWritableReference(arguments[i], invalidateCallableState: true)
+                }
+            }
         }
 
         protected open override func VisitClrConversionCallExpression(node BoundClrConversionCallExpression) {
@@ -2958,8 +3013,9 @@ internal partial class StatementBinder {
                 writableReferenceAliases[node.Variable] = operand!!
             }
             base.VisitVariableDeclaration(node)
-            normalCallableState.ApplyVariableDeclaration(node)
-            allEntryCallableState.ApplyVariableDeclaration(node)
+            let inFunctionLiteral = visitedFunctionLiterals.Count > 0
+            normalCallableState.ApplyVariableDeclaration(node, inFunctionLiteral)
+            allEntryCallableState.ApplyVariableDeclaration(node, inFunctionLiteral)
         }
 
         protected open override func VisitIfStatement(node BoundIfStatement) {
@@ -3074,7 +3130,10 @@ internal partial class StatementBinder {
             base.VisitReturnStatement(node)
             if visitedFunctionLiterals.Count > 0 {
                 if functionLiteralFinallyDepth > 0 {
-                    functionLiteralTryHadReturn = true
+                    functionLiteralTryReturnState = JoinCallableStates(
+                        functionLiteralTryReturnState,
+                        CaptureCallableState()
+                    )
                 } else {
                     functionLiteralReturnState = JoinCallableStates(functionLiteralReturnState, CaptureCallableState())
                 }
@@ -3091,10 +3150,10 @@ internal partial class StatementBinder {
                 }
             }
             let hasFinally = node.FinallyBlock != nil && visitedFunctionLiterals.Count > 0
-            let outerTryHadReturn = functionLiteralTryHadReturn
+            let outerTryReturnState = functionLiteralTryReturnState
             if hasFinally {
                 functionLiteralFinallyDepth++
-                functionLiteralTryHadReturn = false
+                functionLiteralTryReturnState = nil
             }
             let branchStart = CaptureCallableState()
             let outerTryAssignments = tryAssignedVariables
@@ -3152,10 +3211,13 @@ internal partial class StatementBinder {
                     joinedAllEntry = CallableAliasState.Join(joinedAllEntry, catchState.AllEntry)
                 }
             }
-            let tryHadReturn = functionLiteralTryHadReturn
+            let tryReturnState = functionLiteralTryReturnState
             if hasFinally {
                 functionLiteralFinallyDepth--
-                functionLiteralTryHadReturn = outerTryHadReturn
+                functionLiteralTryReturnState = outerTryReturnState
+                if tryReturnState is {} returningState {
+                    finallyEntries = CallableAliasState.Join(finallyEntries, returningState.AllEntry)
+                }
             }
             if node.FinallyBlock != nil {
                 let declaredStart = declaredRegionLabels.Count
@@ -3170,14 +3232,22 @@ internal partial class StatementBinder {
                     HasEscapingRegionJump(declaredStart, jumpedStart) {
                     normalCallableState.RestoreFrom(allEntryCallableState)
                 }
-                if hasFinally && tryHadReturn {
+                if hasFinally && tryReturnState is {} returningState && !StatementBinder.EndsInUnconditionalExit(
+                    node.FinallyBlock,
+                    gotoExits: false
+                ) {
+                    let fallthroughAfterFinally = CaptureCallableState()
+                    RestoreCallableState(returningState)
+                    VisitStatement(node.FinallyBlock)
+                    let returnAfterFinally = CaptureCallableState()
+                    RestoreCallableState(fallthroughAfterFinally)
                     if functionLiteralFinallyDepth > 0 {
-                        functionLiteralTryHadReturn = true
-                    } else {
-                        functionLiteralReturnState = JoinCallableStates(
-                            functionLiteralReturnState,
-                            (Normal: allEntryCallableState.Clone(), AllEntry: allEntryCallableState.Clone())
+                        functionLiteralTryReturnState = JoinCallableStates(
+                            functionLiteralTryReturnState,
+                            returnAfterFinally
                         )
+                    } else {
+                        functionLiteralReturnState = JoinCallableStates(functionLiteralReturnState, returnAfterFinally)
                     }
                 }
             } else {
@@ -3458,11 +3528,11 @@ internal partial class StatementBinder {
             let declaredBefore = declaredRegionLabels.Count
             let jumpedBefore = jumpedRegionLabels.Count
             let outerReturnState = functionLiteralReturnState
+            let outerTryReturnState = functionLiteralTryReturnState
             let outerFinallyDepth = functionLiteralFinallyDepth
-            let outerTryHadReturn = functionLiteralTryHadReturn
             functionLiteralReturnState = nil
+            functionLiteralTryReturnState = nil
             functionLiteralFinallyDepth = 0
-            functionLiteralTryHadReturn = false
             try {
                 VisitStatement(body)
                 if !StatementBinder.EndsInUnconditionalExit(body, gotoExits: false) {
@@ -3473,8 +3543,8 @@ internal partial class StatementBinder {
                 }
             } finally {
                 functionLiteralReturnState = outerReturnState
+                functionLiteralTryReturnState = outerTryReturnState
                 functionLiteralFinallyDepth = outerFinallyDepth
-                functionLiteralTryHadReturn = outerTryHadReturn
                 if declaredRegionLabels.Count > declaredBefore {
                     declaredRegionLabels.RemoveRange(declaredBefore, declaredRegionLabels.Count - declaredBefore)
                 }
@@ -3605,7 +3675,7 @@ internal partial class StatementBinder {
             let Unknown HashSet[VariableSymbol] = HashSet[VariableSymbol]()
             let External HashSet[VariableSymbol] = HashSet[VariableSymbol]()
             let LocalParameters HashSet[VariableSymbol] = HashSet[VariableSymbol]()
-            let CapturedParameters HashSet[VariableSymbol] = HashSet[VariableSymbol]()
+            let CapturedVariables HashSet[VariableSymbol] = HashSet[VariableSymbol]()
 
             func Clone() CallableAliasState {
                 let copy = CallableAliasState()
@@ -3618,7 +3688,7 @@ internal partial class StatementBinder {
                 Unknown.Clear()
                 External.Clear()
                 LocalParameters.Clear()
-                CapturedParameters.Clear()
+                CapturedVariables.Clear()
                 MergeFrom(other)
             }
 
@@ -3633,7 +3703,7 @@ internal partial class StatementBinder {
                 Unknown.UnionWith(other.Unknown)
                 External.UnionWith(other.External)
                 LocalParameters.UnionWith(other.LocalParameters)
-                CapturedParameters.UnionWith(other.CapturedParameters)
+                CapturedVariables.UnionWith(other.CapturedVariables)
             }
 
             func ApplyParameterSnapshot(
@@ -3643,7 +3713,7 @@ internal partial class StatementBinder {
                 isUnknown bool
             ) {
                 LocalParameters.Add(parameter)
-                let preserveCaptured = CapturedParameters.Contains(parameter)
+                let preserveCaptured = CapturedVariables.Contains(parameter)
                 if targets != nil && targets.Length > 0 {
                     if preserveCaptured && Literals.TryGetValue(parameter, out var existing) {
                         existing.UnionWith(targets)
@@ -3685,8 +3755,8 @@ internal partial class StatementBinder {
 
             func EqualsState(other CallableAliasState) bool {
                 return Unknown.SetEquals(other.Unknown) && External.SetEquals(other.External) &&
-                    LocalParameters.SetEquals(other.LocalParameters) && CapturedParameters.SetEquals(
-                    other.CapturedParameters
+                    LocalParameters.SetEquals(other.LocalParameters) && CapturedVariables.SetEquals(
+                    other.CapturedVariables
                 ) &&
                     Literals.Count == other
                     .Literals
@@ -3746,32 +3816,44 @@ internal partial class StatementBinder {
                 return false
             }
 
-            func ApplyVariableDeclaration(node BoundVariableDeclaration) {
+            func ApplyVariableDeclaration(node BoundVariableDeclaration, inFunctionLiteral bool = false) {
+                if inFunctionLiteral {
+                    LocalParameters.Add(node.Variable)
+                }
                 if node.Initializer is not{} initializer {
                     return
                 }
+                let preserveCaptured = inFunctionLiteral && CapturedVariables.Contains(node.Variable)
                 let externalCallable = IsExternalCallable(initializer)
                 if TryGetFunctionLiterals(initializer, out var literals) {
-                    Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals!!)
+                    if preserveCaptured && Literals.TryGetValue(node.Variable, out var existing) {
+                        existing.UnionWith(literals!!)
+                    } else {
+                        Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals!!)
+                    }
                     if UnwrapCallable(initializer) is BoundVariableExpression source && Unknown.Contains(
                         source.Variable
                     ) {
                         Unknown.Add(node.Variable)
-                    } else {
+                    } else if !preserveCaptured {
                         Unknown.Remove(node.Variable)
                     }
                     if externalCallable {
                         External.Add(node.Variable)
-                    } else {
+                    } else if !preserveCaptured {
                         External.Remove(node.Variable)
                     }
                 } else if externalCallable {
-                    Literals.Remove(node.Variable)
-                    Unknown.Remove(node.Variable)
+                    if !preserveCaptured {
+                        Literals.Remove(node.Variable)
+                        Unknown.Remove(node.Variable)
+                    }
                     External.Add(node.Variable)
                 } else {
-                    Literals.Remove(node.Variable)
-                    External.Remove(node.Variable)
+                    if !preserveCaptured {
+                        Literals.Remove(node.Variable)
+                        External.Remove(node.Variable)
+                    }
                     Unknown.Add(node.Variable)
                 }
             }
@@ -3795,9 +3877,15 @@ internal partial class StatementBinder {
                         }
                     }
                 }
+                let preserveCaptured = LocalParameters.Contains(node.Variable) && CapturedVariables.Contains(
+                    node.Variable
+                )
                 let externalCallable = IsExternalCallable(node.Expression)
                 if TryGetFunctionLiterals(node.Expression, out var literals) {
-                    if pendingConditionalTargetsCount > 0 && Literals.TryGetValue(node.Variable, out var existing) {
+                    if (pendingConditionalTargetsCount > 0 || preserveCaptured) && Literals.TryGetValue(
+                        node.Variable,
+                        out var existing
+                    ) {
                         existing.UnionWith(literals!!)
                     } else {
                         Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals!!)
@@ -3806,22 +3894,22 @@ internal partial class StatementBinder {
                         source.Variable
                     ) {
                         Unknown.Add(node.Variable)
-                    } else if pendingConditionalTargetsCount == 0 {
+                    } else if pendingConditionalTargetsCount == 0 && !preserveCaptured {
                         Unknown.Remove(node.Variable)
                     }
                     if externalCallable {
                         MarkExternalAssignment(node.Variable, pendingConditionalTargetsCount)
-                    } else if pendingConditionalTargetsCount == 0 {
+                    } else if pendingConditionalTargetsCount == 0 && !preserveCaptured {
                         External.Remove(node.Variable)
                     }
                 } else if externalCallable {
-                    if pendingConditionalTargetsCount == 0 {
+                    if pendingConditionalTargetsCount == 0 && !preserveCaptured {
                         Literals.Remove(node.Variable)
                         Unknown.Remove(node.Variable)
                     }
                     MarkExternalAssignment(node.Variable, pendingConditionalTargetsCount)
                 } else {
-                    if pendingConditionalTargetsCount == 0 {
+                    if pendingConditionalTargetsCount == 0 && !preserveCaptured {
                         Literals.Remove(node.Variable)
                         External.Remove(node.Variable)
                     }
