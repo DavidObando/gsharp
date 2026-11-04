@@ -1488,7 +1488,7 @@ internal partial class StatementBinder {
                 prefix,
                 retainedVariables,
                 retainRemaining,
-                (tail BoundExpression) -> CaptureGoOperand(tail, prefix, retainedVariables, retainRemaining)
+                (tail BoundExpression) -> tail
             )
             if rewritten is BoundBlockExpression {
                 return BoundAddressOfExpression(
@@ -1540,18 +1540,14 @@ internal partial class StatementBinder {
         // `Span[T]`) cannot cross into the child; both stay in place. An
         // operand that reads a variable no closure may capture also stays, so
         // capture legality still rejects the statement and names the variable.
-        if (
-            operand is BoundLiteralExpression or
-                BoundDefaultExpression or
-                BoundFunctionLiteralExpression or
-                BoundAddressOfExpression or
-                BoundConditionalAddressExpression
-        ) ||
-            operand is BoundVariableExpression{Variable: ParameterSymbol{IsReceiverParameter: true}} ||
-            operand.Type is ByRefTypeSymbol {
+        if (operand is BoundLiteralExpression or BoundDefaultExpression or BoundFunctionLiteralExpression) ||
+            operand is BoundVariableExpression{Variable: ParameterSymbol{IsReceiverParameter: true}} {
             return operand
         }
-        if ReadsUncapturableVariable(operand, retainedVariables) || TypeSymbol.IsByRefLike(operand.Type) {
+        if (operand is BoundAddressOfExpression or BoundConditionalAddressExpression) ||
+            ReadsUncapturableVariable(operand, retainedVariables) ||
+            operand.Type is ByRefTypeSymbol ||
+            TypeSymbol.IsByRefLike(operand.Type) {
             retainRemaining[0] = true
             return operand
         }

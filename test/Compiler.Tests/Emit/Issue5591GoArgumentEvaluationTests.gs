@@ -126,6 +126,8 @@ class Spawner : Base {
     var order string = ""
     var spanCreated int32 = 0
     var posSpanCreated int32 = 0
+    var refOrder string = ""
+    let refItems []int32 = []int32{0, 0}
 
     override func Report(tag string, v int32) { Log.Add(tag + " derived " + v.ToString()) }
 
@@ -143,6 +145,18 @@ class Spawner : Base {
         return "abcde"
     }
     func ReadPosSpanCreated() int32 -> posSpanCreated
+    func NextRefIndex() int32 {
+        refOrder += "idx;"
+        return 1
+    }
+    func NextRefValue() int32 {
+        refOrder += "val;"
+        return 9
+    }
+    func PutRef(ref slot int32, value int32) {
+        slot = value
+        Log.Add("ref-order " + refOrder + " item1=" + refItems[1].ToString())
+    }
     func Three(a int32, b int32, c int32) { Log.Add("positional " + a.ToString() + b.ToString() + c.ToString()) }
     func Pair(a int32, b int32) { Log.Add("named a=" + a.ToString() + " b=" + b.ToString()) }
     func PairIn(in a int32, b int32) { Log.Add("named-in a=" + a.ToString() + " b=" + b.ToString()) }
@@ -194,6 +208,7 @@ class Spawner : Base {
             }, 12)
             go ConsumeSpan3(extra: Next("l"), value: MakeSpanString().AsSpan(), last: ReadSpanCreated())
             go ConsumeSpan(MakePosSpanString().AsSpan(), ReadPosSpanCreated())
+            go PutRef(ref refItems[NextRefIndex()], NextRefValue())
             go Show("inferred", label)
             go Show[int32]("explicit", count)
             go Later(count)
@@ -234,6 +249,7 @@ named-span len=5 extra=5
 named-span3 len=4 extra=12 last=4
 order abcdefghijkl|
 positional 123
+ref-order idx;val; item1=9
 span-block 9
 suspending 7
 `)
