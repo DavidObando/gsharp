@@ -2381,7 +2381,7 @@ internal partial class DeclarationBinder {
                         hasGetter: true,
                         hasSetter: entry.NeedsSetter,
                         isAutoProperty: true,
-                        isVirtual: true,
+                        isVirtual: false,
                         isOverride: false
                     ){BackingField = backingField}
                     declaringType!!.SetProperties(declaringType!!.Properties.Add(synthProp))
@@ -3088,7 +3088,7 @@ internal partial class DeclarationBinder {
                 hasGetter: true,
                 hasSetter: requiresSetter,
                 isAutoProperty: true,
-                isVirtual: true,
+                isVirtual: false,
                 isOverride: false,
                 isInitOnly: contractIsInitOnly
             )
