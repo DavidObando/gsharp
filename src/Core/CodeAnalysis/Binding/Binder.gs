@@ -4728,11 +4728,21 @@ partial class Binder {
                     // was never constraint-checked at all — its type-parameter
                     // constraints are resolved only when its members bind,
                     // which is after every class body (#2519).
-                    CheckUserGenericTypeClauseConstraints(
-                        (iface.Definition ?? iface).TypeParameters,
-                        typeArgs,
-                        identifierToken.Location
-                    )
+                    let def = iface.Definition ?? iface
+                    let ownParams = def.DeclaredTypeParameters
+                    let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(def)
+                    let effectiveEnclosingArgs = if !iface.EnclosingTypeArguments.IsDefaultOrEmpty {
+                        iface.EnclosingTypeArguments
+                    } else {
+                        enclosingParams.CastArray[TypeSymbol]()
+                    }
+                    let (checkParams, checkArgs) = if !enclosingParams.IsDefaultOrEmpty &&
+                        effectiveEnclosingArgs.Length == enclosingParams.Length {
+                        (enclosingParams.AddRange(ownParams), effectiveEnclosingArgs.AddRange(typeArgs))
+                    } else {
+                        (ownParams, typeArgs)
+                    }
+                    CheckUserGenericTypeClauseConstraints(checkParams, checkArgs, identifierToken.Location)
                     element = InterfaceSymbol.Construct(iface, typeArgs, $scope.References!!.MapClrTypeToReferences)
                 } else if element is StructSymbol genericStruct {
                     if !genericStruct.IsGenericDefinition {
@@ -4754,11 +4764,21 @@ partial class Binder {
                     // here, never by `Type.MakeGenericType`, so #4037's
                     // checker never sees it. Issues #4089/#4090: queued rather
                     // than asked here, and now also asks the CLOSED question.
-                    CheckUserGenericTypeClauseConstraints(
-                        (genericStruct.Definition ?? genericStruct).TypeParameters,
-                        typeArgs,
-                        identifierToken.Location
-                    )
+                    let def = genericStruct.Definition ?? genericStruct
+                    let ownParams = def.DeclaredTypeParameters
+                    let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(def)
+                    let effectiveEnclosingArgs = if !genericStruct.EnclosingTypeArguments.IsDefaultOrEmpty {
+                        genericStruct.EnclosingTypeArguments
+                    } else {
+                        enclosingParams.CastArray[TypeSymbol]()
+                    }
+                    let (checkParams, checkArgs) = if !enclosingParams.IsDefaultOrEmpty &&
+                        effectiveEnclosingArgs.Length == enclosingParams.Length {
+                        (enclosingParams.AddRange(ownParams), effectiveEnclosingArgs.AddRange(typeArgs))
+                    } else {
+                        (ownParams, typeArgs)
+                    }
+                    CheckUserGenericTypeClauseConstraints(checkParams, checkArgs, identifierToken.Location)
                     element = StructSymbol.Construct(
                         genericStruct,
                         typeArgs,

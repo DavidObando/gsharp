@@ -239,12 +239,18 @@ func BadNestedInterfaceNullabilityMismatch(x InterfaceOwner[string?].IPlain) Int
 func BadNestedInterfaceNestedNullabilityMismatch(
     x InterfaceOwner[InterfaceOwner[string?].IPlain].IPlain
 ) InterfaceOwner[InterfaceOwner[string].IPlain].IPlain -> x
-func BadNestedInterfaceDependentConstraint(x InterfaceOwner[string].IDep[int32]) { }`)
+func BadNestedInterfaceDependentConstraint(x InterfaceOwner[string].IDep[int32]) { }
+open class DepBase[T] {
+    public interface IDep[U T] { }
+}
+class DepDerived : DepBase[string] {
+    public func Bad(x IDep[int32]) { }
+}`)
         let unclosedErrors = unclosedOutsideOwnerDiagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
-        Assert.Equal(13, unclosedErrors.Length)
+        Assert.Equal(14, unclosedErrors.Length)
         Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0157"))
         Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0113"))
-        Assert.Equal(1, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0152"))
+        Assert.Equal(2, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0152"))
         Assert.Equal(2, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0155"))
         Assert.Equal(1, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0156"))
         Assert.Equal(1, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0187"))
@@ -273,6 +279,7 @@ class Outer[T] {
         func ReadDep(v U) T;
     }
     public func EchoIface(x IPlain) Outer[T].IPlain -> x
+    public func EchoNestedIface(x Outer[IPlain].IPlain) Outer[Outer[T].IPlain].IPlain -> x
     public func UseMiddleLeaf(leaf Middle[string].Leaf) int32 {
         let localLeaf = Middle[string].Leaf{Value: 3}
         return leaf.Read() + localLeaf.Read()
@@ -301,6 +308,10 @@ open class Base[T] {
     public struct InheritedInner(Value int32) {
         public func Read() int32 -> Value
     }
+    public interface InheritedIDep[U T] { }
+}
+class ClosedBaseDerived : Base[object] {
+    public func Good(x InheritedIDep[string]) { }
 }
 class Derived[U] : Base[U] {
     public func InsideDerived() int32 {

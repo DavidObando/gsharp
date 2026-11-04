@@ -1925,7 +1925,7 @@ class BoundScope {
         return previous
     }
 
-    private func ApplyEnclosingConstruction(nestedType TypeSymbol, declaringContainer StructSymbol) TypeSymbol {
+    internal func ApplyEnclosingConstruction(nestedType TypeSymbol, declaringContainer StructSymbol) TypeSymbol {
         let enclosingArguments = FlattenConstructedTypeArguments(declaringContainer)
         if enclosingArguments.IsDefaultOrEmpty {
             return nestedType

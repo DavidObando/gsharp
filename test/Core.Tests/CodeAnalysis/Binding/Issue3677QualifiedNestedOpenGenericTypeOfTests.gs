@@ -81,7 +81,9 @@ typeof(PlainInner).Name == "PlainInner" &&
 typeof(Outer.Inner).IsGenericTypeDefinition &&
 typeof(Outer.Inner).Name == "Inner` + "`" + `1" &&
 typeof(Outer.PlainInner).IsGenericTypeDefinition &&
-typeof(Outer.PlainInner).Name == "PlainInner"
+typeof(Outer.PlainInner).Name == "PlainInner" &&
+!typeof(ClosedBaseDerived.PlainInner).IsGenericTypeDefinition &&
+typeof(ClosedBaseDerived.PlainInner) == typeof(Outer[string].PlainInner)
 `)
         Assert.Empty(result.Diagnostics)
         Assert.Equal(true, result.Value)
@@ -210,10 +212,12 @@ class Fixtures {
     class Plain {}
 }
 
-class Outer[T] {
+open class Outer[T] {
     class Inner[U] {}
-    class PlainInner {}
+    public class PlainInner {}
 }
+
+class ClosedBaseDerived[U] : Outer[string] {}
 
 class Slot[T] {
     prop Value int32

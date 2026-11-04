@@ -420,20 +420,28 @@ internal partial class ExpressionBinder {
                 IsOpenGenericOrGenericEnclosingDefinition(current)
             for var i = head + 1; i < names.Length; i++ {
                 let container = (current as StructSymbol)?.Definition ?? current
-                if !$scope.TryLookupNestedTypeAlias(container, names[i], preferredArity: -1, out var nested) &&
-                    !(
-                    container is StructSymbol containerStruct && $scope.TryLookupNestedTypeAliasIncludingInherited(
-                        containerStruct,
-                        names[i],
-                        preferredArity: -1,
-                        out nested,
-                        out _
-                    )
-                ) {
-                    resolved = false
-                    break
+                var nested TypeSymbol? = nil
+                var effectiveOwner StructSymbol? = current as StructSymbol
+                if !$scope.TryLookupNestedTypeAlias(container, names[i], preferredArity: -1, out nested) {
+                    if !(
+                        effectiveOwner != nil && $scope.TryLookupNestedTypeAliasIncludingInherited(
+                            effectiveOwner,
+                            names[i],
+                            preferredArity: -1,
+                            out nested,
+                            out var declaringContainer
+                        )
+                    ) {
+                        resolved = false
+                        break
+                    }
+                    effectiveOwner = declaringContainer
                 }
-                current = nested
+                current = if effectiveOwner != nil {
+                    $scope.ApplyEnclosingConstruction(nested!!, effectiveOwner)
+                } else {
+                    nested
+                }
                 anyGenericSegment |= DeclaredGenericDefinitionArity(current!!) > 0
             }
             if resolved &&
@@ -446,8 +454,12 @@ internal partial class ExpressionBinder {
                 } else {
                     typeClause.QualifierIdentifierTokens[typeClause.QualifierIdentifierTokens.Length - 1].Location
                 }
-                reportObsoleteUseIfApplicable(targetLocation, current!!, current!!.Name)
-                type = current
+                let openTarget = (current as StructSymbol)?.Definition ??
+                    (current as InterfaceSymbol)?.Definition ??
+                    (current as EnumSymbol)?.Definition ??
+                    current!!
+                reportObsoleteUseIfApplicable(targetLocation, openTarget, openTarget.Name)
+                type = openTarget
                 return true
             }
         }
