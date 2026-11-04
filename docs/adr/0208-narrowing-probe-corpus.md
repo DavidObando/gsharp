@@ -218,3 +218,24 @@ body holds `if x != nil { g(); total += x.Value }`.
 Row d06 is the control for a write of a function that cannot reach `x`. Section 13 removes an alias at any
 write in the region, whatever the written value is, so no write keeps `g` external. Main already rejects
 d06 when another fact is in force at the loop entry; the row now gets the same result without one.
+
+## ADR-0213 slice L2 (#5318) and issue #5671: backward-jump spans and external callable aliases
+
+[ADR-0213](0213-narrowing-across-loops-and-backward-jumps.md) section 11 and section 13 ([#5318](https://github.com/DavidObando/gsharp/issues/5318), [#5671](https://github.com/DavidObando/gsharp/issues/5671)): a backward-jump span `[firstStatement, lastStatement]` applies the same `Lower(S, span)` lower bound as a loop at its first statement and at each participant label, joining pending forward jumps targeting labels inside the span into `S` (rule J6) and reducing `externalCallableAliases` whenever the span assigns the variable.
+
+| Probe | Shape | Result before L2 | Result now |
+| --- | --- | --- | --- |
+| e15 | `again: i = i + s.Length; s = "ab"; if i < n { goto again }` | rejected (`GS0158`) | accepted, prints `0` |
+| e18 | `Run` (no write in span) and `Run2` (`s = Get()` in span) | `GS0158` in `Run` and `Run2` | `Run` accepted; `GS0158` in `Run2` |
+| cC | `Again: let length = x.Length; try { x = nil; goto Again } finally { x = "safe" }` | accepted, prints `4` | rejected (`GS0158`, R8 (a')) |
+| q1 | hiding `Animal.Name`/`Dog.Name`; `if x is Dog { Again: last = last + x.Name + ","; x = Animal{}; i++; if i < n { goto Again } }` | rejected (`GS0158`) | accepted, prints `animal,animal,` (R8 (b)) |
+| q2 | guard; `Again: i = i + s!!.Length; s = nil; if i < n { s = Get(); goto Again }` | accepted, prints `5` | accepted, prints `5` (R8 (d); `M20` reports `GS0536`) |
+| q6 | `if skip { goto Inside }; if s == nil { return 0 }; while count < 3 && s.Length < 9 { Inside: count++ }` | rejected (`GS0158`) | rejected (`GS0158`, J6; `M16` throws `NullReferenceException`) |
+| q10 | guard; `try { Again: i = i + s.Length; s = nil; if i < n { goto Again } } finally { return i }` | rejected (`GS0158`) | rejected (`GS0158`; `M21` accepts) |
+| q11 | guard; `while count < 3 && s.Length < 9 { Inside: count++; i++ }; s = nil; if i < n { goto Inside }` | rejected (`GS0158`) | rejected (`GS0158`; `M22` accepts) |
+| m01 | `x = "safe"`; `Again: let length = x.Length; if count == 0 { count++; x = fresh; goto Again }` (`fresh string`) | accepted, prints `4` | rejected (`GS0158`, R8 (a)) |
+| m02 | `Again: if x != nil { g(); total += x.Value }; g = h; i++; if i < 2 { goto Again }` (#5671) | accepted, `NullReferenceException` | rejected (`GS0158`) |
+| m03 | as m02 without a write to `g` inside the span; `h()` after the span | accepted, prints `2` | accepted, prints `2` |
+| m04 | as m02 with `g = Other` (a named function) inside the span | accepted, prints `2` | rejected (`GS0158`) |
+| m05 | `while count < 2 { if x != nil { g(); total += x.Value }; Inside: count++; i++ }; g = h; if i < 2 { goto Inside }` | accepted, prints `2` | rejected (`GS0158`) |
+

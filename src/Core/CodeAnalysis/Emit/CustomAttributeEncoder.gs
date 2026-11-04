@@ -348,6 +348,7 @@ internal class CustomAttributeEncoder {
         if ShouldEmitPerPositionNullable(flags) {
             this.EmitNullableAttributeOnEntity(eventHandle, flags)
         }
+        this.EmitTupleElementNamesAttribute(eventHandle, type)
     }
 
     /// Issue #4988: stamps a method signature's nullability exactly as

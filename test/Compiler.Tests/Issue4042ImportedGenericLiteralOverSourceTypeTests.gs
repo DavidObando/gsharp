@@ -306,6 +306,103 @@ Console.WriteLine(cf1!!.Length)`
         }
     }
 
+    /// Issue #4799: `with`, `.copy(...)`, and composite literals on imported C#
+    /// and G# generic records/data types preserve their symbolic and lossy
+    /// generic constructions through normalization and emission.
+    @Fact
+    func Issue4799_ImportedSymbolicRecordWithAndLiterals_PreserveGenericConstruction() {
+        const GsLibrary = `package NativeGs
+
+public data class GsRow[T any](Value T, Extra int32)
+
+public data struct GsRowStruct[T any](Value T, Extra int32)`
+        const AppSource = `package SymbolicWith
+import System
+import HelperLib2
+import NativeGs
+
+public struct SourceItem(Id int32)
+
+public class Caller[A any, B any] {
+    public func CopyCs(value Row[B]) Row[B] -> value with { Extra = 13 }
+    public func CopyCsBoth(value Row[B], next B) Row[B] -> value with { Value = next, Extra = 14 }
+    public func CopyCsDotCopy(value Row[B], next B) Row[B] -> value.copy(Value: next, Extra: 15)
+    public func CopyCsStruct(value RowStruct[B], next B) RowStruct[B] -> value with { Value = next, Extra = 16 }
+    public func LitWithCsStruct(next B) RowStruct[B] -> RowStruct[B]{ Value: next, Extra: 1 } with { Extra = 17 }
+    public func CopyGs(value GsRow[B], next B) GsRow[B] -> value with { Value = next, Extra = 18 }
+    public func CopyGsStruct(value GsRowStruct[B], next B) GsRowStruct[B] -> value with { Value = next, Extra = 19 }
+    public func CopySourceItem(value Row[SourceItem], next SourceItem) Row[SourceItem] -> value with { Value = next, Extra = 20 }
+    public func TupleRowStructLit() string -> (RowStruct[(Required string, Code int32)]{ Value: ("tuple-struct", 7), Extra: 2 } with { Extra = 21 }).Value.Required
+    public func TupleGsRowStructLit() string -> (GsRowStruct[(Required string, Code int32)]{ Value: ("gs-tuple-struct", 8), Extra: 2 } with { Extra = 22 }).Value.Required
+}
+
+let caller = Caller[int32, string]()
+let r1 = caller.CopyCs(Row[string]("a", 1))
+let r2 = caller.CopyCsBoth(r1, "b")
+let r3 = caller.CopyCsDotCopy(r2, "c")
+let rs1 = caller.CopyCsStruct(RowStruct[string]("d", 1), "e")
+let rs2 = caller.LitWithCsStruct("f")
+let g1 = caller.CopyGs(GsRow[string]("g", 1), "h")
+let gs1 = caller.CopyGsStruct(GsRowStruct[string]("i", 1), "j")
+let s1 = caller.CopySourceItem(Row[SourceItem](SourceItem(1), 2), SourceItem(99))
+Console.WriteLine("${r1.Value}:${r1.Extra}:${r1.GetType()}")
+Console.WriteLine("${r2.Value}:${r2.Extra}")
+Console.WriteLine("${r3.Value}:${r3.Extra}")
+Console.WriteLine("${rs1.Value}:${rs1.Extra}:${rs1.GetType()}")
+Console.WriteLine("${rs2.Value}:${rs2.Extra}")
+Console.WriteLine("${g1.Value}:${g1.Extra}:${g1.GetType()}")
+Console.WriteLine("${gs1.Value}:${gs1.Extra}:${gs1.GetType()}")
+Console.WriteLine("${s1.Value.Id}:${s1.Extra}:${s1.GetType()}")
+Console.WriteLine(caller.TupleRowStructLit())
+Console.WriteLine(caller.TupleGsRowStructLit())`
+        let tempDir = Directory.CreateTempSubdirectory("gs_4799_").FullName
+        try {
+            let libPath = CompileCSharpLibrary(tempDir)
+            let gsLibPath = Path.Combine(tempDir, "NativeGs.dll")
+            let gsLibLog = Compile(tempDir, "NativeGs.gs", GsLibrary, gsLibPath, "/target:library")
+            Assert.DoesNotContain("error GS", gsLibLog, StringComparison.Ordinal)
+            Assert.True(File.Exists(gsLibPath), gsLibLog)
+            IlVerifier.Verify(gsLibPath)
+            let appPath = Path.Combine(tempDir, "SymbolicWith.dll")
+            let appLog = Compile(
+                tempDir,
+                "SymbolicWith.gs",
+                AppSource,
+                appPath,
+                "/target:exe",
+                "/reference:" + libPath,
+                "/reference:" + gsLibPath
+            )
+            Assert.DoesNotContain("error GS", appLog, StringComparison.Ordinal)
+            Assert.True(File.Exists(appPath), appLog)
+            IlVerifier.Verify(appPath, []string{libPath, gsLibPath})
+            let (exit, output) = RunDotnet(appPath)
+            Assert.Equal(0, exit)
+            let lines = output
+                .Split('\n')
+                .Select((line string) -> line.TrimEnd('\r'))
+                .Where((line string) -> line.Length > 0)
+                .ToArray()
+            Assert.Equal(
+                []string{
+                    "a:13:HelperLib2.Row`1[System.String]",
+                    "b:14",
+                    "c:15",
+                    "e:16:HelperLib2.RowStruct`1[System.String]",
+                    "f:17",
+                    "h:18:NativeGs.GsRow`1[System.String]",
+                    "j:19:NativeGs.GsRowStruct`1[System.String]",
+                    "99:20:HelperLib2.Row`1[SymbolicWith.SourceItem]",
+                    "tuple-struct",
+                    "gs-tuple-struct"
+                },
+                lines
+            )
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         /// Timeout for running an emitted sample.
         private const RunTimeout int32 = 60_000
@@ -357,6 +454,10 @@ public class GenericOuter<T>
 }
 
 public record Pair<T>(T First, T Second);
+
+public record Row<T>(T Value, int Extra);
+
+public record struct RowStruct<T>(T Value, int Extra);
 
 public static class PairFactory
 {

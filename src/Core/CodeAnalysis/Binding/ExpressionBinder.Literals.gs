@@ -1854,7 +1854,7 @@ internal partial class ExpressionBinder {
                             resolveTypeOnly
                         )
                     }
-                    if ImportedTypeSymbol.TryCreateSemanticAggregate(
+                    if !hasSymbolicArgument && ImportedTypeSymbol.TryCreateSemanticAggregate(
                         closedImportedType,
                         $scope.References,
                         out var importedAggregate
@@ -3004,6 +3004,7 @@ internal partial class ExpressionBinder {
                     isReadOnly: true,
                     type
                 )
+                $scope.TryDeclareVariable(temporary)
                 argumentStatements.Add(BoundVariableDeclaration(member, temporary, value))
                 supplied.Add(name, BoundVariableExpression(member, temporary))
             }
@@ -3018,7 +3019,8 @@ internal partial class ExpressionBinder {
                     aggregate!!,
                     parameters[i],
                     out var missingDeclarationShape,
-                    type
+                    type,
+                    constructor
                 )
                 if missingDeclarationShape {
                     Diagnostics.ReportNoApplicableOverload(syntax.TypeIdentifier.Location, aggregate!!.Name)
@@ -3495,24 +3497,9 @@ internal partial class ExpressionBinder {
             } else {
                 elementNames.Add(nil)
             }
-            // Issue #5635: the element takes the type of its value with no conversion, so a narrowed read that the
-            // element yields (the value, or the trailing value of a block) is decided for that type where it binds,
-            // as `let t = s` is.
-            var elementRead NarrowedBranchValue? = nil
-            var be = BindBranchValue(
-                e,
-                nil,
-                nil,
-                (read NarrowedBranchValue) -> {
-                    elementRead = read
-                }
-            )
+            var be = BindExpression(e)
             if be.Type == TypeSymbol.Error {
                 return BoundErrorExpression(nil)
-            }
-            if elementRead is {} read {
-                be = conversions.ResolveNarrowedValue(be, read, be.Type)
-                binderCtx.CaptureNarrowedRead(be, read)
             }
             bound.Add(be)
             elementTypes.Add(be.Type)
