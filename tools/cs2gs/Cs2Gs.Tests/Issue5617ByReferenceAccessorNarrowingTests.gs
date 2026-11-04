@@ -954,9 +954,9 @@ public class Demo
         Assert.Equal(7, Regex.Matches(printed, `s!!`).Count)
     }
 
-    /// gsc binds the `else` branch of an `if` from the state before the `then` branch for the effects of a loop, so
-    /// a loop in the `then` branch leaves a read in the `else` branch bare. A field write there removes the fact for
-    /// the `else` branch too, and a loop in an earlier `switch` section reaches a later section.
+    /// gsc binds the `else` branch of an `if` from the state before the `then` branch (#5650, #5654), so a loop or a
+    /// field write in the `then` branch leaves a read in the `else` branch bare, while a loop in an earlier `switch`
+    /// section reaches a later section.
     @Fact
     func RefParameter_ReadInAnElseAfterALoopInTheThenBranch_StaysBare() {
         let printed = AssertRunsLikeCSharp(`
@@ -1012,18 +1012,144 @@ public class Demo
         }
         return total;
     }
+    public static int ForwardGotoExit(ref string? s, Box box, bool flag)
+    {
+        if (s == null) return 0;
+        if (flag)
+        {
+            box.F = 1;
+            goto Done;
+        }
+        else
+        {
+        Unused:
+            return s.Length + 5;
+        }
+    Done:
+        return box.F;
+    }
+    public static int ForwardGotoInThen(ref string? s, Box box, bool flag)
+    {
+        if (s == null) return 0;
+        if (flag)
+        {
+            box.F = 1;
+            goto Step;
+        Step:
+            return 1;
+        }
+        else
+        {
+            return s.Length + 7;
+        }
+    }
+    public static int BackwardGotoInThen(ref string? s, Box box, bool flag, bool step)
+    {
+        if (s == null) return 0;
+        if (flag)
+        {
+        Loop:
+            box.F = 1;
+            if (step)
+            {
+                step = false;
+                goto Loop;
+            }
+        }
+        else
+        {
+            return s.Length + 8;
+        }
+        return box.F;
+    }
+    public static int MergedBackwardGotoSpan(ref string? s, Box box, bool flag, bool a, bool b)
+    {
+        if (s == null) return 0;
+    L1:
+        if (a)
+        {
+            a = false;
+            goto L1;
+        }
+        if (flag)
+        {
+            box.F = 1;
+        }
+        else
+        {
+            return s.Length + 9;
+        }
+    L2:
+        if (b)
+        {
+            b = false;
+            goto L2;
+        }
+        return box.F;
+    }
+    public static int LoweredGotoCase(ref string? s, Box box, bool flag, int k)
+    {
+        if (s == null) return 0;
+        switch (k)
+        {
+            case 0:
+                break;
+            default:
+                goto case 0;
+        }
+        if (flag)
+        {
+            box.F = 1;
+        }
+        else
+        {
+            return s.Length + 10;
+        }
+        switch (k)
+        {
+            case 0:
+                break;
+            default:
+                goto case 0;
+        }
+        return box.F;
+    }
+    public static int DefaultFirstSection(ref string? s, Box box, int k)
+    {
+        if (s == null) return 0;
+        switch (k)
+        {
+            default:
+                box.F = 1;
+                break;
+            case 1:
+                return s.Length + 6;
+        }
+        return box.F;
+    }
     public static string Run()
     {
         string? text = "abc";
         var items = new List<int> { 1 };
         return Loop(ref text, items, false) + "," + Loop(ref text, items, true) + "," +
-            Write(ref text, new Box(), false) + "," + Section(ref text, items, 2);
+            Write(ref text, new Box(), false) + "," + Section(ref text, items, 2) + "," +
+            ForwardGotoExit(ref text, new Box(), false) + "," + ForwardGotoInThen(ref text, new Box(), false) + "," +
+            BackwardGotoInThen(ref text, new Box(), false, false) + "," +
+            MergedBackwardGotoSpan(ref text, new Box(), false, false, false) + "," +
+            LoweredGotoCase(ref text, new Box(), false, 1) + "," +
+            DefaultFirstSection(ref text, new Box(), 1);
     }
 }`)
         Assert.Contains("return s.Length + 1", printed)
         Assert.Contains("return s.Length + 2", printed)
-        Assert.Contains("return s!!.Length + 3", printed)
+        Assert.Contains("return s.Length + 3", printed)
         Assert.Contains("return s!!.Length + 4", printed)
+        Assert.Contains("return s.Length + 5", printed)
+        Assert.Contains("return s!!.Length + 6", printed)
+        Assert.Contains("return s.Length + 7", printed)
+        Assert.Contains("return s.Length + 8", printed)
+        Assert.Contains("return s!!.Length + 9", printed)
+        Assert.Contains("return s.Length + 10", printed)
     }
 
     /// The collection of a `for ... in` and the initializer of a `for` run once, before the loop's region, so effects
