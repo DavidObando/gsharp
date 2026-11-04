@@ -93,11 +93,45 @@ internal shared class CallCandidateRecorder {
         frame.Sets.Add(set.MoveToImmutable())
     }
 
+    /// Records the declared extension overloads an extension call considers (ADR-0212 issue #5480).
+    /// @param candidates The source extension functions.
+    func RecordExtensionFunctions(candidates ImmutableArray[FunctionSymbol]) {
+        let frame = current.Value
+        if frame == nil || candidates.IsDefaultOrEmpty {
+            return
+        }
+        let set = ImmutableArray.CreateBuilder[object](candidates.Length)
+        for candidate in candidates {
+            set.Add(candidate)
+        }
+        frame.ExtensionSet = set.MoveToImmutable()
+    }
+
+    /// Records the reflected extension overloads an imported extension call considers, filtered to those
+    /// whose first parameter can take [`receiverType`](paramref) (ADR-0212 issue #5480).
+    /// @param candidates The reflected extension methods of the call's name.
+    /// @param receiverType The call receiver's type.
+    func RecordExtensionMethods(candidates IReadOnlyCollection[MethodInfo], receiverType TypeSymbol) {
+        let frame = current.Value
+        if frame == nil || candidates.Count == 0 {
+            return
+        }
+        let filtered = Binder.FilterImportedExtensionMethods(candidates, receiverType)
+        if filtered.IsDefaultOrEmpty {
+            return
+        }
+        let set = ImmutableArray.CreateBuilder[object](filtered.Length)
+        for candidate in filtered {
+            set.Add(candidate)
+        }
+        frame.ExtensionSet = set.MoveToImmutable()
+    }
+
     /// Gives [`call`](paramref), or the call it wraps, the group [`frame`](paramref) recorded.
     /// @param frame The frame of the call.
     /// @param bound The expression the binder built for the call.
     func Stamp(frame Frame?, bound BoundExpression) {
-        if frame == nil || frame.Sets.Count == 0 {
+        if frame == nil || (frame.Sets.Count == 0 && frame.ExtensionSet.IsDefault) {
             return
         }
         var node BoundExpression? = bound
@@ -109,7 +143,7 @@ internal shared class CallCandidateRecorder {
             }
             if node is BoundCallOperationExpression call {
                 if call.MemberGroup.IsDefault {
-                    call.MemberGroup = Select(frame, call.CalledFunction)
+                    call.MemberGroup = Select(frame, call)
                 }
                 return
             }
@@ -122,7 +156,14 @@ internal shared class CallCandidateRecorder {
         }
     }
 
-    private func Select(frame Frame, called Symbol) ImmutableArray[object] {
+    private func Select(frame Frame, call BoundCallOperationExpression) ImmutableArray[object] {
+        let called = call.CalledFunction
+        if !frame.ExtensionSet.IsDefault && ContainsCallee(frame.ExtensionSet, called) {
+            return frame.ExtensionSet
+        }
+        if IsSourceExtensionCall(call, frame.Syntax) {
+            return default(ImmutableArray[object])
+        }
         var best ImmutableArray[object] = default(ImmutableArray[object])
         for set in frame.Sets {
             if (best.IsDefault || set.Length >= best.Length) && ContainsCallee(set, called) {
@@ -131,6 +172,16 @@ internal shared class CallCandidateRecorder {
         }
         return best
     }
+
+    /// Reports whether [`call`](paramref) was dispatched as a receiver-form source extension call (`receiver.Ext(...)`)
+    /// rather than a direct free or static call.
+    /// @param call The bound call operation.
+    /// @param fallbackSyntax The call syntax node when [`call`](paramref)'s own syntax is not populated.
+    func IsSourceExtensionCall(call BoundCallOperationExpression, fallbackSyntax SyntaxNode? = nil) bool ->
+    call is BoundCallExpression{Function: {IsExtension: true}, StaticQualifierType: nil} &&
+        (call.Syntax ?? fallbackSyntax) is CallExpressionSyntax ce &&
+        ce.Parent is AccessorExpressionSyntax accessor &&
+        object.ReferenceEquals(accessor.RightPart, ce)
 
     // A probe of an argument conversion or an inference holds other methods, so a set counts only when it
     // holds the called method itself.
@@ -191,6 +242,11 @@ internal shared class CallCandidateRecorder {
 
         prop Sets List[ImmutableArray[object]] {
             get;
+        }
+
+        prop ExtensionSet ImmutableArray[object] {
+            get;
+            set;
         }
     }
 }
