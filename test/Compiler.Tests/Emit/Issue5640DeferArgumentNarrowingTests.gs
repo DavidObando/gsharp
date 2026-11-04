@@ -461,6 +461,64 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "GS0158@20:14", "reject", ""}
+            yield[]object{"d21_5640_defer_invoked_literal_calls_passed_closure_after_external_assignment", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(v int32) { }
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    defer Consume((func(f () -> void) int32 {
+        action = callback
+        f()
+        return 1
+    })(func() { action = clear }))
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(func() { }))`, "GS0158@17:14", "reject", ""}
+            yield[]object{"d22_5640_defer_explicit_delegate_invoke_calls_passed_closure_after_external_assignment", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(v int32) { }
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    defer Consume({
+        let invoke Func[Action, int32] = func(f Action) int32 {
+            action = callback
+            f()
+            return 1
+        }
+        invoke.Invoke(func() { action = clear })
+    })
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(func() { }))`, "GS0158@20:14", "reject", ""}
+            yield[]object{"d23_5640_defer_ignored_callable_argument_does_not_overwrite_non_external_alias", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(v int32) { }
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = clear
+    defer Consume((func(f () -> void) int32 {
+        return 1
+    })(func() { action = callback }))
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(func() { }))`, "GS0158@15:14", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
