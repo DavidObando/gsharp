@@ -395,8 +395,7 @@ public static class Obj {
         Assert.Contains("func Row(choose bool, value int32?) (Value Box, Code int32)", printed)
         Assert.Contains("func Scalar(choose bool, value int32?) Box", printed)
         Assert.Contains("func Local(choose bool, value int32?) Box", printed)
-        // #4737 also covers native nullable-value contextual operator binding.
-
+        AssertBindsAndRuns(printed, fixture, expected: 1)
     }
 
     @Theory
@@ -497,8 +496,7 @@ public static class Obj {
 }`, fixture)
         Assert.Contains("Value Box =", printed)
         Assert.Contains("func Read() Box", printed)
-        // #4737: implicit int32? -> Box fails loudly before execution.
-
+        AssertBindsAndRuns(printed, fixture, expected: 1)
     }
 
     @Theory
@@ -580,8 +578,7 @@ public static class Obj {
     }
 }`), fixture)
         Assert.Contains("func Row(choose bool) (Value object${(if nullable { "?" } else { "" })}, Code int32)", printed)
-        // #4737 tracks these two ordinary nullable-signature operator binding gaps.
-
+        AssertBindsAndRuns(printed, fixture, expected: 1)
     }
 
     @Fact
