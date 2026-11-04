@@ -73,13 +73,24 @@ shared class AsyncBoundTreeQueries {
     }
 
     private class AwaitSyntaxFinder : BoundTreeWalker {
+        private let explicitOnly bool
+
+        init(explicitOnly bool = false) {
+            this.explicitOnly = explicitOnly
+        }
+
         prop Syntax SyntaxNode? {
             get;
             private set;
         }
 
         protected override func VisitAwaitExpression(node BoundAwaitExpression) {
-            Syntax ??= node.Syntax
+            if !explicitOnly || node.ImplicitCompletionOperand == nil {
+                Syntax ??= node.Syntax
+            }
+            if Syntax == nil {
+                base.VisitAwaitExpression(node)
+            }
         }
     }
 
@@ -155,5 +166,18 @@ shared class AsyncBoundTreeQueries {
         let probe = AwaitSyntaxFinder()
         probe.Visit(expression)
         return probe.Syntax
+    }
+
+    /// Returns `true` when [`expression`](paramref) contains an explicit
+    /// `await` expression, traversing through implicit suspending completions.
+    /// @param expression The bound expression to inspect.
+    /// @returns Whether the subtree contains an explicit `await`.
+    internal func HasExplicitAwait(expression BoundExpression?) bool {
+        if expression == nil {
+            return false
+        }
+        let probe = AwaitSyntaxFinder(explicitOnly: true)
+        probe.Visit(expression)
+        return probe.Syntax != nil
     }
 }
