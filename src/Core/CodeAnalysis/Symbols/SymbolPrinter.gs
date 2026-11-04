@@ -41,6 +41,9 @@ shared class SymbolPrinter {
             case SymbolKind.Import {
                 WriteImportTo(cast[ImportSymbol](symbol), writer)
             }
+            case SymbolKind.TypeAlias {
+                WriteTypeAliasTo(cast[TypeAliasSymbol](symbol), writer)
+            }
             default {
                 throw Exception("Unexpected symbol: ${symbol.Kind}")
             }
@@ -126,5 +129,15 @@ shared class SymbolPrinter {
         writer.WriteKeyword(SyntaxKind.ImportKeyword)
         writer.WriteSpace()
         writer.WriteIdentifier(symbol.Name)
+    }
+
+    private func WriteTypeAliasTo(symbol TypeAliasSymbol, writer TextWriter) {
+        writer.WriteKeyword(SyntaxKind.TypeKeyword)
+        writer.WriteSpace()
+        writer.WriteIdentifier(symbol.Name)
+        writer.WriteSpace()
+        writer.WritePunctuation(SyntaxKind.EqualsToken)
+        writer.WriteSpace()
+        symbol.Target.WriteTo(writer)
     }
 }
