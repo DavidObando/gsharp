@@ -416,8 +416,9 @@ class SemanticModel {
   S2 does not add it.
 - `GetSpeculativeTypeInfo(position, expression)` binds `expression` as if it
   stood at `position`: the enclosing function from `GetEnclosingSymbol`, the
-  locals from `LookupSymbols` with their declared types, the file's imports,
-  under `NullabilityOptions.Enter`. No diagnostic escapes; a failed bind
+  locals (including local functions) from `LookupSymbols` with their declared
+  types, the file's imports, under `NullabilityOptions.Enter`. No diagnostic
+  escapes; a failed bind
   returns `TypeInfo.None`. **Flow-sensitive state is excluded from the
   contract**: the speculative binder starts with empty narrowing state
   (`BinderContext.gs:123`), so `p.X` speculated inside `if p != nil` with

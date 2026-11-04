@@ -9,14 +9,13 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Generic
-import System.Linq
 import System.Threading
 
 /// Speculative queries of (cref:SemanticModel) (ADR-0212 section 7b).
 partial class SemanticModel {
     /// Binds [`expression`](paramref) as if it stood at [`position`](paramref) and
     /// returns its type. The enclosing declared function comes from
-    /// (cref:GetEnclosingSymbol), the locals and parameters from
+    /// (cref:GetEnclosingSymbol), the locals, parameters and local functions from
     /// (cref:LookupSymbols) with their declared types, and the file's imports from
     /// the compilation. Binding runs under the compilation's nullability mode.
     /// No diagnostic escapes.
@@ -40,7 +39,15 @@ partial class SemanticModel {
         // reachable through the parent scope.
         var function FunctionSymbol? = nil
         var inConstructorInitializer = false
-        let locals = List[VariableSymbol](LookupSymbols(position, nil, cancellationToken).OfType[VariableSymbol]())
+        let locals = List[VariableSymbol]()
+        let localFunctions = List[FunctionSymbol]()
+        for symbol in LookupSymbols(position, nil, cancellationToken) {
+            if symbol is VariableSymbol variable {
+                locals.Add(variable)
+            } else if symbol is FunctionSymbol localFunction && IsLocalFunction(localFunction) {
+                localFunctions.Add(localFunction)
+            }
+        }
         if GetEnclosingSymbol(position, cancellationToken) is FunctionSymbol enclosing {
             function = enclosing
             // The scope query leaves `this` out where the receiver does not exist yet, as in the
@@ -54,6 +61,7 @@ partial class SemanticModel {
             compilation.References ?? ReferenceResolver.Default(),
             function,
             locals,
+            localFunctions,
             expression,
             syntaxTree,
             inConstructorInitializer

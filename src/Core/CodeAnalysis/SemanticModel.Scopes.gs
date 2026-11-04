@@ -157,7 +157,7 @@ partial class SemanticModel {
         for (anchor, local) in named {
             // A local function is visible in its whole block, so that local functions can
             // call themselves and each other; every other local follows its declaration.
-            let hoisted = local is FunctionSymbol
+            let hoisted = IsLocalFunction(local)
             let region = RegionOf(anchor)
             if region == nil || IsInGuardElse(anchor, position) {
                 continue
@@ -1003,6 +1003,9 @@ partial class SemanticModel {
             return !string.IsNullOrEmpty(name) && name!![0] != '<' && name!![0] != '$' && name != "_"
         }
 
+        /// Whether [`symbol`](paramref) is a local function declared in a statement block.
+        private func IsLocalFunction(symbol Symbol?) bool -> symbol is FunctionSymbol{LocalDeclaration: not nil}
+
         /// Collects the local variables, parameters and local functions declared in the tree, in
         /// source order. Globals are listed by (cref:LookupSymbols) from the
         /// global scope instead.
@@ -1011,9 +1014,7 @@ partial class SemanticModel {
         ] {
             let locals = List[(Anchor SyntaxNode, Local Symbol)]()
             for pair in declaredBySyntax {
-                let isLocal = pair.Value is FunctionSymbol{LocalDeclaration: not nil} ||
-                    pair.Value is VariableSymbol and
-                    not GlobalVariableSymbol
+                let isLocal = IsLocalFunction(pair.Value) || pair.Value is VariableSymbol and not GlobalVariableSymbol
                 if isLocal && IsListable(pair.Value.Name) {
                     locals.Add((pair.Key, pair.Value))
                 }
