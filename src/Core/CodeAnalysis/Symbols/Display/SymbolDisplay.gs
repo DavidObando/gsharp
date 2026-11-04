@@ -1095,6 +1095,12 @@ shared class SymbolDisplay {
     /// the symbolic (cref:ImportedTypeSymbol.TypeArguments).
     private func FormatImportedType(imported ImportedTypeSymbol) string {
         if !imported.TypeArguments.IsDefaultOrEmpty {
+            if imported.ClrType is {IsArray: true, IsSZArray: false} nonSzClr && nonSzClr.GetArrayRank() == 1 &&
+                imported
+                .TypeArguments
+                .Length == 1 {
+                return "[*]${FormatGenericTypeArgument(imported.TypeArguments[0])}"
+            }
             let definition Type? = imported.OpenDefinition
             return if definition == nil {
                 "${StripGenericArity(imported.Name)}[${string.Join(", ", imported.TypeArguments.Select(FormatGenericTypeArgument))}]"
@@ -1155,7 +1161,11 @@ shared class SymbolDisplay {
         }
         if clrType.IsArray {
             return if clrType.GetArrayRank() == 1 {
-                "[]${FormatClrTypeName(clrType.GetElementType(), qualifyNames)}"
+                if clrType.IsSZArray {
+                    "[]${FormatClrTypeName(clrType.GetElementType(), qualifyNames)}"
+                } else {
+                    "[*]${FormatClrTypeName(clrType.GetElementType(), qualifyNames)}"
+                }
             } else {
                 "[${String(',', clrType.GetArrayRank() - 1)}]${FormatClrTypeName(clrType.GetElementType(), qualifyNames)}"
             }

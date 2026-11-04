@@ -1117,6 +1117,38 @@ class StructSymbol : TypeSymbol {
                     ).IsDefaultOrEmpty ||
                         InstanceFieldInitializers
                         .Keys
+                        .Any((member FieldSymbol) -> member.Accessibility != Accessibility.Public || member.IsReadOnly)
+                )
+            }
+        )
+    }
+
+    /// Gets a value indicating whether a zero-initialization (`IsZeroInitialization`)
+    /// value-struct literal routes through the synthesized owning constructor.
+    /// Public `let` explicit initializers synthesize an owning constructor for
+    /// explicit `S{}` literals (#4742), while bare declarations (`var s S`)
+    /// preserve zero-only initialization unless an in-type constructor is
+    /// required by non-public fields, generic ownership, or primary scope.
+    internal prop UsesOwningZeroInitializerConstructor bool -> if Definition != nil && !object.ReferenceEquals(
+        Definition,
+        this
+    ) {
+        Definition!!.UsesOwningZeroInitializerConstructor
+    } else {
+        ClrType == nil &&
+            !IsClass &&
+            !IsInline &&
+            (
+            if IsData {
+                NeedsValueStructZeroHelper
+            } else {
+                !InstanceFieldInitializers.IsEmpty &&
+                    (
+                    IsGenericDefinition || HasPrimaryConstructor || !CollectEnclosingTypeParameters(
+                        this
+                    ).IsDefaultOrEmpty ||
+                        InstanceFieldInitializers
+                        .Keys
                         .Any((member FieldSymbol) -> member.Accessibility != Accessibility.Public)
                 )
             }

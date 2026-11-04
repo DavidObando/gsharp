@@ -1622,7 +1622,10 @@ internal class ImportedMemberRefFactory {
         )
     }
 
-    internal func GetRectangularArrayTypeSpec(arrayType RectangularArrayTypeSymbol) TypeSpecificationHandle {
+    internal func GetRectangularArrayTypeSpec(arrayType RectangularArrayTypeSymbol) TypeSpecificationHandle ->
+    this.GetNonSzArrayTypeSpec(arrayType)
+
+    internal func GetNonSzArrayTypeSpec(arrayType TypeSymbol) TypeSpecificationHandle {
         let sigBlob = BlobBuilder()
         this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).TypeSpecificationSignature(), arrayType)
         return this.emitCtx.MetadataRows.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
@@ -1631,22 +1634,29 @@ internal class ImportedMemberRefFactory {
     internal func GetRectangularArrayMemberReference(
         arrayType RectangularArrayTypeSymbol,
         name string
+    ) MemberReferenceHandle -> this.GetNonSzArrayMemberReference(arrayType, arrayType.ElementType, arrayType.Rank, name)
+
+    internal func GetNonSzArrayMemberReference(
+        arrayType TypeSymbol,
+        elementType TypeSymbol,
+        rank int32,
+        name string
     ) MemberReferenceHandle {
-        let parent = this.GetRectangularArrayTypeSpec(arrayType)
+        let parent = this.GetNonSzArrayTypeSpec(arrayType)
         let sigBlob = BlobBuilder()
         let signature = BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
         if name == ".ctor" {
             signature.Parameters(
-                arrayType.Rank,
+                rank,
                 returnType: (r ReturnTypeEncoder) -> r.Void(),
                 parameters: (ps ParametersEncoder) -> {
-                    for var i = 0; i < arrayType.Rank; i++ {
+                    for var i = 0; i < rank; i++ {
                         ps.AddParameter().Type().Int32()
                     }
                 }
             )
         } else {
-            let parameterCount = arrayType.Rank +
+            let parameterCount = rank +
                 (
                 if name == "Set" {
                     1
@@ -1660,15 +1670,15 @@ internal class ImportedMemberRefFactory {
                     if name == "Set" {
                         r.Void()
                     } else {
-                        this.signatures.EncodeTypeSymbol(r.Type(isByRef: name == "Address"), arrayType.ElementType)
+                        this.signatures.EncodeTypeSymbol(r.Type(isByRef: name == "Address"), elementType)
                     }
                 },
                 parameters: (ps ParametersEncoder) -> {
-                    for var i = 0; i < arrayType.Rank; i++ {
+                    for var i = 0; i < rank; i++ {
                         ps.AddParameter().Type().Int32()
                     }
                     if name == "Set" {
-                        this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(), arrayType.ElementType)
+                        this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(), elementType)
                     }
                 }
             )

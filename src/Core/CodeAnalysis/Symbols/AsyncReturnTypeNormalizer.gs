@@ -62,23 +62,53 @@ internal shared class AsyncReturnTypeNormalizer {
         @NotNullWhen(true) out awaited TypeSymbol?,
         out isValueTask bool
     ) bool {
-        var type = type
         awaited = nil
         isValueTask = false
         if type == nil {
             return false
         }
         // ADR-0186 §9: an async function declared in an oblivious scope has a
-        // platform-typed return (`Task[string!]!`). Whether the TASK itself
-        // may be nil says nothing about what it awaits, so read through the
-        // wrapper — and read the symbolic argument below, not the erased
-        // `ClrType`, or the awaited `string!` silently becomes `string` and
-        // every `return` of an oblivious value is coerced to non-null.
-        type = PlatformTypeSymbol.StripTopLevel(type)
+        // platform-typed return (`Task[string!]!`), and an interface slot such
+        // as `IFactory[Task[Shape]?]` carries a reference-nullability wrapper.
+        // Whether the TASK itself may be nil says nothing about what it awaits,
+        // so read through reference-nullability and platform wrappers — and read
+        // the symbolic argument below, not the erased `ClrType`, or the awaited
+        // `Shape` / `string!` silently becomes `object` / `string`.
+        var current TypeSymbol = type
+        while true {
+            if current is PlatformTypeSymbol platform {
+                current = platform.UnderlyingType
+                continue
+            }
+            if current is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(nullable) {
+                current = nullable.UnderlyingType
+                continue
+            }
+            break
+        }
+        if current is NullableTypeSymbol valueNullable && NullableLifting.IsAnyValueTypeNullable(valueNullable) {
+            return false
+        }
+        if current is NullabilityAnnotatedTypeSymbol annotated {
+            let annotatedOpen = if annotated.BaseType is ImportedTypeSymbol{OpenDefinition: {} baseOpen} {
+                baseOpen
+            } else if annotated.ClrType is {IsGenericType: true, IsGenericTypeDefinition: false} closedTask {
+                closedTask.GetGenericTypeDefinition()
+            } else {
+                default(Type?)
+            }
+            let annotatedOpenName = annotatedOpen?.FullName
+            if annotatedOpenName == "System.Threading.Tasks.Task`1" ||
+                annotatedOpenName == "System.Threading.Tasks.ValueTask`1" {
+                awaited = PlatformTypeSymbol.StripTopLevel(annotated.GetTypeArgumentSymbol(0))
+                isValueTask = annotatedOpenName == "System.Threading.Tasks.ValueTask`1"
+                return true
+            }
+        }
         // #313 symbolic construction: a Task[T] / ValueTask[T] over an in-scope
         // generic type parameter is type-erased in its ClrType, so recover the
         // symbolic result argument from the open definition + type arguments.
-        if type is ImportedTypeSymbol imported &&
+        if current is ImportedTypeSymbol imported &&
             imported.OpenDefinition != nil &&
             !imported
             .TypeArguments
@@ -93,7 +123,7 @@ internal shared class AsyncReturnTypeNormalizer {
                 return true
             }
         }
-        let clr Type? = type.ClrType
+        let clr Type? = current.ClrType
         if clr == nil {
             return false
         }
