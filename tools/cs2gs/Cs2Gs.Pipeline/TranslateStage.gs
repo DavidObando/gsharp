@@ -581,12 +581,13 @@ class TranslateStage : IMigrationStage {
                             packages[0],
                             usedOutputPaths
                         )
-                        context.Options.RepositoryAdditionalFiles!!.Add(
-                            Path.GetRelativePath(
-                                Path.GetFullPath(context.Options.OutputRoot!!),
-                                Path.Combine(context.ProjectOutputDir, gsRelativePath)
-                            )
+                        let additionalRelativePath = Path.GetRelativePath(
+                            Path.GetFullPath(context.Options.OutputRoot!!),
+                            Path.Combine(context.ProjectOutputDir, gsRelativePath)
                         )
+                        if !RepositoryFileInventory.HasExcludedDirectory(additionalRelativePath) {
+                            context.Options.RepositoryAdditionalFiles!!.Add(additionalRelativePath)
+                        }
                     }
                     let gsPath = Path.Combine(context.ProjectOutputDir, gsRelativePath)
                     Directory.CreateDirectory(Path.GetDirectoryName(gsPath)!!)

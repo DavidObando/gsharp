@@ -207,7 +207,9 @@ internal shared class RepositoryMirror {
             StringComparer.OrdinalIgnoreCase
         )
         if additionalFiles != nil {
-            expected.UnionWith(additionalFiles)
+            expected.UnionWith(
+                additionalFiles.Where((path string) -> !RepositoryFileInventory.HasExcludedDirectory(path))
+            )
         }
         // Issue #3993: an excluded project may link a shared source that an
         // included project also evaluates. The exclusion scope alone cannot
