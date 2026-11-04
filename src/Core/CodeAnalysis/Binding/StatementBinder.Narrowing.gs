@@ -365,8 +365,9 @@ internal partial class StatementBinder {
         // statement effect summary, so the syntax walk only answers the
         // member-mutation question and caches that answer per statement.
         let assignedNames = HashSet[string]()
+        // Issue #5640: for a `defer`, `boundStatement` is the prefix only. The deferred call in `statementSyntax` runs when the block exits.
         var dropAllMemberPaths = if boundStatement != nil {
-            SyntaxMayMutateMemberPaths(statementSyntax)
+            statementSyntax is not DeferStatementSyntax && SyntaxMayMutateMemberPaths(statementSyntax)
         } else {
             CollectAssignedNamesAndMemberMutation(statementSyntax, assignedNames)
         }
@@ -508,7 +509,8 @@ internal partial class StatementBinder {
 
     private func UpdateExternalCallableAliases(
         statement BoundStatement,
-        aliasesAtEntry IReadOnlyCollection[VariableSymbol]
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol],
+        syntaxOverride SyntaxNode? = nil
     ) {
         var statement = statement
         while statement is BoundBlockStatement labeledBlock &&
@@ -525,7 +527,7 @@ internal partial class StatementBinder {
         ApplyCallableAliasExitState(externalCallableAliases, statement, aliasesAtEntry, collector)
         // A filter of an enclosing try can run between any two statements of its protected block,
         // when a nested handler catches a replacement exception.
-        if externalCallableAliases.Count > 0 && statement.Syntax is {} syntax {
+        if externalCallableAliases.Count > 0 && (statement.Syntax ?? syntaxOverride) is {} syntax {
             let filters = CollectCatchFiltersAbove(syntax)
             filters.AddRange(CollectCatchFiltersWithin(syntax))
             if filters.Count > 0 {

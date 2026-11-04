@@ -1,0 +1,307 @@
+// <copyright file="Issue5640DeferArgumentNarrowingTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Compiler.Tests.Emit
+
+import GSharp.Compiler
+import System
+import System.Collections.Generic
+import System.Diagnostics
+import System.IO
+import System.Linq
+import System.Text.RegularExpressions
+import Xunit
+
+/// Issue #5640 (ADR-0208): the receiver and arguments of a `defer` call run
+/// when the `defer` statement runs, so their effects apply to the statements
+/// that follow. The deferred call itself runs only when the block exits.
+class Issue5640DeferArgumentNarrowingTests {
+    private const RunTimeout int32 = 30000
+
+    @Theory
+    @MemberData("Rows")
+    func DeferPrefixEffects_MatchExpectedResult(
+        name string,
+        source string,
+        expectedDiagnostics string,
+        kind string,
+        expectedOutput string
+    ) {
+        let tempDir = Path.Combine(AppContext.BaseDirectory, "gs_5640_" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(tempDir)
+        try {
+            let srcPath = Path.Combine(tempDir, name + ".gs")
+            let outPath = Path.Combine(tempDir, name + ".dll")
+            File.WriteAllText(srcPath, source)
+            let args = List[string]{"/out:" + outPath, "/target:exe", "/targetframework:net10.0", "/nowarn:GS9100"}
+            for reference in TrustedPlatformAssemblies() {
+                args.Add("/reference:" + reference)
+            }
+            args.Add(srcPath)
+            using let compileOut = StringWriter()
+            using let compileErr = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(compileOut)
+            Console.SetError(compileErr)
+            try {
+                Program.Main(args.ToArray())
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            let log = compileOut.ToString() + compileErr.ToString()
+            let actualDiagnostics = string.Join(
+                " ",
+                Regex
+                    .Matches(log, `\((\d+),(\d+),\d+,\d+\): (?:error|warning) (GS\d+)`)
+                    .Select((m Match) -> m.Groups[3].Value + "@" + m.Groups[1].Value + ":" + m.Groups[2].Value)
+                    .Where((d string) -> !d.StartsWith("GS9100", StringComparison.Ordinal))
+            )
+            Assert.True(expectedDiagnostics == actualDiagnostics, "${name}: diagnostics changed. Log:\n${log}")
+            if kind == "reject" {
+                Assert.False(File.Exists(outPath), "${name} must not compile. Log:\n${log}")
+                return
+            }
+            Assert.True(File.Exists(outPath), "${name} must compile. Log:\n${log}")
+            IlVerifier.Verify(outPath)
+            let (exit, stdout, stderr) = RunDotnet(outPath)
+            Assert.True(exit == 0, "${name} must run to completion. Exit ${exit}:\n${stderr}")
+            let lines = stdout
+                .Split('\n')
+                .Select((line string) -> line.TrimEnd('\r'))
+                .Where((line string) -> line.Length > 0)
+            Assert.Equal(expectedOutput, string.Join("|", lines))
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
+    shared {
+        func Rows() IEnumerable[[]object] {
+            yield[]object{"d01_5640_defer_call_argument_removes_a_global_fact", `import System
+class C {
+    var Value int32 = 1
+}
+func Clear() int32 {
+    g = nil
+    return 1
+}
+func Consume(n int32) { }
+func Run() int32 {
+    if g == nil { return 0 }
+    defer Consume(Clear())
+    return g.Value
+}
+var g C? = C{}
+Console.WriteLine(Run())`, "GS0158@13:14", "reject", ""}
+            yield[]object{"d02_5640_defer_computed_getter_argument_removes_a_global_fact", `import System
+class C {
+    var Value int32 = 1
+}
+class Box {
+    prop P int32 {
+        get {
+            g = nil
+            return 1
+        }
+    }
+}
+func Consume(n int32) { }
+func Run(b Box) int32 {
+    if g == nil { return 0 }
+    defer Consume(b.P)
+    return g.Value
+}
+var g C? = C{}
+Console.WriteLine(Run(Box{}))`, "GS0158@17:14", "reject", ""}
+            yield[]object{"d03_5640_defer_open_auto_property_argument_removes_a_global_fact", `import System
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    open prop Auto int32 { get; set; }
+}
+class Derived : Base {
+    override prop Auto int32 {
+        get {
+            g = nil
+            return 1
+        }
+        set { }
+    }
+}
+func Consume(n int32) { }
+func Run(b Base) int32 {
+    if g == nil { return 0 }
+    defer Consume(b.Auto)
+    return g.Value
+}
+var g C? = C{}
+Console.WriteLine(Run(Derived()))`, "GS0158@21:14", "reject", ""}
+            yield[]object{"d04_5640_defer_eager_receiver_removes_a_global_fact", `import System
+class C {
+    var Value int32 = 1
+}
+class Receiver {
+    func Method() { }
+}
+func Clear() {
+    g = nil
+}
+func Run() int32 {
+    if g == nil { return 0 }
+    defer (func() Receiver {
+        Clear()
+        return Receiver{}
+    }()).Method()
+    return g.Value
+}
+var g C? = C{}
+Console.WriteLine(Run())`, "GS0158@17:14", "reject", ""}
+            yield[]object{"d05_5640_defer_argument_removes_a_closure_assigned_local_fact", `import System
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void = func() { }
+}
+func Clear(h Holder) int32 {
+    h.Callback()
+    return 1
+}
+func Consume(n int32) { }
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    defer Consume(Clear(h))
+    return x.Value
+}
+Console.WriteLine(Run())`, "GS0158@19:14", "reject", ""}
+            yield[]object{"d06_5640_defer_argument_out_write_removes_a_local_fact", `import System
+class C {
+    var Value int32 = 1
+}
+func ClearOut(out item C?) int32 {
+    item = nil
+    return 1
+}
+func Consume(n int32) { }
+func Run() int32 {
+    var x C? = C{}
+    if x == nil { return 0 }
+    defer Consume(ClearOut(out x))
+    return x.Value
+}
+Console.WriteLine(Run())`, "GS0612@13:28 GS0158@14:14", "reject", ""}
+            yield[]object{"d07_5640_defer_eager_target_replaces_an_external_callable_alias", `import System
+class C {
+    var Value int32 = 1
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    if x == nil { return 0 }
+    defer (action = clear)()
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(func() { }))`, "GS0158@12:14", "reject", ""}
+            yield[]object{"d08_5640_defer_without_eager_effects_keeps_a_global_fact", `import System
+class C {
+    var Value int32 = 7
+}
+func Clear() {
+    g = nil
+}
+func Run() int32 {
+    if g == nil { return 0 }
+    defer Clear()
+    return g.Value
+}
+var g C? = C{}
+Console.WriteLine(Run())`, "", "run", "7"}
+            yield[]object{"d09_5640_defer_without_eager_effects_keeps_a_member_path_fact", `import System
+class C {
+    var Value int32 = 7
+}
+class Box {
+    let Item C?
+    init(item C?) { Item = item }
+}
+func Clear() { }
+func Run(b Box) int32 {
+    if b.Item == nil { return 0 }
+    defer Clear()
+    return b.Item.Value
+}
+Console.WriteLine(Run(Box(C{})))`, "", "run", "7"}
+            yield[]object{"d10_5640_defer_computed_getter_argument_removes_a_by_reference_fact", `import System
+class Box {
+    shared {
+        var G string? = "ab"
+    }
+    prop P int32 {
+        get {
+            G = nil
+            return 1
+        }
+    }
+}
+func Consume(n int32) { }
+func Run(ref text string?, b Box) int32 {
+    if text == nil { return 0 }
+    defer Consume(b.P)
+    return text.Length
+}
+Console.WriteLine(Run(ref Box.G, Box{}))`, "GS0158@17:17", "reject", ""}
+            yield[]object{"d11_5640_defer_plain_argument_keeps_a_by_reference_fact", `import System
+class Box {
+    shared {
+        var G string? = "abcdefg"
+    }
+}
+func Consume(n int32) { }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    defer Consume(1)
+    return text.Length
+}
+Console.WriteLine(Run(ref Box.G))`, "", "run", "7"}
+        }
+
+        private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
+            let psi = ProcessStartInfo("dotnet", "\"$assemblyPath\""){
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                WorkingDirectory = Path.GetDirectoryName(assemblyPath) ?? "."
+            }
+            using let process = Process.Start(psi) ?? throw InvalidOperationException("could not start dotnet")
+            let stdout = process.StandardOutput.ReadToEndAsync()
+            let stderr = process.StandardError.ReadToEndAsync()
+            if !process.WaitForExit(RunTimeout) {
+                try {
+                    process.Kill(entireProcessTree: true)
+                } catch (InvalidOperationException) {
+                    // The process exited between the timeout and the kill.
+
+                }
+                return (-1, "", "timed out after ${RunTimeout / 1000}s.")
+            }
+            return (process.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult())
+        }
+
+        private func TrustedPlatformAssemblies() IEnumerable[string] {
+            let tpa string? = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string
+            if string.IsNullOrEmpty(tpa) {
+                return Enumerable.Empty[string]()
+            }
+            return tpa.Split(Path.PathSeparator).Where(File.Exists)
+        }
+    }
+}

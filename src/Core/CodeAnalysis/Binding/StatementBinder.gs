@@ -543,6 +543,7 @@ internal partial class StatementBinder {
                     }
                 }
                 if statementSyntax is DeferStatementSyntax deferSyntax {
+                    let externalCallableAliasesAtEntry = externalCallableAliases.ToArray()
                     let defer_ = BindDeferStatementInBlock(deferSyntax)
                     statements.AddRange(defer_.PrefixStatements)
                     if defer_.Cleanup == nil {
@@ -556,7 +557,11 @@ internal partial class StatementBinder {
                         InvalidateNarrowingsForAssignedVariables(statementSyntax)
                         continue
                     }
-                    InvalidateNarrowingsForAssignedVariables(statementSyntax)
+                    // Issue #5640: the receiver and arguments run at the `defer` statement. The deferred call runs when the block exits.
+                    let prefix = BoundBlockStatement(nil, defer_.PrefixStatements)
+                    InvalidateNarrowingsForAssignedVariables(statementSyntax, prefix)
+                    UpdateExternalCallableAliases(prefix, externalCallableAliasesAtEntry, statementSyntax)
+                    ShadowAfterStatement(prefix)
                     let innerStatements = ImmutableArray.CreateBuilder[BoundStatement]()
                     let cleanupEffect = BoundExpressionStatement(nil, defer_.Cleanup!!)
                     let fallsThrough = BindWithinSynthesizedCleanup(
