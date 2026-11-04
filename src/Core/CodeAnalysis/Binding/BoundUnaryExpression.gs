@@ -85,11 +85,12 @@ class BoundUnaryExpression : BoundExpression {
     }
 
     /// Gets a value indicating whether this node is the unwrap of a narrowed
-    /// value-type nullable read (issue #4986), whose (cref:Operand) is the
+    /// value-type nullable read (issues #4986, #4974), whose (cref:Operand) is the
     /// read of the original `Nullable<T>` storage. Member access binding
     /// reads it to fall back to `Nullable<T>` members such as `Value` and
-    /// `HasValue` when the narrowed type has no member of that name. Only the
-    /// binder observes it; rewriters that rebuild the node may drop it.
+    /// `HasValue` when the narrowed type has no member of that name, and
+    /// expression-tree validation and lowering use it to lower the unwrap to
+    /// `Expression.Convert`.
     internal prop IsNarrowingUnwrap bool {
         get;
         init;
