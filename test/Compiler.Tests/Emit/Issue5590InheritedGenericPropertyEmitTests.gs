@@ -25,6 +25,8 @@ open class Issue5590InheritedGenericPropertyEmitTests {
         try {
             let librarySource = `package InputLibrary
 
+import System
+
 public open class GrandBase[TPair any] {
     protected var pairField TPair = default(TPair)
     protected prop PairInput TPair {
@@ -39,10 +41,15 @@ public open class PairBase[U any, V any] : GrandBase[(V, U)] {
 public open class Base[TInput any] {
     private var input TInput = default(TInput)
     protected var protectedField TInput = default(TInput)
+    protected event Changed Action[TInput]?
 
     protected open prop Input TInput {
         get -> input
         set { input = value }
+    }
+
+    protected func FireChanged(value TInput) {
+        Changed?(value)
     }
 }
 `
@@ -119,10 +126,15 @@ class Owner : Base[Big] {
             Retry: () -> {}
         }
         this.protectedField = base.Input
+        var eventLog = ""
+        this.Changed += (v Big) -> { eventLog = eventLog + v.Text }
+        Changed += (v Big) -> { eventLog = eventLog + ":" + v.Issue }
+        FireChanged(base.Input)
         return (receiver.Matched ? "correct branch" : "wrong branch") +
             ":" + receiver.Text +
             ":" + direct +
-            ":" + this.protectedField.Text
+            ":" + this.protectedField.Text +
+            ":" + eventLog
     }
 }
 
@@ -246,7 +258,7 @@ public func RunAll() string {
                 )!!
                 let actual = Assert.IsType[string](runAll.Invoke(nil, nil))
                 Assert.Equal(
-                    "correct branch:alpha/5590/beta/alpha:alpha:5590|alpha:5590|alpha:5590:updated;mid:m1;reordered:g1#7;pair:p1#9=pair:p1#9",
+                    "correct branch:alpha/5590/beta/alpha:alpha:5590|alpha:5590|alpha:5590:updated:updated:ok;mid:m1;reordered:g1#7;pair:p1#9=pair:p1#9",
                     actual
                 )
             } finally {

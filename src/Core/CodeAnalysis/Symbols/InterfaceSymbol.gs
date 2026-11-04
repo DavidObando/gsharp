@@ -986,6 +986,9 @@ class InterfaceSymbol : TypeSymbol {
                     // gracefully rather than crash.
                     let assertMessage = "InterfaceSymbol.SubstituteType: MakeGenericType failed for '${imported.OpenDefinition}' with args [${FormatClrTypes(resolvedClrArgs)}] even after mapClrType projection."
                     Debug.WriteLine(assertMessage)
+                    if mapClrType == nil {
+                        return imported
+                    }
                     return ImportedTypeSymbol.GetConstructed(
                         Invariant.Required(
                             imported.ClrType,

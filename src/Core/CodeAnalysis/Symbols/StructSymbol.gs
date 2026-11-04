@@ -3124,6 +3124,9 @@ class StructSymbol : TypeSymbol {
                     }
                     let assertMessage = "StructSymbol.SubstituteTypeForConstruction: MakeGenericType failed for '${imported.OpenDefinition}' with args [${string.Join(", ", renderedArguments)}] even after mapClrType projection."
                     Debug.WriteLine(assertMessage)
+                    if mapClrType == nil {
+                        return imported
+                    }
                     return ImportedTypeSymbol.GetConstructed(
                         Invariant.Required(
                             imported.ClrType,
