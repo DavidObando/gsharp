@@ -514,7 +514,7 @@ func Run(n int32) int32 {
     }
     return total
 }
-func Main() { Console.WriteLine(Run(2)) }`, "24|x|nullability|W4(unknown-write)|R7 c", "1/1/0")
+func Main() { Console.WriteLine(Run(2)) }`, "24|x|nullability|W5(unknown-write)|R7 e", "1/1/0")
             Add("q14-enclosing-filter-reenters-loop", `import System
 func Clear(ref s string?) bool {
     s = nil
@@ -579,7 +579,7 @@ func Run(n int32) int32 {
         let clear = func() { s = nil }
     }
     return total
-}`, "7|s|nullability|W4(unknown-write)|R7 c", "1/1/0")
+}`, "7|s|nullability|P7(no-proof)|R7 b", "1/1/0")
             Add("W3-ref-argument-writes-the-root", `package T
 func Clear(ref s string?) { s = nil }
 func Get() string? { return nil }

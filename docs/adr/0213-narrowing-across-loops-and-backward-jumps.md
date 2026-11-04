@@ -1302,14 +1302,26 @@ callable alias in force runs `ApplyLoopEntryLowerBound`; the decisions are those
   (`PatternTestRunsUserCode`) in a loop as `if x is P` is classified outside one. #5642's back-edge seeds for a
   `continue` inside a `switch`, `try` or `fixed` are not needed, because the lower bound counts every write of the
   body at entry. Four of #5642's corpus rows are stricter here: a22, a23 and a32 (a write before a `break`, or under
-  a literal `false` guard; R7 (a)) and a09 (an assignment and a field read count as calls for a mutable global; R7 (c),
-  W4 and W5). Row b07 keeps a global's fact across a `continue` in an `int32` case.
-- *Conversion sites.* A user-defined conversion is a call (W4), and the walker cannot see types, so every place
-  where the binder converts a value is a candidate: a declared, assigned, multi-assigned, deconstructed or bound
-  (`if let`) value, both operands of `??`, a returned value, and a condition or guard (`if`, the loops, `if let`, `while let`, `guard let`, switch and select
-  guards, `catch ... when`, `?:`) unless it is `bool` by its form (a `true` or `false` literal, `is`, a comparison,
-  `!`, `&&` or `||`). The conversion of a typed `for ... in` variable and the `Deconstruct` call or getter of a
-  tuple-target `for ... in` run before every body run, so an indexed iteration with such a prelude runs user code.
+  a literal `false` guard; R7 (a)) and a09 (a field read counts as a call for a mutable global; R7 (e), W5). Row b07
+  keeps a global's fact across a `continue` in an `int32` case.
+- *Bare fallback properties and fields (#5470).* When a bare name in a region does not resolve to a variable in the
+  entry scope, `ResolveRegionWrites` and the path/type resolvers reuse the binder's static-import, default-interface
+  property (`ExpressionBinder.TryResolveInterfaceInstancePropertyByBareName`) and inherited-CLR member
+  (`ExpressionBinder.TryResolveInheritedClrInstanceMemberByBareName`) fallbacks, so a bare `P` or `P = 1` inside a
+  default interface method, a class with an imported CLR base, or a file with a static type import has the same effect
+  as a qualified access (including `IsStableClrGetter` under R16 and static type-initializer checks under R11).
+- *Conversion sites (#5657).* Every non-argument conversion site is recorded as a `RegionConversion` with its source
+  and target origins (a typed declaration or `if let`/`guard let`/`while let` binding, an assignment or `??=`, a
+  multi-assignment or deconstruction, both operands of `??`, a returned value, an array/stackalloc/map/channel element,
+  length or capacity, a range bound, a relational pattern operand, the merged arms of a conditional/`if`/`if let`/`switch`
+  expression, and a condition or guard unless it is `bool` by its form: a `true` or `false` literal, `is`, a
+  comparison, `!`, `&&` or `||`), and `ConversionsRunUserCode` classifies those sites for every fact (mutable globals,
+  closure-assigned locals, member-bearing paths, and by-reference storage). An untyped declaration (`let n = 1`) or
+  binding (`if let v = maybe`), or a site whose resolved source and target types convert without a user-defined or
+  imported conversion operator or structural projection, runs no user code; any site whose source or target the walker
+  cannot resolve still counts, and a non-empty map literal (`map[K, V]{k: v}`) counts as a construction because key
+  insertion calls `GetHashCode` and `Equals`. The conversion of a typed `for ... in` variable and the `Deconstruct` call or getter of
+  a tuple-target `for ... in` run before every body run, so an indexed iteration with such a prelude runs user code.
 - *Function values.* A call whose callee name the region declares (`let Invoke = callback; Invoke()`) calls a function
   value, which is an indirect call (A3), also when a nested loop's record is composed. A member call whose receiver is
   a plain name of the entry scope (a variable or a type) is resolved on the receiver's declared type, on the type its

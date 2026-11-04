@@ -7980,7 +7980,7 @@ func Run() int32 {
     return k
 }
 var g C? = C{}
-Console.WriteLine(Run())`, "GS0158@25:19", "reject", "", "ADR-0213 R7 (c) (L1): the assignment and the member read count as calls for a mutable global (W4, W5); b07 is the L1 form"}
+Console.WriteLine(Run())`, "GS0158@25:19", "reject", "", "ADR-0213 R7 (e) (L1): the member read counts as a call for a mutable global (W5); b07 is the L1 form"}
             yield[]object{"a10_5629_switch_case_property_pattern_getter_removes_the_fact_R14", `import System
 
 class C {

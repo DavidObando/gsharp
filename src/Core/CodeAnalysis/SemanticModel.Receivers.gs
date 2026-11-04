@@ -138,6 +138,10 @@ partial class SemanticModel {
         return switch token.Parent {
             case name is NameExpressionSyntax when object.ReferenceEquals(name.IdentifierToken, token): name
             case call is CallExpressionSyntax when object.ReferenceEquals(call.Identifier, token): call
+            case baseInterface is BaseInterfaceCallExpressionSyntax when object.ReferenceEquals(
+                baseInterface.MethodIdentifier,
+                token
+            ): baseInterface
             default: default(ExpressionSyntax?)
         }
     }

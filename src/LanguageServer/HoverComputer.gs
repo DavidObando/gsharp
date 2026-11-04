@@ -743,6 +743,9 @@ shared class DefinitionComputer {
             case importedType is ImportedTypeSymbol {
                 return CrossAssemblyDefinitionResolver.TryResolveType(workspace, importedType.Type, out location)
             }
+            case importedStruct is StructSymbol when importedStruct.ClrType is {} clrType {
+                return CrossAssemblyDefinitionResolver.TryResolveType(workspace, clrType, out location)
+            }
             case importedFunction is ImportedFunctionSymbol {
                 return CrossAssemblyDefinitionResolver.TryResolveMethod(
                     workspace,
@@ -751,7 +754,11 @@ shared class DefinitionComputer {
                 )
             }
             default {
-                return false
+                return if BoundSemantics.GetMemberInfo(symbol) is {} member {
+                    TryResolveClrMember(workspace, member, out location)
+                } else {
+                    false
+                }
             }
         }
     }
@@ -798,7 +805,7 @@ shared class DefinitionComputer {
             case p is PropertySymbol when p.Declaration != nil: p.Declaration!!.Identifier
             case ev is EventSymbol when ev.Declaration != nil: ev.Declaration!!.Identifier
             case ta is TypeAliasSymbol when ta.Declaration != nil: ta.Declaration!!.Identifier
-            case field is FieldSymbol: FindFieldToken(compilation, field, ct)
+            case field is FieldSymbol when field.ImportedMember == nil: FindFieldToken(compilation, field, ct)
             case variable is VariableSymbol: FindVariableToken(compilation, variable, ct)
             default: default(SyntaxToken?)
         }
@@ -1022,16 +1029,27 @@ shared class SignatureHelpComputer {
         // Find the identifier token just before the paren
         var funcToken = SemanticLookup.FindTokenAt(content.SyntaxTree, funcNameEnd - 1)
         if funcToken?.Kind == SyntaxKind.CloseSquareBracketToken {
-            funcToken = funcToken!!.FirstAncestorOrSelf[CallExpressionSyntax]()?.Identifier
+            var ancestor SyntaxNode? = funcToken!!.Parent
+            while ancestor != nil {
+                if ancestor is CallExpressionSyntax callAncestor {
+                    funcToken = callAncestor.Identifier
+                    break
+                }
+                if ancestor is BaseInterfaceCallExpressionSyntax baseAncestor {
+                    funcToken = baseAncestor.MethodIdentifier
+                    break
+                }
+                ancestor = ancestor.Parent
+            }
         }
         // One signature per candidate that overload resolution considered (ADR-0212 slice S4); the
         // overload the call resolved to is the active one.
         let group = BoundSemantics.GetMemberGroup(compilation, funcToken)
-        let resolved = BoundSemantics.GetImportedSymbol(compilation, funcToken) ?? SemanticLookup.ResolveSymbol(
+        let boundSymbol = BoundSemantics.GetImportedSymbol(compilation, funcToken) ?? BoundSemantics.GetSymbol(
             compilation,
-            funcToken,
-            ct
+            funcToken
         )
+        let resolved = boundSymbol ?? SemanticLookup.ResolveSymbol(compilation, funcToken, ct)
         let candidates = group.Where((g Symbol) -> g is FunctionSymbol or ImportedFunctionSymbol).ToList()
         if candidates.Count == 0 && resolved is FunctionSymbol single {
             candidates.Add(single)
@@ -1070,6 +1088,13 @@ shared class SignatureHelpComputer {
                     .Method
                     .DeclaringType
             )
+        }
+        if activeParameter > 0 &&
+            (active < 0 || (boundSymbol == nil && signatures[active].Parameters.Count() <= activeParameter)) {
+            let byArity = signatures.FindIndex((s SignatureInformation) -> s.Parameters.Count() > activeParameter)
+            if byArity >= 0 {
+                active = byArity
+            }
         }
         active = Math.Max(active, 0)
         let activeCount = signatures[active].Parameters.Count()

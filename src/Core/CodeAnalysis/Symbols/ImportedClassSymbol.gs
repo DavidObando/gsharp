@@ -349,6 +349,7 @@ class ImportedClassSymbol : Symbol {
         if nameMatches.Count == 0 {
             return false
         }
+        CallCandidateRecorder.RecordMethods(nameMatches, SymbolicReceiver)
         let argTypes = [arguments.Length]Type?
         let CheckUserClassInterface = func (source Type, target Type) bool {
             return IsUserClassAssignableToInterface(arguments, argTypes, source, target)
