@@ -552,8 +552,10 @@ internal partial class ExpressionBinder {
             // `b.Named[k](",", "a", "b", "c")` against a variadic named
             // delegate.
             if !TryBindAmbiguousBracketAsIndex(ce, memberLoad, out var indexedValue) ||
-                indexedValue!!.Type is not{} indexedType ||
-                !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(indexedType, out functionType) {
+                indexedValue!!.Type is not{} indexedType {
+                return false
+            }
+            if !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(indexedType, out functionType) {
                 return false
             }
             memberLoad = indexedValue!!
@@ -563,7 +565,7 @@ internal partial class ExpressionBinder {
             callableType.ClrType is {} importedDelegateClr &&
             ClrTypeUtilities
             .IsDelegateType(importedDelegateClr) {
-            result = BuildDelegateMemberInvocation(ce, memberLoad, callableType, functionType!!, arguments)
+            result = BuildDelegateMemberInvocation(ce, memberLoad, callableType, functionType, arguments)
             return true
         }
         if callableType is DelegateTypeSymbol namedDelegate {
@@ -582,7 +584,7 @@ internal partial class ExpressionBinder {
                 ce,
                 memberLoad,
                 callableType,
-                functionType!!,
+                functionType,
                 namedArguments,
                 namedRefKinds
             )
@@ -591,11 +593,11 @@ internal partial class ExpressionBinder {
         // ADR-0102 follow-up / issue #818: when the field's declared
         // function type spells a trailing variadic parameter, pack /
         // pass-through trailing args at the call site.
-        let fldIsVariadic = functionType!!.HasVariadic
+        let fldIsVariadic = functionType.HasVariadic
         let fldFixedCount = if fldIsVariadic {
-            functionType!!.ParameterTypes.Length - 1
+            functionType.ParameterTypes.Length - 1
         } else {
-            functionType!!.ParameterTypes.Length
+            functionType.ParameterTypes.Length
         }
         if fldIsVariadic {
             if arguments.Length < fldFixedCount {
@@ -603,11 +605,11 @@ internal partial class ExpressionBinder {
                 result = BoundErrorExpression(nil)
                 return true
             }
-        } else if arguments.Length != functionType!!.ParameterTypes.Length {
+        } else if arguments.Length != functionType.ParameterTypes.Length {
             Diagnostics.ReportWrongArgumentCount(
                 ce.Location,
                 methodName,
-                functionType!!.ParameterTypes.Length,
+                functionType.ParameterTypes.Length,
                 arguments.Length
             )
             result = BoundErrorExpression(nil)
@@ -615,7 +617,7 @@ internal partial class ExpressionBinder {
         }
         var permutedArgs = arguments
         if fldIsVariadic {
-            let sliceType = functionType!!.ParameterTypes[functionType!!.ParameterTypes.Length - 1]
+            let sliceType = functionType.ParameterTypes[functionType.ParameterTypes.Length - 1]
             var hasVariadicErrors = false
             // Issue #1823: route through the #1630 canonical helper so
             // trailing elements get the same per-element coercion applied
@@ -652,16 +654,16 @@ internal partial class ExpressionBinder {
             var argument = permutedArgs[i]
             if argument is BoundErrorExpression{Syntax: LambdaExpressionSyntax lambda} &&
                 MemberLookup
-                .TryGetLambdaTargetFunctionTypeFromSymbol(functionType!!.ParameterTypes[i], out var target) {
+                .TryGetLambdaTargetFunctionTypeFromSymbol(functionType.ParameterTypes[i], out var target) {
                 argument = lambdas.BindLambdaExpression(lambda, target)
             }
-            convertedArgs.Add(conversions.BindConversion(argLoc, argument, functionType!!.ParameterTypes[i]))
+            convertedArgs.Add(conversions.BindConversion(argLoc, argument, functionType.ParameterTypes[i]))
         }
         result = BuildDelegateMemberInvocation(
             ce,
             memberLoad,
             callableType,
-            functionType!!,
+            functionType,
             convertedArgs.MoveToImmutable()
         )
         return true
