@@ -1022,6 +1022,7 @@ public class Demo
         }
         else
         {
+        Unused:
             return s.Length + 5;
         }
     Done:
@@ -1041,6 +1042,50 @@ public class Demo
         {
             return s.Length + 7;
         }
+    }
+    public static int BackwardGotoInThen(ref string? s, Box box, bool flag, bool step)
+    {
+        if (s == null) return 0;
+        if (flag)
+        {
+        Loop:
+            box.F = 1;
+            if (step)
+            {
+                step = false;
+                goto Loop;
+            }
+        }
+        else
+        {
+            return s.Length + 8;
+        }
+        return box.F;
+    }
+    public static int MergedBackwardGotoSpan(ref string? s, Box box, bool flag, bool a, bool b)
+    {
+        if (s == null) return 0;
+    L1:
+        if (a)
+        {
+            a = false;
+            goto L1;
+        }
+        if (flag)
+        {
+            box.F = 1;
+        }
+        else
+        {
+            return s.Length + 9;
+        }
+    L2:
+        if (b)
+        {
+            b = false;
+            goto L2;
+        }
+        return box.F;
     }
     public static int DefaultFirstSection(ref string? s, Box box, int k)
     {
@@ -1062,6 +1107,8 @@ public class Demo
         return Loop(ref text, items, false) + "," + Loop(ref text, items, true) + "," +
             Write(ref text, new Box(), false) + "," + Section(ref text, items, 2) + "," +
             ForwardGotoExit(ref text, new Box(), false) + "," + ForwardGotoInThen(ref text, new Box(), false) + "," +
+            BackwardGotoInThen(ref text, new Box(), false, false) + "," +
+            MergedBackwardGotoSpan(ref text, new Box(), false, false, false) + "," +
             DefaultFirstSection(ref text, new Box(), 1);
     }
 }`)
@@ -1072,6 +1119,8 @@ public class Demo
         Assert.Contains("return s.Length + 5", printed)
         Assert.Contains("return s!!.Length + 6", printed)
         Assert.Contains("return s.Length + 7", printed)
+        Assert.Contains("return s.Length + 8", printed)
+        Assert.Contains("return s!!.Length + 9", printed)
     }
 
     /// The collection of a `for ... in` and the initializer of a `for` run once, before the loop's region, so effects
