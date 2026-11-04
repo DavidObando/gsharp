@@ -174,15 +174,11 @@ shared class ClrNullability {
         // fallback (matches the C# emit shape used by csc for
         // e.g. `DirectoryInfo.Parent`).
         // ADR-0172 Phase B: surface imported tuple element names.
+        let layoutType = GetOpenDefinition(property)?.PropertyType
         return TupleElementNamesReader.ApplyNames(
-            ApplyReferenceNullabilityFull(
-                baseSymbol,
-                propertyType,
-                property,
-                property.DeclaringType,
-                GetOpenDefinition(property)?.PropertyType
-            ),
-            property
+            ApplyReferenceNullabilityFull(baseSymbol, propertyType, property, property.DeclaringType, layoutType),
+            property,
+            layoutType
         )
     }
 
@@ -205,7 +201,8 @@ shared class ClrNullability {
         }
         return TupleElementNamesReader.ApplyNames(
             ApplyReferenceNullabilityFull(baseSymbol, elementType, property, property.DeclaringType, layoutType),
-            property
+            property,
+            layoutType
         )
     }
 
@@ -231,15 +228,11 @@ shared class ClrNullability {
         let fieldType = GetSignatureType(field)
         let baseSymbol = TypeSymbol.FromClrType(fieldType)
         // ADR-0172 Phase B: surface imported tuple element names.
+        let layoutType = GetOpenDefinition(field)?.FieldType
         return TupleElementNamesReader.ApplyNames(
-            ApplyReferenceNullabilityFull(
-                baseSymbol,
-                fieldType,
-                field,
-                field.DeclaringType,
-                GetOpenDefinition(field)?.FieldType
-            ),
-            field
+            ApplyReferenceNullabilityFull(baseSymbol, fieldType, field, field.DeclaringType, layoutType),
+            field,
+            layoutType
         )
     }
 
@@ -290,7 +283,8 @@ shared class ClrNullability {
         // ADR-0172 Phase B: surface imported tuple element names.
         let result = TupleElementNamesReader.ApplyNames(
             ApplyReferenceNullabilityFull(baseSymbol, returnType, returnParameter, attributeMethod, layoutType),
-            returnParameter
+            returnParameter,
+            layoutType
         )
         return if method.ReturnType.IsByRef {
             cast[TypeSymbol](ByRefTypeSymbol.Get(result))
@@ -361,7 +355,7 @@ shared class ClrNullability {
             layoutType
         )
         // ADR-0172 Phase B: surface imported tuple element names.
-        mapped = TupleElementNamesReader.ApplyNames(mapped, attributeParameter)
+        mapped = TupleElementNamesReader.ApplyNames(mapped, attributeParameter, layoutType)
         let rawDefault object? = if parameter.HasDefaultValue || parameter.IsOptional {
             parameter.RawDefaultValue
         } else {
