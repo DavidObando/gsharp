@@ -667,7 +667,7 @@ internal partial class ExpressionBinder {
                 )
             )
         )
-        var bound = bindStatementList(ImmutableArray.Create[StatementSyntax](loop), nil).Single()
+        var bound = bindStatementList(ImmutableArray.Create[StatementSyntax](loop), nil, nil).Single()
         if targetElementType != nil {
             bound = CollectionSpreadLoopRewriter(this, collectionLocal, targetElementType, spread).Rewrite(bound)
         }

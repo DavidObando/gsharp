@@ -247,6 +247,11 @@ open class Adr0208NarrowingCorpusTests {
                 "k2_header_write_before_branch_read",
                 "l1_condition_call_kills_alias_fact",
                 "l2_condition_call_kills_member_path_on_alias",
+                "m01_5318_backward_goto_nonnull_variable_reassignment_R8a",
+                "m02_5671_closure_stored_in_an_external_function_value_in_a_backward_goto_span_kills_its_alias",
+                "m03_5671_function_value_that_the_backward_goto_span_does_not_assign_stays_external",
+                "m04_5671_named_function_stored_in_a_function_value_in_a_backward_goto_span_kills_its_alias",
+                "m05_5671_closure_stored_in_an_external_function_value_after_a_loop_before_backward_goto_into_loop_kills_its_alias",
                 "m1_unrelated_interface_refinement",
                 "n1_boxed_value_type_test",
                 "o1_callback_after_test_replaces_root",
@@ -274,12 +279,16 @@ open class Adr0208NarrowingCorpusTests {
                 "p7_5237_iterator_runs_escaped_closure",
                 "p8_5237_call_replaces_a_closure_assigned_callable",
                 "p9_5237_explicit_invoke_of_an_external_callback_keeps_the_fact",
+                "q10_intra_try_backward_goto",
+                "q11_backward_goto_into_loop",
                 "q12_exit_gain",
                 "q13_exit_gain_bang",
                 "q14_enclosing_filter_reenters_loop",
                 "q14b_filter_write_reenters_loop_retested",
                 "q1_5456_closure_own_local_survives_unknown_callable",
+                "q1_goto_hidden_member",
                 "q2_5456_nested_closure_assigns_enclosing_closure_local",
+                "q2_goto_gs0536",
                 "q3_5456_closure_own_local_in_nested_block_survives_unknown_callable",
                 "q3_loop_escaped_closure",
                 "q4_5456_initializer_write_names_the_enclosing_variable",
@@ -289,6 +298,7 @@ open class Adr0208NarrowingCorpusTests {
                 "q5b_imported_getter_in_loop",
                 "q5c_imported_getter_closure_root",
                 "q5d_hidden_field_getter",
+                "q6_forward_goto_into_loop",
                 "q7_while_exit_state",
                 "q8_do_while",
                 "q9_loop_in_goto_span",
@@ -691,7 +701,7 @@ func Main() { Console.WriteLine(Run(2)) }`, "GS0158@12:27", "reject", "", ""}
     }
     return length
 }
-func Main() { Console.WriteLine(Run()) }`, "", "run", "4", ""}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@6:20", "reject", "", "ADR-0213 R8 (a') (L2)"}
             yield[]object{"d01_5461_closure_stored_in_an_external_function_value_in_a_for_loop_kills_its_alias", `import System
 class C {
     var Value int32 = 1
@@ -1010,7 +1020,7 @@ func Run(n int32) int32 {
     if i < n { goto again }
     return i
 }
-func Main() { Console.WriteLine(Run(5)) }`, "GS0158@7:15", "reject", "", ""}
+func Main() { Console.WriteLine(Run(5)) }`, "", "run", "0", "ADR-0213 R8 (L2)"}
             yield[]object{"e16_shadow_in_loop", `func Get() string? { return nil }
 func Run(n int32) int32 {
     var s string? = Get()
@@ -1056,7 +1066,7 @@ func Run2(n int32) int32 {
     if i < n { goto again }
     return i
 }
-func Main() { Console.WriteLine(Run(5)) }`, "GS0158@7:15 GS0158@16:15", "reject", "", "R6 (Run accepted after)"}
+func Main() { Console.WriteLine(Run(5)) }`, "GS0158@16:15", "reject", "", "ADR-0213 R8 (L2)"}
             yield[]object{"e19_try_in_branch_and_finally", `func Get() string? { return nil }
 func Work() { }
 func Run(c bool) int32 {
@@ -2049,6 +2059,43 @@ Done:
     return settings
 }
 func Main() { Console.WriteLine(Make[Setup](0).Ready) }`, "", "run", "True", ""}
+            yield[]object{"q1_goto_hidden_member", `import System
+open class Animal {
+    prop Name string -> "animal"
+}
+class Dog : Animal {
+    prop Name string -> "dog"
+}
+func Run(n int32) string {
+    var x Animal = Dog{}
+    var last = ""
+    var i = 0
+    if x is Dog {
+        Again:
+        last = last + x.Name + ","
+        x = Animal{}
+        i++
+        if i < n { goto Again }
+    }
+    return last
+}
+func Main() { Console.WriteLine(Run(2)) }`, "", "run", "animal,animal,", "ADR-0213 R8 (b) (L2)"}
+            yield[]object{"q2_goto_gs0536", `import System
+func Get() string? { return "xy" }
+func Run(n int32) int32 {
+    var s string? = "abc"
+    var i = 0
+    if s == nil { return 0 }
+    Again:
+    i = i + s!!.Length
+    s = nil
+    if i < n {
+        s = Get()
+        goto Again
+    }
+    return i
+}
+func Main() { Console.WriteLine(Run(5)) }`, "", "run", "5", "ADR-0213 R8 (d) (L2)"}
             yield[]object{"q3_loop_escaped_closure", `import System
 class C {
     var Value int32 = 1
@@ -2183,6 +2230,20 @@ func Run(n int32) int32 {
     return total
 }
 func Main() { Console.WriteLine(Run(2)) }`, "GS0158@25:27", "reject", "", "ADR-0213 R7 (e) (L1)"}
+            yield[]object{"q6_forward_goto_into_loop", `import System
+func Get() string? { return nil }
+func Run(skip bool) int32 {
+    var s string? = Get()
+    var count = 0
+    if skip { goto Inside }
+    if s == nil { return 0 }
+    while count < 3 && s.Length < 9 {
+        Inside:
+        count++
+    }
+    return count
+}
+func Main() { Console.WriteLine(Run(true)) }`, "GS0158@8:26", "reject", "", "ADR-0213 J6 (L2)"}
             yield[]object{"q7_while_exit_state", `import System
 func Next(s string) string? { return if s.Length > 3 { nil } else { s + "a" } }
 func Run(c bool) int32 {
@@ -2223,6 +2284,37 @@ func Run(n int32) int32 {
     return i
 }
 func Main() { Console.WriteLine(Run(5)) }`, "GS0158@8:15", "reject", "", ""}
+            yield[]object{"q10_intra_try_backward_goto", `import System
+func Run(n int32) int32 {
+    var s string? = "abc"
+    var i = 0
+    if s == nil { return 0 }
+    try {
+        Again:
+        i = i + s.Length
+        s = nil
+        if i < n { goto Again }
+    } finally {
+        return i
+    }
+}
+func Main() { Console.WriteLine(Run(5)) }`, "GS0158@8:19", "reject", "", "ADR-0213 section 11 (L2)"}
+            yield[]object{"q11_backward_goto_into_loop", `import System
+func Run(n int32) int32 {
+    var s string? = "abc"
+    var i = 0
+    var count = 0
+    if s == nil { return 0 }
+    while count < 3 && s.Length < 9 {
+        Inside:
+        count++
+        i++
+    }
+    s = nil
+    if i < n { goto Inside }
+    return i
+}
+func Main() { Console.WriteLine(Run(5)) }`, "GS0158@7:26", "reject", "", "ADR-0213 section 11 (L2)"}
             yield[]object{"q12_exit_gain", `import System
 func Get(c bool) string? { return if c { nil } else { "ab" } }
 func Run(c bool) int32 {
@@ -9904,6 +9996,125 @@ func Run(t Token?) int32 {
 }
 var g string? = "ab"
 Console.WriteLine(Run(Token{Raw: 1}))`, "GS0158@15:14", "reject", "", "R11"}
+            yield[]object{"m01_5318_backward_goto_nonnull_variable_reassignment_R8a", `import System
+func Run(fresh string) int32 {
+    var x string? = nil
+    x = "safe"
+    var count = 0
+    Again:
+    let length = x.Length
+    if count == 0 {
+        count++
+        x = fresh
+        goto Again
+    }
+    return length
+}
+func Main() { Console.WriteLine(Run("next")) }`, "GS0158@7:20", "reject", "", "ADR-0213 R8 (a) (L2)"}
+            yield[]object{
+                "m02_5671_closure_stored_in_an_external_function_value_in_a_backward_goto_span_kills_its_alias",
+                `import System
+class C {
+    var Value int32 = 1
+}
+func Run(cb () -> void) int32 {
+    var x C? = C{}
+    let h = func() { x = nil }
+    var g () -> void = cb
+    var total = 0
+    var i = 0
+    Again:
+    if x != nil {
+        g()
+        total += x.Value
+    }
+    g = h
+    i++
+    if i < 2 { goto Again }
+    return total
+}
+func Main() { Console.WriteLine(Run(func() { })) }`,
+                "GS0129@14:15 GS0158@14:20",
+                "reject",
+                "",
+                "ADR-0213 section 11 (#5671)"
+            }
+            yield[]object{"m03_5671_function_value_that_the_backward_goto_span_does_not_assign_stays_external", `import System
+class C {
+    var Value int32 = 1
+}
+func Run(cb () -> void) int32 {
+    var x C? = C{}
+    let h = func() { x = nil }
+    var g () -> void = cb
+    var total = 0
+    var i = 0
+    Again:
+    if x != nil {
+        g()
+        total += x.Value
+    }
+    i++
+    if i < 2 { goto Again }
+    h()
+    return total
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "", "run", "2", "ADR-0213 section 11 (#5671)"}
+            yield[]object{"m04_5671_named_function_stored_in_a_function_value_in_a_backward_goto_span_kills_its_alias", `import System
+class C {
+    var Value int32 = 1
+}
+func Other() { }
+func Run(cb () -> void) int32 {
+    var x C? = C{}
+    let h = func() { x = nil }
+    var g () -> void = cb
+    var total = 0
+    var i = 0
+    Again:
+    if x != nil {
+        g()
+        total += x.Value
+    }
+    g = Other
+    i++
+    if i < 2 { goto Again }
+    h()
+    return total
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0129@15:15 GS0158@15:20", "reject", "", "ADR-0213 section 11 (#5671)"}
+            yield[]object{
+                "m05_5671_closure_stored_in_an_external_function_value_after_a_loop_before_backward_goto_into_loop_kills_its_alias",
+                `import System
+class C {
+    var Value int32 = 1
+}
+func Run(cb () -> void) int32 {
+    var x C? = C{}
+    let h = func() { x = nil }
+    var g () -> void = cb
+    var total = 0
+    var i = 0
+    var count = 0
+    while count < 2 {
+        if x != nil {
+            g()
+            total += x.Value
+        }
+        Inside:
+        count++
+        i++
+    }
+    g = h
+    if i < 2 { goto Inside }
+    return total
+}
+func Main() { Console.WriteLine(Run(func() { })) }`,
+                "GS0129@15:19 GS0158@15:24",
+                "reject",
+                "",
+                "ADR-0213 section 11 (#5671)"
+            }
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

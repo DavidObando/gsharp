@@ -1048,16 +1048,6 @@ internal partial class OverloadResolver {
         } else {
             default(TypeSymbol?)
         }
-        if syntax.NullableQuestionToken == nil &&
-            symbol is VariableSymbol narrowedCallTarget &&
-            narrowedCallTargetType != nil {
-            binderCtx.TrackBackwardGotoNarrowingUse(
-                GetNarrowedVariablePath(narrowedCallTarget),
-                syntax.Identifier.Location,
-                syntax.Identifier.ValueText,
-                BackwardGotoNarrowingUseKind.Function
-            )
-        }
         // Issue #1566: an accessible in-scope member of the enclosing type
         // shadows a same-named top-level EXTENSION function for an unqualified,
         // receiver-less call — mirroring C#, where an in-scope member hides an
@@ -2845,18 +2835,6 @@ internal partial class OverloadResolver {
                         "an implicitly converted argument has a target type",
                         expression: "expectedType"
                     )
-                )
-            } else if expectedType != nil {
-                // Issue #5635: an argument that goes into its parameter with no conversion (the parameter has the
-                // argument's type, also an inferred type argument) keeps the backward `goto` check of a narrowed read.
-                boundArguments[i] = conversions.DecideNarrowedConversion(
-                    if i < parameterSyntax.Length {
-                        parameterSyntax[i]?.Location ?? syntax.Identifier.Location
-                    } else {
-                        syntax.Identifier.Location
-                    },
-                    argument,
-                    expectedType
                 )
             }
         }
