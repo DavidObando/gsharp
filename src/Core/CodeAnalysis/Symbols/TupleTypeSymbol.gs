@@ -204,6 +204,29 @@ class TupleTypeSymbol : TypeSymbol {
             return Cache.GetOrAdd(key, (_ string) -> TupleTypeSymbol(elementTypes, elementNames))
         }
 
+        /// Issue #4316: replaces any unresolved `nil` element (`TypeSymbol.Null`) in [`type`](paramref)
+        /// with `object?` before a local's storage is materialized.
+        internal func ResolveNilElements(type TypeSymbol) TypeSymbol {
+            if type is not TupleTypeSymbol tuple || !tuple.HasNilElement {
+                return type
+            }
+            let elements = ImmutableArray.CreateBuilder[TypeSymbol](tuple.Arity)
+            for element in tuple.ElementTypes {
+                elements.Add(
+                    if element == TypeSymbol.Null {
+                        cast[TypeSymbol](NullableTypeSymbol.Get(TypeSymbol.Object))
+                    } else {
+                        ResolveNilElements(element)
+                    }
+                )
+            }
+            return if tuple.HasNames {
+                Get(elements.MoveToImmutable(), tuple.ElementNames)
+            } else {
+                Get(elements.MoveToImmutable())
+            }
+        }
+
         /// Issue #3987: recognizes a tuple-shaped type by SHAPE rather than by
         /// spelling — G#'s own (cref:TupleTypeSymbol), or the
         /// `System.ValueTuple<…>` it IS (ADR-0158 identity) arriving from

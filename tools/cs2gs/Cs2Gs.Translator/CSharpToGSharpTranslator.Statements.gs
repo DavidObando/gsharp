@@ -4276,10 +4276,10 @@ partial class CSharpToGSharpTranslator {
                 let nullableResult GTypeReference? = MakeNullable(
                     this.typeMapper.Map(resultType, this.context, conditional.GetLocation())
                 )
-                if IsNullLiteral(conditional.WhenTrue) {
+                if !(whenTrue is DefaultValueExpression) && IsNullLiteral(conditional.WhenTrue) {
                     whenTrue = DefaultValueExpression(nullableResult)
                 }
-                if IsNullLiteral(conditional.WhenFalse) {
+                if !(whenFalse is DefaultValueExpression) && IsNullLiteral(conditional.WhenFalse) {
                     whenFalse = DefaultValueExpression(nullableResult)
                 }
             }

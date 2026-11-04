@@ -1083,6 +1083,7 @@ namespace Demo
     @Fact
     func SuppressedReturnNull_EmitsDefaultWhileUnsuppressedReturnNull_StaysNil() {
         let suppressed = TranslateEnabled(("Stubs.cs", `
+using System;
 namespace Demo
 {
     public interface IChain<out TEntity, out TProperty> { }
@@ -1098,11 +1099,24 @@ namespace Demo
             }
             return null!;
         }
+        public static BoundSpillSequenceExpression Conditional(bool c) =>
+            c ? new BoundSpillSequenceExpression() : null!;
+        public static BoundSpillSequenceExpression Switched(int i) =>
+            i switch { 0 => new BoundSpillSequenceExpression(), _ => null! };
+        public static BoundSpillSequenceExpression Coalesced(BoundSpillSequenceExpression? x) =>
+            x ?? null!;
+        public static BoundSpillSequenceExpression Lambdas()
+        {
+            Func<BoundSpillSequenceExpression> f = () => null!;
+            Func<BoundSpillSequenceExpression> g = () => { return null!; };
+            return f() ?? g();
+        }
         public static BoundSpillSequenceExpression? NullableReturn() => null!;
     }
 }`))
         Assert.Contains("-> default(IChain[TEntity, TProperty])", suppressed[0])
         Assert.Contains("return default(BoundSpillSequenceExpression)", suppressed[0])
+        Assert.Contains("() -> default(BoundSpillSequenceExpression)", suppressed[0])
         Assert.Contains("func NullableReturn() BoundSpillSequenceExpression? -> nil", suppressed[0])
 
         let plain = TranslateEnabled(

@@ -764,10 +764,16 @@ partial class CSharpToGSharpTranslator {
         ) GExpression? {
             let (value, statements) = this.TranslateConditionalValueBranch(
                 expression,
-                () -> if nullableResultType != nil && IsNullOrDefaultLiteral(expression) {
-                    cast[GExpression](DefaultValueExpression(nullableResultType))
-                } else {
-                    this.CoerceSwitchArmValue(expression, this.TranslateValueWithNullForgiveness(expression))!!
+                () -> {
+                    let translated = this.TranslateValueWithNullForgiveness(expression)
+                    if translated is DefaultValueExpression && IsNullOrSuppressedNull(expression) {
+                        return translated
+                    }
+                    return if nullableResultType != nil && IsNullOrDefaultLiteral(expression) {
+                        cast[GExpression](DefaultValueExpression(nullableResultType))
+                    } else {
+                        this.CoerceSwitchArmValue(expression, translated)!!
+                    }
                 }
             )
             return if statements.Count == 0 {

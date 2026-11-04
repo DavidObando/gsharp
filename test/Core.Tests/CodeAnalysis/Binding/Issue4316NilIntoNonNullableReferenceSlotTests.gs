@@ -378,6 +378,9 @@ class H {
     })
     let b2 Box? = u.Item1
     let s2 string? = u.Item2
+    let v = d ? (nil, "y") : (nil, nil)
+    let o object? = v.Item1
+    let s3 string? = v.Item2
 }`, "")
             yield Row("ok-coalesce-nil-in-field-initializer", `class H(value Box?) {
     public var f Box? = value ?? nil

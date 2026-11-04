@@ -3997,6 +3997,7 @@ internal partial class StatementBinder {
                     convertedInitializer = BoundErrorExpression(initializer.Syntax)
                     variableType = TypeSymbol.Error
                 } else {
+                    variableType = TupleTypeSymbol.ResolveNilElements(variableType)
                     convertedInitializer = conversions.BindConversion(
                         syntax.Initializer!!.Location,
                         initializer,

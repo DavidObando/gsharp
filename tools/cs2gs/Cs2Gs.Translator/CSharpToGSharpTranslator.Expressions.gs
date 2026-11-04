@@ -526,6 +526,14 @@ partial class CSharpToGSharpTranslator {
                     }
                     return (declared, method)
                 }
+                case lambda is Microsoft.CodeAnalysis.CSharp.Syntax.AnonymousFunctionExpressionSyntax {
+                    if this.GetLambdaTargetDelegateType(lambda)
+                        ?.DelegateInvokeMethod is not{} invoke ||
+                        invoke.ReturnsVoid {
+                        return (nil, nil)
+                    }
+                    return (GetLambdaResultTargetType(lambda, invoke), invoke)
+                }
                 default {
                     return (nil, nil)
                 }
@@ -556,7 +564,64 @@ partial class CSharpToGSharpTranslator {
                 }
                 node = parent
             }
-            switch node.Parent {
+            var returnNode Microsoft.CodeAnalysis.SyntaxNode = node
+            var returnIsSuppressed = isSuppressed
+            while true {
+                if returnNode is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ExpressionSyntax branch &&
+                    this.GetUserDefinedConversionInputOperator(
+                    branch,
+                    this.context.GetTypeInfo(branch).ConvertedType,
+                    out _
+                ) != nil {
+                    break
+                }
+                if returnNode.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParenthesizedExpressionSyntax ||
+                    returnNode.Parent is PostfixUnaryExpressionSyntax{
+                    RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)
+                } {
+                    if returnNode.Parent.IsKind(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+                    ) {
+                        returnIsSuppressed = true
+                    }
+                    returnNode = returnNode.Parent
+                } else if returnNode.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ConditionalExpressionSyntax conditional &&
+                    (conditional.WhenTrue == returnNode || conditional.WhenFalse == returnNode) {
+                    returnNode = conditional
+                } else if returnNode.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .SwitchExpressionArmSyntax{
+                    Parent: Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression
+                } arm &&
+                    arm.Expression == returnNode {
+                    returnNode = switchExpression
+                } else if returnNode.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .BinaryExpressionSyntax coalesce &&
+                    coalesce.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression) &&
+                    coalesce.Right == returnNode {
+                    returnNode = coalesce
+                } else {
+                    break
+                }
+            }
+            switch returnNode.Parent {
                 case Microsoft.CodeAnalysis.CSharp.Syntax.ReturnStatementSyntax returnStatement {
                     let owner Microsoft.CodeAnalysis.SyntaxNode? = returnStatement.Ancestors().FirstOrDefault(
                         (n Microsoft.CodeAnalysis.SyntaxNode) -> n is Microsoft
@@ -581,12 +646,24 @@ partial class CSharpToGSharpTranslator {
                             .AnonymousFunctionExpressionSyntax
                     )
                     let (returnType, returnSymbol) = this.ReturnSlotOf(owner)
-                    return (returnType, returnSymbol, isSuppressed, false, true)
+                    return (returnType, returnSymbol, returnIsSuppressed, false, true)
                 }
                 case Microsoft.CodeAnalysis.CSharp.Syntax.ArrowExpressionClauseSyntax arrow {
                     let (returnType, returnSymbol) = this.ReturnSlotOf(arrow.Parent)
-                    return (returnType, returnSymbol, isSuppressed, false, true)
+                    return (returnType, returnSymbol, returnIsSuppressed, false, true)
                 }
+                case lambda is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AnonymousFunctionExpressionSyntax when lambda.Body ==
+                returnNode {
+                    let (returnType, returnSymbol) = this.ReturnSlotOf(lambda)
+                    return (returnType, returnSymbol, returnIsSuppressed, false, true)
+                }
+                default { }
+            }
+            switch node.Parent {
                 case Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assignment when assignment.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression
                 ) &&

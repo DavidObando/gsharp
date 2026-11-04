@@ -106,7 +106,12 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
         case 1: (nil, nil)
         default: (nil, "d")
     })
-    return (a.Item2, b.Item2)
+    let standalone = d ? (nil, "e") : (nil, nil)
+    return if standalone.Item1 == nil {
+        (a.Item2, b.Item2)
+    } else {
+        ("bad", "bad")
+    }
 }
 
 func Main() {
