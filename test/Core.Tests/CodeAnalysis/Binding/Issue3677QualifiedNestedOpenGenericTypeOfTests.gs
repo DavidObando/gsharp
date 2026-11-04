@@ -70,6 +70,41 @@ typeof(Outer[_].Inner[_]).Name
     }
 
     @Fact
+    func UnqualifiedNestedGenericInsideGeneric_BindsAndEmitsOpenDefinition() {
+        let result = EmittedOracle.Evaluate(Fixtures + `
+typeof(Inner[_]).IsGenericTypeDefinition &&
+typeof(Inner[_]).Name == "Inner` + "`" + `1" &&
+typeof(Inner).IsGenericTypeDefinition &&
+typeof(Inner).Name == "Inner` + "`" + `1" &&
+typeof(PlainInner).IsGenericTypeDefinition &&
+typeof(PlainInner).Name == "PlainInner" &&
+typeof(Kind).IsGenericTypeDefinition &&
+typeof(Kind).Name == "Kind" &&
+typeof(Outer.Inner).IsGenericTypeDefinition &&
+typeof(Outer.Inner).Name == "Inner` + "`" + `1" &&
+typeof(Outer.PlainInner).IsGenericTypeDefinition &&
+typeof(Outer.PlainInner).Name == "PlainInner" &&
+typeof(Outer.Kind).IsGenericTypeDefinition &&
+typeof(Outer.Kind).Name == "Kind" &&
+!typeof(ClosedBaseDerived.PlainInner).IsGenericTypeDefinition &&
+typeof(ClosedBaseDerived.PlainInner) == typeof(Outer[string].PlainInner) &&
+!typeof(ClosedBaseDerived.Kind).IsGenericTypeDefinition &&
+typeof(ClosedBaseDerived.Kind) == typeof(Outer[string].Kind)
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(true, result.Value)
+    }
+
+    @Fact
+    func TypeParameterShadowingSourceGeneric_ReportsUndefinedTypeGS0113() {
+        let result = EmittedOracle.Evaluate(Fixtures + `
+func Probe[Slot]() System.Type -> typeof(Slot[_])
+Probe[int32]()
+`)
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0113")
+    }
+
+    @Fact
     func NestedSourceGenericInsideGeneric_CarriesEnclosingTypeParameters() {
         // The CLR gives a type nested in a generic its enclosing type's
         // parameters too, so `Outer`1+Inner`1` is an arity-2 definition —
@@ -183,10 +218,13 @@ class Fixtures {
     class Plain {}
 }
 
-class Outer[T] {
+open class Outer[T] {
     class Inner[U] {}
-    class PlainInner {}
+    public class PlainInner {}
+    public enum Kind { A, B }
 }
+
+class ClosedBaseDerived[U] : Outer[string] {}
 
 class Slot[T] {
     prop Value int32

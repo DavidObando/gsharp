@@ -532,6 +532,7 @@ internal shared class SymbolDocumentationIdProvider {
         return switch type {
             case structType is StructSymbol: structType.EnclosingTypeArguments
             case enumType is EnumSymbol: enumType.EnclosingTypeArguments
+            case interfaceType is InterfaceSymbol: interfaceType.EnclosingTypeArguments
             default: ImmutableArray[TypeSymbol].Empty
         }
     }

@@ -430,6 +430,13 @@ internal class ImportedMemberRefFactory {
                 handle = interfaceHandle
                 return true
             }
+            case enumSym is EnumSymbol when this
+                .cache
+                .EnumTypeDefs
+                .TryGetValue(enumSym.Definition ?? enumSym, out var enumHandle) {
+                handle = enumHandle
+                return true
+            }
             case delegateSym is DelegateTypeSymbol when this
                 .cache
                 .DelegateTypeDefs
@@ -1931,6 +1938,10 @@ internal class ImportedMemberRefFactory {
             definition = switch type {
                 case StructSymbol{IsGenericDefinition: true} structSym: cast[TypeSymbol](structSym)
                 case InterfaceSymbol{IsGenericDefinition: true} interfaceSym: cast[TypeSymbol](interfaceSym)
+                case EnumSymbol{
+                    EnclosingTypeArguments: {IsDefaultOrEmpty: true},
+                    TypeParameters: {IsDefaultOrEmpty: false}
+                } enumSym: cast[TypeSymbol](enumSym)
                 case DelegateTypeSymbol{IsGenericDefinition: true} delegateSym: cast[TypeSymbol](delegateSym)
                 default: nil
             }
