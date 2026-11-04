@@ -163,6 +163,22 @@ func Run(ref text string?) int32 {
 }
 var s string? = "abc"
 Console.WriteLine(Run(ref s))`, "GS0158@12:27", "reject", ""}
+            yield[]object{"r5562_control_imported_base_ctor_call_removes_ref_parameter_narrowing", `import System
+
+open class Base : Exception {
+}
+class Derived : Base {
+    var Id int32
+}
+func Run(ref text string?) int32 {
+    if text == nil {
+        return 0
+    }
+    let made = Derived()
+    return made.Id + text.Length
+}
+var s string? = "abc"
+Console.WriteLine(Run(ref s))`, "GS0158@13:27", "reject", ""}
             yield[]object{"r5606_if_condition_gained_alias_carried_into_then_branch", `import System
 
 func Run(callback () -> string) int32 {

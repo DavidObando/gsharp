@@ -6481,7 +6481,7 @@ internal partial class StatementBinder {
             return owner != nil && TypeInitializationRunsUserCode(owner, atStaticMemberAccess: true)
         }
 
-        /// ADR-0208 R11 (#5170), R15 (#5237) and #5483: the one definition of whether constructing
+        /// ADR-0208 R11 (#5170), R15 (#5237), #5483 and #5562: the one definition of whether constructing
         /// [`type`](paramref) can run user code. The type, the generic definition of a constructed type, and
         /// every base class are checked for
         ///
@@ -6490,6 +6490,7 @@ internal partial class StatementBinder {
         /// | instance field initializer                          | yes                  |
         /// | primary constructor                                 | yes                  |
         /// | explicit constructor                                | yes                  |
+        /// | imported base class                                 | yes                  |
         /// | the type initializer (see (cref:TypeInitializationRunsUserCode)) | per that table |
         /// | none of the above                                   | no                   |
         internal func ConstructionRunsUserCode(type StructSymbol) bool {
@@ -6503,6 +6504,7 @@ internal partial class StatementBinder {
                     !definition
                     .EffectiveExplicitConstructors
                     .IsDefaultOrEmpty ||
+                    definition.ImportedBaseType != nil ||
                     TypeInitializationRunsUserCode(definition, atStaticMemberAccess: false) {
                     return true
                 }
