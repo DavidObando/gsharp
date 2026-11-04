@@ -77,7 +77,9 @@ internal class WellKnownReferences {
 
     // Issue #420 (P3-11): cached MemberRefs for IsReadOnlyAttribute/IsByRefLikeAttribute/ObsoleteAttribute ctors,
     // so repeated emission of these markers doesn't create duplicate MemberRef rows.
-    private var isReadOnlyAttributeCtorRef MemberReferenceHandle?
+    private var isReadOnlyAttributeCtorRef EntityHandle?
+    private var isReadOnlyAttributeTypeRef EntityHandle?
+    private var isExternalInitTypeRef EntityHandle?
 
     private var isByRefLikeAttributeCtorRef MemberReferenceHandle?
     private var obsoleteAttributeStringBoolCtorRef MemberReferenceHandle?
@@ -306,26 +308,46 @@ internal class WellKnownReferences {
         return this.interlockedCompareExchangeOpenRef!!
     }
 
-    /// ADR-0060 §6: returns the TypeRef handle for
+    /// ADR-0060 §6: returns the TypeRef (or embedded TypeDef) handle for
     /// `System.Runtime.CompilerServices.IsReadOnlyAttribute`, used as the
     /// `modreq` on each emitted `in` parameter signature.
-    /// @returns The cached (cref:MemberReferenceHandle).
-    /// @returns The cached (cref:EntityHandle).
-    /// @returns The TypeRef entity handle, or `default` if the type can't be resolved.
+    /// @returns The cached (cref:EntityHandle), or `default` if the type can't be resolved.
     func GetIsReadOnlyAttributeTypeRef() EntityHandle {
-        let attrType = if this
-            .emitCtx
-            .References
-            .TryResolveType(
-            "System.Runtime.CompilerServices.IsReadOnlyAttribute",
-            requireExternalVisibility: false,
-            out var resolved
-        ) {
-            resolved!!
-        } else {
-            typeof(IsReadOnlyAttribute)
+        if (this.isReadOnlyAttributeTypeRef != nil) {
+            return this.isReadOnlyAttributeTypeRef!!
         }
-        return this.getTypeReference(attrType)
+        if !this.TryResolveEmbeddableAttribute(
+            "System.Runtime.CompilerServices.IsReadOnlyAttribute",
+            out var attrType
+        ) {
+            let embeddedType = this.TryGetEmbeddedType(
+                "System.Runtime.CompilerServices.IsReadOnlyAttribute",
+                requireAttributeBase: true
+            )
+            if !embeddedType.IsNil {
+                this.isReadOnlyAttributeTypeRef = embeddedType
+            }
+            return embeddedType
+        }
+        let typeRef = EntityHandle(this.getTypeReference(attrType!!))
+        this.isReadOnlyAttributeTypeRef = typeRef
+        return typeRef
+    }
+
+    /// Issue #4993: returns the `modreq` handle for an `in` parameter signature.
+    /// When the parameter overrides an imported base slot or implements an imported
+    /// interface slot, preserves that slot parameter's required modifier (`IsReadOnlyAttribute`
+    /// or `InAttribute`) so downlevel embedded modifier types match the slot signature.
+    func GetInParameterModifierTypeRef(importedParameter ParameterInfo? = nil) EntityHandle {
+        if importedParameter != nil {
+            for modType in importedParameter.GetRequiredCustomModifiers() {
+                if modType.FullName is "System.Runtime.CompilerServices.IsReadOnlyAttribute" or
+                    "System.Runtime.InteropServices.InAttribute" {
+                    return EntityHandle(this.getTypeReference(modType))
+                }
+            }
+        }
+        return this.GetIsReadOnlyAttributeTypeRef()
     }
 
     func GetInAttributeTypeRef() EntityHandle {
@@ -344,46 +366,64 @@ internal class WellKnownReferences {
         return this.getTypeReference(attrType)
     }
 
-    /// Issue #946: returns the TypeRef handle for
+    /// Issue #946 / #4993: returns the TypeRef (or embedded TypeDef) handle for
     /// `System.Runtime.CompilerServices.IsExternalInit`, used as the
     /// `modreq` on the void return of an `init`-only property setter
     /// (mirroring the C# 9 init-only setter encoding). Resolved against the
-    /// target framework's reference assemblies (every runtime G# targets ships
-    /// this type since .NET 5), falling back to the host runtime's type.
-    /// @returns The TypeRef entity handle.
+    /// target framework's published reference assemblies, falling back to the
+    /// compilation's embedded or source-declared copy on downlevel targets.
+    /// @returns The TypeRef or TypeDef entity handle.
     func GetIsExternalInitTypeRef() EntityHandle {
-        let attrType = if this
-            .emitCtx
-            .References
-            .TryResolveType(
-            "System.Runtime.CompilerServices.IsExternalInit",
-            requireExternalVisibility: false,
-            out var resolved
-        ) {
-            resolved!!
-        } else {
-            typeof(IsExternalInit)
+        if (this.isExternalInitTypeRef != nil) {
+            return this.isExternalInitTypeRef!!
         }
-        return this.getTypeReference(attrType)
+        if !this.TryResolveEmbeddableAttribute("System.Runtime.CompilerServices.IsExternalInit", out var attrType) {
+            let embeddedType = this.TryGetEmbeddedType(
+                "System.Runtime.CompilerServices.IsExternalInit",
+                requireAttributeBase: false
+            )
+            if !embeddedType.IsNil {
+                this.isExternalInitTypeRef = embeddedType
+            }
+            return embeddedType
+        }
+        let typeRef = EntityHandle(this.getTypeReference(attrType!!))
+        this.isExternalInitTypeRef = typeRef
+        return typeRef
     }
 
-    func GetIsReadOnlyAttributeCtorRef() MemberReferenceHandle {
+    /// Issue #4993: returns the `modreq` handle for an `init`-only setter return signature.
+    /// When the setter overrides an imported base slot or implements an imported interface
+    /// slot, preserves that slot return parameter's `IsExternalInit` modifier so downlevel
+    /// embedded modifier types match the slot signature.
+    func GetInitSetterModifierTypeRef(importedSetter MethodInfo? = nil) EntityHandle {
+        if importedSetter != nil {
+            for modType in importedSetter.ReturnParameter.GetRequiredCustomModifiers() {
+                if modType.FullName == "System.Runtime.CompilerServices.IsExternalInit" {
+                    return EntityHandle(this.getTypeReference(modType))
+                }
+            }
+        }
+        return this.GetIsExternalInitTypeRef()
+    }
+
+    func GetIsReadOnlyAttributeCtorRef() EntityHandle {
         if (this.isReadOnlyAttributeCtorRef != nil) {
             return this.isReadOnlyAttributeCtorRef!!
         }
-        let attrType = if this
-            .emitCtx
-            .References
-            .TryResolveType(
+        if !this.TryResolveEmbeddableAttribute(
             "System.Runtime.CompilerServices.IsReadOnlyAttribute",
-            requireExternalVisibility: false,
-            out var resolved
+            out var attrType
         ) {
-            resolved!!
-        } else {
-            typeof(IsReadOnlyAttribute)
+            let embeddedCtor = this.TryGetEmbeddedParameterlessAttributeCtor(
+                "System.Runtime.CompilerServices.IsReadOnlyAttribute"
+            )
+            if !embeddedCtor.IsNil {
+                this.isReadOnlyAttributeCtorRef = embeddedCtor
+            }
+            return embeddedCtor
         }
-        let attrTypeRef = this.getTypeReference(attrType)
+        let attrTypeRef = this.getTypeReference(attrType!!)
         let ctorSig = BlobBuilder()
         BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true).Parameters(
             0,
@@ -1495,6 +1535,12 @@ internal class WellKnownReferences {
         return this.objectStaticEqualsRef
     }
 
+    /// Issue #4993: returns whether the compilation's target reference set
+    /// publishes `System.HashCode` (excluding the host fallback on downlevel
+    /// frameworks such as `netstandard2.0`).
+    /// @returns `true` when `System.HashCode` is published by the target.
+    func HasHashCodeType() bool -> this.TryResolveEmbeddableAttribute("System.HashCode", out _)
+
     /// Issue #410 / ADR-0029: returns a TypeRef for `System.HashCode`,
     /// used by data-struct `GetHashCode` synthesis. Cached because the
     /// data-struct helpers need a strongly-typed handle even though the
@@ -1505,7 +1551,12 @@ internal class WellKnownReferences {
         if !this.hashCodeTypeRef.IsNil {
             return this.hashCodeTypeRef
         }
-        this.hashCodeTypeRef = this.getTypeReference(typeof(HashCode))
+        let hashCodeType = if this.TryResolveEmbeddableAttribute("System.HashCode", out var resolved) {
+            resolved!!
+        } else {
+            typeof(HashCode)
+        }
+        this.hashCodeTypeRef = this.getTypeReference(hashCodeType)
         return this.hashCodeTypeRef
     }
 
@@ -1763,6 +1814,29 @@ internal class WellKnownReferences {
             this.tokenCache,
             fullName,
             isArrayCtor
+        )
+    }
+
+    private func TryGetEmbeddedParameterlessAttributeCtor(fullName string) EntityHandle {
+        if this.tokenCache == nil {
+            return default(EntityHandle)
+        }
+        return EmbeddedAttributeSource.FindSourceParameterlessConstructor(
+            this.emitCtx.Program.Structs,
+            this.tokenCache,
+            fullName
+        )
+    }
+
+    private func TryGetEmbeddedType(fullName string, requireAttributeBase bool) EntityHandle {
+        if this.tokenCache == nil {
+            return default(EntityHandle)
+        }
+        return EmbeddedAttributeSource.FindSourceType(
+            this.emitCtx.Program.Structs,
+            this.tokenCache,
+            fullName,
+            requireAttributeBase
         )
     }
 

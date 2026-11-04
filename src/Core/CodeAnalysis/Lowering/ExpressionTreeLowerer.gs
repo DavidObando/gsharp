@@ -104,9 +104,24 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             }
             case variable is BoundVariableExpression {
                 if parameterMap.TryGetValue(variable.Variable, out var parameterLocal) {
-                    return BoundVariableExpression(expression.Syntax, parameterLocal)
+                    return WrapNarrowingConversionIfNeeded(
+                        BoundVariableExpression(expression.Syntax, parameterLocal),
+                        variable.Variable.Type,
+                        variable.NarrowedType
+                    )
                 }
-                return BuildRuntimeConstant(variable, variable.Type)
+                return WrapNarrowingConversionIfNeeded(
+                    BuildRuntimeConstant(
+                        if variable.NarrowedType == nil {
+                            variable
+                        } else {
+                            BoundVariableExpression(variable.Syntax, variable.Variable)
+                        },
+                        variable.Variable.Type
+                    ),
+                    variable.Variable.Type,
+                    variable.NarrowedType
+                )
             }
             case field is BoundFieldAccessExpression {
                 return BuildFieldAccessExpression(field, parameterMap)
@@ -305,9 +320,9 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         field BoundFieldAccessExpression,
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
-        if field.Receiver == nil {
+        let access = if field.Receiver == nil {
             let owner = field.InterfaceType as TypeSymbol ?? field.StructType
-            return BoundClrStaticCallExpression(
+            BoundClrStaticCallExpression(
                 field.Syntax,
                 ExpressionFieldStaticMethod,
                 TypeSymbol.FromClrTypeWithoutNullability(typeof(MemberExpression), NullabilityFreeReason.TypeLiteral),
@@ -323,23 +338,25 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                     BoundLiteralExpression(nil, field.Field.Name, TypeSymbol.String)
                 )
             )
-        }
-        return BoundClrStaticCallExpression(
-            field.Syntax,
-            ExpressionFieldInstanceMethod,
-            TypeSymbol.FromClrTypeWithoutNullability(typeof(MemberExpression), NullabilityFreeReason.TypeLiteral),
-            ImmutableArray.Create[BoundExpression](
-                UpcastToExpression(this.TranslateExpression(field.Receiver!!, parameterMap)),
-                BoundLiteralExpression(nil, field.Field.Name, TypeSymbol.String)
+        } else {
+            BoundClrStaticCallExpression(
+                field.Syntax,
+                ExpressionFieldInstanceMethod,
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(MemberExpression), NullabilityFreeReason.TypeLiteral),
+                ImmutableArray.Create[BoundExpression](
+                    UpcastToExpression(this.TranslateExpression(field.Receiver, parameterMap)),
+                    BoundLiteralExpression(nil, field.Field.Name, TypeSymbol.String)
+                )
             )
-        )
+        }
+        return WrapNarrowingConversionIfNeeded(access, GetEffectiveFieldType(field), field.NarrowedType)
     }
 
     private func BuildPropertyAccessExpression(
         property BoundPropertyAccessExpression,
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
-        return BoundClrStaticCallExpression(
+        let access = BoundClrStaticCallExpression(
             property.Syntax,
             ExpressionPropertyInfoMethod,
             TypeSymbol.FromClrTypeWithoutNullability(typeof(MemberExpression), NullabilityFreeReason.TypeLiteral),
@@ -359,6 +376,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 )
             )
         )
+        return WrapNarrowingConversionIfNeeded(access, GetEffectivePropertyType(property), property.NarrowedType)
     }
 
     private func BuildClrPropertyAccessExpression(
@@ -398,8 +416,10 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
         let operand = UpcastToExpression(this.TranslateExpression(unary.Operand, parameterMap))
-        // Issue #5400: a synthesized nullable extraction remains a conversion in expression trees.
-        if unary.IsConversionUnwrap {
+        // Issue #5400 / #4974: a synthesized nullable extraction (explicit
+        // conversion or smart-cast narrowing unwrap) remains a conversion in
+        // expression trees.
+        if unary.IsConversionUnwrap || unary.IsNarrowingUnwrap {
             return BoundClrStaticCallExpression(
                 unary.Syntax,
                 ExpressionConvertMethod,
@@ -2342,6 +2362,45 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         }
 
         private func CreateTypeOf(type TypeSymbol) BoundExpression -> BoundTypeOfExpression(nil, type, SystemTypeSymbol)
+
+        private func WrapNarrowingConversionIfNeeded(
+            expression BoundExpression,
+            declaredType TypeSymbol,
+            narrowedType TypeSymbol?
+        ) BoundExpression {
+            if narrowedType == nil || TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                declaredType,
+                narrowedType
+            ) {
+                return expression
+            }
+            return BoundClrStaticCallExpression(
+                expression.Syntax,
+                ExpressionConvertMethod,
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(UnaryExpression), NullabilityFreeReason.TypeLiteral),
+                ImmutableArray.Create[BoundExpression](UpcastToExpression(expression), CreateTypeOf(narrowedType))
+            )
+        }
+
+        private func GetEffectiveFieldType(access BoundFieldAccessExpression) TypeSymbol -> access.SubstitutedType ??
+            (
+            if access.StructType is StructSymbol owner {
+                owner.SubstituteMemberType(access.Field.Type)!!
+            } else {
+                access.Field.Type
+            }
+        )
+
+        private func GetEffectivePropertyType(
+            access BoundPropertyAccessExpression
+        ) TypeSymbol -> access.SubstitutedType ??
+            (
+            if access.StructType is StructSymbol owner {
+                owner.SubstituteMemberType(access.Property.Type)!!
+            } else {
+                access.Property.Type
+            }
+        )
 
         private func UpcastToExpression(
             expression BoundExpression

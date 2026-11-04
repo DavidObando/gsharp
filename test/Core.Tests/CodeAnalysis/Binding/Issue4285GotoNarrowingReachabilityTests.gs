@@ -96,14 +96,9 @@ Run(true)
 
     @Fact
     func Goto_BypassesTypeGuard_SwitchVariant_DoesNotNarrowFieldPath() {
-        // Same defect, but through the post-switch narrowing lift (ADR-0069
-        // addendum / issue #712) rather than the post-if lift: a `case is
-        // Dog {}` arm falls through with the discriminant narrowed to `Dog`,
-        // and (with a `default { return "" }` arm) issue #712 lifts that
-        // narrowing past the switch. The `goto`/`Never:` pair here is
-        // syntactically unreachable (`if false`) and has nothing to do with
-        // the switch — its mere PRESENCE anywhere in the function is what
-        // must suppress the lift under this conservative fix.
+        // ADR-0208 section 16, row R6 (#5301): an unrelated `goto`/`Never:` pair
+        // after the switch does not bypass the switch, so the post-switch
+        // narrowing lift (`b.Pet -> Dog`) survives to `Never:`.
         let result = Evaluate(Hierarchy + `
 class Box { let Pet Animal }
 func Run(b Box) string {
@@ -115,6 +110,337 @@ func Run(b Box) string {
         goto Never
     }
     Never:
+    return b.Pet.Bark()
+}
+Run(Box{Pet: Dog{Name: "Rex"}})
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("woof", result.Value)
+    }
+
+    @Fact
+    func Goto_LandsInsideSwitchArmInIfBranch_DoesNotLiftNarrowing() {
+        let result = Evaluate(`
+import System
+
+func Run(cond bool, flag bool, k int32) string {
+    var x string? = nil
+    if cond {
+        goto InsideSwitch
+    }
+    if flag {
+        x = "hello"
+        switch k {
+            case 1 {
+            InsideSwitch:
+                Console.WriteLine("reached")
+            }
+            default {
+            }
+        }
+    } else {
+        x = "world"
+    }
+    return x.Length.ToString()
+}
+
+Run(true, false, 1)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func Goto_LandsAfterDeferInIfBranch_DoesNotLiftNarrowing() {
+        let result = Evaluate(`
+import System
+
+func Run(cond bool, flag bool) string {
+    var x string? = nil
+    if cond {
+        goto AfterDefer
+    }
+    if flag {
+        x = "hello"
+        defer Console.WriteLine("cleanup")
+    AfterDefer:
+        Console.WriteLine("reached")
+    } else {
+        x = "world"
+    }
+    return x.Length.ToString()
+}
+
+Run(true, false)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func Goto_LandsInsideEarlyExitGuardCondition_DoesNotLiftNarrowing() {
+        let result = Evaluate(`
+import System
+
+func Run(skip bool) int32 {
+    var x string? = nil
+    if skip {
+        goto Inside
+    }
+    if x == nil || ({
+    Inside:
+        var marker = 0
+        false
+    }) {
+        return 0
+    }
+    return x.Length
+}
+
+Run(true)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func Goto_LandsInsideIfJoinCondition_DoesNotLiftNarrowing() {
+        let result = Evaluate(`
+import System
+
+func Run(skip bool) int32 {
+    var x string? = nil
+    if skip {
+        goto Inside
+    }
+    if x != nil && ({
+    Inside:
+        var marker = 0
+        true
+    }) {
+        Console.WriteLine("then")
+    } else {
+        x = "fallback"
+    }
+    return x.Length
+}
+
+Run(true)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func Goto_LandsInsideConditionAfterCallableAliasAssignment_DoesNotLiftNarrowing() {
+        let result = Evaluate(`
+import System
+
+func Run(cb () -> void, skip bool) int32 {
+    var x string? = nil
+    var g () -> void = func() { x = nil }
+    if skip {
+        goto Inside
+    }
+    if ({
+        g = cb
+    Inside:
+        var marker = 0
+        true
+    }) {
+        x = "safe"
+        g()
+    } else {
+        x = "other"
+    }
+    return x.Length
+}
+
+Run(func() {}, true)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func Goto_LandsInsideSwitchArmAfterCallableAliasAssignment_DoesNotLiftNarrowing() {
+        let result = Evaluate(`
+import System
+
+func Run(cb () -> void, skip bool, flag bool, k int32) int32 {
+    var x string? = nil
+    var g () -> void = func() { x = nil }
+    if skip {
+        goto Inside
+    }
+    if flag {
+        switch k {
+            case 1 {
+                g = cb
+            Inside:
+                Console.WriteLine("in switch")
+            }
+            default {
+                g = cb
+            }
+        }
+        x = "safe"
+        g()
+    } else {
+        x = "other"
+    }
+    return x.Length
+}
+
+Run(func() {}, true, false, 1)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func Goto_LandsInsideTryAfterCallableAliasAssignment_DoesNotLiftNarrowing() {
+        let result = Evaluate(`
+import System
+
+func Run(cb () -> void, skip bool, flag bool) int32 {
+    var x string? = nil
+    var g () -> void = func() { x = nil }
+    if skip {
+        goto Inside
+    }
+    if flag {
+        try {
+            g = cb
+        Inside:
+            Console.WriteLine("in try")
+        } finally {
+            Console.WriteLine("finally")
+        }
+        x = "safe"
+        g()
+    } else {
+        x = "other"
+    }
+    return x.Length
+}
+
+Run(func() {}, true, false)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func Goto_LandsOnLabeledIfAfterCallableAliasAssignment_DoesNotLiftNarrowing() {
+        let result = Evaluate(`
+import System
+
+func Run(cb () -> void, skip bool, flag bool) int32 {
+    var x string? = nil
+    var g () -> void = func() { x = nil }
+    if skip {
+        goto L
+    }
+    g = cb
+L:
+    if flag {
+        x = "safe"
+        g()
+    } else {
+        x = "other"
+    }
+    return x.Length
+}
+
+Run(func() {}, true, true)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func Goto_LandsInsideIfConditionAfterReturnInBranch_DoesNotLiftNarrowing() {
+        let result = Evaluate(`
+import System
+
+func Run(skip bool, flag bool) int32 {
+    var x string? = nil
+    if skip {
+        goto Inside
+    }
+    if flag {
+        return 0
+        if ({
+        Inside:
+            var marker = 0
+            true
+        }) {
+            Console.WriteLine("reached")
+        }
+    } else {
+        x = "other"
+    }
+    return x.Length
+}
+
+Run(true, false)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func DeadBlockBodiedArrowLambdaLabel_DoesNotMakeSubsequentDeadCodeReachable() {
+        let result = Evaluate(`
+import System
+
+func Run() int32 {
+    var x string? = nil
+    x = "safe"
+    goto Done
+    let unused = () -> {
+    Again:
+        var marker = 0
+        if false {
+            goto Again
+        }
+        0
+    }
+    x = nil
+    goto Done
+Done:
+    return x.Length
+}
+
+Run()
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(4, result.Value)
+    }
+
+    @Fact
+    func Goto_BypassesSwitchArm_DoesNotNarrowFieldPath() {
+        // ADR-0208 section 16, row R6 (#5301): when the default arm jumps to
+        // `Skip:` via `goto Skip` without narrowing `b.Pet` to `Dog`, the label
+        // join at `Skip:` drops `b.Pet -> Dog` and rejects `b.Pet.Bark()`.
+        let result = Evaluate(Hierarchy + `
+class Box { let Pet Animal }
+func Run(b Box) string {
+    switch b.Pet {
+        case d is Dog {}
+        default { goto Skip }
+    }
+    Skip:
     return b.Pet.Bark()
 }
 Run(Box{Pet: Dog{Name: "Rex"}})

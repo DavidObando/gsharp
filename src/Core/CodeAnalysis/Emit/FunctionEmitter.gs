@@ -547,6 +547,12 @@ internal class FunctionEmitter {
                 0
             }
         )
+        let importedSlot = MethodInfoHelpers.TryFindImportedMethodSlot(function)
+        let importedParameters = if importedSlot != nil {
+            importedSlot.GetParameters()
+        } else {
+            Array.Empty[ParameterInfo]()
+        }
         BlobEncoder(sigBlob).MethodSignature(
             isInstanceMethod: function.IsInstanceMethod,
             genericParameterCount: if function.TypeParameters.IsDefaultOrEmpty {
@@ -566,7 +572,7 @@ internal class FunctionEmitter {
                     this.outer.EncodeAsyncReturnType(r, asyncPlan)
                 } else {
                     if function.IsInitOnlySetter {
-                        let isExternalInit = this.outer.wellKnown.GetIsExternalInitTypeRef()
+                        let isExternalInit = this.outer.wellKnown.GetInitSetterModifierTypeRef(importedSlot)
                         if !isExternalInit.IsNil {
                             r.CustomModifiers().AddModifier(isExternalInit, isOptional: false)
                         }
@@ -575,6 +581,7 @@ internal class FunctionEmitter {
                 }
             },
             (ps ParametersEncoder) -> {
+                var paramIndex = 0
                 for p in function.EmittedParameters {
                     if object.ReferenceEquals(p, function.ThisParameter) && !emitsExplicitReceiver {
                         continue
@@ -587,12 +594,19 @@ internal class FunctionEmitter {
                     // metadata row below. Issue #1610: this encoding is shared with the
                     // interface abstract / static-virtual slot paths so the interface
                     // signature and its implementation can never drift apart.
+                    let importedParam = if paramIndex < importedParameters.Length {
+                        importedParameters[paramIndex]
+                    } else {
+                        default(ParameterInfo?)
+                    }
                     TypeDefEmitter.EncodeParameterSignature(
                         ps,
                         p,
                         this.signatures.EncodeTypeSymbol,
-                        this.outer.wellKnown
+                        this.outer.wellKnown,
+                        importedParam
                     )
+                    paramIndex++
                 }
             }
         )
