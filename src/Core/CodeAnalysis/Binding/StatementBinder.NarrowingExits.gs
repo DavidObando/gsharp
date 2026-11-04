@@ -16,9 +16,8 @@ import System.Collections.Generic
 /// and a bare block exits with the state at the end of its list. An `else if`
 /// adds the exit states of its own branches to the list of the enclosing `if`,
 /// so the join stays n-ary. The enclosing list then lifts every fact that the
-/// join proves and that the frames do not hold. A function with a user label or `goto` keeps its current lifts (row R6
-/// belongs to a later PR). The legacy passes still run, and they still own the
-/// facts that a write kills.
+/// join proves and that the frames do not hold (rows R1, R3, R5 and R6). The
+/// legacy passes still run, and they still own the facts that a write kills.
 internal partial class StatementBinder {
     // The statement that owns the recorded exit, the state before it, and the
     // states that flow out of it, in source order.
@@ -27,9 +26,6 @@ internal partial class StatementBinder {
     private var exitPredecessors List[NarrowingState] = List[NarrowingState]()
     // The state at the end of the statement list that was bound last.
     private var listExitState NarrowingState = NarrowingState.Empty
-
-    /// Whether the join of branch exit states is consumed in the current function.
-    private func JoinExitsEnabled() bool -> !binderCtx.FunctionContainsUserGotoOrLabel
 
     /// Records the state at the end of a statement list. `BindBlockStatements`
     /// calls it before it pops the frame that holds the lifts of the list.
@@ -40,9 +36,6 @@ internal partial class StatementBinder {
     /// Records the exit state of a block that [`BindBlockStatement`](paramref) bound.
     /// @param entry The state before the block.
     private func RecordBlockExit(block BoundBlockStatement, entry NarrowingState) {
-        if !JoinExitsEnabled() {
-            return
-        }
         exitOwner = block
         exitEntry = entry
         exitPredecessors = List[NarrowingState]{listExitState}
@@ -52,9 +45,6 @@ internal partial class StatementBinder {
     /// that cannot complete adds the unreachable state. A branch with no recorded
     /// exit adds the state with no fact. Call it right after the branch is bound.
     private func AddBranchExits(exits List[NarrowingState], branch BoundStatement) {
-        if !JoinExitsEnabled() {
-            return
-        }
         if !CanCompleteNormally(branch) {
             exits.Add(NarrowingState.Unreachable)
         } else if object.ReferenceEquals(exitOwner, branch) {
@@ -77,9 +67,6 @@ internal partial class StatementBinder {
 
     /// Records the exit states of an `if`: the states of its branches.
     private func RecordIfExit(statement BoundStatement, entry NarrowingState, exits List[NarrowingState]) {
-        if !JoinExitsEnabled() {
-            return
-        }
         exitOwner = statement
         exitEntry = entry
         exitPredecessors = exits
@@ -93,7 +80,18 @@ internal partial class StatementBinder {
         persistentFrame NarrowingFrame,
         aliasesAtEntry IReadOnlyCollection[VariableSymbol]
     ) {
-        if statement == nil || !JoinExitsEnabled() || !object.ReferenceEquals(exitOwner, statement) {
+        var statement = statement
+        var aliasesAtEntry = aliasesAtEntry
+        while statement is BoundBlockStatement labeledBlock &&
+            labeledBlock.Syntax is LabeledStatementSyntax &&
+            labeledBlock
+            .Statements
+            .Length == 2 &&
+            labeledBlock.Statements[0] is BoundLabelStatement {
+            statement = labeledBlock.Statements[1]
+            aliasesAtEntry = Array.Empty[VariableSymbol]()
+        }
+        if statement == nil || !object.ReferenceEquals(exitOwner, statement) {
             return
         }
         let entry = exitEntry
