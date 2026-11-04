@@ -183,6 +183,11 @@ func Outside(w IWorker) {
         {
             return Label;
         }
+
+        public string Format(string prefix)
+        {
+            return prefix + Label;
+        }
     }
 }
 `
@@ -222,7 +227,7 @@ func Outside(w IWorker) {
 import RecordDef
 func Use(b Badge) string {
     let label = b.Label
-    return b.Format()
+    return b.Format("#")
 }
 `
             let gsPath = Path.Combine(root, "Consumer.gs")
@@ -233,13 +238,23 @@ func Use(b Badge) string {
             let lines = Enumerable.Range(0, gsSource.Length).Where((i int32) -> gsSource[i] == '\n').ToList()
             let content = DocumentContent(tree, lines, project, WorkspaceState())
             let uri = DocumentUri.FromFileSystemPath(gsPath)!!
-            let formatLoc = DefinitionComputer.ComputeDefinition(
-                uri,
-                content,
-                LanguageServerTestHelpers.PositionOf(gsSource, "Format")
-            )
+            let formatPos = LanguageServerTestHelpers.PositionOf(gsSource, "Format")
+            let formatLoc = DefinitionComputer.ComputeDefinition(uri, content, formatPos)
             Assert.NotNull(formatLoc)
             Assert.Equal(csPath, formatLoc!!.Uri!!.GetFileSystemPath())
+            Assert.True(
+                formatLoc!!.Range.Start.Line >= 9,
+                "expected Format(string prefix) line: ${formatLoc!!.Range.Start.Line}"
+            )
+            let formatHover = HoverComputer.ComputeHover(content, formatPos)
+            Assert.NotNull(formatHover)
+            Assert.Contains(
+                "func (Badge) Format(prefix string",
+                formatHover!!.Contents.ToString(),
+                StringComparison.Ordinal
+            )
+            let hints = InlayHintComputer.ComputeHints(content)
+            Assert.Contains(hints, (h InlayHint) -> h.Label.String == "prefix:")
             let labelLoc = DefinitionComputer.ComputeDefinition(
                 uri,
                 content,

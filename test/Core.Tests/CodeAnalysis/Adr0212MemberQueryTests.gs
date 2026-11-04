@@ -151,10 +151,12 @@ func UseUnfinished[T IImportedParsable[T]](sb StringBuilder, c Cat) {
     Free( // PUnfinishedFree
     c.Purr( // PUnfinishedInstance
     T.Parse( // PUnfinishedConstraint
+    WriteLine(Console.WriteLine, 1, 2) // PFailedProbe
 }
 
 class UnfinishedDog : Animal {
     func Act() {
+        base[Animal].Speak(1, 2) // PFailedBracketBase
         base.Speak( // PUnfinishedBase
     }
 }
@@ -193,6 +195,15 @@ class UnfinishedDog : Animal {
             []string{"Speak(int32)", "Speak(string)", "Speak()"},
             baseGroup.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
         )
+        let bracketBase = unfinishedTree.Root.DescendantNodes().OfType[BaseInterfaceCallExpressionSyntax]().Single()
+        let bracketBaseGroup = model.GetMemberGroup(bracketBase)
+        Assert.Equal(
+            []string{"Speak(int32)", "Speak(string)", "Speak()"},
+            bracketBaseGroup.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
+        )
+        let failedProbeGroup = model.GetMemberGroup(FindCall("PFailedProbe"))
+        Assert.Equal(2, failedProbeGroup.Length)
+        Assert.All(failedProbeGroup, (s Symbol) -> Assert.IsType[FunctionSymbol](s))
         let constraintGroup = model.GetMemberGroup(FindCall("PUnfinishedConstraint"))
         Assert.Equal(2, constraintGroup.Length)
         Assert.All(constraintGroup, (s Symbol) -> Assert.IsType[ImportedFunctionSymbol](s))

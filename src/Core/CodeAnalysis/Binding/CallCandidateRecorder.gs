@@ -71,7 +71,7 @@ internal shared class CallCandidateRecorder {
     /// @param receiverType The call receiver's type, when any.
     func RecordFunctions(candidates ImmutableArray[FunctionSymbol], receiverType TypeSymbol? = nil) {
         let frame = current.Value
-        if frame == nil || candidates.IsDefaultOrEmpty {
+        if !enabled.Value || frame == nil || candidates.IsDefaultOrEmpty {
             return
         }
         if receiverType != nil && frame.ReceiverType == nil {
@@ -89,7 +89,7 @@ internal shared class CallCandidateRecorder {
     /// @param receiverType The call receiver's type, when any.
     func RecordMethods[T MethodBase](candidates IReadOnlyCollection[T], receiverType TypeSymbol? = nil) {
         let frame = current.Value
-        if frame == nil || candidates.Count == 0 {
+        if !enabled.Value || frame == nil || candidates.Count == 0 {
             return
         }
         if receiverType != nil && frame.ReceiverType == nil {
@@ -106,7 +106,7 @@ internal shared class CallCandidateRecorder {
     /// @param candidates The source extension functions.
     func RecordExtensionFunctions(candidates ImmutableArray[FunctionSymbol]) {
         let frame = current.Value
-        if frame == nil || candidates.IsDefaultOrEmpty {
+        if !enabled.Value || frame == nil || candidates.IsDefaultOrEmpty {
             return
         }
         let set = ImmutableArray.CreateBuilder[object](candidates.Length)
@@ -122,7 +122,7 @@ internal shared class CallCandidateRecorder {
     /// @param receiverType The call receiver's type.
     func RecordExtensionMethods(candidates IReadOnlyCollection[MethodInfo], receiverType TypeSymbol) {
         let frame = current.Value
-        if frame == nil || candidates.Count == 0 {
+        if !enabled.Value || frame == nil || candidates.Count == 0 {
             return
         }
         if frame.ReceiverType == nil {
@@ -177,8 +177,19 @@ internal shared class CallCandidateRecorder {
                         error.IsExtensionCall = isExtension
                     }
                 }
-                if frame.FailedChildren is {Count: > 0} children && error.FailedChildren.IsDefault {
-                    error.FailedChildren = children.ToImmutableArray()
+                if frame.FailedChildren is {Count: > 0} children {
+                    let builder = ImmutableArray.CreateBuilder[BoundErrorExpression](children.Count)
+                    if !error.FailedChildren.IsDefaultOrEmpty {
+                        builder.AddRange(error.FailedChildren)
+                    }
+                    for child in children {
+                        if !object.ReferenceEquals(child, error) && !builder.Contains(child) {
+                            builder.Add(child)
+                        }
+                    }
+                    if builder.Count > 0 {
+                        error.FailedChildren = builder.ToImmutable()
+                    }
                 }
                 if frame.Parent != nil &&
                     (!error.MemberGroup.IsDefaultOrEmpty || !error.FailedChildren.IsDefaultOrEmpty) {
