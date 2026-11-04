@@ -6385,7 +6385,9 @@ class Conversion {
                         return true
                     }
                 }
-                return false
+                if fromValueStruct.ClrType == nil {
+                    return false
+                }
             }
             if from is ImportedTypeSymbol &&
                 RequiresSymbolicTypeArgumentIdentity(from) &&

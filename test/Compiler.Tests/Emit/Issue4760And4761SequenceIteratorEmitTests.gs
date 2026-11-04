@@ -500,6 +500,53 @@ func Reject(value ` + sourceType + `) ` + targetType + ` -> value
         }
     }
 
+    /// ADR-0154 discrimination witness:
+    /// On `eb53592af` (with unconditional `return false` in `IsValueTypeAssignableToInterface`'s
+    /// `StructSymbol` arm), an imported C# `record struct` normalized to a metadata-backed
+    /// `StructSymbol` via `BuildSemanticAggregate` has empty `ImplementedClrInterfaces` and
+    /// `Interfaces`, so boxing to `IDisposable` / `sequence[string]` and reverse unboxing fail
+    /// with `GS0155` / `GS0201`. Guarding the early `return false` on `fromValueStruct.ClrType == nil`
+    /// preserves the fallback for metadata-backed structs while still rejecting unimplemented
+    /// interfaces on source structs.
+    @Fact
+    func Issue4761_ImportedRecordStructInterfaceBoxingAndUnboxing_CompilesVerifiesAndExecutes() {
+        let tempDir = CreateScratchDirectory("gsharp_4761_rec_")
+        try {
+            let refDll = CompileCSharpFixture(tempDir, "RecordBagRef", `
+using System;
+using System.Collections;
+using System.Collections.Generic;
+namespace RecordBagRef;
+public readonly record struct ImportedRecordBag(string Value) : IDisposable, IEnumerable<string>
+{
+    public void Dispose() { }
+    public IEnumerator<string> GetEnumerator() { yield return Value; }
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+}
+`)
+            let source = `
+import System
+import System.Collections.Generic
+import RecordBagRef
+
+func AsDisposable(bag ImportedRecordBag) IDisposable -> bag
+func AsSequence(bag ImportedRecordBag) sequence[string] -> bag
+func UnboxBag(disposable IDisposable) ImportedRecordBag -> cast[ImportedRecordBag](disposable)
+
+let bag = ImportedRecordBag("ok")
+let d = AsDisposable(bag)
+let roundTrip = UnboxBag(d)
+for item in AsSequence(roundTrip) {
+    Console.WriteLine(item)
+}
+`
+            let stdout = CompileVerifyAndRun(tempDir, source, referencePath: refDll)
+            Assert.Equal("ok\n".ReplaceLineEndings(Environment.NewLine), stdout)
+        } finally {
+            DeleteScratchDirectory(tempDir)
+        }
+    }
+
     shared {
         private func CreateScratchDirectory(prefix string) string {
             let path = Path.Combine(AppContext.BaseDirectory, prefix + Guid.NewGuid().ToString("N"))
