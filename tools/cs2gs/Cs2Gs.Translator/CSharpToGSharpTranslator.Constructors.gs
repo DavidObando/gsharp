@@ -194,8 +194,7 @@ partial class CSharpToGSharpTranslator {
             } else {
                 this.MapParameterList(node.ParameterList)
             }
-            if !this.emitGeneratedImplementingParts &&
-                symbol is IPropertySymbol{PartialDefinitionPart: IPropertySymbol partialDefinition} implementation {
+            if symbol is IPropertySymbol{PartialDefinitionPart: IPropertySymbol partialDefinition} implementation {
                 indexParameters = this.ReconcilePartialIndexerParameters(
                     partialDefinition,
                     implementation,
@@ -1379,15 +1378,11 @@ partial class CSharpToGSharpTranslator {
         /// @returns The member's attribute list, including any hoisted `@UnscopedRef`.
         private func MapPropertyAttributes(node BasePropertyDeclarationSyntax) List[AttributeUse] {
             let propertySymbol IPropertySymbol? = this.context.GetDeclaredSymbol(node) as IPropertySymbol
-            let definitionNode BasePropertyDeclarationSyntax? = if !this.emitGeneratedImplementingParts {
-                propertySymbol
-                    ?.PartialDefinitionPart
-                    ?.DeclaringSyntaxReferences
-                    .FirstOrDefault()
-                    ?.GetSyntax() as BasePropertyDeclarationSyntax
-            } else {
-                default(BasePropertyDeclarationSyntax?)
-            }
+            let definitionNode BasePropertyDeclarationSyntax? = propertySymbol
+                ?.PartialDefinitionPart
+                ?.DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() as BasePropertyDeclarationSyntax
             let declarations = if definitionNode != nil {
                 []BasePropertyDeclarationSyntax{definitionNode, node}
             } else {

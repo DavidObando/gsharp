@@ -3510,13 +3510,11 @@ namespace N2 {
 }
 namespace N3 {
     public sealed class Other { }
-}
+}`), ("Decl.cs", declImports + `
 namespace Demo {
     public sealed class Outer<T> {
         public delegate int Callback(int x);
     }
-}`), ("Decl.cs", declImports + `
-namespace Demo {
     public sealed partial class Rows {
         [Tag(typeof(Helper), Choice.First, Helper.FloatRate, Helper.DoubleRate, new int[] { 7 })]
         [N1.GenericTag<N1.GenericHelper<int>>(typeof(Outer<int>.Callback), Choice.First)]
@@ -3530,6 +3528,7 @@ namespace Demo {
             int step = 2] { get; }
     }
 }`), ("Impl.cs", implImports + `
+using Outer_Callback = System.String;
 namespace Demo {
     ` + innerShadowAlias + `public sealed partial class Rows {
         [Tag(typeof(Helper), Choice.Second, Helper.FloatRate, Helper.DoubleRate, new int[] { 70 })]
@@ -3619,7 +3618,7 @@ namespace Demo {
         }
         let implPrinted = File.ReadAllText(Path.Combine(dir, "Impl.gs"))
         Assert.DoesNotContain("import N1\n", implPrinted)
-        Assert.Contains("typeof(Outer_Callback)", implPrinted)
+        Assert.Contains("typeof(Demo.Outer_Callback)", implPrinted)
         Assert.DoesNotContain("typeof(Outer[int32].Callback)", implPrinted)
         if shadowLeadingNamespace {
             Assert.Contains("import N1Namespace = N1\n", implPrinted)
@@ -3657,6 +3656,10 @@ namespace Demo {
         let unboundProject = CSharpProjectLoader.LoadInMemory([](string, string){("Types.cs", `using System;
 namespace N1 {
     public sealed class GenericHelper<T> { }
+    public sealed class Outer {
+        public delegate int Callback(int x);
+        public delegate T GenericCallback<T>(T x);
+    }
     [AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter, AllowMultiple = true)]
     public sealed class MarkerAttribute : Attribute {
         public MarkerAttribute(Type type, long min = 0, double nan = 0.0, double posInf = 0.0, float negInf = 0f) {
@@ -3672,25 +3675,42 @@ namespace N1 {
         public double PosInf { get; }
         public float NegInf { get; }
     }
+    [AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter, AllowMultiple = true)]
+    public sealed class GenericMarkerAttribute<T> : Attribute {
+        public GenericMarkerAttribute(Type type) { Type = type; }
+        public Type Type { get; }
+    }
 }
 namespace N3 {
     public sealed class Other { }
-}`), ("Decl.cs", `using N1;
+}`), ("Decl.cs", `using System.Diagnostics.CodeAnalysis;
+using N1;
 namespace Demo {
-    public sealed partial class Rows {
+    public partial struct Rows {
+        private int storage;
+
         [Marker(typeof(GenericHelper<>), long.MinValue, double.NaN, double.PositiveInfinity, float.NegativeInfinity)]
-        public partial int this[[Marker(typeof(GenericHelper<int>))] int index] { get; }
+        [GenericMarker<GenericHelper<int>>(typeof(Outer.Callback))]
+        public partial ref int Value { [UnscopedRef] get; }
+
+        [Marker(typeof(Outer.GenericCallback<>))]
+        public partial int this[[Marker(typeof(GenericHelper<int>))] int index, int step = 3] { get; }
     }
-}`), ("Impl.cs", `namespace Demo {
+}`), ("Impl.cs", `using Outer_Callback = System.String;
+using Outer_GenericCallback = System.String;
+namespace Demo {
     using NS = N1;
-    using N1 = N3.Other;
     using System = N3.Other;
-    public sealed partial class Rows {
+    public partial struct Rows {
+        public static class N1 {
+            public sealed class GenericHelper<T> { }
+        }
         public static class NS {
             public sealed class GenericHelper<T> { }
         }
-        public partial int this[int index] => index;
-        public static int Use(N1 other, System sys) => other == null || sys == null ? 0 : 1;
+        public partial ref int Value => ref storage;
+        public partial int this[int index, int step] => index + step;
+        public static int Use(System sys) => sys == null ? 0 : 1;
     }
 }`)}, CSharpProjectLoader.RuntimeReferences())
         Assert.True(
@@ -3704,13 +3724,25 @@ namespace Demo {
             implDocument.FilePath
         )
         let implPrinted = GSharpPrinter.Print(
-            CSharpToGSharpTranslator(preservePartialParts: true).TranslateDocument(implDocument, implContext)
+            CSharpToGSharpTranslator(
+                preservePartialParts: true,
+                emitGeneratedImplementingParts: true
+            ).TranslateDocument(implDocument, implContext)
         )
         Assert.Contains("import N1Namespace = N1", implPrinted)
         Assert.Contains("typeof(N1Namespace.GenericHelper[_])", implPrinted)
         Assert.Contains("typeof(N1Namespace.GenericHelper[int32])", implPrinted)
+        Assert.Contains(
+            "@N1Namespace.GenericMarkerAttribute[N1Namespace.GenericHelper[int32]](typeof(N1Outer_Callback))",
+            implPrinted
+        )
+        Assert.Contains("typeof(N1Namespace.Outer_GenericCallback[_])", implPrinted)
+        Assert.Contains("@CodeAnalysisUnscopedRefAttribute", implPrinted)
+        Assert.Contains("step int32 = 3", implPrinted)
         Assert.DoesNotContain("typeof(NS.GenericHelper[int32])", implPrinted)
         Assert.DoesNotContain("typeof(N1.GenericHelper[_])", implPrinted)
+        Assert.DoesNotContain("typeof(N1.GenericHelper[int32])", implPrinted)
+        Assert.DoesNotContain("typeof(Outer_Callback)", implPrinted)
         Assert.Contains("SystemInt64.MinValue", implPrinted)
         Assert.Contains("SystemDouble.NaN", implPrinted)
         Assert.Contains("SystemDouble.PositiveInfinity", implPrinted)

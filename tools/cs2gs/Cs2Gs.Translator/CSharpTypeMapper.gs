@@ -973,7 +973,15 @@ class CSharpTypeMapper {
         precomputedTarget string?
     ) string? {
         let names = this.Names(context)
-        let simpleName string? = this.Names(context).GetName(named)
+        let simpleName string? = if IsLiftedNestedDelegate(named) {
+            let parts = Stack[string]()
+            for var current INamedTypeSymbol? = named; current != nil; current = current!!.ContainingType {
+                parts.Push(names.GetName(current)!!)
+            }
+            string.Join("_", parts)
+        } else {
+            this.Names(context).GetName(named)
+        }
         let namespaceName string? = if named!!.ContainingNamespace is {IsGlobalNamespace: false} ns {
             this.Names(context).GetNamespaceName(ns)
         } else {
@@ -1183,9 +1191,6 @@ class CSharpTypeMapper {
         ) {
             return this.QualifiedTypeName(named, context, location)!!
         }
-        if IsLiftedNestedDelegate(named) {
-            return this.LiftedNestedDelegateName(named, context)
-        }
         let definition = named.OriginalDefinition
         let qualifiedTarget = this.QualifiedAliasTarget(definition)
         let dotIndex = qualifiedTarget.IndexOf('.')
@@ -1209,9 +1214,12 @@ class CSharpTypeMapper {
             return qualifiedTarget
         }
         let leadingSegment = qualifiedTarget[.. dotIndex]
+        let leadingNamespaceShadowed = definition.ContainingNamespace is {IsGlobalNamespace: false} &&
+            this.HasVisibleSourceTypeName(leadingSegment, context, location)
         if this.reservedTypeAliases.ContainsKey(leadingSegment) || this.synthesizedTypeAliases.ContainsKey(
             leadingSegment
-        ) {
+        ) ||
+            leadingNamespaceShadowed {
             if definition.Arity == 0 &&
                 (SupportsMetadataTypeAlias(definition) || definition.Locations.Any((l Location) -> l.IsInSource)) {
                 return this.GetOrCreateImportedTypeAlias(
@@ -1255,9 +1263,9 @@ class CSharpTypeMapper {
         location Location?
     ) GTypeReference {
         if IsLiftedNestedDelegate(unboundNamed) {
-            let liftedName = this.LiftedNestedDelegateName(unboundNamed, context)
+            let baseName = this.RenderDestinationSafeTypeName(unboundNamed.OriginalDefinition, context, location)
             return NamedTypeReference(
-                liftedName,
+                baseName,
                 Enumerable.Repeat(cast[GTypeReference](NamedTypeReference("_")), unboundNamed.Arity).ToList()
             )
         }
@@ -1599,7 +1607,12 @@ class CSharpTypeMapper {
             parts.Push(nameAllocator.GetName(current)!!)
             outermost = current
         }
-        let typeName = string.Join(".", parts)
+        let separator = if IsLiftedNestedDelegate(type) {
+            "_"
+        } else {
+            "."
+        }
+        let typeName = string.Join(separator, parts)
         return if outermost!!.ContainingNamespace is {IsGlobalNamespace: false} ns {
             "${nameAllocator.GetNamespaceName(ns)}.$typeName"
         } else {
