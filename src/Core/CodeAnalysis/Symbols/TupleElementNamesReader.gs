@@ -31,9 +31,14 @@ shared class TupleElementNamesReader {
     /// absent or carries no names.
     /// @param mapped The already-mapped member type symbol.
     /// @param provider The imported parameter / field / property to read the attribute from.
-    /// @param layoutType Optional open declaration type that defines the metadata positions.
     /// @returns The (possibly) name-enriched type symbol.
-    func ApplyNames(mapped TypeSymbol, provider ICustomAttributeProvider, layoutType Type? = nil) TypeSymbol {
+    func ApplyNames(mapped TypeSymbol, provider ICustomAttributeProvider) TypeSymbol -> ApplyNames(
+        mapped,
+        provider,
+        nil
+    )
+
+    internal func ApplyNames(mapped TypeSymbol, provider ICustomAttributeProvider, layoutType Type?) TypeSymbol {
         let names = TryGetNames(provider)
         if names.IsDefaultOrEmpty {
             return mapped
