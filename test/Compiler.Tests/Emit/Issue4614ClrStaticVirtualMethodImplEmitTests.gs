@@ -726,6 +726,18 @@ import NonSzLib
 public class Shape {
     public var Tag int32
 }
+public class NonSzHolder[T] {
+    internal func MakeAnon(x INonSz[T]) -> object {
+        var Items = x.R()
+        func Tag() int32 -> 1
+    }
+    public func FirstFromConstructed(box INonSz[Shape]) Shape {
+        return NonSzHolder[Shape]().MakeAnon(box).Items[0]
+    }
+}
+public func ForwardNullableArray(x INonSz[Shape]) {
+    let _ = x.RNullable()
+}
 public func Forward(x INonSz[Shape]) int32 {
     let arr = x.R()
     return x.M(arr)
@@ -760,7 +772,6 @@ public func MutateAt(x INonSz[Shape], idx int32, v Shape) Shape {
 public func ReadNullableElement(x INonSz[Shape], idx int32) Shape? {
     return x.RNullable()[idx]
 }
-public func ForwardNullableArray(x INonSz[Shape]) -> x.RNullable()
 public func CountLoop(x INonSz[Shape]) int32 {
     var sum = 0
     for item in x.R() {
@@ -778,6 +789,7 @@ let nestedArr = cast[Array](Activator.CreateInstance(nonSzShapeType.MakeArrayTyp
 nestedArr.SetValue(zeroArr, []int32{0})
 typeof(NonSzBox[Shape]).GetField("BackingNested")!!.SetValue(box, nestedArr)
 Console.WriteLine(First(box).Tag)
+Console.WriteLine(NonSzHolder[Shape]().FirstFromConstructed(box).Tag)
 Console.WriteLine(SetAtZero(box, Shape{Tag: 99}).Tag)
 Console.WriteLine(ReadNullableElement(box, 0)?.Tag ?? -1)
 Console.WriteLine(Forward(box))
@@ -803,7 +815,7 @@ Console.WriteLine(CountLoop(box))`, validPath, "/target:exe", "/reference:" + li
                 .Select((line string) -> line.TrimEnd('\r'))
                 .Where((line string) -> line.Length > 0)
                 .ToArray()
-            Assert.Equal([]string{"42", "99", "99", "2", "1", "109", "7", "30", "38"}, lines)
+            Assert.Equal([]string{"42", "42", "99", "99", "2", "1", "109", "7", "30", "38"}, lines)
         } finally {
             Directory.Delete(tempDir, recursive: true)
         }
@@ -998,6 +1010,8 @@ public static class Probe
     public static int CallRefTup<T, TImpl>(IRefTup<T> i, T x) where TImpl : IRefTup<T> =>
         i.M(TImpl.MakeS(x)) + i.Concrete(System.Tuple.Create(3, 4));
     public static System.Tuple<int, int> MakeRefTupPair(int a, int b) => System.Tuple.Create(a, b);
+    public static System.Threading.Tasks.Task<System.Tuple<string?, int>> MakeNullableRefTupTask(string? s, int n) =>
+        System.Threading.Tasks.Task.FromResult(System.Tuple.Create(s, n));
     public static int CallRefTupDerived<T>(IRefTupDerived<T> i, T x) =>
         i.M((x, MakeRefTupPair(5, 6)));
 }`
@@ -1956,6 +1970,19 @@ class BadNullableTaskFactory : IFactory[Task[Shape]?] {
     async func Create() object { return Shape() }
 }
 Console.WriteLine("x")`, "GS0187", "'Clib.IFactory[System.Threading.Tasks.Task[Shape]?].Create"}
+            yield[]object{"select-await-task-of-nullable-reference-tuple-preserves-nested-nullability", `package P
+import System
+import Clib
+
+async func CheckSelect() string {
+    select {
+        case let tup = await Probe.MakeNullableRefTupTask(nil, 1) {
+            let bad string = tup.Item1
+            return bad
+        }
+    }
+}
+Console.WriteLine("x")`, "GS0155", "Cannot convert type 'string?' to 'string'"}
         }
 
         /// Issue #4626: symbolic CLR interface signature matcher end-to-end cases.

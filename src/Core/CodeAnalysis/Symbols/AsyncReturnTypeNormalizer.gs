@@ -84,15 +84,26 @@ internal shared class AsyncReturnTypeNormalizer {
                 current = nullable.UnderlyingType
                 continue
             }
-            if current is NullabilityAnnotatedTypeSymbol annotated &&
-                annotated.BaseType is ImportedTypeSymbol{OpenDefinition: not nil, TypeArguments: {Length: 1}} {
-                current = annotated.BaseType
-                continue
-            }
             break
         }
         if current is NullableTypeSymbol valueNullable && NullableLifting.IsAnyValueTypeNullable(valueNullable) {
             return false
+        }
+        if current is NullabilityAnnotatedTypeSymbol annotated {
+            let annotatedOpen = if annotated.BaseType is ImportedTypeSymbol{OpenDefinition: {} baseOpen} {
+                baseOpen
+            } else if annotated.ClrType is {IsGenericType: true, IsGenericTypeDefinition: false} closedTask {
+                closedTask.GetGenericTypeDefinition()
+            } else {
+                default(Type?)
+            }
+            let annotatedOpenName = annotatedOpen?.FullName
+            if annotatedOpenName == "System.Threading.Tasks.Task`1" ||
+                annotatedOpenName == "System.Threading.Tasks.ValueTask`1" {
+                awaited = annotated.GetTypeArgumentSymbol(0)
+                isValueTask = annotatedOpenName == "System.Threading.Tasks.ValueTask`1"
+                return true
+            }
         }
         // #313 symbolic construction: a Task[T] / ValueTask[T] over an in-scope
         // generic type parameter is type-erased in its ClrType, so recover the

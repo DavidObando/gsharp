@@ -1361,6 +1361,31 @@ open partial class TypeSymbol : Symbol {
                     }
                     return true
                 }
+                case ImportedTypeSymbol{
+                    OpenDefinition: nil,
+                    ClrType: {IsArray: true} importedArrayClr,
+                    TypeArguments: {Length: 1} importedArrayArgs
+                } {
+                    let substitutedElement = substitute(importedArrayArgs[0])
+                    if object.ReferenceEquals(substitutedElement, importedArrayArgs[0]) {
+                        result = type
+                    } else if importedArrayClr.IsSZArray {
+                        let effectiveElementClr = NullableLifting.GetEffectiveClrType(substitutedElement)
+                        let arrayClr = if effectiveElementClr != nil && !effectiveElementClr.ContainsGenericParameters {
+                            effectiveElementClr.MakeArrayType()
+                        } else {
+                            importedArrayClr
+                        }
+                        result = ImportedTypeSymbol.GetConstructed(
+                            arrayClr,
+                            openDefinition: nil,
+                            ImmutableArray.Create(substitutedElement)
+                        )
+                    } else {
+                        result = MemberLookup.ConstructRankOneNonSzArray(substitutedElement, importedArrayClr)
+                    }
+                    return true
+                }
                 case sequence_ is SequenceTypeSymbol {
                     let sequenceElement = substitute(sequence_.ElementType)
                     result = if object.ReferenceEquals(sequenceElement, sequence_.ElementType) {
