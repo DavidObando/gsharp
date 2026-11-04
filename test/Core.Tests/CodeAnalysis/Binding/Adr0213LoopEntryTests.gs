@@ -154,6 +154,72 @@ func Main() { }`}, EmittedOracleOptions{References: []string{fixture.AssemblyPat
     }
 
     @Fact
+    func BareStaticImportOfImportedClrFieldWithTypeInitializer_RemovesFactsInLoopAndSpan() {
+        // An imported CLR static field read through a static import (`import Adr0213ClrStaticInit.ClrHolder`) can run
+        // the declaring type's `.cctor`, removing mutable-global facts at loop and backward-jump entry (#5470, #5657),
+        // while a derived constant hiding a base static property (`ClrDerived.Hidden`) keeps by-reference facts.
+        using let fixture = CSharpFixture(`namespace Adr0213ClrStaticInit;
+public static class ClrHolder {
+    public static System.Action? OnInit;
+    public static int Seed = 1;
+    static ClrHolder() { OnInit?.Invoke(); }
+}
+public class ClrBase {
+    public static int Hidden => 99;
+}
+public class ClrDerived : ClrBase {
+    public new const int Hidden = 5;
+}`)
+        let result = EmittedOracle.Evaluate([]string{`package T
+import Adr0213ClrStaticInit.ClrDerived
+import Adr0213ClrStaticInit.ClrHolder
+class C { }
+var g C? = C()
+func ReadInLoop() int32 {
+    if g == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let a C = g
+        let v = Seed
+        n = n + 1
+    }
+    return n
+}
+func ReadInSpan() int32 {
+    if g == nil { return 0 }
+    var n = 0
+    Again:
+    let a C = g
+    let v = Seed
+    n = n + 1
+    if n < 2 { goto Again }
+    return n
+}
+func KeepRefAcrossHidingConst(ref item C?) int32 {
+    if item == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let b C = item
+        let h = Hidden
+        n = n + h
+    }
+    Again:
+    let c C = item
+    let h2 = Hidden
+    n = n + h2
+    if n < 20 { goto Again }
+    return n
+}
+func Main() { }`}, EmittedOracleOptions{References: []string{fixture.AssemblyPath}})
+        let errors = result
+            .Diagnostics
+            .Where((d Diagnostic) -> d.IsError)
+            .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("GS0155@10:19 GS0155@20:15", string.Join(" ", errors))
+    }
+
+    @Fact
     func CompoundGenericParameterOfAnImportedConversion_IsAConversion() {
         // `Use(payload, 1)` infers `T = int32` from the second argument and converts `Payload` to `List[int32]` with
         // an imported operator, which can write the storage that a `ref` parameter aliases.
@@ -3502,6 +3568,279 @@ func Run(ref text string?, n int32, threshold Threshold) int32 {
     return k
 }
 func Main() { }`, "GS0158@12:16")
+            Add("default-interface-bare-property-read-and-write-are-calls (#5470)", `package T
+import System
+class C { }
+interface IAccess {
+    prop P int32 { get; set; }
+    func ReadInLoop(ref item C?) int32 {
+        if item == nil { return 0 }
+        var n = 0
+        while n < 2 {
+            let b C = item
+            let v = P
+            n = n + 1
+        }
+        return n
+    }
+    func WriteInLoop(ref item C?) int32 {
+        if item == nil { return 0 }
+        var n = 0
+        while n < 2 {
+            let b C = item
+            P = 1
+            n = n + 1
+        }
+        return n
+    }
+}
+func Main() { }`, "GS0155@10:23 GS0155@20:23")
+            Add("inherited-clr-bare-property-read-and-write-are-calls (#5470)", `package T
+import System
+class C { }
+var g C? = C()
+class MyError : Exception {
+    func ReadInLoop(ref item C?) int32 {
+        if g == nil || item == nil { return 0 }
+        var n = 0
+        while n < 2 {
+            let a C = g
+            let b C = item
+            let m = Message
+            n = n + 1
+        }
+        return n
+    }
+    func WriteInLoop(ref item C?) int32 {
+        if g == nil || item == nil { return 0 }
+        var n = 0
+        while n < 2 {
+            let a C = g
+            let b C = item
+            HelpLink = "x"
+            n = n + 1
+        }
+        return n
+    }
+}
+func Main() { }`, "GS0155@10:23 GS0155@11:23 GS0155@21:23 GS0155@22:23")
+            Add("inherited-stable-clr-bare-getter-keeps-a-by-reference-fact (#5470, R16)", `package T
+import System
+import System.Collections.Generic
+class MyList : List[int32] {
+    func Run(ref text string?) int32 {
+        if text == nil { return 0 }
+        var n = 0
+        while text.Length > 0 && n < 2 {
+            n = n + Count + 1
+        }
+        return n
+    }
+}
+func Main() { }`, "")
+            Add("conversion-free-declarations-and-assignments-keep-every-fact (#5657)", `package T
+import System
+class C { var Value int32 }
+class Box {
+    let Item C?
+    init(item C?) { Item = item }
+}
+var g C? = C()
+func RunGlobal() C {
+    if g == nil { return C() }
+    while true {
+        let n = 1
+        return g
+    }
+    return C()
+}
+func RunCapturedAndMember(box Box) int32 {
+    var local C? = C()
+    let clear = func() { local = nil }
+    if local == nil || box.Item == nil { return 0 }
+    var k = 0
+    while k < 2 {
+        let step = 1
+        let typedStep int32 = step
+        var copy int32 = 0
+        copy = typedStep
+        k = k + 1
+    }
+    return local.Value + box.Item.Value + k
+}
+func Main() { }`, "")
+            Add("static-import-bare-getter-and-type-initializer-are-calls (#5470, #5657)", `package T
+import System
+import T.Host
+class C { }
+var g C? = C()
+class Host {
+    shared {
+        var Seed int32 = Init()
+        func Init() int32 {
+            g = nil
+            return 1
+        }
+        prop Level int32 {
+            get {
+                g = nil
+                return 1
+            }
+        }
+    }
+}
+func ReadGetter(ref item C?) int32 {
+    if g == nil || item == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let a C = g
+        let b C = item
+        let v = Level
+        n = n + 1
+    }
+    return n
+}
+func ReadInitializingField(ref item C?) int32 {
+    if g == nil || item == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let a C = g
+        let b C = item
+        let v = Seed
+        n = n + 1
+    }
+    return n
+}
+func Main() { }`, "GS0155@25:19 GS0155@26:19 GS0155@36:19 GS0155@37:19")
+            Add("populated-map-literal-is-a-call (#5657)", `package T
+import System
+class C { }
+var g C? = C()
+class Key {
+    override func GetHashCode() int32 {
+        g = nil
+        return 1
+    }
+    override func Equals(o object?) bool -> true
+}
+func Run(ref item C?, key Key) int32 {
+    if g == nil || item == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let a C = g
+        let b C = item
+        let m = map[Key, int32]{key: 1}
+        n = n + 1
+    }
+    return n
+}
+func Main() { }`, "GS0155@16:19 GS0155@17:19")
+            Add("channel-capacity-conversion-and-static-import-lexical-collision-are-calls (#5470, #5657)", `package T
+import System
+import T.Host
+class C { }
+var g C? = C()
+struct Cap { var Raw int32 }
+func operator implicit(c Cap) int32 {
+    g = nil
+    return c.Raw
+}
+class Host {
+    shared {
+        const Message string = "const"
+    }
+}
+class SubError : Exception {
+    func RunCollision(ref item C?) int32 {
+        if g == nil || item == nil { return 0 }
+        var n = 0
+        while n < 2 {
+            let a C = g
+            let b C = item
+            let m = Message
+            n = n + 1
+        }
+        return n
+    }
+}
+func RunChannel(ref item C?, cap Cap) int32 {
+    if g == nil || item == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let a C = g
+        let b C = item
+        let ch = chan[int32](cap)
+        n = n + 1
+    }
+    return n
+}
+func Main() { }`, "GS0155@33:19 GS0155@34:19 GS0155@21:23 GS0155@22:23")
+            Add(
+                "implicit-static-field-write-initializes-enclosing-owner-and-method-group-beats-static-import-property (#5470, #5657)",
+                `package T
+import System
+import T.Host
+class C { }
+var g C? = C()
+class Host {
+    shared {
+        prop Level int32 {
+            get {
+                g = nil
+                return 1
+            }
+        }
+    }
+}
+func Level() int32 -> 7
+class Outer {
+    shared {
+        var Seed int32 = 0
+        init {
+            g = nil
+        }
+    }
+    class Inner {
+        func WriteInLoop() int32 {
+            if g == nil { return 0 }
+            var n = 0
+            while n < 2 {
+                let a C = g
+                Seed = 1
+                n = n + 1
+            }
+            return n
+        }
+        func WriteInSpan() int32 {
+            if g == nil { return 0 }
+            var n = 0
+            Again:
+            let a C = g
+            Seed = 1
+            n = n + 1
+            if n < 2 { goto Again }
+            return n
+        }
+    }
+}
+func KeepRefAcrossMethodGroup(ref item C?) int32 {
+    if item == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let b C = item
+        let cb = Level
+        n = n + 1
+    }
+    Again:
+    let c C = item
+    let cb2 = Level
+    n = n + 1
+    if n < 4 { goto Again }
+    return n
+}
+func Main() { }`,
+                "GS0155@29:27 GS0155@39:23"
+            )
             return rows
         }
     }
