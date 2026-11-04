@@ -341,7 +341,7 @@ internal shared class SmartCastStability {
         return false
     }
 
-    private func IsStableClrMember(member MemberInfo) bool {
+    func IsStableClrMember(member MemberInfo) bool {
         if member is FieldInfo field {
             return !field.IsStatic && field.IsInitOnly
         }

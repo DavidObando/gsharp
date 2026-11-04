@@ -2762,7 +2762,7 @@ internal partial class ExpressionBinder {
     private func ClassifyConditionalNarrowing(condition BoundExpression)(
         WhenTrue Dictionary[AccessPath, TypeSymbol]?,
         WhenFalse Dictionary[AccessPath, TypeSymbol]?
-    ) -> ClassifyTypeTestNarrowing(condition, restrictBareVariableToLocalsAndParams: false, $scope)
+    ) -> ClassifyTypeTestNarrowing(condition, restrictBareVariableToLocalsAndParams: false)
 
     shared {
         /// Issue #5635: gets a value indicating whether [`syntax`](paramref) is a block value, also in parentheses or

@@ -1622,9 +1622,9 @@ internal partial class StatementBinder {
             }
         }
         var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition)
-        if thenNarrow == nil && elseNarrow == nil {
-            thenNarrow, elseNarrow = TryClassifyBoolCallNarrowing(condition)
-        }
+        let (boolThen, boolElse) = TryClassifyBoolCallNarrowing(condition)
+        thenNarrow = MergeNarrowingFrames(thenNarrow, boolThen)
+        elseNarrow = MergeNarrowingFrames(elseNarrow, boolElse)
         let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition, removedFacts: nil, beforeAliases)
         thenNarrow = MergeNarrowingFrames(thenNarrow, typeThen)
         elseNarrow = MergeNarrowingFrames(elseNarrow, typeElse)
@@ -2018,13 +2018,16 @@ internal partial class StatementBinder {
 
     /// Issue #2159: conservatively drops every narrowing on a local that
     /// [`node`](paramref)'s bound subtree assigns anywhere.
-    private func ClearAssignedRoots(
+    internal func ClearAssignedRoots(
         node BoundNode,
         state Dictionary[AccessPath, TypeSymbol],
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     ) {
         if state.Count == 0 {
             return
+        }
+        if node.Syntax is {} anchor {
+            EnsureClosureAssignedNames(anchor)
         }
         let collector = NewCollector(nil, callableAliases ?? externalCallableAliases)
         collector.Visit(node)

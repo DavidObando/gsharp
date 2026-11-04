@@ -245,6 +245,22 @@ Console.WriteLine("${viaTernary(1)} ${viaIf(1)} ${viaTernary(nil)} ${viaIf(nil)}
     @InlineData("s string?, n int32?", "int32", "!string.IsNullOrEmpty(s) && !(n == nil)", "s.Length + n", "0", "")
     @InlineData("s string?", "int32", "string.IsNullOrEmpty(s)", "s.Length", "0", "GS0158:Length")
     @InlineData("a int32?, b int32?", "int32", "a != nil || b != nil", "a + b", "0", "GS0156:a + b")
+    @InlineData(
+        "ref s string?",
+        "int32",
+        "!string.IsNullOrEmpty(s) && (s = nil) == nil",
+        "s.Length",
+        "0",
+        "GS0158:Length"
+    )
+    @InlineData(
+        "ref s string?",
+        "int32",
+        "string.IsNullOrEmpty(s) || (s = nil) != nil",
+        "0",
+        "s.Length",
+        "GS0158:Length"
+    )
     func Ternary_And_If_Expression_Report_The_Same_Diagnostics(
         parameters string,
         returnType string,
@@ -271,6 +287,48 @@ Console.WriteLine("${viaTernary(1)} ${viaIf(1)} ${viaTernary(nil)} ${viaIf(nil)}
 func f(s string?) int32 {
     let n = ` + conditional + `
     return n + s.Length
+}
+`)
+        Assert.Equal("GS0158:Length", DiagnoseSource(source))
+    }
+
+    @Theory
+    @InlineData("if !string.IsNullOrEmpty(g) && Clear() { return g.Length } else { return 0 }")
+    @InlineData("if string.IsNullOrEmpty(g) || Clear() { return 0 } else { return g.Length }")
+    @InlineData("if g != nil && Clear() { return g.Length } else { return 0 }")
+    @InlineData("if g == nil || Clear() { return 0 } else { return g.Length }")
+    @InlineData("return (!string.IsNullOrEmpty(g) && Clear()) ? g.Length : 0")
+    @InlineData("return (string.IsNullOrEmpty(g) || Clear()) ? 0 : g.Length")
+    @InlineData("return if !string.IsNullOrEmpty(g) && Clear() { g.Length } else { 0 }")
+    @InlineData("return if string.IsNullOrEmpty(g) || Clear() { 0 } else { g.Length }")
+    @InlineData("return (g != nil && Clear()) ? g.Length : 0")
+    @InlineData("return (g == nil || Clear()) ? 0 : g.Length")
+    func Right_Operand_Invalidation_Clears_Left_Narrowing_In_Statements_And_Expressions(body string) {
+        let source = (`package Issue4969.RightInvalidation
+var g string? = "seed"
+func Clear() bool {
+    g = nil
+    return true
+}
+func f() int32 {
+    ` + body + `
+}
+`)
+        Assert.Equal("GS0158:Length", DiagnoseSource(source))
+    }
+
+    @Theory
+    @InlineData("other.TryGet() ? _name.Length : 0")
+    @InlineData("if other.TryGet() { _name.Length } else { 0 }")
+    @InlineData("other.TryGet() && _name.Length > 0 ? 1 : 0")
+    func MemberNotNullWhen_On_NonThis_Receiver_Does_Not_Narrow_Implicit_This_Field(expr string) {
+        let source = (`package Issue4969.MemberNotNullReceiver
+import System.Diagnostics.CodeAnalysis
+class Box {
+    var _name string?
+    @MemberNotNullWhen(true, "_name")
+    func TryGet() bool -> _name != nil
+    func Check(other Box) int32 -> ` + expr + `
 }
 `)
         Assert.Equal("GS0158:Length", DiagnoseSource(source))

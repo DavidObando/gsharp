@@ -758,7 +758,8 @@ internal partial class StatementBinder {
                     // De Morgan for `&&`: then = thenL ∧ thenR (both true → both narrowings apply).
                     // The else frame is intentionally dropped — either operand could have been
                     // the false one, so we cannot single out a per-variable narrowing.
-                    let (leftThen, _) = TryClassifyTypeTestNarrowing(binary.Left, removedFacts, callableAliases)
+                    var (leftThen, _) = TryClassifyTypeTestNarrowing(binary.Left, removedFacts, callableAliases)
+                    leftThen = FilterLeftConditionNarrowings(binary.Right, leftThen, callableAliases)
                     let (rightThen, _) = TryClassifyTypeTestNarrowing(binary.Right, removedFacts, callableAliases)
                     let combinedThen Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftThen, rightThen)
                     if combinedThen == nil || combinedThen.Count == 0 {
@@ -776,7 +777,8 @@ internal partial class StatementBinder {
                     //     (canonical example: `x is T || x is T` keeps `{x → T}`).
                     //   • else = elseL ∧ elseR — when the whole `||` is false, BOTH operands
                     //     were false, so both negative narrowings apply.
-                    let (leftThen, leftElse) = TryClassifyTypeTestNarrowing(binary.Left, removedFacts, callableAliases)
+                    var (leftThen, leftElse) = TryClassifyTypeTestNarrowing(binary.Left, removedFacts, callableAliases)
+                    leftElse = FilterLeftConditionNarrowings(binary.Right, leftElse, callableAliases)
                     let (rightThen, rightElse) = TryClassifyTypeTestNarrowing(
                         binary.Right,
                         removedFacts,
@@ -793,6 +795,27 @@ internal partial class StatementBinder {
             }
         }
         return (nil, nil)
+    }
+
+    private func FilterLeftConditionNarrowings(
+        rightOperand BoundExpression,
+        leftFrame Dictionary[AccessPath, TypeSymbol]?,
+        callableAliases IReadOnlyCollection[VariableSymbol]? = nil
+    ) Dictionary[AccessPath, TypeSymbol]? {
+        if leftFrame == nil || leftFrame.Count == 0 {
+            return nil
+        }
+        var aliases = callableAliases
+        if aliases == nil && testAliasesAt is {} aliasesAt && aliasesAt.TryGetValue(rightOperand, out var atRight) {
+            aliases = atRight
+        }
+        let filtered = Dictionary[AccessPath, TypeSymbol](leftFrame)
+        ClearAssignedRoots(rightOperand, filtered, aliases)
+        return if filtered.Count == 0 {
+            default(Dictionary[AccessPath, TypeSymbol]?)
+        } else {
+            filtered
+        }
     }
 
     /// ADR-0208 R18 (#5534): the condition is bound before its effects apply, so the operand of a type test reads
@@ -915,6 +938,7 @@ internal partial class StatementBinder {
         before HashSet[VariableSymbol],
         aliasesAt Dictionary[BoundExpression, HashSet[VariableSymbol]]
     )(WhenTrue HashSet[VariableSymbol], WhenFalse HashSet[VariableSymbol]) {
+        aliasesAt[expression] = before
         switch expression {
             case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
                 {
@@ -938,7 +962,6 @@ internal partial class StatementBinder {
             }
             default {
                 {
-                    aliasesAt[expression] = before
                     let after = AliasesAfter(expression, before)
                     return (after, after)
                 }
@@ -1007,7 +1030,8 @@ internal partial class StatementBinder {
             }
             case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
                 {
-                    let (leftThen, _) = TryClassifyNilGuard(bin.Left)
+                    var (leftThen, _) = TryClassifyNilGuard(bin.Left)
+                    leftThen = FilterLeftConditionNarrowings(bin.Right, leftThen)
                     let (rightThen, _) = TryClassifyNilGuard(bin.Right)
                     let combinedThen Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftThen, rightThen)
                     if combinedThen == nil || combinedThen.Count == 0 {
@@ -1018,7 +1042,8 @@ internal partial class StatementBinder {
             }
             case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
                 {
-                    let (leftThen, leftElse) = TryClassifyNilGuard(bin.Left)
+                    var (leftThen, leftElse) = TryClassifyNilGuard(bin.Left)
+                    leftElse = FilterLeftConditionNarrowings(bin.Right, leftElse)
                     let (rightThen, rightElse) = TryClassifyNilGuard(bin.Right)
                     let combinedThen Dictionary[AccessPath, TypeSymbol]? = IntersectNarrowingFrames(leftThen, rightThen)
                     let combinedElse Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftElse, rightElse)
@@ -1072,7 +1097,8 @@ internal partial class StatementBinder {
                 return (inElse, inThen)
             }
             case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
-                let (leftThen, _) = TryClassifyBoolCallNarrowing(bin.Left)
+                var (leftThen, _) = TryClassifyBoolCallNarrowing(bin.Left)
+                leftThen = FilterLeftConditionNarrowings(bin.Right, leftThen)
                 let (rightThen, _) = TryClassifyBoolCallNarrowing(bin.Right)
                 let combinedThen Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftThen, rightThen)
                 if combinedThen == nil || combinedThen.Count == 0 {
@@ -1081,7 +1107,8 @@ internal partial class StatementBinder {
                 return (combinedThen, nil)
             }
             case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
-                let (leftThen, leftElse) = TryClassifyBoolCallNarrowing(bin.Left)
+                var (leftThen, leftElse) = TryClassifyBoolCallNarrowing(bin.Left)
+                leftElse = FilterLeftConditionNarrowings(bin.Right, leftElse)
                 let (rightThen, rightElse) = TryClassifyBoolCallNarrowing(bin.Right)
                 let combinedThen Dictionary[AccessPath, TypeSymbol]? = IntersectNarrowingFrames(leftThen, rightThen)
                 let combinedElse Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftElse, rightElse)
@@ -1092,11 +1119,7 @@ internal partial class StatementBinder {
                 return (combinedThen, combinedElse)
             }
         }
-        return TryClassifyBoolCallNarrowingLeaf(
-            condition,
-            $scope,
-            (fieldVar ImplicitFieldVariableSymbol) -> NoteAssignmentNarrowing(fieldVar)
-        )
+        return TryClassifyBoolCallNarrowingLeaf(condition, $scope)
     }
 
     private func BindStatementWithNarrowing(
@@ -1816,26 +1839,16 @@ internal partial class StatementBinder {
             return SmartCastStability.IsTypeTestNarrowing(declared, candidate)
         }
 
-        internal func TryClassifyBoolCallNarrowingLeaf(
-            condition BoundExpression,
-            $scope BoundScope? = nil,
-            onFieldNarrowed((ImplicitFieldVariableSymbol) -> void)? = nil
-        )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
+        internal func TryClassifyBoolCallNarrowingLeaf(condition BoundExpression, $scope BoundScope? = nil)(
+            Then Dictionary[AccessPath, TypeSymbol]?,
+            Else Dictionary[AccessPath, TypeSymbol]?
+        ) {
             var inner = condition
             while inner is BoundBlockExpression block {
                 inner = block.Expression
             }
             if inner is BoundImportedCallExpression importedCall && importedCall.Type == TypeSymbol.Bool {
-                var (thenFrame, elseFrame) = ClassifyImportedBoolCallNarrowing(importedCall, negate: false)
-                MergeClrMemberNotNullWhenNarrowings(
-                    importedCall.Function.Method,
-                    negate: false,
-                    $scope,
-                    onFieldNarrowed,
-                    &thenFrame,
-                    &elseFrame
-                )
-                return (thenFrame, elseFrame)
+                return ClassifyImportedBoolCallNarrowing(importedCall, negate: false)
             }
             if inner is BoundImportedInstanceCallExpression importedInstanceCall &&
                 importedInstanceCall.Type == TypeSymbol
@@ -1846,26 +1859,17 @@ internal partial class StatementBinder {
                     negate: false
                 )
                 MergeClrMemberNotNullWhenNarrowings(
+                    importedInstanceCall.Receiver,
                     importedInstanceCall.Method,
                     negate: false,
                     $scope,
-                    onFieldNarrowed,
                     &thenFrame,
                     &elseFrame
                 )
                 return (thenFrame, elseFrame)
             }
             if inner is BoundCallExpression userCall && userCall.Type == TypeSymbol.Bool {
-                var (thenFrame, elseFrame) = ClassifyUserBoolCallNarrowing(userCall, negate: false)
-                MergeUserMemberNotNullWhenNarrowings(
-                    userCall.Function.Attributes,
-                    negate: false,
-                    $scope,
-                    onFieldNarrowed,
-                    &thenFrame,
-                    &elseFrame
-                )
-                return (thenFrame, elseFrame)
+                return ClassifyUserBoolCallNarrowing(userCall, negate: false)
             }
             if inner is BoundUserInstanceCallExpression userInstanceCall && userInstanceCall.Type == TypeSymbol.Bool {
                 // Spelled with the declared `?` rather than `var (a, b) = (default(T),
@@ -1875,10 +1879,10 @@ internal partial class StatementBinder {
                 var thenFrame Dictionary[AccessPath, TypeSymbol]? = nil
                 var elseFrame Dictionary[AccessPath, TypeSymbol]? = nil
                 MergeUserMemberNotNullWhenNarrowings(
+                    userInstanceCall.Receiver,
                     userInstanceCall.Method.Attributes,
                     negate: false,
                     $scope,
-                    onFieldNarrowed,
                     &thenFrame,
                     &elseFrame
                 )
@@ -1889,10 +1893,10 @@ internal partial class StatementBinder {
 
         // Issue #208: merge [MemberNotNullWhen] field narrowings from a CLR-imported method.
         private func MergeClrMemberNotNullWhenNarrowings(
+            receiver BoundExpression?,
             method MethodInfo,
             negate bool,
             $scope BoundScope?,
-            onFieldNarrowed((ImplicitFieldVariableSymbol) -> void)?,
             ref thenFrame Dictionary[AccessPath, TypeSymbol]?,
             ref elseFrame Dictionary[AccessPath, TypeSymbol]?
         ) {
@@ -1926,16 +1930,16 @@ internal partial class StatementBinder {
                 )
             }
             for name in members {
-                NarrowFieldInScope($scope, name, frame, onFieldNarrowed)
+                NarrowFieldInScope($scope, receiver, name, frame)
             }
         }
 
         // Issue #208: merge [MemberNotNullWhen] field narrowings from a user-declared method.
         private func MergeUserMemberNotNullWhenNarrowings(
+            receiver BoundExpression?,
             attributes ImmutableArray[BoundAttribute],
             negate bool,
             $scope BoundScope?,
-            onFieldNarrowed((ImplicitFieldVariableSymbol) -> void)?,
             ref thenFrame Dictionary[AccessPath, TypeSymbol]?,
             ref elseFrame Dictionary[AccessPath, TypeSymbol]?
         ) {
@@ -1969,22 +1973,97 @@ internal partial class StatementBinder {
                     )
                 }
                 for name in members {
-                    NarrowFieldInScope($scope, name, frame, onFieldNarrowed)
+                    NarrowFieldInScope($scope, receiver, name, frame)
                 }
             }
         }
 
         private func NarrowFieldInScope(
             $scope BoundScope,
+            receiver BoundExpression?,
             fieldName string,
-            frame Dictionary[AccessPath, TypeSymbol],
-            onFieldNarrowed((ImplicitFieldVariableSymbol) -> void)?
+            frame Dictionary[AccessPath, TypeSymbol]
         ) {
             if $scope.TryLookupSymbol(fieldName) is ImplicitFieldVariableSymbol fieldVar &&
+                TargetsImplicitThis(receiver, fieldVar) &&
                 fieldVar.Type is NullableTypeSymbol nullable {
                 frame[fieldVar] = nullable.UnderlyingType
-                if onFieldNarrowed != nil {
-                    onFieldNarrowed(fieldVar)
+            }
+            if receiver != nil && SmartCastStability.TryGetStablePath(receiver) is {} receiverPath {
+                NarrowStableReceiverMember(receiver.Type, receiverPath, fieldName, frame)
+            }
+        }
+
+        private func TargetsImplicitThis(receiver BoundExpression?, implicitField ImplicitFieldVariableSymbol) bool {
+            var current = receiver
+            while current is BoundConversionExpression conversion && IsFlowTransparentConversion(conversion) {
+                current = conversion.Expression
+            }
+            return current is BoundVariableExpression variable && object.ReferenceEquals(
+                variable.Variable,
+                implicitField.Receiver
+            )
+        }
+
+        private func NarrowStableReceiverMember(
+            receiverType TypeSymbol,
+            receiverPath AccessPath,
+            memberName string,
+            frame Dictionary[AccessPath, TypeSymbol]
+        ) {
+            let unwrappedType = if receiverType is NullableTypeSymbol nullableReceiver {
+                nullableReceiver.UnderlyingType
+            } else if receiverType is PlatformTypeSymbol platformReceiver {
+                platformReceiver.UnderlyingType
+            } else {
+                receiverType
+            }
+            if unwrappedType is StructSymbol structType {
+                for owner in structType.GetHierarchy() {
+                    if !owner.Fields.IsDefaultOrEmpty {
+                        for fld in owner.Fields {
+                            if fld.Name == memberName && SmartCastStability.IsStableField(fld) &&
+                                fld.Type is NullableTypeSymbol fldNullable {
+                                frame[receiverPath.Append(fld)] = fldNullable.UnderlyingType
+                                return
+                            }
+                        }
+                    }
+                    if !owner.Properties.IsDefaultOrEmpty {
+                        for prop in owner.Properties {
+                            if prop.Name == memberName && SmartCastStability.IsStableProperty(prop) &&
+                                prop.Type is NullableTypeSymbol propNullable {
+                                frame[receiverPath.Append(prop)] = propNullable.UnderlyingType
+                                return
+                            }
+                        }
+                    }
+                }
+                return
+            }
+            if unwrappedType.ClrType is {} clrType {
+                if ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
+                    clrType,
+                    memberName,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+                ) is {} clrProp &&
+                    SmartCastStability.IsStableClrMember(clrProp) && MemberLookup.GetClrPropertyTypeSymbol(
+                    unwrappedType,
+                    clrProp
+                ) is NullableTypeSymbol clrPropNullable {
+                    frame[receiverPath.Append(clrProp)] = clrPropNullable.UnderlyingType
+                    return
+                }
+                if ClrTypeUtilities.SafeGetField(
+                    clrType,
+                    memberName,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+                ) is {} clrField &&
+                    SmartCastStability.IsStableClrMember(clrField) && MemberLookup.GetClrFieldTypeSymbol(
+                    unwrappedType,
+                    clrField
+                ) is NullableTypeSymbol clrFieldNullable {
+                    frame[receiverPath.Append(clrField)] = clrFieldNullable.UnderlyingType
                 }
             }
         }

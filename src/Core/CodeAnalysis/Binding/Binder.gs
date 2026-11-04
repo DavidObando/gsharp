@@ -564,7 +564,9 @@ partial class Binder {
                 header StatementBinder.SwitchArmHeader
             ) -> Statements.ReapplySwitchArmHeaderEffects(valueSyntax, guardSyntax, header),
             bindAfterLaterArmTests: (bindLaterTests() -> void, fallsThrough bool, bind() -> BoundNode) ->
-            Statements.BindAfterLaterArmTests(bindLaterTests, fallsThrough, bind)
+            Statements.BindAfterLaterArmTests(bindLaterTests, fallsThrough, bind),
+            clearAssignedRoots: (node BoundNode, state Dictionary[AccessPath, TypeSymbol]) ->
+            Statements.ClearAssignedRoots(node, state)
         )
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor
