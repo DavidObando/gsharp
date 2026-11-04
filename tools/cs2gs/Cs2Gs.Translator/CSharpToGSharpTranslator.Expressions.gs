@@ -6415,12 +6415,38 @@ partial class CSharpToGSharpTranslator {
                     return this.ForEachCollectionHasRegionPath(element.Expression, forEach)
                 }
                 case invocation is InvocationExpressionSyntax {
-                    return this.InvocationHasRegionPath(invocation, forEach)
+                    return this.IsPureStringFormInRegion(invocation) || this.InvocationHasRegionPath(
+                        invocation,
+                        forEach
+                    )
                 }
                 default {
-                    return false
+                    return this.IsPureStringFormInRegion(expression)
                 }
             }
+        }
+
+        private func IsPureStringFormInRegion(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
+            let inner = StripParentheses(expression)
+            if inner is Microsoft.CodeAnalysis.CSharp.Syntax.InterpolatedStringExpressionSyntax {
+                return true
+            }
+            if inner is InvocationExpressionSyntax invocation &&
+                invocation.Expression is IdentifierNameSyntax{Identifier: {ValueText: "nameof"}} &&
+                this
+                .context
+                .GetSymbolInfo(invocation)
+                .Symbol == nil {
+                return true
+            }
+            if inner is Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax literal {
+                return literal.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StringLiteralExpression) ||
+                    literal.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.Utf8StringLiteralExpression)
+            }
+            return inner is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary && binary.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.AddExpression
+            ) &&
+                this.IsPureStringFormInRegion(binary.Left) && this.IsPureStringFormInRegion(binary.Right)
         }
 
         /// Whether gsc's `RegionEffectScanner.BuildPath`/`AppendPath` and `ResolveReceiverPathCore` resolve the return
@@ -6435,12 +6461,35 @@ partial class CSharpToGSharpTranslator {
                 .GetSymbolInfo(invocation)
                 .Symbol is not IMethodSymbol method ||
                 method.IsGenericMethod ||
-                method.IsExtensionMethod ||
                 invocation.Expression is GenericNameSyntax ||
                 invocation.Expression is MemberAccessExpressionSyntax{Name: GenericNameSyntax} {
                 return false
             }
             let isCollectionRoot = object.ReferenceEquals(StripParentheses(forEach.Expression), invocation)
+            if method.IsExtensionMethod {
+                if method.ReducedFrom == nil || invocation.Expression is not MemberAccessExpressionSyntax extAccess {
+                    return false
+                }
+                if !this.ForEachCollectionHasRegionPath(extAccess.Expression, forEach) || this.IsPureStringFormInRegion(
+                    extAccess.Expression
+                ) {
+                    return false
+                }
+                let extReceiver = this.context.GetTypeInfo(extAccess.Expression).Type as INamedTypeSymbol
+                if extReceiver == nil {
+                    return false
+                }
+                for var current INamedTypeSymbol? = extReceiver; current != nil; current = current!!.BaseType {
+                    if current.GetMembers(method.Name).Length > 0 {
+                        return false
+                    }
+                }
+                return this.ExtensionMethodOverloadsResolveInRegion(
+                    method.Name,
+                    invocation.SyntaxTree,
+                    isCollectionRoot
+                )
+            }
             if invocation.Expression is IdentifierNameSyntax {
                 if method.MethodKind == MethodKind.LocalFunction {
                     return !method.DeclaringSyntaxReferences.Any(
@@ -6484,6 +6533,34 @@ partial class CSharpToGSharpTranslator {
             return true
         }
 
+        private func ExtensionMethodOverloadsResolveInRegion(
+            methodName string,
+            tree Microsoft.CodeAnalysis.SyntaxTree,
+            isCollectionRoot bool
+        ) bool {
+            var found = false
+            for ns in this.CollectRegionImportedNamespaces(tree) {
+                for type in ns.GetTypeMembers() {
+                    if !type.MightContainExtensionMethods {
+                        continue
+                    }
+                    for candidate in type.GetMembers(methodName).OfType[IMethodSymbol]() {
+                        if !candidate.IsExtensionMethod {
+                            continue
+                        }
+                        found = true
+                        if candidate.IsGenericMethod || candidate.ReturnsVoid || !this.RegionCallReturnTypeResolves(
+                            candidate.ReturnType,
+                            isCollectionRoot
+                        ) {
+                            return false
+                        }
+                    }
+                }
+            }
+            return found
+        }
+
         private func RegionCallReturnTypeResolves(returnType ITypeSymbol?, requireElementStep bool) bool {
             if returnType == nil ||
                 returnType.SpecialType == SpecialType.System_Void ||
@@ -6504,6 +6581,21 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func HasVisibleExtensionMethodInRegion(methodName string, tree Microsoft.CodeAnalysis.SyntaxTree) bool {
+            for ns in this.CollectRegionImportedNamespaces(tree) {
+                for type in ns.GetTypeMembers() {
+                    if type.MightContainExtensionMethods &&
+                        type
+                        .GetMembers(methodName)
+                        .OfType[IMethodSymbol]()
+                        .Any((candidate IMethodSymbol) -> candidate.IsExtensionMethod) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func CollectRegionImportedNamespaces(tree Microsoft.CodeAnalysis.SyntaxTree) HashSet[INamespaceSymbol] {
             let namespaces = HashSet[INamespaceSymbol](SymbolEqualityComparer.Default)
             if this.LookupGlobalNamespace("System") is {} systemNs {
                 namespaces.Add(systemNs)
@@ -6534,18 +6626,7 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             namespaces.Add(this.context.Compilation.Assembly.GlobalNamespace)
-            for ns in namespaces {
-                for type in ns.GetTypeMembers() {
-                    if type.MightContainExtensionMethods &&
-                        type
-                        .GetMembers(methodName)
-                        .OfType[IMethodSymbol]()
-                        .Any((candidate IMethodSymbol) -> candidate.IsExtensionMethod) {
-                        return true
-                    }
-                }
-            }
-            return false
+            return namespaces
         }
 
         private func LookupGlobalNamespace(name string) INamespaceSymbol? {
@@ -6667,6 +6748,10 @@ partial class CSharpToGSharpTranslator {
                     let rightInfo = this.context.GetTypeInfo(binary.Right)
                     if binary.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression) {
                         let resultType = this.context.GetTypeInfo(binary).Type
+                        if this.ExpressionEmitsCovariantArrayConversion(binary.Left, leftInfo.ConvertedType) ||
+                            this.ExpressionEmitsCovariantArrayConversion(binary.Right, resultType) {
+                            return true
+                        }
                         return TryGetNumericKind(leftInfo.Type, out var coalesceLeft) &&
                             TryGetNumericKind(rightInfo.Type, out var coalesceRight) &&
                             coalesceLeft != coalesceRight &&
@@ -6732,9 +6817,13 @@ partial class CSharpToGSharpTranslator {
                         armSource != armConverted &&
                         IsNonNullableValueType(info.ConvertedType)
                 }
-                case argument is ArgumentSyntax when argument.Parent is ArgumentListSyntax &&
-                    !this
-                    .GSharpAcceptsImplicitNumericArgument(argument) {
+                case argument is ArgumentSyntax when argument.Parent is ArgumentListSyntax {
+                    if this.ExpressionEmitsUnsignedConstantOrPointerConversion(argument.Expression) {
+                        return true
+                    }
+                    if this.GSharpAcceptsImplicitNumericArgument(argument) {
+                        return false
+                    }
                     let info = this.context.GetTypeInfo(argument.Expression)
                     if argument.Expression is Microsoft
                         .CodeAnalysis
@@ -6743,22 +6832,16 @@ partial class CSharpToGSharpTranslator {
                         .LiteralExpressionSyntax literal &&
                         literal
                         .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NumericLiteralExpression) {
-                        return (
-                            TryGetNumericKind(info.Type, out var litSource) &&
-                                TryGetNumericKind(info.ConvertedType, out var litTarget) &&
-                                litSource != litTarget &&
-                                !this.TargetsConcreteNumericParameter(argument) &&
-                                IsNonNullableValueType(info.ConvertedType)
-                        ) ||
-                            this.ExpressionEmitsUnsignedConstantOrPointerConversion(argument.Expression)
-                    }
-                    return (
-                        TryGetNumericKind(info.Type, out var argSource) &&
-                            TryGetNumericKind(info.ConvertedType, out var argTarget) &&
-                            argSource != argTarget &&
+                        return TryGetNumericKind(info.Type, out var litSource) &&
+                            TryGetNumericKind(info.ConvertedType, out var litTarget) &&
+                            litSource != litTarget &&
+                            !this.TargetsConcreteNumericParameter(argument) &&
                             IsNonNullableValueType(info.ConvertedType)
-                    ) ||
-                        this.ExpressionEmitsUnsignedConstantOrPointerConversion(argument.Expression)
+                    }
+                    return TryGetNumericKind(info.Type, out var argSource) &&
+                        TryGetNumericKind(info.ConvertedType, out var argTarget) &&
+                        argSource != argTarget &&
+                        IsNonNullableValueType(info.ConvertedType)
                 }
                 default {
                     return false
@@ -6808,11 +6891,37 @@ partial class CSharpToGSharpTranslator {
                 IsUnsignedIntegerSpecialType(info.ConvertedType!!.SpecialType) {
                 return true
             }
-            return info.Type is IPointerTypeSymbol sourcePtr &&
+            if info.Type is IPointerTypeSymbol sourcePtr &&
                 info.ConvertedType is IPointerTypeSymbol targetPtr &&
                 !SymbolEqualityComparer
                 .Default
-                .Equals(sourcePtr.PointedAtType, targetPtr.PointedAtType)
+                .Equals(sourcePtr.PointedAtType, targetPtr.PointedAtType) {
+                return true
+            }
+            return this.ExpressionEmitsCovariantArrayConversion(expression, info.ConvertedType)
+        }
+
+        private func ExpressionEmitsCovariantArrayConversion(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            targetType ITypeSymbol?
+        ) bool {
+            let info = this.context.GetTypeInfo(expression)
+            return info.Type is IArrayTypeSymbol source &&
+                targetType is IArrayTypeSymbol target &&
+                source.Rank == 1 &&
+                target.Rank == 1 &&
+                source.ElementType is {IsReferenceType: true} sourceElement &&
+                target.ElementType is {IsReferenceType: true} targetElement &&
+                sourceElement.TypeKind != TypeKind.Error &&
+                targetElement.TypeKind != TypeKind.Error &&
+                !SymbolEqualityComparer
+                .Default
+                .Equals(sourceElement, targetElement) &&
+                this
+                .context
+                .Compilation
+                .ClassifyConversion(source, target)
+                .IsImplicit
         }
 
         /// Whether the `ref` expression [`reference`](paramref) initializes or reassigns a `ref readonly` local, which

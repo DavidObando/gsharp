@@ -1245,6 +1245,19 @@ public class Demo
         }
         return s.Length + total;
     }
+    public static int CovariantArrayInLoop(ref string? s, string[] strings)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        var i = 0;
+        while (i < 1)
+        {
+            object[] copy = strings;
+            total += copy.Length;
+            i++;
+        }
+        return s.Length + total + 2;
+    }
     public static int GuardInsideLoop(ref string? s, string text)
     {
         var total = 0;
@@ -1266,14 +1279,16 @@ public class Demo
     {
         string? text = "abc";
         return ForEachCharToInt(ref text, "xy") + "," + WhileIntToLong(ref text) + "," +
-            ArrayLengthLongToInt(ref text, 2L) + "," + GuardInsideLoop(ref text, "z") + "," +
-            OutsideLoop(ref text, 4);
+            ArrayLengthLongToInt(ref text, 2L) + "," + CovariantArrayInLoop(ref text, new[] { "a" }) + "," +
+            GuardInsideLoop(ref text, "z") + "," + OutsideLoop(ref text, 4);
     }
 }`)
-        Assert.Contains("return s!!.Length + total", printed)
+        Assert.Contains("return s!!.Length + total\n", printed.Replace("\r\n", "\n"))
         Assert.Contains("total += int64(s!!.Length)", printed)
         Assert.Contains("return total + int64(s!!.Length)", printed)
         Assert.Contains("[int32(n)]uint8", printed)
+        Assert.Contains("cast[[]object](strings)", printed)
+        Assert.Contains("return s!!.Length + total + 2", printed)
         Assert.Contains("total += s.Length + 1", printed)
         Assert.Contains("return int64(s.Length) + wide", printed)
     }
@@ -1353,6 +1368,10 @@ public class Demo
     @Fact
     func RefParameter_ReadAroundAForEachOverACallWhoseLoopVariableIsRead_IsAsserted() {
         let printed = AssertRunsLikeCSharp(`
+public static class WordExtensions
+{
+    public static string[] WordParts(this string text) => new[] { text };
+}
 public sealed class Box
 {
     public static string[] Parts() => new[] { "a", "b" };
@@ -1393,20 +1412,33 @@ public class Demo
         foreach (var part in parts) total += part.Length;
         return s.Length + total + 1;
     }
-    public static int OverResolvableMemberCalls(ref string? s, Box box)
+    public static int OverResolvableMemberCalls(ref string? s, Box box, string word)
     {
         if (s == null) return 0;
         var total = 0;
         foreach (var part in Box.Parts()) total += part.Length;
         foreach (var part in box.InstanceParts()) total += part.Length;
+        foreach (var part in word.WordParts()) total += part.Length;
         return s.Length + total + 2;
+    }
+    public static int OverPureStringConcatenation(ref string? s)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var c in "a" + "b")
+        {
+            if (c == 'a') total += 1;
+        }
+        return s.Length + total + 4;
     }
     public static string Run()
     {
         string? text = "abc";
         return AfterCallCollection(ref text) + "," + InsideCallCollection(ref text) + "," +
             OverUnqualifiedStaticCall(ref text) + "," +
-            OverParameterArray(ref text, new[] { "a", "b" }) + "," + OverResolvableMemberCalls(ref text, new Box());
+            OverParameterArray(ref text, new[] { "a", "b" }) + "," +
+            OverResolvableMemberCalls(ref text, new Box(), "hi") + "," +
+            OverPureStringConcatenation(ref text);
     }
 }`)
         Assert.Contains("return s!!.Length + total\n", printed.Replace("\r\n", "\n"))
@@ -1414,14 +1446,16 @@ public class Demo
         Assert.Contains("return s!!.Length + total + 3", printed)
         Assert.Contains("return s.Length + total + 1", printed)
         Assert.Contains("return s.Length + total + 2", printed)
+        Assert.Contains("return s.Length + total + 4", printed)
         Assert.Equal(3, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null
     /// when the loop has no emitted `break` (`RecordLoopExitFacts`, ADR-0213 R7 (f)). A loop with a `break` (targeting
-    /// it or a nested loop), a loop whose condition lowers to a hoisted `break` guard, or a loop whose condition runs
-    /// an accessor that can write by-reference storage does not get the loop-exit fact on main, so its read after the
-    /// loop stays asserted.
+    /// it, a nested loop, a non-terminal switch break, or inside a lambda), a loop whose condition lowers to a hoisted
+    /// `break` guard, a loop in a function with a lowered `goto case`, or a loop whose condition runs an accessor that
+    /// can write by-reference storage does not get the loop-exit fact on main, so its read after the loop stays
+    /// asserted.
     @Fact
     func RefParameter_ReadAfterALoopWhoseExitConditionProvesNonNull_StaysBare() {
         let printed = AssertRunsLikeCSharp(`
@@ -1432,7 +1466,6 @@ public sealed class Box
 }
 public class Demo
 {
-    static object TryGet(out int value) { value = 1; return 1; }
     public static int DoLoop(ref string? s, Box box)
     {
         do { box.F = 1; s = box.F > 0 ? "abc" : null; } while (s == null);
@@ -1506,6 +1539,56 @@ public class Demo
         }
         return s.Length + 8;
     }
+    public static int WhileLoopWithLambdaBreak(ref string? s, Box box)
+    {
+        s = null;
+        while (s == null)
+        {
+            Action a = () => { while (true) { break; } };
+            a();
+            box.F = 1;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 9;
+    }
+    public static int WhileLoopWithNonTerminalSwitchBreak(ref string? s, Box box, int k)
+    {
+        s = null;
+        while (s == null)
+        {
+            switch (k)
+            {
+                case 0:
+                    if (box.F == 0) break;
+                    box.F = 2;
+                    break;
+            }
+            box.F = 1;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 10;
+    }
+    public static int WhileLoopInSwitchGotoFunction(ref string? s, Box box, int k)
+    {
+        switch (k)
+        {
+            case 0:
+                box.F = 1;
+                break;
+            case 1:
+                box.F = 2;
+                break;
+            default:
+                goto case 0;
+        }
+        s = null;
+        while (s == null)
+        {
+            box.F = 1;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 11;
+    }
     public static string Run()
     {
         string? text = "abc";
@@ -1514,10 +1597,13 @@ public class Demo
             WhileLoopWithBreak(ref text, new Box()) + "," +
             WhileConditionRunsAccessor(ref text, new Lazy<int>(() => 1)) + "," +
             WhileLoopWithNestedBreak(ref text, new Box()) + "," +
-            WhileConditionHoistsOutPattern(ref text, 1);
+            WhileConditionHoistsOutPattern(ref text, 1) + "," +
+            WhileLoopWithLambdaBreak(ref text, new Box()) + "," +
+            WhileLoopWithNonTerminalSwitchBreak(ref text, new Box(), 0) + "," +
+            WhileLoopInSwitchGotoFunction(ref text, new Box(), 2);
     }
 }`)
-        Assert.Contains("return s.Length + 1", printed)
+        Assert.Contains("return s.Length + 1\n", printed.Replace("\r\n", "\n"))
         Assert.Contains("return s.Length + 2", printed)
         Assert.Contains("return s.Length + 3", printed)
         Assert.Contains("return s.Length + 4", printed)
@@ -1525,7 +1611,10 @@ public class Demo
         Assert.Contains("return s!!.Length + 6", printed)
         Assert.Contains("return s!!.Length + 7", printed)
         Assert.Contains("return s!!.Length + 8", printed)
-        Assert.Equal(4, Regex.Matches(printed, `s!!`).Count)
+        Assert.Contains("return s!!.Length + 9", printed)
+        Assert.Contains("return s!!.Length + 10", printed)
+        Assert.Contains("return s!!.Length + 11", printed)
+        Assert.Equal(7, Regex.Matches(printed, `s!!`).Count)
     }
 
     shared {
