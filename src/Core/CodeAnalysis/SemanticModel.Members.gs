@@ -47,6 +47,10 @@ partial class SemanticModel {
     /// (`System.Array`, `Dictionary`, `Channel`, `ChannelReader`, `ChannelWriter`, `IEnumerable`), with member
     /// types read at the receiver's type arguments. The list is the one the same collection of a primitive
     /// has, extensions aside.</item>
+    /// <item>Type parameter (issue #5488): the members of each constraint, in constraint order along the
+    /// forwarded bound chain (cref:Binder.EnumerateForwardedParameterChain). When no constraint is a class,
+    /// the public instance members of `object` follow. A base-class constraint supplies only its instance
+    /// members. A member that more than one constraint reaches is listed once.</item>
     /// </list>
     /// A member that is private or protected is returned only when the enclosing declaration of
     /// [`position`](paramref) may access it. Imported members are public ones. With [`name`](paramref), only
@@ -101,24 +105,7 @@ partial class SemanticModel {
                 AddDefaultInterfaceMethods(structure, name, access, result)
             }
             case declared is InterfaceSymbol {
-                AddSourceMembers(
-                    declared,
-                    MemberQuery.Instance(MemberKinds.Property | MemberKinds.Event | MemberKinds.Method),
-                    MemberQuery.Static(MemberKinds.Property | MemberKinds.Method),
-                    name,
-                    access,
-                    result
-                )
-                for clrInterface in ClrTypeUtilities.GetTransitiveClrBaseInterfaces(declared) {
-                    // The walk is already transitive, so each interface contributes only its own members.
-                    AddClrMembersOf(
-                        ImportedTypeSymbol.GetWithoutNullability(clrInterface, NullabilityFreeReason.TypeStructure),
-                        clrInterface,
-                        BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static,
-                        name,
-                        result
-                    )
-                }
+                AddInterfaceMembers(declared, name, access, result)
             }
             case enumeration is EnumSymbol {
                 AddSourceMembers(
@@ -129,6 +116,9 @@ partial class SemanticModel {
                     access,
                     result
                 )
+            }
+            case typeParameter is TypeParameterSymbol {
+                AddTypeParameterMembers(typeParameter, name, access, result)
             }
             default {
                 if receiver.ClrType is {} clrType {
@@ -142,11 +132,178 @@ partial class SemanticModel {
         return result.ToImmutable()
     }
 
+    /// Adds the members of [`declared`](paramref), its base interfaces and its transitive CLR base interfaces.
+    private func AddInterfaceMembers(
+        declared InterfaceSymbol,
+        name string?,
+        access MemberAccessContext,
+        result ImmutableArray[Symbol].Builder
+    ) {
+        AddSourceMembers(
+            declared,
+            MemberQuery.Instance(MemberKinds.Property | MemberKinds.Event | MemberKinds.Method),
+            MemberQuery.Static(MemberKinds.Property | MemberKinds.Method),
+            name,
+            access,
+            result
+        )
+        for clrInterface in ClrTypeUtilities.GetTransitiveClrBaseInterfaces(declared) {
+            // The walk is already transitive, so each interface contributes only its own members.
+            AddClrMembersOf(
+                ImportedTypeSymbol.GetWithoutNullability(clrInterface, NullabilityFreeReason.TypeStructure),
+                clrInterface,
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static,
+                name,
+                result
+            )
+        }
+    }
+
+    /// Adds the members that a type parameter takes from its constraints, in constraint order along the
+    /// forwarded bound chain (cref:Binder.EnumerateForwardedParameterChain), and the public instance members
+    /// of `object` when no constraint is a class. A member that more than one constraint reaches is listed
+    /// once.
+    private func AddTypeParameterMembers(
+        typeParameter TypeParameterSymbol,
+        name string?,
+        access MemberAccessContext,
+        result ImmutableArray[Symbol].Builder
+    ) {
+        let candidates = ImmutableArray.CreateBuilder[Symbol]()
+        let chain = Binder.EnumerateForwardedParameterChain(typeParameter)
+        let overridden = ImportedOverrides()
+        for parameter in chain {
+            if parameter.ClassConstraint is {} rawClass && UnwrapNullability(rawClass) is StructSymbol structure {
+                AddExternalOverrides(structure, overridden)
+            }
+        }
+        var hasClassConstraint = false
+        for parameter in chain {
+            if parameter.InterfaceConstraint is {} declared {
+                AddInterfaceMembers(declared, name, access, candidates)
+            }
+            if parameter.ClrInterfaceConstraint is {} rawClrInterface {
+                let clrInterface = UnwrapNullability(rawClrInterface)
+                if clrInterface.ClrType is {} clrInterfaceType {
+                    AddClrMembers(clrInterface, clrInterfaceType, name, candidates)
+                } else if BuiltInView(clrInterface) is {} view && view.ClrType is {} viewClrType {
+                    AddClrMembers(view, viewClrType, name, candidates)
+                }
+            }
+            if parameter.ClassConstraint is {} rawClassConstraint && rawClassConstraint is not TypeParameterSymbol {
+                let classConstraint = UnwrapNullability(rawClassConstraint)
+                if classConstraint is StructSymbol structure {
+                    hasClassConstraint = true
+                    for member in TypeMemberModel.EnumerateMembers(structure, MemberQuery.Instance(MemberKinds.All)) {
+                        AddSourceMember(structure, member, name, access, candidates)
+                    }
+                    if structure.ClrType == nil {
+                        AddImportedBaseMembers(structure, name, candidates, overridden)
+                    }
+                    AddDefaultInterfaceMethods(structure, name, access, candidates)
+                } else if classConstraint.ClrType is {} clrClass {
+                    hasClassConstraint = true
+                    AddClrMembers(classConstraint, clrClass, name, candidates, includeStatic: false, overridden)
+                }
+            }
+        }
+        if !hasClassConstraint {
+            AddClrMembers(
+                ImportedTypeSymbol.GetWithoutNullability(typeof(object), NullabilityFreeReason.TypeStructure),
+                typeof(object),
+                name,
+                candidates,
+                includeStatic: false,
+                overridden
+            )
+        }
+        for candidate in candidates {
+            if !ContainsMember(result, candidate) {
+                result.Add(candidate)
+            }
+        }
+    }
+
+    private func ContainsMember(members ImmutableArray[Symbol].Builder, candidate Symbol) bool {
+        for var i = 0; i < members.Count; i++ {
+            if SameMember(members[i], candidate) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func SameMember(left Symbol, right Symbol) bool {
+        if object.ReferenceEquals(left, right) {
+            return true
+        }
+        let leftImported = ImportedMemberOf(left)
+        let rightImported = ImportedMemberOf(right)
+        if leftImported != nil || rightImported != nil {
+            return leftImported != nil && rightImported != nil && ImportedOverrides.SameDefinition(
+                leftImported,
+                rightImported
+            ) &&
+                leftImported.DeclaringType is {} leftDeclaring &&
+                rightImported.DeclaringType is {} rightDeclaring &&
+                ClrTypeInspector.IsSameAs(leftDeclaring, rightDeclaring) && object.Equals(
+                MemberTypeOf(left),
+                MemberTypeOf(right)
+            )
+        }
+        let leftSyntax = left.DeclaringSyntaxNodes
+        let rightSyntax = right.DeclaringSyntaxNodes
+        return left.GetType() == right.GetType() &&
+            !leftSyntax.IsDefaultOrEmpty &&
+            !rightSyntax.IsDefaultOrEmpty &&
+            object.ReferenceEquals(leftSyntax[0], rightSyntax[0]) && object.Equals(
+            MemberTypeOf(left),
+            MemberTypeOf(right)
+        ) &&
+            SameParameters(left, right)
+    }
+
+    private func ImportedMemberOf(symbol Symbol) MemberInfo? -> switch symbol {
+        case function is ImportedFunctionSymbol: function.Method
+        case property is PropertySymbol: property.ImportedMember
+        case field is FieldSymbol: field.ImportedMember
+        case clrEvent is EventSymbol: clrEvent.ImportedMember
+        default: default(MemberInfo?)
+    }
+
+    private func MemberTypeOf(symbol Symbol) TypeSymbol? -> switch symbol {
+        case function is ImportedFunctionSymbol: function.Type
+        case function is FunctionSymbol: function.Type
+        case property is PropertySymbol: property.Type
+        case field is FieldSymbol: field.Type
+        case clrEvent is EventSymbol: clrEvent.Type
+        default: default(TypeSymbol?)
+    }
+
+    private func SameParameters(left Symbol, right Symbol) bool {
+        if left is FunctionSymbol leftFunction && right is FunctionSymbol rightFunction {
+            if leftFunction.Parameters.Length != rightFunction.Parameters.Length {
+                return false
+            }
+            for var i = 0; i < leftFunction.Parameters.Length; i++ {
+                if !object.Equals(leftFunction.Parameters[i].Type, rightFunction.Parameters[i].Type) {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
     /// Adds the public instance members that a source class or struct inherits from its imported base class,
     /// and from `object` when it has none, read at that base. A class reaches metadata through its nearest
     /// imported base (cref:ExpressionBinder.GetInheritedClrBaseType), the rule the binder uses to bind an
     /// inherited member.
-    private func AddImportedBaseMembers(structure StructSymbol, name string?, result ImmutableArray[Symbol].Builder) {
+    private func AddImportedBaseMembers(
+        structure StructSymbol,
+        name string?,
+        result ImmutableArray[Symbol].Builder,
+        overridden ImportedOverrides? = nil
+    ) {
         var baseType TypeSymbol? = nil
         for current in structure.GetHierarchy() {
             if current.ImportedBaseType is {} imported {
@@ -154,7 +311,7 @@ partial class SemanticModel {
                 break
             }
         }
-        let overridden = ExternalOverrides(structure)
+        let effectiveOverridden = overridden ?? ExternalOverrides(structure)
         if baseType == nil {
             AddClrMembers(
                 ImportedTypeSymbol.GetWithoutNullability(typeof(object), NullabilityFreeReason.TypeStructure),
@@ -162,10 +319,10 @@ partial class SemanticModel {
                 name,
                 result,
                 includeStatic: false,
-                overridden
+                effectiveOverridden
             )
         } else if baseType.ClrType is {} baseClr {
-            AddClrMembers(baseType, baseClr, name, result, includeStatic: false, overridden)
+            AddClrMembers(baseType, baseClr, name, result, includeStatic: false, effectiveOverridden)
         }
     }
 
@@ -173,6 +330,11 @@ partial class SemanticModel {
     /// override. The override stands for the slot: the imported member is not listed again.
     private func ExternalOverrides(structure StructSymbol) ImportedOverrides {
         let overridden = ImportedOverrides()
+        AddExternalOverrides(structure, overridden)
+        return overridden
+    }
+
+    private func AddExternalOverrides(structure StructSymbol, overridden ImportedOverrides) {
         for member in TypeMemberModel.EnumerateMembers(structure, MemberQuery.Instance(MemberKinds.All)) {
             switch member {
                 case function is FunctionSymbol {
@@ -194,7 +356,6 @@ partial class SemanticModel {
                 }
             }
         }
-        return overridden
     }
 
     /// The imported methods that source members override: by the slot the binder recorded, or, for an override
@@ -226,16 +387,18 @@ partial class SemanticModel {
             )
         }
 
-        private func SameDefinition(left MethodInfo, right MethodInfo) bool {
-            try {
-                return left.MetadataToken == right.MetadataToken &&
-                    left
-                    .Module
-                    .ModuleVersionId == right
-                    .Module
-                    .ModuleVersionId
-            } catch (Exception) {
-                return false
+        shared {
+            internal func SameDefinition(left MemberInfo, right MemberInfo) bool {
+                try {
+                    return left.MetadataToken == right.MetadataToken &&
+                        left
+                        .Module
+                        .ModuleVersionId == right
+                        .Module
+                        .ModuleVersionId
+                } catch (Exception) {
+                    return false
+                }
             }
         }
 
@@ -412,7 +575,10 @@ partial class SemanticModel {
                 return ImmutableArray[Symbol].Empty
             }
             let receiverType TypeSymbol? = switch call {
-                case instanceCall is BoundImportedInstanceCallExpression: instanceCall.Receiver.Type
+                case instanceCall is BoundImportedInstanceCallExpression: instanceCall.ConstrainedInterfaceType ??
+                    instanceCall
+                    .Receiver
+                    .Type
                 case importedCall is BoundImportedCallExpression: importedCall.StaticContainerType
                 default: default(TypeSymbol?)
             }
@@ -452,13 +618,7 @@ partial class SemanticModel {
 
     // An imported member can differ from its G# spelling (`@return` in metadata is `return_`).
     private func SpellsName(symbol Symbol, name string) bool {
-        let member MemberInfo? = switch symbol {
-            case function is ImportedFunctionSymbol: function.Method
-            case property is PropertySymbol: property.ImportedMember
-            case field is FieldSymbol: field.ImportedMember
-            case clrEvent is EventSymbol: clrEvent.ImportedMember
-            default: default(MemberInfo?)
-        }
+        let member = ImportedMemberOf(symbol)
         return if member != nil {
             ClrTypeUtilities.EmittedMemberNameMatches(member, name)
         } else {
