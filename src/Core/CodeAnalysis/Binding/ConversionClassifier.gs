@@ -5989,6 +5989,12 @@ internal class ConversionClassifier {
             if mapped.Equals(expected) {
                 return true
             }
+            if mapped is NullableTypeSymbol mappedNullable &&
+                expected is NullableTypeSymbol expectedNullable &&
+                NullableLifting.IsAnyValueTypeNullable(mappedNullable) ==
+            NullableLifting.IsAnyValueTypeNullable(expectedNullable) {
+                return IsSameSymbolicType(mappedNullable.UnderlyingType, expectedNullable.UnderlyingType)
+            }
             if !(mapped is ImportedTypeSymbol{OpenDefinition: {} mappedOpen} mappedImported) ||
                 !(expected is ImportedTypeSymbol{OpenDefinition: {} expectedOpen} expectedImported) ||
                 mappedOpen != expectedOpen ||
