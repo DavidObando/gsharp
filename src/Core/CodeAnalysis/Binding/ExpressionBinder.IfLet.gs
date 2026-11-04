@@ -75,7 +75,8 @@ internal partial class ExpressionBinder {
             DeclareIfLetLocal,
             (guardSyntax ExpressionSyntax) -> BindExpression(guardSyntax, TypeSymbol.Bool),
             (boundGuard BoundExpression) -> ClassifyConditionalNarrowing(boundGuard).WhenTrue,
-            () -> BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
+            () -> BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType),
+            syntax.ThenBlock
         )
         var whenTrue = whenTrueBound
         var anyInvalid = false

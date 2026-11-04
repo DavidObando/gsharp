@@ -166,7 +166,8 @@ internal partial class ExpressionBinder {
                 guardWhenTrue,
                 () -> {
                     return BindExpressionWithNarrowing(armSyntax.Result, frame, targetType, canBeVoid)
-                }
+                },
+                armSyntax.Result
             )
             $scope = $scope.Pop()
             boundArmBuilders.Add((armSyntax, pattern, guard_, armResult))
