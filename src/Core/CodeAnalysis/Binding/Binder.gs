@@ -305,7 +305,20 @@ partial class Binder {
             conversions,
             bindExpression: (syntax ExpressionSyntax) -> Expressions.BindExpression(syntax),
             bindTypeClause: BindTypeClause,
-            isNilLiteral: StatementBinder.IsNilLiteral
+            isNilLiteral: StatementBinder.IsNilLiteral,
+            bindEqualityOperation: (syntax RelationalPatternSyntax, input BoundExpression, value BoundExpression) -> {
+                return Expressions.BindBinaryOperation(
+                    syntax,
+                    syntax.OperatorToken.Kind,
+                    syntax.OperatorToken.Location,
+                    syntax.OperatorToken.Text,
+                    syntax.Location,
+                    input,
+                    value,
+                    syntax.Location,
+                    syntax.Expression.Location
+                )
+            }
         )
         // ADR-0185: bindLocalVariable/bindTupleDestructuringPrelude below
         // reuse StatementBinder's own local-declaration callback and its
@@ -7212,8 +7225,8 @@ partial class Binder {
             // static-member calls, matching the visibility a constructor body has.
             // (Parameter default values already drained above, before this
             // point — see the #4183/#4192 comment above DetectClassInheritanceCycles.)
-            binder.declarations.BindPendingBaseInitializers()
             binder.declarations.BindPendingFieldInitializers()
+            binder.declarations.BindPendingBaseInitializers()
             binder.declarations.ExpandStructInterfaceClosures()
             // Issue #4481: every class's base class, every source interface's base
             // clause and every class's implemented-interface closure are populated

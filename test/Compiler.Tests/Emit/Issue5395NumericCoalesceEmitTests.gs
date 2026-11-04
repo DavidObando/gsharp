@@ -169,4 +169,74 @@ func Main() {
             fixture.RunBytes(assembly)
         )
     }
+
+    @Fact
+    func AsyncNullableUInt64CoalesceConvertedToInt32ConstructorArg_VerifiesAndRuns() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let assembly = fixture.Compile(`package Reproduction5487
+import System
+import System.Threading.Tasks
+
+class Result(txid string, fee uint64, change uint64, count int32) {
+    let Count int32 = count
+}
+
+func Count(present bool) uint64? {
+    if present {
+        return uint64(1)
+    }
+    return nil
+}
+
+func NarrowCount(present bool) uint32? {
+    if present {
+        return uint32(7)
+    }
+    return nil
+}
+
+async func ReadAsync(present bool) Result {
+    await Task.Delay(1)
+    return Result("txid", uint64(3), uint64(2), int32(Count(present) ?? 0))
+}
+
+func WidenedNullableCoalesce(present bool, fallback uint64?) int32 ->
+    int32((NarrowCount(present) ?? fallback) ?? 0)
+
+struct BoxedTag5487(Value int32) : IComparable {
+    func CompareTo(other object?) int32 -> 0
+}
+
+func ChooseComparable(x int32?, y string) IComparable -> x ?? y
+
+func ChooseSymbolicComparable(x BoxedTag5487?, y string) IComparable -> x ?? y
+
+func ChooseTupleNullable(left (int32, string)?, right (int32, string?)?) (int32, string?)? -> left ?? right
+
+func ChooseSymbolicTupleNullable(left (BoxedTag5487, string)?, right (BoxedTag5487, string?)?) (BoxedTag5487, string?)? -> left ?? right
+
+func Main() {
+    Console.WriteLine(ReadAsync(false).GetAwaiter().GetResult().Count)
+    Console.WriteLine(ReadAsync(true).GetAwaiter().GetResult().Count)
+    Console.WriteLine(WidenedNullableCoalesce(false, uint64(9)))
+    Console.WriteLine(WidenedNullableCoalesce(true, uint64(9)))
+    Console.WriteLine(ChooseComparable(42, "fallback"))
+    Console.WriteLine(ChooseComparable(nil, "fallback"))
+    Console.WriteLine(ChooseSymbolicComparable(BoxedTag5487(11), "fallback").CompareTo(nil))
+    Console.WriteLine(ChooseSymbolicComparable(nil, "fallback"))
+    let tuplePresent = ChooseTupleNullable((5, "ok"), (6, default(string?)))
+    let tupleAbsent = ChooseTupleNullable(nil, (6, default(string?)))
+    Console.WriteLine(tuplePresent!!.Item1)
+    Console.WriteLine(tupleAbsent!!.Item1)
+    let symPresent = ChooseSymbolicTupleNullable((BoxedTag5487(13), "ok"), (BoxedTag5487(14), default(string?)))
+    let symAbsent = ChooseSymbolicTupleNullable(nil, (BoxedTag5487(14), default(string?)))
+    Console.WriteLine(symPresent!!.Item1.Value)
+    Console.WriteLine(symAbsent!!.Item1.Value)
+}`, "reproduction-5487", true)
+        IlVerifier.Verify(assembly)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("0\n1\n9\n7\n42\nfallback\n0\nfallback\n5\n6\n13\n14\n"),
+            fixture.RunBytes(assembly)
+        )
+    }
 }

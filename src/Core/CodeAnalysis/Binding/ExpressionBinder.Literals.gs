@@ -2358,6 +2358,9 @@ internal partial class ExpressionBinder {
                     // A later explicit write must not leave an earlier Add
                     // observing a raw null. Seed only mandatory zero values,
                     // not a skipped, possibly effectful field initializer.
+                    if hasContentElement {
+                        binderCtx.EnsureStructFieldInitializerBound?.Invoke(structSymbol, nil)
+                    }
                     if hasContentElement &&
                         !(structSymbol!!.Definition ?? structSymbol)!!
                         .NeedsSynthesizedValueStructDefaultCtor {
@@ -2368,6 +2371,8 @@ internal partial class ExpressionBinder {
                     }
                     continue
                 }
+                // Issue #5596: bind each omitted field's default initializer on demand.
+                binderCtx.EnsureStructFieldInitializerBound?.Invoke(structSymbol, field)
                 if structSymbol!!.InstanceFieldInitializers.TryGetValue(field, out var initExpr) {
                     inits.Add(BoundFieldInitializer(field, initExpr){IsDeclarationInitializer = true})
                     seenFieldNames.Add(field.Name)

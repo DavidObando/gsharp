@@ -123,7 +123,83 @@ func Main() {
         Assert.Equal("5${Environment.NewLine}", output)
     }
 
+    @Fact
+    func EndToEnd_StructAndUnmanagedNullableUnwrapAndNullableObjectBox_BindsAndRuns() {
+        // Issue #4735: explicit `T? -> T` unwrap (`T(value)`) and implicit
+        // `T? -> object?` boxing for `struct` and `unmanaged` constraints.
+        let source = `package Probe4735
+import System
+
+func UnwrapStruct[T struct](value T?) T -> T(value)
+func UnwrapUnmanaged[T unmanaged](value T?) T -> T(value)
+func BoxStruct[T struct](value T?) object? -> value
+func BoxUnmanaged[T unmanaged](value T?) object? -> value
+func RowUnwrap[T struct]() (Value object, Code int32) -> (T(default(T?)), 1)
+func RowBox[T struct]() (Value object?, Code int32) -> (T?(default(object)), 1)
+
+func Main() {
+    Console.WriteLine(UnwrapStruct[int32](19))
+    Console.WriteLine(UnwrapUnmanaged[int32](23))
+    try {
+        let _ = UnwrapStruct[int32](nil)
+        Console.WriteLine("unexpected")
+    } catch (ex InvalidOperationException) {
+        Console.WriteLine("unwrap-empty")
+    }
+    try {
+        let _ = RowUnwrap[int32]()
+        Console.WriteLine("unexpected")
+    } catch (ex InvalidOperationException) {
+        Console.WriteLine("row-unwrap-empty")
+    }
+    Console.WriteLine(BoxStruct[int32](29)!!)
+    Console.WriteLine(BoxStruct[int32](nil) == nil)
+    Console.WriteLine(BoxUnmanaged[int32](31)!!)
+    Console.WriteLine(BoxUnmanaged[int32](nil) == nil)
+    let row = RowBox[int32]()
+    Console.WriteLine((row.Value == nil) && (row.Code == 1))
+}`
+        let output = CompileAndRun(source)
+        Assert.Equal(
+            "19${Environment.NewLine}23${Environment.NewLine}unwrap-empty${Environment.NewLine}row-unwrap-empty${Environment.NewLine}29${Environment.NewLine}True${Environment.NewLine}31${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}",
+            output
+        )
+        let negativeSource = `package Probe4735Negative
+func ImplicitStruct[T struct](value T?) T -> value
+func ImplicitUnmanaged[T unmanaged](value T?) T -> value`
+        let (negExit, negOut, negErr) = CompileOnly(negativeSource)
+        Assert.NotEqual(0, negExit)
+        Assert.Contains("GS0155", negOut + negErr)
+    }
+
     shared {
+        private func CompileOnly(source string)(ExitCode int32, Stdout string, Stderr string) {
+            let tempDir = Directory.CreateTempSubdirectory("gs_1455_neg_").FullName
+            try {
+                let srcPath = Path.Combine(tempDir, "test.gs")
+                let dllPath = Path.Combine(tempDir, "test.dll")
+                File.WriteAllText(srcPath, source)
+                let args = []string{"/out:" + dllPath, "/target:library", "/targetframework:net10.0", srcPath}
+                using let stdoutWriter = StringWriter()
+                using let stderrWriter = StringWriter()
+                let prevOut = Console.Out
+                let prevErr = Console.Error
+                Console.SetOut(stdoutWriter)
+                Console.SetError(stderrWriter)
+                try {
+                    let compileExit = Program.Main(args)
+                    return (compileExit, stdoutWriter.ToString(), stderrWriter.ToString())
+                } finally {
+                    Console.SetOut(prevOut)
+                    Console.SetError(prevErr)
+                }
+            } finally {
+                try {
+                    Directory.Delete(tempDir, recursive: true)
+                } catch { }
+            }
+        }
+
         private func CompileAndRun(source string) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_1455_exe_").FullName
             try {

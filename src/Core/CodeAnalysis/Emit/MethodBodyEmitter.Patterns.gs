@@ -614,6 +614,15 @@ internal partial class MethodBodyEmitter {
     }
 
     private func EmitRelationalPattern(rp BoundRelationalPattern, loadValue() -> void, failLabel LabelHandle) {
+        if rp.Test is {} test {
+            // Issue #5688: the test is the binary operation `input op value`. It converts the stored input, evaluates
+            // the value, and applies the operator in the order of the expression.
+            loadValue()
+            this.il.StoreLocal(this.locals[rp.InputVariable!!])
+            this.EmitExpression(test)
+            this.il.Branch(ILOpCode.Brfalse, failLabel)
+            return
+        }
         if rp.InputVariable is {} inputVariable {
             this.EmitNullableRelationalPattern(rp, inputVariable, loadValue, failLabel)
             return
@@ -624,9 +633,9 @@ internal partial class MethodBodyEmitter {
         this.il.Branch(ILOpCode.Brfalse, failLabel)
     }
 
-    // Issue #5681: a relational pattern on a value-type `T?` input has the lifted operator result.
-    // Ordering fails when an operand is nil. `==` matches two nils. `!=` matches when exactly one operand is nil.
-    // Both operands are evaluated once, in source order, before the `HasValue` tests. A literal value stays inline.
+    // Issue #5681: an ordering pattern on a value-type `T?` input has the lifted operator result: it fails when an
+    // operand is nil. Both operands are evaluated once, in source order, before the `HasValue` tests. A literal value
+    // stays inline. A `==` or `!=` pattern has a test (issue #5688) and does not come here.
     private func EmitNullableRelationalPattern(
         rp BoundRelationalPattern,
         inputVariable LocalVariableSymbol,
@@ -644,10 +653,8 @@ internal partial class MethodBodyEmitter {
         let getHasValue = this.GetNullableHasValueRef(nullableInput)
         let getValue = this.GetNullableValueRef(nullableInput)
         let kind = rp.Op.Kind
-        let isEquality = kind == BoundBinaryOperatorKind.Equals || kind == BoundBinaryOperatorKind.NotEquals
         // The binder gives the value the type `T` when only the input can be nil.
         let valueIsNullable = rp.Value.Type != nullableInput.UnderlyingType
-        let matchLabel = this.il.DefineLabel()
         let inputSlot = this.locals[inputVariable]
         loadValue()
         this.il.StoreLocal(inputSlot)
@@ -664,40 +671,9 @@ internal partial class MethodBodyEmitter {
             this.il.LoadLocalAddress(valueSlot)
             this.il.OpCode(ILOpCode.Call)
             this.il.Token(getHasValue)
-            if isEquality {
-                this.il.Branch(
-                    ILOpCode.Bne_un,
-                    if kind == BoundBinaryOperatorKind.NotEquals {
-                        matchLabel
-                    } else {
-                        failLabel
-                    }
-                )
-                this.il.LoadLocalAddress(inputSlot)
-                this.il.OpCode(ILOpCode.Call)
-                this.il.Token(getHasValue)
-                this.il.Branch(
-                    ILOpCode.Brfalse,
-                    if kind == BoundBinaryOperatorKind.Equals {
-                        matchLabel
-                    } else {
-                        failLabel
-                    }
-                )
-            } else {
-                this.il.OpCode(ILOpCode.And)
-                this.il.Branch(ILOpCode.Brfalse, failLabel)
-            }
-        } else {
-            this.il.Branch(
-                ILOpCode.Brfalse,
-                if kind == BoundBinaryOperatorKind.NotEquals {
-                    matchLabel
-                } else {
-                    failLabel
-                }
-            )
+            this.il.OpCode(ILOpCode.And)
         }
+        this.il.Branch(ILOpCode.Brfalse, failLabel)
         this.il.LoadLocalAddress(inputSlot)
         this.il.OpCode(ILOpCode.Call)
         this.il.Token(getValue)
@@ -712,7 +688,6 @@ internal partial class MethodBodyEmitter {
         }
         this.EmitRelationalComparison(kind, nullableInput.UnderlyingType)
         this.il.Branch(ILOpCode.Brfalse, failLabel)
-        this.il.MarkLabel(matchLabel)
     }
 
     // Leaves the bool result of comparing the two `operandType` values on the stack.
