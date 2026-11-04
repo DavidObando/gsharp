@@ -887,42 +887,8 @@ open class Issue4988SignatureNullabilityMatrixTests {
 
         /// The netstandard2.0 contract: the NETStandard.Library 2.0 package's
         /// reference assembly when the NuGet cache has it, otherwise the SDK's
-        /// NETStandard.Library.Ref pack (as Issue4921HostFallbackEmbeddableAttributeTests does).
-        private func FindNetStandardReference() string? {
-            let packages = Environment.GetEnvironmentVariable("NUGET_PACKAGES") ?? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".nuget",
-                "packages"
-            )
-            let packageRoot = Path.Combine(packages, "netstandard.library")
-            if Directory.Exists(packageRoot) {
-                let packaged string? = Directory
-                    .GetFiles(packageRoot, "netstandard.dll", SearchOption.AllDirectories)
-                    .Where(
-                    (p string) -> p.Contains(Path.Combine("build", "netstandard2.0", "ref"), StringComparison.Ordinal)
-                )
-                    .OrderByDescending((p string) -> p, StringComparer.Ordinal)
-                    .FirstOrDefault()
-                if packaged != nil {
-                    return packaged
-                }
-            }
-            var dotnetRoot string? = Path.GetDirectoryName(typeof(object).Assembly.Location)
-            while dotnetRoot != nil && !Directory.Exists(Path.Combine(dotnetRoot, "packs")) {
-                dotnetRoot = Path.GetDirectoryName(dotnetRoot)
-            }
-            if dotnetRoot == nil {
-                return nil
-            }
-            let packRoot = Path.Combine(dotnetRoot, "packs", "NETStandard.Library.Ref")
-            if !Directory.Exists(packRoot) {
-                return nil
-            }
-            return Directory
-                .GetFiles(packRoot, "netstandard.dll", SearchOption.AllDirectories)
-                .OrderByDescending((p string) -> p, StringComparer.Ordinal)
-                .FirstOrDefault()
-        }
+        /// NETStandard.Library.Ref pack scrubbed to the netstandard2.0 surface.
+        private func FindNetStandardReference() string? -> Issue4921HostFallbackEmbeddableAttributeTests.FindNetStandardReference()
 
         private func TryDelete(directory string) {
             try {

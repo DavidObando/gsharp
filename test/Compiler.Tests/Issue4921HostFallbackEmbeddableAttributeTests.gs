@@ -11,6 +11,7 @@ import System.IO
 import System.Linq
 import System.Reflection
 import System.Reflection.Metadata
+import System.Reflection.Metadata.Ecma335
 import System.Reflection.PortableExecutable
 import Xunit
 
@@ -781,41 +782,113 @@ let k = 1
 Console.WriteLine("${r1 == r2 && r1.GetHashCode() == r2.GetHashCode()} ${r1 == r3} ${p1 == p2 && p1.GetHashCode() == p2.GetHashCode() && w1.GetHashCode() == w2.GetHashCode()} ${m1 == m2 && m1.GetHashCode() == m2.GetHashCode()} ${box.Read(in k)}")
 `
 
+        private let netStandardCacheLock object = Object()
+        private var cachedNetStandard20Path string?
+
         // NuGet cache NETStandard.Library 2.0 ref assembly, or <dotnet-root>/packs/NETStandard.Library.Ref/<version>/ref/<tfm>/netstandard.dll
-        private func FindNetStandardReference() string? {
-            let packages = Environment.GetEnvironmentVariable("NUGET_PACKAGES") ?? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".nuget",
-                "packages"
-            )
-            let packageRoot = Path.Combine(packages, "netstandard.library")
-            if Directory.Exists(packageRoot) {
-                let packaged string? = Directory
-                    .GetFiles(packageRoot, "netstandard.dll", SearchOption.AllDirectories)
-                    .Where(
-                    (p string) -> p.Contains(Path.Combine("build", "netstandard2.0", "ref"), StringComparison.Ordinal)
+        // scrubbed to the netstandard2.0 surface (without netstandard2.1's IsReadOnlyAttribute / HashCode).
+        internal func FindNetStandardReference() string? {
+            lock netStandardCacheLock {
+                if cachedNetStandard20Path != nil && File.Exists(cachedNetStandard20Path) {
+                    return cachedNetStandard20Path
+                }
+                let packages = Environment.GetEnvironmentVariable("NUGET_PACKAGES") ?? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".nuget",
+                    "packages"
                 )
+                let packageRoot = Path.Combine(packages, "netstandard.library")
+                if Directory.Exists(packageRoot) {
+                    let packaged string? = Directory
+                        .GetFiles(packageRoot, "netstandard.dll", SearchOption.AllDirectories)
+                        .Where(
+                        (p string) -> p.Contains(
+                            Path.Combine("build", "netstandard2.0", "ref"),
+                            StringComparison.Ordinal
+                        )
+                    )
+                        .OrderByDescending((p string) -> p, StringComparer.Ordinal)
+                        .FirstOrDefault()
+                    if packaged != nil {
+                        cachedNetStandard20Path = EnsureNetStandard20Surface(packaged)
+                        return cachedNetStandard20Path
+                    }
+                }
+                var dotnetRoot string? = Path.GetDirectoryName(typeof(object).Assembly.Location)
+                while dotnetRoot != nil && !Directory.Exists(Path.Combine(dotnetRoot, "packs")) {
+                    dotnetRoot = Path.GetDirectoryName(dotnetRoot)
+                }
+                var packRoot = if dotnetRoot != nil {
+                    Path.Combine(dotnetRoot, "packs", "NETStandard.Library.Ref")
+                } else {
+                    ""
+                }
+                if !Directory.Exists(packRoot) && Directory.Exists(
+                    "/usr/local/share/dotnet/packs/NETStandard.Library.Ref"
+                ) {
+                    packRoot = "/usr/local/share/dotnet/packs/NETStandard.Library.Ref"
+                }
+                if !Directory.Exists(packRoot) {
+                    return nil
+                }
+                let packCandidate = Directory
+                    .GetFiles(packRoot, "netstandard.dll", SearchOption.AllDirectories)
                     .OrderByDescending((p string) -> p, StringComparer.Ordinal)
                     .FirstOrDefault()
-                if packaged != nil {
-                    return packaged
+                if packCandidate == nil {
+                    return nil
+                }
+                cachedNetStandard20Path = EnsureNetStandard20Surface(packCandidate)
+                return cachedNetStandard20Path
+            }
+        }
+
+        internal func EnsureNetStandard20Surface(path string) string {
+            let bytes = File.ReadAllBytes(path)
+            var patched = false
+            {
+                using let memory = MemoryStream(bytes, writable: false)
+                using let peReader = PEReader(memory)
+                let reader = peReader.GetMetadataReader()
+                let metadataStart = peReader.PEHeaders.MetadataStartOffset
+                let typeDefTableOffset = metadataStart + reader.GetTableMetadataOffset(TableIndex.TypeDef)
+                let typeDefRowSize = reader.GetTableRowSize(TableIndex.TypeDef)
+                for handle in reader.TypeDefinitions {
+                    let definition = reader.GetTypeDefinition(handle)
+                    if (definition.Attributes & TypeAttributes.VisibilityMask) != TypeAttributes.Public {
+                        continue
+                    }
+                    let ns = reader.GetString(definition.Namespace)
+                    let name = reader.GetString(definition.Name)
+                    if (ns == "System" && name == "HashCode") ||
+                        (ns == "System.Runtime.CompilerServices" && name == "IsReadOnlyAttribute") {
+                        let rowNumber = MetadataTokens.GetRowNumber(handle)
+                        let flagsOffset = typeDefTableOffset + ((rowNumber - 1) * typeDefRowSize)
+                        bytes[flagsOffset] = cast[uint8](bytes[flagsOffset] & 0xF8)
+                        patched = true
+                    }
                 }
             }
-            var dotnetRoot string? = Path.GetDirectoryName(typeof(object).Assembly.Location)
-            while dotnetRoot != nil && !Directory.Exists(Path.Combine(dotnetRoot, "packs")) {
-                dotnetRoot = Path.GetDirectoryName(dotnetRoot)
+            if !patched {
+                return path
             }
-            if dotnetRoot == nil {
-                return nil
+            let cacheDir = Path.Combine(AppContext.BaseDirectory, "netstandard20-surface-cache")
+            Directory.CreateDirectory(cacheDir)
+            let sourceDir = Path.GetDirectoryName(path)
+            if sourceDir != nil {
+                for dll in Directory.GetFiles(sourceDir, "*.dll") {
+                    let fileName = Path.GetFileName(dll)
+                    if !string.Equals(fileName, "netstandard.dll", StringComparison.OrdinalIgnoreCase) {
+                        let dest = Path.Combine(cacheDir, fileName)
+                        if !File.Exists(dest) {
+                            File.Copy(dll, dest, overwrite: true)
+                        }
+                    }
+                }
             }
-            let packRoot = Path.Combine(dotnetRoot, "packs", "NETStandard.Library.Ref")
-            if !Directory.Exists(packRoot) {
-                return nil
-            }
-            return Directory
-                .GetFiles(packRoot, "netstandard.dll", SearchOption.AllDirectories)
-                .OrderByDescending((p string) -> p, StringComparer.Ordinal)
-                .FirstOrDefault()
+            let outPath = Path.Combine(cacheDir, "netstandard.dll")
+            File.WriteAllBytes(outPath, bytes)
+            return outPath
         }
 
         private func CompileLibrary(
