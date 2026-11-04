@@ -34,11 +34,9 @@ internal partial class StatementBinder {
     private let memberMutationBySyntax Dictionary[SyntaxNode, bool] = Dictionary[SyntaxNode, bool]()
     // ADR-0208 R18: reused for each condition; read only before the branches are bound.
     private var conditionRemovedFacts Dictionary[AccessPath, TypeSymbol]?
-    // ADR-0208 R18: the facts that the conditions of the `if` statements in the then-branch being bound removed,
-    // so the sibling else-branch can be bound without them. `nil` outside such a branch.
+    // ADR-0208 R18 (#5534, #5654): the facts that the conditions and statements in the then-branch being bound
+    // removed, so the sibling else-branch can be bound without them. `nil` outside such a branch.
     private var conditionKillJournal List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?
-    // #5629: the facts that statements remove while the headers after a `default` are bound early.
-    private var laterArmStatementKills List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?
     // ADR-0208 R18: the callable aliases at each operand of the condition being classified (cref:AliasesAtTests);
     // `nil` otherwise, and the current aliases apply.
     private var testAliasesAt Dictionary[BoundExpression, HashSet[VariableSymbol]]?
@@ -400,17 +398,17 @@ internal partial class StatementBinder {
         }
         // ADR-0208 R10 (#5168): a statement that runs user code or catches a replacement exception can
         // run after a filter of an enclosing try, so the filter writes join the statement effects.
-        let filterNames = if statementCollector != nil {
-            EnclosingFilterNames(statementSyntax, statementCollector)
+        let filterWrites = if statementCollector != nil {
+            EnclosingFilterWrites(statementSyntax, statementCollector)
         } else {
-            default(HashSet[string]?)
+            default(List[(TryBlock SyntaxNode?, Names HashSet[string])]?)
         }
         if !anyRootAssigned &&
             !dropAllMemberPaths &&
             !dropAllRoots &&
             !dropGlobalRoots &&
             !runsEscapedClosure &&
-            filterNames == nil {
+            filterWrites == nil {
             return
         }
         // Issue #208: iterate ALL frames (not just the top) because the
@@ -424,7 +422,8 @@ internal partial class StatementBinder {
             var toRemove List[AccessPath]? = nil
             for key in frame.Keys {
                 let drop = (
-                    filterNames != nil && (filterNames.Contains(key.Root.Name) || MayBeMutatedByUnknownCallable(key))
+                    filterWrites != nil &&
+                        (FilterWritesVariable(filterWrites, key.Root) || MayBeMutatedByUnknownCallable(key))
                 ) ||
                     (
                     if statementCollector != nil {
@@ -460,28 +459,26 @@ internal partial class StatementBinder {
                     if removedFacts != nil && !removedFacts.ContainsKey(key) {
                         removedFacts[key] = frame[key]
                     }
-                    if removedFacts != nil {
-                        conditionKillJournal?.Add((frame, key, frame[key]))
-                    } else {
-                        laterArmStatementKills?.Add((frame, key, frame[key]))
-                    }
+                    conditionKillJournal?.Add((frame, key, frame[key]))
                     frame.Remove(key)
                 }
             }
         }
     }
 
-    // The names that the filters of enclosing `try` statements write, when the statement
+    // The writes that the filters of enclosing `try` statements make, when the statement
     // can run after one of them; otherwise `nil`.
-    private func EnclosingFilterNames(statementSyntax SyntaxNode, effects AssignedRootsCollector) HashSet[string]? {
+    private func EnclosingFilterWrites(statementSyntax SyntaxNode, effects AssignedRootsCollector) List[
+        (TryBlock SyntaxNode?, Names HashSet[string])
+    ]? {
         if !effects.MayMutateMemberPaths && !effects.ContainsTry {
             return nil
         }
         let filters = CollectCatchFiltersAbove(statementSyntax)
         return if filters.Count > 0 {
-            CollectEnclosingFilterNames(filters)
+            CollectEnclosingFilterWrites(filters)
         } else {
-            default(HashSet[string]?)
+            default(List[(TryBlock SyntaxNode?, Names HashSet[string])]?)
         }
     }
 
@@ -886,7 +883,11 @@ internal partial class StatementBinder {
                     }
                 }
             }
-            for frame in binderCtx.NarrowedVariables {
+            for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {
+                let frame = binderCtx.NarrowedVariables[i]
+                for entry in frame {
+                    conditionKillJournal?.Add((frame, entry.Key, entry.Value))
+                }
                 frame.Clear()
             }
             for entry in commonIncoming {
@@ -927,8 +928,11 @@ internal partial class StatementBinder {
             var targetFrameIndex = -1
             for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {
                 let frame = binderCtx.NarrowedVariables[i]
-                if frame.ContainsKey(path) && targetFrameIndex < 0 {
-                    targetFrameIndex = i
+                if frame.TryGetValue(path, out var removedType) {
+                    if targetFrameIndex < 0 {
+                        targetFrameIndex = i
+                    }
+                    conditionKillJournal?.Add((frame, path, removedType))
                 }
                 frame.Remove(path)
             }
@@ -1095,6 +1099,7 @@ internal partial class StatementBinder {
                     summary
                     .Mutations
                     .InvalidatesNarrowing(entry.Key.Root, entry.Value) {
+                    conditionKillJournal?.Add((frame, entry.Key, entry.Value))
                     frame.Remove(entry.Key)
                 }
             }
@@ -1792,12 +1797,7 @@ internal partial class StatementBinder {
         if !HasAnyActiveNarrowings() {
             return
         }
-        let removedFacts = if conditionKillJournal == nil {
-            default(Dictionary[AccessPath, TypeSymbol]?)
-        } else {
-            Dictionary[AccessPath, TypeSymbol]()
-        }
-        InvalidateNarrowingsForAssignedVariables(syntax, initializer, removedFacts)
+        InvalidateNarrowingsForAssignedVariables(syntax, initializer)
     }
 
     private func IsOnNarrowingStack(frame NarrowingFrame) bool {
@@ -1970,30 +1970,26 @@ internal partial class StatementBinder {
         let outer = BeginThenBranchConditionKills()
         let entry = binderCtx.Narrowing
         let entryAliases = CaptureExternalCallableAliases()
-        let outerStatementKills = laterArmStatementKills
-        let statementKills = List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]()
-        laterArmStatementKills = statementKills
         bindLaterTests()
-        laterArmStatementKills = outerStatementKills
-        outerStatementKills?.AddRange(statementKills)
+        let headerKills = conditionKillJournal!!
+        conditionKillJournal = outer
         let bound = bind()
         if !fallsThrough {
             RestoreExternalCallableAliases(entryAliases)
         }
         if fallsThrough {
-            let kills = conditionKillJournal!!
-            conditionKillJournal = outer
-            outer?.AddRange(kills)
+            outer?.AddRange(headerKills)
         } else {
+            conditionKillJournal = headerKills
             RestoreThenBranchConditionKills(outer, entry)
-            // A statement in a header (a block in a guard) is not a condition, so its kills are not in the journal.
-            // Each of those arms removes them again where it is dispatched.
-            for kill in statementKills {
-                if !kill.Frame.ContainsKey(kill.Path) && IsOnNarrowingStack(kill.Frame) && object.Equals(
-                    entry.NarrowedType(kill.Path),
-                    kill.Type
-                ) {
-                    kill.Frame[kill.Path] = kill.Type
+            if headerKills.Count > 0 && bound.Syntax is {} boundSyntax {
+                let boundStatement = switch bound {
+                    case statement is BoundStatement: statement
+                    case expression is BoundExpression: BoundExpressionStatement(boundSyntax, expression)
+                    default: default(BoundStatement?)
+                }
+                if boundStatement != nil {
+                    InvalidateNarrowingsForAssignedVariables(boundSyntax, boundStatement)
                 }
             }
         }
@@ -2042,10 +2038,13 @@ internal partial class StatementBinder {
         if node.Syntax is {} syntax && (collector.MayMutateMemberPaths || collector.ContainsTry) {
             let filters = CollectCatchFiltersAbove(syntax)
             if filters.Count > 0 {
-                let names = CollectEnclosingFilterNames(filters)
+                let filterWrites = CollectEnclosingFilterWrites(filters)
                 for path in state
                     .Keys
-                    .Where((path AccessPath) -> names.Contains(path.Root.Name) || MayBeMutatedByUnknownCallable(path))
+                    .Where(
+                    (path AccessPath) -> FilterWritesVariable(filterWrites, path.Root) ||
+                        MayBeMutatedByUnknownCallable(path)
+                )
                     .ToArray() {
                     state.Remove(path)
                 }
