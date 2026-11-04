@@ -160,11 +160,14 @@ class Dog : Animal {
     func Completion_InsideAnInterface_OffersItsPrivateHelpersAndHidesThemOutside() {
         const source = `package Members
 interface IWorker {
-    func Work(w IWorker) int32 {
+    func Work(w IWorker, c Worker) int32 {
         let a = w.
+        let d = c.
         return 0
     }
     private func PrivateWork() int32 { return 1 }
+}
+class Worker : IWorker {
 }
 func Outside(w IWorker) {
     let b = w.
@@ -178,6 +181,9 @@ func Outside(w IWorker) {
         let insideInstance = InsideItems("w.", 0)
         Assert.Contains(insideInstance, (i CompletionItem) -> i.Label == "PrivateWork")
         Assert.Contains(insideInstance, (i CompletionItem) -> i.Label == "Work")
+        let insideClass = InsideItems("c.", 0)
+        Assert.DoesNotContain(insideClass, (i CompletionItem) -> i.Label == "PrivateWork")
+        Assert.Contains(insideClass, (i CompletionItem) -> i.Label == "Work")
         let outsideInstance = InsideItems("w.", 1)
         Assert.DoesNotContain(outsideInstance, (i CompletionItem) -> i.Label == "PrivateWork")
         Assert.Contains(outsideInstance, (i CompletionItem) -> i.Label == "Work")

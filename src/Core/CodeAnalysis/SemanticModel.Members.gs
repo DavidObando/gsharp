@@ -642,9 +642,9 @@ partial class SemanticModel {
                     continue
                 }
                 for member in TypeMemberModel.EnumerateMembers(declared, MemberQuery.Instance(MemberKinds.Method)) {
-                    if member is FunctionSymbol method && InterfaceSymbol.HasDefaultBody(method) && !seen.Contains(
-                        method
-                    ) &&
+                    if member is FunctionSymbol method &&
+                        method.Accessibility != Accessibility.Private &&
+                        InterfaceSymbol.HasDefaultBody(method) && !seen.Contains(method) &&
                         MemberLookup
                         .CollectSourceInstanceMethods(structure, method.Name).IsEmpty {
                         seen.Add(method)
@@ -840,7 +840,7 @@ partial class SemanticModel {
             var failed BoundErrorExpression? = nil
             if index.Value.FailedCalls.TryGetValue(parent, out var indexedFailed) {
                 failed = indexedFailed
-            } else if CallCandidateRecorder.TryGetFailedCall(parent, out var recordedFailed) {
+            } else if compilation.FailedCalls.TryGetValue(parent, out var recordedFailed) {
                 failed = recordedFailed
             }
             if failed is {} failedCall && !failedCall.MemberGroup.IsDefaultOrEmpty {

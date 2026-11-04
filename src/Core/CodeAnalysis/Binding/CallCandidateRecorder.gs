@@ -7,11 +7,10 @@ package GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import System
+import System.Collections.Concurrent
 import System.Collections.Generic
 import System.Collections.Immutable
-import System.Diagnostics.CodeAnalysis
 import System.Reflection
-import System.Runtime.CompilerServices
 import System.Threading
 
 /// Collects the candidate sets that overload resolution considers while one call binds, so that the
@@ -23,23 +22,27 @@ import System.Threading
 internal shared class CallCandidateRecorder {
     private let current ThreadLocal[Frame?] = ThreadLocal[Frame?]()
     internal let enabled AsyncLocal[bool] = AsyncLocal[bool]()
-    private let failedCallsBySyntax ConditionalWeakTable[SyntaxNode, BoundErrorExpression] = ConditionalWeakTable[
-        SyntaxNode,
-        BoundErrorExpression
+    private let currentFailedCalls AsyncLocal[ConcurrentDictionary[SyntaxNode, BoundErrorExpression]?] = AsyncLocal[
+        ConcurrentDictionary[SyntaxNode, BoundErrorExpression]?
     ]()
-
-    /// Looks up a failed-call record by its call syntax node when an enclosing expression replaced its operand.
-    func TryGetFailedCall(syntax SyntaxNode, @NotNullWhen(true) out failedCall BoundErrorExpression?) bool ->
-    failedCallsBySyntax.TryGetValue(syntax, out failedCall)
 
     /// Turns recording on for the binding that runs in the returned scope, workers included. Only a
     /// compilation made for the semantic model asks for it, so `gsc` allocates nothing here.
     /// @param record Whether to record.
+    /// @param failedCalls The owning compilation's failed-call table, when entering a compilation bind.
     /// @returns The scope to dispose when the binding ends.
-    func Enter(record bool) RecordingScope {
+    func Enter(record bool, failedCalls ConcurrentDictionary[SyntaxNode, BoundErrorExpression]? = nil) RecordingScope {
         let previous = enabled.Value
+        let previousFailedCalls = currentFailedCalls.Value
         enabled.Value = record
-        return RecordingScope(previous)
+        if failedCalls != nil || !record {
+            currentFailedCalls.Value = if record {
+                failedCalls
+            } else {
+                default(ConcurrentDictionary[SyntaxNode, BoundErrorExpression]?)
+            }
+        }
+        return RecordingScope(previous, previousFailedCalls)
     }
 
     /// Starts collecting for [`syntax`](paramref).
@@ -66,13 +69,16 @@ internal shared class CallCandidateRecorder {
     ///Restores the recording state that (cref:Enter) replaced.
     internal struct RecordingScope : IDisposable {
         private let previous bool
+        private let previousFailedCalls ConcurrentDictionary[SyntaxNode, BoundErrorExpression]?
 
-        internal init(previous bool) {
+        internal init(previous bool, previousFailedCalls ConcurrentDictionary[SyntaxNode, BoundErrorExpression]?) {
             this.previous = previous
+            this.previousFailedCalls = previousFailedCalls
         }
 
         func Dispose() {
             CallCandidateRecorder.enabled.Value = this.previous
+            CallCandidateRecorder.currentFailedCalls.Value = this.previousFailedCalls
         }
     }
 
@@ -185,7 +191,9 @@ internal shared class CallCandidateRecorder {
                         error.MemberGroup = selected
                         error.ReceiverType = frame.ReceiverType
                         error.IsExtensionCall = isExtension
-                        failedCallsBySyntax.AddOrUpdate(frame.Syntax, error)
+                        if currentFailedCalls.Value is {} table {
+                            table[frame.Syntax] = error
+                        }
                     }
                 }
                 if frame.FailedChildren is {Count: > 0} children {

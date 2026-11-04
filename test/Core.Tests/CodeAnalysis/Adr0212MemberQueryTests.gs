@@ -216,6 +216,11 @@ class UnfinishedDog : Animal {
         let constraintGroup = model.GetMemberGroup(FindCall("PUnfinishedConstraint"))
         Assert.Equal(2, constraintGroup.Length)
         Assert.All(constraintGroup, (s Symbol) -> Assert.IsType[ImportedFunctionSymbol](s))
+        let isolatedCompilation = Compilation(unfinishedTree)
+        isolatedCompilation.RecordMemberGroups = true
+        Assert.True(
+            isolatedCompilation.GetSemanticModel(unfinishedTree).GetMemberGroup(FindCall("PUnfinishedBinary")).IsEmpty
+        )
     }
 
     @Fact
@@ -549,6 +554,7 @@ class UnfinishedDog : Animal {
         let insideNames = Members("PInsideIRead", "IRead").Select((s Symbol) -> s.Name).ToList()
         Assert.Contains("ReadHelper", insideNames)
         Assert.Contains("StaticReadHelper", insideNames)
+        Assert.DoesNotContain("SecretPut", Members("PInsideIBoxed", "GDerived").Select((s Symbol) -> s.Name))
         let boxedCall = CallAt("PBoxed")
         let model = ModelOf(boxedCall)
         let boxedAccess = cast[AccessorExpressionSyntax](boxedCall.Parent!!)

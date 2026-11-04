@@ -53,4 +53,28 @@ class BoundErrorExpression : BoundExpression {
         get;
         set;
     }
+
+    shared {
+        /// Creates an error expression that retains any failed-call records from [`left`](paramref) and [`right`](paramref).
+        internal func WithFailedOperands(left BoundExpression, right BoundExpression? = nil) BoundErrorExpression {
+            let error = BoundErrorExpression(nil)
+            var builder ImmutableArray[BoundErrorExpression].Builder? = nil
+            if left is BoundErrorExpression leftError &&
+                (!leftError.MemberGroup.IsDefaultOrEmpty || !leftError.FailedChildren.IsDefaultOrEmpty) {
+                builder ??= ImmutableArray.CreateBuilder[BoundErrorExpression]()
+                builder!!.Add(leftError)
+            }
+            if right is BoundErrorExpression rightError &&
+                (!rightError.MemberGroup.IsDefaultOrEmpty || !rightError.FailedChildren.IsDefaultOrEmpty) {
+                builder ??= ImmutableArray.CreateBuilder[BoundErrorExpression]()
+                if !builder!!.Contains(rightError) {
+                    builder!!.Add(rightError)
+                }
+            }
+            if builder != nil {
+                error.FailedChildren = builder.ToImmutable()
+            }
+            return error
+        }
+    }
 }

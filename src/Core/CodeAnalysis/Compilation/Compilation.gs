@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Compilation
 
 import System
+import System.Collections.Concurrent
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Diagnostics.CodeAnalysis
@@ -48,6 +49,10 @@ open class Compilation {
     // Set when ReplaceSyntaxTree re-points this compilation's symbols at a successor's tree.
     // A second re-point would map the wrong declarations, so a retired compilation never reuses.
     private var retired bool
+    internal let FailedCalls ConcurrentDictionary[SyntaxNode, BoundErrorExpression] = ConcurrentDictionary[
+        SyntaxNode,
+        BoundErrorExpression
+    ](ReferenceEqualityComparer.Instance)
     // ADR-0212 §7a: each diagnostics query publishes once, under the build gate. A cancelled
     // build publishes nothing.
     private var declarationDiagnostics DiagnosticList?
@@ -380,7 +385,7 @@ open class Compilation {
             using let measurement = CompilationMeasurements.BeginPhase("bodies")
             // ADR-0186: body binding reads imported member signatures too.
             using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
-            using let recordingScope = CallCandidateRecorder.Enter(RecordMemberGroups)
+            using let recordingScope = CallCandidateRecorder.Enter(RecordMemberGroups, FailedCalls)
             ThrowIfCannotBuild_Locked()
             BodyBindProbe?.Invoke()
             let bp = Binder.BindProgram(declarations, References, BodyCache, DirtyBodyTrees, WorkBudget)
@@ -419,7 +424,7 @@ open class Compilation {
         // reader that decides what an oblivious byte means is a static
         // leaf with no Compilation in reach.
         using let nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks)
-        using let recordingScope = CallCandidateRecorder.Enter(RecordMemberGroups)
+        using let recordingScope = CallCandidateRecorder.Enter(RecordMemberGroups, FailedCalls)
         let bound = reused ?? Binder.BindGlobalScope(
             previous: nil,
             EmbeddedAttributeSource.AddEmbeddedAttributes(SyntaxTrees, References),
