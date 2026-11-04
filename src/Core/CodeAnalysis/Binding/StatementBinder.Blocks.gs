@@ -18,7 +18,14 @@ import System.Threading
 
 internal partial class StatementBinder {
     private func BindSwitchStatement(syntax SwitchStatementSyntax) BoundStatement {
-        let discriminant = bindExpression(syntax.Expression, false)
+        var discriminant = bindExpression(syntax.Expression, false)
+        if discriminant.Type is TupleTypeSymbol{HasNilElement: true} unresolvedDiscriminantTuple {
+            discriminant = conversions.BindConversion(
+                syntax.Expression.Location,
+                discriminant,
+                TupleTypeSymbol.ResolveNilElements(unresolvedDiscriminantTuple)
+            )
+        }
         if NativeProtocolOperations.GetProtocol(discriminant.Type) != nil {
             Diagnostics.ReportNativeProtocol(
                 syntax.Location,

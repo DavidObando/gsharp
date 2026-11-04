@@ -384,6 +384,13 @@ class H {
     var mb Box? = nil
     var ms string? = nil
     mb, ms = d ? (nil, "y") : (nil, nil)
+    let f = (flag bool) -> {
+        if flag {
+            return (Box(), 1)
+        }
+        return (nil, 2)
+    }
+    let fb Box? = f(c).Item1
 }`, "")
             yield Row("ok-coalesce-nil-in-field-initializer", `class H(value Box?) {
     public var f Box? = value ?? nil

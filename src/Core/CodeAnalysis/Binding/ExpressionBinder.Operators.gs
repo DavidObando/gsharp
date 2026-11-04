@@ -946,6 +946,7 @@ internal partial class ExpressionBinder {
     /// void switch-expression arm). A void or never-typed value is returned as
     /// is; any other value is evaluated as an expression statement.
     private func DiscardValue(value BoundExpression) BoundExpression {
+        var value = value
         // A bare `default` takes its type from a target, and a discarded
         // position has none: report it rather than leave the untyped
         // placeholder to the emitter (GS0362, as for any targetless `default`),
@@ -955,6 +956,13 @@ internal partial class ExpressionBinder {
         }
         if value.Type == TypeSymbol.Void || value.Type == TypeSymbol.Never || value.Type == TypeSymbol.Error {
             return value
+        }
+        if value.Type == TypeSymbol.Null || value.Type is TupleTypeSymbol{HasNilElement: true} {
+            value = conversions.BindConversion(
+                value.Syntax?.Location ?? default(TextLocation),
+                value,
+                TupleTypeSymbol.ResolveNilElements(value.Type)
+            )
         }
         return BoundBlockExpression(
             nil,

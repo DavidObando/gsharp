@@ -2510,7 +2510,16 @@ internal class LambdaBinder {
             return
         }
         if returnType == TypeSymbol.Void || returnType == TypeSymbol.Error {
-            bodyStatements.Add(BoundExpressionStatement(syntax.Body, trailing))
+            var discardedTrailing = trailing
+            if discardedTrailing.Type == TypeSymbol.Null ||
+                discardedTrailing.Type is TupleTypeSymbol{HasNilElement: true} {
+                discardedTrailing = conversions.BindConversion(
+                    syntax.Body.Location,
+                    discardedTrailing,
+                    TupleTypeSymbol.ResolveNilElements(discardedTrailing.Type)
+                )
+            }
+            bodyStatements.Add(BoundExpressionStatement(syntax.Body, discardedTrailing))
             if returnType == TypeSymbol.Void {
                 bodyStatements.Add(BoundReturnStatement(syntax.Body, expression: nil))
             }
@@ -4199,6 +4208,15 @@ internal class LambdaBinder {
                     return TypeSymbol.Error
                 }
             }
+            if result == nil {
+                let significant = List[TypeSymbol](candidates.Count)
+                for candidate in candidates {
+                    if candidate != TypeSymbol.Never && candidate != TypeSymbol.Null {
+                        significant.Add(candidate)
+                    }
+                }
+                result = ExpressionBinder.JoinTupleArmsWithNilElements(significant)
+            }
             // Issue #4965 (ADR-0202): a block body every return of which never
             // completes (`() -> { return { throw e } }`) has no value type
             // either; see `neverBlockTail` above.
@@ -4275,7 +4293,7 @@ internal class LambdaBinder {
                 // statement order.
                 return MemberLookup.MergeInferredTypeArgument(left, right)
             }
-            return nil
+            return ExpressionBinder.JoinTupleArmsWithNilElements([]TypeSymbol{left, right})
         }
 
         // ADR-0076 / issue #716: strips a Task / Task<T> wrap from a target

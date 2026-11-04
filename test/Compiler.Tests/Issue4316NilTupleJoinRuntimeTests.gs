@@ -128,6 +128,25 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
     pair, num = d ? ((nil, "x"), 1) : ((nil, nil), 2)
     let boxed object = (d ? (nil, "x") : (nil, nil))
     let multiT, let multiN = d ? (nil, "x") : (nil, nil), 0
+    let swExpr = switch (d ? (nil, "x") : (nil, nil)) {
+        default: 1
+    }
+    var swStmt = 0
+    switch (d ? (nil, "x") : (nil, nil)) {
+        default {
+            swStmt = 1
+        }
+    }
+    (switch i {
+        case 0: (nil, "x")
+        default: (nil, nil)
+    })
+    let multiRet = (flag bool) -> {
+        if flag {
+            return (AlwaysEqualBox(), 1)
+        }
+        return (nil, 2)
+    }
     return if standalone.Item1 == nil &&
         da == nil &&
         (db != nil || !d) &&
@@ -141,7 +160,10 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
         pair.Item1 == nil &&
         boxed != nil &&
         multiT.Item1 == nil &&
-        multiN == 0 {
+        multiN == 0 &&
+        swExpr == 1 &&
+        swStmt == 1 &&
+        multiRet(false).Item1 == nil {
         (a.Item2, b.Item2)
     } else {
         ("bad", "bad")

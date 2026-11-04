@@ -532,11 +532,50 @@ partial class CSharpToGSharpTranslator {
                         invoke.ReturnsVoid {
                         return (nil, nil)
                     }
-                    return (GetLambdaResultTargetType(lambda, invoke), invoke)
+                    return (
+                        GetEffectiveReturnType(
+                            invoke.ReturnType,
+                            lambda.AsyncKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsyncKeyword)
+                        ),
+                        invoke
+                    )
                 }
                 default {
                     return (nil, nil)
                 }
+            }
+        }
+
+        private func ResolveReturnTupleSlot(
+            returnType ITypeSymbol?,
+            returnSymbol ISymbol?,
+            tupleIndices List[int32]
+        ) ITypeSymbol? {
+            if tupleIndices.Count == 0 {
+                return returnType
+            }
+            var currentType ITypeSymbol? = returnType
+            let path = List[int32](tupleIndices.Count)
+            for var i = tupleIndices.Count - 1; i >= 0; i-- {
+                if currentType is not INamedTypeSymbol{IsTupleType: true} tupleType ||
+                    tupleIndices[i] < 0 ||
+                    tupleIndices[i] >= tupleType
+                    .TupleElements
+                    .Length {
+                    return nil
+                }
+                currentType = tupleType.TupleElements[tupleIndices[i]].Type
+                path.Add(tupleIndices[i])
+            }
+            return if ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                this.context.Compilation,
+                returnSymbol,
+                path,
+                this.context.SiblingCompilations
+            ) {
+                currentType!!.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+            } else {
+                currentType
             }
         }
 
@@ -567,6 +606,7 @@ partial class CSharpToGSharpTranslator {
             var returnNode Microsoft.CodeAnalysis.SyntaxNode = node
             var returnIsSuppressed = isSuppressed
             var stoppedAtConversion = false
+            let tupleIndices = List[int32]()
             while true {
                 if returnNode is Microsoft
                     .CodeAnalysis
@@ -592,6 +632,15 @@ partial class CSharpToGSharpTranslator {
                 } suppress {
                     returnIsSuppressed = true
                     returnNode = suppress
+                } else if returnNode.Parent is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ArgumentSyntax{
+                    Parent: Microsoft.CodeAnalysis.CSharp.Syntax.TupleExpressionSyntax enclosingTuple
+                } tupleArgument {
+                    tupleIndices.Add(enclosingTuple.Arguments.IndexOf(tupleArgument))
+                    returnNode = enclosingTuple
                 } else if returnNode.Parent is Microsoft
                     .CodeAnalysis
                     .CSharp
@@ -646,11 +695,23 @@ partial class CSharpToGSharpTranslator {
                                 .AnonymousFunctionExpressionSyntax
                         )
                         let (returnType, returnSymbol) = this.ReturnSlotOf(owner)
-                        return (returnType, returnSymbol, returnIsSuppressed, false, true)
+                        return (
+                            this.ResolveReturnTupleSlot(returnType, returnSymbol, tupleIndices),
+                            returnSymbol,
+                            returnIsSuppressed,
+                            tupleIndices.Count != 0,
+                            true
+                        )
                     }
                     case Microsoft.CodeAnalysis.CSharp.Syntax.ArrowExpressionClauseSyntax arrow {
                         let (returnType, returnSymbol) = this.ReturnSlotOf(arrow.Parent)
-                        return (returnType, returnSymbol, returnIsSuppressed, false, true)
+                        return (
+                            this.ResolveReturnTupleSlot(returnType, returnSymbol, tupleIndices),
+                            returnSymbol,
+                            returnIsSuppressed,
+                            tupleIndices.Count != 0,
+                            true
+                        )
                     }
                     case lambda is Microsoft
                         .CodeAnalysis
@@ -659,7 +720,13 @@ partial class CSharpToGSharpTranslator {
                         .AnonymousFunctionExpressionSyntax when lambda.Body ==
                     returnNode {
                         let (returnType, returnSymbol) = this.ReturnSlotOf(lambda)
-                        return (returnType, returnSymbol, returnIsSuppressed, false, true)
+                        return (
+                            this.ResolveReturnTupleSlot(returnType, returnSymbol, tupleIndices),
+                            returnSymbol,
+                            returnIsSuppressed,
+                            tupleIndices.Count != 0,
+                            true
+                        )
                     }
                     default { }
                 }
@@ -686,7 +753,7 @@ partial class CSharpToGSharpTranslator {
                     let element = cast[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax](node)
                     let tupleSink = this.ResolveValueSink(element)
                     if this.GetFixedElementDestinationType(element, tupleSink) is {} tupleTargetType {
-                        return (tupleTargetType, tupleSink, returnIsSuppressed, true, tupleSink is IMethodSymbol)
+                        return (tupleTargetType, tupleSink, returnIsSuppressed, true, false)
                     }
                     return (nil, nil, returnIsSuppressed, true, false)
                 }

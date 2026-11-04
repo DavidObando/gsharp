@@ -41,7 +41,14 @@ internal partial class ExpressionBinder {
         // front so nested sub-expressions bind with normal semantics.
         let deferOnFailure = targetType == nil && binderCtx.DeferTargetlessConditional
         this.binderCtx.DeferTargetlessConditional = false
-        let discriminant = BindExpression(syntax.Expression)
+        var discriminant = BindExpression(syntax.Expression)
+        if discriminant.Type is TupleTypeSymbol{HasNilElement: true} unresolvedDiscriminantTuple {
+            discriminant = conversions.BindConversion(
+                syntax.Expression.Location,
+                discriminant,
+                TupleTypeSymbol.ResolveNilElements(unresolvedDiscriminantTuple)
+            )
+        }
         if NativeProtocolOperations.GetProtocol(discriminant.Type) != nil {
             Diagnostics.ReportNativeProtocol(
                 syntax.Location,
@@ -414,7 +421,7 @@ internal partial class ExpressionBinder {
         /// @param arms The tuple arm types, without `nil`, `never` or nullable wrappers.
         /// @returns The element-wise join, or `null` when an arm is not a tuple of the same arity,
         /// no arm holds a `nil` element, or an element has no common type.
-        private func JoinTupleArmsWithNilElements(arms IReadOnlyList[TypeSymbol]) TypeSymbol? {
+        internal func JoinTupleArmsWithNilElements(arms IReadOnlyList[TypeSymbol]) TypeSymbol? {
             if arms.Count < 2 || arms[0] is not TupleTypeSymbol first {
                 return nil
             }

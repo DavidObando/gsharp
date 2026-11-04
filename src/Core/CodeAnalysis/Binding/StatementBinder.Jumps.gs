@@ -1083,7 +1083,14 @@ internal partial class StatementBinder {
             bindNullCoalescingAssignmentStatement is {} bindCoalescingStatement {
             return bindCoalescingStatement(syntax, coalescing)
         }
-        let expression = bindExpression(syntax.Expression, true)
+        var expression = bindExpression(syntax.Expression, true)
+        if expression.Type == TypeSymbol.Null || expression.Type is TupleTypeSymbol{HasNilElement: true} {
+            expression = conversions.BindConversion(
+                syntax.Expression.Location,
+                expression,
+                TupleTypeSymbol.ResolveNilElements(expression.Type)
+            )
+        }
         return BoundExpressionStatement(syntax, expression)
     }
 

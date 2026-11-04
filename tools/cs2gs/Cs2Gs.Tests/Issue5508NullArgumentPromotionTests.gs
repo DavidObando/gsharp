@@ -1084,6 +1084,7 @@ namespace Demo
     func SuppressedReturnNull_EmitsDefaultWhileUnsuppressedReturnNull_StaysNil() {
         let suppressed = TranslateEnabled(("Stubs.cs", `
 using System;
+using System.Threading.Tasks;
 namespace Demo
 {
     public interface IChain<out TEntity, out TProperty> { }
@@ -1094,6 +1095,11 @@ namespace Demo
         public string Value { get; }
         public Wrapped(string? s) { Calls++; Value = s ?? "<null>"; }
         public static implicit operator Wrapped(string? s) => new Wrapped(s);
+    }
+    public sealed class TupleHolder
+    {
+        public (BoundSpillSequenceExpression, int) Prop => (null!, 1);
+        public (BoundSpillSequenceExpression, int) this[int i] => (null!, i);
     }
     public static class QueryExtensions
     {
@@ -1117,7 +1123,14 @@ namespace Demo
         {
             Func<BoundSpillSequenceExpression> f = () => null!;
             Func<BoundSpillSequenceExpression> g = () => { return null!; };
-            return f() ?? g();
+            Func<(BoundSpillSequenceExpression, int)> h = () => (null!, 1);
+            Func<ValueTask<BoundSpillSequenceExpression>> vt = async () =>
+            {
+                await Task.Yield();
+                return null!;
+            };
+            _ = vt;
+            return f() ?? g() ?? h().Item1;
         }
         public static (BoundSpillSequenceExpression, int) TupleForgiven() => (null!, 1);
         public static BoundSpillSequenceExpression? NullableReturn() => null!;
@@ -1127,19 +1140,22 @@ namespace Demo
         Assert.Contains("return default(BoundSpillSequenceExpression)", suppressed[0])
         Assert.Contains("() -> default(BoundSpillSequenceExpression)", suppressed[0])
         Assert.Contains("(default(BoundSpillSequenceExpression), 1)", suppressed[0])
+        Assert.Contains("(default(BoundSpillSequenceExpression), i)", suppressed[0])
         Assert.DoesNotContain("default(Wrapped)", suppressed[0])
         Assert.Contains("func NullableReturn() BoundSpillSequenceExpression? -> nil", suppressed[0])
 
         let plain = TranslateEnabled(
-            "Round-trip only: reachable unsuppressed `return null` in hand-authored code stays `return nil` so gsc rejects the non-null sink with GS0155 (#4316).",
+            "Round-trip only: reachable unsuppressed `return null` and property tuple assignment `(null!, 1)` in hand-authored code stay `nil` so gsc rejects the non-null sink with GS0155 (#4316).",
             ("Spiller.cs", `
 namespace Demo
 {
     public sealed class BoundSpillSequenceExpression { }
     public static class SpillSequenceSpiller
     {
+        public static (BoundSpillSequenceExpression, int) Stored { get; set; }
         public static BoundSpillSequenceExpression Plain(int kind)
         {
+            Stored = (null!, 1);
             if (kind == 0)
             {
                 return new BoundSpillSequenceExpression();
@@ -1149,6 +1165,7 @@ namespace Demo
     }
 }`)
         )
+        Assert.Contains("Stored = (nil, 1)", plain[0])
         Assert.Contains("return nil", plain[0])
         Assert.DoesNotContain("default(BoundSpillSequenceExpression)", plain[0])
         let ex = Assert.ThrowsAny[Exception](() -> TranslationTestValidation.AssertBinds(plain[0]))
