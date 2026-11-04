@@ -1087,6 +1087,33 @@ public class Demo
         }
         return box.F;
     }
+    public static int LoweredGotoCase(ref string? s, Box box, bool flag, int k)
+    {
+        if (s == null) return 0;
+        switch (k)
+        {
+            case 0:
+                break;
+            default:
+                goto case 0;
+        }
+        if (flag)
+        {
+            box.F = 1;
+        }
+        else
+        {
+            return s.Length + 10;
+        }
+        switch (k)
+        {
+            case 0:
+                break;
+            default:
+                goto case 0;
+        }
+        return box.F;
+    }
     public static int DefaultFirstSection(ref string? s, Box box, int k)
     {
         if (s == null) return 0;
@@ -1109,6 +1136,7 @@ public class Demo
             ForwardGotoExit(ref text, new Box(), false) + "," + ForwardGotoInThen(ref text, new Box(), false) + "," +
             BackwardGotoInThen(ref text, new Box(), false, false) + "," +
             MergedBackwardGotoSpan(ref text, new Box(), false, false, false) + "," +
+            LoweredGotoCase(ref text, new Box(), false, 1) + "," +
             DefaultFirstSection(ref text, new Box(), 1);
     }
 }`)
@@ -1121,6 +1149,7 @@ public class Demo
         Assert.Contains("return s.Length + 7", printed)
         Assert.Contains("return s.Length + 8", printed)
         Assert.Contains("return s!!.Length + 9", printed)
+        Assert.Contains("return s.Length + 10", printed)
     }
 
     /// The collection of a `for ... in` and the initializer of a `for` run once, before the loop's region, so effects

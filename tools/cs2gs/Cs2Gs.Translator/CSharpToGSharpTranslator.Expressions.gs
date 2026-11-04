@@ -5937,13 +5937,18 @@ partial class CSharpToGSharpTranslator {
                     jump.Expression is IdentifierNameSyntax targetId &&
                     labels.TryGetValue(targetId.Identifier.ValueText, out var labeledTarget) {
                     target = labeledTarget
-                } else if (
-                    jump.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.GotoCaseStatement) || jump.IsKind(
-                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.GotoDefaultStatement
-                    )
-                ) &&
-                    this.ResolveGotoCaseOrDefaultTarget(jump) is {} targetSwitchLabel {
-                    target = targetSwitchLabel
+                } else if jump.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.GotoCaseStatement) || jump.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.GotoDefaultStatement
+                ) {
+                    if this.IsAdjacentFallthroughGoto(jump) {
+                        continue
+                    }
+                    if this.ResolveGotoCaseOrDefaultTarget(jump) is {} targetSwitchLabel {
+                        if TargetArmIsEmptyBreak(targetSwitchLabel) && !HasInterveningBreakTarget(jump) {
+                            continue
+                        }
+                        target = targetSwitchLabel
+                    }
                 }
                 jumps.Add((jump, target))
                 if target != nil && target.SpanStart <= jump.SpanStart {
