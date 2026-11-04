@@ -452,7 +452,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
         requireInitializedResult bool = true
     ) {
         if zeroValue != nil {
-            let validatedInitializers = type.NeedsSynthesizedValueStructDefaultCtor &&
+            let validatedInitializers = type.UsesOwningZeroInitializerConstructor &&
                 !type.ValueStructDefaultCtorIsZeroInitialization
             let declaredStorage Dictionary[FieldSymbol, TypeSymbol]? = if validatedInitializers {
                 InstanceStorageTypes(type.Definition!!)
