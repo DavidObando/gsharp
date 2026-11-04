@@ -731,7 +731,7 @@ class ImportedTypeSymbol : TypeSymbol {
                         parameter = ParameterSymbol(name, ClrNullability.GetPropertyTypeSymbol(selectedProperty))
                     }
                 } else {
-                    let member = ImportedAssemblySemantics.GetPrimaryConstructorMember(type, i)
+                    let member = ImportedAssemblySemantics.GetPrimaryConstructorSignatureMember(type, i)
                     if member is FieldInfo field {
                         parameter = ParameterSymbol(name, ClrNullability.GetFieldTypeSymbol(field))
                     } else if member is PropertyInfo property {
@@ -793,7 +793,7 @@ class ImportedTypeSymbol : TypeSymbol {
                         .Length {
                         member = shape.PrimaryConstructorProperties[i]
                     } else {
-                        member = ImportedAssemblySemantics.GetPrimaryConstructorMember(definition, i)
+                        member = ImportedAssemblySemantics.GetPrimaryConstructorSignatureMember(definition, i)
                     }
                     if member == nil || !ClrNullability.GetSignatureType(parameters[i]).Equals(
                         ClrNullability.GetSignatureType(member)

@@ -117,6 +117,37 @@ internal shared class ImportedAssemblySemantics {
         }
     }
 
+    internal func GetPrimaryConstructorSignatureMember(type Type, index int32) MemberInfo? {
+        if GetPrimaryConstructorMember(type, index) is {} declaredMember {
+            return declaredMember
+        }
+        if type.IsValueType ||
+            !TryGetTypeSemantics(type, out var semantics) ||
+            index < 0 ||
+            index >= semantics!!
+            .PrimaryConstructorParameterNames
+            .Length {
+            return nil
+        }
+        let tokens = semantics!!.PrimaryConstructorParameterFieldTokens
+        if !tokens.IsDefaultOrEmpty && index < tokens.Length && tokens[index] != 0 {
+            return nil
+        }
+        let name = semantics!!.PrimaryConstructorParameterNames[index]
+        let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly
+        var baseType Type? = type.BaseType
+        while baseType != nil {
+            let prop = ClrTypeUtilities.SafeGetProperties(baseType, flags).FirstOrDefault(
+                (candidate PropertyInfo) -> candidate.Name == name && candidate.GetIndexParameters().Length == 0
+            )
+            if prop != nil {
+                return prop
+            }
+            baseType = baseType.BaseType
+        }
+        return nil
+    }
+
     /// Checks CLR eligibility and the declaring G# assembly's inheritance policy.
     /// @param type The imported base class.
     /// @returns Whether a different compilation may derive from the class.

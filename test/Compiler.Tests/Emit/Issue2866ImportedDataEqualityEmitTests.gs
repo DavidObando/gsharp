@@ -87,16 +87,21 @@ func Main() {
 
 open data class Node(Id int32)
 
-data class Leaf(Id int32) : Node(Id)`
+data class Leaf(Id int32) : Node(Id)
+
+data class LeafPair(Id int32, Extra int32) : Node(Id)`
         const source = `package i2866d
 import i2866lib4
 
 func Main() {
     let a Node = Node(1)
     let b Node = Leaf(1)
-    System.Console.WriteLine((a == b).ToString())
+    let lit = LeafPair{Id: 3, Extra: 4}
+    let copied = lit.copy(Id: 5, Extra: 6)
+    let (cid, cextra) = copied.copy(Id: 7)
+    System.Console.WriteLine((a == b).ToString() + "|" + cid.ToString() + ":" + cextra.ToString())
 }`
-        Assert.Equal("False${Environment.NewLine}", CompileAndRun(source, library, "i2866lib4"))
+        Assert.Equal("False|7:6${Environment.NewLine}", CompileAndRun(source, library, "i2866lib4"))
     }
 
     @Fact
