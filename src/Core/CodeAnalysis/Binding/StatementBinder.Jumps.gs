@@ -21,25 +21,10 @@ internal partial class StatementBinder {
     private func BindGotoStatement(syntax GotoStatementSyntax) BoundStatement {
         let labelName = syntax.LabelIdentifier.ValueText
         let labelDefined = binderCtx.DefinedUserLabels.Contains(labelName)
-        let snapshot = CaptureGotoNarrowingSnapshot()
-        if currentStatementListFallsThrough && !labelDefined && !binderCtx.PendingGotoAssignmentStarts.ContainsKey(
-            labelName
-        ) {
-            binderCtx.PendingGotoAssignmentStarts[labelName] = binderCtx.AssignmentNarrowingGeneration
-        }
+        // ADR-0213 section 11 (J4, J7, J8): a reachable forward `goto` records its state; a backward
+        // `goto` and an unreachable `goto` record nothing.
         if currentStatementListFallsThrough && !labelDefined {
-            if !binderCtx.PendingGotoNarrowingSnapshots.TryGetValue(labelName, out var snapshots) {
-                snapshots = List[GotoNarrowingSnapshot]()
-                binderCtx.PendingGotoNarrowingSnapshots[labelName] = snapshots
-            }
-            snapshots.Add(snapshot)
-        } else if currentStatementListFallsThrough && binderCtx.BackwardGotoNarrowingStates.TryGetValue(
-            labelName,
-            out var backwardState
-        ) {
-            binderCtx.DeferredUnreachableGotoEdges.Add((nil, labelName, snapshot))
-        } else if !currentStatementListFallsThrough && binderCtx.PotentialReachabilityLabel is {} sourceLabel {
-            binderCtx.DeferredUnreachableGotoEdges.Add((sourceLabel, labelName, snapshot))
+            binderCtx.NarrowingFlow.RecordJump(labelName, CaptureJumpState())
         }
         let label = GetOrCreateUserLabelForGoto(labelName, syntax.LabelIdentifier.Location)
         userGotoHandlerRegions.Add(
@@ -79,7 +64,11 @@ internal partial class StatementBinder {
     /// site, reusing any placeholder created by an earlier forward-referencing
     /// `goto` ((cref:GetOrCreateUserLabelForGoto)). A second
     /// declaration of the same name in the same function is GS0470.
-    private func DefineUserLabel(labelName string, location TextLocation) BoundLabel {
+    private func DefineUserLabel(
+        labelName string,
+        location TextLocation,
+        syntax LabeledStatementSyntax? = nil
+    ) BoundLabel {
         if !binderCtx.DefinedUserLabels.Add(labelName) {
             Diagnostics.ReportDuplicateGotoLabel(location, labelName)
             // Keep each recovered declaration distinct without changing the canonical goto target.
@@ -87,23 +76,23 @@ internal partial class StatementBinder {
         }
         userLabelHandlerRegions[labelName] = exceptionHandlerRegions.Reverse().ToImmutableArray()
         let wasReachable = currentStatementListFallsThrough
-        let incomingSnapshots = InvalidateAssignmentNarrowingsBypassedByGoto(
-            labelName,
-            currentStatementListFallsThrough
-        )
+        let incomingJumps = JoinForwardJumpsAtLabel(labelName, currentStatementListFallsThrough)
+        let hadIncomingForwardJump = incomingJumps != nil && incomingJumps.Count > 0
+        let span = if syntax == nil {
+            default(BackwardJumpSpan?)
+        } else {
+            GetEnclosingBackwardJumpSpan(syntax)
+        }
+        let isParticipant = span != nil && span.Labels.Contains(labelName)
         currentStatementListFallsThrough = currentStatementListFallsThrough ||
-            incomingSnapshots != nil &&
-            incomingSnapshots.Count > 0
-        this.binderCtx.PotentialReachabilityLabel = labelName
-        if currentStatementListFallsThrough {
-            binderCtx.ReachableUserLabels.Add(labelName)
+            hadIncomingForwardJump ||
+            (isParticipant && span!!.TargetedLabels.Contains(labelName))
+        if isParticipant {
+            ApplySpanLabelLowerBound(span!!, labelName, wasReachable, hadIncomingForwardJump)
         }
         if !wasReachable && currentStatementListFallsThrough {
             internalReachabilityGeneration++
         }
-        let backwardState = BackwardGotoNarrowingState(CaptureGotoNarrowingSnapshot())
-        AddUpstreamLabelDependencies(backwardState, incomingSnapshots)
-        binderCtx.BackwardGotoNarrowingStates[labelName] = backwardState
         binderCtx.UnresolvedGotoLabels.Remove(labelName)
         if !binderCtx.UserLabels.TryGetValue(labelName, out var label) {
             label = CreateUserLabel(labelName)
@@ -118,7 +107,6 @@ internal partial class StatementBinder {
     /// constructor/accessor body, or — for top-level statements — once after
     /// all global statements share the synthesized entry point's body).
     internal func FinalizeUserLabels() {
-        FinalizeNestedUserLabelNarrowings()
         for entry in binderCtx.UnresolvedGotoLabels {
             Diagnostics.ReportUndefinedGotoLabel(entry.Value, entry.Key)
         }
@@ -129,12 +117,8 @@ internal partial class StatementBinder {
             }
         }
         binderCtx.UnresolvedGotoLabels.Clear()
-        binderCtx.PendingGotoAssignmentStarts.Clear()
-        binderCtx.AssignmentNarrowingGenerations.Clear()
-        this.binderCtx.AssignmentNarrowingGeneration = 0
-        binderCtx.PendingGotoNarrowingSnapshots.Clear()
-        binderCtx.BackwardGotoNarrowingStates.Clear()
-        binderCtx.ClearCapturedNarrowedReads()
+        binderCtx.NarrowingFlow.Clear()
+        ClearBackwardJumpSpanCaches()
         boundFinallyBlocks.Clear()
         finallyEntryExternalCallableAliases.Clear()
         finallyFlowSummaries.Clear()
@@ -142,49 +126,11 @@ internal partial class StatementBinder {
         activeCleanupRegions.Clear()
         userGotoHandlerRegions.Clear()
         userLabelHandlerRegions.Clear()
-        binderCtx.ReachableUserLabels.Clear()
-        binderCtx.DeferredUnreachableGotoEdges.Clear()
-        this.binderCtx.PotentialReachabilityLabel = nil
     }
 
-    internal func FinalizeNestedUserLabelNarrowings() {
-        ActivateDeferredReachableGotoEdges()
-        ReportUnsafeBackwardGotoNarrowings()
-    }
-
-    private func ActivateDeferredReachableGotoEdges() {
-        let remaining = List[(SourceLabel string?, TargetLabel string, Snapshot GotoNarrowingSnapshot)](
-            binderCtx.DeferredUnreachableGotoEdges
-        )
-        var changed = true
-        while changed {
-            changed = false
-            for var i = remaining.Count - 1; i >= 0; i-- {
-                let edge = remaining[i]
-                if edge.SourceLabel != nil && !binderCtx.ReachableUserLabels.Contains(edge.SourceLabel!!) {
-                    continue
-                }
-                if !binderCtx.BackwardGotoNarrowingStates.TryGetValue(edge.TargetLabel, out var targetState) {
-                    remaining.RemoveAt(i)
-                    continue
-                }
-                let targetFinallySet = HashSet[FinallyClauseSyntax](targetState.TargetSnapshot.ActiveFinallyClauses)
-                let targetCleanupSet = HashSet[BoundStatement](targetState.TargetSnapshot.ActiveCleanupStatements)
-                if !ApplyExitedFinallyEffects(edge.Snapshot.Clone(), targetFinallySet, targetCleanupSet) {
-                    remaining.RemoveAt(i)
-                    continue
-                }
-                targetState.Edges.Add(BackwardGotoNarrowingEdge(edge.Snapshot, targetState.Accesses))
-                changed |= binderCtx.ReachableUserLabels.Add(edge.TargetLabel)
-                remaining.RemoveAt(i)
-            }
-        }
-    }
-
-    private func CaptureGotoNarrowingSnapshot() GotoNarrowingSnapshot {
+    private func CaptureJumpState() NarrowingJumpState {
         let narrowedAtSource = Dictionary[AccessPath, TypeSymbol]()
         let narrowingFrameIndices = Dictionary[AccessPath, int32]()
-        let narrowingProofGenerations = Dictionary[AccessPath, int32]()
         // Frames are ordered outermost to innermost, so overwriting records
         // the currently effective narrowing for a repeated root.
         for var i = 0; i < binderCtx.NarrowedVariables.Count; i++ {
@@ -192,47 +138,16 @@ internal partial class StatementBinder {
             for entry in frame {
                 narrowedAtSource[entry.Key] = entry.Value
                 narrowingFrameIndices[entry.Key] = i
-                narrowingProofGenerations[entry.Key] = binderCtx.GetNarrowingProofGeneration(frame)
             }
         }
-        return GotoNarrowingSnapshot(
+        return NarrowingJumpState(
             narrowedAtSource,
             narrowingFrameIndices,
-            narrowingProofGenerations,
-            binderCtx.AssignmentNarrowingGenerations,
             externalCallableAliases,
             activeFinallyClauses.ToImmutableArray(),
             activeCleanupStatements.ToImmutableArray(),
-            activeCleanupRegions.ToImmutableArray(),
-            binderCtx.DefinedUserLabels.ToImmutableHashSet()
+            activeCleanupRegions.ToImmutableArray()
         )
-    }
-
-    private func AddUpstreamLabelDependencies(
-        targetState BackwardGotoNarrowingState,
-        incomingSnapshots IReadOnlyList[GotoNarrowingSnapshot]?
-    ) {
-        if incomingSnapshots == nil {
-            return
-        }
-        for path in targetState.TargetSnapshot.NarrowedVariables.Keys {
-            for snapshot in incomingSnapshots {
-                for priorState in binderCtx.BackwardGotoNarrowingStates {
-                    if !snapshot.DefinedLabels.Contains(priorState.Key) ||
-                        !NarrowingProofDependsOn(snapshot, priorState.Value.TargetSnapshot, path) {
-                        continue
-                    }
-                    if !targetState.UpstreamLabels.TryGetValue(path, out var labels) {
-                        labels = HashSet[string]()
-                        targetState.UpstreamLabels.Add(path, labels)
-                    }
-                    labels.Add(priorState.Key)
-                    if priorState.Value.UpstreamLabels.TryGetValue(path, out var upstream) {
-                        labels.UnionWith(upstream)
-                    }
-                }
-            }
-        }
     }
 
     /// Binds a loop body while pushing the loop's break/continue labels (and
@@ -261,7 +176,8 @@ internal partial class StatementBinder {
     ) BoundStatement {
         // ADR-0213 section 13 (#5461): the external callable aliases are part of the entry state.
         // A loop that reassigns an alias must remove it even when no fact is in force.
-        if HasAnyActiveNarrowings() || externalCallableAliases.Count > 0 {
+        // ADR-0213 section 6 (J6): a forward `goto` into the loop body is also an entry edge.
+        if HasAnyActiveNarrowings() || externalCallableAliases.Count > 0 || binderCtx.NarrowingFlow.HasPendingJumps {
             ApplyLoopEntryLowerBound(body, iterationRunsUserCode)
         }
         binderCtx.LabelCounter++
@@ -283,8 +199,8 @@ internal partial class StatementBinder {
     }
 
     /// The function-wide binder state that a speculative bind can change: diagnostics, narrowing frame
-    /// contents, pending exit and goto narrowing states, labels and jumps, callable aliases, assignment
-    /// generations, reachability, finally and cleanup bookkeeping, the synthetic local counter, and the held
+    /// contents, pending exit and goto narrowing states, labels and jumps, callable aliases,
+    /// reachability, finally and cleanup bookkeeping, the synthetic local counter, and the held
     /// returns of a speculative lambda body (issue #5569). A speculative lambda return value (issue #5569) binds
     /// again after a restore; a loop body binds once (ADR-0213 L1).
     private sealed class SpeculativeBindState {
@@ -296,19 +212,8 @@ internal partial class StatementBinder {
             Dictionary[AccessPath, TypeSymbol]
         ]
         internal let DefinedUserLabels[]string
-        internal let PendingGotoAssignmentStarts[]KeyValuePair[string, int32]
         internal let ExternalCallableAliases[]VariableSymbol
-        internal let AssignmentNarrowingGenerations[]KeyValuePair[VariableSymbol, int32]
-        internal let AssignmentNarrowingGeneration int32
-        internal let PendingGotoNarrowingSnapshots Dictionary[string, List[GotoNarrowingSnapshot]]
-        internal let BackwardGotoNarrowingStates Dictionary[string, BackwardGotoNarrowingState]
-        internal let ReachableUserLabels[]string
-        internal let DeferredUnreachableGotoEdges[](
-            SourceLabel string?,
-            TargetLabel string,
-            Snapshot GotoNarrowingSnapshot
-        )
-        internal let PotentialReachabilityLabel string?
+        internal let PendingJumps Dictionary[string, List[NarrowingJumpState]]
         internal let UserLabels[]KeyValuePair[string, BoundLabel]
         internal let UnresolvedGotoLabels[]KeyValuePair[string, TextLocation]
         internal let UserLabelHandlerRegions[]KeyValuePair[string, ImmutableArray[SyntaxNode]]
@@ -337,15 +242,8 @@ internal partial class StatementBinder {
             pendingEarlyExitFrames[]KeyValuePair[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]],
             pendingSwitchExitFrames[]KeyValuePair[BoundPatternSwitchStatement, Dictionary[AccessPath, TypeSymbol]],
             definedUserLabels[]string,
-            pendingGotoAssignmentStarts[]KeyValuePair[string, int32],
             externalCallableAliases[]VariableSymbol,
-            assignmentNarrowingGenerations[]KeyValuePair[VariableSymbol, int32],
-            assignmentNarrowingGeneration int32,
-            pendingGotoNarrowingSnapshots Dictionary[string, List[GotoNarrowingSnapshot]],
-            backwardGotoNarrowingStates Dictionary[string, BackwardGotoNarrowingState],
-            reachableUserLabels[]string,
-            deferredUnreachableGotoEdges[](SourceLabel string?, TargetLabel string, Snapshot GotoNarrowingSnapshot),
-            potentialReachabilityLabel string?,
+            pendingJumps Dictionary[string, List[NarrowingJumpState]],
             userLabels[]KeyValuePair[string, BoundLabel],
             unresolvedGotoLabels[]KeyValuePair[string, TextLocation],
             userLabelHandlerRegions[]KeyValuePair[string, ImmutableArray[SyntaxNode]],
@@ -365,15 +263,8 @@ internal partial class StatementBinder {
             PendingEarlyExitFrames = pendingEarlyExitFrames
             PendingSwitchExitFrames = pendingSwitchExitFrames
             DefinedUserLabels = definedUserLabels
-            PendingGotoAssignmentStarts = pendingGotoAssignmentStarts
             ExternalCallableAliases = externalCallableAliases
-            AssignmentNarrowingGenerations = assignmentNarrowingGenerations
-            AssignmentNarrowingGeneration = assignmentNarrowingGeneration
-            PendingGotoNarrowingSnapshots = pendingGotoNarrowingSnapshots
-            BackwardGotoNarrowingStates = backwardGotoNarrowingStates
-            ReachableUserLabels = reachableUserLabels
-            DeferredUnreachableGotoEdges = deferredUnreachableGotoEdges
-            PotentialReachabilityLabel = potentialReachabilityLabel
+            PendingJumps = pendingJumps
             UserLabels = userLabels
             UnresolvedGotoLabels = unresolvedGotoLabels
             UserLabelHandlerRegions = userLabelHandlerRegions
@@ -403,24 +294,8 @@ internal partial class StatementBinder {
         binderCtx.PendingEarlyExitFrames.ToArray(),
         binderCtx.PendingSwitchExitFrames.ToArray(),
         binderCtx.DefinedUserLabels.ToArray(),
-        binderCtx.PendingGotoAssignmentStarts.ToArray(),
         externalCallableAliases.ToArray(),
-        binderCtx.AssignmentNarrowingGenerations.ToArray(),
-        binderCtx.AssignmentNarrowingGeneration,
-        binderCtx.PendingGotoNarrowingSnapshots.ToDictionary(
-            (entry KeyValuePair[string, List[GotoNarrowingSnapshot]]) -> entry.Key,
-            (entry KeyValuePair[string, List[GotoNarrowingSnapshot]]) -> entry
-                .Value
-                .Select((snapshot GotoNarrowingSnapshot) -> snapshot.Clone())
-                .ToList()
-        ),
-        binderCtx.BackwardGotoNarrowingStates.ToDictionary(
-            (entry KeyValuePair[string, BackwardGotoNarrowingState]) -> entry.Key,
-            (entry KeyValuePair[string, BackwardGotoNarrowingState]) -> entry.Value.Clone()
-        ),
-        binderCtx.ReachableUserLabels.ToArray(),
-        binderCtx.DeferredUnreachableGotoEdges.ToArray(),
-        binderCtx.PotentialReachabilityLabel,
+        binderCtx.NarrowingFlow.Clone(),
         binderCtx.UserLabels.ToArray(),
         binderCtx.UnresolvedGotoLabels.ToArray(),
         userLabelHandlerRegions.ToArray(),
@@ -451,25 +326,8 @@ internal partial class StatementBinder {
         RestoreEntries(binderCtx.PendingEarlyExitFrames, state.PendingEarlyExitFrames)
         RestoreEntries(binderCtx.PendingSwitchExitFrames, state.PendingSwitchExitFrames)
         RestoreItems(binderCtx.DefinedUserLabels, state.DefinedUserLabels)
-        RestoreEntries(binderCtx.PendingGotoAssignmentStarts, state.PendingGotoAssignmentStarts)
         RestoreItems(externalCallableAliases, state.ExternalCallableAliases)
-        RestoreEntries(binderCtx.AssignmentNarrowingGenerations, state.AssignmentNarrowingGenerations)
-        this.binderCtx.AssignmentNarrowingGeneration = state.AssignmentNarrowingGeneration
-        binderCtx.PendingGotoNarrowingSnapshots.Clear()
-        for entry in state.PendingGotoNarrowingSnapshots {
-            binderCtx.PendingGotoNarrowingSnapshots.Add(
-                entry.Key,
-                entry.Value.Select((snapshot GotoNarrowingSnapshot) -> snapshot.Clone()).ToList()
-            )
-        }
-        binderCtx.BackwardGotoNarrowingStates.Clear()
-        for entry in state.BackwardGotoNarrowingStates {
-            binderCtx.BackwardGotoNarrowingStates.Add(entry.Key, entry.Value.Clone())
-        }
-        RestoreItems(binderCtx.ReachableUserLabels, state.ReachableUserLabels)
-        binderCtx.DeferredUnreachableGotoEdges.Clear()
-        binderCtx.DeferredUnreachableGotoEdges.AddRange(state.DeferredUnreachableGotoEdges)
-        this.binderCtx.PotentialReachabilityLabel = state.PotentialReachabilityLabel
+        binderCtx.NarrowingFlow.Restore(state.PendingJumps)
         RestoreEntries(binderCtx.UserLabels, state.UserLabels)
         RestoreEntries(binderCtx.UnresolvedGotoLabels, state.UnresolvedGotoLabels)
         RestoreEntries(userLabelHandlerRegions, state.UserLabelHandlerRegions)
@@ -671,9 +529,7 @@ internal partial class StatementBinder {
     }
 
     // Issue #5569: converts a return value of a speculative lambda body to the target where the value binds, as an
-    // eager bind does, so the conversion's narrowing checks (backward `goto` uses) apply. The result, its
-    // diagnostics and the narrowing uses that only this conversion records wait in the body's state for the lambda
-    // binder's decision.
+    // eager bind does. The result and its diagnostics wait in the body's state for the lambda binder's decision.
     private func HoldDeferredReturnConversion(
         deferredReturns LambdaBinder.DeferredReturnState,
         location TextLocation,
@@ -681,14 +537,7 @@ internal partial class StatementBinder {
         targetType TypeSymbol
     ) {
         let mark = Diagnostics.Count
-        let outerOwner = binderCtx.DeferredReturnNarrowingOwner
-        this.binderCtx.DeferredReturnNarrowingOwner = deferredReturns
-        var converted BoundExpression
-        try {
-            converted = conversions.BindConversion(location, value, targetType)
-        } finally {
-            this.binderCtx.DeferredReturnNarrowingOwner = outerOwner
-        }
+        let converted = conversions.BindConversion(location, value, targetType)
         deferredReturns.HoldConversion(value, converted, Diagnostics.Skip(mark).ToImmutableArray())
         Diagnostics.TruncateTo(mark)
     }
@@ -711,15 +560,6 @@ internal partial class StatementBinder {
             deferredReturns.InTargetPass = false
             deferredReturns.InNaturalPass = false
             $scope = $scope.Pop()
-        }
-    }
-
-    // Issue #5603: records the backward `goto` narrowing use of a `return` value where it binds, for a result type
-    // that the lambda binder chooses after the body: an inferred result, or the natural result of a speculative
-    // lambda. The use does not depend on a target conversion.
-    private func TrackResultReturnNarrowing(syntax ReturnStatementSyntax, value BoundExpression?) {
-        if value != nil && syntax.Expression is {} valueSyntax && function?.InferredReturnNarrowings is {} narrowings {
-            binderCtx.TrackInferredReturnNarrowing(narrowings, value, valueSyntax.Location)
         }
     }
 
@@ -827,18 +667,6 @@ internal partial class StatementBinder {
             } else {
                 expression = if syntax.Expression == nil {
                     default(BoundExpression?)
-                } else if function is {
-                    IsReturnTypeInferred: true,
-                    DefersReturnConversion: false,
-                    InferredReturnNarrowings: {} narrowings
-                } {
-                    // Issue #5635: a block value holds the narrowed read that it yields for the inferred result, as
-                    // a narrowed `return` value does (TrackResultReturnNarrowing).
-                    binderCtx.BindWithBlockValueCapture(
-                        syntax.Expression,
-                        (read NarrowedBranchValue) -> binderCtx.TrackInferredReturnNarrowing(narrowings, read),
-                        () -> bindExpression(syntax.Expression!!, false)
-                    )
                 } else {
                     bindExpression(syntax.Expression, false)
                 }
@@ -899,9 +727,6 @@ internal partial class StatementBinder {
                     function!!.Type
                 )
             }
-            // Issue #5603: the natural function type converts the natural value after the body, as an inferred result
-            // does. The target conversion above can read the declared value and record no use.
-            TrackResultReturnNarrowing(syntax, expression)
         } else if function!!.IsReturnTypeInferred {
             // ADR-0076 / issue #716: arrow-lambda binding deferred return-type
             // resolution to a post-bind pass. The expression has been bound,
@@ -911,9 +736,7 @@ internal partial class StatementBinder {
             // across all return paths and the trailing block expression, if
             // any), and applies a single conversion pass to each return-
             // statement expression once the return type is known.
-            // Issue #5603: that conversion runs outside the narrowing scope, so the backward `goto` check of a
-            // narrowed value runs here. The lambda binder reports it when the inferred result needs the narrowing.
-            TrackResultReturnNarrowing(syntax, expression)
+
         } else {
             if function!!.Type == TypeSymbol.Void {
                 if expression != nil {
@@ -1265,32 +1088,6 @@ internal partial class StatementBinder {
     }
 
     shared {
-        private func NarrowingProofDependsOn(
-            source GotoNarrowingSnapshot,
-            target GotoNarrowingSnapshot,
-            path AccessPath
-        ) bool -> source
-            .NarrowedVariables
-            .ContainsKey(path) && source.NarrowingFrameIndices.TryGetValue(path, out var sourceFrame) &&
-            target
-            .NarrowingFrameIndices
-            .TryGetValue(path, out var targetFrame) &&
-            sourceFrame == targetFrame &&
-            source
-            .NarrowingProofGenerations
-            .TryGetValue(path, out var sourceProof) && target.NarrowingProofGenerations.TryGetValue(
-            path,
-            out var targetProof
-        ) &&
-            sourceProof == targetProof &&
-            (
-            path.HasMembers || !source.AssignmentGenerations.TryGetValue(path.Root, out var sourceGeneration) ||
-                (
-                target.AssignmentGenerations.TryGetValue(path.Root, out var targetGeneration) &&
-                    sourceGeneration <= targetGeneration
-            )
-        )
-
         /// Issue #4285: syntactic (pre-binding) check for whether
         /// [`node`](paramref) — a function/lambda/local-function BODY, or
         /// any subtree of one — contains any user-written `goto` statement

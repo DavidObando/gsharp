@@ -9,9 +9,14 @@ import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Reflection
+import System.Reflection.Metadata
+import System.Reflection.Metadata.Ecma335
+import System.Reflection.PortableExecutable
 import System.Text
 import Xunit
 
@@ -556,6 +561,165 @@ Console.WriteLine(viaMethodRefused[SchemeOptions]())`
         }
     }
 
+    @Fact
+    func ImportedGenericHierarchyWithRectangularArrayAndNullableStruct_SatisfiesProjectedBounds() {
+        const Source = `package P
+import System
+import System.Collections.Generic
+import HelperLib2
+
+class MatrixBox[X IList[[,]int32]] {
+    public var Tag string = "m"
+}
+
+class MatrixHolder {
+    public var Box MatrixBox[MatrixItems[int32]]
+}
+
+func countOptional[X IList[int32?]](x X) int32 -> 2
+func countMaybeIface[X IList[string?]](x X) int32 -> 3
+func countMaybeClass[X List[string?]](x X) int32 -> 4
+
+Console.WriteLine(countOptional[OptionalItems[int32]](OptionalItems[int32]()))
+Console.WriteLine(countMaybeIface[MaybeItems[string]](MaybeItems[string]()))
+Console.WriteLine(countMaybeClass[MaybeItems[string]](MaybeItems[string]()))
+Console.WriteLine(countMaybeIface[NullableStringBag](NullableStringBag()))
+Console.WriteLine(countMaybeClass[NullableStringBag](NullableStringBag()))`
+        const BadMaybeIface = `package P
+import System
+import System.Collections.Generic
+import HelperLib2
+
+func countNonNullIface[X IList[string]](x X) int32 -> 1
+
+Console.WriteLine(countNonNullIface[MaybeItems[string]](MaybeItems[string]()))`
+        const BadMaybeClass = `package P
+import System
+import System.Collections.Generic
+import HelperLib2
+
+func countNonNullClass[X List[string]](x X) int32 -> 1
+
+Console.WriteLine(countNonNullClass[NullableStringBag](NullableStringBag()))`
+        let tempDir = Directory.CreateTempSubdirectory("gs_4070_proj_").FullName
+        try {
+            let libPath = CompileCSharpLibrary(tempDir)
+            let appPath = Path.Combine(tempDir, "Proj.dll")
+            let appLog = Compile(tempDir, "App.gs", Source, appPath, "/target:exe", "/reference:" + libPath)
+            Assert.DoesNotContain("GS0152", appLog, StringComparison.Ordinal)
+            Assert.True(File.Exists(appPath), (`projected hierarchy bounds must bind. Log:
+` + "$appLog"))
+            IlVerifier.Verify(appPath, []string{libPath})
+            let (exit, output) = RunDotnet(appPath)
+            Assert.True(exit == 0, (`the program must run. Exit ` + "$exit" + `:
+` + "$output"))
+            Assert.Equal([]string{"2", "3", "4", "3", "4"}, SplitLines(output))
+            let badIfacePath = Path.Combine(tempDir, "BadIface.dll")
+            let badIfaceLog = Compile(
+                tempDir,
+                "BadIface.gs",
+                BadMaybeIface,
+                badIfacePath,
+                "/target:exe",
+                "/reference:" + libPath
+            )
+            Assert.Contains("GS0152", badIfaceLog, StringComparison.Ordinal)
+            Assert.False(File.Exists(badIfacePath))
+            let badClassPath = Path.Combine(tempDir, "BadClass.dll")
+            let badClassLog = Compile(
+                tempDir,
+                "BadClass.gs",
+                BadMaybeClass,
+                badClassPath,
+                "/target:exe",
+                "/reference:" + libPath
+            )
+            Assert.Contains("GS0152", badClassLog, StringComparison.Ordinal)
+            Assert.False(File.Exists(badClassPath))
+            const BadPlatformElement = `package P
+import System
+import System.Collections.Generic
+import HelperLib2
+
+interface IVal[V] {
+    prop Value V { get; }
+}
+
+data class ValItem[V](Saved V) : IVal[V] {
+    public prop Value V -> Saved
+}
+
+func makeFromList[V](xs List[V]) ValItem[V] -> ValItem[V]{Saved: xs[0]}
+func readNonNull[T IVal[string]](item T) string -> item.Value
+
+let item = makeFromList(ObliviousHelper.Strings())
+Console.WriteLine(readNonNull(item))`
+            let badPlatformElemPath = Path.Combine(tempDir, "BadPlatformElem.dll")
+            let badPlatformElemLog = Compile(
+                tempDir,
+                "BadPlatformElem.gs",
+                BadPlatformElement,
+                badPlatformElemPath,
+                "/target:exe",
+                "/reference:" + libPath
+            )
+            Assert.Contains("GS0152", badPlatformElemLog, StringComparison.Ordinal)
+            Assert.False(File.Exists(badPlatformElemPath))
+            const BadPlatformSibling = `package P
+import System
+import System.Collections.Generic
+import HelperLib2
+
+interface IBox[V] {
+    prop Value V { get; set; }
+}
+
+class NonNullBox : IBox[string] {
+    public prop Value string { get; set; } = ""
+}
+
+func copyFirst[V, T IBox[V]](xs List[V], target T) {
+    target.Value = xs[0]
+}
+
+copyFirst(ObliviousHelper.Strings(), NonNullBox())`
+            let badPlatformSiblingPath = Path.Combine(tempDir, "BadPlatformSibling.dll")
+            let badPlatformSiblingLog = Compile(
+                tempDir,
+                "BadPlatformSibling.gs",
+                BadPlatformSibling,
+                badPlatformSiblingPath,
+                "/target:exe",
+                "/reference:" + libPath
+            )
+            Assert.Contains("GS0152", badPlatformSiblingLog, StringComparison.Ordinal)
+            Assert.False(File.Exists(badPlatformSiblingPath))
+            let nonSzLibPath = EmitNonSzListLibrary(tempDir)
+            const BadNonSzClass = `package P
+import System
+import System.Collections.Generic
+import NonSzConstraintLib
+
+func takeSliceList[T List[[]int32]](x T) int32 -> x.Count
+
+var items NonSzIntList
+Console.WriteLine(takeSliceList[NonSzIntList](items))`
+            let badNonSzPath = Path.Combine(tempDir, "BadNonSz.dll")
+            let badNonSzLog = Compile(
+                tempDir,
+                "BadNonSz.gs",
+                BadNonSzClass,
+                badNonSzPath,
+                "/target:exe",
+                "/reference:" + nonSzLibPath
+            )
+            Assert.Contains("GS0152", badNonSzLog, StringComparison.Ordinal)
+            Assert.False(File.Exists(badNonSzPath))
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         /// Timeout for running an emitted sample.
         private const RunTimeout int32 = 60_000
@@ -622,6 +786,32 @@ public class MyCmp : System.IComparable<MyCmp>
 public class StringBag : System.Collections.Generic.List<string>
 {
 }
+
+public class MatrixItems<T> : System.Collections.Generic.List<T[,]>
+{
+}
+
+public class OptionalItems<T> : System.Collections.Generic.List<T?>
+    where T : struct
+{
+}
+
+public class MaybeItems<T> : System.Collections.Generic.List<T?>
+    where T : class
+{
+}
+
+public class NullableStringBag : System.Collections.Generic.List<string?>
+{
+}
+
+#nullable disable
+public static class ObliviousHelper
+{
+    public static System.Collections.Generic.List<string> Strings()
+        => new System.Collections.Generic.List<string> { null };
+}
+#nullable enable
 
 public static class Probes
 {
@@ -1045,6 +1235,76 @@ Console.WriteLine(Fwd[` + "$arguments" + `]().Tag)`)
             .Select((line string) -> line.TrimEnd('\r'))
             .Where((line string) -> line.Length > 0)
             .ToArray()
+
+        private func EmitNonSzListLibrary(tempDir string) string {
+            let libPath = Path.Combine(tempDir, "NonSzConstraintLib.dll")
+            let metadata = MetadataBuilder()
+            metadata.AddModule(
+                0,
+                metadata.GetOrAddString("NonSzConstraintLib.dll"),
+                metadata.GetOrAddGuid(Guid.NewGuid()),
+                GuidHandle(),
+                GuidHandle()
+            )
+            metadata.AddAssembly(
+                metadata.GetOrAddString("NonSzConstraintLib"),
+                Version(1, 0, 0, 0),
+                StringHandle(),
+                BlobHandle(),
+                cast[AssemblyFlags](0),
+                AssemblyHashAlgorithm.None
+            )
+            metadata.AddTypeDefinition(
+                cast[TypeAttributes](0),
+                StringHandle(),
+                metadata.GetOrAddString("<Module>"),
+                EntityHandle(),
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(1)
+            )
+            let collectionsAsmRef = metadata.AddAssemblyReference(
+                metadata.GetOrAddString("System.Collections"),
+                Version(10, 0, 0, 0),
+                default(StringHandle),
+                metadata.GetOrAddBlob([]uint8{0xB0, 0x3F, 0x5F, 0x7F, 0x11, 0xD5, 0x0A, 0x3A}),
+                default(AssemblyFlags),
+                default(BlobHandle)
+            )
+            let listTypeRef = metadata.AddTypeReference(
+                collectionsAsmRef,
+                metadata.GetOrAddString("System.Collections.Generic"),
+                metadata.GetOrAddString("List`1")
+            )
+            let baseTypeSpecBlob = BlobBuilder()
+            let gi = BlobEncoder(baseTypeSpecBlob).TypeSpecificationSignature().GenericInstantiation(
+                listTypeRef,
+                1,
+                isValueType: false
+            )
+            gi.AddArgument().Array(
+                (element SignatureTypeEncoder) -> element.Int32(),
+                (shape ArrayShapeEncoder) -> shape.Shape(1, ImmutableArray[int32].Empty, ImmutableArray[int32].Empty)
+            )
+            let baseTypeSpec = metadata.AddTypeSpecification(metadata.GetOrAddBlob(baseTypeSpecBlob))
+            metadata.AddTypeDefinition(
+                TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.BeforeFieldInit,
+                metadata.GetOrAddString("NonSzConstraintLib"),
+                metadata.GetOrAddString("NonSzIntList"),
+                baseTypeSpec,
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(1)
+            )
+            let peBuilder = ManagedPEBuilder(
+                PEHeaderBuilder(imageCharacteristics: Characteristics.ExecutableImage | Characteristics.Dll),
+                MetadataRootBuilder(metadata),
+                BlobBuilder()
+            )
+            let peBlob = BlobBuilder()
+            peBuilder.Serialize(peBlob)
+            using let fs = File.Create(libPath)
+            peBlob.WriteContentTo(fs)
+            return libPath
+        }
 
         private func CompileCSharpLibrary(tempDir string) string {
             let references = TrustedPlatformAssemblies().Select(
