@@ -553,6 +553,7 @@ internal partial class StatementBinder {
         aliasesAtEntry IReadOnlyCollection[VariableSymbol]
     ) {
         var statement = statement
+        var aliasesAtEntry = aliasesAtEntry
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
             labeledBlock
@@ -560,6 +561,7 @@ internal partial class StatementBinder {
             .Length == 2 &&
             labeledBlock.Statements[0] is BoundLabelStatement {
             statement = labeledBlock.Statements[1]
+            aliasesAtEntry = Array.Empty[VariableSymbol]()
         }
         let collector = GetStatementEffects(statement, aliasesAtEntry)
         // The summary serves one statement; later statements recompute it.
@@ -728,14 +730,14 @@ internal partial class StatementBinder {
     }
 
     private func UsesJoinedCallableExitState(statement BoundStatement) bool -> switch statement {
-        case block is BoundBlockStatement: block.Syntax != nil && !ContainsUserGotoOrLabel(block.Syntax)
+        case block is BoundBlockStatement: block.Syntax != nil && !ContainsUserGotoOrLabel(block)
         case _ is BoundIfStatement or
             _ is BoundTryStatement or
             _ is BoundPatternSwitchStatement or
             _ is BoundForInfiniteStatement or
             _ is BoundForEllipsisStatement or
             _ is BoundForRangeStatement or
-            _ is BoundAwaitForRangeStatement: true
+            _ is BoundAwaitForRangeStatement: !ContainsUserLabel(statement)
         default: false
     }
 
@@ -775,23 +777,13 @@ internal partial class StatementBinder {
     private func ApplyEarlyExitNarrowings(statement BoundStatement?, persistentFrame NarrowingFrame) {
         var statement = statement
         lastEarlyExitLifts.Clear()
-        var isLabeledStatement = false
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
             labeledBlock
             .Statements
             .Length == 2 &&
             labeledBlock.Statements[0] is BoundLabelStatement {
-            isLabeledStatement = true
             statement = labeledBlock.Statements[1]
-        }
-        // Issue #4285 / ADR-0213 L2: a guard without nested user labels lifts bare-variable nullability
-        // facts when its then-branch exits without `goto`, and lifts any bare-variable fact when attached
-        // directly to its target label. Forward jumps into a label or region join at that entry, and
-        // backward-jump spans apply `Lower(S, span)` at entry and at participant labels.
-        if binderCtx.FunctionContainsUserGotoOrLabel &&
-            !(statement is BoundIfStatement && !ContainsUserLabel(statement.Syntax)) {
-            return
         }
         if statement is BoundIfStatement ifStmt {
             if !binderCtx.PendingEarlyExitFrames.TryGetValue(ifStmt, out var elseFrame) {
@@ -805,23 +797,10 @@ internal partial class StatementBinder {
             if !EndsInUnconditionalExit(ifStmt.ThenStatement) {
                 return
             }
+            if ifStmt.ElseStatement != nil && ContainsUserLabel(ifStmt.ElseStatement) {
+                return
+            }
             for kv in elseFrame {
-                if binderCtx.FunctionContainsUserGotoOrLabel &&
-                    (
-                    !kv
-                        .Key
-                        .Members
-                        .IsDefaultOrEmpty ||
-                        (
-                        !isLabeledStatement &&
-                            (
-                            !EndsInUnconditionalExit(ifStmt.ThenStatement, gotoExits: false) ||
-                                !IsBareNullabilityGuardFact(kv.Key.Root.Type, kv.Value)
-                        )
-                    )
-                ) {
-                    continue
-                }
                 SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value)
                 lastEarlyExitLifts.Add((kv.Key, kv.Value))
             }
@@ -839,12 +818,6 @@ internal partial class StatementBinder {
                 SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value)
             }
         }
-    }
-
-    private func IsBareNullabilityGuardFact(declared TypeSymbol, fact TypeSymbol) bool -> switch declared {
-        case nullable is NullableTypeSymbol: object.Equals(nullable.UnderlyingType, fact)
-        case platform is PlatformTypeSymbol: object.Equals(platform.UnderlyingType, fact)
-        default: false
     }
 
     /// Issue #1123: assignment-based smart cast. When the bound statement is a
@@ -1381,10 +1354,16 @@ internal partial class StatementBinder {
         persistentFrame NarrowingFrame,
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     ) {
-        // Issues #4285 and #4290: arbitrary user jumps invalidate the
-        // dominance assumptions behind branch-exit narrowing.
-        if binderCtx.FunctionContainsUserGotoOrLabel {
-            return
+        var statement = statement
+        var callableAliases = callableAliases
+        while statement is BoundBlockStatement labeledBlock &&
+            labeledBlock.Syntax is LabeledStatementSyntax &&
+            labeledBlock
+            .Statements
+            .Length == 2 &&
+            labeledBlock.Statements[0] is BoundLabelStatement {
+            statement = labeledBlock.Statements[1]
+            callableAliases = Array.Empty[VariableSymbol]()
         }
         if statement is not BoundIfStatement ifStmt {
             return
@@ -1435,7 +1414,7 @@ internal partial class StatementBinder {
         updatedAliases HashSet[VariableSymbol]? = nil
     ) Dictionary[AccessPath, TypeSymbol]? {
         var conditionEntry Dictionary[AccessPath, TypeSymbol]? = nil
-        if entry != nil && entry.Count > 0 {
+        if entry != nil && entry.Count > 0 && !ContainsUserLabel(ifStmt.Condition) {
             conditionEntry = Dictionary[AccessPath, TypeSymbol](entry)
             ClearAssignedRoots(ifStmt.Condition, conditionEntry, callableAliases)
         }
@@ -1521,6 +1500,12 @@ internal partial class StatementBinder {
                 return false
             }
             case BoundExpressionStatement{Expression: BoundAssignmentExpression assign} {
+                if ContainsUserLabel(stmt) {
+                    state.Clear()
+                    aliases.Clear()
+                    ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
+                    return true
+                }
                 // The right-hand side can write other roots, aliases included.
                 ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
                 if TryClassifyNonNullAssignment(assign, out var local, out var underlying) {
@@ -1574,22 +1559,50 @@ internal partial class StatementBinder {
                 }
             }
             case inner is BoundBlockStatement {
+                if inner.Syntax is LabeledStatementSyntax &&
+                    inner
+                    .Statements
+                    .Length == 2 &&
+                    inner.Statements[0] is BoundLabelStatement {
+                    // A user label can be reached by a goto from outside the branch,
+                    // so only facts established after the label hold on all paths out.
+                    state.Clear()
+                    aliases.Clear()
+                    return ProcessBranchStatement(inner.Statements[1], state, aliases)
+                }
                 if inner.Statements.Any((statement BoundStatement) -> statement is BoundLabelStatement) {
+                    if ContainsUserLabel(inner) {
+                        state.Clear()
+                        aliases.Clear()
+                    }
                     // Internal jumps do not exit the branch. Without a CFG,
                     // retain only entry facts untouched by the whole block.
                     ClearAssignedRootsAndUpdateAliases(inner, state, aliases)
                     return true
                 }
+                var fallsThrough = true
                 for s in inner.Statements {
+                    if !fallsThrough {
+                        if !HasInternallyReachableFallthrough(s) {
+                            continue
+                        }
+                        state.Clear()
+                        aliases.Clear()
+                        fallsThrough = true
+                    }
                     if !ProcessBranchStatement(s, state, aliases) {
-                        return false
+                        fallsThrough = false
                     }
                 }
-                return true
+                return fallsThrough
             }
             case tryStatement is BoundTryStatement {
-                if EndsInUnconditionalExit(tryStatement) {
+                if !CanCompleteNormally(tryStatement) {
                     return false
+                }
+                if ContainsUserLabel(tryStatement) {
+                    state.Clear()
+                    aliases.Clear()
                 }
                 if tryStatement.FinallyBlock is not{} finallyBlock {
                     ClearAssignedRootsAndUpdateAliases(tryStatement, state, aliases)
@@ -1602,8 +1615,8 @@ internal partial class StatementBinder {
                     finallyBlock: nil
                 )
                 ClearAssignedRootsAndUpdateAliases(withoutFinally, state, aliases)
-                if ContainsUserGotoOrLabel(finallyBlock.Syntax) {
-                    if EndsInUnconditionalExit(finallyBlock) {
+                if ContainsUserGotoOrLabel(finallyBlock) {
+                    if !CanCompleteNormally(finallyBlock) {
                         return false
                     }
                     ClearAssignedRootsAndUpdateAliases(finallyBlock, state, aliases)
@@ -1612,12 +1625,108 @@ internal partial class StatementBinder {
                 return ProcessBranchStatement(finallyBlock, state, aliases)
             }
             default {
+                if !CanCompleteNormally(stmt) {
+                    return false
+                }
+                if ContainsUserLabel(stmt) {
+                    state.Clear()
+                    aliases.Clear()
+                }
                 // Loops, switches, and any other construct that could reassign a
                 // tracked local: conservatively drop every narrowing on a local
                 // the statement's subtree assigns anywhere.
                 ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
                 return true
             }
+        }
+    }
+
+    private func ContainsUserLabel(statement BoundStatement?) bool {
+        if !binderCtx.FunctionContainsUserGotoOrLabel || statement == nil {
+            return false
+        }
+        let finder = UserLabelFinder()
+        finder.VisitStatement(statement)
+        return finder.Found
+    }
+
+    private func ContainsUserLabel(expression BoundExpression?) bool {
+        if !binderCtx.FunctionContainsUserGotoOrLabel || expression == nil {
+            return false
+        }
+        let finder = UserLabelFinder()
+        finder.VisitExpression(expression)
+        return finder.Found
+    }
+
+    private func ContainsUserGotoOrLabel(statement BoundStatement?) bool {
+        if !binderCtx.FunctionContainsUserGotoOrLabel || statement == nil {
+            return false
+        }
+        let finder = UserGotoOrLabelFinder()
+        finder.VisitStatement(statement)
+        return finder.Found
+    }
+
+    private class UserLabelFinder : BoundTreeWalker {
+        prop Found bool {
+            get;
+            private set;
+        }
+
+        open override func VisitStatement(node BoundStatement?) {
+            if Found || node == nil || node is BoundLocalFunctionDeclaration {
+                return
+            }
+            if node.Syntax is LabeledStatementSyntax labeled && !IsLabelableLoop(labeled.Statement) {
+                Found = true
+                return
+            }
+            if node.Syntax != nil && ContainsUserLabel(node.Syntax) {
+                Found = true
+                return
+            }
+            base.VisitStatement(node)
+        }
+
+        open override func VisitExpression(node BoundExpression?) {
+            if Found || node == nil || node is BoundFunctionLiteralExpression {
+                return
+            }
+            if node.Syntax != nil && ContainsUserLabel(node.Syntax) {
+                Found = true
+                return
+            }
+            base.VisitExpression(node)
+        }
+    }
+
+    private class UserGotoOrLabelFinder : BoundTreeWalker {
+        prop Found bool {
+            get;
+            private set;
+        }
+
+        open override func VisitStatement(node BoundStatement?) {
+            if Found || node == nil || node is BoundLocalFunctionDeclaration {
+                return
+            }
+            if node.Syntax != nil && ContainsUserGotoOrLabel(node.Syntax) {
+                Found = true
+                return
+            }
+            base.VisitStatement(node)
+        }
+
+        open override func VisitExpression(node BoundExpression?) {
+            if Found || node == nil || node is BoundFunctionLiteralExpression {
+                return
+            }
+            if node.Syntax != nil && ContainsUserGotoOrLabel(node.Syntax) {
+                Found = true
+                return
+            }
+            base.VisitExpression(node)
         }
     }
 
@@ -1641,6 +1750,9 @@ internal partial class StatementBinder {
         WhenTrueAliases HashSet[VariableSymbol],
         WhenFalseAliases HashSet[VariableSymbol]
     ) {
+        if ContainsUserLabel(condition) {
+            return (nil, nil, HashSet[VariableSymbol](), HashSet[VariableSymbol]())
+        }
         switch condition {
             case block is BoundBlockExpression {
                 let afterPrefix = AliasesAfterBlockPrefix(block, beforeAliases)
@@ -1794,6 +1906,10 @@ internal partial class StatementBinder {
     // The one header rule: an alias that [`header`](paramref) assigns, or that an unknown callable in it can assign,
     // is no longer known to be external.
     private func RemoveHeaderAffectedAliases(aliases HashSet[VariableSymbol], header BoundExpression) {
+        if ContainsUserLabel(header) {
+            aliases.Clear()
+            return
+        }
         let collector = NewCollector(nil, aliases)
         collector.VisitExpression(header)
         if collector.MayMutateAnyRootViaPointer {
@@ -2087,11 +2203,19 @@ internal partial class StatementBinder {
         state Dictionary[AccessPath, TypeSymbol],
         aliases HashSet[VariableSymbol]
     ) {
+        let hasUserLabel = ContainsUserLabel(statement)
+        if hasUserLabel {
+            state.Clear()
+            aliases.Clear()
+        }
         let aliasesAtEntry = aliases.ToArray()
         let collector = NewCollector(nil, aliasesAtEntry)
         collector.Visit(statement)
         ClearAssignedRoots(statement, state, collector)
         ApplyCallableAliasExitState(aliases, statement, aliasesAtEntry, collector)
+        if hasUserLabel {
+            aliases.Clear()
+        }
     }
 
     /// Issue #2159: conservatively drops every narrowing on a local that
@@ -4172,7 +4296,11 @@ internal partial class StatementBinder {
                 return fallsThrough
             }
             case ifStatement is BoundIfStatement {
-                return HasInternallyReachableFallthrough(ifStatement.ThenStatement) ||
+                return (
+                    HasInternallyReachableExpressionFallthrough(ifStatement.Condition) &&
+                        CanCompleteNormally(ifStatement)
+                ) ||
+                    HasInternallyReachableFallthrough(ifStatement.ThenStatement) ||
                     (ifStatement.ElseStatement != nil && HasInternallyReachableFallthrough(ifStatement.ElseStatement))
             }
             case tryStatement is BoundTryStatement {
@@ -4184,8 +4312,17 @@ internal partial class StatementBinder {
                 )
             }
             case switchStatement is BoundPatternSwitchStatement {
-                return switchStatement.Arms.Any(
-                    (arm BoundPatternSwitchArm) -> HasInternallyReachableFallthrough(arm.Body)
+                return (
+                    HasInternallyReachableExpressionFallthrough(switchStatement.Discriminant) &&
+                        CanCompleteNormally(switchStatement)
+                ) ||
+                    switchStatement
+                    .Arms
+                    .Any(
+                    (arm BoundPatternSwitchArm) -> (
+                        HasInternallyReachableExpressionFallthrough(arm.Guard) && !EndsInUnconditionalExit(arm.Body)
+                    ) ||
+                        HasInternallyReachableFallthrough(arm.Body)
                 )
             }
             case infiniteLoop is BoundForInfiniteStatement {
@@ -4207,8 +4344,64 @@ internal partial class StatementBinder {
                     HasInternallyReachableFallthrough(awaitRangeLoop.Body)
             }
             default {
-                return false
+                return HasInternallyReachableStatementExpressionFallthrough(statement) && CanCompleteNormally(statement)
             }
+        }
+    }
+
+    private func HasInternallyReachableExpressionFallthrough(expression BoundExpression?) bool {
+        if !binderCtx.FunctionContainsUserGotoOrLabel || expression == nil {
+            return false
+        }
+        let finder = ExpressionFallthroughFinder(this)
+        finder.VisitExpression(expression)
+        return finder.Found
+    }
+
+    private func HasInternallyReachableStatementExpressionFallthrough(statement BoundStatement) bool {
+        if !binderCtx.FunctionContainsUserGotoOrLabel {
+            return false
+        }
+        let finder = ExpressionFallthroughFinder(this)
+        finder.VisitStatement(statement)
+        return finder.Found
+    }
+
+    private class ExpressionFallthroughFinder : BoundTreeWalker {
+        private let owner StatementBinder
+
+        init(owner StatementBinder) {
+            this.owner = owner
+        }
+
+        prop Found bool {
+            get;
+            private set;
+        }
+
+        open override func VisitStatement(node BoundStatement?) {
+            if Found || node == nil || node is BoundLocalFunctionDeclaration {
+                return
+            }
+            base.VisitStatement(node)
+        }
+
+        open override func VisitExpression(node BoundExpression?) {
+            if Found || node == nil || node is BoundFunctionLiteralExpression {
+                return
+            }
+            if node is BoundBlockExpression block {
+                var fallsThrough = false
+                for child in block.Statements {
+                    fallsThrough = (fallsThrough || owner.HasInternallyReachableFallthrough(child)) &&
+                        owner.CanCompleteNormally(child)
+                }
+                if fallsThrough {
+                    Found = true
+                    return
+                }
+            }
+            base.VisitExpression(node)
         }
     }
 

@@ -1127,15 +1127,10 @@ internal partial class StatementBinder {
         /// narrowing lifts.
         ///
         /// Used to populate (cref:BinderContext.FunctionContainsUserGotoOrLabel)
-        /// once per function-equivalent binding session, which
-        /// (cref:ApplyEarlyExitNarrowings) consults to conservatively
-        /// suppress the early-exit / post-switch narrowing lift for the WHOLE
-        /// body whenever the function contains any goto/label at all, rather
-        /// than pinpointing which SPECIFIC lift site a given `goto` can
-        /// actually reach. See the comment on
-        /// (cref:ApplyEarlyExitNarrowings) for why a more precise
-        /// CFG-based reachability check is a valid future refinement, not
-        /// required for this fix.
+        /// once per function-equivalent binding session for pattern-variable scope
+        /// leaks ((cref:ApplyEarlyExitPatternVariables)), backward-jump span lookup
+        /// ((cref:EnterBackwardJumpSpanIfFirstStatement)), and loop-exit facts
+        /// ((cref:RecordLoopExitFacts)).
         internal func ContainsUserGotoOrLabel(node SyntaxNode?) bool {
             switch node {
                 case nil {
