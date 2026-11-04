@@ -273,10 +273,17 @@ shared class ClrNullability {
         if layoutType?.IsByRef == true {
             layoutType = layoutType!!.GetElementType()
         }
+        let attributeMethod = if ClrTypeUtilities.IsTypeBuilderInstantiation(method.DeclaringType) &&
+            definition != nil {
+            definition
+        } else {
+            method
+        }
+        let returnParameter = attributeMethod.ReturnParameter
         // ADR-0172 Phase B: surface imported tuple element names.
         let result = TupleElementNamesReader.ApplyNames(
-            ApplyReferenceNullabilityFull(baseSymbol, returnType, method.ReturnParameter, method, layoutType),
-            method.ReturnParameter,
+            ApplyReferenceNullabilityFull(baseSymbol, returnType, returnParameter, attributeMethod, layoutType),
+            returnParameter,
             layoutType
         )
         return if method.ReturnType.IsByRef {
@@ -331,10 +338,24 @@ shared class ClrNullability {
         if layoutType?.IsByRef == true {
             layoutType = layoutType!!.GetElementType()
         }
+        let attributeParameter = if parameter.Member is MethodBase parameterMethod &&
+            ClrTypeUtilities.IsTypeBuilderInstantiation(parameterMethod.DeclaringType) &&
+            definitionParameters != nil &&
+            uint32(parameter.Position) < uint32(definitionParameters.Length) {
+            definitionParameters[parameter.Position]
+        } else {
+            parameter
+        }
         let baseSymbol = TypeSymbol.FromClrType(parameterType)
-        var mapped = ApplyReferenceNullabilityFull(baseSymbol, parameterType, parameter, parameter.Member, layoutType)
+        var mapped = ApplyReferenceNullabilityFull(
+            baseSymbol,
+            parameterType,
+            attributeParameter,
+            attributeParameter.Member,
+            layoutType
+        )
         // ADR-0172 Phase B: surface imported tuple element names.
-        mapped = TupleElementNamesReader.ApplyNames(mapped, parameter, layoutType)
+        mapped = TupleElementNamesReader.ApplyNames(mapped, attributeParameter, layoutType)
         let rawDefault object? = if parameter.HasDefaultValue || parameter.IsOptional {
             parameter.RawDefaultValue
         } else {
@@ -1565,6 +1586,23 @@ shared class ClrNullability {
         CompilationMeasurements.Count("metadata.attribute-requests")
         if AttributesCache.TryGetValue(provider, out var cached) {
             return cached
+        }
+        if (
+            provider is Type providerType &&
+                (
+                ClrTypeUtilities.IsTypeBuilderInstantiation(providerType) || ClrTypeUtilities.IsUnfinishedEmitType(
+                    providerType
+                )
+            )
+        ) ||
+            (
+            provider is MemberInfo providerMember &&
+                (
+                ClrTypeUtilities.IsTypeBuilderInstantiation(providerMember.DeclaringType) ||
+                    ClrTypeUtilities.IsUnfinishedEmitType(providerMember.DeclaringType)
+            )
+        ) {
+            return Array.Empty[CustomAttributeData]()
         }
         try {
             CompilationMeasurements.Count("metadata.attribute-reads")

@@ -100,11 +100,21 @@ class SequenceTypeSymbol : TypeSymbol {
         }
 
         private func MakeClrType(elementType TypeSymbol) Type? {
+            if TypeSymbol.ContainsTypeParameter(elementType) || elementType.ClrType == nil {
+                return nil
+            }
             let elementClrType Type? = NullableTypeSymbol.GetEffectiveClrType(elementType)
             if elementClrType == nil {
                 return nil
             }
-            return typeof(IEnumerable[_]).MakeGenericType(elementClrType)
+            if elementClrType.IsRuntimeProvidedType() {
+                return typeof(IEnumerable[_]).MakeGenericType(elementClrType)
+            }
+            return MapTypeSymbol.TryMakeSingleArgumentClrTypeInReferenceContext(
+                typeof(IEnumerable[_]),
+                "GetEnumerator",
+                elementType
+            )
         }
 
         private func IsEnumerableInterfaceDefinition(

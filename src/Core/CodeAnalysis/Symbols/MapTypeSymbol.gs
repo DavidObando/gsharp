@@ -208,6 +208,91 @@ class MapTypeSymbol : TypeSymbol {
             )
         }
 
+        internal func TryMakeSingleArgumentClrTypeInReferenceContext(
+            openHostType Type,
+            probeMethodName string,
+            elementType TypeSymbol
+        ) Type? {
+            if elementType.ClrType is not{} elementClrType {
+                return nil
+            }
+            return TryMakeSingleArgumentClrTypeInReferenceContext(
+                openHostType,
+                probeMethodName,
+                elementClrType,
+                IsNullableValueType(elementType)
+            )
+        }
+
+        internal func TryMakeErasedSingleArgumentClrTypeInReferenceContext(
+            openHostType Type,
+            probeMethodName string,
+            elementClrType Type?
+        ) Type? -> if elementClrType == nil {
+            default(Type?)
+        } else {
+            TryMakeSingleArgumentClrTypeInReferenceContext(
+                openHostType,
+                probeMethodName,
+                elementClrType,
+                elementIsNullableValueType: false
+            )
+        }
+
+        private func TryMakeSingleArgumentClrTypeInReferenceContext(
+            openHostType Type,
+            probeMethodName string,
+            elementClrType Type,
+            elementIsNullableValueType bool
+        ) Type? {
+            if FindReferenceCarrierAssembly(elementClrType) is not{} carrierAssembly ||
+                !ReferenceProjectors.TryGetValue(carrierAssembly, out var project) {
+                return nil
+            }
+            try {
+                let openDefinition Type? = project(openHostType)
+                var projectedElement Type? = project(elementClrType)
+                if openDefinition == nil || projectedElement == nil {
+                    return nil
+                }
+                if elementIsNullableValueType && !TryWrapInContextNullable(project, &projectedElement) {
+                    return nil
+                }
+                let closed = openDefinition.MakeGenericType(projectedElement!!)
+                return if closed.GetMethod(probeMethodName) == nil {
+                    default(Type?)
+                } else {
+                    closed
+                }
+            } catch (e Exception) when e is ArgumentException ||
+                e is InvalidOperationException ||
+                e is NotSupportedException ||
+                e is TypeLoadException ||
+                e is AmbiguousMatchException {
+                return nil
+            }
+        }
+
+        private func FindReferenceCarrierAssembly(type Type?) Assembly? {
+            if type == nil || type.IsRuntimeProvidedType() {
+                return nil
+            }
+            if !object.ReferenceEquals(type.Assembly, typeof(object).Assembly) {
+                return type.Assembly
+            }
+            if type.HasElementType {
+                return FindReferenceCarrierAssembly(type.GetElementType())
+            }
+            if type.IsConstructedGenericType {
+                for argument in type.GetGenericArguments() {
+                    if FindReferenceCarrierAssembly(argument) is {} found {
+                        return found
+                    }
+                }
+            }
+            return nil
+        }
+
         private func MakeClrType(keyType TypeSymbol, valueType TypeSymbol) Type? {
             // Nested generic arguments must use the same symbolic projection as direct type parameters (ADR-0087).
             if TypeSymbol.ContainsTypeParameter(keyType) || TypeSymbol.ContainsTypeParameter(valueType) {

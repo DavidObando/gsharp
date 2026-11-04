@@ -914,10 +914,6 @@ internal class MemberLookup {
         /// the two never overwrite one another.
         private const ExplicitInterfaceCandidatesCacheKeySuffix string = "\u0000explicitiface"
 
-        private let OpenMethodsByMappedMethod ConditionalWeakTable[MethodInfo, MethodInfo] = ConditionalWeakTable[
-            MethodInfo,
-            MethodInfo
-        ]()
         private let SymbolicInferenceConflict TypeSymbol = TypeSymbol.FromClrTypeWithoutNullability(
             typeof(SymbolicInferenceConflictMarker),
             NullabilityFreeReason.TypeLiteral
@@ -1284,8 +1280,7 @@ internal class MemberLookup {
                                 continue
                             }
                             try {
-                                let mapped = TypeBuilder.GetMethod(clrType, openMethod)
-                                OpenMethodsByMappedMethod.GetValue(mapped, (_ MethodInfo) -> openMethod)
+                                let mapped = ClrTypeUtilities.MapConstructedGenericMethod(clrType, openMethod)
                                 if !IsMethodHiddenByExisting(result, mapped) {
                                     result.Add(mapped)
                                 }
@@ -3855,6 +3850,16 @@ internal class MemberLookup {
                     // symbolic-argument recovery downstream re-derives the real
                     // element type for the member's return projection.
                     if TryProjectErasedClrType(seq.ElementType, out var seqElement) && seqElement != nil {
+                        if !seqElement.IsRuntimeProvidedType() &&
+                            MapTypeSymbol
+                            .TryMakeErasedSingleArgumentClrTypeInReferenceContext(
+                            typeof(System.Collections.Generic.IEnumerable[_]),
+                            "GetEnumerator",
+                            seqElement
+                        ) is {} inContext {
+                            erased = inContext
+                            return true
+                        }
                         erased = typeof(System.Collections.Generic.IEnumerable[_]).MakeGenericType(seqElement)
                         return true
                     }
@@ -3864,6 +3869,16 @@ internal class MemberLookup {
                     // Issue #1320: the async-iterator counterpart, alias for
                     // `IAsyncEnumerable<T>`.
                     if TryProjectErasedClrType(aseq.ElementType, out var aseqElement) && aseqElement != nil {
+                        if !aseqElement.IsRuntimeProvidedType() &&
+                            MapTypeSymbol
+                            .TryMakeErasedSingleArgumentClrTypeInReferenceContext(
+                            typeof(System.Collections.Generic.IAsyncEnumerable[_]),
+                            "GetAsyncEnumerator",
+                            aseqElement
+                        ) is {} inContext {
+                            erased = inContext
+                            return true
+                        }
                         erased = typeof(System.Collections.Generic.IAsyncEnumerable[_]).MakeGenericType(aseqElement)
                         return true
                     }
@@ -6378,7 +6393,7 @@ internal class MemberLookup {
 
         internal func GetImportedMethodForEmission(
             method MethodInfo
-        ) MethodInfo -> if OpenMethodsByMappedMethod.TryGetValue(method, out var openMethod) {
+        ) MethodInfo -> if ClrTypeUtilities.TryGetMappedOpenMethod(method, out var openMethod) {
             openMethod
         } else {
             method
@@ -6649,6 +6664,7 @@ internal class MemberLookup {
             }
             return imported ??
                 TryGetClosedMapProjectionView(type) ??
+                TryGetClosedSequenceProjectionView(type) ??
                 (
                 if type is StructSymbol userClass && TypeMemberModel.GetNearestImportedBase(
                     userClass
@@ -6658,6 +6674,20 @@ internal class MemberLookup {
                     default(ImportedTypeSymbol?)
                 }
             )
+        }
+
+        internal func TryGetClosedSequenceProjectionView(type TypeSymbol) ImportedTypeSymbol? {
+            if (type is SequenceTypeSymbol or AsyncSequenceTypeSymbol) &&
+                type.ClrType is {IsGenericType: true, IsGenericTypeDefinition: false} sequenceClr &&
+                SequenceTypeSymbol
+                .TryGetEnumerableInterfaceShape(type, out _, out var elementType) {
+                return ImportedTypeSymbol.GetConstructed(
+                    sequenceClr,
+                    sequenceClr.GetGenericTypeDefinition(),
+                    ImmutableArray.Create(elementType)
+                )
+            }
+            return nil
         }
 
         /// Issue #4033: the `Dictionary[K, V]` view of a CLOSED
@@ -8076,7 +8106,7 @@ internal class MemberLookup {
             if openDeclaringType == nil || genericMethod == nil {
                 return nil
             }
-            if OpenMethodsByMappedMethod.TryGetValue(genericMethod, out var mappedOpenMethod) &&
+            if ClrTypeUtilities.TryGetMappedOpenMethod(genericMethod, out var mappedOpenMethod) &&
                 ClrTypeUtilities.AreSame(mappedOpenMethod.DeclaringType, openDeclaringType) {
                 return mappedOpenMethod
             }
