@@ -296,7 +296,7 @@ internal partial class StatementBinder {
             $scope.GetDeclaredStructs(),
             Diagnostics
         )
-        let result = BoundPatternSwitchStatement(nil, discriminant, boundArms, isExhaustive)
+        let result = BoundPatternSwitchStatement(syntax, discriminant, boundArms, isExhaustive)
         let shadowBreaks = binderCtx.UsedBreakLabels.Contains(switchBreakLabel)
         // ADR-0069 addendum / issue #712: park the merged narrowing on the
         // bound switch so the enclosing block walker can lift it. Only do

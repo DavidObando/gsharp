@@ -736,11 +736,7 @@ internal partial class StatementBinder {
             if !EndsInUnconditionalExit(ifStmt.ThenStatement) {
                 return
             }
-            if ifStmt.ElseStatement != nil &&
-                ifStmt
-                .ElseStatement
-                .Syntax != nil &&
-                ContainsUserLabel(ifStmt.ElseStatement.Syntax) {
+            if ifStmt.ElseStatement != nil && ContainsUserLabel(ifStmt.ElseStatement) {
                 return
             }
             for kv in elseFrame {
@@ -1432,6 +1428,12 @@ internal partial class StatementBinder {
                 return false
             }
             case BoundExpressionStatement{Expression: BoundAssignmentExpression assign} {
+                if ContainsUserLabel(stmt) {
+                    state.Clear()
+                    aliases.Clear()
+                    ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
+                    return true
+                }
                 // The right-hand side can write other roots, aliases included.
                 ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
                 if TryClassifyNonNullAssignment(assign, out var local, out var underlying) {
@@ -1497,7 +1499,7 @@ internal partial class StatementBinder {
                     return ProcessBranchStatement(inner.Statements[1], state, aliases)
                 }
                 if inner.Statements.Any((statement BoundStatement) -> statement is BoundLabelStatement) {
-                    if inner.Syntax != nil && ContainsUserLabel(inner.Syntax) {
+                    if ContainsUserLabel(inner) {
                         state.Clear()
                         aliases.Clear()
                     }
@@ -1526,7 +1528,7 @@ internal partial class StatementBinder {
                 if !CanCompleteNormally(tryStatement) {
                     return false
                 }
-                if tryStatement.Syntax != nil && ContainsUserLabel(tryStatement.Syntax) {
+                if ContainsUserLabel(tryStatement) {
                     state.Clear()
                     aliases.Clear()
                 }
@@ -1541,8 +1543,8 @@ internal partial class StatementBinder {
                     finallyBlock: nil
                 )
                 ClearAssignedRootsAndUpdateAliases(withoutFinally, state, aliases)
-                if ContainsUserGotoOrLabel(finallyBlock.Syntax) {
-                    if EndsInUnconditionalExit(finallyBlock) {
+                if ContainsUserGotoOrLabel(finallyBlock) {
+                    if !CanCompleteNormally(finallyBlock) {
                         return false
                     }
                     ClearAssignedRootsAndUpdateAliases(finallyBlock, state, aliases)
@@ -1554,7 +1556,7 @@ internal partial class StatementBinder {
                 if !CanCompleteNormally(stmt) {
                     return false
                 }
-                if stmt.Syntax != nil && ContainsUserLabel(stmt.Syntax) {
+                if ContainsUserLabel(stmt) {
                     state.Clear()
                     aliases.Clear()
                 }
@@ -1564,6 +1566,90 @@ internal partial class StatementBinder {
                 ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
                 return true
             }
+        }
+    }
+
+    private func ContainsUserLabel(statement BoundStatement?) bool {
+        if !binderCtx.FunctionContainsUserGotoOrLabel || statement == nil {
+            return false
+        }
+        let finder = UserLabelFinder()
+        finder.VisitStatement(statement)
+        return finder.Found
+    }
+
+    private func ContainsUserGotoOrLabel(statement BoundStatement?) bool {
+        if !binderCtx.FunctionContainsUserGotoOrLabel || statement == nil {
+            return false
+        }
+        let finder = UserGotoOrLabelFinder()
+        finder.VisitStatement(statement)
+        return finder.Found
+    }
+
+    private class UserLabelFinder : BoundTreeWalker {
+        prop Found bool {
+            get;
+            private set;
+        }
+
+        open override func VisitStatement(node BoundStatement?) {
+            if Found || node == nil || node is BoundLocalFunctionDeclaration {
+                return
+            }
+            if node.Syntax is LabeledStatementSyntax labeled && !IsLabelableLoop(labeled.Statement) {
+                Found = true
+                return
+            }
+            if node.Syntax != nil && ContainsUserLabel(node.Syntax) {
+                Found = true
+                return
+            }
+            base.VisitStatement(node)
+        }
+
+        open override func VisitExpression(node BoundExpression?) {
+            if Found || node == nil || node is BoundFunctionLiteralExpression {
+                return
+            }
+            if node.Syntax != nil && ContainsUserLabel(node.Syntax) {
+                Found = true
+                return
+            }
+            base.VisitExpression(node)
+        }
+    }
+
+    private class UserGotoOrLabelFinder : BoundTreeWalker {
+        prop Found bool {
+            get;
+            private set;
+        }
+
+        open override func VisitStatement(node BoundStatement?) {
+            if Found || node == nil || node is BoundLocalFunctionDeclaration {
+                return
+            }
+            if node is BoundGotoStatement {
+                Found = true
+                return
+            }
+            if node.Syntax != nil && ContainsUserGotoOrLabel(node.Syntax) {
+                Found = true
+                return
+            }
+            base.VisitStatement(node)
+        }
+
+        open override func VisitExpression(node BoundExpression?) {
+            if Found || node == nil || node is BoundFunctionLiteralExpression {
+                return
+            }
+            if node.Syntax != nil && ContainsUserGotoOrLabel(node.Syntax) {
+                Found = true
+                return
+            }
+            base.VisitExpression(node)
         }
     }
 

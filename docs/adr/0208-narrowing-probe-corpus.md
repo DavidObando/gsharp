@@ -250,5 +250,7 @@ d06 when another fact is in force at the loop entry; the row now gets the same r
 | m06 | `guard let p = b.Pet else { return "" }`; `if b.Pet !is Dog { return "" }`; `{ if s == nil { return "" } }`; `if skip { goto Done }`; `Done: return b.Pet.Bark() + "-" + p.Name + "-" + s.Length.ToString()` | rejected (`GS0158`, `GS0159`) | accepted, prints `woof-rex-2` (R6) |
 | m07 | `if cond { goto SkipAssign }`; `if flag { x = "hello"; SkipAssign: Console.WriteLine("reached") } else { x = "world" }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
 | m08 | `if cond { goto InsideElse }`; `if x == nil { return 0 } else { InsideElse: Console.WriteLine("reached") }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m09 | `if cond { goto InsideSwitch }`; `if flag { x = "a"; switch k { case 1 { InsideSwitch: ... } default { } } } else { x = "b" }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m10 | `if cond { goto AfterDefer }`; `if flag { x = "a"; defer ...; AfterDefer: ... } else { x = "b" }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
 
 

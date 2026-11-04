@@ -119,6 +119,67 @@ Run(Box{Pet: Dog{Name: "Rex"}})
     }
 
     @Fact
+    func Goto_LandsInsideSwitchArmInIfBranch_DoesNotLiftNarrowing() {
+        let result = Evaluate(`
+import System
+
+func Run(cond bool, flag bool, k int32) string {
+    var x string? = nil
+    if cond {
+        goto InsideSwitch
+    }
+    if flag {
+        x = "hello"
+        switch k {
+            case 1 {
+            InsideSwitch:
+                Console.WriteLine("reached")
+            }
+            default {
+            }
+        }
+    } else {
+        x = "world"
+    }
+    return x.Length.ToString()
+}
+
+Run(true, false, 1)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func Goto_LandsAfterDeferInIfBranch_DoesNotLiftNarrowing() {
+        let result = Evaluate(`
+import System
+
+func Run(cond bool, flag bool) string {
+    var x string? = nil
+    if cond {
+        goto AfterDefer
+    }
+    if flag {
+        x = "hello"
+        defer Console.WriteLine("cleanup")
+    AfterDefer:
+        Console.WriteLine("reached")
+    } else {
+        x = "world"
+    }
+    return x.Length.ToString()
+}
+
+Run(true, false)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
     func Goto_BypassesSwitchArm_DoesNotNarrowFieldPath() {
         // ADR-0208 section 16, row R6 (#5301): when the default arm jumps to
         // `Skip:` via `goto Skip` without narrowing `b.Pet` to `Dog`, the label

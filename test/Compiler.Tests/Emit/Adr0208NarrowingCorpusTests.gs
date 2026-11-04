@@ -255,6 +255,8 @@ open class Adr0208NarrowingCorpusTests {
                 "m06_5301_member_path_and_guard_let_lifts_survive_unrelated_goto_R6",
                 "m07_5301_goto_into_if_branch_after_assignment_does_not_lift_R6",
                 "m08_5301_goto_into_else_branch_of_early_exit_guard_does_not_lift_R6",
+                "m09_5301_goto_into_switch_arm_in_if_branch_does_not_lift_R6",
+                "m10_5301_goto_after_defer_in_if_branch_does_not_lift_R6",
                 "m1_unrelated_interface_refinement",
                 "n1_boxed_value_type_test",
                 "o1_callback_after_test_replaces_root",
@@ -10171,6 +10173,45 @@ func Run(cond bool) int32 {
     return x.Length
 }
 func Main() { Console.WriteLine(Run(true)) }`, "GS0158@13:14", "reject", "", "R6 (#5301)"}
+            yield[]object{"m09_5301_goto_into_switch_arm_in_if_branch_does_not_lift_R6", `import System
+func Run(cond bool, flag bool, k int32) int32 {
+    var x string? = nil
+    if cond {
+        goto InsideSwitch
+    }
+    if flag {
+        x = "a"
+        switch k {
+            case 1 {
+                InsideSwitch:
+                Console.WriteLine("reached")
+            }
+            default {
+            }
+        }
+    } else {
+        x = "b"
+    }
+    return x.Length
+}
+func Main() { Console.WriteLine(Run(true, false, 1)) }`, "GS0158@20:14", "reject", "", "R6 (#5301)"}
+            yield[]object{"m10_5301_goto_after_defer_in_if_branch_does_not_lift_R6", `import System
+func Run(cond bool, flag bool) int32 {
+    var x string? = nil
+    if cond {
+        goto AfterDefer
+    }
+    if flag {
+        x = "a"
+        defer Console.WriteLine("cleanup")
+        AfterDefer:
+        Console.WriteLine("reached")
+    } else {
+        x = "b"
+    }
+    return x.Length
+}
+func Main() { Console.WriteLine(Run(true, false)) }`, "GS0158@15:14", "reject", "", "R6 (#5301)"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
