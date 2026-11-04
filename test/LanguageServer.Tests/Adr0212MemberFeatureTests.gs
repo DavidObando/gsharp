@@ -4,11 +4,13 @@
 
 package GSharp.LanguageServer.Tests
 
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.LanguageServer
 import GSharp.LanguageServer.Protocol
 import System
 import System.Collections.Generic
 import System.Linq
+import System.Threading
 import Xunit
 
 /// ADR-0212 slice S4: the features that moved onto `SemanticModel.LookupMembers` and
@@ -101,6 +103,92 @@ open class Adr0212MemberFeatureTests {
         let hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(Source, "WriteLine", 0))
         Assert.NotNull(hover)
         Assert.Contains("overloads", hover!!.Contents.ToString(), StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Hover_OnATopLevelFunctionDeclaration_CountsOverloadsAcrossFiles() {
+        let sourceA = "package Members\nfunc Pick(a int32) int32 { return a }\n"
+        let sourceB = "package Members\nfunc Pick(a string) int32 { return 0 }\n"
+        let project = ProjectState("/test/project.gsproj")
+        project.UpdateFile("/test/a.gs", sourceA)
+        project.UpdateFile("/test/b.gs", sourceB)
+        Assert.True(project.TryGetSyntaxTree("/test/a.gs", out var treeA))
+        let content = DocumentContent(treeA, List[int32](), project)
+        let hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(sourceA, "Pick"))
+        Assert.NotNull(hover)
+        Assert.Contains("*(+ 1 overload)*", hover!!.Contents.ToString(), StringComparison.Ordinal)
+    }
+
+    @Fact
+    func WarmUp_BuildsReferenceIndexAndResolvesTypeAliasDeclaration() {
+        let source = `/// Type-only package doc.
+package Members
+/// System import alias doc.
+import sys = System
+type IntAlias = int32
+func IntAlias() {}
+func Use(x IntAlias) IntAlias { return x }
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = ServerCompilation.Create(content.SyntaxTree)
+        SemanticLookup.WarmUp(compilation)
+        let staleContent = LanguageServerTestHelpers.Content(source)
+        let aliasOffset = SemanticLookup.ToOffset(
+            staleContent,
+            LanguageServerTestHelpers.PositionOf(source, "IntAlias =")
+        )
+        let aliasToken = SemanticLookup.FindTokenAt(staleContent.SyntaxTree, aliasOffset)
+        let aliasSymbol = Assert.IsType[TypeSymbol](SemanticLookup.ResolveSymbol(compilation, aliasToken))
+        Assert.Same(TypeSymbol.Int32, aliasSymbol)
+        using let cts = CancellationTokenSource()
+        cts.Cancel()
+        let references = SemanticLookup.FindReferences(compilation, aliasSymbol, cts.Token).ToArray()
+        Assert.Equal(4, references.Length)
+        let importHover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "sys"))
+        Assert.NotNull(importHover)
+        Assert.Contains("System import alias doc.", importHover!!.Contents.ToString(), StringComparison.Ordinal)
+        let typeOnlySource = `/// Type-only package doc.
+package TypeOnly
+class Box {}
+`
+        let typeOnlyContent = LanguageServerTestHelpers.Content(typeOnlySource)
+        let packageHover = HoverComputer.ComputeHover(
+            typeOnlyContent,
+            LanguageServerTestHelpers.PositionOf(typeOnlySource, "TypeOnly")
+        )
+        Assert.NotNull(packageHover)
+        Assert.Contains("Type-only package doc.", packageHover!!.Contents.ToString(), StringComparison.Ordinal)
+        let fooSource = "package Foo\ntype Coord = int32\n"
+        let bazSource = "package Baz\ntype Coord = int64\n"
+        let project = ProjectState("/test/aliases.gsproj")
+        project.UpdateFile("/test/foo.gs", fooSource)
+        project.UpdateFile("/test/baz.gs", bazSource)
+        let projectCompilation = project.GetCompilation()
+        Assert.True(project.TryGetSyntaxTree("/test/foo.gs", out var fooTree))
+        Assert.True(project.TryGetSyntaxTree("/test/baz.gs", out var bazTree))
+        let fooToken = SemanticLookup.FindTokenAt(fooTree, fooSource.IndexOf("Coord", StringComparison.Ordinal))
+        let bazToken = SemanticLookup.FindTokenAt(bazTree, bazSource.IndexOf("Coord", StringComparison.Ordinal))
+        Assert.Same(TypeSymbol.Int32, SemanticLookup.ResolveSymbol(projectCompilation, fooToken))
+        Assert.Same(TypeSymbol.Int64, SemanticLookup.ResolveSymbol(projectCompilation, bazToken))
+        let editedFoo = "package Foo\ntype Coord = int32\nfunc F() int32 { return 1 }\n"
+        project.UpdateFile("/test/foo.gs", editedFoo)
+        let beforeEditComp = project.GetCompilation()
+        SemanticLookup.WarmUp(beforeEditComp)
+        let editedFoo2 = "package Foo\ntype Coord = int32\nfunc F() int32 { return 2 }\n"
+        project.UpdateFile("/test/foo.gs", editedFoo2)
+        let afterEditComp = project.GetCompilation()
+        Assert.True(project.TryGetSyntaxTree("/test/foo.gs", out var editedFooTree))
+        let pkgToken = SemanticLookup.FindTokenAt(editedFooTree, editedFoo2.IndexOf("Foo", StringComparison.Ordinal))
+        let pkgSymbol = Assert.IsType[PackageSymbol](SemanticLookup.ResolveSymbol(afterEditComp, pkgToken))
+        Assert.Equal("Foo", pkgSymbol.Name)
+        let anonSource = "package P\nfunc F() {\n    let x = object {\n        event Changed (int32) -> void\n    }\n}\n"
+        let anonContent = LanguageServerTestHelpers.Content(anonSource)
+        let anonHover = HoverComputer.ComputeHover(
+            anonContent,
+            LanguageServerTestHelpers.PositionOf(anonSource, "Changed")
+        )
+        Assert.NotNull(anonHover)
+        Assert.Contains("Changed", anonHover!!.Contents.ToString(), StringComparison.Ordinal)
     }
 
     shared {

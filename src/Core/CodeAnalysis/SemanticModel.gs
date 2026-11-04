@@ -544,6 +544,41 @@ partial class SemanticModel {
             for symbol in EnumerateDeclaredSymbols(program, globalScope) {
                 RecordDeclarations(symbol, tree, declaredBySyntax)
             }
+            for import_ in globalScope.Imports {
+                if import_.Declaration is {} importDeclaration && object.ReferenceEquals(
+                    importDeclaration.SyntaxTree,
+                    tree
+                ) {
+                    declaredBySyntax.TryAdd(importDeclaration, import_)
+                }
+            }
+            let treePackageName = Binder.PackageNameOfTree(
+                tree,
+                compilation.Submission?.DefaultPackageName ?? "Default"
+            )
+            for package_ in globalScope.Packages {
+                if package_.Declaration != nil && string.Equals(
+                    package_.Name,
+                    treePackageName,
+                    StringComparison.Ordinal
+                ) {
+                    for packageDeclaration in tree.Root.Members.OfType[PackageSyntax]() {
+                        declaredBySyntax.TryAdd(packageDeclaration, package_)
+                    }
+                    break
+                }
+            }
+            for typeAlias in tree.Root.Members.OfType[TypeAliasDeclarationSyntax]() {
+                if !typeAlias.Identifier.IsMissing {
+                    let aliasName = typeAlias.Identifier.ValueText
+                    let qualifiedKey = treePackageName + "#" + aliasName
+                    if globalScope.TypeAliases.TryGetValue(qualifiedKey, out var qualifiedTarget) {
+                        declaredBySyntax.TryAdd(typeAlias, qualifiedTarget)
+                    } else if globalScope.TypeAliases.TryGetValue(aliasName, out var aliasedType) {
+                        declaredBySyntax.TryAdd(typeAlias, aliasedType)
+                    }
+                }
+            }
             SemanticModel.RecordTypeClauses(globalScope, tree, typeClauseTokens)
             // A shared class's declaration node is a copy the binder made when it moved the members
             // into the shared block; the identifier token is the same object in both.
@@ -695,6 +730,9 @@ partial class SemanticModel {
                 for property in declaredInterface.Properties {
                     yield property
                 }
+                for declaredEvent in declaredInterface.Events {
+                    yield declaredEvent
+                }
             }
             for declaredStruct in program.Structs {
                 // ADR-0169 / issue #3795: anchor member containment as the model's
@@ -708,6 +746,9 @@ partial class SemanticModel {
                 yield declaredStruct
                 for property in declaredStruct.Properties.Concat(declaredStruct.StaticProperties) {
                     yield property
+                }
+                for declaredEvent in declaredStruct.Events.Concat(declaredStruct.StaticEvents) {
+                    yield declaredEvent
                 }
             }
             // Signature-only functions (e.g. bodies that failed to bind) still
@@ -729,6 +770,16 @@ partial class SemanticModel {
                 if object.ReferenceEquals(declaration.SyntaxTree, tree) && !declaredBySyntax.ContainsKey(declaration) {
                     declaredBySyntax.Add(declaration, symbol)
                 }
+            }
+            if symbol is EventSymbol{Declaration: {} eventDeclaration} && object.ReferenceEquals(
+                eventDeclaration.Identifier.SyntaxTree,
+                tree
+            ) &&
+                !eventDeclaration
+                .Identifier
+                .IsMissing &&
+                !declaredBySyntax.ContainsKey(eventDeclaration.Identifier) {
+                declaredBySyntax.Add(eventDeclaration.Identifier, symbol)
             }
         }
 
