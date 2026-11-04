@@ -4565,10 +4565,11 @@ partial class Binder {
             }
             try {
                 let closed = clrOpenType!!.MakeGenericType(clrArgs)
-                if hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(
-                    closed,
-                    out _
-                ) {
+                if hasSymbolicArg || clrOpenType!!.FullName?.StartsWith(
+                    "System.Tuple`",
+                    StringComparison.Ordinal
+                ) == true ||
+                    NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(closed, out _) {
                     // #313 / #671: keep the symbolic type arguments alongside
                     // the type-erased closed CLR shape so call-site inference,
                     // return-type substitution, and user-type emit can recover
@@ -5759,10 +5760,8 @@ partial class Binder {
         }
         try {
             let closed = nestedDef.MakeGenericType(clrArgs)
-            if hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(
-                closed,
-                out _
-            ) {
+            if hasSymbolicArg || nestedDef.FullName?.StartsWith("System.Tuple`", StringComparison.Ordinal) == true ||
+                NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(closed, out _) {
                 return ImportedTypeSymbol.GetConstructed(closed, nestedDef, symbolicArgs.MoveToImmutable())
             }
             return ResolveClrTypeClauseSymbol(closed)
@@ -5808,7 +5807,9 @@ partial class Binder {
         if TypeSymbol.RequiresSymbolicProjection(type) ||
             type.ClrType == nil ||
             type is TupleTypeSymbol ||
-            TypeSymbol.ContainsNamedTupleElements(type) || TypeSymbol.ContainsSourceArrayShape(type) {
+            TypeSymbol.ContainsNamedTupleElements(type) || TypeSymbol.ContainsSourceArrayShape(type) ||
+            MemberLookup
+            .ContainsReferenceTuple(type) {
             hasSymbolicArgument = true
             // Issue #2919 follow-up: a nullable source enum keeps the same
             // caller-selected leaf surrogate as the bare enum. A caller that
@@ -10570,7 +10571,11 @@ partial class Binder {
             if type.IsArray {
                 let element = MapAdapterMethodType(RequiredAdapterElementType(type), typeParameters)
                 return if type.GetArrayRank() == 1 {
-                    cast[TypeSymbol](SliceTypeSymbol.Get(element))
+                    if type.IsSZArray {
+                        cast[TypeSymbol](SliceTypeSymbol.Get(element))
+                    } else {
+                        MemberLookup.ConstructRankOneNonSzArray(element, type)
+                    }
                 } else {
                     cast[TypeSymbol](RectangularArrayTypeSymbol.Get(element, type.GetArrayRank()))
                 }

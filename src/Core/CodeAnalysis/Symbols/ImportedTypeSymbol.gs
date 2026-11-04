@@ -475,6 +475,7 @@ class ImportedTypeSymbol : TypeSymbol {
             clrType Type?,
             references ReferenceResolver?
         ) TypeSymbol {
+            let type = ByRefStorageMatching.PreserveReferenceTupleIdentity(clrType, type)
             let nullable = type is NullableTypeSymbol
             let unwrapped = if nullable {
                 (cast[NullableTypeSymbol](type)).UnderlyingType
