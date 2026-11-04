@@ -2453,8 +2453,6 @@ internal partial class StatementBinder {
                 )
                 if function.HasCaptures {
                     MayMutateAnyRoot = true
-                    normalCallableState.InvalidateClosureAssigned(isClosureAssigned)
-                    allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned)
                 }
                 let count = Math.Min(arguments.Length, function.Parameters.Length)
                 for var i = 0; i < count; i++ {
@@ -2490,12 +2488,6 @@ internal partial class StatementBinder {
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol{HasCaptures: true}} {
                 normalCallableState.InvalidateClosureAssigned(isClosureAssigned)
                 allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned)
-            }
-            if node is BoundClrConversionCallExpression conversionCall {
-                AnalyzeCallableArguments(ImmutableArray.Create(conversionCall.Source))
-            }
-            if node is BoundCallOperationExpression callAfterOperands {
-                AnalyzeCallableArguments(callAfterOperands.Arguments)
             }
         }
 
@@ -2678,10 +2670,8 @@ internal partial class StatementBinder {
         protected open override func VisitIndirectCallExpression(node BoundIndirectCallExpression) {
             VisitExpression(node.Target)
             let targetState = CaptureCallableState()
-            for argument in node.Arguments {
-                VisitExpression(argument)
-            }
-            AnalyzeCallableArguments(node.Arguments)
+            let argumentSnapshots = VisitAndSnapshotCallableArguments(node.Arguments)
+            ApplyCallableArguments(argumentSnapshots)
             AnalyzeCallableInvocation(node.Target, targetState)
         }
 
@@ -2770,13 +2760,39 @@ internal partial class StatementBinder {
             }
         }
 
+        protected open override func VisitCallExpression(node BoundCallExpression) {
+            VisitCallableArguments(node.Arguments)
+        }
+
+        protected open override func VisitImportedCallExpression(node BoundImportedCallExpression) {
+            VisitCallableArguments(node.Arguments)
+        }
+
+        protected open override func VisitConstrainedStaticCallExpression(node BoundConstrainedStaticCallExpression) {
+            VisitCallableArguments(node.Arguments)
+        }
+
+        protected open override func VisitClrStaticCallExpression(node BoundClrStaticCallExpression) {
+            VisitCallableArguments(node.Arguments)
+        }
+
+        protected open override func VisitUserInstanceCallExpression(node BoundUserInstanceCallExpression) {
+            VisitExpression(node.Receiver)
+            VisitCallableArguments(node.Arguments)
+        }
+
+        protected open override func VisitBaseInterfaceCallExpression(node BoundBaseInterfaceCallExpression) {
+            VisitExpression(node.Receiver)
+            VisitCallableArguments(node.Arguments)
+        }
+
         protected open override func VisitBaseClassCallExpression(node BoundBaseClassCallExpression) {
             // ADR-0208 R11 (#5170): a base method or computed accessor runs user code.
             if node.Method != nil {
                 MarkMayMutateGlobalRoots()
             }
-            base.VisitBaseClassCallExpression(node)
-            AnalyzeCallableArguments(node.Arguments)
+            VisitExpression(node.Receiver)
+            VisitCallableArguments(node.Arguments)
         }
 
         // `callback.Invoke()` on a delegate value: the explicit form of `callback()`.
@@ -2789,68 +2805,108 @@ internal partial class StatementBinder {
             IsCallableType(receiverType)
 
         protected open override func VisitImportedInstanceCallExpression(node BoundImportedInstanceCallExpression) {
-            if string.Equals(node.Method.Name, "Invoke", StringComparison.Ordinal) &&
-                IsCallableType(node.Receiver.Type) {
-                VisitExpression(node.Receiver)
+            VisitExpression(node.Receiver)
+            if IsCallableValueInvocation(node) {
                 let targetState = CaptureCallableState()
-                for argument in node.Arguments {
-                    VisitExpression(argument)
-                }
-                AnalyzeCallableArguments(node.Arguments)
+                let argumentSnapshots = VisitAndSnapshotCallableArguments(node.Arguments)
+                ApplyCallableArguments(argumentSnapshots)
                 AnalyzeCallableInvocation(node.Receiver, targetState)
                 return
             }
-            base.VisitImportedInstanceCallExpression(node)
+            VisitCallableArguments(node.Arguments)
         }
 
         protected open override func VisitFunctionPointerInvocationExpression(
             node BoundFunctionPointerInvocationExpression
         ) {
-            base.VisitFunctionPointerInvocationExpression(node)
-            AnalyzeCallableArguments(node.Arguments)
+            VisitExpression(node.Pointer)
+            VisitCallableArguments(node.Arguments)
         }
 
         protected open override func VisitConstructorCallExpression(node BoundConstructorCallExpression) {
-            base.VisitConstructorCallExpression(node)
-            AnalyzeCallableArguments(node.Arguments)
+            VisitCallableArguments(node.Arguments)
         }
 
         protected open override func VisitClrConstructorCallExpression(node BoundClrConstructorCallExpression) {
-            base.VisitClrConstructorCallExpression(node)
-            AnalyzeCallableArguments(node.Arguments)
+            VisitCallableArguments(node.Arguments)
         }
 
-        private func AnalyzeCallableArguments(arguments ImmutableArray[BoundExpression]) {
+        protected open override func VisitClrConversionCallExpression(node BoundClrConversionCallExpression) {
+            VisitCallableArguments(ImmutableArray.Create(node.Source))
+        }
+
+        private data struct CallableProvenance(
+            NormalTargets[]?BoundFunctionLiteralExpression,
+            IsNormalExternal bool,
+            IsNormalUnknown bool,
+            AllTargets[]?BoundFunctionLiteralExpression,
+            IsExternal bool,
+            IsUnknown bool
+        ) { }
+
+        private func SnapshotCallableArgument(argument BoundExpression) CallableProvenance {
+            let hasNormalTargets = normalCallableState.TryGetFunctionLiterals(argument, out var normalLiterals)
+            let normalTargetArray = normalLiterals?.ToArray()
+            let isNormalExternal = normalCallableState.IsExternalCallable(argument)
+            let isNormalUnknown = normalCallableState.IsUnknownCallable(argument) ||
+                (!hasNormalTargets && !isNormalExternal)
+            let hasAllTargets = allEntryCallableState.TryGetFunctionLiterals(argument, out var allLiterals)
+            let allTargetArray = allLiterals?.ToArray()
+            let isExternal = allEntryCallableState.IsExternalCallable(argument)
+            let isUnknown = allEntryCallableState.IsUnknownCallable(argument) || (!hasAllTargets && !isExternal)
+            return CallableProvenance(
+                normalTargetArray,
+                isNormalExternal,
+                isNormalUnknown,
+                allTargetArray,
+                isExternal,
+                isUnknown
+            )
+        }
+
+        private func VisitAndSnapshotCallableArguments(arguments ImmutableArray[BoundExpression]) List[
+            CallableProvenance
+        ]? {
+            var snapshots List[CallableProvenance]? = nil
             for argument in arguments {
+                VisitExpression(argument)
                 if !IsCallableType(argument.Type) {
                     continue
                 }
-                let hasNormalTargets = normalCallableState.TryGetFunctionLiterals(argument, out var normalLiterals)
-                let normalTargetArray = normalLiterals?.ToArray()
-                let isNormalExternal = normalCallableState.IsExternalCallable(argument)
-                let isNormalUnknown = normalCallableState.IsUnknownCallable(argument) ||
-                    (!hasNormalTargets && !isNormalExternal)
-                let hasAllTargets = allEntryCallableState.TryGetFunctionLiterals(argument, out var allLiterals)
-                let allTargetArray = allLiterals?.ToArray()
-                let isExternal = allEntryCallableState.IsExternalCallable(argument)
-                let isUnknown = allEntryCallableState.IsUnknownCallable(argument) || (!hasAllTargets && !isExternal)
+                if snapshots == nil {
+                    snapshots = List[CallableProvenance]()
+                }
+                snapshots.Add(SnapshotCallableArgument(argument))
+            }
+            return snapshots
+        }
+
+        private func ApplyCallableArguments(snapshots List[CallableProvenance]?) {
+            if snapshots == nil {
+                return
+            }
+            for snapshot in snapshots {
                 VisitCallableTargets(
-                    normalTargetArray,
-                    isNormalExternal || isNormalUnknown,
-                    allTargetArray,
-                    isExternal || isUnknown
+                    snapshot.NormalTargets,
+                    snapshot.IsNormalExternal || snapshot.IsNormalUnknown,
+                    snapshot.AllTargets,
+                    snapshot.IsExternal || snapshot.IsUnknown
                 )
-                if isExternal {
+                if snapshot.IsExternal {
                     MarkMayMutateGlobalRoots(runsSourceCode: false)
                 }
-                if isNormalUnknown {
+                if snapshot.IsNormalUnknown {
                     normalCallableState.InvalidateClosureAssigned(isClosureAssigned)
                 }
-                if isUnknown {
+                if snapshot.IsUnknown {
                     MayMutateAnyRoot = true
                     allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned)
                 }
             }
+        }
+
+        private func VisitCallableArguments(arguments ImmutableArray[BoundExpression]) {
+            ApplyCallableArguments(VisitAndSnapshotCallableArguments(arguments))
         }
 
         protected open override func VisitVariableDeclaration(node BoundVariableDeclaration) {

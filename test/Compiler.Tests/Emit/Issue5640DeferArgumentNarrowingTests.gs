@@ -420,6 +420,47 @@ func Run() int32 {
     return x.Value
 }
 Console.WriteLine(Run())`, "", "run", "7"}
+            yield[]object{"d19_5640_defer_explicit_delegate_invoke_runs_after_callable_argument", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(v int32) { }
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    let invoke Func[Action, int32] = func(f Action) int32 {
+        action = clear
+        return 1
+    }
+    defer Consume(invoke.Invoke(func() { action = callback }))
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(func() { }))`, "GS0158@17:14", "reject", ""}
+            yield[]object{"d20_5640_defer_callable_argument_provenance_snapshotted_before_later_argument", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(v int32) { }
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    var flip () -> void = func() { action = clear }
+    defer Consume((func(f () -> void, n int32) int32 {
+        f()
+        return n
+    })(flip, {
+        flip = callback
+        1
+    }))
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(func() { }))`, "GS0158@20:14", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
