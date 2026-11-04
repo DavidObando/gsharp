@@ -278,22 +278,23 @@ internal partial class ExpressionBinder {
         if elementType == nil || !MemberLookup.TryProjectErasedClrType(elementType, out var erasedElement) {
             return false
         }
-        var openDefinition Type
+        let references = $scope.References!!
+        if !references.TryMapClrTypeToReferences(
+            typeof(System.Collections.Generic.IEnumerable[_]),
+            out var openDefinition
+        ) ||
+            !references.TryMapClrTypeToReferences(erasedElement, out var mappedElement) {
+            return false
+        }
         var closedEnumerable Type
         try {
-            openDefinition = $scope.References!!.MapClrTypeToReferences(
-                typeof(System.Collections.Generic.IEnumerable[_])
-            )!!
-            let mappedElement = $scope.References!!.MapClrTypeToReferences(erasedElement)
-            closedEnumerable = openDefinition.MakeGenericType(mappedElement!!)
-        } catch (ex Exception) when ClrTypeUtilities.IsMetadataLoadFailure(ex) ||
-            ex is ArgumentException ||
-            ex is InvalidOperationException {
+            closedEnumerable = openDefinition!!.MakeGenericType(mappedElement!!)
+        } catch (ex Exception) when ReferenceResolver.IsProjectionFailure(ex) {
             return false
         }
         normalized = ImportedTypeSymbol.GetConstructed(
             closedEnumerable,
-            openDefinition,
+            openDefinition!!,
             ImmutableArray.Create(elementType)
         )
         return true

@@ -97,6 +97,77 @@ Console.WriteLine("${negated("abc")} ${negated(1)} ${isNot("abcd")} ${isNot(1)} 
         Assert.Equal(string.Join(Environment.NewLine, "3 0 3 0", "3 0 4 0 3 -1") + Environment.NewLine, result.Output)
     }
 
+    /// Issue #4969: composed nil guards (`!`, `&&`, `||`) over value-type
+    /// nullables (`int32?`, user struct `?`, enum `?`) and `[NotNullWhen]`
+    /// bool-call predicates narrow in if-expressions, `?:` ternaries, and
+    /// short-circuit `&&`/`||` operands, matching the if-statement.
+    @Fact
+    func Issue4969_ComposedValueTypeNullableAndBoolCallGuards_NarrowVerifyAndRun() {
+        let result = CompileAndRun(`import System
+import System.Diagnostics.CodeAnalysis
+
+struct Pair {
+    var A int32
+    var B int32
+}
+
+enum Mode { Off = 2, On = 5 }
+
+func tryRead(flag bool, v int32?, @NotNullWhen(true) out res int32?) bool {
+    res = flag ? v : nil
+    return flag && v != nil
+}
+
+func exprNot(n int32?) int32 -> if !(n == nil) { n + 1 } else { -1 }
+func terNot(n int32?) int32 -> !(n == nil) ? n + 1 : -1
+
+func exprAnd(a int32?, b int32?) int32 -> if a != nil && b != nil {
+    let x int32 = a
+    let y int32 = b
+    x + y
+} else { 0 }
+func terAnd(a int32?, b int32?) int32 -> (a != nil && b != nil) ? a + b : 0
+
+func exprOrElse(a int32?, b int32?) int32 -> if a == nil || b == nil { 0 } else { a + b }
+func terOrElse(a int32?, b int32?) int32 -> (a == nil || b == nil) ? 0 : a + b
+
+func structGuard(p Pair?, q Pair?) int32 -> (p != nil && !(q == nil)) ? p.A + q.B : -1
+func enumGuard(m Mode?) int32 -> if !(m == nil) { int32(m) } else { 0 }
+
+func shortCircuitAnd(n int32?, p Pair?) bool -> n != nil && p != nil && (n + p.A) > 3
+func shortCircuitOr(n int32?) bool -> n == nil || (n + 1) > 3
+
+func exprPred(s string?) int32 -> if !string.IsNullOrEmpty(s) { s.Length } else { 0 }
+func terPred(s string?) int32 -> !string.IsNullOrEmpty(s) ? s.Length : 0
+func terPredElse(s string?) int32 -> string.IsNullOrEmpty(s) ? 0 : s.Length
+func shortPredAnd(s string?) bool -> !string.IsNullOrEmpty(s) && s.Length == 3
+func shortPredOr(s string?) bool -> string.IsNullOrEmpty(s) || s.Length == 3
+func userPred(flag bool, v int32?) int32 -> tryRead(flag, v, out var r) ? r + 10 : -1
+
+Console.WriteLine("${exprNot(4)} ${exprNot(nil)} ${terNot(4)} ${terNot(nil)}")
+Console.WriteLine("${exprAnd(2, 3)} ${exprAnd(2, nil)} ${terAnd(2, 3)} ${terAnd(nil, 3)}")
+Console.WriteLine("${exprOrElse(4, 5)} ${exprOrElse(4, nil)} ${terOrElse(4, 5)} ${terOrElse(nil, 5)}")
+Console.WriteLine("${structGuard(Pair{A: 3, B: 1}, Pair{A: 2, B: 4})} ${structGuard(nil, Pair{A: 2, B: 4})} ${enumGuard(Mode.On)} ${enumGuard(nil)}")
+Console.WriteLine("${shortCircuitAnd(2, Pair{A: 3, B: 0})} ${shortCircuitAnd(nil, Pair{A: 3, B: 0})} ${shortCircuitOr(nil)} ${shortCircuitOr(5)} ${shortCircuitOr(1)}")
+Console.WriteLine("${exprPred("abc")} ${exprPred(nil)} ${terPred("abcd")} ${terPred("")} ${terPredElse("xy")} ${terPredElse(nil)}")
+Console.WriteLine("${shortPredAnd("abc")} ${shortPredAnd(nil)} ${shortPredOr(nil)} ${shortPredOr("abc")} ${userPred(true, 7)} ${userPred(false, 7)}")
+`)
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "5 -1 5 -1",
+                "5 0 5 0",
+                "9 0 9 0",
+                "7 -1 5 0",
+                "True False True True False",
+                "3 0 4 0 2 0",
+                "True False True True 17 -1"
+            ) +
+                Environment.NewLine,
+            result.Output
+        )
+    }
+
     /// Narrowing changes a branch's type, so it can change the conditional's
     /// result type: `n != nil ? n : 0` is now `int32` (it was `int32?`), as
     /// the if-expression already was. The overload chosen for the result
@@ -148,10 +219,32 @@ Console.WriteLine("${viaTernary(1)} ${viaIf(1)} ${viaTernary(nil)} ${viaIf(nil)}
     @InlineData("@Oblivious s string", "int32", "s != nil", "s!!.Length", "0", "GS0536:!!")
     @InlineData("@Oblivious s string", "int32", "s == nil", "0", "s!!.Length", "GS0536:!!")
     @InlineData("@Oblivious s string", "int32", "s != nil", "0", "s!!.Length", "")
-    // Composed nil guards over a VALUE-type nullable do not narrow in
-    // either form (the short-circuit classifier is reference-only, issue #4969); the
-    // forms still agree.
-    @InlineData("n int32?", "int32", "!(n == nil)", "n", "-1", "GS0156:n")
+    // Composed nil guards over a VALUE-type nullable narrow in both forms
+    // (issue #4969), as do [NotNullWhen] bool-call guards.
+    @InlineData("n int32?", "int32", "!(n == nil)", "n", "-1", "")
+    @InlineData("a int32?, b int32?", "int32", "a != nil && b != nil", "a + b", "0", "")
+    @InlineData("a int32?, b int32?", "int32", "a == nil || b == nil", "0", "a + b", "")
+    @InlineData("s string?", "int32", "!string.IsNullOrEmpty(s)", "s.Length", "0", "")
+    @InlineData("s string?", "int32", "string.IsNullOrEmpty(s)", "0", "s.Length", "")
+    @InlineData(
+        "a string?, b string?",
+        "int32",
+        "!string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b)",
+        "a.Length + b.Length",
+        "0",
+        ""
+    )
+    @InlineData(
+        "a string?, b string?",
+        "int32",
+        "string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)",
+        "0",
+        "a.Length + b.Length",
+        ""
+    )
+    @InlineData("s string?, n int32?", "int32", "!string.IsNullOrEmpty(s) && !(n == nil)", "s.Length + n", "0", "")
+    @InlineData("s string?", "int32", "string.IsNullOrEmpty(s)", "s.Length", "0", "GS0158:Length")
+    @InlineData("a int32?, b int32?", "int32", "a != nil || b != nil", "a + b", "0", "GS0156:a + b")
     func Ternary_And_If_Expression_Report_The_Same_Diagnostics(
         parameters string,
         returnType string,
@@ -190,6 +283,8 @@ func f(s string?) int32 {
     @Theory
     @InlineData("v != nil ? v + 1 : 0")
     @InlineData("if v != nil { v + 1 } else { 0 }")
+    @InlineData("!(v == nil) ? v + 1 : 0")
+    @InlineData("if !(v == nil) { v + 1 } else { 0 }")
     func Expression_Tree_Narrowed_Value_Type_Read_Is_Rejected_In_Both_Forms(conditional string) {
         let source = (`package Issue4964.ExpressionTree
 import System

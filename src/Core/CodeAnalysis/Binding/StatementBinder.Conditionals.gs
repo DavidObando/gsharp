@@ -34,9 +34,9 @@ internal partial class StatementBinder {
         var thenNarrow Dictionary[AccessPath, TypeSymbol]?
         var elseNarrow Dictionary[AccessPath, TypeSymbol]?
         thenNarrow, elseNarrow = TryClassifyNilGuard(condition)
-        if thenNarrow == nil && elseNarrow == nil {
-            thenNarrow, elseNarrow = TryClassifyBoolCallNarrowing(condition)
-        }
+        let (boolThen, boolElse) = TryClassifyBoolCallNarrowing(condition)
+        thenNarrow = MergeNarrowingFrames(thenNarrow, boolThen)
+        elseNarrow = MergeNarrowingFrames(elseNarrow, boolElse)
         // ADR-0069 / issue #700: smart-cast type-test narrowing on
         // `x is T`, `x !is T`, and `&&` chains thereof. Compose with the
         // nullable / `[NotNullWhen]` frames computed above so a condition
@@ -1066,126 +1066,37 @@ internal partial class StatementBinder {
         Then Dictionary[AccessPath, TypeSymbol]?,
         Else Dictionary[AccessPath, TypeSymbol]?
     ) {
-        var negate = false
-        var inner = condition
-        if inner is BoundUnaryExpression unary && unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
-            negate = true
-            inner = unary.Operand
-        }
-        while inner is BoundBlockExpression block {
-            inner = block.Expression
-        }
-        if inner is BoundImportedCallExpression importedCall && importedCall.Type == TypeSymbol.Bool {
-            var (thenFrame, elseFrame) = ClassifyImportedBoolCallNarrowing(importedCall, negate)
-            MergeClrMemberNotNullWhenNarrowings(importedCall.Function.Method, negate, &thenFrame, &elseFrame)
-            return (thenFrame, elseFrame)
-        }
-        if inner is BoundImportedInstanceCallExpression importedInstanceCall &&
-            importedInstanceCall.Type == TypeSymbol
-            .Bool {
-            var (thenFrame, elseFrame) = ClassifyImportedMethodBoolCallNarrowing(
-                importedInstanceCall.Method.GetParameters(),
-                importedInstanceCall.Arguments,
-                negate
-            )
-            MergeClrMemberNotNullWhenNarrowings(importedInstanceCall.Method, negate, &thenFrame, &elseFrame)
-            return (thenFrame, elseFrame)
-        }
-        if inner is BoundCallExpression userCall && userCall.Type == TypeSymbol.Bool {
-            var (thenFrame, elseFrame) = ClassifyUserBoolCallNarrowing(userCall, negate)
-            MergeUserMemberNotNullWhenNarrowings(userCall.Function.Attributes, negate, &thenFrame, &elseFrame)
-            return (thenFrame, elseFrame)
-        }
-        if inner is BoundUserInstanceCallExpression userInstanceCall && userInstanceCall.Type == TypeSymbol.Bool {
-            // Spelled with the declared `?` rather than `var (a, b) = (default(T),
-            // default(T))`: the translated G# gives that tuple form the
-            // non-null type `T`, which differs from these `ref T?` parameters
-            // (GS0612, issue #4422).
-            var thenFrame Dictionary[AccessPath, TypeSymbol]? = nil
-            var elseFrame Dictionary[AccessPath, TypeSymbol]? = nil
-            MergeUserMemberNotNullWhenNarrowings(userInstanceCall.Method.Attributes, negate, &thenFrame, &elseFrame)
-            return (thenFrame, elseFrame)
-        }
-        return (nil, nil)
-    }
-
-    // Issue #208: merge [MemberNotNullWhen] field narrowings from a CLR-imported method.
-    private func MergeClrMemberNotNullWhenNarrowings(
-        method MethodInfo,
-        negate bool,
-        ref thenFrame Dictionary[AccessPath, TypeSymbol]?,
-        ref elseFrame Dictionary[AccessPath, TypeSymbol]?
-    ) {
-        if !ClrNullability.TryGetMemberNotNullWhenData(method, out var returnValue, out var members) {
-            return
-        }
-        let narrowThen = returnValue != negate
-        let frame = if narrowThen {
-            (
-                (
-                    if thenFrame == nil {
-                        (thenFrame = Dictionary[AccessPath, TypeSymbol]())
-                    } else {
-                        thenFrame
-                    }
-                )!!
-            )
-        } else {
-            (
-                (
-                    if elseFrame == nil {
-                        (elseFrame = Dictionary[AccessPath, TypeSymbol]())
-                    } else {
-                        elseFrame
-                    }
-                )!!
-            )
-        }
-        for name in members {
-            NarrowFieldIfNullable(name, frame)
-        }
-    }
-
-    // Issue #208: merge [MemberNotNullWhen] field narrowings from a user-declared method.
-    private func MergeUserMemberNotNullWhenNarrowings(
-        attributes ImmutableArray[BoundAttribute],
-        negate bool,
-        ref thenFrame Dictionary[AccessPath, TypeSymbol]?,
-        ref elseFrame Dictionary[AccessPath, TypeSymbol]?
-    ) {
-        if attributes.IsDefaultOrEmpty {
-            return
-        }
-        for attr in attributes {
-            if !KnownAttributes.TryGetMemberNotNullWhenData(attr, out var returnValue, out var members) {
-                continue
+        switch condition {
+            case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
+                let (inThen, inElse) = TryClassifyBoolCallNarrowing(unary.Operand)
+                return (inElse, inThen)
             }
-            let narrowThen = returnValue != negate
-            let frame = if narrowThen {
-                (
-                    (
-                        if thenFrame == nil {
-                            (thenFrame = Dictionary[AccessPath, TypeSymbol]())
-                        } else {
-                            thenFrame
-                        }
-                    )!!
-                )
-            } else {
-                (
-                    (
-                        if elseFrame == nil {
-                            (elseFrame = Dictionary[AccessPath, TypeSymbol]())
-                        } else {
-                            elseFrame
-                        }
-                    )!!
-                )
+            case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
+                let (leftThen, _) = TryClassifyBoolCallNarrowing(bin.Left)
+                let (rightThen, _) = TryClassifyBoolCallNarrowing(bin.Right)
+                let combinedThen Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftThen, rightThen)
+                if combinedThen == nil || combinedThen.Count == 0 {
+                    return (nil, nil)
+                }
+                return (combinedThen, nil)
             }
-            for name in members {
-                NarrowFieldIfNullable(name, frame)
+            case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
+                let (leftThen, leftElse) = TryClassifyBoolCallNarrowing(bin.Left)
+                let (rightThen, rightElse) = TryClassifyBoolCallNarrowing(bin.Right)
+                let combinedThen Dictionary[AccessPath, TypeSymbol]? = IntersectNarrowingFrames(leftThen, rightThen)
+                let combinedElse Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftElse, rightElse)
+                if (combinedThen == nil || combinedThen.Count == 0) &&
+                    (combinedElse == nil || combinedElse.Count == 0) {
+                    return (nil, nil)
+                }
+                return (combinedThen, combinedElse)
             }
         }
+        return TryClassifyBoolCallNarrowingLeaf(
+            condition,
+            $scope,
+            (fieldVar ImplicitFieldVariableSymbol) -> NoteAssignmentNarrowing(fieldVar)
+        )
     }
 
     private func BindStatementWithNarrowing(
@@ -1903,6 +1814,179 @@ internal partial class StatementBinder {
             // the subtype lattice (issue #1636) and the type-parameter/interface
             // operand tested against an interface (issue #2165).
             return SmartCastStability.IsTypeTestNarrowing(declared, candidate)
+        }
+
+        internal func TryClassifyBoolCallNarrowingLeaf(
+            condition BoundExpression,
+            $scope BoundScope? = nil,
+            onFieldNarrowed((ImplicitFieldVariableSymbol) -> void)? = nil
+        )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
+            var inner = condition
+            while inner is BoundBlockExpression block {
+                inner = block.Expression
+            }
+            if inner is BoundImportedCallExpression importedCall && importedCall.Type == TypeSymbol.Bool {
+                var (thenFrame, elseFrame) = ClassifyImportedBoolCallNarrowing(importedCall, negate: false)
+                MergeClrMemberNotNullWhenNarrowings(
+                    importedCall.Function.Method,
+                    negate: false,
+                    $scope,
+                    onFieldNarrowed,
+                    &thenFrame,
+                    &elseFrame
+                )
+                return (thenFrame, elseFrame)
+            }
+            if inner is BoundImportedInstanceCallExpression importedInstanceCall &&
+                importedInstanceCall.Type == TypeSymbol
+                .Bool {
+                var (thenFrame, elseFrame) = ClassifyImportedMethodBoolCallNarrowing(
+                    importedInstanceCall.Method.GetParameters(),
+                    importedInstanceCall.Arguments,
+                    negate: false
+                )
+                MergeClrMemberNotNullWhenNarrowings(
+                    importedInstanceCall.Method,
+                    negate: false,
+                    $scope,
+                    onFieldNarrowed,
+                    &thenFrame,
+                    &elseFrame
+                )
+                return (thenFrame, elseFrame)
+            }
+            if inner is BoundCallExpression userCall && userCall.Type == TypeSymbol.Bool {
+                var (thenFrame, elseFrame) = ClassifyUserBoolCallNarrowing(userCall, negate: false)
+                MergeUserMemberNotNullWhenNarrowings(
+                    userCall.Function.Attributes,
+                    negate: false,
+                    $scope,
+                    onFieldNarrowed,
+                    &thenFrame,
+                    &elseFrame
+                )
+                return (thenFrame, elseFrame)
+            }
+            if inner is BoundUserInstanceCallExpression userInstanceCall && userInstanceCall.Type == TypeSymbol.Bool {
+                // Spelled with the declared `?` rather than `var (a, b) = (default(T),
+                // default(T))`: the translated G# gives that tuple form the
+                // non-null type `T`, which differs from these `ref T?` parameters
+                // (GS0612, issue #4422).
+                var thenFrame Dictionary[AccessPath, TypeSymbol]? = nil
+                var elseFrame Dictionary[AccessPath, TypeSymbol]? = nil
+                MergeUserMemberNotNullWhenNarrowings(
+                    userInstanceCall.Method.Attributes,
+                    negate: false,
+                    $scope,
+                    onFieldNarrowed,
+                    &thenFrame,
+                    &elseFrame
+                )
+                return (thenFrame, elseFrame)
+            }
+            return (nil, nil)
+        }
+
+        // Issue #208: merge [MemberNotNullWhen] field narrowings from a CLR-imported method.
+        private func MergeClrMemberNotNullWhenNarrowings(
+            method MethodInfo,
+            negate bool,
+            $scope BoundScope?,
+            onFieldNarrowed((ImplicitFieldVariableSymbol) -> void)?,
+            ref thenFrame Dictionary[AccessPath, TypeSymbol]?,
+            ref elseFrame Dictionary[AccessPath, TypeSymbol]?
+        ) {
+            if $scope == nil || !ClrNullability.TryGetMemberNotNullWhenData(
+                method,
+                out var returnValue,
+                out var members
+            ) {
+                return
+            }
+            let narrowThen = returnValue != negate
+            let frame = if narrowThen {
+                (
+                    (
+                        if thenFrame == nil {
+                            (thenFrame = Dictionary[AccessPath, TypeSymbol]())
+                        } else {
+                            thenFrame
+                        }
+                    )!!
+                )
+            } else {
+                (
+                    (
+                        if elseFrame == nil {
+                            (elseFrame = Dictionary[AccessPath, TypeSymbol]())
+                        } else {
+                            elseFrame
+                        }
+                    )!!
+                )
+            }
+            for name in members {
+                NarrowFieldInScope($scope, name, frame, onFieldNarrowed)
+            }
+        }
+
+        // Issue #208: merge [MemberNotNullWhen] field narrowings from a user-declared method.
+        private func MergeUserMemberNotNullWhenNarrowings(
+            attributes ImmutableArray[BoundAttribute],
+            negate bool,
+            $scope BoundScope?,
+            onFieldNarrowed((ImplicitFieldVariableSymbol) -> void)?,
+            ref thenFrame Dictionary[AccessPath, TypeSymbol]?,
+            ref elseFrame Dictionary[AccessPath, TypeSymbol]?
+        ) {
+            if $scope == nil || attributes.IsDefaultOrEmpty {
+                return
+            }
+            for attr in attributes {
+                if !KnownAttributes.TryGetMemberNotNullWhenData(attr, out var returnValue, out var members) {
+                    continue
+                }
+                let narrowThen = returnValue != negate
+                let frame = if narrowThen {
+                    (
+                        (
+                            if thenFrame == nil {
+                                (thenFrame = Dictionary[AccessPath, TypeSymbol]())
+                            } else {
+                                thenFrame
+                            }
+                        )!!
+                    )
+                } else {
+                    (
+                        (
+                            if elseFrame == nil {
+                                (elseFrame = Dictionary[AccessPath, TypeSymbol]())
+                            } else {
+                                elseFrame
+                            }
+                        )!!
+                    )
+                }
+                for name in members {
+                    NarrowFieldInScope($scope, name, frame, onFieldNarrowed)
+                }
+            }
+        }
+
+        private func NarrowFieldInScope(
+            $scope BoundScope,
+            fieldName string,
+            frame Dictionary[AccessPath, TypeSymbol],
+            onFieldNarrowed((ImplicitFieldVariableSymbol) -> void)?
+        ) {
+            if $scope.TryLookupSymbol(fieldName) is ImplicitFieldVariableSymbol fieldVar &&
+                fieldVar.Type is NullableTypeSymbol nullable {
+                frame[fieldVar] = nullable.UnderlyingType
+                if onFieldNarrowed != nil {
+                    onFieldNarrowed(fieldVar)
+                }
+            }
         }
 
         private func ClassifyImportedBoolCallNarrowing(call BoundImportedCallExpression, negate bool)(

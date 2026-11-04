@@ -2749,6 +2749,21 @@ internal partial class ExpressionBinder {
         }
     }
 
+    /// Issue #4964, #4969: computes the smart-cast narrowing frames that a
+    /// conditional's condition implies for each branch. The if-expression
+    /// (`if c { a } else { b }`) and the conditional operator (`c ? a : b`)
+    /// are two spellings of one value form, and both bind their branches
+    /// under these frames, so the two cannot narrow differently.
+    /// The `if let` expression's guard shares these frames (ADR-0201).
+    /// @param condition The bound condition.
+    /// @returns The frame for the branch taken when the condition is true,
+    /// and the frame for the branch taken when it is false. Either may be
+    /// `nil` when that branch narrows nothing.
+    private func ClassifyConditionalNarrowing(condition BoundExpression)(
+        WhenTrue Dictionary[AccessPath, TypeSymbol]?,
+        WhenFalse Dictionary[AccessPath, TypeSymbol]?
+    ) -> ClassifyTypeTestNarrowing(condition, restrictBareVariableToLocalsAndParams: false, $scope)
+
     shared {
         /// Issue #5635: gets a value indicating whether [`syntax`](paramref) is a block value, also in parentheses or
         /// `checked`/`unchecked`. These wrappers bind their operand as the value.
@@ -2840,68 +2855,6 @@ internal partial class ExpressionBinder {
         private func CanLowerPointerComparisonOperand(type TypeSymbol) bool -> type == TypeSymbol.Null ||
             Conversion
             .Classify(type, TypeSymbol.NInt).Exists
-
-        /// Issue #4964: computes the smart-cast narrowing frames that a
-        /// conditional's condition implies for each branch. The if-expression
-        /// (`if c { a } else { b }`) and the conditional operator (`c ? a : b`)
-        /// are two spellings of one value form, and both bind their branches
-        /// under these frames, so the two cannot narrow differently.
-        /// The `if let` expression's guard shares these frames (ADR-0201).
-        ///
-        /// Issue #2640 introduced the frames for the if-expression: a top-level
-        /// nil guard (`x != nil`, `x == nil`, nullable value types included),
-        /// merged with the type-test and short-circuit frames of
-        /// `ClassifyTypeTestNarrowing` (`x is T`, `!`, `&&`, `||`).
-        /// @param condition The bound condition.
-        /// @returns The frame for the branch taken when the condition is true,
-        /// and the frame for the branch taken when it is false. Either may be
-        /// `nil` when that branch narrows nothing.
-        private func ClassifyConditionalNarrowing(condition BoundExpression)(
-            WhenTrue Dictionary[AccessPath, TypeSymbol]?,
-            WhenFalse Dictionary[AccessPath, TypeSymbol]?
-        ) {
-            var whenTrueNarrowing Dictionary[AccessPath, TypeSymbol]? = nil
-            var whenFalseNarrowing Dictionary[AccessPath, TypeSymbol]? = nil
-            if SmartCastStability.TryClassifyNilGuardLeaf(
-                condition,
-                restrictBareVariableToLocalsAndParams: false,
-                referenceNullableOnly: false,
-                out var target,
-                out var underlying,
-                out var nonNilWhenTrue
-            ) &&
-                target != nil &&
-                underlying != nil {
-                let frame = Dictionary[AccessPath, TypeSymbol]{[target] = underlying}
-                if nonNilWhenTrue {
-                    whenTrueNarrowing = frame
-                } else {
-                    whenFalseNarrowing = frame
-                }
-            }
-            let (typeWhenTrue, typeWhenFalse) = ClassifyTypeTestNarrowing(condition)
-            return (
-                MergeIfExpressionNarrowing(whenTrueNarrowing, typeWhenTrue),
-                MergeIfExpressionNarrowing(whenFalseNarrowing, typeWhenFalse)
-            )
-        }
-
-        private func MergeIfExpressionNarrowing(
-            first Dictionary[AccessPath, TypeSymbol]?,
-            second Dictionary[AccessPath, TypeSymbol]?
-        ) Dictionary[AccessPath, TypeSymbol]? {
-            if first == nil || first.Count == 0 {
-                return second
-            }
-            if second == nil || second.Count == 0 {
-                return first
-            }
-            let merged = Dictionary[AccessPath, TypeSymbol](first)
-            for pair in second {
-                merged[pair.Key] = pair.Value
-            }
-            return merged
-        }
 
         private func IsNestedLambdaExpression(syntax ExpressionSyntax) bool {
             var syntax = syntax

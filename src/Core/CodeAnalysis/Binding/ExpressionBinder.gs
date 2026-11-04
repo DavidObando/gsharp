@@ -1109,7 +1109,7 @@ internal partial class ExpressionBinder {
     /// `!(x is T)`, and nested `&&` chains; returns
     /// `null` when no narrowing can be safely inferred.
     private func TryClassifyTypeTestNarrowingForAnd(boundLeft BoundExpression) Dictionary[AccessPath, TypeSymbol]? {
-        let (thenFrame, _) = ClassifyTypeTestNarrowing(boundLeft)
+        let (thenFrame, _) = ClassifyTypeTestNarrowing(boundLeft, restrictBareVariableToLocalsAndParams: true, $scope)
         return if (thenFrame != nil && thenFrame.Count > 0) {
             thenFrame
         } else {
@@ -1124,7 +1124,7 @@ internal partial class ExpressionBinder {
     /// `else` frame (the negation of its narrowing) applies. This
     /// makes `!(x is T) || f(x)` bind `f(x)` with `x` narrowed to `T`.
     private func TryClassifyTypeTestNarrowingForOr(boundLeft BoundExpression) Dictionary[AccessPath, TypeSymbol]? {
-        let (_, elseFrame) = ClassifyTypeTestNarrowing(boundLeft)
+        let (_, elseFrame) = ClassifyTypeTestNarrowing(boundLeft, restrictBareVariableToLocalsAndParams: true, $scope)
         return if (elseFrame != nil && elseFrame.Count > 0) {
             elseFrame
         } else {
@@ -2409,10 +2409,11 @@ internal partial class ExpressionBinder {
             return read
         }
 
-        private func ClassifyTypeTestNarrowing(condition BoundExpression)(
-            Then Dictionary[AccessPath, TypeSymbol]?,
-            Else Dictionary[AccessPath, TypeSymbol]?
-        ) {
+        private func ClassifyTypeTestNarrowing(
+            condition BoundExpression,
+            restrictBareVariableToLocalsAndParams bool = true,
+            $scope BoundScope? = nil
+        )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
             switch condition {
                 case isExpr is BoundIsExpression {
                     {
@@ -2438,14 +2439,26 @@ internal partial class ExpressionBinder {
                 }
                 case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
                     {
-                        let (inThen, inElse) = ClassifyTypeTestNarrowing(unary.Operand)
+                        let (inThen, inElse) = ClassifyTypeTestNarrowing(
+                            unary.Operand,
+                            restrictBareVariableToLocalsAndParams,
+                            $scope
+                        )
                         return (inElse, inThen)
                     }
                 }
                 case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
                     {
-                        let (leftThen, _) = ClassifyTypeTestNarrowing(binary.Left)
-                        let (rightThen, _) = ClassifyTypeTestNarrowing(binary.Right)
+                        let (leftThen, _) = ClassifyTypeTestNarrowing(
+                            binary.Left,
+                            restrictBareVariableToLocalsAndParams,
+                            $scope
+                        )
+                        let (rightThen, _) = ClassifyTypeTestNarrowing(
+                            binary.Right,
+                            restrictBareVariableToLocalsAndParams,
+                            $scope
+                        )
                         if (leftThen == nil || leftThen.Count == 0) && (rightThen == nil || rightThen.Count == 0) {
                             return (nil, nil)
                         }
@@ -2470,8 +2483,16 @@ internal partial class ExpressionBinder {
                         // else = elseL ∪ elseR (both operands were false → both
                         // negations apply). This is the expression-level mirror
                         // of the if-condition classifier in StatementBinder.
-                        let (leftThen, leftElse) = ClassifyTypeTestNarrowing(binary.Left)
-                        let (rightThen, rightElse) = ClassifyTypeTestNarrowing(binary.Right)
+                        let (leftThen, leftElse) = ClassifyTypeTestNarrowing(
+                            binary.Left,
+                            restrictBareVariableToLocalsAndParams,
+                            $scope
+                        )
+                        let (rightThen, rightElse) = ClassifyTypeTestNarrowing(
+                            binary.Right,
+                            restrictBareVariableToLocalsAndParams,
+                            $scope
+                        )
                         var combinedThen Dictionary[AccessPath, TypeSymbol]? = nil
                         if leftThen != nil && leftThen.Count > 0 && rightThen != nil && rightThen.Count > 0 {
                             for kv in leftThen {
@@ -2502,15 +2523,15 @@ internal partial class ExpressionBinder {
                     }
                 }
             }
-            // ADR-0069 addendum / issue #1545: nil-guard leaf. Threads
-            // `x == nil` / `x != nil` narrowing into the right operand of
-            // `&&`/`||`, mirroring the type-test (`x is T`) cases above. Uses the
-            // shared leaf classifier kept in sync with
-            // StatementBinder.TryClassifyNilGuard.
+            // ADR-0069 addendum / issues #1545, #4969: nil-guard leaf. Threads
+            // `x == nil` / `x != nil` narrowing into conditional branches and
+            // the right operand of `&&`/`||`, mirroring the type-test (`x is T`)
+            // cases above. Value-type nullables (`int32?`, struct?, enum?) are
+            // unwrapped on read by `BuildNarrowedRead` (#4943).
             if SmartCastStability.TryClassifyNilGuardLeaf(
                 condition,
-                restrictBareVariableToLocalsAndParams: true,
-                referenceNullableOnly: true,
+                restrictBareVariableToLocalsAndParams,
+                referenceNullableOnly: false,
                 out var nilTarget,
                 out var nilUnderlying,
                 out var nonNilWhenTrue
@@ -2528,7 +2549,7 @@ internal partial class ExpressionBinder {
                     (nil, nonNilFrame)
                 }
             }
-            return (nil, nil)
+            return StatementBinder.TryClassifyBoolCallNarrowingLeaf(condition, $scope)
         }
 
         /// Issue #3705 (family 3): whether a structural function type has exactly
