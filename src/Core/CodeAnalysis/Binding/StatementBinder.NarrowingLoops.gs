@@ -2664,7 +2664,7 @@ internal partial class StatementBinder {
         narrowedType TypeSymbol,
         effects RegionEffects,
         resolved ResolvedRegionWrites,
-        filterNames HashSet[string]?
+        filterWrites List[(TryBlock SyntaxNode?, Names HashSet[string])]?
     ) RegionKillDecision {
         let root = path.Root
         // (i) the closed kind list.
@@ -2751,8 +2751,8 @@ internal partial class StatementBinder {
         // (iv) the shared predicate for every effect other than a plain write to this root.
         // A handler of the region, or one in code that the region calls, can catch an exception after an enclosing
         // filter has written the root.
-        if filterNames != nil && (effects.ContainsHandler || callLike || readLike) {
-            if filterNames.Contains(root.Name) || MayBeMutatedByUnknownCallable(path) {
+        if filterWrites != nil && (effects.ContainsHandler || callLike || readLike) {
+            if FilterWritesVariable(filterWrites, root) || MayBeMutatedByUnknownCallable(path) {
                 return RegionKillDecision(true, "W8", "R10")
             }
         }
@@ -2936,11 +2936,11 @@ internal partial class StatementBinder {
         let frameCount = binderCtx.NarrowedVariables.Count
         let invalidations = List[(FrameIndex int32, Path AccessPath)]()
         let resolved = ResolveRegionWrites(effects)
-        var filterNames HashSet[string]? = nil
+        var filterWrites List[(TryBlock SyntaxNode?, Names HashSet[string])]? = nil
         if effects.ContainsHandler || RegionRunsCode(effects, resolved) {
             let filters = CollectCatchFiltersAbove(regionNode)
             if filters.Count > 0 {
-                filterNames = CollectEnclosingFilterNames(filters)
+                filterWrites = CollectEnclosingFilterWrites(filters)
             }
         }
         // S: the facts of the frames. A path that two frames hold is reported once, for the innermost frame.
@@ -2952,7 +2952,7 @@ internal partial class StatementBinder {
         for var i = frameCount - 1; i >= 0; i-- {
             for entry in binderCtx.NarrowedVariables[i] {
                 let path = entry.Key
-                let decision = DecideRegionKill(path, entry.Value, effects, resolved, filterNames)
+                let decision = DecideRegionKill(path, entry.Value, effects, resolved, filterWrites)
                 if decision.Killed {
                     invalidations.Add((i, path))
                 }
@@ -3191,13 +3191,20 @@ internal partial class StatementBinder {
             let limit = Math.Min(entryState.Frames.Length, binderCtx.NarrowedVariables.Count)
             for var i = 0; i < limit; i++ {
                 let frame = binderCtx.NarrowedVariables[i]
+                for entry in frame {
+                    conditionKillJournal?.Add((frame, entry.Key, entry.Value))
+                }
                 frame.Clear()
                 for entry in entryState.Frames[i] {
                     frame.Add(entry.Key, entry.Value)
                 }
             }
             for var i = limit; i < binderCtx.NarrowedVariables.Count; i++ {
-                binderCtx.NarrowedVariables[i].Clear()
+                let frame = binderCtx.NarrowedVariables[i]
+                for entry in frame {
+                    conditionKillJournal?.Add((frame, entry.Key, entry.Value))
+                }
+                frame.Clear()
             }
             externalCallableAliases.Clear()
             for alias in entryState.ExternalCallableAliases {
@@ -3420,15 +3427,15 @@ internal partial class StatementBinder {
             let headerEffects = GetRegionScanner().ScanStatements([]SyntaxNode{headerSyntax})
             let resolved = ResolveRegionWrites(headerEffects)
             let filters = CollectCatchFiltersAbove(loop)
-            var filterNames HashSet[string]? = nil
+            var filterWrites List[(TryBlock SyntaxNode?, Names HashSet[string])]? = nil
             if filters.Count > 0 {
-                filterNames = CollectEnclosingFilterNames(filters)
+                filterWrites = CollectEnclosingFilterWrites(filters)
             }
             headerFalseState = loopEntryState
             for entry in elseFacts!! {
                 let path = entry.Key
                 // The enclosing filters apply when the header has a handler or runs code (W8, in `DecideRegionKill`).
-                let removed = DecideRegionKill(path, entry.Value, headerEffects, resolved, filterNames).Killed
+                let removed = DecideRegionKill(path, entry.Value, headerEffects, resolved, filterWrites).Killed
                 if !removed {
                     survivingElseFacts ??= Dictionary[AccessPath, TypeSymbol]()
                     survivingElseFacts!![path] = entry.Value
