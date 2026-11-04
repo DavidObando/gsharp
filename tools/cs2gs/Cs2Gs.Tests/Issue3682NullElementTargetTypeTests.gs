@@ -308,9 +308,12 @@ namespace Demo
 #nullable enable
         public static (string? Value, bool Ok) Receive2Nullable() => (null, false);
 
-        public static void F()
+        public static void F(bool c, int k)
         {
             AssertLike.Equal<(string? Value, bool Ok)>((null, false), Receive2Nullable());
+            AssertLike.Equal<(string, bool)?>((null!, false), default);
+            AssertLike.Equal<(string, bool)>((c ? "ok" : null!, false), ("ok", false));
+            AssertLike.Equal<(string, bool)>((k switch { 0 => "ok", _ => null! }, false), ("ok", false));
         }
 #nullable disable
         public static void ObliviousF()
@@ -325,6 +328,12 @@ namespace Demo
             printed,
             StringComparison.Ordinal
         )
+        Assert.Contains(
+            "AssertLike.Equal[(string, bool)?]((default(string), false), default((string, bool)?))",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("default(string)", printed, StringComparison.Ordinal)
     }
 
     shared {

@@ -6216,16 +6216,26 @@ partial class CSharpToGSharpTranslator {
                 path.Add(0)
             }
             for var i = tupleIndices.Count - 1; i >= 0; i-- {
-                if sinkType is not INamedTypeSymbol{IsTupleType: true} tupleType ||
-                    tupleIndices[i] < 0 ||
-                    tupleIndices[i] >= tupleType
-                    .TupleElements
-                    .Length {
+                while sinkType is INamedTypeSymbol nullableNamed &&
+                    nullableNamed
+                    .OriginalDefinition
+                    .SpecialType == SpecialType.System_Nullable_T &&
+                    nullableNamed
+                    .TypeArguments
+                    .Length == 1 {
+                    sinkType = nullableNamed.TypeArguments[0]
+                    path.Add(0)
+                }
+                if sinkType is not INamedTypeSymbol tupleType || !tupleType.IsTupleType {
                     return nil
                 }
-                let tupleElement = tupleType.TupleElements[tupleIndices[i]]
+                let index = tupleIndices[i]
+                if index < 0 || index >= tupleType.TupleElements.Length {
+                    return nil
+                }
+                let tupleElement = tupleType.TupleElements[index]
                 sinkType = tupleElement.Type
-                path.Add(tupleIndices[i])
+                path.Add(index)
             }
             if tupleIndices.Count != 0 {
                 return if ObliviousNullabilityAnalyzer.IsTupleElementTainted(

@@ -857,24 +857,32 @@ namespace Demo
             SyntaxNode? q = p;
             return new Sink().Take(q);
         }
+        public static bool RepeatedSafeNullableLocalConsumerWidens(DelegateDeclarationSyntax p, bool c)
+        {
+            SyntaxNode? q = p;
+            SyntaxNode? r = c ? q : q;
+            return r == null;
+        }
         public static string Run()
         {
             if (false) UnguardedNullableLocalPins(default(DelegateDeclarationSyntax)!);
             var synth = new DelegateTypeSymbol("<>RefFunc0", declaration: null!);
             var real = new DelegateTypeSymbol("D", declaration: new DelegateDeclarationSyntax { Implicit = true });
             return IsImplicit(synth) + " " + IsImplicit(real) + " " +
-                PinnedRead(new PinnedSymbol(default(DelegateDeclarationSyntax)!));
+                PinnedRead(new PinnedSymbol(default(DelegateDeclarationSyntax)!)) + " " +
+                RepeatedSafeNullableLocalConsumerWidens(null!, true);
         }
     }
 }`))
         let printed = TranslateFile(compilation, "Delegates.cs", []CSharpCompilation{compilation})
-        Assert.Equal("False True taken", CompileAndRun([]string{printed}, "Demo.BoundScope.Run()").Trim())
+        Assert.Equal("False True taken True", CompileAndRun([]string{printed}, "Demo.BoundScope.Run()").Trim())
         Assert.Contains("declaration DelegateDeclarationSyntax?", printed)
         Assert.Contains("prop Declaration DelegateDeclarationSyntax?", printed)
         Assert.Contains("(d.Declaration as SyntaxNode)", printed)
         Assert.Contains("declaration: nil", printed)
         Assert.Contains("init(declaration DelegateDeclarationSyntax)", printed)
         Assert.Contains("UnguardedNullableLocalPins(p DelegateDeclarationSyntax)", printed)
+        Assert.Contains("RepeatedSafeNullableLocalConsumerWidens(p DelegateDeclarationSyntax?, c bool)", printed)
     }
 
     shared {

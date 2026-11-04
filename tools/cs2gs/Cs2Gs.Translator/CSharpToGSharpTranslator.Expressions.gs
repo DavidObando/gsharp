@@ -740,6 +740,22 @@ partial class CSharpToGSharpTranslator {
                     }
                     default { }
                 }
+                if tupleIndices.Count != 0 &&
+                    returnNode is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ExpressionSyntax rootExpr {
+                    let tupleSink = this.ResolveValueSink(rootExpr)
+                    var rootType ITypeSymbol? = ObliviousNullabilityAnalyzer.SymbolValueType(tupleSink)
+                    if rootType == nil {
+                        rootType = this.context.GetTypeInfo(rootExpr).ConvertedType
+                    }
+                    if this.ResolveReturnTupleSlot(rootType, tupleSink, tupleIndices) is {} tupleTargetType {
+                        return (tupleTargetType, tupleSink, returnIsSuppressed, true, false)
+                    }
+                    return (nil, nil, returnIsSuppressed, true, false)
+                }
             }
             switch node.Parent {
                 case Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assignment when assignment.IsKind(
@@ -754,18 +770,6 @@ partial class CSharpToGSharpTranslator {
                         case property is IPropertySymbol: (property.Type, target, isSuppressed, false, false)
                         default: (nil, nil, isSuppressed, false, false)
                     }
-                }
-                case Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ArgumentSyntax{Parent: Microsoft.CodeAnalysis.CSharp.Syntax.TupleExpressionSyntax} {
-                    let element = cast[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax](node)
-                    let tupleSink = this.ResolveValueSink(element)
-                    if this.GetFixedElementDestinationType(element, tupleSink) is {} tupleTargetType {
-                        return (tupleTargetType, tupleSink, returnIsSuppressed, true, false)
-                    }
-                    return (nil, nil, returnIsSuppressed, true, false)
                 }
                 case Microsoft.CodeAnalysis.CSharp.Syntax.ArgumentSyntax argument when argument.RefKindKeyword.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.None

@@ -2944,35 +2944,39 @@ internal shared class ObliviousNullabilityAnalyzer {
         if !visited.Add(local) {
             return false
         }
-        if local
-            .DeclaringSyntaxReferences
-            .Length != 1 ||
-            local
-            .DeclaringSyntaxReferences[0]
-            .GetSyntax() is not VariableDeclaratorSyntax declarator {
-            return false
-        }
-        let enclosingScope SyntaxNode? = declarator.Ancestors().FirstOrDefault(
-            (n SyntaxNode) -> n is BaseMethodDeclarationSyntax ||
-                n is AccessorDeclarationSyntax ||
-                n is LocalFunctionStatementSyntax ||
-                n is AnonymousFunctionExpressionSyntax
-        )
-        if enclosingScope == nil {
-            return false
-        }
-        for id in enclosingScope.DescendantNodes().OfType[IdentifierNameSyntax]() {
-            if !SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(id).Symbol, local) {
-                continue
-            }
-            if id.Parent is AssignmentExpressionSyntax assignment && assignment.Left == id {
+        try {
+            if local
+                .DeclaringSyntaxReferences
+                .Length != 1 ||
+                local
+                .DeclaringSyntaxReferences[0]
+                .GetSyntax() is not VariableDeclaratorSyntax declarator {
                 return false
             }
-            if !ClassifyNullArgumentRead(id, model, run, visited).Safe {
+            let enclosingScope SyntaxNode? = declarator.Ancestors().FirstOrDefault(
+                (n SyntaxNode) -> n is BaseMethodDeclarationSyntax ||
+                    n is AccessorDeclarationSyntax ||
+                    n is LocalFunctionStatementSyntax ||
+                    n is AnonymousFunctionExpressionSyntax
+            )
+            if enclosingScope == nil {
                 return false
             }
+            for id in enclosingScope.DescendantNodes().OfType[IdentifierNameSyntax]() {
+                if !SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(id).Symbol, local) {
+                    continue
+                }
+                if id.Parent is AssignmentExpressionSyntax assignment && assignment.Left == id {
+                    return false
+                }
+                if !ClassifyNullArgumentRead(id, model, run, visited).Safe {
+                    return false
+                }
+            }
+            return true
+        } finally {
+            visited.Remove(local)
         }
-        return true
     }
 
     private func IsExplicitlyNullableReferenceLocal(local ILocalSymbol) bool -> local.Type is {
