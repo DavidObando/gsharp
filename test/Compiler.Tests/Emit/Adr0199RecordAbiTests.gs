@@ -638,10 +638,16 @@ data class Item(Id int32) {
     func InheritedPositionalProperty_NestedReversedOrder_AndPrivateGetterControls() {
         const source = `package W
 
+data class Token(Kind int32)
+
 class Outer {
     data class DerivedBeforeBase(Name string, Value int32) : BaseAfterDerived(Name)
     data class QualifiedDerivedBeforeBase(Name string, Value int32) : Bases.NestedBase(Name)
     data class PackageQualifiedDerived(Name string, Value int32) : W.Outer.BaseAfterDerived(Name)
+    unsafe data class GenericDerivedBeforeNonGenericBase[Token](Name string, Payload Token) : NonGenericBaseWithToken(Name)
+    open data class NonGenericBaseWithToken(Name string) {
+        var Tag Token = Token(7)
+    }
     class Holder {
         class BaseAfterDerived
         data class HolderDerived(Name string, Value int32) : Outer.BaseAfterDerived(Name)
@@ -712,12 +718,30 @@ func Run() string {
     let unpacked = Outer.EnclosingUnpack(prot)
     let td = TupleDerived((3, 4), 10)
     let (pair, te) = td
-    return "${d}|${n}:${v}|${q}|${qn}:${qv}|${msg}|${mn}:${md}|${esc}|${en}:${ev}|${p}|${h}:${e}|${unpacked}|${pv}:${pe}|${pair.Left}:${pair.Right}:${te}"
+    let gd = Outer.GenericDerivedBeforeNonGenericBase[string]("tok", "payload")
+    return "${d}|${n}:${v}|${q}|${qn}:${qv}|${msg}|${mn}:${md}|${esc}|${en}:${ev}|${p}|${h}:${e}|${unpacked}|${pv}:${pe}|${pair.Left}:${pair.Right}:${te}|${gd.Name}:${gd.Payload}:${gd.Tag.Kind}"
 }`
         let assembly = Adr0199RecordAbiWitness.CompileGSharp(source)
         let declared = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
         let nestedDerived = assembly.GetType("W.Outer+DerivedBeforeBase", throwOnError: true)!!
         Assert.DoesNotContain(nestedDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let genericBeforeNonGeneric = assembly.GetType(
+            "W.Outer+GenericDerivedBeforeNonGenericBase`1",
+            throwOnError: true
+        )!!
+        Assert.DoesNotContain(genericBeforeNonGeneric.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let nonGenericBase = assembly.GetType("W.Outer+NonGenericBaseWithToken", throwOnError: true)!!
+        Assert.Equal("W.Token", nonGenericBase.GetField("Tag")!!.FieldType.FullName)
+        const safeBaseLeakCheck = `package W
+class Outer {
+    unsafe data class UnsafeDerived(Name string) : SafeBase(Name)
+    open data class SafeBase(Name string) {
+        func BadPtr(x *int32) int32 -> 0
+    }
+}`
+        let (safeExit, safeOut) = Adr0199RecordAbiWitness.TryCompileGSharp(safeBaseLeakCheck)
+        Assert.NotEqual(0, safeExit)
+        Assert.Contains("GS0243", safeOut, StringComparison.Ordinal)
         let qualifiedDerived = assembly.GetType("W.Outer+QualifiedDerivedBeforeBase", throwOnError: true)!!
         Assert.DoesNotContain(qualifiedDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
         let packageQualifiedDerived = assembly.GetType("W.Outer+PackageQualifiedDerived", throwOnError: true)!!
@@ -737,7 +761,7 @@ func Run() string {
         let protectedGetterDerived = assembly.GetType("W.DerivedFromProtectedGetter", throwOnError: true)!!
         Assert.DoesNotContain(protectedGetterDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
         Assert.Equal(
-            "DerivedBeforeBase { Name = ok, Value = 7 }|ok:7|QualifiedDerivedBeforeBase { Name = qual, Value = 8 }|qual:8|Message { Name = msg, Data = 99 }|msg:99|EscapedDerived { Name = ev, Value = 3 }|ev:3|DerivedFromPrivateGetter { Hidden = 99, Extra = 5 }|99:5|15:25|16:26|3:4:10",
+            "DerivedBeforeBase { Name = ok, Value = 7 }|ok:7|QualifiedDerivedBeforeBase { Name = qual, Value = 8 }|qual:8|Message { Name = msg, Data = 99 }|msg:99|EscapedDerived { Name = ev, Value = 3 }|ev:3|DerivedFromPrivateGetter { Hidden = 99, Extra = 5 }|99:5|15:25|16:26|3:4:10|tok:payload:7",
             Adr0199RecordAbiWitness.Invoke(assembly, "Run")
         )
     }

@@ -4767,8 +4767,17 @@ partial class CSharpToGSharpTranslator {
                     return RawStatement("// unsupported: delegate multicast '$combineOp'")
                 }
                 case assignment is AssignmentExpressionSyntax {
+                    let isEventSubscription = (
+                        assignment.IsKind(SyntaxKind.AddAssignmentExpression) || assignment.IsKind(
+                            SyntaxKind.SubtractAssignmentExpression
+                        )
+                    ) &&
+                        this
+                        .context
+                        .GetSymbolInfo(assignment.Left)
+                        .Symbol is IEventSymbol
                     let isVoidAssignment = this.context.GetTypeInfo(assignment).Type?.SpecialType ==
-                    SpecialType.System_Void || this.context.GetSymbolInfo(assignment.Left).Symbol is IEventSymbol
+                    SpecialType.System_Void || isEventSubscription
                     return AssignmentStatement(
                         this.TranslateAssignmentTarget(assignment.Left),
                         this.TranslateAssignmentValue(assignment),

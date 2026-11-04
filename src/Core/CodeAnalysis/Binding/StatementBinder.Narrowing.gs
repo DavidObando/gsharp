@@ -5320,6 +5320,17 @@ internal partial class StatementBinder {
         if prefixStatement != nil {
             statements.Add(prefixStatement)
         }
+        if aggregate.ClrType != nil &&
+            TryBindImportedDeconstruct(
+            receiver,
+            identifiers,
+            syntax?.Location ?? default(TextLocation),
+            isReadOnly,
+            out var importedStatements
+        ) {
+            statements.AddRange(importedStatements)
+            return statements.ToImmutable()
+        }
         let arguments = ImmutableArray.CreateBuilder[BoundExpression](members.Length)
         let declarations = ImmutableArray.CreateBuilder[BoundStatement](members.Length)
         for var i = 0; i < identifiers.Count; i++ {

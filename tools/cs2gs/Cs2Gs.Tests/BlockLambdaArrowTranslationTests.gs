@@ -182,6 +182,8 @@ namespace Demo
 
     public static class Probe
     {
+        private static event Action? Changed;
+        private static void OnChanged() { }
         private static int Step(int x) => x + 1;
         private static Task BgWork() => Task.CompletedTask;
         private static string Pick(Action a) { a(); return "Action"; }
@@ -197,6 +199,8 @@ namespace Demo
 
             var directCall = Pick(() => { Step(1); });
             var assignTail = Pick(() => { count = 10; });
+            var eventSimpleAssign = Pick(() => { Changed = OnChanged; });
+            var eventAddAssign = Pick(() => { Changed += OnChanged; });
             var incTail = Pick(() => { count++; });
             var nestedAssignTail = Pick(() =>
             {
@@ -258,7 +262,7 @@ namespace Demo
             taskRun.GetAwaiter().GetResult();
             bool isPlainTask = taskRun.GetType() == typeof(Task) || taskRun.GetType().BaseType == typeof(Task);
 
-            return string.Join("|", directCall, assignTail, incTail, nestedAssignTail, count, ifElseSameType, ifElseMixedTypes, ifLetChain, usingBlock, asyncVoidTask, isPlainTask);
+            return string.Join("|", directCall, assignTail, eventSimpleAssign, eventAddAssign, incTail, nestedAssignTail, count, ifElseSameType, ifElseMixedTypes, ifLetChain, usingBlock, asyncVoidTask, isPlainTask);
         }
     }
 }`
@@ -274,6 +278,8 @@ namespace Demo
         let printed = TranslateUnit(source)
         Assert.Contains("Step(1)\n            return", printed, StringComparison.Ordinal)
         Assert.Contains("count = 10\n            return", printed, StringComparison.Ordinal)
+        Assert.Contains("Changed = OnChanged\n            return", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("Changed += OnChanged\n            return", printed, StringComparison.Ordinal)
         Assert.Contains("count++\n            return", printed, StringComparison.Ordinal)
         using let gsharpImage = MemoryStream()
         let compilation = GSharpCompilation(GSharpSyntaxTree.Parse(SourceText.From(printed))){IsLibrary = true}
@@ -285,7 +291,7 @@ namespace Demo
             []object{"hello", true}
         )
         Assert.Equal(expected, actual)
-        Assert.Equal("Action|Action|Action|Action|20|Action|Action|Action|Action|FuncTask|True", actual)
+        Assert.Equal("Action|Action|Action|Action|Action|Action|20|Action|Action|Action|Action|FuncTask|True", actual)
     }
 
     shared {

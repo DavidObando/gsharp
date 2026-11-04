@@ -63,6 +63,8 @@ internal partial class DeclarationBinder {
                         binderCtx.CurrentTypeParameters!![tp.Name] = tp
                     }
                 }
+            } else {
+                this.binderCtx.CurrentTypeParameters = nil
             }
             if shouldBindOwnBody {
                 // Issue #2519: aggregate shells carry bare type parameters so every
@@ -231,8 +233,8 @@ internal partial class DeclarationBinder {
             baseDefinition,
             out var basePackage
         ) {
-            let savedUnsafe = binderCtx.InUnsafeContext
-            var enclosingUnsafe = baseSyntax.IsUnsafe
+            let savedUnsafeDepth = binderCtx.UnsafeDepth
+            var enclosingUnsafe = false
             var currentParent TypeSymbol? = baseDefinition.ContainingType
             while !enclosingUnsafe && currentParent is StructSymbol parentStruct {
                 let parentDef = parentStruct.Definition ?? parentStruct
@@ -241,11 +243,18 @@ internal partial class DeclarationBinder {
                 }
                 currentParent = parentDef.ContainingType
             }
-            using let _ = binderCtx.PushUnsafeContext(enclosingUnsafe && !savedUnsafe)
+            binderCtx.UnsafeDepth = if enclosingUnsafe {
+                1
+            } else {
+                0
+            }
+            let previousPackage = $scope.SetCurrentDeclaringPackage(basePackage.Name)
             let previousTree = $scope.SetCurrentReferencingSyntaxTree(baseSyntax.SyntaxTree)
             try {
                 BindStructDeclarationBody(baseSyntax, basePackage, baseDefinition, bindNestedTypes: false)
             } finally {
+                binderCtx.UnsafeDepth = savedUnsafeDepth
+                $scope.SetCurrentDeclaringPackage(previousPackage)
                 $scope.SetCurrentReferencingSyntaxTree(previousTree)
             }
         }

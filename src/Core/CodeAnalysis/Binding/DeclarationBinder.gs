@@ -657,6 +657,7 @@ internal partial class DeclarationBinder {
         if !$scope.TryDeclareTypeAlias(name, structSymbol) {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name)
         }
+        nestedStructPackages[structSymbol] = $package
         return structSymbol
     }
 
