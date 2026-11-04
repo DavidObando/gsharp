@@ -13579,8 +13579,20 @@ partial class Binder {
                     }
                     if allClr {
                         try {
+                            let closed = it.OpenDefinition!!.MakeGenericType(clrArgs)
+                            if it.OpenDefinition!!.FullName?.StartsWith(
+                                "System.Tuple`",
+                                StringComparison.Ordinal
+                            ) == true ||
+                                substitutedArgs
+                                .Any(
+                                (a TypeSymbol) -> TypeSymbol.ContainsNamedTupleElements(a) ||
+                                    TypeSymbol.ContainsSourceArrayShape(a)
+                            ) {
+                                return ImportedTypeSymbol.GetConstructed(closed, it.OpenDefinition, substitutedArgs)
+                            }
                             return TypeSymbol.FromClrTypeWithoutNullability(
-                                it.OpenDefinition!!.MakeGenericType(clrArgs),
+                                closed,
                                 NullabilityFreeReason.CompilerProduced
                             )
                         } catch (ArgumentException) {

@@ -87,8 +87,8 @@ shared class TupleElementNamesReader {
         // #1922 identity bridging covers the two spellings elsewhere).
         // Flatten it first so its positions line up with the name cursor.
         if !(type is TupleTypeSymbol) &&
-            type is ImportedTypeSymbol{ClrType: {} importedClr} &&
-            TypeSymbol.TryGetTupleTypeSymbolFromClr(importedClr, out var flattened) {
+            type is ImportedTypeSymbol importedValueTuple &&
+            TryFlattenValueTuple(importedValueTuple, out var flattened) {
             type = flattened!!
         }
         switch type {
@@ -391,6 +391,93 @@ shared class TupleElementNamesReader {
                 return type
             }
         }
+    }
+
+    private func TryFlattenValueTuple(imported ImportedTypeSymbol, out tupleTypeSymbol TupleTypeSymbol?) bool {
+        tupleTypeSymbol = nil
+        let elementTypes = ImmutableArray.CreateBuilder[TypeSymbol]()
+        if !TryCollectValueTupleElements(imported, elementTypes, allowSingleElementRest: false) {
+            return false
+        }
+        tupleTypeSymbol = TupleTypeSymbol.Get(elementTypes.ToImmutable())
+        return true
+    }
+
+    private func TryCollectValueTupleElements(
+        type TypeSymbol,
+        elementTypes ImmutableArray[TypeSymbol].Builder,
+        allowSingleElementRest bool
+    ) bool {
+        if type is TupleTypeSymbol tuple {
+            if !allowSingleElementRest {
+                return false
+            }
+            elementTypes.AddRange(tuple.ElementTypes)
+            return true
+        }
+        if type is not ImportedTypeSymbol imported ||
+            imported.ClrType is not{IsGenericType: true, IsGenericTypeDefinition: false} clrType {
+            return false
+        }
+        let openDefinition = imported.OpenDefinition ?? clrType.UnderlyingSystemType.GetGenericTypeDefinition()
+        if openDefinition.FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) != true {
+            return false
+        }
+        if !imported.TypeArguments.IsDefaultOrEmpty {
+            let arguments = imported.TypeArguments
+            if arguments.Length == 1 {
+                if !allowSingleElementRest {
+                    return false
+                }
+                elementTypes.Add(arguments[0])
+                return true
+            }
+            if (arguments.Length is < 2 or > 8) {
+                return false
+            }
+            let directCount = if arguments.Length == 8 {
+                7
+            } else {
+                arguments.Length
+            }
+            for var i = 0; i < directCount; i++ {
+                elementTypes.Add(arguments[i])
+            }
+            return arguments.Length != 8 ||
+                TryCollectValueTupleElements(arguments[7], elementTypes, allowSingleElementRest: true)
+        }
+        let clrArguments = TryGetGenericArguments(clrType)
+        if clrArguments == nil {
+            return false
+        }
+        if clrArguments.Length == 1 {
+            if !allowSingleElementRest {
+                return false
+            }
+            elementTypes.Add(
+                TypeSymbol.FromClrTypeWithoutNullability(clrArguments[0], NullabilityFreeReason.TypeStructure)
+            )
+            return true
+        }
+        if (clrArguments.Length is < 2 or > 8) {
+            return false
+        }
+        let clrDirectCount = if clrArguments.Length == 8 {
+            7
+        } else {
+            clrArguments.Length
+        }
+        for var i = 0; i < clrDirectCount; i++ {
+            elementTypes.Add(
+                TypeSymbol.FromClrTypeWithoutNullability(clrArguments[i], NullabilityFreeReason.TypeStructure)
+            )
+        }
+        return clrArguments.Length != 8 ||
+            TryCollectValueTupleElements(
+            TypeSymbol.FromClrTypeWithoutNullability(clrArguments[7], NullabilityFreeReason.TypeStructure),
+            elementTypes,
+            allowSingleElementRest: true
+        )
     }
 
     private func TryGetGenericArguments(type Type?)[]?Type {
