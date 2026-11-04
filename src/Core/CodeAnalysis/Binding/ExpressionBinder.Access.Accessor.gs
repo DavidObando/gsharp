@@ -736,9 +736,6 @@ internal partial class ExpressionBinder {
         if userInterfaceSymbol != nil {
             return BindInterfaceStaticAccessorStep(userInterfaceSymbol, rightPart)
         }
-        if receiver != nil && binderCtx.LoopStack.Count > 0 && !(receiver is BoundErrorExpression) {
-            binderCtx.BoundExpressionsInLoop[leftPart] = receiver
-        }
         return BindAccessorStep(receiver, classSymbol, rightPart, leftPart)
     }
 
@@ -2081,7 +2078,6 @@ internal partial class ExpressionBinder {
     private func BindUserTypeStaticAccessorStep(structSym StructSymbol, rightPart ExpressionSyntax) BoundExpression {
         let result = BindUserTypeStaticAccessorStepCore(structSym, rightPart)
         RecordStaticTypeQualifier(result, structSym, rightPart)
-        RecordBoundExpressionInLoop(rightPart, result)
         return result
     }
 
@@ -2422,7 +2418,6 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         let result = BindInterfaceStaticAccessorStepCore(interfaceSym, rightPart)
         RecordStaticTypeQualifier(result, interfaceSym, rightPart)
-        RecordBoundExpressionInLoop(rightPart, result)
         return result
     }
 

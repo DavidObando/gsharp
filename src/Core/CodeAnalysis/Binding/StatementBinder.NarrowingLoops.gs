@@ -3371,7 +3371,7 @@ internal partial class StatementBinder {
             let activeFinallySet = HashSet[FinallyClauseSyntax](activeFinallyClauses)
             let activeCleanupSet = HashSet[BoundStatement](activeCleanupStatements)
             for snapshot in rawBreaks {
-                ApplyBreakPrefixEffects(snapshot, loopBody)
+                ApplyBreakPrefixEffects(snapshot, loopBody, boundBody, condition)
                 if ApplyExitedFinallyEffects(snapshot, activeFinallySet, activeCleanupSet) {
                     reachableBreaks ??= List[NarrowingState](rawBreaks.Count)
                     reachableBreaks!!.Add(NarrowingState.Empty.WithAll(snapshot.NarrowedVariables))

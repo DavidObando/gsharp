@@ -3427,17 +3427,6 @@ internal partial class ExpressionBinder {
         syntax RefArgumentExpressionSyntax,
         parameter ParameterSymbol?
     ) BoundExpression {
-        let result = BindRefArgumentExpressionCore(syntax, parameter)
-        if binderCtx.LoopStack.Count > 0 && !(result is BoundErrorExpression) {
-            binderCtx.BoundExpressionsInLoop[syntax] = result
-        }
-        return result
-    }
-
-    private func BindRefArgumentExpressionCore(
-        syntax RefArgumentExpressionSyntax,
-        parameter ParameterSymbol?
-    ) BoundExpression {
         if syntax.IsInlineDeclaration {
             // ADR-0060 §1: `out var n [T]` / `out let n [T]` / `out _ [T]`.
             // Only legal when the modifier is `out` AND the parameter (if known) is `out`.

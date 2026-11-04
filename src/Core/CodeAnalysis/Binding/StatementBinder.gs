@@ -356,9 +356,14 @@ internal partial class StatementBinder {
         }
         {
             using let _ = binderCtx.PushUnsafeContext(entersUnsafe)
+            let blockFrameIndex = binderCtx.NarrowedVariables.Count
+            let blockAliasesAtEntry = externalCallableAliases.ToImmutableArray()
             let shadowEntry = ShadowBegin()
             let fallsThrough = BindBlockStatements(syntax.Statements, 0, statements)
             let block = BoundBlockStatement(syntax, statements.ToImmutable())
+            if binderCtx.LoopStack.Count > 0 {
+                boundStatementEntries[block] = (blockFrameIndex, blockAliasesAtEntry)
+            }
             ShadowRecordBlock(block, shadowEntry)
             RecordBlockExit(block, joinEntry)
             if !reachableOnEntry && fallsThrough {
@@ -478,16 +483,6 @@ internal partial class StatementBinder {
         // subsequent statements in the block (until assignment invalidates them).
         let inheritedFallthrough = currentStatementListFallsThrough
         let blockFrameIndex = binderCtx.NarrowedVariables.Count
-        let blockOwner = if startIndex == 0 && statementSyntaxes.Length > 0 {
-            statementSyntaxes[0].Parent
-        } else {
-            default(SyntaxNode?)
-        }
-        var recordedBlockOwner = false
-        if blockOwner != nil && !blockEntryStates.ContainsKey(blockOwner) {
-            blockEntryStates[blockOwner] = (blockFrameIndex, externalCallableAliases.ToImmutableArray())
-            recordedBlockOwner = true
-        }
         let memberNotNullFrame = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol]())
         let shadowSavedOverlay = ShadowEnterList()
         let shadowSavedBase = binderCtx.ShadowOverlayBase
@@ -734,24 +729,15 @@ internal partial class StatementBinder {
                     continue
                 }
                 let externalCallableAliasesAtEntry = externalCallableAliases.ToArray()
-                var recordedStatementEntry = false
-                if !blockEntryStates.ContainsKey(statementSyntax) {
-                    blockEntryStates[statementSyntax] = (
-                        binderCtx.NarrowedVariables.Count,
-                        externalCallableAliasesAtEntry.ToImmutableArray()
-                    )
-                    recordedStatementEntry = true
-                }
-                var statement BoundStatement? = nil
-                try {
-                    statement = BindStatement(statementSyntax)
-                } finally {
-                    if recordedStatementEntry {
-                        blockEntryStates.Remove(statementSyntax)
-                    }
-                }
+                let statement BoundStatement? = BindStatement(statementSyntax)
                 if statement == nil {
                     continue
+                }
+                if binderCtx.LoopStack.Count > 0 {
+                    boundStatementEntries[statement] = (
+                        blockFrameIndex,
+                        externalCallableAliasesAtEntry.ToImmutableArray()
+                    )
                 }
                 statements.Add(statement)
                 // Issue #208: after binding a call statement, apply any
@@ -815,27 +801,18 @@ internal partial class StatementBinder {
                     tailNode = tailExpr
                     EnterBackwardJumpSpanIfFirstStatement(tailExpr)
                 }
-                var recordedTailEntry = false
-                if tailNode != nil && !blockEntryStates.ContainsKey(tailNode) {
-                    blockEntryStates[tailNode] = (
-                        binderCtx.NarrowedVariables.Count,
-                        externalCallableAliases.ToImmutableArray()
-                    )
-                    recordedTailEntry = true
+                let tailAliasesAtEntry = externalCallableAliases.ToImmutableArray()
+                if tailNode != nil && binderCtx.LoopStack.Count > 0 {
+                    trailingSyntaxEntries[tailNode] = (blockFrameIndex, tailAliasesAtEntry)
                 }
-                try {
-                    statements.Add(trailingStatement())
-                } finally {
-                    if recordedTailEntry && tailNode != nil {
-                        blockEntryStates.Remove(tailNode)
-                    }
+                let tailStmt = trailingStatement()
+                if binderCtx.LoopStack.Count > 0 {
+                    boundStatementEntries[tailStmt] = (blockFrameIndex, tailAliasesAtEntry)
                 }
+                statements.Add(tailStmt)
             }
             return currentStatementListFallsThrough
         } finally {
-            if recordedBlockOwner && blockOwner != nil {
-                blockEntryStates.Remove(blockOwner)
-            }
             ShadowLeaveList(shadowSavedOverlay, shadowSavedBase)
             NoteListExit()
             binderCtx.EndNarrowingProof()

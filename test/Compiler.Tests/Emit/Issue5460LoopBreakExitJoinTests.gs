@@ -629,6 +629,123 @@ func RunIdentityOverload(token Token) int32 {
 }
 var g string? = "ok"
 Console.WriteLine(RunIdentityOverload(Token{Value: 1}))`, "", "run", "2"}
+            yield[]object{"control10_variadic_named_indirect_base_and_member_collection_breaks", `import System
+import System.Collections.Generic
+struct Token {
+    shared {
+        func operator implicit(t Token) int32 {
+            g = nil
+            return 1
+        }
+    }
+}
+func Clear() int32 {
+    g = nil
+    return 1
+}
+func ClearVariadic(xs ...int32) int32 {
+    g = nil
+    return xs.Length
+}
+func TakeVariadic(xs ...int32) int32 {
+    return xs.Length
+}
+func TakeNamed(a int32, b int32) int32 {
+    return a + b
+}
+open class BaseCallHost {
+    open func M(a int32, b int32) int32 {
+        return a + b
+    }
+}
+class DerivedCallHost : BaseCallHost {
+    func RunBaseCall(value Token) int32 {
+        while true {
+            if g == nil {
+                return 0
+            }
+            let ignored = base.M(value, {
+                break
+                0
+            })
+        }
+        return g.Length
+    }
+}
+class Holder {
+    prop Items List[int32] {
+        get {
+            g = nil
+            return List[int32]()
+        }
+    }
+}
+func RunVariadicCall() int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let ignored = ClearVariadic(1) + {
+            break
+            0
+        }
+    }
+    return g.Length
+}
+func RunPackedVariadicConversion(value Token) int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let ignored = TakeVariadic(value, {
+            break
+            0
+        })
+    }
+    return g.Length
+}
+func RunReorderedNamed() int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let ignored = TakeNamed(b: Clear(), a: {
+            break
+            0
+        })
+    }
+    return g.Length
+}
+func RunIndirectCall(del (int32, int32) -> int32, value Token) int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let ignored = del(value, {
+            break
+            0
+        })
+    }
+    return g.Length
+}
+func RunMemberCollectionInitializer() int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let ignored = Holder{
+            Items: {
+                ({
+                    break
+                    0
+                })
+            }
+        }
+    }
+    return g.Length
+}
+var g string? = "ok"
+Console.WriteLine(DerivedCallHost().RunBaseCall(Token{}) + RunVariadicCall() + RunPackedVariadicConversion(Token{}) + RunReorderedNamed() + RunIndirectCall((a int32, b int32) -> a + b, Token{}) + RunMemberCollectionInitializer())`, "GS0158@41:18 GS0158@62:14 GS0158@74:14 GS0158@86:14 GS0158@98:14 GS0158@114:14", "reject", ""}
             yield[]object{"control7_killed_branch_and_loop_condition_facts_not_replayed_on_break", `import System
 func Get() string? { return "ok" }
 func RunShortCircuitKilled() int32 {

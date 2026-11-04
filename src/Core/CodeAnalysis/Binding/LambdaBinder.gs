@@ -2382,7 +2382,6 @@ internal class LambdaBinder {
         binderCtx.UnresolvedGotoLabels.Clear()
         binderCtx.NarrowingFlow.Clear()
         binderCtx.LoopStack.Clear()
-        binderCtx.BoundExpressionsInLoop.Clear()
         this.binderCtx.CurrentFallthroughTarget = nil
         this.binderCtx.CurrentFallthroughAnchor = nil
         this.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(bodySyntax)
@@ -2428,10 +2427,6 @@ internal class LambdaBinder {
         binderCtx.LoopStack.Clear()
         for var i = saved.LoopStack.Length - 1; i >= 0; i-- {
             binderCtx.LoopStack.Push(saved.LoopStack[i])
-        }
-        binderCtx.BoundExpressionsInLoop.Clear()
-        for kvp in saved.BoundExpressionsInLoop {
-            binderCtx.BoundExpressionsInLoop[kvp.Key] = kvp.Value
         }
         this.binderCtx.CurrentFallthroughTarget = saved.FallthroughTarget
         this.binderCtx.CurrentFallthroughAnchor = saved.FallthroughAnchor
@@ -2903,7 +2898,6 @@ internal class LambdaBinder {
             UnresolvedGotoLabels = Dictionary[string, TextLocation](ctx.UnresolvedGotoLabels)
             PendingJumps = ctx.NarrowingFlow.Clone()
             LoopStack = ctx.LoopStack.ToArray()
-            BoundExpressionsInLoop = Dictionary[SyntaxNode, BoundExpression](ctx.BoundExpressionsInLoop)
             FallthroughTarget = ctx.CurrentFallthroughTarget
             FallthroughAnchor = ctx.CurrentFallthroughAnchor
             ExternalCallableAliases = HashSet[VariableSymbol](externalCallableAliases)
@@ -2927,10 +2921,6 @@ internal class LambdaBinder {
         }
 
         prop LoopStack[](LabelName string?, BreakLabel BoundLabel, ContinueLabel BoundLabel?) {
-            get;
-        }
-
-        prop BoundExpressionsInLoop Dictionary[SyntaxNode, BoundExpression] {
             get;
         }
 

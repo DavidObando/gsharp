@@ -71,17 +71,20 @@ internal partial class ExpressionBinder {
         // extension) keeps the narrowed binding and its diagnostics.
         let narrowingUnwrap = receiver as BoundUnaryExpression
         let headToken = AccessorHeadToken(rightPart, out var callSyntax)
-        let result = if narrowingUnwrap != nil &&
+        if narrowingUnwrap != nil &&
             narrowingUnwrap.IsNarrowingUnwrap &&
             headToken != nil &&
             NullableOnlyMemberNames.Contains(headToken.ValueText) &&
             !NarrowedTypeMayHaveMember(narrowingUnwrap.Type, headToken.ValueText, callSyntax) {
-            BindAccessorStepOnReceiver(narrowingUnwrap.Operand, classSymbol, rightPart, receiverSyntax, receiverStart)
-        } else {
-            BindAccessorStepOnReceiver(receiver, classSymbol, rightPart, receiverSyntax, receiverStart)
+            return BindAccessorStepOnReceiver(
+                narrowingUnwrap.Operand,
+                classSymbol,
+                rightPart,
+                receiverSyntax,
+                receiverStart
+            )
         }
-        RecordBoundExpressionInLoop(rightPart, result)
-        return result
+        return BindAccessorStepOnReceiver(receiver, classSymbol, rightPart, receiverSyntax, receiverStart)
     }
 
     /// Issue #4986: whether [`type`](paramref), the narrowed type of a
