@@ -2483,14 +2483,20 @@ internal partial class StatementBinder {
                     }
                 }
             }
+            if node is BoundCallOperationExpression call {
+                RecordCallSiteAliasing(call)
+            }
+            base.VisitExpression(node)
+            if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol{HasCaptures: true}} {
+                normalCallableState.InvalidateClosureAssigned(isClosureAssigned)
+                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned)
+            }
             if node is BoundClrConversionCallExpression conversionCall {
                 AnalyzeCallableArguments(ImmutableArray.Create(conversionCall.Source))
             }
-            if node is BoundCallOperationExpression call {
-                RecordCallSiteAliasing(call)
-                AnalyzeCallableArguments(call.Arguments)
+            if node is BoundCallOperationExpression callAfterOperands {
+                AnalyzeCallableArguments(callAfterOperands.Arguments)
             }
-            base.VisitExpression(node)
         }
 
         // ADR-0208 R12 (#5171): whether [`root`](paramref) may name the storage of another
@@ -2670,9 +2676,13 @@ internal partial class StatementBinder {
         )
 
         protected open override func VisitIndirectCallExpression(node BoundIndirectCallExpression) {
-            AnalyzeCallableInvocation(node.Target)
+            VisitExpression(node.Target)
+            let targetState = CaptureCallableState()
+            for argument in node.Arguments {
+                VisitExpression(argument)
+            }
             AnalyzeCallableArguments(node.Arguments)
-            base.VisitIndirectCallExpression(node)
+            AnalyzeCallableInvocation(node.Target, targetState)
         }
 
         private func VisitPossiblySkipped(visit() -> void) {
@@ -2765,8 +2775,8 @@ internal partial class StatementBinder {
             if node.Method != nil {
                 MarkMayMutateGlobalRoots()
             }
-            AnalyzeCallableArguments(node.Arguments)
             base.VisitBaseClassCallExpression(node)
+            AnalyzeCallableArguments(node.Arguments)
         }
 
         // `callback.Invoke()` on a delegate value: the explicit form of `callback()`.
@@ -2781,7 +2791,14 @@ internal partial class StatementBinder {
         protected open override func VisitImportedInstanceCallExpression(node BoundImportedInstanceCallExpression) {
             if string.Equals(node.Method.Name, "Invoke", StringComparison.Ordinal) &&
                 IsCallableType(node.Receiver.Type) {
-                AnalyzeCallableInvocation(node.Receiver)
+                VisitExpression(node.Receiver)
+                let targetState = CaptureCallableState()
+                for argument in node.Arguments {
+                    VisitExpression(argument)
+                }
+                AnalyzeCallableArguments(node.Arguments)
+                AnalyzeCallableInvocation(node.Receiver, targetState)
+                return
             }
             base.VisitImportedInstanceCallExpression(node)
         }
@@ -2789,18 +2806,18 @@ internal partial class StatementBinder {
         protected open override func VisitFunctionPointerInvocationExpression(
             node BoundFunctionPointerInvocationExpression
         ) {
-            AnalyzeCallableArguments(node.Arguments)
             base.VisitFunctionPointerInvocationExpression(node)
+            AnalyzeCallableArguments(node.Arguments)
         }
 
         protected open override func VisitConstructorCallExpression(node BoundConstructorCallExpression) {
-            AnalyzeCallableArguments(node.Arguments)
             base.VisitConstructorCallExpression(node)
+            AnalyzeCallableArguments(node.Arguments)
         }
 
         protected open override func VisitClrConstructorCallExpression(node BoundClrConstructorCallExpression) {
-            AnalyzeCallableArguments(node.Arguments)
             base.VisitClrConstructorCallExpression(node)
+            AnalyzeCallableArguments(node.Arguments)
         }
 
         private func AnalyzeCallableArguments(arguments ImmutableArray[BoundExpression]) {
@@ -2840,9 +2857,9 @@ internal partial class StatementBinder {
             if node.Initializer != nil && TryGetWritableReferenceOperand(node.Initializer, out var operand) {
                 writableReferenceAliases[node.Variable] = operand!!
             }
+            base.VisitVariableDeclaration(node)
             normalCallableState.ApplyVariableDeclaration(node)
             allEntryCallableState.ApplyVariableDeclaration(node)
-            base.VisitVariableDeclaration(node)
         }
 
         protected open override func VisitIfStatement(node BoundIfStatement) {
@@ -3088,7 +3105,10 @@ internal partial class StatementBinder {
             allEntryCallableState.MergeFrom(state.AllEntry)
         }
 
-        private func AnalyzeCallableInvocation(expression BoundExpression) {
+        private func AnalyzeCallableInvocation(
+            expression BoundExpression,
+            targetState(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
+        ) {
             let callable = UnwrapCallable(expression)
             if callable is BoundFunctionLiteralExpression direct {
                 VisitFunctionLiteralBody(direct)
@@ -3101,20 +3121,25 @@ internal partial class StatementBinder {
                 return
             }
             callableInvocations.Add(variable.Variable)
-            AnalyzeCallableVariable(variable.Variable)
+            AnalyzeCallableVariable(variable.Variable, targetState)
         }
 
-        private func AnalyzeCallableVariable(variable VariableSymbol) {
+        private func AnalyzeCallableVariable(
+            variable VariableSymbol,
+            targetState(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
+        ) {
+            let normalSource = targetState?.Normal ?? normalCallableState
+            let allSource = targetState?.AllEntry ?? allEntryCallableState
             let isReadonlyCallableParameter = variable is ParameterSymbol && variable.IsReadOnly == true
-            normalCallableState.Literals.TryGetValue(variable, out var normalLiterals)
+            normalSource.Literals.TryGetValue(variable, out var normalLiterals)
             let normalTargetArray = normalLiterals?.ToArray()
-            let isNormalExternal = isReadonlyCallableParameter || normalCallableState.External.Contains(variable)
-            let isNormalUnknown = normalCallableState.Unknown.Contains(variable) ||
+            let isNormalExternal = isReadonlyCallableParameter || normalSource.External.Contains(variable)
+            let isNormalUnknown = normalSource.Unknown.Contains(variable) ||
                 (!isNormalExternal && normalLiterals == nil)
-            allEntryCallableState.Literals.TryGetValue(variable, out var allLiterals)
+            allSource.Literals.TryGetValue(variable, out var allLiterals)
             let allTargetArray = allLiterals?.ToArray()
-            let isExternal = isReadonlyCallableParameter || allEntryCallableState.External.Contains(variable)
-            let isUnknown = allEntryCallableState.Unknown.Contains(variable) || (!isExternal && allLiterals == nil)
+            let isExternal = isReadonlyCallableParameter || allSource.External.Contains(variable)
+            let isUnknown = allSource.Unknown.Contains(variable) || (!isExternal && allLiterals == nil)
             VisitCallableTargets(
                 normalTargetArray,
                 isNormalExternal || isNormalUnknown,
@@ -3485,13 +3510,21 @@ internal partial class StatementBinder {
                         source.Variable
                     ) {
                         Unknown.Add(node.Variable)
+                    } else {
+                        Unknown.Remove(node.Variable)
                     }
                     if externalCallable {
                         External.Add(node.Variable)
+                    } else {
+                        External.Remove(node.Variable)
                     }
                 } else if externalCallable {
+                    Literals.Remove(node.Variable)
+                    Unknown.Remove(node.Variable)
                     External.Add(node.Variable)
                 } else {
+                    Literals.Remove(node.Variable)
+                    External.Remove(node.Variable)
                     Unknown.Add(node.Variable)
                 }
             }

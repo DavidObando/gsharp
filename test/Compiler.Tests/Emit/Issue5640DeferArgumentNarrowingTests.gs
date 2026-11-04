@@ -382,6 +382,44 @@ func Run() int32 {
     return x.Value
 }
 Console.WriteLine(Run())`, "", "run", "7"}
+            yield[]object{"d17_5640_defer_invoked_function_literal_runs_after_argument_assignment", `import System
+class C {
+    var Value int32 = 1
+}
+func Consume(n int32) { }
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    defer Consume((func(f () -> void) int32 {
+        action = clear
+        return 1
+    })((action = callback)))
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(func() { }))`, "GS0158@16:14", "reject", ""}
+            yield[]object{"d18_5640_variable_declaration_evaluates_initializer_before_recording_method_group_alias", `import System
+class C {
+    var Value int32 = 7
+}
+class Box {
+    func Noop() { }
+}
+func Run() int32 {
+    var x C? = C{}
+    var make () -> Box = func() Box { return Box{} }
+    var action () -> void = make().Noop
+    let clear = func() {
+        x = nil
+        action = func() { }
+    }
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run())`, "", "run", "7"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
