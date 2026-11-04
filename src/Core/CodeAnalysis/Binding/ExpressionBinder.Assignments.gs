@@ -3470,7 +3470,7 @@ internal partial class ExpressionBinder {
             // declaring a local — the call-site arg-loop re-binds us once the
             // parameter has been resolved so the local has the right type.
             if declaredType == nil {
-                return BoundAddressOfExpression(nil, BoundErrorExpression(nil))
+                return BoundAddressOfExpression(syntax, BoundErrorExpression(nil))
             }
             // Synthesize the local. `out _` gets a fresh anonymous name; `out var`/`out let`
             // honour the user-given identifier.
@@ -3510,7 +3510,7 @@ internal partial class ExpressionBinder {
                         existing.DeclaringSyntax,
                         syntax
                     ) {
-                        return BoundAddressOfExpression(nil, BoundVariableExpression(nil, existing))
+                        return BoundAddressOfExpression(syntax, BoundVariableExpression(nil, existing))
                     }
                     Diagnostics.ReportSymbolAlreadyDeclared(resolvedDeclarationIdentifier.Location, localName)
                     return BoundErrorExpression(nil)
@@ -3520,7 +3520,7 @@ internal partial class ExpressionBinder {
                 $scope.TryDeclareVariable(local)
             }
             let nameExpression = BoundVariableExpression(nil, local)
-            return BoundAddressOfExpression(nil, nameExpression)
+            return BoundAddressOfExpression(syntax, nameExpression)
         }
         // Plain lvalue form: bind the operand and check it's an lvalue.
         // ADR-0061: the operand may be a conditional ref-argument expression
@@ -3535,13 +3535,21 @@ internal partial class ExpressionBinder {
             rawExpr = pen.Expression
         }
         if rawExpr is ConditionalRefArgumentExpressionSyntax condSyntax {
-            return conversions.BindConditionalRefArgument(condSyntax, syntax.RefKindModifier)
+            let conditionalRef = conversions.BindConditionalRefArgument(condSyntax, syntax.RefKindModifier)
+            if conditionalRef is not BoundErrorExpression {
+                conditionalRef.AnchorSyntax(syntax)
+            }
+            return conditionalRef
         }
         // ADR-0062: a general conditional expression as the payload of
         // ref/out/in binds to the conditional-address path (preserving
         // ADR-0061 byref safety).
         if rawExpr is ConditionalExpressionSyntax generalCondSyntax {
-            return BindConditionalAddressFromGeneral(generalCondSyntax, syntax.RefKindModifier)
+            let generalConditionalRef = BindConditionalAddressFromGeneral(generalCondSyntax, syntax.RefKindModifier)
+            if generalConditionalRef is not BoundErrorExpression {
+                generalConditionalRef.AnchorSyntax(syntax)
+            }
+            return generalConditionalRef
         }
         let operand = BindExpression(expression)
         if operand is BoundErrorExpression {
@@ -3563,7 +3571,12 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        return BoundAddressOfExpression(nil, operand, unmanaged: false, isReadOnly: syntax.RefKindModifier.Text == "in")
+        return BoundAddressOfExpression(
+            syntax,
+            operand,
+            unmanaged: false,
+            isReadOnly: syntax.RefKindModifier.Text == "in"
+        )
     }
 
     /// ADR-0060 / issues #1133, #1139: re-binds a first-pass inline out-var
