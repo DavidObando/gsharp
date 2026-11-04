@@ -315,6 +315,18 @@ class BoundGlobalScope {
         get;
     }
 
+    private var _declaredTypeAliases ImmutableArray[TypeAliasSymbol] = ImmutableArray[TypeAliasSymbol].Empty
+
+    /// Gets the source-declared `type Name = Target` alias symbols in declaration order (#5333).
+    internal prop DeclaredTypeAliases ImmutableArray[TypeAliasSymbol] {
+        get {
+            return _declaredTypeAliases
+        }
+        set {
+            _declaredTypeAliases = value
+        }
+    }
+
     /// Gets the synthesized or explicit entry-point function for this compilation,
     /// or null if the compilation produces a library (no entry point).
     prop EntryPoint FunctionSymbol? {

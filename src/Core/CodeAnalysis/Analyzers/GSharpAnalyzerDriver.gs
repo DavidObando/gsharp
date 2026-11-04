@@ -103,7 +103,7 @@ class GSharpAnalyzerDriver {
         if registry.SymbolActions.Count == 0 {
             return
         }
-        for symbol in EnumerateDeclaredSymbols(program) {
+        for symbol in EnumerateDeclaredSymbols(program).Concat(compilation.GlobalScope.DeclaredTypeAliases) {
             cancellationToken.ThrowIfCancellationRequested()
             if !registry.SymbolActions.TryGetValue(symbol.Kind, out var entries) {
                 continue

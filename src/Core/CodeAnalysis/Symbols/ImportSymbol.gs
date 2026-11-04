@@ -6,6 +6,65 @@ package GSharp.Core.CodeAnalysis.Symbols
 
 import GSharp.Core.CodeAnalysis.Syntax
 import System
+import System.Collections.Immutable
+
+/// Represents a `type Name = Target` alias symbol in the language (#5333).
+class TypeAliasSymbol : Symbol {
+    /// Initializes a new instance of the (cref:TypeAliasSymbol) class.
+    /// @param name The alias name.
+    /// @param target The aliased type symbol.
+    /// @param declaration The declaring syntax node, or `null` for synthesized aliases.
+    init(name string, target TypeSymbol, declaration TypeAliasDeclarationSyntax? = nil) : base(name) {
+        Target = target
+        Declaration = declaration
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    override prop Kind SymbolKind -> SymbolKind.TypeAlias
+
+    /// Gets the aliased type symbol.
+    prop Target TypeSymbol {
+        get;
+    }
+
+    /// Gets the declaration of the type alias, or `null` for synthesized aliases.
+    prop Declaration TypeAliasDeclarationSyntax? {
+        get;
+        private set;
+    }
+
+    /// Gets or sets the declaring package name.
+    internal var PackageName string = string.Empty
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    override prop ContainingNamespace string? -> if string.IsNullOrEmpty(PackageName) {
+        default(string?)
+    } else {
+        PackageName
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    override prop DeclaringSyntaxNodes ImmutableArray[SyntaxNode] -> if Declaration is {} declaration &&
+        !declaration
+        .Identifier
+        .IsMissing {
+        ImmutableArray.Create[SyntaxNode](declaration.Identifier)
+    } else {
+        ImmutableArray[SyntaxNode].Empty
+    }
+
+    /// Re-points this reused type alias at the matching declaration in the edited tree.
+    /// @param declaration The corresponding declaration in the re-parsed tree.
+    internal func RepointDeclaration(declaration TypeAliasDeclarationSyntax) {
+        Declaration = declaration
+    }
+}
 
 /// Represents an import symbol in the language.
 class ImportSymbol : Symbol {

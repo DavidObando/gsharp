@@ -38,6 +38,8 @@ shared class BoundSemantics {
         let symbol = bound.Model.GetSymbolInfo(bound.Token).Symbol
         return if IsImportedMember(symbol) {
             default(Symbol?)
+        } else if symbol is TypeAliasSymbol typeAlias {
+            typeAlias.Target
         } else {
             symbol
         }
@@ -179,11 +181,17 @@ shared class BoundSemantics {
         // The token may declare a symbol that is not yet visible at its own position (a stale local).
         let declared = bound.Model.GetSymbolInfo(bound.Token).Symbol
         if declared != nil {
-            return declared
+            return if declared is TypeAliasSymbol declaredAlias {
+                declaredAlias.Target
+            } else {
+                declared
+            }
         }
         let symbols = bound.Model.LookupSymbols(bound.Token.Span.Start, bound.Token.ValueText)
         return if symbols.IsDefaultOrEmpty {
             default(Symbol?)
+        } else if symbols[0] is TypeAliasSymbol alias {
+            alias.Target
         } else {
             symbols[0]
         }

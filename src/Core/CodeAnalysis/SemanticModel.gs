@@ -568,17 +568,6 @@ partial class SemanticModel {
                     break
                 }
             }
-            for typeAlias in tree.Root.Members.OfType[TypeAliasDeclarationSyntax]() {
-                if !typeAlias.Identifier.IsMissing {
-                    let aliasName = typeAlias.Identifier.ValueText
-                    let qualifiedKey = treePackageName + "#" + aliasName
-                    if globalScope.TypeAliases.TryGetValue(qualifiedKey, out var qualifiedTarget) {
-                        declaredBySyntax.TryAdd(typeAlias, qualifiedTarget)
-                    } else if globalScope.TypeAliases.TryGetValue(aliasName, out var aliasedType) {
-                        declaredBySyntax.TryAdd(typeAlias, aliasedType)
-                    }
-                }
-            }
             SemanticModel.RecordTypeClauses(globalScope, tree, typeClauseTokens)
             // A shared class's declaration node is a copy the binder made when it moved the members
             // into the shared block; the identifier token is the same object in both.
@@ -759,6 +748,9 @@ partial class SemanticModel {
             for variable in globalScope.Variables {
                 yield variable
             }
+            for typeAlias in globalScope.DeclaredTypeAliases {
+                yield typeAlias
+            }
         }
 
         private func RecordDeclarations(
@@ -770,6 +762,13 @@ partial class SemanticModel {
                 if object.ReferenceEquals(declaration.SyntaxTree, tree) && !declaredBySyntax.ContainsKey(declaration) {
                     declaredBySyntax.Add(declaration, symbol)
                 }
+            }
+            if symbol is TypeAliasSymbol{Declaration: {} aliasDeclaration} && object.ReferenceEquals(
+                aliasDeclaration.SyntaxTree,
+                tree
+            ) &&
+                !declaredBySyntax.ContainsKey(aliasDeclaration) {
+                declaredBySyntax.Add(aliasDeclaration, symbol)
             }
             if symbol is EventSymbol{Declaration: {} eventDeclaration} && object.ReferenceEquals(
                 eventDeclaration.Identifier.SyntaxTree,

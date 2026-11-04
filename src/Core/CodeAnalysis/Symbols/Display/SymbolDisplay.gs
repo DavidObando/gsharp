@@ -157,6 +157,9 @@ shared class SymbolDisplay {
             case package_ is PackageSymbol {
                 AppendPackage(builder, package_)
             }
+            case typeAlias is TypeAliasSymbol {
+                AppendTypeAlias(builder, format, typeAlias)
+            }
             case protocol is InterfaceSymbol when protocol.IsProtocol {
                 builder.Keyword("protocol")
                 builder.Space()
@@ -451,6 +454,16 @@ shared class SymbolDisplay {
         builder.Keyword("package")
         builder.Space()
         builder.Add(SymbolDisplayPartKind.NamespaceName, $package.Name)
+    }
+
+    private func AppendTypeAlias(builder PartBuilder, format SymbolDisplayFormat, typeAlias TypeAliasSymbol) {
+        builder.Keyword("type")
+        builder.Space()
+        builder.Add(SymbolDisplayPartKind.AliasName, QualifiedName(format, typeAlias.PackageName, typeAlias.Name))
+        builder.Space()
+        builder.Punctuation("=")
+        builder.Space()
+        builder.Type(FormatType(typeAlias.Target))
     }
 
     private func AppendTypeParameters(builder PartBuilder, typeParameters ImmutableArray[TypeParameterSymbol]) {

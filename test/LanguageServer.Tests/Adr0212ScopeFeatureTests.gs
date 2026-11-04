@@ -44,11 +44,32 @@ open class Adr0212ScopeFeatureTests {
 
     @Fact
     func Completion_OffersTypeAliasNames() {
-        // LookupSymbols cannot list an alias (no alias symbol); completion still offers its name.
         let items = Complete(Source, "// caret")
-        Assert.Contains(items, (i CompletionItem) -> i.Label == "Meters")
-        // `type $Feet` is the alias `Feet`; its target is found by the semantic name.
-        Assert.Contains(items, (i CompletionItem) -> i.Label == "Feet" && i.Detail != nil)
+        let meters = Assert.Single(items, (i CompletionItem) -> i.Label == "Meters")
+        Assert.Equal("type Meters = int32", meters.Detail)
+        // `type $Feet` is the alias `Feet`; LookupSymbols lists it under its semantic name.
+        let feet = Assert.Single(items, (i CompletionItem) -> i.Label == "Feet")
+        Assert.Equal("type Feet = int32", feet.Detail)
+    }
+
+    @Fact
+    func Completion_OffersTwoTypeAliasesOfTheSameTargetAndEscapesKeywordAliases() {
+        let source = `package P
+type First = int32
+type Second = int32
+type $type = string
+func Run() int32 {
+    // caret
+    return 0
+}
+`
+        let items = Complete(source, "// caret")
+        let first = Assert.Single(items, (i CompletionItem) -> i.Label == "First")
+        Assert.Equal("type First = int32", first.Detail)
+        let second = Assert.Single(items, (i CompletionItem) -> i.Label == "Second")
+        Assert.Equal("type Second = int32", second.Detail)
+        let escaped = Assert.Single(items, (i CompletionItem) -> i.Label == "$$type")
+        Assert.Equal("type type = string", escaped.Detail)
     }
 
     @Fact

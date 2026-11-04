@@ -18,5 +18,6 @@ enum SymbolKind {
     Field,
     EnumMember,
     Property,
-    Event
+    Event,
+    TypeAlias
 }
