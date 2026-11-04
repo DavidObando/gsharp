@@ -192,6 +192,91 @@ open class Adr0212SpeculativeTypeInfoTests {
         }
     }
 
+    @Fact
+    func PatternVariable_FollowsBinderFlowRegions() {
+        const source = `func Flow(x object, items []object) int32 {
+    if x is string s {
+        let inThen = s.Length
+    } else {
+        let inElse = 0
+    }
+    let afterIf = 0
+    if !(x is string bang) {
+        return 1
+    }
+    let afterBang = bang.Length
+    for item in items {
+        if item is not string token {
+            continue
+        }
+        let afterNot = token.Length
+    }
+    let afterLoop = 0
+    let andOk = x is string a && a.Length > 0
+    let orOut = x is string b || x == nil
+    let notOrOk = x is not string c || c.Length == 0
+    let condPos = x is string d ? d.Length : 10
+    let condNeg = x is not string e ? 20 : e.Length
+    while x is string w {
+        let inWhile = w.Length
+        break
+    }
+    while !(x is string wNeg) {
+        let inWhileNeg = 0
+        break
+    }
+    let afterWhile = 0
+    return afterBang + condPos + condNeg + afterIf + afterLoop + afterWhile
+}
+`
+        let (model, tree) = Create(source)
+        let Speculate = func (anchorSnippet string, exprText string) TypeSymbol? {
+            let pos = source.IndexOf(anchorSnippet, StringComparison.Ordinal)
+            Assert.True(pos >= 0, anchorSnippet)
+            let parsed = SyntaxTree.Parse(SourceText.From("func f() {\n    " + exprText + "\n}\n", "probe.gs"))
+            let expr = parsed.Root.DescendantNodes().OfType[ExpressionStatementSyntax]().Single().Expression
+            return model.GetSpeculativeTypeInfo(pos, expr).Type
+        }
+        Assert.Same(TypeSymbol.Int32, Speculate("let inThen", "s.Length"))
+        Assert.Null(Speculate("let inElse", "s.Length"))
+        Assert.Null(Speculate("let afterIf", "s.Length"))
+        Assert.Null(Speculate("return 1", "bang.Length"))
+        Assert.Same(TypeSymbol.Int32, Speculate("let afterBang", "bang.Length"))
+        Assert.Null(Speculate("continue", "token.Length"))
+        Assert.Same(TypeSymbol.Int32, Speculate("let afterNot", "token.Length"))
+        Assert.Null(Speculate("let afterLoop", "token.Length"))
+        Assert.Same(TypeSymbol.Int32, Speculate("a.Length > 0", "a.Length"))
+        Assert.Null(Speculate("x == nil", "b.Length"))
+        Assert.Same(TypeSymbol.Int32, Speculate("c.Length == 0", "c.Length"))
+        Assert.Same(TypeSymbol.Int32, Speculate("d.Length", "d.Length"))
+        Assert.Null(Speculate("10", "d.Length"))
+        Assert.Null(Speculate("20", "e.Length"))
+        Assert.Same(TypeSymbol.Int32, Speculate("e.Length", "e.Length"))
+        Assert.Same(TypeSymbol.Int32, Speculate("let inWhile =", "w.Length"))
+        Assert.Null(Speculate("let inWhileNeg", "wNeg.Length"))
+        Assert.Null(Speculate("let afterWhile", "w.Length"))
+
+        const topLevelSource = `let topInput object = "hello"
+if topInput is not string topText {
+    return
+}
+let topUsed = topText.Length
+func SubsequentFunction() int32 {
+    return 0
+}
+`
+        let (topModel, _) = Create(topLevelSource)
+        let TopSpeculate = func (anchorSnippet string, exprText string) TypeSymbol? {
+            let pos = topLevelSource.IndexOf(anchorSnippet, StringComparison.Ordinal)
+            Assert.True(pos >= 0, anchorSnippet)
+            let parsed = SyntaxTree.Parse(SourceText.From("func f() {\n    " + exprText + "\n}\n", "probe.gs"))
+            let expr = parsed.Root.DescendantNodes().OfType[ExpressionStatementSyntax]().Single().Expression
+            return topModel.GetSpeculativeTypeInfo(pos, expr).Type
+        }
+        Assert.Same(TypeSymbol.Int32, TopSpeculate("let topUsed", "topText.Length"))
+        Assert.Null(TopSpeculate("return 0", "topText.Length"))
+    }
+
     // The scope query leaves `this` out of the arguments of `: base(...)`; the speculative bind must not
     // accept instance access there, while the constructor body keeps it.
     @Fact
@@ -478,9 +563,6 @@ ShadowedGlobal("hi")
                         continue
                     }
                     let referenced = model.GetSymbolInfo(name.IdentifierToken).Symbol
-                    if IsNegatedPatternBinding(referenced) {
-                        continue
-                    }
                     let declared TypeSymbol? = switch referenced {
                         case v is VariableSymbol: v.Type
                         case f is FieldSymbol: f.Type
@@ -549,22 +631,6 @@ ShadowedGlobal("hi")
                     return false
                 }
             }
-        }
-
-        /// A pattern variable bound by `x is not T v` and read after an early exit: the scope query does not
-        /// list it yet (a shape the pre-S5 server path also missed, tracked in issue #5466).
-        private func IsNegatedPatternBinding(symbol Symbol?) bool {
-            if symbol is not VariableSymbol || symbol.DeclaringSyntaxNodes.IsDefaultOrEmpty {
-                return false
-            }
-            var node SyntaxNode? = symbol.DeclaringSyntaxNodes[0]
-            while node != nil {
-                if node is NotPatternSyntax {
-                    return true
-                }
-                node = node.Parent
-            }
-            return false
         }
 
         private func AssertNoMismatches(mismatches List[string]) {
