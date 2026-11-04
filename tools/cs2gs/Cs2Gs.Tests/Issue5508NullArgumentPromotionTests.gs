@@ -1088,6 +1088,13 @@ namespace Demo
 {
     public interface IChain<out TEntity, out TProperty> { }
     public sealed class BoundSpillSequenceExpression { }
+    public sealed class Wrapped
+    {
+        public static int Calls;
+        public string Value { get; }
+        public Wrapped(string? s) { Calls++; Value = s ?? "<null>"; }
+        public static implicit operator Wrapped(string? s) => new Wrapped(s);
+    }
     public static class QueryExtensions
     {
         public static IChain<TEntity, TProperty> Include<TEntity, TProperty>() => null!;
@@ -1105,6 +1112,7 @@ namespace Demo
             i switch { 0 => new BoundSpillSequenceExpression(), _ => null! };
         public static BoundSpillSequenceExpression Coalesced(BoundSpillSequenceExpression? x) =>
             x ?? null!;
+        public static Wrapped ConvertedConditional(bool c) => c ? null! : "x";
         public static BoundSpillSequenceExpression Lambdas()
         {
             Func<BoundSpillSequenceExpression> f = () => null!;
@@ -1117,6 +1125,7 @@ namespace Demo
         Assert.Contains("-> default(IChain[TEntity, TProperty])", suppressed[0])
         Assert.Contains("return default(BoundSpillSequenceExpression)", suppressed[0])
         Assert.Contains("() -> default(BoundSpillSequenceExpression)", suppressed[0])
+        Assert.DoesNotContain("default(Wrapped)", suppressed[0])
         Assert.Contains("func NullableReturn() BoundSpillSequenceExpression? -> nil", suppressed[0])
 
         let plain = TranslateEnabled(

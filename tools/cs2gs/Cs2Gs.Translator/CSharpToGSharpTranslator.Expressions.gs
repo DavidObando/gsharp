@@ -566,6 +566,7 @@ partial class CSharpToGSharpTranslator {
             }
             var returnNode Microsoft.CodeAnalysis.SyntaxNode = node
             var returnIsSuppressed = isSuppressed
+            var stoppedAtConversion = false
             while true {
                 if returnNode is Microsoft
                     .CodeAnalysis
@@ -577,6 +578,7 @@ partial class CSharpToGSharpTranslator {
                     this.context.GetTypeInfo(branch).ConvertedType,
                     out _
                 ) != nil {
+                    stoppedAtConversion = true
                     break
                 }
                 if returnNode.Parent is Microsoft
@@ -621,47 +623,49 @@ partial class CSharpToGSharpTranslator {
                     break
                 }
             }
-            switch returnNode.Parent {
-                case Microsoft.CodeAnalysis.CSharp.Syntax.ReturnStatementSyntax returnStatement {
-                    let owner Microsoft.CodeAnalysis.SyntaxNode? = returnStatement.Ancestors().FirstOrDefault(
-                        (n Microsoft.CodeAnalysis.SyntaxNode) -> n is Microsoft
-                            .CodeAnalysis
-                            .CSharp
-                            .Syntax
-                            .BaseMethodDeclarationSyntax ||
-                            n is Microsoft
-                            .CodeAnalysis
-                            .CSharp
-                            .Syntax
-                            .AccessorDeclarationSyntax ||
-                            n is Microsoft
-                            .CodeAnalysis
-                            .CSharp
-                            .Syntax
-                            .LocalFunctionStatementSyntax ||
-                            n is Microsoft
-                            .CodeAnalysis
-                            .CSharp
-                            .Syntax
-                            .AnonymousFunctionExpressionSyntax
-                    )
-                    let (returnType, returnSymbol) = this.ReturnSlotOf(owner)
-                    return (returnType, returnSymbol, returnIsSuppressed, false, true)
+            if !stoppedAtConversion {
+                switch returnNode.Parent {
+                    case Microsoft.CodeAnalysis.CSharp.Syntax.ReturnStatementSyntax returnStatement {
+                        let owner Microsoft.CodeAnalysis.SyntaxNode? = returnStatement.Ancestors().FirstOrDefault(
+                            (n Microsoft.CodeAnalysis.SyntaxNode) -> n is Microsoft
+                                .CodeAnalysis
+                                .CSharp
+                                .Syntax
+                                .BaseMethodDeclarationSyntax ||
+                                n is Microsoft
+                                .CodeAnalysis
+                                .CSharp
+                                .Syntax
+                                .AccessorDeclarationSyntax ||
+                                n is Microsoft
+                                .CodeAnalysis
+                                .CSharp
+                                .Syntax
+                                .LocalFunctionStatementSyntax ||
+                                n is Microsoft
+                                .CodeAnalysis
+                                .CSharp
+                                .Syntax
+                                .AnonymousFunctionExpressionSyntax
+                        )
+                        let (returnType, returnSymbol) = this.ReturnSlotOf(owner)
+                        return (returnType, returnSymbol, returnIsSuppressed, false, true)
+                    }
+                    case Microsoft.CodeAnalysis.CSharp.Syntax.ArrowExpressionClauseSyntax arrow {
+                        let (returnType, returnSymbol) = this.ReturnSlotOf(arrow.Parent)
+                        return (returnType, returnSymbol, returnIsSuppressed, false, true)
+                    }
+                    case lambda is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .AnonymousFunctionExpressionSyntax when lambda.Body ==
+                    returnNode {
+                        let (returnType, returnSymbol) = this.ReturnSlotOf(lambda)
+                        return (returnType, returnSymbol, returnIsSuppressed, false, true)
+                    }
+                    default { }
                 }
-                case Microsoft.CodeAnalysis.CSharp.Syntax.ArrowExpressionClauseSyntax arrow {
-                    let (returnType, returnSymbol) = this.ReturnSlotOf(arrow.Parent)
-                    return (returnType, returnSymbol, returnIsSuppressed, false, true)
-                }
-                case lambda is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .AnonymousFunctionExpressionSyntax when lambda.Body ==
-                returnNode {
-                    let (returnType, returnSymbol) = this.ReturnSlotOf(lambda)
-                    return (returnType, returnSymbol, returnIsSuppressed, false, true)
-                }
-                default { }
             }
             switch node.Parent {
                 case Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assignment when assignment.IsKind(
