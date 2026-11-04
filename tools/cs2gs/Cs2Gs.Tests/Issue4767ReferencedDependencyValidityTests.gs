@@ -1297,10 +1297,14 @@ public static class Consumer
             Assert.Equal("dependency-blocked", case3bDebugApp.FailureCategory)
             Assert.Empty(case3bDebugApp.Fingerprints)
 
-            // Case 4 (`PRRT_kwDOCzQNb86z0x4E`): when a consumer references a
+            // Case 4a (`PRRT_kwDOCzQNb86z0x4E`): when a valid consumer references a
             // producer project with malformed XML, MigrationPipeline.RunAsync must
             // not abort with XmlException during reference discovery before
             // recording dependency-blocked on the consumer.
+            File.WriteAllText(
+                Path.Combine(consumerDir, "Consumer.cs"),
+                "namespace Consumers;\npublic static class Consumer { public static int Read(int value) => value + 1; }\n"
+            )
             File.WriteAllText(
                 badModelsProject,
                 "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>net10.0\n"
@@ -1331,6 +1335,94 @@ public static class Consumer
             let case4App = Assert.Single(case4Result.Apps)
             Assert.Equal("dependency-blocked", case4App.FailureCategory)
             Assert.Empty(case4App.Fingerprints)
+
+            // Case 4b (`PRRT_kwDOCzQNb86z1zvw`): if the consumer has its own
+            // unsupported construct as well as a producer workspace-load failure,
+            // TranslateStage must still translate the consumer and preserve the
+            // consumer's own CS2GS-GAP artifact (`translation-unsupported`).
+            File.WriteAllText(
+                Path.Combine(consumerDir, "Consumer.cs"),
+                "namespace Consumers;\npublic abstract class ConsumerBad { public abstract ref int Value { get; } }\n"
+            )
+            let case4bOptions = PipelineOptions{
+                GscPath: compiler,
+                Config: "Release",
+                OutputRoot: Path.Combine(corpusRoot, "runs-case4b"),
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true
+            }
+            let case4bResult = await MigrationPipeline(case4bOptions, []IMigrationStage{TranslateStage()}).RunAsync(
+                []CorpusApp{app}
+            )
+            Assert.False(case4bResult.Succeeded)
+            let case4bApp = Assert.Single(case4bResult.Apps)
+            Assert.Equal("translation-unsupported", case4bApp.FailureCategory)
+            Assert.Single(case4bApp.Fingerprints)
+
+            // Restore valid Consumer.cs for the negative controls below.
+            File.WriteAllText(
+                Path.Combine(consumerDir, "Consumer.cs"),
+                "namespace Consumers;\npublic static class Consumer { public static int Read(int value) => value + 1; }\n"
+            )
+
+            // Case 4c (`PRRT_kwDOCzQNb86z1zwL` negative control 1): a malformed
+            // producer project that is removed by `<ProjectReference Remove="..." />`
+            // is inactive and must not block the valid consumer.
+            File.WriteAllText(
+                consumerProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <ItemGroup>\n" +
+                    "    <ProjectReference Include=\"../BadModels/BadModels.csproj\" />\n" +
+                    "    <ProjectReference Remove=\"../BadModels/BadModels.csproj\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            let case4cOptions = PipelineOptions{
+                GscPath: compiler,
+                Config: "Release",
+                OutputRoot: Path.Combine(corpusRoot, "runs-case4c"),
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true
+            }
+            let case4cResult = await MigrationPipeline(case4cOptions, []IMigrationStage{TranslateStage()}).RunAsync(
+                []CorpusApp{app}
+            )
+            Assert.True(case4cResult.Succeeded)
+
+            // Case 4d (`PRRT_kwDOCzQNb86z1zwL` negative control 2): a malformed
+            // producer project inside an inactive `<Choose>/<When>` branch must
+            // not block the valid consumer.
+            File.WriteAllText(
+                consumerProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <Choose>\n" +
+                    "    <When Condition=\"'$$(Configuration)' == 'Debug'\">\n" +
+                    "      <ItemGroup>\n" +
+                    "        <ProjectReference Include=\"../BadModels/BadModels.csproj\" />\n" +
+                    "      </ItemGroup>\n" +
+                    "    </When>\n" +
+                    "  </Choose>\n" +
+                    "</Project>\n"
+            )
+            let case4dOptions = PipelineOptions{
+                GscPath: compiler,
+                Config: "Release",
+                OutputRoot: Path.Combine(corpusRoot, "runs-case4d"),
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true
+            }
+            let case4dResult = await MigrationPipeline(case4dOptions, []IMigrationStage{TranslateStage()}).RunAsync(
+                []CorpusApp{app}
+            )
+            Assert.True(case4dResult.Succeeded)
         } finally {
             Directory.Delete(corpusRoot, recursive: true)
         }

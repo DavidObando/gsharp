@@ -269,30 +269,6 @@ class TranslateStage : IMigrationStage {
             ?.Values
             .Select((p LoadedCSharpProject) -> p.Compilation)
             .ToList()
-        for referencedProject in(sdkReferencedProjects ?? projects).Skip(1) {
-            if !referencedProject.WorkspaceLoadFailed {
-                continue
-            }
-            if !string.IsNullOrEmpty(referencedProject.ProjectPath) &&
-                IsExcludedOrPassthroughProject(Path.GetFullPath(referencedProject.ProjectPath!!), context.Options) {
-                continue
-            }
-            let loadMessage = string.Join(
-                " | ",
-                referencedProject.WorkspaceLoadErrors.Select((d Microsoft.CodeAnalysis.Diagnostic) -> d.GetMessage())
-            )
-            Note(
-                context,
-                "dependency-blocked: referenced project '${referencedProject.ProjectPath}' failed workspace load: $loadMessage"
-            )
-            if !string.IsNullOrEmpty(referencedProject.ProjectPath) &&
-                context
-                .Options
-                .ValidatedReferencedProjects != nil {
-                context.Options.ValidatedReferencedProjects!![Path.GetFullPath(referencedProject.ProjectPath!!)] = false
-            }
-            return StageOutcome.DependencyBlocked()
-        }
         var referencedDependencyFailed = false
         // Translate the app itself (index 0) plus, in the no-via-sdk path,
         // its transitively referenced sibling projects (Refs #914); under the

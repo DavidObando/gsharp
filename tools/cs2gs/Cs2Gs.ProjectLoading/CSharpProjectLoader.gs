@@ -143,9 +143,15 @@ shared class CSharpProjectLoader {
         // consumer-owned load error.
         let referencedPaths = CollectExistingReferencedProjectPaths(
             fullPath,
-            TransitiveCSharpProjectReferences(project)
+            TransitiveCSharpProjectReferences(project),
+            configuration
         )
-        let diagnosticsByProject = PartitionWorkspaceLoadDiagnostics(workspace, fullPath, referencedPaths)
+        let diagnosticsByProject = PartitionWorkspaceLoadDiagnostics(
+            workspace,
+            fullPath,
+            referencedPaths,
+            configuration
+        )
         if diagnosticsByProject.TryGetValue(fullPath, out var ownDiagnostics) {
             loadDiagnostics.AddRange(ownDiagnostics)
         }
@@ -206,8 +212,13 @@ shared class CSharpProjectLoader {
         // them by owning project so referenced-producer workspace failures attach
         // to the referenced project rather than the root consumer.
         let referencedProjects = TransitiveCSharpProjectReferences(project).ToList()
-        let referencedPaths = CollectExistingReferencedProjectPaths(fullPath, referencedProjects)
-        let diagnosticsByProject = PartitionWorkspaceLoadDiagnostics(workspace, fullPath, referencedPaths)
+        let referencedPaths = CollectExistingReferencedProjectPaths(fullPath, referencedProjects, configuration)
+        let diagnosticsByProject = PartitionWorkspaceLoadDiagnostics(
+            workspace,
+            fullPath,
+            referencedPaths,
+            configuration
+        )
         let rootDiagnostics = List[Diagnostic]()
         if diagnosticsByProject.TryGetValue(fullPath, out var ownDiagnostics) {
             rootDiagnostics.AddRange(ownDiagnostics)
@@ -512,7 +523,8 @@ shared class CSharpProjectLoader {
     private func PartitionWorkspaceLoadDiagnostics(
         workspace MSBuildWorkspace,
         rootProjectPath string,
-        referencedPaths IReadOnlyList[string]
+        referencedPaths IReadOnlyList[string],
+        configuration string? = nil
     ) Dictionary[string, List[Diagnostic]] {
         let map_ = Dictionary[string, List[Diagnostic]](StringComparer.OrdinalIgnoreCase)
         for diagnostic in workspace.Diagnostics {
@@ -520,7 +532,13 @@ shared class CSharpProjectLoader {
                 continue
             }
             let classified = ClassifyWorkspaceLoadDiagnostic(diagnostic)
-            let ownerPath = ResolveWorkspaceDiagnosticOwnerPath(diagnostic, rootProjectPath, referencedPaths, workspace)
+            let ownerPath = ResolveWorkspaceDiagnosticOwnerPath(
+                diagnostic,
+                rootProjectPath,
+                referencedPaths,
+                workspace,
+                configuration
+            )
             if !map_.TryGetValue(ownerPath, out var list) {
                 list = List[Diagnostic]()
                 map_[ownerPath] = list
@@ -534,7 +552,8 @@ shared class CSharpProjectLoader {
         diagnostic WorkspaceDiagnostic,
         rootProjectPath string,
         referencedPaths IReadOnlyList[string],
-        workspace MSBuildWorkspace
+        workspace MSBuildWorkspace,
+        configuration string? = nil
     ) string {
         if diagnostic is ProjectDiagnostic projectDiagnostic {
             let ownerFilePath = workspace.CurrentSolution.GetProject(projectDiagnostic.ProjectId)?.FilePath
@@ -555,9 +574,9 @@ shared class CSharpProjectLoader {
                 return referencedPath
             }
         }
-        let rootDeclaredTargets = ReadDeclaredTargetPaths(rootProjectPath)
+        let rootDeclaredTargets = ReadDeclaredTargetPaths(rootProjectPath, configuration)
         for referencedPath in referencedPaths {
-            for targetPath in ReadDeclaredTargetPaths(referencedPath) {
+            for targetPath in ReadDeclaredTargetPaths(referencedPath, configuration) {
                 if !rootDeclaredTargets.Contains(targetPath) && MessageMentionsPath(message, targetPath) {
                     return referencedPath
                 }
@@ -619,7 +638,8 @@ shared class CSharpProjectLoader {
 
     private func CollectExistingReferencedProjectPaths(
         rootProjectPath string,
-        loadedReferencedProjects IEnumerable[Project]
+        loadedReferencedProjects IEnumerable[Project],
+        configuration string? = nil
     ) IReadOnlyList[string] {
         let seen = HashSet[string](StringComparer.OrdinalIgnoreCase){rootProjectPath}
         let ordered = List[string]()
@@ -637,7 +657,7 @@ shared class CSharpProjectLoader {
         }
         while queue.Count > 0 {
             let current = queue.Dequeue()
-            for candidate in ReadUnconditionalProjectReferencePaths(current) {
+            for candidate in ReadActiveProjectReferencePaths(current, configuration) {
                 if File.Exists(candidate) && seen.Add(candidate) {
                     ordered.Add(candidate)
                     queue.Enqueue(candidate)
@@ -647,7 +667,91 @@ shared class CSharpProjectLoader {
         return ordered
     }
 
-    private func ReadUnconditionalProjectReferencePaths(projectPath string) IReadOnlyList[string] {
+    private func ReadActiveProjectReferencePaths(projectPath string, configuration string?) IReadOnlyList[string] {
+        if TryReadMsbuildEvaluatedProjectReferencePaths(projectPath, configuration, out var msbuildPaths) {
+            return msbuildPaths
+        }
+        return ReadXmlActiveProjectReferencePaths(projectPath, configuration)
+    }
+
+    private func TryReadMsbuildEvaluatedProjectReferencePaths(
+        projectPath string,
+        configuration string?,
+        out paths List[string]
+    ) bool {
+        paths = List[string]()
+        if string.IsNullOrEmpty(projectPath) || !File.Exists(projectPath) {
+            return false
+        }
+        let fullProjectPath = Path.GetFullPath(projectPath)
+        let projectDir string? = Path.GetDirectoryName(fullProjectPath)
+        if string.IsNullOrEmpty(projectDir) {
+            return false
+        }
+        EnsureMSBuildRegistered()
+        try {
+            let msbuildAssembly = System.Reflection.Assembly.Load("Microsoft.Build")
+            let projectCollectionType = msbuildAssembly.GetType("Microsoft.Build.Evaluation.ProjectCollection")
+            if projectCollectionType == nil {
+                return false
+            }
+            let globalProps = Dictionary[string, string](StringComparer.OrdinalIgnoreCase)
+            if !string.IsNullOrWhiteSpace(configuration) {
+                globalProps["Configuration"] = configuration
+            }
+            using let collection = System.Activator.CreateInstance(
+                projectCollectionType,
+                []object? {globalProps}
+            ) as IDisposable
+            if collection == nil {
+                return false
+            }
+            let loadProjectMethod = projectCollectionType.GetMethod("LoadProject", []Type{typeof(string)})
+            if loadProjectMethod == nil {
+                return false
+            }
+            let evaluatedProject = loadProjectMethod.Invoke(collection, []object? {fullProjectPath})
+            if evaluatedProject == nil {
+                return false
+            }
+            let getItemsMethod = evaluatedProject.GetType().GetMethod("GetItems", []Type{typeof(string)})
+            if getItemsMethod == nil {
+                return false
+            }
+            if getItemsMethod.Invoke(evaluatedProject, []object? {"ProjectReference"}) is System
+                .Collections
+                .IEnumerable items {
+                for item in items {
+                    if item == nil {
+                        continue
+                    }
+                    let itemType = item.GetType()
+                    let getMetadataValue = itemType.GetMethod("GetMetadataValue", []Type{typeof(string)})
+                    if getMetadataValue != nil {
+                        let refOutput = getMetadataValue.Invoke(item, []object? {"ReferenceOutputAssembly"}) as string
+                        if string.Equals(refOutput?.Trim(), "false", StringComparison.OrdinalIgnoreCase) {
+                            continue
+                        }
+                    }
+                    let evaluatedInclude = itemType.GetProperty("EvaluatedInclude")?.GetValue(item) as string
+                    if string.IsNullOrWhiteSpace(evaluatedInclude) {
+                        continue
+                    }
+                    let normalized = evaluatedInclude.Replace('\\', Path.DirectorySeparatorChar).Replace(
+                        '/',
+                        Path.DirectorySeparatorChar
+                    )
+                    paths.Add(Path.GetFullPath(Path.Combine(projectDir, normalized)))
+                }
+                return true
+            }
+        } catch (Exception) {
+            return false
+        }
+        return false
+    }
+
+    private func ReadXmlActiveProjectReferencePaths(projectPath string, configuration string?) IReadOnlyList[string] {
         let paths = List[string]()
         if string.IsNullOrEmpty(projectPath) || !File.Exists(projectPath) {
             return paths
@@ -658,28 +762,74 @@ shared class CSharpProjectLoader {
         }
         try {
             let document = XDocument.Load(projectPath)
-            for itemGroup in document.Descendants().Where(
-                (e XElement) -> e.Name.LocalName.Equals("ItemGroup", StringComparison.OrdinalIgnoreCase)
-            ) {
-                if !string.IsNullOrWhiteSpace(itemGroup.Attribute(XName?("Condition")!!)?.Value) {
-                    continue
-                }
+            let root = document.Root
+            if root == nil {
+                return paths
+            }
+            let activeGroups = List[XElement]()
+            CollectActiveItemGroups(root, configuration, activeGroups)
+            for itemGroup in activeGroups {
                 for item in itemGroup.Elements().Where(
                     (e XElement) -> e.Name.LocalName.Equals("ProjectReference", StringComparison.OrdinalIgnoreCase)
                 ) {
-                    if !string.IsNullOrWhiteSpace(item.Attribute(XName?("Condition")!!)?.Value) {
+                    if !EvaluateSimpleMsbuildCondition(item.Attribute(XName?("Condition")!!)?.Value, configuration) {
                         continue
+                    }
+                    let removeSpec = item.Attribute(XName?("Remove")!!)?.Value
+                    if !string.IsNullOrWhiteSpace(removeSpec) {
+                        for part in removeSpec.Split(';', StringSplitOptions.RemoveEmptyEntries) {
+                            let trimmed = part.Trim()
+                            if string.IsNullOrEmpty(trimmed) || trimmed.Contains("$$(", StringComparison.Ordinal) ||
+                                trimmed.Contains("@(", StringComparison.Ordinal) {
+                                continue
+                            }
+                            let normalizedRemove = trimmed.Replace('\\', Path.DirectorySeparatorChar).Replace(
+                                '/',
+                                Path.DirectorySeparatorChar
+                            )
+                            let fullRemove = Path.GetFullPath(Path.Combine(projectDir, normalizedRemove))
+                            paths.RemoveAll(
+                                (existing string) -> string.Equals(
+                                    existing,
+                                    fullRemove,
+                                    StringComparison.OrdinalIgnoreCase
+                                )
+                            )
+                        }
                     }
                     let include = item.Attribute(XName?("Include")!!)?.Value
                     if string.IsNullOrWhiteSpace(include) || include!!.Contains("$$(", StringComparison.Ordinal) ||
                         include!!.Contains("@(", StringComparison.Ordinal) {
                         continue
                     }
-                    let normalized = include!!.Replace('\\', Path.DirectorySeparatorChar).Replace(
-                        '/',
-                        Path.DirectorySeparatorChar
+                    let refOutput = item.Attribute(XName?("ReferenceOutputAssembly")!!)
+                        ?.Value ??
+                        item
+                        .Elements()
+                        .FirstOrDefault(
+                        (e XElement) -> e
+                            .Name
+                            .LocalName
+                            .Equals("ReferenceOutputAssembly", StringComparison.OrdinalIgnoreCase)
                     )
-                    paths.Add(Path.GetFullPath(Path.Combine(projectDir, normalized)))
+                        ?.Value
+                    if string.Equals(refOutput?.Trim(), "false", StringComparison.OrdinalIgnoreCase) {
+                        continue
+                    }
+                    for part in include!!.Split(';', StringSplitOptions.RemoveEmptyEntries) {
+                        let trimmed = part.Trim()
+                        if string.IsNullOrEmpty(trimmed) {
+                            continue
+                        }
+                        let normalized = trimmed.Replace('\\', Path.DirectorySeparatorChar).Replace(
+                            '/',
+                            Path.DirectorySeparatorChar
+                        )
+                        let fullInclude = Path.GetFullPath(Path.Combine(projectDir, normalized))
+                        if !paths.Contains(fullInclude, StringComparer.OrdinalIgnoreCase) {
+                            paths.Add(fullInclude)
+                        }
+                    }
                 }
             }
         } catch (ex Exception) when ex is IOException || ex is XmlException || ex is UnauthorizedAccessException {
@@ -688,8 +838,81 @@ shared class CSharpProjectLoader {
         return paths
     }
 
-    private func ReadDeclaredTargetPaths(projectPath string) HashSet[string] {
+    private func CollectActiveItemGroups(container XElement, configuration string?, activeGroups List[XElement]) {
+        for child in container.Elements() {
+            if child.Name.LocalName.Equals("ItemGroup", StringComparison.OrdinalIgnoreCase) {
+                if EvaluateSimpleMsbuildCondition(child.Attribute(XName?("Condition")!!)?.Value, configuration) {
+                    activeGroups.Add(child)
+                }
+            } else if child.Name.LocalName.Equals("Choose", StringComparison.OrdinalIgnoreCase) {
+                var matchedBranch = false
+                for branch in child.Elements() {
+                    if branch.Name.LocalName.Equals("When", StringComparison.OrdinalIgnoreCase) {
+                        if !matchedBranch &&
+                            EvaluateSimpleMsbuildCondition(
+                            branch.Attribute(XName?("Condition")!!)?.Value,
+                            configuration
+                        ) {
+                            matchedBranch = true
+                            CollectActiveItemGroups(branch, configuration, activeGroups)
+                        }
+                    } else if branch.Name.LocalName.Equals("Otherwise", StringComparison.OrdinalIgnoreCase) {
+                        if !matchedBranch {
+                            matchedBranch = true
+                            CollectActiveItemGroups(branch, configuration, activeGroups)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func EvaluateSimpleMsbuildCondition(condition string?, configuration string?) bool {
+        if string.IsNullOrWhiteSpace(condition) {
+            return true
+        }
+        let effectiveConfig = if string.IsNullOrWhiteSpace(configuration) {
+            "Debug"
+        } else {
+            configuration?.Trim() ?? "Debug"
+        }
+        let expanded = condition
+            .Trim()
+            .Replace("$$(Configuration)", effectiveConfig, StringComparison.OrdinalIgnoreCase)
+            .Replace("'", string.Empty, StringComparison.Ordinal)
+            .Trim()
+        if string.Equals(expanded, "true", StringComparison.OrdinalIgnoreCase) {
+            return true
+        }
+        if string.Equals(expanded, "false", StringComparison.OrdinalIgnoreCase) {
+            return false
+        }
+        let neqIndex = expanded.IndexOf("!=", StringComparison.Ordinal)
+        if neqIndex >= 0 {
+            let left = expanded.Substring(0, neqIndex).Trim()
+            let right = expanded.Substring(neqIndex + 2).Trim()
+            if !left.Contains("$$(", StringComparison.Ordinal) && !right.Contains("$$(", StringComparison.Ordinal) {
+                return !string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+            }
+            return false
+        }
+        let eqIndex = expanded.IndexOf("==", StringComparison.Ordinal)
+        if eqIndex >= 0 {
+            let left = expanded.Substring(0, eqIndex).Trim()
+            let right = expanded.Substring(eqIndex + 2).Trim()
+            if !left.Contains("$$(", StringComparison.Ordinal) && !right.Contains("$$(", StringComparison.Ordinal) {
+                return string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+            }
+            return false
+        }
+        return false
+    }
+
+    private func ReadDeclaredTargetPaths(projectPath string, configuration string? = nil) HashSet[string] {
         let paths = HashSet[string](StringComparer.OrdinalIgnoreCase)
+        for activeRef in ReadActiveProjectReferencePaths(projectPath, configuration) {
+            paths.Add(activeRef)
+        }
         if string.IsNullOrEmpty(projectPath) || !File.Exists(projectPath) {
             return paths
         }
@@ -699,20 +922,13 @@ shared class CSharpProjectLoader {
         }
         try {
             let document = XDocument.Load(projectPath)
-            for element in document.Descendants() {
-                var rawPath string? = nil
-                if element.Name.LocalName.Equals("ProjectReference", StringComparison.OrdinalIgnoreCase) {
-                    if !string.IsNullOrWhiteSpace(element.Attribute(XName?("Condition")!!)?.Value) ||
-                        !string.IsNullOrWhiteSpace(element.Parent?.Attribute(XName?("Condition")!!)?.Value) {
-                        continue
-                    }
-                    rawPath = element.Attribute(XName?("Include")!!)?.Value
-                } else if element.Name.LocalName.Equals("Import", StringComparison.OrdinalIgnoreCase) {
-                    if !string.IsNullOrWhiteSpace(element.Attribute(XName?("Condition")!!)?.Value) {
-                        continue
-                    }
-                    rawPath = element.Attribute(XName?("Project")!!)?.Value
+            for element in document.Descendants().Where(
+                (e XElement) -> e.Name.LocalName.Equals("Import", StringComparison.OrdinalIgnoreCase)
+            ) {
+                if !EvaluateSimpleMsbuildCondition(element.Attribute(XName?("Condition")!!)?.Value, configuration) {
+                    continue
                 }
+                let rawPath = element.Attribute(XName?("Project")!!)?.Value
                 if string.IsNullOrWhiteSpace(rawPath) || rawPath!!.Contains("$$(", StringComparison.Ordinal) ||
                     rawPath!!.Contains("@(", StringComparison.Ordinal) {
                     continue
