@@ -2338,11 +2338,12 @@ internal class TypeDefEmitter {
             ps ParametersEncoder,
             parameter ParameterSymbol,
             encodeTypeSymbol(SignatureTypeEncoder, TypeSymbol) -> void,
-            wellKnown WellKnownReferences
+            wellKnown WellKnownReferences,
+            importedParameter ParameterInfo? = nil
         ) {
             let paramEncoder = ps.AddParameter()
             if parameter.RefKind == RefKind.In {
-                let isReadOnlyAttrType = wellKnown.GetIsReadOnlyAttributeTypeRef()
+                let isReadOnlyAttrType = wellKnown.GetInParameterModifierTypeRef(importedParameter)
                 if !isReadOnlyAttrType.IsNil {
                     paramEncoder.CustomModifiers().AddModifier(isReadOnlyAttrType, isOptional: false)
                 }

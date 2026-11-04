@@ -1045,7 +1045,8 @@ internal class UserTokenResolver {
             }
         }
         if fn.IsInitOnlySetter {
-            let isExternalInit = this.outer.wellKnown.GetIsExternalInitTypeRef()
+            let importedSlot = MethodInfoHelpers.TryFindImportedMethodSlot(fn)
+            let isExternalInit = this.outer.wellKnown.GetInitSetterModifierTypeRef(importedSlot)
             if !isExternalInit.IsNil {
                 encoder.CustomModifiers().AddModifier(isExternalInit, isOptional: false)
             }
@@ -1072,6 +1073,12 @@ internal class UserTokenResolver {
                 1
             }
         )
+        let importedSlot = MethodInfoHelpers.TryFindImportedMethodSlot(openMethod)
+        let importedParameters = if importedSlot != nil {
+            importedSlot.GetParameters()
+        } else {
+            Array.Empty[ParameterInfo]()
+        }
         BlobEncoder(sigBlob).MethodSignature(
             isInstanceMethod: openMethod.IsInstanceMethod,
             genericParameterCount: if openMethod.TypeParameters.IsDefaultOrEmpty {
@@ -1084,16 +1091,24 @@ internal class UserTokenResolver {
             paramCount,
             (r ReturnTypeEncoder) -> this.EncodeFunctionReturnSymbol(r, openMethod),
             (ps ParametersEncoder) -> {
+                var paramIndex = 0
                 for p in emittedParameters {
                     if object.ReferenceEquals(p, openMethod.ThisParameter) {
                         continue
+                    }
+                    let importedParam = if paramIndex < importedParameters.Length {
+                        importedParameters[paramIndex]
+                    } else {
+                        default(ParameterInfo?)
                     }
                     TypeDefEmitter.EncodeParameterSignature(
                         ps,
                         p,
                         this.signatures.EncodeTypeSymbol,
-                        this.outer.wellKnown
+                        this.outer.wellKnown,
+                        importedParam
                     )
+                    paramIndex++
                 }
             }
         )
@@ -1522,12 +1537,18 @@ internal class UserTokenResolver {
         // type has no `this` — the MemberRef signature must NOT set HASTHIS, or
         // the runtime fails to bind the accessor (MissingMethodException).
         let isInstanceAccessor = !property.IsStatic
+        let (importedGetter, importedSetter) = MethodInfoHelpers.TryFindImportedPropertySlots(nil, property)
         if wantSetter {
+            let importedSetterParams = if importedSetter != nil {
+                importedSetter.GetParameters()
+            } else {
+                Array.Empty[ParameterInfo]()
+            }
             BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: isInstanceAccessor).Parameters(
                 indexParams.Length + 1,
                 (r ReturnTypeEncoder) -> {
                     if property.IsInitOnly {
-                        let isExternalInit = this.outer.wellKnown.GetIsExternalInitTypeRef()
+                        let isExternalInit = this.outer.wellKnown.GetInitSetterModifierTypeRef(importedSetter)
                         if !isExternalInit.IsNil {
                             r.CustomModifiers().AddModifier(isExternalInit, isOptional: false)
                         }
@@ -1535,28 +1556,43 @@ internal class UserTokenResolver {
                     r.Void()
                 },
                 (ps ParametersEncoder) -> {
-                    for p in indexParams {
+                    for var i = 0; i < indexParams.Length; i++ {
                         TypeDefEmitter.EncodeParameterSignature(
                             ps,
-                            p,
+                            indexParams[i],
                             this.signatures.EncodeTypeSymbol,
-                            this.outer.wellKnown
+                            this.outer.wellKnown,
+                            if i < importedSetterParams.Length {
+                                importedSetterParams[i]
+                            } else {
+                                default(ParameterInfo?)
+                            }
                         )
                     }
                     this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(), property.Type)
                 }
             )
         } else {
+            let importedGetterParams = if importedGetter != nil {
+                importedGetter.GetParameters()
+            } else {
+                Array.Empty[ParameterInfo]()
+            }
             BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: isInstanceAccessor).Parameters(
                 indexParams.Length,
                 (r ReturnTypeEncoder) -> this.signatures.EncodeReturnSymbol(r, property.Type, property.ReturnRefKind),
                 (ps ParametersEncoder) -> {
-                    for p in indexParams {
+                    for var i = 0; i < indexParams.Length; i++ {
                         TypeDefEmitter.EncodeParameterSignature(
                             ps,
-                            p,
+                            indexParams[i],
                             this.signatures.EncodeTypeSymbol,
-                            this.outer.wellKnown
+                            this.outer.wellKnown,
+                            if i < importedGetterParams.Length {
+                                importedGetterParams[i]
+                            } else {
+                                default(ParameterInfo?)
+                            }
                         )
                     }
                 }

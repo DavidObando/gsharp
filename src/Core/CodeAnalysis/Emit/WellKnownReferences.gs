@@ -334,6 +334,22 @@ internal class WellKnownReferences {
         return typeRef
     }
 
+    /// Issue #4993: returns the `modreq` handle for an `in` parameter signature.
+    /// When the parameter overrides an imported base slot or implements an imported
+    /// interface slot, preserves that slot parameter's required modifier (`IsReadOnlyAttribute`
+    /// or `InAttribute`) so downlevel embedded modifier types match the slot signature.
+    func GetInParameterModifierTypeRef(importedParameter ParameterInfo? = nil) EntityHandle {
+        if importedParameter != nil {
+            for modType in importedParameter.GetRequiredCustomModifiers() {
+                if modType.FullName is "System.Runtime.CompilerServices.IsReadOnlyAttribute" or
+                    "System.Runtime.InteropServices.InAttribute" {
+                    return EntityHandle(this.getTypeReference(modType))
+                }
+            }
+        }
+        return this.GetIsReadOnlyAttributeTypeRef()
+    }
+
     func GetInAttributeTypeRef() EntityHandle {
         let attrType = if this
             .emitCtx
@@ -374,6 +390,21 @@ internal class WellKnownReferences {
         let typeRef = EntityHandle(this.getTypeReference(attrType!!))
         this.isExternalInitTypeRef = typeRef
         return typeRef
+    }
+
+    /// Issue #4993: returns the `modreq` handle for an `init`-only setter return signature.
+    /// When the setter overrides an imported base slot or implements an imported interface
+    /// slot, preserves that slot return parameter's `IsExternalInit` modifier so downlevel
+    /// embedded modifier types match the slot signature.
+    func GetInitSetterModifierTypeRef(importedSetter MethodInfo? = nil) EntityHandle {
+        if importedSetter != nil {
+            for modType in importedSetter.ReturnParameter.GetRequiredCustomModifiers() {
+                if modType.FullName == "System.Runtime.CompilerServices.IsExternalInit" {
+                    return EntityHandle(this.getTypeReference(modType))
+                }
+            }
+        }
+        return this.GetIsExternalInitTypeRef()
     }
 
     func GetIsReadOnlyAttributeCtorRef() EntityHandle {

@@ -576,6 +576,140 @@ public class Box {
         }
     }
 
+    /// Issue #4993 review: when a `netstandard2.0` consumer implements an interface or
+    /// overrides an abstract base declared in another `netstandard2.0` assembly, the
+    /// consumer's emitted `in` parameter and `init` setter `modreq` tokens match the
+    /// imported slot's embedded modifier types so CLR slot matching and dispatch succeed.
+    @Fact
+    func Issue4993_CrossAssemblyInterfaceAndBaseOverride_PreservesImportedModifiersAndDispatches() {
+        let netstandard string? = FindNetStandardReference()
+        Assert.True(netstandard != nil, "could not locate a netstandard.dll reference assembly")
+        let tempDir = Directory.CreateTempSubdirectory("gs_4993_xasm_").FullName
+        try {
+            let contractPath = Path.Combine(tempDir, "ContractLib.dll")
+            CompileOrThrow("ContractLib", `
+package ContractLib
+
+public interface IReader {
+    func Read(in x int32) int32;
+    prop this[in i int32] int32 { get; }
+}
+
+public abstract class BaseInit {
+    public abstract prop Tag string? { get; init; }
+    public open func Borrow(in x int32) ref readonly int32;
+}
+`, contractPath, tempDir, netstandard!!)
+
+            let implSrcPath = Path.Combine(tempDir, "ImplLib.gs")
+            let implPath = Path.Combine(tempDir, "ImplLib.dll")
+            File.WriteAllText(implSrcPath, `
+package ImplLib
+
+import ContractLib
+
+public class Impl : BaseInit, IReader {
+    private var slot int32 = 10
+    public override prop Tag string? { get; init; }
+    public func Read(in x int32) int32 -> x + this.slot
+    public prop this[in i int32] int32 {
+        get -> i * 2 + this.slot
+    }
+    public override func Borrow(in x int32) ref readonly int32 {
+        this.slot = x + 5
+        return ref this.slot
+    }
+}
+`)
+            {
+                using let compileOut = StringWriter()
+                using let compileErr = StringWriter()
+                let prevOut = Console.Out
+                let prevErr = Console.Error
+                Console.SetOut(compileOut)
+                Console.SetError(compileErr)
+                var implExit int32
+                try {
+                    implExit = Program.Main(
+                        []string{
+                            "/out:" + implPath,
+                            "/target:library",
+                            "/targetframework:netstandard2.0",
+                            "/reference:" + netstandard!!,
+                            "/reference:" + contractPath,
+                            implSrcPath
+                        }
+                    )
+                } finally {
+                    Console.SetOut(prevOut)
+                    Console.SetError(prevErr)
+                }
+                Assert.True(implExit == 0, "ImplLib failed to compile:\n$compileOut\n$compileErr")
+            }
+
+            let appSrcPath = Path.Combine(tempDir, "App.gs")
+            let appPath = Path.Combine(tempDir, "App.dll")
+            File.WriteAllText(appSrcPath, `
+import System
+import ContractLib
+import ImplLib
+
+let impl = Impl{ Tag: "configured" }
+let reader IReader = impl
+let baseInit BaseInit = impl
+let k = 7
+let r1 = reader.Read(in k)
+let r2 = reader[in k]
+let r3 = baseInit.Borrow(in k)
+Console.WriteLine("${baseInit.Tag} $r1 $r2 $r3")
+`)
+            {
+                let args = List[string]{
+                    "/out:" + appPath,
+                    "/target:exe",
+                    "/targetframework:net10.0",
+                    "/reference:" + contractPath,
+                    "/reference:" + implPath
+                }
+                for reference in TrustedPlatformAssemblies() {
+                    args.Add("/reference:" + reference)
+                }
+                args.Add(appSrcPath)
+                using let compileOut = StringWriter()
+                using let compileErr = StringWriter()
+                let prevOut = Console.Out
+                let prevErr = Console.Error
+                Console.SetOut(compileOut)
+                Console.SetError(compileErr)
+                var appExit int32
+                try {
+                    appExit = Program.Main(args.ToArray())
+                } finally {
+                    Console.SetOut(prevOut)
+                    Console.SetError(prevErr)
+                }
+                Assert.True(appExit == 0, "App failed to compile:\n$compileOut\n$compileErr")
+            }
+
+            let psi = System
+                .Diagnostics
+                .ProcessStartInfo("dotnet", "\"$appPath\""){
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                WorkingDirectory = tempDir
+            }
+            using let proc = System.Diagnostics.Process.Start(psi)!!
+            let stdout = proc.StandardOutput.ReadToEnd()
+            let stderr = proc.StandardError.ReadToEnd()
+            proc.WaitForExit()
+            Assert.True(proc.ExitCode == 0, "App failed at runtime ($stderr):\n$stdout")
+            Assert.Equal("configured 17 24 12" + Environment.NewLine, stdout)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         private const UserAppliedContextSource string = `
 package Lib
