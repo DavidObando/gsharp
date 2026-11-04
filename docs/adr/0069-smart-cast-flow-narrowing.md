@@ -204,17 +204,28 @@ safe (they decline to narrow rather than narrowing unsoundly):
 
 - A *bare variable* receiver is accepted even when its root is a mutable
   global, which `SmartCastStability.IsStableRoot` would reject. This matches
-  the long-standing behaviour of every if-condition narrowing classifier: the
-  if-statement path has flow-based mutation invalidation, so a later assignment
-  clears the fact. The stricter `IsStableRoot` test applies to *member paths*,
-  whose links have no such per-assignment tracking, and to the `&&`/`||`
-  short-circuit classifier, which has no invalidation pass at all.
-- Member-path narrowing is confined to the guarded branch. The issue #2159
-  early-exit/join pass deliberately lifts only plain variables past an early
-  `return`, so after `if x.Values.IsNullOrEmpty() { return }` the member path
-  is *not* narrowed at the join. Lifting member paths would require the join
-  pass to model member invalidation across the merge; until then the
-  conservative result stands.
+  the long-standing behaviour of every if-condition nil-guard and
+  `[NotNullWhen]` classifier: the if-statement path has flow-based mutation
+  invalidation, so a later assignment, a call or operation that can run user
+  code ([ADR-0208](0208-narrowing-as-flow-state-with-a-query.md) row R11), or a
+  suspension point (row R13) clears the fact on a mutable global. The stricter
+  `IsStableRoot` test applies to *member paths*, whose links have no such
+  per-assignment tracking, and the `&&`/`||` short-circuit operand classifier
+  restricts bare-variable nil guards to locals and parameters.
+- Under the legacy early-exit pass (`ApplyEarlyExitNarrowings` followed by
+  `InvalidateNarrowingsForAssignedVariables`, plus `ApplyIfJoinNarrowings` from
+  issue #2159), call-free `is` / `!is` / `== nil` early exits (`if b.Pet !is Dog { return }`,
+  `if b.Name == nil { return }`, probe `e7`) lift both plain variables and
+  stable member paths, whereas for `[NotNullWhen]` predicate calls the call in
+  the condition clears member-bearing paths from the frame stack so only plain
+  variables survive that pass. **Superseded by
+  [ADR-0208](0208-narrowing-as-flow-state-with-a-query.md) row R5:** the
+  branch-exit join (`ApplyJoinExitNarrowings`) lifts both plain variables and
+  stable member paths — including `[NotNullWhen]`-derived member-path facts such
+  as `if x.Values.IsNullOrEmpty() { return }` (probe `e21`) — when the function
+  contains no user label or `goto` (until row R6), the root cannot be replaced
+  by user code in the statement (`o1`–`o7`), and the surviving branch does not
+  mutate member paths.
 
 For source compatibility with established G# libraries, an unannotated
 extension named exactly `IsNullOrEmpty` is treated as
@@ -284,14 +295,13 @@ For `switch x { case <pattern>: <body> default: <body> }`:
 
 #### Stable narrowable receivers
 
-The original ADR restricted narrowing to `LocalVariableSymbol` and `ParameterSymbol`. This addendum extends that allow-list (consistently across both `is`-narrowing and switch-pattern narrowing) to include read-only `GlobalVariableSymbol` (top-level `let` bindings). The rationale is the same as for `let` locals: an immutable binding cannot be reassigned between the test and the use, so the narrowing is sound. Mutable globals (`var` at file scope) are still excluded.
+The original ADR restricted narrowing to `LocalVariableSymbol` and `ParameterSymbol`. In the implementation (`StatementBinder.Conditionals.gs`, `ExpressionBinder.gs`, `SmartCastStability.gs`), top-level globals (`GlobalVariableSymbol`) participate as follows:
 
-In summary, narrowing applies when the receiver is one of:
+- **`switch` discriminator pattern narrowing and stable member-path roots:** `StatementBinder.TryClassifyPatternNarrowing` (with its default `allowReadOnlyGlobals: true`) and `SmartCastStability.IsStableRoot` (issue #1180 addendum below) extend the `LocalVariableSymbol` / `ParameterSymbol` allow-list to include read-only `GlobalVariableSymbol` (top-level `let` bindings).
+- **Bare `is` / `!is` type tests:** `StatementBinder.TryClassifyTypeTestNarrowing` and `ExpressionBinder.ClassifyTypeTestNarrowing` pass `allowReadOnlyGlobals: false`, so bare-variable `is` / `!is` narrowing applies only to `LocalVariableSymbol` (which includes `ParameterSymbol`). A bare top-level `let` or `var` does **not** narrow on `is` / `!is` type tests (pinned by `Issue700SmartCastBinderTests.If_IsTest_OnGlobalVariable_DoesNotNarrow` and [ADR-0208](0208-narrowing-as-flow-state-with-a-query.md) corpus row `e20`), although a stable member path rooted at a read-only top-level `let` (`b.Pet`) narrows through `SmartCastStability.TryGetStableMemberPath`.
+- **Nullability narrowing (`== nil` / `!= nil`, `[NotNullWhen]`, and non-null assignment):** `StatementBinder.TryClassifyNilGuard`, `ExpressionBinder.ClassifyConditionalNarrowing`, and `StatementBinder.TryClassifyBoolCallNarrowing` accept bare top-level `let` and `var` globals, and `StatementBinder.TryClassifyNonNullAssignment` narrows a mutable top-level `var` on a non-null reference assignment. A narrowing on a mutable top-level `var` is invalidated by reassignment, by any call or operation that can run user code ([ADR-0208](0208-narrowing-as-flow-state-with-a-query.md) rows R11, R14, R16, R17, R19), or by a suspension point (`await` / `yield`, row R13). In `&&` / `||` right-operand short-circuit threading (`ExpressionBinder.ClassifyTypeTestNarrowing`), bare-variable nil guards remain restricted to locals and parameters (`restrictBareVariableToLocalsAndParams: true`).
 
-- A `LocalVariableSymbol` (`let` or `var` local — `var` is invalidated on assignment), which includes `ParameterSymbol` as a subclass.
-- A read-only `GlobalVariableSymbol` (top-level `let`).
-
-Mutable receivers (`var` globals, fields, properties, indexed expressions) remain excluded — they may change between the test and the use.
+Mutable member and indexed receivers (`var` fields, settable/computed/overridable properties, indexed expressions) remain excluded — they may change between the test and the use.
 
 ### Implementation notes (addendum)
 
@@ -376,12 +386,14 @@ These predicates live in `SmartCastStability`; the path key is `AccessPath` (a r
 A member-path narrowing is conservatively dropped when anything in scope could change it:
 
 - **Root reassignment** — any path rooted at a reassigned variable is invalidated (as before for locals).
-- **Intervening call** — any statement containing a call invalidates *all* member-bearing paths, because a method could mutate reachable state. (Local-only narrowings are unaffected.)
+- **Intervening call or user-code operation** — any operation that can run user code invalidates *all* member-bearing paths, because user code could mutate reachable state ([ADR-0208](0208-narrowing-as-flow-state-with-a-query.md) rows R14, R16, R17, R18, R19: calls, non-auto getters, `open` or `override` auto-properties on receivers whose type can have a subclass or through an interface, unlisted CLR property/indexer accesses, iteration/disposal, type-initializer triggers, and pattern tests that call user `Equals` or unlisted list-pattern accessors, with condition effects applied before branches).
 - **Member / indexed / indirect assignment** — invalidates all member-bearing paths.
 
-This is intentionally stricter than Kotlin (which keeps `val`-member casts across benign calls), but it satisfies the issue's explicit "intervening call invalidates" requirement and is trivially sound. Local-root narrowings retain their previous, more precise invalidation behavior.
+This is intentionally stricter than Kotlin (which keeps `val`-member casts across benign calls), but it satisfies the issue's explicit "intervening call invalidates" requirement and is trivially sound. Plain local-root narrowings retain their more precise invalidation behavior (with closure-assigned locals invalidated by calls or operations that can run source code under [ADR-0208](0208-narrowing-as-flow-state-with-a-query.md) row R15, and by suspension points under row R13).
 
-### Loop back-edges (issue #2943)
+### Loop back-edges (issue #2943; updated by ADR-0213 slice L1)
+
+> **Updated by [ADR-0213](0213-narrowing-across-loops-and-backward-jumps.md) slice L1 (#5459):** Loops now compute the syntactic region lower bound `Lower(S, R)` (`RegionEffectScanner`) before binding the loop header and body once. The speculative second bind (`BindLoopBody` snapshot/restore), the exit-path write exemption below (ADR-0213 row R7 (a)), and the variable/callee return non-null proof below (row R7 (b)) are superseded; `T{}` struct literals preserve a type-test fact like `T()` does (row R7 (d)), a reassignment from a type-pattern variable bound inside the loop preserves the narrowing where that variable is in scope, and a `break`-free `while`, `for`, or `do` loop joins the condition's false state on exit (row R7 (f)). See [ADR-0213](0213-narrowing-across-loops-and-backward-jumps.md) sections 6–9 and 16 for the current loop rules.
 
 A narrowing inherited from outside a loop is invalidated before the body and
 repeated header when an assignment or member-path mutation can reach that loop's back-edge. This
