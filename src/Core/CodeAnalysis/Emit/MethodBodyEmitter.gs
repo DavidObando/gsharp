@@ -1319,8 +1319,11 @@ internal partial class MethodBodyEmitter {
             if elementType == TypeSymbol.Object {
                 return true
             }
+            if elementType is PointerTypeSymbol || elementType is FunctionPointerTypeSymbol {
+                return false
+            }
             let clr Type? = elementType?.ClrType
-            return clr != nil && !clr.IsValueType && !clr.IsGenericParameter
+            return clr != nil && !clr.IsValueType && !clr.IsPointer && !clr.IsByRef && !clr.IsGenericParameter
         }
 
         // Issue #420 (P3-4): debug-only check used by EmitFieldAssignment to

@@ -290,6 +290,30 @@ internal class SignatureEncoder {
             for arg in constructedImported.TypeArguments {
                 this.EncodeTypeSymbol(genericInst.AddArgument(), arg)
             }
+        } else if type is ImportedTypeSymbol arrayImported &&
+            !arrayImported
+            .TypeArguments
+            .IsDefaultOrEmpty &&
+            arrayImported
+            .TypeArguments
+            .Length == 1 &&
+            arrayImported.ClrType is {IsArray: true} arrayClr {
+            if arrayClr.IsSZArray {
+                this.EncodeTypeSymbol(encoder.SZArray(), arrayImported.TypeArguments[0])
+            } else {
+                encoder.Array(out var elementEncoder, out var shapeEncoder)
+                this.EncodeTypeSymbol(elementEncoder, arrayImported.TypeArguments[0])
+                let rank = arrayClr.GetArrayRank()
+                shapeEncoder.Shape(
+                    rank,
+                    ImmutableArray[int32].Empty,
+                    if rank == 1 {
+                        ImmutableArray[int32].Empty
+                    } else {
+                        Enumerable.Repeat(0, rank).ToImmutableArray()
+                    }
+                )
+            }
         } else if type is ArrayTypeSymbol arr {
             EncodeTypeSymbol(encoder.SZArray(), arr.ElementType)
         } else if type is RectangularArrayTypeSymbol rectangular {
@@ -695,7 +719,7 @@ internal class SignatureEncoder {
                     }
                     break
                 }
-                if type.IsArray && type.GetArrayRank() == 1 {
+                if type.IsSZArray {
                     EncodeClrType(encoder.SZArray(), type.GetElementType()!!)
                     break
                 }
@@ -703,10 +727,15 @@ internal class SignatureEncoder {
                     encoder.Array(out var elementEncoder, out var shapeEncoder)
                     // IsArray check above establishes a non-null reflection element type.
                     EncodeClrType(elementEncoder, type.GetElementType()!!)
+                    let rank = type.GetArrayRank()
                     shapeEncoder.Shape(
-                        type.GetArrayRank(),
+                        rank,
                         ImmutableArray[int32].Empty,
-                        Enumerable.Repeat(0, type.GetArrayRank()).ToImmutableArray()
+                        if rank == 1 {
+                            ImmutableArray[int32].Empty
+                        } else {
+                            Enumerable.Repeat(0, rank).ToImmutableArray()
+                        }
                     )
                     break
                 }
