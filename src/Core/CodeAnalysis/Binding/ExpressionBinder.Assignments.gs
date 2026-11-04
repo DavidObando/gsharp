@@ -67,7 +67,8 @@ internal partial class ExpressionBinder {
             // ADR-0156 Phase 2: a bare write to a top-level global declared by
             // a prior interactive submission stores to the static field on
             // that submission's <Program> container (newest submission first).
-            if TryBindSubmissionStaticFieldWrite(
+            if SubmissionBinding.TryBindStaticFieldWrite(
+                this,
                 name,
                 syntax.Expression,
                 syntax.EqualsToken.Location,
@@ -439,18 +440,6 @@ internal partial class ExpressionBinder {
                 !ReceiverTypeIsReference(bve.Variable.Type)
         ) ||
             RefCapabilities.IsReadOnlyValueReference(receiver)
-    }
-
-    /// ADR-0156 Phase 2 (issue #3185): classification of a member-write
-    /// receiver whose chain bottoms out at a prior interactive submission's
-    /// top-level global (an addressable static field on that submission's
-    /// `<Program>` container). `None` for every other shape,
-    /// so non-REPL binding behavior is unchanged.
-    private enum SubmissionWriteReceiverKind {
-        None,
-        Addressable,
-        ReadOnlyRoot,
-        NotAddressable
     }
 
     /// Issue #4224 (root cause #5): when an instance property has no setter
@@ -1001,7 +990,7 @@ internal partial class ExpressionBinder {
         // Consulted before the imported-class probe so a prior cell's global
         // shadows a same-named imported type, mirroring the read fallback's
         // ordering in BindAccessorExpression.
-        if TryBindSubmissionGlobalMemberAssignment(syntax, out var submissionMemberWrite) &&
+        if SubmissionBinding.TryBindGlobalMemberAssignment(this, syntax, out var submissionMemberWrite) &&
             submissionMemberWrite is {} resolvedSubmissionMemberWrite {
             return resolvedSubmissionMemberWrite
         }
@@ -1799,7 +1788,7 @@ internal partial class ExpressionBinder {
             // top-level global declared by a prior interactive submission
             // reads and stores the static field on that submission's
             // <Program> container (newest submission first).
-            if TryBindSubmissionStaticFieldCompound(name, bareName, syntax, out var submissionCompound) &&
+            if SubmissionBinding.TryBindStaticFieldCompound(this, name, bareName, syntax, out var submissionCompound) &&
                 submissionCompound is {} resolvedSubmissionCompound {
                 return resolvedSubmissionCompound
             }
@@ -2846,7 +2835,12 @@ internal partial class ExpressionBinder {
         // prior-cell submission global (`p.X += v`, `a.B.C *= v`) enforces
         // the read-only root and addressable-chain rules; non-submission
         // receivers are untouched.
-        if ReportSubmissionGlobalMemberWriteBlocked(boundReceiver, memberName, syntax.OperatorToken.Location) {
+        if SubmissionBinding.ReportGlobalMemberWriteBlocked(
+            this,
+            boundReceiver,
+            memberName,
+            syntax.OperatorToken.Location
+        ) {
             return BoundErrorExpression(syntax)
         }
         let boundRhs = BindExpression(syntax.Value)
@@ -3616,7 +3610,7 @@ internal partial class ExpressionBinder {
             // (read, whole-variable write, compound `name[i] op= v` via the
             // chain path) already consults the submission fallback; without
             // this the shape reports a spurious GS0125.
-            if TryBindSubmissionGlobalIndexAssignment(syntax, out var submissionIndexWrite) &&
+            if SubmissionBinding.TryBindGlobalIndexAssignment(this, syntax, out var submissionIndexWrite) &&
                 submissionIndexWrite is {} resolvedSubmissionIndexWrite {
                 return resolvedSubmissionIndexWrite
             }
@@ -4327,7 +4321,12 @@ internal partial class ExpressionBinder {
             // prior-cell submission global (`a.B.C = v`) enforces the
             // read-only root and addressable-chain rules; non-submission
             // receivers are untouched.
-            if ReportSubmissionGlobalMemberWriteBlocked(receiver, fieldName, syntax.EqualsToken.Location) {
+            if SubmissionBinding.ReportGlobalMemberWriteBlocked(
+                this,
+                receiver,
+                fieldName,
+                syntax.EqualsToken.Location
+            ) {
                 return BoundErrorExpression(syntax)
             }
             let instConverted = conversions.BindConversion(
@@ -4991,355 +4990,6 @@ internal partial class ExpressionBinder {
         return true
     }
 
-    /// ADR-0156 Phase 2: binds a bare simple write (`name = value`) to a
-    /// top-level global declared by a prior interactive submission as a store
-    /// to the static field on that submission's `<Program>`
-    /// container, newest submission first. Read-only (`let`) globals —
-    /// known from the submission's source-side scope, since the emitted field
-    /// intentionally omits `InitOnly` — report GS0203.
-    /// @param name The bare identifier being assigned.
-    /// @param valueSyntax The right-hand-side expression syntax.
-    /// @param operatorLocation The assignment operator's location for diagnostics.
-    /// @param result The bound assignment, when the name matched a prior submission's global.
-    /// @returns `true` when a prior submission declared the global.
-    private func TryBindSubmissionStaticFieldWrite(
-        name string,
-        valueSyntax ExpressionSyntax,
-        operatorLocation TextLocation,
-        out result BoundExpression?
-    ) bool {
-        result = nil
-        let submissionImports SubmissionImports? = $scope.SubmissionImports
-        if submissionImports == nil || !submissionImports.TryFindGlobalVariable(
-            $scope.References!!,
-            name,
-            out var programType,
-            out var declared
-        ) ||
-            programType is not{} resolvedProgramType ||
-            declared is not{} resolvedDeclared {
-            return false
-        }
-        let classSymbol = ImportedClassSymbol(resolvedProgramType, declaration: nil, references: $scope.References)
-        if !classSymbol.TryLookupMember(name, ne: nil, out var member) ||
-            !TryGetWritableClrMember(member, out _, out var targetSymbol, out _) {
-            Diagnostics.ReportCannotAssign(operatorLocation, name)
-            result = BoundErrorExpression(nil)
-            return true
-        }
-        if resolvedDeclared.IsReadOnly {
-            Diagnostics.ReportCannotAssign(operatorLocation, name)
-        }
-        // Issue #3308: the writable-member probe reports the field's CLR
-        // projection; reverse-project magic wrapper kinds (chan/slice/fixed
-        // array) so the RHS converts against the same symbolic type the
-        // declaring cell assigned under (e.g. `ch = make(chan int32, 2)`).
-        if member is FieldInfo globalField {
-            targetSymbol = SubmissionGlobalTypeProjection.ReverseProject(
-                targetSymbol!!,
-                globalField.FieldType,
-                resolvedDeclared.Type,
-                $scope.References!!
-            )
-        }
-        let value = BindAssignmentRhs(valueSyntax, targetSymbol)
-        let converted = conversions.BindConversion(valueSyntax.Location, value, targetSymbol)
-        result = BoundClrPropertyAssignmentExpression(
-            nil,
-            receiver: nil,
-            member!!,
-            converted,
-            targetSymbol!!,
-            staticContainerType: nil
-        )
-        return true
-    }
-
-    /// ADR-0156 Phase 2: binds a bare compound write (`name op= value`)
-    /// to a top-level global declared by a prior interactive submission as a
-    /// read-modify-store of the static field on that submission's
-    /// `<Program>` container, newest submission first.
-    /// @param name The bare identifier being assigned.
-    /// @param bareName The identifier's name-expression syntax (for the read half).
-    /// @param syntax The compound assignment syntax.
-    /// @param result The bound assignment, when the name matched a prior submission's global.
-    /// @returns `true` when a prior submission declared the global.
-    private func TryBindSubmissionStaticFieldCompound(
-        name string,
-        bareName NameExpressionSyntax,
-        syntax EventSubscriptionExpressionSyntax,
-        out result BoundExpression?
-    ) bool {
-        result = nil
-        let submissionImports SubmissionImports? = $scope.SubmissionImports
-        if submissionImports == nil || !submissionImports.TryFindGlobalVariable(
-            $scope.References!!,
-            name,
-            out var programType,
-            out var declared
-        ) ||
-            programType is not{} resolvedProgramType ||
-            declared is not{} resolvedDeclared {
-            return false
-        }
-        let classSymbol = ImportedClassSymbol(resolvedProgramType, declaration: nil, references: $scope.References)
-        if !classSymbol.TryLookupMember(name, ne: nil, out var member) ||
-            !TryGetWritableClrMember(member, out _, out var targetSymbol, out _) {
-            Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name)
-            result = BoundErrorExpression(nil)
-            return true
-        }
-        if resolvedDeclared.IsReadOnly {
-            Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name)
-        }
-        // Read half: bind the same bare name through the submission member
-        // read fallback so the leftExpr is the field load.
-        if !TryBindSubmissionStaticMember(bareName, out var boundLeft) {
-            return false
-        }
-        let compoundTarget = boundLeft!!
-        var leftExpr = compoundTarget
-        let previousValue = CapturePostfixCompoundValue(
-            syntax.ReturnsPreviousValue,
-            syntax,
-            &leftExpr,
-            out var previousDeclaration
-        )
-        let boundRhs = BindExpression(syntax.Value)
-        SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var baseOpSyntaxKind)
-        let userCompound BoundExpression? = TryBindUserCompoundAssignmentOperator(
-            syntax.OperatorToken.Kind,
-            compoundTarget,
-            boundRhs,
-            syntax.Value.Location
-        )
-        if userCompound != nil {
-            result = FinishUserCompoundIncrement(
-                syntax,
-                compoundTarget,
-                userCompound,
-                previousDeclaration,
-                previousValue
-            )
-            return true
-        }
-        let binaryResult BoundExpression? = TryBindCompoundBinaryOperation(
-            baseOpSyntaxKind,
-            leftExpr,
-            boundRhs,
-            syntax.Value.Location
-        )
-        if binaryResult == nil {
-            Diagnostics.ReportUndefinedBinaryOperator(
-                syntax.OperatorToken.Location,
-                syntax.OperatorToken.Text,
-                leftExpr.Type,
-                boundRhs.Type
-            )
-            result = BoundErrorExpression(nil)
-            return true
-        }
-        let converted = conversions.BindConversion(syntax.Value.Location, binaryResult, targetSymbol)
-        let assignment = BoundClrPropertyAssignmentExpression(
-            nil,
-            receiver: nil,
-            member!!,
-            converted,
-            targetSymbol!!,
-            staticContainerType: nil
-        )
-        result = FinishPostfixCompoundAssignment(syntax, previousDeclaration, previousValue, assignment)
-        return true
-    }
-
-    /// ADR-0156 Phase 2 (issue #3251): binds a bare indexed write
-    /// (`name[i] = v`) whose target is a top-level global declared by a
-    /// prior interactive submission. The receiver is bound through the shared
-    /// bare-identifier read fallback ((cref:TryBindSubmissionStaticMember),
-    /// which applies the issue #3185 addressable-static-field marking) into a
-    /// synthesized temp local, then the ordinary indexed write targets the
-    /// temp — for a map / array / slice global the temp holds the reference,
-    /// so the store mutates the stored global. This is the same
-    /// temp-receiver shape the compound chain path
-    /// (`BindIndexedWriteThroughChain`) and the same-cell static-field
-    /// path ((cref:ImplicitStaticFieldVariableSymbol)) already use, so
-    /// simple and compound indexed writes stay in lockstep.
-    /// @param syntax The `name[index] = value` assignment syntax.
-    /// @param result The bound assignment when the target named a prior submission's global.
-    /// @returns `true` when a prior submission declared the global (and the current cell does not shadow
-    /// it).
-    private func TryBindSubmissionGlobalIndexAssignment(
-        syntax IndexAssignmentExpressionSyntax,
-        out result BoundExpression?
-    ) bool {
-        result = nil
-        let submissionImports SubmissionImports? = $scope.SubmissionImports
-        let name = syntax.TargetIdentifier.ValueText
-        if submissionImports == nil || !submissionImports.TryFindGlobalVariable(
-            $scope.References!!,
-            name,
-            out _,
-            out _
-        ) {
-            return false
-        }
-        // The current cell's own declarations shadow prior cells (newest
-        // declaration wins regardless of kind): when the name resolves to any
-        // same-cell symbol, keep the regular path's diagnostics.
-        if $scope.TryLookupSymbol(name) != nil {
-            return false
-        }
-        let nameSyntax = NameExpressionSyntax(syntax.SyntaxTree, syntax.TargetIdentifier)
-        if !TryBindSubmissionStaticMember(nameSyntax, out var receiver) ||
-            receiver is BoundErrorExpression ||
-            receiver!!.Type == TypeSymbol.Error {
-            return false
-        }
-        let tempName = "<idxAsn${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
-        let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, receiver!!.Type)
-        $scope.TryDeclareVariable(tempVar)
-        let declaration = BoundVariableDeclaration(syntax, tempVar, receiver)
-        let assignment = BindIndexedAssignmentToVariable(
-            tempVar,
-            syntax.Index,
-            syntax.Value,
-            syntax.TargetIdentifier.Location
-        )
-        if assignment is BoundErrorExpression {
-            result = assignment
-            return true
-        }
-        result = BoundBlockExpression(syntax, ImmutableArray.Create[BoundStatement](declaration), assignment)
-        return true
-    }
-
-    /// ADR-0156 Phase 2 (issue #3185): binds a member write
-    /// (`name.Member = value`) where `name` is a top-level global
-    /// declared by a prior interactive submission. The receiver is the
-    /// submission's static field marked addressable, so the emitter stores
-    /// through the field's address (`ldsflda`) for a struct-typed global
-    /// (mutating the stored global in place, mirroring the same-cell
-    /// global-variable write) and through the object reference for a
-    /// class-typed global. A read-only (`let`) value-typed global
-    /// rejects the write with the same diagnostic the local-variable rule
-    /// (issue #1132) produces.
-    /// @param syntax The `name.field = value` assignment syntax.
-    /// @param result The bound assignment when the receiver named a prior submission's global.
-    /// @returns `true` when a prior submission declared the global (and the current cell does not shadow
-    /// it).
-    private func TryBindSubmissionGlobalMemberAssignment(
-        syntax FieldAssignmentExpressionSyntax,
-        out result BoundExpression?
-    ) bool {
-        result = nil
-        let submissionImports SubmissionImports? = $scope.SubmissionImports
-        let name = syntax.Receiver.Text
-        if submissionImports == nil || !submissionImports.TryFindGlobalVariable(
-            $scope.References!!,
-            name,
-            out var programType,
-            out var declared
-        ) ||
-            programType is not{} resolvedProgramType ||
-            declared is not{} resolvedDeclared {
-            return false
-        }
-        // The current cell's own declarations shadow prior cells: when the
-        // receiver name resolves as a variable in this compilation, the
-        // regular variable path below must bind it.
-        if BindVariableReference(
-            name,
-            syntax.Receiver.Location,
-            suppressNotAVariable: true,
-            suppressUndefinedVariable: true
-        ) != nil {
-            return false
-        }
-        let container = ImportedClassSymbol(resolvedProgramType, declaration: nil, references: $scope.References)
-        if !container.TryLookupMember(name, ne: nil, out var globalMember) ||
-            globalMember is not FieldInfo globalField {
-            return false
-        }
-        let globalType = ClrNullability.GetFieldTypeSymbol(globalField)
-        if globalType?.ClrType == nil {
-            return false
-        }
-        let receiver = BoundClrPropertyAccessExpression(
-            nil,
-            receiver: nil,
-            globalField,
-            globalType,
-            isAddressableStaticField: true,
-            isReadOnlySubmissionGlobal: resolvedDeclared.IsReadOnly
-        )
-        let clrReceiverType = globalType.ClrType
-        let memberName = syntax.FieldIdentifier.ValueText
-        var instanceMember MemberInfo? = SafeGetVisibleInstanceProperty(clrReceiverType!!, memberName)
-        if instanceMember is PropertyInfo indexedProperty && indexedProperty.GetIndexParameters().Length != 0 {
-            instanceMember = nil
-        }
-        instanceMember ??= SafeGetVisibleInstanceField(clrReceiverType!!, memberName)
-        if instanceMember == nil {
-            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, memberName)
-            result = BoundErrorExpression(nil)
-            return true
-        }
-        if !TryGetWritableClrMember(instanceMember, globalType, out _, out var targetSymbol, out _) {
-            Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, memberName)
-            result = BoundErrorExpression(nil)
-            return true
-        }
-        // Issue #1132's read-only rule, mirrored for a prior-cell global: a
-        // member write through a `let` VALUE-typed global would mutate the
-        // value stored in the read-only binding — reject it. A class-typed
-        // `let` global mutates the heap object and stays writable.
-        if declared?.IsReadOnly == true && !ReceiverTypeIsReference(globalType) {
-            Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, name)
-        }
-        let value = BindAssignmentRhs(syntax.Value, targetSymbol)
-        let converted = conversions.BindConversion(syntax.Value.Location, value, targetSymbol)
-        result = BoundClrPropertyAssignmentExpression(
-            nil,
-            receiver,
-            instanceMember,
-            converted,
-            targetSymbol!!,
-            staticContainerType: nil
-        )
-        return true
-    }
-
-    /// Issue #3185: applies the gated submission-global diagnostics to a
-    /// CLR member write (simple or compound) through a possibly
-    /// submission-rooted receiver chain. Reports the read-only rejection
-    /// (report-and-continue, mirroring issue #1132's handling) or the
-    /// struct-temporary rejection (blocking — emitting it would silently
-    /// write a copy, the exact wrong-value class ADR-0156 exists to kill).
-    /// A non-submission receiver never produces a diagnostic here.
-    /// @param receiver The bound member-write receiver.
-    /// @param memberName The written member's name (for diagnostics).
-    /// @param location The assignment operator's location.
-    /// @returns `true` when the write must be blocked (caller returns an error expression).
-    private func ReportSubmissionGlobalMemberWriteBlocked(
-        receiver BoundExpression,
-        memberName string,
-        location TextLocation
-    ) bool {
-        switch ClassifySubmissionGlobalWriteReceiver(receiver) {
-            case SubmissionWriteReceiverKind.ReadOnlyRoot {
-                Diagnostics.ReportCannotAssign(location, memberName)
-                return false
-            }
-            case SubmissionWriteReceiverKind.NotAddressable {
-                Diagnostics.ReportFieldAssignmentThroughStructTemporary(location, memberName, receiver.Type)
-                return true
-            }
-            default {
-                return false
-            }
-        }
-    }
-
     shared {
         /// Issue #1316: resolves the declared type of a simple-assignment target so
         /// it can be threaded into the RHS binder as the expected type. Mirrors the
@@ -5503,175 +5153,6 @@ internal partial class ExpressionBinder {
                 ),
                 previousValue
             )
-        }
-
-        /// Issue #3185: classifies a member-write receiver against the
-        /// submission-global chain rules. Walks CLR member-access links from the
-        /// receiver down to the chain root; only a chain that bottoms out at an
-        /// addressable submission static field classifies as anything but
-        /// (cref:SubmissionWriteReceiverKind.None). Crossing a
-        /// reference-typed link makes the remaining chain heap-rooted (writable
-        /// regardless of the root's read-only flag); crossing a computed
-        /// (property) link makes an in-place write impossible. Issue #3252 /
-        /// issue #3292: a value-typed ELEMENT link classifies by its storage —
-        /// an array-backed element (`ps[0]` over an array or slice) has a
-        /// real address (`ldelema`) and is
-        /// (cref:SubmissionWriteReceiverKind.Addressable), while a
-        /// map/indexer element (`m[k]` — the getter returns a copy) is
-        /// (cref:SubmissionWriteReceiverKind.NotAddressable), matching
-        /// the GS0499 rejection the identical same-cell shape reports.
-        /// @param receiver The bound member-write receiver.
-        /// @returns The chain classification.
-        private func ClassifySubmissionGlobalWriteReceiver(receiver BoundExpression?) SubmissionWriteReceiverKind {
-            if receiver == nil || ReceiverTypeIsReference(receiver.Type) {
-                return SubmissionWriteReceiverKind.None
-            }
-            // Issue #3252: the receiver IS an element load (`ps[0].X = v`).
-            // Issue #3292: an array-backed element has a real address
-            // (`ldelema`), so the write reaches the stored element in place —
-            // crossing the element link is heap-rooted, so the root's read-only
-            // flag no longer applies (same rule as a reference-typed link). An
-            // indexer/map element load stays a struct temporary.
-            if TryGetElementAccessTarget(receiver, out var elementCollection) &&
-                elementCollection is {} resolvedElementCollection {
-                if !ChainHasSubmissionGlobalRoot(resolvedElementCollection) {
-                    return SubmissionWriteReceiverKind.None
-                }
-                return if IsAddressableElementLoad(receiver) {
-                    SubmissionWriteReceiverKind.Addressable
-                } else {
-                    SubmissionWriteReceiverKind.NotAddressable
-                }
-            }
-            var access BoundClrPropertyAccessExpression? = receiver as BoundClrPropertyAccessExpression
-            if access == nil {
-                return SubmissionWriteReceiverKind.None
-            }
-            var sawComputedLink = false
-            while true {
-                if access.Receiver == nil {
-                    if !access.IsAddressableStaticField {
-                        return SubmissionWriteReceiverKind.None
-                    }
-                    if access.IsReadOnlySubmissionGlobal {
-                        return SubmissionWriteReceiverKind.ReadOnlyRoot
-                    }
-                    return if sawComputedLink {
-                        SubmissionWriteReceiverKind.NotAddressable
-                    } else {
-                        SubmissionWriteReceiverKind.Addressable
-                    }
-                }
-                if !(access.Member is FieldInfo) {
-                    sawComputedLink = true
-                }
-                if ReceiverTypeIsReference(access.Receiver.Type) {
-                    // Heap-rooted from here on: the write mutates the referenced
-                    // object, so the root's read-only flag no longer applies —
-                    // but the value-typed links walked so far must all have been
-                    // real fields for the address chain to reach the storage.
-                    if access.Receiver is BoundClrPropertyAccessExpression referenceLink &&
-                        ChainHasSubmissionGlobalRoot(referenceLink) {
-                        return if sawComputedLink {
-                            SubmissionWriteReceiverKind.NotAddressable
-                        } else {
-                            SubmissionWriteReceiverKind.Addressable
-                        }
-                    }
-                    return SubmissionWriteReceiverKind.None
-                }
-                // Issue #3252: the value-typed field walk rests on an element
-                // load (`qs[0].B2.C = v`). Issue #3292: when the element is
-                // array-backed and every link walked so far is a real field, the
-                // address chain (`ldelema` + `ldflda`…) reaches the stored
-                // element in place; an indexer/map element (or a computed link
-                // above the element) still bottoms out in a copy and stays
-                // blocked.
-                if TryGetElementAccessTarget(access.Receiver!!, out var linkCollection) &&
-                    linkCollection is {} resolvedLinkCollection {
-                    if !ChainHasSubmissionGlobalRoot(resolvedLinkCollection) {
-                        return SubmissionWriteReceiverKind.None
-                    }
-                    return if !sawComputedLink && IsAddressableElementLoad(access.Receiver!!) {
-                        SubmissionWriteReceiverKind.Addressable
-                    } else {
-                        SubmissionWriteReceiverKind.NotAddressable
-                    }
-                }
-                if access.Receiver is not BoundClrPropertyAccessExpression inner {
-                    return SubmissionWriteReceiverKind.None
-                }
-                access = inner
-            }
-        }
-
-        /// Issue #3252: extracts the indexed collection from a bound element
-        /// load — (cref:BoundIndexExpression) (arrays, slices, maps) or
-        /// (cref:BoundClrIndexExpression) (CLR indexer, e.g. an imported
-        /// `Dictionary`).
-        /// @param expression The candidate element-access expression.
-        /// @param collection The indexed collection expression, when [`expression`](paramref) is an element
-        /// load.
-        /// @returns `true` when [`expression`](paramref) is an element load.
-        private func TryGetElementAccessTarget(expression BoundExpression, out collection BoundExpression?) bool {
-            switch expression {
-                case index is BoundIndexExpression {
-                    collection = index.Target
-                    return true
-                }
-                case clrIndex is BoundClrIndexExpression {
-                    collection = clrIndex.Target
-                    return true
-                }
-                default {
-                    collection = nil
-                    return false
-                }
-            }
-        }
-
-        /// Issue #3292: whether an element load denotes addressable element
-        /// storage — an array-backed (cref:BoundIndexExpression) whose
-        /// element address the emitter can root a write chain at
-        /// (`ldelema`). A map element load or a CLR indexer result
-        /// ((cref:BoundClrIndexExpression)) returns a copy and is never
-        /// addressable.
-        /// @param expression The element-load expression.
-        /// @returns `true` when the element has a real address.
-        private func IsAddressableElementLoad(expression BoundExpression) bool -> expression is BoundIndexExpression &&
-            expression.IsArrayBackedElementAccess == true
-
-        /// Issue #3185: whether a CLR member-access chain bottoms out at a prior
-        /// submission's addressable global static field. Issue #3252: the walk
-        /// also crosses element-access links (`obj.Arr[0]`) so an indexed
-        /// collection reached through fields of a submission global still
-        /// classifies against the seam rules.
-        /// @param expression The chain's innermost inspected link.
-        /// @returns `true` when the chain root is a flagged submission global.
-        private func ChainHasSubmissionGlobalRoot(expression BoundExpression) bool {
-            var expression = expression
-            while true {
-                switch expression {
-                    case BoundClrPropertyAccessExpression{Receiver: nil} root {
-                        return root.IsAddressableStaticField
-                    }
-                    case link is BoundClrPropertyAccessExpression {
-                        expression = link.Receiver!!
-                        continue
-                    }
-                    case index is BoundIndexExpression {
-                        expression = index.Target
-                        continue
-                    }
-                    case clrIndex is BoundClrIndexExpression {
-                        expression = clrIndex.Target
-                        continue
-                    }
-                    default {
-                        return false
-                    }
-                }
-            }
         }
     }
 }

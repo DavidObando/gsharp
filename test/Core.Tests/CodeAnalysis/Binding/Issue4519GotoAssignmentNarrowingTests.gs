@@ -4022,6 +4022,31 @@ Run(true)`, "4")
     }
 
     @Fact
+    func NestedFinallyWithLoopBreak_EstablishesNarrowingForOuterGoto() {
+        AssertRuns(`import System
+
+func Run(jump bool) {
+    var x string? = nil
+    try {
+        if jump { goto Done }
+    } finally {
+        try {
+        } finally {
+            for {
+                break
+            }
+            x = "safe"
+        }
+    }
+    x = "again"
+Done:
+    Console.WriteLine(x.Length)
+}
+
+Run(true)`, "4")
+    }
+
+    @Fact
     func NonCompletingFinally_DoesNotInvalidateFallthroughNarrowing() {
         AssertRuns(`import System
 
