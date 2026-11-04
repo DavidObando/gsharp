@@ -190,6 +190,9 @@ partial class SemanticModel {
         if node is SyntaxToken{Kind: SyntaxKind.IdentifierToken} token {
             return SymbolInfo(GetTokenSymbol(token))
         }
+        if node is TypeAliasDeclarationSyntax aliasDeclaration {
+            return SymbolInfo(GetDeclaredSymbol(aliasDeclaration, cancellationToken))
+        }
         var target SyntaxNode = node
         while target is ParenthesizedExpressionSyntax parenthesized {
             target = parenthesized.Expression

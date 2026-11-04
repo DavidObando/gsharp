@@ -9,6 +9,7 @@ import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import System
+import System.Collections.Concurrent
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
@@ -640,24 +641,33 @@ partial class SemanticModel {
         }
     }
 
+    private let collidingGlobalTables ConcurrentDictionary[BoundGlobalScope, GlobalTable] = ConcurrentDictionary[
+        BoundGlobalScope,
+        GlobalTable
+    ](ReferenceEqualityComparer.Instance)
+
     private func ResolveGlobalTable(globalScope BoundGlobalScope) GlobalTable {
         if !HasCollidingTypeAliases(globalScope) {
             return GlobalTables.GetValue(globalScope, (table BoundGlobalScope) -> BuildGlobalTable(table, nil, nil))
         }
-        let treePackageName = Binder.PackageNameOfTree(
-            syntaxTree,
-            compilation.Submission?.DefaultPackageName ?? "Default"
-        )
-        let importedPackages = HashSet[string](StringComparer.Ordinal)
-        for import_ in syntaxTree.Root.Members.OfType[ImportSyntax]() {
-            if import_.AliasIdentifier == nil {
-                let target = string.Join(".", import_.Identifiers.Select((i SyntaxToken) -> i.Text))
-                if !string.IsNullOrEmpty(target) {
-                    importedPackages.Add(target)
+        return collidingGlobalTables.GetOrAdd(
+            globalScope,
+            (scope_ BoundGlobalScope) -> {
+                let treePackageName = Binder.PackageNameOfTree(
+                    syntaxTree,
+                    compilation.Submission?.DefaultPackageName ?? "Default"
+                )
+                let importedPackages = HashSet[string](StringComparer.Ordinal)
+                for import_ in compilation.GlobalScope.Imports.Concat(scope_.Imports) {
+                    let declaration = import_.Declaration
+                    if !string.IsNullOrEmpty(import_.Target) &&
+                        (declaration == nil || object.ReferenceEquals(declaration.SyntaxTree, syntaxTree)) {
+                        importedPackages.Add(import_.Target)
+                    }
                 }
+                return BuildGlobalTable(scope_, treePackageName, importedPackages)
             }
-        }
-        return BuildGlobalTable(globalScope, treePackageName, importedPackages)
+        )
     }
 
     private func StructSymbolOf(
@@ -1115,6 +1125,9 @@ partial class SemanticModel {
                         continue
                     }
                     if imported.Count > 1 {
+                        if imported.All((a TypeAliasSymbol) -> object.ReferenceEquals(a.Target, imported[0].Target)) {
+                            selected.Add(imported[0])
+                        }
                         continue
                     }
                 }

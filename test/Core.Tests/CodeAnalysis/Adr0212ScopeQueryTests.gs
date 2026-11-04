@@ -514,6 +514,22 @@ func Branches(x object, maybe object?) int32 {
         )
         let ambiguousModel = Compilation(libTree, otherTree, ambiguousTree).GetSemanticModel(ambiguousTree)
         Assert.Empty(ambiguousModel.LookupSymbols(0, "Coord"))
+        let aliasedImportTree = SyntaxTree.Parse(
+            SourceText.From("package Aliased\nimport chosen = $$Other\nfunc Use() int32 { return 0 }\n", "e-aliased.gs")
+        )
+        let aliasedImportModel = Compilation(libTree, otherTree, aliasedImportTree).GetSemanticModel(aliasedImportTree)
+        let aliasedCoord = Assert.IsType[TypeAliasSymbol](Assert.Single(aliasedImportModel.LookupSymbols(0, "Coord")))
+        Assert.Same(TypeSymbol.Int64, aliasedCoord.Target)
+        let sameTargetTree = SyntaxTree.Parse(SourceText.From("package Same\ntype Coord = int32\n", "f-same.gs"))
+        let bothSameTree = SyntaxTree.Parse(
+            SourceText.From(
+                "package BothSame\nimport Lib\nimport Same\nfunc Use() int32 { return 0 }\n",
+                "g-both-same.gs"
+            )
+        )
+        let bothSameModel = Compilation(libTree, sameTargetTree, bothSameTree).GetSemanticModel(bothSameTree)
+        let bothSameCoord = Assert.IsType[TypeAliasSymbol](Assert.Single(bothSameModel.LookupSymbols(0, "Coord")))
+        Assert.Same(TypeSymbol.Int32, bothSameCoord.Target)
     }
 
     @Fact
@@ -644,8 +660,10 @@ func Branches(x object, maybe object?) int32 {
             .Single((d TypeAliasDeclarationSyntax) -> d.Identifier.ValueText == "Alias")
         let byDeclaration = Assert.IsType[TypeAliasSymbol](model.GetDeclaredSymbol(declaration))
         let byIdentifier = Assert.IsType[TypeAliasSymbol](model.GetDeclaredSymbol(declaration.Identifier))
+        let byDeclarationSymbolInfo = Assert.IsType[TypeAliasSymbol](model.GetSymbolInfo(declaration).Symbol)
         let bySymbolInfo = Assert.IsType[TypeAliasSymbol](model.GetSymbolInfo(declaration.Identifier).Symbol)
         Assert.Same(byDeclaration, byIdentifier)
+        Assert.Same(byDeclaration, byDeclarationSymbolInfo)
         Assert.Same(byDeclaration, bySymbolInfo)
         Assert.Equal("Alias", byDeclaration.Name)
         Assert.Equal("Scope", byDeclaration.ContainingNamespace)
