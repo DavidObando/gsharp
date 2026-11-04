@@ -66,8 +66,21 @@ internal partial class ExpressionBinder {
         // scoping (then-region only, never the else branch), progressive
         // narrowing, and the guard rules cannot drift between the forms.
         let beforeConditional = CaptureExpressionNarrowingFrames()
+        var afterFirstBinding List[
+            (
+                Id int32,
+                Frame NarrowingFrame?,
+                Entries Dictionary[AccessPath, TypeSymbol]?,
+                Aliases HashSet[VariableSymbol]
+            )
+        ]? = nil
         var afterHeader List[
-            (Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol], Aliases HashSet[VariableSymbol])
+            (
+                Id int32,
+                Frame NarrowingFrame?,
+                Entries Dictionary[AccessPath, TypeSymbol]?,
+                Aliases HashSet[VariableSymbol]
+            )
         ]? = nil
         var guardEntryAliases HashSet[VariableSymbol]? = nil
         var guardTrueAliases HashSet[VariableSymbol]? = nil
@@ -78,7 +91,13 @@ internal partial class ExpressionBinder {
             Diagnostics,
             conversions,
             bindTypeClause,
-            (initializer ExpressionSyntax) -> BindExpression(initializer),
+            (initializer ExpressionSyntax) -> {
+                let boundInitializer = BindExpression(initializer)
+                if afterFirstBinding == nil {
+                    afterFirstBinding = CaptureExpressionNarrowingFrames()
+                }
+                return boundInitializer
+            },
             DeclareIfLetLocal,
             (guardSyntax ExpressionSyntax) -> {
                 guardEntryAliases = GetCurrentExpressionCallableAliases()
@@ -95,12 +114,18 @@ internal partial class ExpressionBinder {
                 let initialAliases = guardTrueAliases ?? GetCurrentExpressionCallableAliases()
                 setCallableAliases(initialAliases)
                 let topFrame = binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1]
-                expressionNarrowingFrames.Add((topFrame, initialAliases, savedStatementAliases))
+                nextExpressionFrameId += 1
+                let id = nextExpressionFrameId
+                expressionNarrowingFrames.Add((id, topFrame, initialAliases, savedStatementAliases))
                 try {
                     return BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
                 } finally {
                     expressionNarrowingFrames.RemoveAt(expressionNarrowingFrames.Count - 1)
-                    setCallableAliases(savedStatementAliases)
+                    if HasActiveExpressionNarrowings() {
+                        setCallableAliases(GetCurrentExpressionCallableAliases())
+                    } else {
+                        setCallableAliases(savedStatementAliases)
+                    }
                 }
             },
             syntax.ThenBlock
@@ -114,8 +139,13 @@ internal partial class ExpressionBinder {
         }
         // Bound AFTER the binding scope/frame is popped: the else branch never
         // sees the bindings.
+        let thenExit = CaptureExpressionNarrowingFrames()
         RestoreExpressionNarrowingFrames(afterHeader)
+        if afterFirstBinding != nil {
+            MergeBranchExpressionNarrowingFrames(afterFirstBinding)
+        }
         var whenFalse = BindIfLetElseBranch(syntax.ElseExpression!!, canBeVoid, targetType)
+        MergeBranchExpressionNarrowingFrames(thenExit)
         if anyInvalid ||
             clauses.Length == 0 ||
             guard_ is BoundErrorExpression ||

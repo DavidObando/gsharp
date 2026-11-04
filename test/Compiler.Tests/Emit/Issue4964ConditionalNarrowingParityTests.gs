@@ -584,9 +584,29 @@ func CheckBlockValuedConditionPrefixAliasesOutwardAnd(external () -> bool, seed 
         !string.IsNullOrEmpty(s)
     } && action()) ? s.Length : 0
 }
+
+@SuppressDiagnostic("GS0524")
+func CheckSiblingBeforeNarrowingFrame(external () -> bool, seed string?) int32 {
+    var s = seed
+    var action = external
+    let reset = () -> {
+        s = nil
+        return true
+    }
+    return (action = reset, (!string.IsNullOrEmpty(s) && action()) ? s.Length : 0).Item2
+}
+
+func CheckIfLetExitEffectsInNarrowedArm(ref s string?, n int32?) int32 ->
+    s != nil ? (if let x = n { (s = nil) == nil ? 0 : 0 } else { 0 }) + s.Length : 0
+
+func CheckSwitchExitEffectsInNarrowedArm(ref s string?, flag bool) int32 ->
+    s != nil ? (switch flag { case true: (s = nil) == nil ? 0 : 0 default: 0 }) + s.Length : 0
+
+func CheckSwitchDefaultFirstExitEffectsInNarrowedArm(ref s string?, flag bool) int32 ->
+    s != nil ? (switch flag { default: (s = nil) == nil ? 0 : 0 case true: 0 }) + s.Length : 0
 `
         Assert.Equal(
-            "GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length",
+            "GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length",
             DiagnoseSource(callableReassignment)
         )
 

@@ -78,6 +78,16 @@ internal partial class ExpressionBinder {
         let earlyScopes = [syntax.Arms.Length]BoundScope?
         // #5629: whether a header so far can remove the discriminant's fact, in dispatch order.
         var discriminantStale = false
+        let armExits = List[
+            List[
+                (
+                    Id int32,
+                    Frame NarrowingFrame?,
+                    Entries Dictionary[AccessPath, TypeSymbol]?,
+                    Aliases HashSet[VariableSymbol]
+                )
+            ]?
+        ](syntax.Arms.Length)
         for var armIndex = 0; armIndex < syntax.Arms.Length; armIndex++ {
             let armSyntax = syntax.Arms[armIndex]
             var pattern BoundPattern? = nil
@@ -127,6 +137,7 @@ internal partial class ExpressionBinder {
                         )
                     )
                 }
+                armExits.Add(CaptureExpressionNarrowingFrames())
                 RestoreExpressionNarrowingFrames(beforeDefaultArm)
                 boundArmBuilders.Add((armSyntax, pattern, default(BoundExpression), result))
                 continue
@@ -180,9 +191,13 @@ internal partial class ExpressionBinder {
                 },
                 armSyntax.Result
             )
+            armExits.Add(CaptureExpressionNarrowingFrames())
             RestoreExpressionNarrowingFrames(beforeArmResult)
             $scope = $scope.Pop()
             boundArmBuilders.Add((armSyntax, pattern, guard_, armResult))
+        }
+        for armExit in armExits {
+            MergeBranchExpressionNarrowingFrames(armExit)
         }
         let armResults = List[BoundExpression](boundArmBuilders.Count)
         for arm in boundArmBuilders {

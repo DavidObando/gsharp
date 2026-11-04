@@ -97,23 +97,46 @@ internal partial class ExpressionBinder {
     private let recordExpressionNarrowingKill(NarrowingFrame, AccessPath, TypeSymbol) -> void
     private let getCallableAliases() -> HashSet[VariableSymbol]
     private let setCallableAliases(HashSet[VariableSymbol]) -> void
+    private var nextExpressionFrameId int32
     private let expressionNarrowingFrames List[
-        (Frame NarrowingFrame, Aliases HashSet[VariableSymbol], SavedStatementAliases HashSet[VariableSymbol])
-    ] = List[(Frame NarrowingFrame, Aliases HashSet[VariableSymbol], SavedStatementAliases HashSet[VariableSymbol])]()
+        (
+            Id int32,
+            Frame NarrowingFrame?,
+            Aliases HashSet[VariableSymbol],
+            SavedStatementAliases HashSet[VariableSymbol]
+        )
+    ] = List[
+        (
+            Id int32,
+            Frame NarrowingFrame?,
+            Aliases HashSet[VariableSymbol],
+            SavedStatementAliases HashSet[VariableSymbol]
+        )
+    ]()
     private let processedExpressionEffects HashSet[BoundExpression] = HashSet[BoundExpression](
         ReferenceEqualityComparer.Instance
     )
     private let nestedLambdaExpressionFrameStack Stack[
         (
             Frames List[
-                (Frame NarrowingFrame, Aliases HashSet[VariableSymbol], SavedStatementAliases HashSet[VariableSymbol])
+                (
+                    Id int32,
+                    Frame NarrowingFrame?,
+                    Aliases HashSet[VariableSymbol],
+                    SavedStatementAliases HashSet[VariableSymbol]
+                )
             ],
             Processed HashSet[BoundExpression]
         )
     ] = Stack[
         (
             Frames List[
-                (Frame NarrowingFrame, Aliases HashSet[VariableSymbol], SavedStatementAliases HashSet[VariableSymbol])
+                (
+                    Id int32,
+                    Frame NarrowingFrame?,
+                    Aliases HashSet[VariableSymbol],
+                    SavedStatementAliases HashSet[VariableSymbol]
+                )
             ],
             Processed HashSet[BoundExpression]
         )
@@ -294,12 +317,29 @@ internal partial class ExpressionBinder {
         )
     }
 
+    private func IsExpressionFrameActive(
+        entry(
+            Id int32,
+            Frame NarrowingFrame?,
+            Aliases HashSet[VariableSymbol],
+            SavedStatementAliases HashSet[VariableSymbol]
+        )
+    ) bool {
+        let frame = entry.Frame
+        return frame == nil || frame.Owner != nil
+    }
+
     internal func IsolateExpressionNarrowingFramesForNestedLambda() {
         if HasActiveExpressionNarrowings() {
             setCallableAliases(GetCurrentExpressionCallableAliases())
         }
         let savedFrames = List[
-            (Frame NarrowingFrame, Aliases HashSet[VariableSymbol], SavedStatementAliases HashSet[VariableSymbol])
+            (
+                Id int32,
+                Frame NarrowingFrame?,
+                Aliases HashSet[VariableSymbol],
+                SavedStatementAliases HashSet[VariableSymbol]
+            )
         ](expressionNarrowingFrames)
         let savedProcessed = HashSet[BoundExpression](processedExpressionEffects, ReferenceEqualityComparer.Instance)
         nestedLambdaExpressionFrameStack.Push((savedFrames, savedProcessed))
@@ -326,8 +366,9 @@ internal partial class ExpressionBinder {
     internal func SyncActiveExpressionCallableAliases(aliases IReadOnlyCollection[VariableSymbol]) {
         for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
             let entry = expressionNarrowingFrames[i]
-            if entry.Frame.Owner != nil {
+            if IsExpressionFrameActive(entry) {
                 expressionNarrowingFrames[i] = (
+                    entry.Id,
                     entry.Frame,
                     HashSet[VariableSymbol](aliases),
                     entry.SavedStatementAliases
@@ -339,7 +380,7 @@ internal partial class ExpressionBinder {
     private func GetCurrentExpressionCallableAliases() HashSet[VariableSymbol] {
         for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
             let entry = expressionNarrowingFrames[i]
-            if entry.Frame.Owner != nil {
+            if IsExpressionFrameActive(entry) {
                 return HashSet[VariableSymbol](entry.Aliases)
             }
         }
@@ -349,7 +390,7 @@ internal partial class ExpressionBinder {
     private func PushExpressionNarrowingFrame(
         frame Dictionary[AccessPath, TypeSymbol]?,
         aliases HashSet[VariableSymbol]? = nil
-    ) NarrowingFrame {
+    ) NarrowingFrame? {
         let hadActive = HasActiveExpressionNarrowings()
         if !hadActive {
             processedExpressionEffects.Clear()
@@ -361,20 +402,23 @@ internal partial class ExpressionBinder {
             GetCurrentExpressionCallableAliases()
         }
         setCallableAliases(initialAliases)
-        let dict = if frame != nil {
-            Dictionary[AccessPath, TypeSymbol](frame)
+        let pushed = if frame != nil && frame.Count > 0 {
+            binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol](frame))
         } else {
-            Dictionary[AccessPath, TypeSymbol]()
+            default(NarrowingFrame?)
         }
-        let pushed = binderCtx.PushNarrowingFrame(dict)
-        expressionNarrowingFrames.Add((pushed, initialAliases, savedStatementAliases))
+        nextExpressionFrameId += 1
+        let id = nextExpressionFrameId
+        expressionNarrowingFrames.Add((id, pushed, initialAliases, savedStatementAliases))
         return pushed
     }
 
     private func PopExpressionNarrowingFrame() {
         let popped = expressionNarrowingFrames[expressionNarrowingFrames.Count - 1]
         expressionNarrowingFrames.RemoveAt(expressionNarrowingFrames.Count - 1)
-        binderCtx.EndNarrowingProof()
+        if popped.Frame != nil {
+            binderCtx.EndNarrowingProof()
+        }
         if HasActiveExpressionNarrowings() {
             setCallableAliases(GetCurrentExpressionCallableAliases())
         } else {
@@ -385,8 +429,7 @@ internal partial class ExpressionBinder {
 
     private func HasActiveExpressionNarrowings() bool {
         for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
-            let frame = expressionNarrowingFrames[i].Frame
-            if frame.Owner != nil {
+            if IsExpressionFrameActive(expressionNarrowingFrames[i]) {
                 return true
             }
         }
@@ -394,23 +437,28 @@ internal partial class ExpressionBinder {
     }
 
     private func CaptureExpressionNarrowingFrames() List[
-        (Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol], Aliases HashSet[VariableSymbol])
+        (Id int32, Frame NarrowingFrame?, Entries Dictionary[AccessPath, TypeSymbol]?, Aliases HashSet[VariableSymbol])
     ]? {
         if !HasActiveExpressionNarrowings() {
             return nil
         }
         let snapshot = List[
-            (Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol], Aliases HashSet[VariableSymbol])
+            (
+                Id int32,
+                Frame NarrowingFrame?,
+                Entries Dictionary[AccessPath, TypeSymbol]?,
+                Aliases HashSet[VariableSymbol]
+            )
         ](expressionNarrowingFrames.Count)
         for entry in expressionNarrowingFrames {
-            if entry.Frame.Owner != nil {
-                snapshot.Add(
-                    (
-                        entry.Frame,
-                        Dictionary[AccessPath, TypeSymbol](entry.Frame.Entries),
-                        HashSet[VariableSymbol](entry.Aliases)
-                    )
-                )
+            if IsExpressionFrameActive(entry) {
+                let frame = entry.Frame
+                let entries = if frame != nil {
+                    Dictionary[AccessPath, TypeSymbol](frame.Entries)
+                } else {
+                    default(Dictionary[AccessPath, TypeSymbol]?)
+                }
+                snapshot.Add((entry.Id, frame, entries, HashSet[VariableSymbol](entry.Aliases)))
             }
         }
         return snapshot
@@ -418,23 +466,31 @@ internal partial class ExpressionBinder {
 
     private func RestoreExpressionNarrowingFrames(
         snapshot List[
-            (Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol], Aliases HashSet[VariableSymbol])
+            (
+                Id int32,
+                Frame NarrowingFrame?,
+                Entries Dictionary[AccessPath, TypeSymbol]?,
+                Aliases HashSet[VariableSymbol]
+            )
         ]?
     ) {
         if snapshot == nil {
             return
         }
-        for (frame, entries, aliases) in snapshot {
-            if frame.Owner == nil {
+        for (id, frame, entries, aliases) in snapshot {
+            if frame != nil && frame.Owner == nil {
                 continue
             }
-            frame.Clear()
-            for kv in entries {
-                frame.Add(kv.Key, kv.Value)
+            if frame != nil && entries != nil {
+                frame.Clear()
+                for kv in entries {
+                    frame.Add(kv.Key, kv.Value)
+                }
             }
             for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
-                if object.ReferenceEquals(expressionNarrowingFrames[i].Frame, frame) {
+                if expressionNarrowingFrames[i].Id == id {
                     expressionNarrowingFrames[i] = (
+                        id,
                         frame,
                         HashSet[VariableSymbol](aliases),
                         expressionNarrowingFrames[i].SavedStatementAliases
@@ -450,27 +506,35 @@ internal partial class ExpressionBinder {
 
     private func MergeBranchExpressionNarrowingFrames(
         snapshot List[
-            (Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol], Aliases HashSet[VariableSymbol])
+            (
+                Id int32,
+                Frame NarrowingFrame?,
+                Entries Dictionary[AccessPath, TypeSymbol]?,
+                Aliases HashSet[VariableSymbol]
+            )
         ]?
     ) {
         if snapshot == nil {
             return
         }
-        for (frame, branchEntries, branchAliases) in snapshot {
-            if frame.Owner == nil {
+        for (id, frame, branchEntries, branchAliases) in snapshot {
+            if frame != nil && frame.Owner == nil {
                 continue
             }
-            for kv in frame.Entries.ToArray() {
-                if !StatementBinder.IsNullableWidening(kv.Key, kv.Value) && !branchEntries.ContainsKey(kv.Key) {
-                    recordExpressionNarrowingKill(frame, kv.Key, kv.Value)
-                    frame.Remove(kv.Key)
+            if frame != nil && branchEntries != nil {
+                for kv in frame.Entries.ToArray() {
+                    if !StatementBinder.IsNullableWidening(kv.Key, kv.Value) && !branchEntries.ContainsKey(kv.Key) {
+                        recordExpressionNarrowingKill(frame, kv.Key, kv.Value)
+                        frame.Remove(kv.Key)
+                    }
                 }
             }
             for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
-                if object.ReferenceEquals(expressionNarrowingFrames[i].Frame, frame) {
+                if expressionNarrowingFrames[i].Id == id {
                     let joinedAliases = HashSet[VariableSymbol](expressionNarrowingFrames[i].Aliases)
                     joinedAliases.IntersectWith(branchAliases)
                     expressionNarrowingFrames[i] = (
+                        id,
                         frame,
                         joinedAliases,
                         expressionNarrowingFrames[i].SavedStatementAliases
@@ -551,17 +615,31 @@ internal partial class ExpressionBinder {
                 return
             }
         }
+        let canAddExternalAlias = bound is BoundAssignmentExpression || bound is BoundBlockExpression
         var activeCount = 0
         for entry in expressionNarrowingFrames {
-            if entry.Frame.Owner != nil {
+            if !IsExpressionFrameActive(entry) {
+                continue
+            }
+            let frame = entry.Frame
+            let hasFacts = frame != nil && frame.Count > 0
+            if hasFacts || entry.Aliases.Count > 0 || canAddExternalAlias {
                 activeCount++
             }
+        }
+        if activeCount == 0 {
+            processedExpressionEffects.Add(bound)
+            return
         }
         var seenActive = 0
         for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
             let entry = expressionNarrowingFrames[i]
+            if !IsExpressionFrameActive(entry) {
+                continue
+            }
             let frame = entry.Frame
-            if frame.Owner == nil {
+            let hasFacts = frame != nil && frame.Count > 0
+            if !hasFacts && entry.Aliases.Count == 0 && !canAddExternalAlias {
                 continue
             }
             seenActive++
@@ -572,13 +650,13 @@ internal partial class ExpressionBinder {
             } else {
                 HashSet[BoundExpression](processedExpressionEffects, ReferenceEqualityComparer.Instance)
             }
-            let temp = if frame.Count > 0 {
+            let temp = if frame != nil && frame.Count > 0 {
                 Dictionary[AccessPath, TypeSymbol](frame.Entries)
             } else {
                 Dictionary[AccessPath, TypeSymbol]()
             }
             let aliases = applyExpressionEffects(bound, temp, entry.Aliases, processedSet)
-            if frame.Count > 0 && temp.Count != frame.Count {
+            if frame != nil && frame.Count > 0 && temp.Count != frame.Count {
                 for kv in frame.Entries.ToArray() {
                     if !StatementBinder.IsNullableWidening(kv.Key, kv.Value) && !temp.ContainsKey(kv.Key) {
                         recordExpressionNarrowingKill(frame, kv.Key, kv.Value)
@@ -586,7 +664,7 @@ internal partial class ExpressionBinder {
                     }
                 }
             }
-            expressionNarrowingFrames[i] = (frame, aliases, entry.SavedStatementAliases)
+            expressionNarrowingFrames[i] = (entry.Id, frame, aliases, entry.SavedStatementAliases)
         }
         processedExpressionEffects.Add(bound)
         setCallableAliases(GetCurrentExpressionCallableAliases())
@@ -638,14 +716,24 @@ internal partial class ExpressionBinder {
     }
 
     internal func BindExpression(syntax ExpressionSyntax, targetType TypeSymbol) BoundExpression {
-        // ADR-0169: guarantee the dispatch-level anchor (see the canBeVoid
-        // overload for the BoundErrorExpression exemption rationale).
-        let result = BindExpressionWithTargetTypeCore(syntax, targetType)
-        if !(result is BoundErrorExpression) {
-            result.AnchorSyntax(syntax)
-            InvalidateExpressionNarrowingFrames(result)
+        let pushedRootFrame = !HasActiveExpressionNarrowings()
+        if pushedRootFrame {
+            PushExpressionNarrowingFrame(nil)
         }
-        return result
+        try {
+            // ADR-0169: guarantee the dispatch-level anchor (see the canBeVoid
+            // overload for the BoundErrorExpression exemption rationale).
+            let result = BindExpressionWithTargetTypeCore(syntax, targetType)
+            if !(result is BoundErrorExpression) {
+                result.AnchorSyntax(syntax)
+                InvalidateExpressionNarrowingFrames(result)
+            }
+            return result
+        } finally {
+            if pushedRootFrame {
+                PopExpressionNarrowingFrame()
+            }
+        }
     }
 
     private func BindExpressionWithTargetTypeCore(syntax ExpressionSyntax, targetType TypeSymbol) BoundExpression {
@@ -761,24 +849,34 @@ internal partial class ExpressionBinder {
     }
 
     internal func BindExpression(syntax ExpressionSyntax, canBeVoid bool = false) BoundExpression {
-        // Issue #2620: discard context must reach wrappers and tail-if arms,
-        // not merely suppress the final void-result check.
-        let result = BindExpressionpublic(syntax, canBeVoid)
-        if !canBeVoid && result.Type == TypeSymbol.Void {
-            Diagnostics.ReportExpressionMustHaveValue(syntax.Location)
-            return BoundErrorExpression(nil)
+        let pushedRootFrame = !HasActiveExpressionNarrowings()
+        if pushedRootFrame {
+            PushExpressionNarrowingFrame(nil)
         }
-        // ADR-0169: guarantee the dispatch-level anchor so semantic-model and
-        // analyzer queries can resolve this expression by its syntax. Error
-        // expressions are exempt: a BoundErrorExpression's null-vs-non-null
-        // Syntax is the binder's defer-and-rebind sentinel (e.g. target-typed
-        // lambda/conditional retry), so stamping one would trigger spurious
-        // re-binds and duplicated diagnostics.
-        if !(result is BoundErrorExpression) {
-            result.AnchorSyntax(syntax)
-            InvalidateExpressionNarrowingFrames(result)
+        try {
+            // Issue #2620: discard context must reach wrappers and tail-if arms,
+            // not merely suppress the final void-result check.
+            let result = BindExpressionpublic(syntax, canBeVoid)
+            if !canBeVoid && result.Type == TypeSymbol.Void {
+                Diagnostics.ReportExpressionMustHaveValue(syntax.Location)
+                return BoundErrorExpression(nil)
+            }
+            // ADR-0169: guarantee the dispatch-level anchor so semantic-model and
+            // analyzer queries can resolve this expression by its syntax. Error
+            // expressions are exempt: a BoundErrorExpression's null-vs-non-null
+            // Syntax is the binder's defer-and-rebind sentinel (e.g. target-typed
+            // lambda/conditional retry), so stamping one would trigger spurious
+            // re-binds and duplicated diagnostics.
+            if !(result is BoundErrorExpression) {
+                result.AnchorSyntax(syntax)
+                InvalidateExpressionNarrowingFrames(result)
+            }
+            return result
+        } finally {
+            if pushedRootFrame {
+                PopExpressionNarrowingFrame()
+            }
         }
-        return result
     }
 
     private func BindExpressionpublic(syntax ExpressionSyntax, canBeVoid bool = false) BoundExpression {
