@@ -723,10 +723,10 @@ internal class InterfaceImplEmitter {
                 parameterCount,
                 (returnType ReturnTypeEncoder) -> {
                     if bridge.IsSetter && bridge.Property.IsInitOnly {
-                        returnType.CustomModifiers().AddModifier(
-                            this.outer.wellKnown.GetIsExternalInitTypeRef(),
-                            isOptional: false
-                        )
+                        let isExternalInit = this.outer.wellKnown.GetIsExternalInitTypeRef()
+                        if !isExternalInit.IsNil {
+                            returnType.CustomModifiers().AddModifier(isExternalInit, isOptional: false)
+                        }
                     }
                     this
                         .outer
@@ -1403,7 +1403,10 @@ internal class InterfaceImplEmitter {
             il.OpCode(ILOpCode.Ret)
             bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il))
         }
-        let signature = this.outer.userTokens.EncodeOpenPropertyAccessorSignature(prop, wantSetter: isSetter)
+        let signature = this
+            .outer
+            .userTokens
+            .EncodeOpenPropertyAccessorSignature(prop, wantSetter: isSetter, bridge.DeclaringType)
         let bridgeParameters = ImmutableArray.CreateBuilder[ParameterSymbol](parameterCount)
         for parameter in prop.Parameters {
             bridgeParameters.Add(parameter)

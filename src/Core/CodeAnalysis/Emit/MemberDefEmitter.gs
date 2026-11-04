@@ -153,16 +153,29 @@ internal class MemberDefEmitter {
                 // ADR-0118 / issue #944: a CLR default indexer property carries
                 // its index parameter types in the PropertyDef signature.
                 let indexParams = prop.Parameters
+                let (importedGetter, importedSetter) = MethodInfoHelpers.TryFindImportedPropertySlots(structSym, prop)
+                let importedIndexParams = if importedGetter != nil {
+                    importedGetter.GetParameters()
+                } else if importedSetter != nil {
+                    importedSetter.GetParameters()
+                } else {
+                    Array.Empty[ParameterInfo]()
+                }
                 BlobEncoder(propertySignature).PropertySignature(isInstanceProperty: true).Parameters(
                     indexParams.Length,
                     (returnType ReturnTypeEncoder) -> this.EncodePropertyType(returnType, prop),
                     (parameters ParametersEncoder) -> {
-                        for indexParam in indexParams {
+                        for var i = 0; i < indexParams.Length; i++ {
                             TypeDefEmitter.EncodeParameterSignature(
                                 parameters,
-                                indexParam,
+                                indexParams[i],
                                 this.encodeTypeSymbol,
-                                this.wellKnown
+                                this.wellKnown,
+                                if i < importedIndexParams.Length {
+                                    importedIndexParams[i]
+                                } else {
+                                    default(ParameterInfo?)
+                                }
                             )
                         }
                     }
@@ -252,17 +265,14 @@ internal class MemberDefEmitter {
     }
 
     private func EmitIsReadOnlyAttribute(handle EntityHandle) {
+        let ctorRef = this.wellKnown.GetIsReadOnlyAttributeCtorRef()
+        if ctorRef.IsNil {
+            return
+        }
         let value = BlobBuilder()
         value.WriteUInt16(1)
         value.WriteUInt16(0)
-        this
-            .emitCtx
-            .Metadata
-            .AddCustomAttribute(
-            handle,
-            this.wellKnown.GetIsReadOnlyAttributeCtorRef(),
-            this.emitCtx.Metadata.GetOrAddBlob(value)
-        )
+        this.emitCtx.Metadata.AddCustomAttribute(handle, ctorRef, this.emitCtx.Metadata.GetOrAddBlob(value))
     }
 
     /// Issue #4988: mints an accessor MethodDef's `Param` rows — the
@@ -457,11 +467,17 @@ internal class MemberDefEmitter {
     /// For computed properties: emits the bound getter body IL.
     private func EmitPropertyGetter(structSym StructSymbol, prop PropertySymbol) MethodDefinitionHandle {
         if prop.IsAbstract && prop.GetterBodySyntax == nil {
-            return this.EmitAbstractClassPropertyAccessor(prop, isGetter: true)
+            return this.EmitAbstractClassPropertyAccessor(structSym, prop, isGetter: true)
         }
         let (computed, bodyOffset) = this.EmitPropertyAccessorBody(structSym, prop, isStatic: false, isGetter: true)
         if (computed != nil) {
             return computed
+        }
+        let (importedGetter, _) = MethodInfoHelpers.TryFindImportedPropertySlots(structSym, prop)
+        let importedGetterParams = if importedGetter != nil {
+            importedGetter.GetParameters()
+        } else {
+            Array.Empty[ParameterInfo]()
         }
         let sigBlob = BlobBuilder()
         BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
@@ -482,8 +498,18 @@ internal class MemberDefEmitter {
                 if prop.Parameters.IsDefaultOrEmpty {
                     return
                 }
-                for indexParam in prop.Parameters {
-                    TypeDefEmitter.EncodeParameterSignature(ps, indexParam, this.encodeTypeSymbol, this.wellKnown)
+                for var i = 0; i < prop.Parameters.Length; i++ {
+                    TypeDefEmitter.EncodeParameterSignature(
+                        ps,
+                        prop.Parameters[i],
+                        this.encodeTypeSymbol,
+                        this.wellKnown,
+                        if i < importedGetterParams.Length {
+                            importedGetterParams[i]
+                        } else {
+                            default(ParameterInfo?)
+                        }
+                    )
                 }
             }
         )
@@ -572,11 +598,17 @@ internal class MemberDefEmitter {
     /// For computed properties: emits the bound setter body IL.
     private func EmitPropertySetter(structSym StructSymbol, prop PropertySymbol) MethodDefinitionHandle {
         if prop.IsAbstract && prop.SetterBodySyntax == nil {
-            return this.EmitAbstractClassPropertyAccessor(prop, isGetter: false)
+            return this.EmitAbstractClassPropertyAccessor(structSym, prop, isGetter: false)
         }
         let (computed, bodyOffset) = this.EmitPropertyAccessorBody(structSym, prop, isStatic: false, isGetter: false)
         if (computed != nil) {
             return computed
+        }
+        let (_, importedSetter) = MethodInfoHelpers.TryFindImportedPropertySlots(structSym, prop)
+        let importedSetterParams = if importedSetter != nil {
+            importedSetter.GetParameters()
+        } else {
+            Array.Empty[ParameterInfo]()
         }
         let sigBlob = BlobBuilder()
         let indexParameterCount = if prop.Parameters.IsDefaultOrEmpty {
@@ -592,7 +624,7 @@ internal class MemberDefEmitter {
                 // exactly as a C# 9 init-only setter does. This is how the
                 // CLR and peer compilers recognize the accessor as init-only.
                 if prop.IsInitOnly {
-                    let isExternalInit = this.wellKnown.GetIsExternalInitTypeRef()
+                    let isExternalInit = this.wellKnown.GetInitSetterModifierTypeRef(importedSetter)
                     if !isExternalInit.IsNil {
                         r.CustomModifiers().AddModifier(isExternalInit, isOptional: false)
                     }
@@ -604,8 +636,18 @@ internal class MemberDefEmitter {
                 // EmitPropertyGetter — an indexer's setter takes the index
                 // parameters ahead of the value parameter.
                 if !prop.Parameters.IsDefaultOrEmpty {
-                    for indexParam in prop.Parameters {
-                        TypeDefEmitter.EncodeParameterSignature(ps, indexParam, this.encodeTypeSymbol, this.wellKnown)
+                    for var i = 0; i < prop.Parameters.Length; i++ {
+                        TypeDefEmitter.EncodeParameterSignature(
+                            ps,
+                            prop.Parameters[i],
+                            this.encodeTypeSymbol,
+                            this.wellKnown,
+                            if i < importedSetterParams.Length {
+                                importedSetterParams[i]
+                            } else {
+                                default(ParameterInfo?)
+                            }
+                        )
                     }
                 }
                 this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type)
@@ -672,7 +714,22 @@ internal class MemberDefEmitter {
         return accessor
     }
 
-    private func EmitAbstractClassPropertyAccessor(prop PropertySymbol, isGetter bool) MethodDefinitionHandle {
+    private func EmitAbstractClassPropertyAccessor(
+        structSym StructSymbol,
+        prop PropertySymbol,
+        isGetter bool
+    ) MethodDefinitionHandle {
+        let (importedGetter, importedSetter) = MethodInfoHelpers.TryFindImportedPropertySlots(structSym, prop)
+        let importedAccessor = if isGetter {
+            importedGetter
+        } else {
+            importedSetter
+        }
+        let importedParams = if importedAccessor != nil {
+            importedAccessor.GetParameters()
+        } else {
+            Array.Empty[ParameterInfo]()
+        }
         let sigBlob = BlobBuilder()
         BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
             prop
@@ -687,10 +744,10 @@ internal class MemberDefEmitter {
             ),
             (r ReturnTypeEncoder) -> {
                 if isGetter {
-                    this.encodeTypeSymbol(r.Type(), prop.Type)
+                    this.EncodePropertyType(r, prop)
                 } else {
                     if prop.IsInitOnly {
-                        let isExternalInit = this.wellKnown.GetIsExternalInitTypeRef()
+                        let isExternalInit = this.wellKnown.GetInitSetterModifierTypeRef(importedSetter)
                         if !isExternalInit.IsNil {
                             r.CustomModifiers().AddModifier(isExternalInit, isOptional: false)
                         }
@@ -699,8 +756,18 @@ internal class MemberDefEmitter {
                 }
             },
             (ps ParametersEncoder) -> {
-                for indexParam in prop.Parameters {
-                    TypeDefEmitter.EncodeParameterSignature(ps, indexParam, this.encodeTypeSymbol, this.wellKnown)
+                for var i = 0; i < prop.Parameters.Length; i++ {
+                    TypeDefEmitter.EncodeParameterSignature(
+                        ps,
+                        prop.Parameters[i],
+                        this.encodeTypeSymbol,
+                        this.wellKnown,
+                        if i < importedParams.Length {
+                            importedParams[i]
+                        } else {
+                            default(ParameterInfo?)
+                        }
+                    )
                 }
                 if !isGetter {
                     this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type)
