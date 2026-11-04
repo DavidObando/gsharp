@@ -293,25 +293,25 @@ internal shared class MethodInfoHelpers {
         Getter MethodInfo?,
         Setter MethodInfo?
     ) {
+        var getter MethodInfo? = nil
+        var setter MethodInfo? = nil
         var current PropertySymbol? = prop
         while current != nil {
             let property = current
-            if property.ExternalOverriddenGetter != nil || property.ExternalOverriddenSetter != nil {
-                return (property.ExternalOverriddenGetter, property.ExternalOverriddenSetter)
-            }
-            if property.ExplicitInterfaceGetterSlot != nil || property.ExplicitInterfaceSetterSlot != nil {
-                return (property.ExplicitInterfaceGetterSlot, property.ExplicitInterfaceSetterSlot)
-            }
+            getter ??= property.ExternalOverriddenGetter ?? property.ExplicitInterfaceGetterSlot
+            setter ??= property.ExternalOverriddenSetter ?? property.ExplicitInterfaceSetterSlot
             let owner = FindPropertyDeclaringStruct(structSym, property) ?? structSym
             if owner != nil && !property.IsStatic {
                 let ifaceSlots = TryFindImplicitClrInterfacePropertySlots(owner, property)
-                if ifaceSlots.Getter != nil || ifaceSlots.Setter != nil {
-                    return ifaceSlots
-                }
+                getter ??= ifaceSlots.Getter
+                setter ??= ifaceSlots.Setter
+            }
+            if (getter != nil || !prop.HasGetter) && (setter != nil || !prop.HasSetter) {
+                return (getter, setter)
             }
             current = property.OverriddenProperty
         }
-        return (nil, nil)
+        return (getter, setter)
     }
 
     func TryFindImplicitClrInterfacePropertySlots(structSym StructSymbol, prop PropertySymbol)(
@@ -321,6 +321,8 @@ internal shared class MethodInfoHelpers {
         if prop.HasExplicitInterfaceClause || structSym.ImplementedClrInterfaces.IsDefaultOrEmpty {
             return (nil, nil)
         }
+        var getter MethodInfo? = nil
+        var setter MethodInfo? = nil
         for ifaceSym in structSym.ImplementedClrInterfaces {
             let clrIface Type? = ifaceSym?.ClrType
             if clrIface == nil {
@@ -335,11 +337,15 @@ internal shared class MethodInfoHelpers {
                         !MemberLookup.PropertyMatchesClrInterfaceSignature(prop, ifaceSym, clrProp) {
                         continue
                     }
-                    return (clrProp.GetMethod, clrProp.SetMethod)
+                    getter ??= clrProp.GetMethod
+                    setter ??= clrProp.SetMethod
+                    if (getter != nil || !prop.HasGetter) && (setter != nil || !prop.HasSetter) {
+                        return (getter, setter)
+                    }
                 }
             }
         }
-        return (nil, nil)
+        return (getter, setter)
     }
 
     private func FindPropertyDeclaringStruct(structSym StructSymbol?, prop PropertySymbol) StructSymbol? {
