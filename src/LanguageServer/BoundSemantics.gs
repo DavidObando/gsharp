@@ -101,6 +101,7 @@ shared class BoundSemantics {
     /// Tells whether [`symbol`](paramref) stands for a member of an imported CLR type.
     func IsImportedMember(symbol Symbol?) bool -> switch symbol {
         case ImportedFunctionSymbol _: true
+        case function is FunctionSymbol: function.ImportedMember != nil
         case property is PropertySymbol: property.ImportedMember != nil
         case field is FieldSymbol: field.ImportedMember != nil
         case clrEvent is EventSymbol: clrEvent.ImportedMember != nil
@@ -159,6 +160,7 @@ shared class BoundSemantics {
     /// cross-assembly definitions, until imported symbols carry handles (ADR-0209 stage 6).
     func GetMemberInfo(symbol Symbol?) MemberInfo? -> switch symbol {
         case function is ImportedFunctionSymbol: function.Method
+        case function is FunctionSymbol: function.ImportedMember
         case property is PropertySymbol: property.ImportedMember
         case field is FieldSymbol: field.ImportedMember
         case clrEvent is EventSymbol: clrEvent.ImportedMember

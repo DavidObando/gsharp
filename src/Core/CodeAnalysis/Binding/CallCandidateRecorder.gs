@@ -34,12 +34,13 @@ internal shared class CallCandidateRecorder {
 
     /// Starts collecting for [`syntax`](paramref).
     /// @param syntax The call being bound.
+    /// @param receiverType The call receiver's type, when already known.
     /// @returns The frame that (cref:End) closes, or null when recording is off.
-    func Begin(syntax SyntaxNode) Frame? {
+    func Begin(syntax SyntaxNode, receiverType TypeSymbol? = nil) Frame? {
         if !enabled.Value {
             return nil
         }
-        let frame = Frame(syntax, current.Value)
+        let frame = Frame(syntax, current.Value, receiverType)
         current.Value = frame
         return frame
     }
@@ -52,7 +53,7 @@ internal shared class CallCandidateRecorder {
         }
     }
 
-    /// Restores the recording state that (cref:Enter) replaced.
+    ///Restores the recording state that (cref:Enter) replaced.
     internal struct RecordingScope : IDisposable {
         private let previous bool
 
@@ -67,10 +68,14 @@ internal shared class CallCandidateRecorder {
 
     /// Records the declared overloads a source selection considers.
     /// @param candidates The source functions.
-    func RecordFunctions(candidates ImmutableArray[FunctionSymbol]) {
+    /// @param receiverType The call receiver's type, when any.
+    func RecordFunctions(candidates ImmutableArray[FunctionSymbol], receiverType TypeSymbol? = nil) {
         let frame = current.Value
-        if frame == nil || candidates.Length < 2 {
+        if frame == nil || candidates.IsDefaultOrEmpty {
             return
+        }
+        if receiverType != nil && frame.ReceiverType == nil {
+            frame.ReceiverType = receiverType
         }
         let set = ImmutableArray.CreateBuilder[object](candidates.Length)
         for candidate in candidates {
@@ -81,10 +86,14 @@ internal shared class CallCandidateRecorder {
 
     /// Records the reflected overloads an imported selection considers.
     /// @param candidates The reflected methods or constructors.
-    func RecordMethods[T MethodBase](candidates IReadOnlyCollection[T]) {
+    /// @param receiverType The call receiver's type, when any.
+    func RecordMethods[T MethodBase](candidates IReadOnlyCollection[T], receiverType TypeSymbol? = nil) {
         let frame = current.Value
-        if frame == nil || candidates.Count < 2 {
+        if frame == nil || candidates.Count == 0 {
             return
+        }
+        if receiverType != nil && frame.ReceiverType == nil {
+            frame.ReceiverType = receiverType
         }
         let set = ImmutableArray.CreateBuilder[object](candidates.Count)
         for candidate in candidates {
@@ -116,6 +125,9 @@ internal shared class CallCandidateRecorder {
         if frame == nil || candidates.Count == 0 {
             return
         }
+        if frame.ReceiverType == nil {
+            frame.ReceiverType = receiverType
+        }
         let filtered = Binder.FilterImportedExtensionMethods(candidates, receiverType)
         if filtered.IsDefaultOrEmpty {
             return
@@ -131,7 +143,7 @@ internal shared class CallCandidateRecorder {
     /// @param frame The frame of the call.
     /// @param bound The expression the binder built for the call.
     func Stamp(frame Frame?, bound BoundExpression) {
-        if frame == nil || (frame.Sets.Count == 0 && frame.ExtensionSet.IsDefault) {
+        if frame == nil {
             return
         }
         var node BoundExpression? = bound
@@ -142,8 +154,35 @@ internal shared class CallCandidateRecorder {
                 continue
             }
             if node is BoundCallOperationExpression call {
-                if call.MemberGroup.IsDefault {
-                    call.MemberGroup = Select(frame, call)
+                if call.MemberGroup.IsDefault && (frame.Sets.Count > 0 || !frame.ExtensionSet.IsDefault) {
+                    call.MemberGroup = Select(frame, call.CalledFunction, IsSourceExtensionCall(call, frame.Syntax))
+                }
+                PropagateFailedChildren(frame)
+                return
+            }
+            if node is BoundBaseClassCallExpression{Method: {} baseMethod} baseCall {
+                if baseCall.MemberGroup.IsDefault && frame.Sets.Count > 0 {
+                    baseCall.MemberGroup = Select(frame, baseMethod, extensionCall: false)
+                }
+                PropagateFailedChildren(frame)
+                return
+            }
+            if node is BoundErrorExpression error {
+                if error.MemberGroup.IsDefault && (frame.Sets.Count > 0 || !frame.ExtensionSet.IsDefault) {
+                    let (selected, isExtension) = SelectForSyntax(frame)
+                    if !selected.IsDefaultOrEmpty {
+                        error.CallSyntax = frame.Syntax
+                        error.MemberGroup = selected
+                        error.ReceiverType = frame.ReceiverType
+                        error.IsExtensionCall = isExtension
+                    }
+                }
+                if frame.FailedChildren is {Count: > 0} children && error.FailedChildren.IsDefault {
+                    error.FailedChildren = children.ToImmutableArray()
+                }
+                if frame.Parent != nil &&
+                    (!error.MemberGroup.IsDefaultOrEmpty || !error.FailedChildren.IsDefaultOrEmpty) {
+                    frame.Parent.AddFailedChild(error)
                 }
                 return
             }
@@ -154,23 +193,75 @@ internal shared class CallCandidateRecorder {
                 default: default(BoundExpression?)
             }
         }
+        PropagateFailedChildren(frame)
     }
 
-    private func Select(frame Frame, call BoundCallOperationExpression) ImmutableArray[object] {
-        let called = call.CalledFunction
+    private func PropagateFailedChildren(frame Frame) {
+        if frame.Parent is {} parent && frame.FailedChildren is {Count: > 0} children {
+            for child in children {
+                parent.AddFailedChild(child)
+            }
+        }
+    }
+
+    private func Select(frame Frame, called Symbol, extensionCall bool) ImmutableArray[object] {
         if !frame.ExtensionSet.IsDefault && ContainsCallee(frame.ExtensionSet, called) {
             return frame.ExtensionSet
         }
-        if IsSourceExtensionCall(call, frame.Syntax) {
+        if extensionCall {
             return default(ImmutableArray[object])
         }
         var best ImmutableArray[object] = default(ImmutableArray[object])
         for set in frame.Sets {
-            if (best.IsDefault || set.Length >= best.Length) && ContainsCallee(set, called) {
+            if set.Length >= 2 && (best.IsDefault || set.Length >= best.Length) && ContainsCallee(set, called) {
                 best = set
             }
         }
         return best
+    }
+
+    private func SelectForSyntax(frame Frame)(Group ImmutableArray[object], IsExtension bool) {
+        let name = SyntaxCallName(frame.Syntax)
+        if string.IsNullOrEmpty(name) {
+            return (default(ImmutableArray[object]), false)
+        }
+        var best ImmutableArray[object] = default(ImmutableArray[object])
+        for set in frame.Sets {
+            if (best.IsDefault || set.Length >= best.Length) && ContainsName(set, name) {
+                best = set
+            }
+        }
+        if !best.IsDefault {
+            return (best, false)
+        }
+        if !frame.ExtensionSet.IsDefault && ContainsName(frame.ExtensionSet, name) {
+            let isSourceExtension = frame.ExtensionSet[0] is FunctionSymbol{IsExtension: true} &&
+                frame.Syntax is CallExpressionSyntax ce &&
+                ce.Parent is AccessorExpressionSyntax accessor &&
+                object.ReferenceEquals(accessor.RightPart, ce)
+            return (frame.ExtensionSet, isSourceExtension)
+        }
+        return (default(ImmutableArray[object]), false)
+    }
+
+    private func SyntaxCallName(syntax SyntaxNode) string? -> switch syntax {
+        case call is CallExpressionSyntax: call.Identifier.ValueText
+        case baseInterface is BaseInterfaceCallExpressionSyntax: baseInterface.MethodIdentifier.ValueText
+        default: default(string?)
+    }
+
+    private func ContainsName(set ImmutableArray[object], name string) bool {
+        for candidate in set {
+            let matches = switch candidate {
+                case function is FunctionSymbol: function.Name == name
+                case method is MethodBase: ClrTypeUtilities.EmittedMemberNameMatches(method, name)
+                default: false
+            }
+            if matches {
+                return true
+            }
+        }
+        return false
     }
 
     /// Reports whether [`call`](paramref) was dispatched as a receiver-form source extension call (`receiver.Ext(...)`)
@@ -226,9 +317,10 @@ internal shared class CallCandidateRecorder {
 
     /// The candidate sets of one call being bound.
     internal class Frame {
-        init(syntax SyntaxNode, parent Frame?) {
+        init(syntax SyntaxNode, parent Frame?, receiverType TypeSymbol? = nil) {
             Syntax = syntax
             Parent = parent
+            ReceiverType = receiverType
             Sets = List[ImmutableArray[object]]()
         }
 
@@ -240,6 +332,11 @@ internal shared class CallCandidateRecorder {
             get;
         }
 
+        prop ReceiverType TypeSymbol? {
+            get;
+            set;
+        }
+
         prop Sets List[ImmutableArray[object]] {
             get;
         }
@@ -247,6 +344,18 @@ internal shared class CallCandidateRecorder {
         prop ExtensionSet ImmutableArray[object] {
             get;
             set;
+        }
+
+        prop FailedChildren List[BoundErrorExpression]? {
+            get;
+            private set;
+        }
+
+        func AddFailedChild(child BoundErrorExpression) {
+            FailedChildren ??= List[BoundErrorExpression]()
+            if !FailedChildren!!.Contains(child) {
+                FailedChildren!!.Add(child)
+            }
         }
     }
 }

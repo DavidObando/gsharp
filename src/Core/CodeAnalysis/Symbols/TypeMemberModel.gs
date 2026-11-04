@@ -893,10 +893,20 @@ shared class TypeMemberModel {
                     for m in iface.Methods {
                         yield m
                     }
+                    if object.ReferenceEquals(iface, interfaceSymbol) {
+                        for m in iface.PrivateMethods {
+                            yield m
+                        }
+                    }
                 }
                 if query.IncludeStatic {
                     for m in iface.StaticMethods {
                         yield m
+                    }
+                    if object.ReferenceEquals(iface, interfaceSymbol) {
+                        for m in iface.StaticPrivateMethods {
+                            yield m
+                        }
                     }
                 }
             }

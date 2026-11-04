@@ -84,7 +84,10 @@ shared class InlayHintComputer {
         text SourceText,
         ct CancellationToken = default(CancellationToken)
     ) {
-        let symbol = SemanticLookup.ResolveSymbol(compilation, call.Identifier, ct)
+        let symbol = SemanticLookup.ResolveSymbol(compilation, call.Identifier, ct) ?? BoundSemantics.GetImportedSymbol(
+            compilation,
+            call.Identifier
+        )
         if symbol is not FunctionSymbol func_ {
             return
         }

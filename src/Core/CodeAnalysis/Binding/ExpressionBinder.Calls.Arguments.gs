@@ -1219,6 +1219,7 @@ internal partial class ExpressionBinder {
         allowProtectedInherited bool = true
     ) bool {
         result = nil
+        CallCandidateRecorder.RecordMethods(candidates, receiver.Type)
         let argTypes = [arguments.Length]Type?
         let CheckUserClassInterface = func (source Type, target Type) bool {
             return IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target)
@@ -1643,6 +1644,10 @@ internal partial class ExpressionBinder {
         let CheckUserClassInterface = func (source Type, target Type) bool {
             return IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target, argumentOffset: 1)
         }
+        CallCandidateRecorder.RecordExtensionMethods(
+            this.memberLookup.CollectImportedExtensionMethods(methodName),
+            receiver.Type
+        )
         let deferredInferenceArgs = [arguments.Length + 1]bool
         argTypes[0] = receiverClrType
         var hasUserClassArg = false
@@ -2418,6 +2423,17 @@ internal partial class ExpressionBinder {
     /// On success, returns a (cref:BoundBaseInterfaceCallExpression)
     /// whose receiver is the enclosing method's `this` parameter.
     private func BindBaseInterfaceCallExpression(syntax BaseInterfaceCallExpressionSyntax) BoundExpression {
+        let frame = CallCandidateRecorder.Begin(syntax)
+        try {
+            let bound = BindBaseInterfaceCallExpressionCore(syntax)
+            CallCandidateRecorder.Stamp(frame, bound)
+            return bound
+        } finally {
+            CallCandidateRecorder.End(frame)
+        }
+    }
+
+    private func BindBaseInterfaceCallExpressionCore(syntax BaseInterfaceCallExpressionSyntax) BoundExpression {
         // Resolve the selector inside the brackets first. Issue #986: when it
         // names a base CLASS instead of an interface, route to the base-class
         // call form so `base[BaseClass].M(args)` works as an alternative
@@ -2479,7 +2495,8 @@ internal partial class ExpressionBinder {
                 synthesizedCall,
                 syntax.BaseKeyword.Location,
                 classSelector,
-                syntax.InterfaceTypeClause.Location
+                syntax.InterfaceTypeClause.Location,
+                syntaxOverride: syntax
             )
         }
         // Bind the user arguments unconditionally — even on the failure paths
@@ -2555,6 +2572,7 @@ internal partial class ExpressionBinder {
         var arityMatch FunctionSymbol? = nil
         var anyMatch FunctionSymbol? = nil
         var matchIndex = -1
+        CallCandidateRecorder.RecordFunctions(ifaceSym.GetMethods(methodName), ifaceSym)
         let overloads = ifaceSym.Methods
         for var i = 0; i < overloads.Length; i++ {
             let candidate = overloads[i]
@@ -2681,7 +2699,26 @@ internal partial class ExpressionBinder {
         ce CallExpressionSyntax,
         baseLocation TextLocation,
         explicitBaseType StructSymbol?,
-        selectorLocation TextLocation
+        selectorLocation TextLocation,
+        syntaxOverride SyntaxNode? = nil
+    ) BoundExpression {
+        let callSyntax SyntaxNode = syntaxOverride ?? ce
+        let frame = CallCandidateRecorder.Begin(callSyntax)
+        try {
+            let bound = BindBaseClassCallCore(ce, baseLocation, explicitBaseType, selectorLocation, callSyntax)
+            CallCandidateRecorder.Stamp(frame, bound)
+            return bound
+        } finally {
+            CallCandidateRecorder.End(frame)
+        }
+    }
+
+    private func BindBaseClassCallCore(
+        ce CallExpressionSyntax,
+        baseLocation TextLocation,
+        explicitBaseType StructSymbol?,
+        selectorLocation TextLocation,
+        callSyntax SyntaxNode
     ) BoundExpression {
         if !TryResolveBaseSearchType(
             baseLocation,
@@ -2716,6 +2753,7 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
+        CallCandidateRecorder.RecordFunctions(baseOverloads, GetBaseAccessThisParameter()?.Type ?? searchBase)
         if !overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames) {
             return BoundErrorExpression(nil)
         }
@@ -2758,7 +2796,7 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         let baseCall = BoundBaseClassCallExpression(
-            ce,
+            callSyntax,
             uic.Receiver,
             declaringType,
             uic.Method,
@@ -3565,6 +3603,7 @@ internal partial class ExpressionBinder {
         if candidates.Count == 0 {
             return false
         }
+        CallCandidateRecorder.RecordMethods(candidates, constraintType)
         let argTypes = [arguments.Length]Type?
         for var i = 0; i < arguments.Length; i++ {
             let t Type? = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type)

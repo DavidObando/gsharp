@@ -1677,6 +1677,7 @@ internal partial class OverloadResolver {
         // and, where useful, types). The legacy `TryLookupSymbol` returned the
         // first declared overload; we now consult the overload-set store.
         var overloadSet = Scope.TryLookupFunctions(syntax.Identifier.ValueText)
+        CallCandidateRecorder.RecordFunctions(overloadSet)
         var explicitOverloadTypeArguments = default(ImmutableArray[TypeSymbol])
         if overloadSet.Length > 1 {
             if syntax.TypeArgumentList != nil {

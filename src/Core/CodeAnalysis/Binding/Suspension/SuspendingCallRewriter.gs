@@ -442,6 +442,7 @@ internal class SuspendingCallRewriter : BoundTreeRewriter {
             call.Property,
             call.IsSetterAccessor
         ){MethodTypeArguments = call.MethodTypeArguments}
+        call.CopyMemberGroupTo(result)
         return if retype {
             Complete(result, logicalType, method.Name)
         } else {

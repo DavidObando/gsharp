@@ -3151,6 +3151,7 @@ internal partial class ExpressionBinder {
                         )
                     ] = delegateParameterTypes[i]
                 }
+                using let _ = CallCandidateRecorder.Enter(false)
                 let resolution = ClrOverloadResolution.Resolve(
                     clrGroup.Candidates,
                     resolutionArguments,
