@@ -225,7 +225,8 @@ internal partial class StatementBinder {
                     guardWhenTrue,
                     () -> {
                         return BindStatementWithNarrowing(caseSyntax.Body, frame)
-                    }
+                    },
+                    caseSyntax.Body
                 )
                 $scope = $scope.Pop()
                 ShadowAddBranch(shadowFlow, frame, body)
@@ -431,7 +432,8 @@ internal partial class StatementBinder {
                     () -> PatternVariables.BindInScope(
                         binderCtx,
                         filterWhenTrue,
-                        () -> BindBlockStatement(catchSyntax.Body)
+                        () -> BindBlockStatement(catchSyntax.Body),
+                        catchSyntax.Body
                     )
                 )
             } finally {

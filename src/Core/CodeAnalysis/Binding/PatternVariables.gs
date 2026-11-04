@@ -95,8 +95,14 @@ internal shared class PatternVariables {
     /// @param binderCtx The shared binder context whose current scope is extended.
     /// @param variables The pattern variables in scope for the region.
     /// @param bind The binding action.
+    /// @param regionSyntax The syntax node that bounds the region for semantic-model scope queries.
     /// @returns The bound result.
-    func BindInScope[T](binderCtx BinderContext, variables ImmutableArray[LocalVariableSymbol], bind() -> T) T {
+    func BindInScope[T](
+        binderCtx BinderContext,
+        variables ImmutableArray[LocalVariableSymbol],
+        bind() -> T,
+        regionSyntax SyntaxNode? = nil
+    ) T {
         if variables.IsDefaultOrEmpty {
             return bind()
         }
@@ -105,7 +111,15 @@ internal shared class PatternVariables {
         binderCtx.RootScope = region
         try {
             for variable in variables {
-                region.TryDeclareVariable(variable)
+                if region.TryDeclareVariable(variable) &&
+                    regionSyntax != nil &&
+                    variable is PatternVariableSymbol patternVariable {
+                    patternVariable.AddRegion(
+                        regionSyntax.Parent ?? regionSyntax,
+                        regionSyntax.Span.Start,
+                        regionSyntax.Span.End
+                    )
+                }
             }
             return bind()
         } finally {

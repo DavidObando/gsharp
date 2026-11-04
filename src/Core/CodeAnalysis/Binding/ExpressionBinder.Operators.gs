@@ -675,7 +675,8 @@ internal partial class ExpressionBinder {
                             whenTrueRead = read
                         }
                     )
-                }
+                },
+                syntax.WhenTrue
             )
         }
         let bindWhenFalse = func (branchTargetType TypeSymbol?) BoundExpression {
@@ -690,7 +691,8 @@ internal partial class ExpressionBinder {
                             whenFalseRead = read
                         }
                     )
-                }
+                },
+                syntax.WhenFalse
             )
         }
         var whenTrue BoundExpression
@@ -708,13 +710,21 @@ internal partial class ExpressionBinder {
             if whenFalse is BoundErrorExpression {
                 return BoundErrorExpression(nil)
             }
-            whenTrue = BoundDefaultExpression(syntax.WhenTrue, whenFalse.Type)
+            whenTrue = BindWithPatternVariables(
+                patternWhenTrue,
+                () -> BoundDefaultExpression(syntax.WhenTrue, whenFalse.Type),
+                syntax.WhenTrue
+            )
         } else if falseIsBareDefault {
             whenTrue = bindWhenTrue(nil)
             if whenTrue is BoundErrorExpression {
                 return BoundErrorExpression(nil)
             }
-            whenFalse = BoundDefaultExpression(syntax.WhenFalse, whenTrue.Type)
+            whenFalse = BindWithPatternVariables(
+                patternWhenFalse,
+                () -> BoundDefaultExpression(syntax.WhenFalse, whenTrue.Type),
+                syntax.WhenFalse
+            )
         } else {
             whenTrue = bindWhenTrue(nil)
             whenFalse = bindWhenFalse(nil)
@@ -868,8 +878,8 @@ internal partial class ExpressionBinder {
         let bindWhenFalseNarrowed() -> BoundExpression = () -> {
             return BindWithNarrowing(whenFalseNarrowing, bindWhenFalse)
         }
-        var whenTrue = BindWithPatternVariables(patternWhenTrue, bindWhenTrueNarrowed)
-        var whenFalse = BindWithPatternVariables(patternWhenFalse, bindWhenFalseNarrowed)
+        var whenTrue = BindWithPatternVariables(patternWhenTrue, bindWhenTrueNarrowed, syntax.ThenBlock)
+        var whenFalse = BindWithPatternVariables(patternWhenFalse, bindWhenFalseNarrowed, elseSyntax)
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }
@@ -1573,7 +1583,8 @@ internal partial class ExpressionBinder {
                 leftWhenTrue,
                 () -> {
                     return BindExpressionWithNarrowing(syntax.Right, rightFrame)
-                }
+                },
+                syntax.Right
             )
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenTrue, leftWhenTrue)
         } else if syntax.OperatorToken.Kind == SyntaxKind.PipePipeToken {
@@ -1583,7 +1594,8 @@ internal partial class ExpressionBinder {
                 leftWhenFalse,
                 () -> {
                     return BindExpressionWithNarrowing(syntax.Right, rightFrame)
-                }
+                },
+                syntax.Right
             )
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenFalse, leftWhenFalse)
         } else if syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken {

@@ -686,7 +686,8 @@ internal partial class StatementBinder {
                     let boundBody = PatternVariables.BindInScope(
                         binderCtx,
                         patternWhenTrue,
-                        () -> BindConditionedLoopBodyCore(boundCondition, bodySyntax)
+                        () -> BindConditionedLoopBodyCore(boundCondition, bodySyntax),
+                        bodySyntax
                     )
                     return boundBody
                 } finally {

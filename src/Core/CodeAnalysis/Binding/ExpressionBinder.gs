@@ -2296,8 +2296,9 @@ internal partial class ExpressionBinder {
     /// variables are definitely assigned.
     private func BindWithPatternVariables(
         variables ImmutableArray[LocalVariableSymbol],
-        bind() -> BoundExpression
-    ) BoundExpression -> PatternVariables.BindInScope(binderCtx, variables, bind)
+        bind() -> BoundExpression,
+        regionSyntax SyntaxNode? = nil
+    ) BoundExpression -> PatternVariables.BindInScope(binderCtx, variables, bind, regionSyntax)
 
     private func BindAsExpression(syntax AsExpressionSyntax) BoundExpression {
         var expression = BindExpression(syntax.Expression)
