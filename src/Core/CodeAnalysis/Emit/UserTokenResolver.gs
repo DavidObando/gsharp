@@ -1460,7 +1460,7 @@ internal class UserTokenResolver {
         var sigBlob BlobBuilder
         {
             using let _ = this.remaps.PushSmRemap(defType)
-            sigBlob = this.EncodeOpenPropertyAccessorSignature(defProp, wantSetter)
+            sigBlob = this.EncodeOpenPropertyAccessorSignature(defProp, wantSetter, defType)
         }
         return this.GetUserStructMethodRef(containingType, accessor, accessorName, sigBlob)
     }
@@ -1526,7 +1526,11 @@ internal class UserTokenResolver {
     /// definition's property type is used so type parameters encode as
     /// `VAR(idx)`, and an init-only setter retains its
     /// `modreq(IsExternalInit)` return modifier.
-    internal func EncodeOpenPropertyAccessorSignature(property PropertySymbol, wantSetter bool) BlobBuilder {
+    internal func EncodeOpenPropertyAccessorSignature(
+        property PropertySymbol,
+        wantSetter bool,
+        ownerStruct StructSymbol? = nil
+    ) BlobBuilder {
         let sigBlob = BlobBuilder()
         let indexParams = if property.Parameters.IsDefaultOrEmpty {
             ImmutableArray[ParameterSymbol].Empty
@@ -1537,7 +1541,7 @@ internal class UserTokenResolver {
         // type has no `this` — the MemberRef signature must NOT set HASTHIS, or
         // the runtime fails to bind the accessor (MissingMethodException).
         let isInstanceAccessor = !property.IsStatic
-        let (importedGetter, importedSetter) = MethodInfoHelpers.TryFindImportedPropertySlots(nil, property)
+        let (importedGetter, importedSetter) = MethodInfoHelpers.TryFindImportedPropertySlots(ownerStruct, property)
         if wantSetter {
             let importedSetterParams = if importedSetter != nil {
                 importedSetter.GetParameters()

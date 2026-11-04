@@ -595,6 +595,10 @@ public interface IReader {
     prop this[in i int32] int32 { get; }
 }
 
+public interface IConfig {
+    prop Name string { get; init; }
+}
+
 public abstract class BaseInit {
     public abstract prop Tag string? { get; init; }
     public open func Borrow(in x int32) ref readonly int32;
@@ -607,6 +611,19 @@ public abstract class BaseInit {
 package ImplLib
 
 import ContractLib
+
+public class Config[T] : IConfig {
+    public prop Name string { get; init; }
+    public prop Value T? { get; init; }
+    public init() {
+        this.Name = ""
+        this.Value = default(T?)
+    }
+
+    shared {
+        public func Make(name string, v T) Config[T] -> Config[T]{ Name: name, Value: v }
+    }
+}
 
 public class Impl : BaseInit, IReader {
     private var slot int32 = 10
@@ -655,13 +672,15 @@ import ContractLib
 import ImplLib
 
 let impl = Impl{ Tag: "configured" }
+let cfg = Config[int32].Make("ok", 99)
+let icfg IConfig = cfg
 let reader IReader = impl
 let baseInit BaseInit = impl
 let k = 7
 let r1 = reader.Read(in k)
 let r2 = reader[in k]
 let r3 = baseInit.Borrow(in k)
-Console.WriteLine("${baseInit.Tag} $r1 $r2 $r3")
+Console.WriteLine("${baseInit.Tag} ${icfg.Name} ${cfg.Value} $r1 $r2 $r3")
 `)
             {
                 let args = List[string]{
@@ -704,7 +723,7 @@ Console.WriteLine("${baseInit.Tag} $r1 $r2 $r3")
             let stderr = proc.StandardError.ReadToEnd()
             proc.WaitForExit()
             Assert.True(proc.ExitCode == 0, "App failed at runtime ($stderr):\n$stdout")
-            Assert.Equal("configured 17 24 12" + Environment.NewLine, stdout)
+            Assert.Equal("configured ok 99 17 24 12" + Environment.NewLine, stdout)
         } finally {
             Directory.Delete(tempDir, recursive: true)
         }
