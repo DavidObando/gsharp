@@ -9,7 +9,9 @@ import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.Diagnostics.CodeAnalysis
 import System.Reflection
+import System.Runtime.CompilerServices
 import System.Threading
 
 /// Collects the candidate sets that overload resolution considers while one call binds, so that the
@@ -21,6 +23,14 @@ import System.Threading
 internal shared class CallCandidateRecorder {
     private let current ThreadLocal[Frame?] = ThreadLocal[Frame?]()
     internal let enabled AsyncLocal[bool] = AsyncLocal[bool]()
+    private let failedCallsBySyntax ConditionalWeakTable[SyntaxNode, BoundErrorExpression] = ConditionalWeakTable[
+        SyntaxNode,
+        BoundErrorExpression
+    ]()
+
+    /// Looks up a failed-call record by its call syntax node when an enclosing expression replaced its operand.
+    func TryGetFailedCall(syntax SyntaxNode, @NotNullWhen(true) out failedCall BoundErrorExpression?) bool ->
+    failedCallsBySyntax.TryGetValue(syntax, out failedCall)
 
     /// Turns recording on for the binding that runs in the returned scope, workers included. Only a
     /// compilation made for the semantic model asks for it, so `gsc` allocates nothing here.
@@ -175,6 +185,7 @@ internal shared class CallCandidateRecorder {
                         error.MemberGroup = selected
                         error.ReceiverType = frame.ReceiverType
                         error.IsExtensionCall = isExtension
+                        failedCallsBySyntax.AddOrUpdate(frame.Syntax, error)
                     }
                 }
                 if frame.FailedChildren is {Count: > 0} children {

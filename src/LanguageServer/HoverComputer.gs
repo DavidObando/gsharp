@@ -1029,19 +1029,27 @@ shared class SignatureHelpComputer {
         // Find the identifier token just before the paren
         var funcToken = SemanticLookup.FindTokenAt(content.SyntaxTree, funcNameEnd - 1)
         if funcToken?.Kind == SyntaxKind.CloseSquareBracketToken {
-            funcToken = funcToken!!.FirstAncestorOrSelf[CallExpressionSyntax]()
-                ?.Identifier ??
-                funcToken!!
-                .FirstAncestorOrSelf[BaseInterfaceCallExpressionSyntax]()?.MethodIdentifier
+            var ancestor SyntaxNode? = funcToken!!.Parent
+            while ancestor != nil {
+                if ancestor is CallExpressionSyntax callAncestor {
+                    funcToken = callAncestor.Identifier
+                    break
+                }
+                if ancestor is BaseInterfaceCallExpressionSyntax baseAncestor {
+                    funcToken = baseAncestor.MethodIdentifier
+                    break
+                }
+                ancestor = ancestor.Parent
+            }
         }
         // One signature per candidate that overload resolution considered (ADR-0212 slice S4); the
         // overload the call resolved to is the active one.
         let group = BoundSemantics.GetMemberGroup(compilation, funcToken)
-        let resolved = BoundSemantics.GetImportedSymbol(compilation, funcToken) ?? SemanticLookup.ResolveSymbol(
+        let boundSymbol = BoundSemantics.GetImportedSymbol(compilation, funcToken) ?? BoundSemantics.GetSymbol(
             compilation,
-            funcToken,
-            ct
+            funcToken
         )
+        let resolved = boundSymbol ?? SemanticLookup.ResolveSymbol(compilation, funcToken, ct)
         let candidates = group.Where((g Symbol) -> g is FunctionSymbol or ImportedFunctionSymbol).ToList()
         if candidates.Count == 0 && resolved is FunctionSymbol single {
             candidates.Add(single)
@@ -1081,8 +1089,12 @@ shared class SignatureHelpComputer {
                     .DeclaringType
             )
         }
-        if active < 0 && activeParameter > 0 {
-            active = signatures.FindIndex((s SignatureInformation) -> s.Parameters.Count() > activeParameter)
+        if activeParameter > 0 &&
+            (active < 0 || (boundSymbol == nil && signatures[active].Parameters.Count() <= activeParameter)) {
+            let byArity = signatures.FindIndex((s SignatureInformation) -> s.Parameters.Count() > activeParameter)
+            if byArity >= 0 {
+                active = byArity
+            }
         }
         active = Math.Max(active, 0)
         let activeCount = signatures[active].Parameters.Count()

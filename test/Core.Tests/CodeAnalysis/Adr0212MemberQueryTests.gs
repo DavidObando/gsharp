@@ -101,12 +101,15 @@ open class Adr0212MemberQueryTests {
             genericBaseGroup.ToArray(),
             genericBaseModel.GetMemberGroup(cast[BaseClassCallExpressionSyntax](genericBaseCall.Parent!!)).ToArray()
         )
-        let baseInterfaceNode = Trees[0].Root.DescendantNodes().OfType[BaseInterfaceCallExpressionSyntax]().Single()
-        let baseInterfaceGroup = genericBaseModel.GetMemberGroup(baseInterfaceNode)
+        let baseInterfaceNodes = Trees[0].Root.DescendantNodes().OfType[BaseInterfaceCallExpressionSyntax]().ToArray()
+        let baseInterfaceGroup = genericBaseModel.GetMemberGroup(baseInterfaceNodes[0])
         Assert.Equal(
             []string{"Put(int32)", "Put(int32, int32)"},
             baseInterfaceGroup.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
         )
+        let baseClrGroup = genericBaseModel.GetMemberGroup(baseInterfaceNodes[1])
+        Assert.Equal(3, baseClrGroup.Length)
+        Assert.All(baseClrGroup, (s Symbol) -> Assert.IsType[ImportedFunctionSymbol](s))
     }
 
     @Fact
@@ -149,6 +152,7 @@ import System.Text
 func UseUnfinished[T IImportedParsable[T]](sb StringBuilder, c Cat) {
     sb.Append( // PUnfinishedImported
     Free( // PUnfinishedFree
+    let n = 1 + Free( // PUnfinishedBinary
     c.Purr( // PUnfinishedInstance
     T.Parse( // PUnfinishedConstraint
     WriteLine(Console.WriteLine, 1, 2) // PFailedProbe
@@ -184,6 +188,11 @@ class UnfinishedDog : Animal {
         Assert.Equal(
             []string{"Free(int32)", "Free(string)", "Free(int32, int32)", "Free(bool)"},
             freeGroup.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
+        )
+        let binaryFreeGroup = model.GetMemberGroup(FindCall("PUnfinishedBinary"))
+        Assert.Equal(
+            []string{"Free(int32)", "Free(string)", "Free(int32, int32)", "Free(bool)"},
+            binaryFreeGroup.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
         )
         let instanceGroup = model.GetMemberGroup(FindCall("PUnfinishedInstance"))
         Assert.Equal(
@@ -768,6 +777,15 @@ class GDerived : GBase[int32], IBoxed[int32] {
         let e = base.Echo(1) // PGenericBase
         let p = base[IBoxed[int32]].Put(1) // PBaseInterface
         return e + p // PInGDerived
+    }
+}
+
+open class ClrListParent : List[int32] {
+}
+
+class ClrListChild : ClrListParent {
+    func FindInBase() int32 {
+        return base[ClrListParent].IndexOf(1) // PBaseClrBracket
     }
 }
 

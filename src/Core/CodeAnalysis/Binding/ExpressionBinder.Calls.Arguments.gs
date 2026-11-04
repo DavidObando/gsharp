@@ -1216,7 +1216,8 @@ internal partial class ExpressionBinder {
         mapEnumArgumentsToBaseClr bool = false,
         nonVirtualBaseCall bool = false,
         baseMemberLocation TextLocation? = nil,
-        allowProtectedInherited bool = true
+        allowProtectedInherited bool = true,
+        callSyntax SyntaxNode? = nil
     ) bool {
         result = nil
         CallCandidateRecorder.RecordMethods(candidates, receiver.Type)
@@ -1481,9 +1482,10 @@ internal partial class ExpressionBinder {
                     result = BoundErrorExpression(nil)
                     return true
                 }
+                let effectiveSyntax SyntaxNode = callSyntax ?? ce
                 var inheritedCall = ConversionClassifier.AutoDereferenceRefReturn(
                     BoundImportedInstanceCallExpression(
-                        ce,
+                        effectiveSyntax,
                         inheritedCallReceiver,
                         best,
                         returnType,
@@ -1497,7 +1499,7 @@ internal partial class ExpressionBinder {
                 // through `base.M()` or unqualified, is completed like any other
                 // imported suspending call (ADR-0174 D4).
                 inheritedCall = CompleteImportedSuspendingCall(inheritedCall, best, ce.Location)
-                result = WrapWithHandlerPrelude(inheritedCall, inheritedHandlerPrelude, ce)
+                result = WrapWithHandlerPrelude(inheritedCall, inheritedHandlerPrelude, effectiveSyntax)
                 return true
             }
             case ClrOverloadResolution.ResolutionOutcome.Ambiguous {
@@ -1644,10 +1646,12 @@ internal partial class ExpressionBinder {
         let CheckUserClassInterface = func (source Type, target Type) bool {
             return IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target, argumentOffset: 1)
         }
-        CallCandidateRecorder.RecordExtensionMethods(
-            this.memberLookup.CollectImportedExtensionMethods(methodName),
-            receiver.Type
-        )
+        if CallCandidateRecorder.enabled.Value {
+            CallCandidateRecorder.RecordExtensionMethods(
+                this.memberLookup.CollectImportedExtensionMethods(methodName),
+                receiver.Type
+            )
+        }
         let deferredInferenceArgs = [arguments.Length + 1]bool
         argTypes[0] = receiverClrType
         var hasUserClassArg = false
@@ -2572,7 +2576,9 @@ internal partial class ExpressionBinder {
         var arityMatch FunctionSymbol? = nil
         var anyMatch FunctionSymbol? = nil
         var matchIndex = -1
-        CallCandidateRecorder.RecordFunctions(ifaceSym.GetMethods(methodName), ifaceSym)
+        if CallCandidateRecorder.enabled.Value {
+            CallCandidateRecorder.RecordFunctions(ifaceSym.GetMethods(methodName), ifaceSym)
+        }
         let overloads = ifaceSym.Methods
         for var i = 0; i < overloads.Length; i++ {
             let candidate = overloads[i]
@@ -2743,7 +2749,7 @@ internal partial class ExpressionBinder {
             // directly from a BCL base, or the nearest user base does not declare
             // it). Fall back to the imported/BCL base type so `base.Dispose(...)`,
             // `base.ToString()`, etc. resolve and emit a non-virtual `call`.
-            if TryBindBaseClrInstanceCall(ce, methodName, clrBaseFallback, out var bclResult) {
+            if TryBindBaseClrInstanceCall(ce, methodName, clrBaseFallback, out var bclResult, callSyntax) {
                 return bclResult!!
             }
             Diagnostics.ReportBaseClassCallMemberNotFound(
@@ -2863,7 +2869,8 @@ internal partial class ExpressionBinder {
         ce CallExpressionSyntax,
         methodName string,
         clrBase Type?,
-        @NotNullWhen(true) out result BoundExpression?
+        @NotNullWhen(true) out result BoundExpression?,
+        callSyntax SyntaxNode? = nil
     ) bool {
         result = nil
         let candidates = CollectBaseClrMethodCandidates(clrBase, methodName)
@@ -2891,7 +2898,8 @@ internal partial class ExpressionBinder {
             typeArgSymbols: default(ImmutableArray[TypeSymbol]),
             argumentNames: argumentNames,
             nonVirtualBaseCall: true,
-            baseMemberLocation: ce.Identifier.Location
+            baseMemberLocation: ce.Identifier.Location,
+            callSyntax: callSyntax
         )
     }
 

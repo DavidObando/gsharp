@@ -836,20 +836,21 @@ partial class SemanticModel {
         ) {
             return ImmutableArray.Create(single)
         }
-        if token.Parent is {} parent &&
-            index
-            .Value
-            .FailedCalls
-            .TryGetValue(parent, out var failedCall) &&
-            !failedCall
-            .MemberGroup
-            .IsDefaultOrEmpty {
-            return BuildRecordedMemberGroup(
-                failedCall.MemberGroup,
-                failedCall.ReceiverType,
-                called: nil,
-                failedCall.IsExtensionCall
-            )
+        if token.Parent is {} parent {
+            var failed BoundErrorExpression? = nil
+            if index.Value.FailedCalls.TryGetValue(parent, out var indexedFailed) {
+                failed = indexedFailed
+            } else if CallCandidateRecorder.TryGetFailedCall(parent, out var recordedFailed) {
+                failed = recordedFailed
+            }
+            if failed is {} failedCall && !failedCall.MemberGroup.IsDefaultOrEmpty {
+                return BuildRecordedMemberGroup(
+                    failedCall.MemberGroup,
+                    failedCall.ReceiverType,
+                    called: nil,
+                    failedCall.IsExtensionCall
+                )
+            }
         }
         return ImmutableArray[Symbol].Empty
     }

@@ -105,29 +105,45 @@ open class Adr0212MemberFeatureTests {
     func SignatureHelp_OnAnUnfinishedSourceAndBaseCall_ListsEveryOverload() {
         const unfinished = `package Members
 func Pick(a int32) int32 { return a }
-func Pick(a string) int32 { return 0 }
+func Pick(a int32, b int32) int32 { return a + b }
 
 open class Animal {
     func Speak(a int32) string { return "" }
     func Speak(a string) string { return a }
+    func Echo[T](a T) int32 { return 0 }
+    func Echo[T](a T, b int32) int32 { return b }
 }
 
 class Dog : Animal {
     func Speak(a bool) string { return "" }
     func Act() {
-        Pick(
+        let n = 1 + Pick(1, 
+        let m = Pick(base[Animal].Echo[int32](1))
         base.Speak(
     }
 }
 `
         let content = LanguageServerTestHelpers.Content(unfinished)
-        let pickPos = LanguageServerTestHelpers.PositionOf(unfinished, "Pick(", 2)
+        let pickPos = LanguageServerTestHelpers.PositionOf(unfinished, "Pick(1, ")
         let pickHelp = SignatureHelpComputer.ComputeSignatureHelp(
             content,
-            Position(pickPos.Line, pickPos.Character + "Pick(".Length)
+            Position(pickPos.Line, pickPos.Character + "Pick(1, ".Length)
         )
         Assert.NotNull(pickHelp)
         Assert.Equal(2, pickHelp!!.Signatures.Count())
+        Assert.Equal(1, pickHelp!!.ActiveSignature)
+        Assert.Equal(1, pickHelp!!.ActiveParameter)
+        let nestedBasePos = LanguageServerTestHelpers.PositionOf(unfinished, "Echo[int32](1")
+        let nestedBaseHelp = SignatureHelpComputer.ComputeSignatureHelp(
+            content,
+            Position(nestedBasePos.Line, nestedBasePos.Character + "Echo[int32](".Length)
+        )
+        Assert.NotNull(nestedBaseHelp)
+        Assert.Equal(2, nestedBaseHelp!!.Signatures.Count())
+        Assert.All(
+            nestedBaseHelp!!.Signatures,
+            (s SignatureInformation) -> Assert.Contains("Echo", s.Label, StringComparison.Ordinal)
+        )
         let basePos = LanguageServerTestHelpers.PositionOf(unfinished, "base.Speak(")
         let baseHelp = SignatureHelpComputer.ComputeSignatureHelp(
             content,
