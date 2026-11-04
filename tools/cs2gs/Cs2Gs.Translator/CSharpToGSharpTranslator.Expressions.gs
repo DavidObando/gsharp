@@ -5639,7 +5639,10 @@ partial class CSharpToGSharpTranslator {
                     return true
                 }
                 case forEach is CommonForEachStatementSyntax {
-                    return this.ForEachIterationRunsUserCode(forEach) || this.ContainsNestedForEach(forEach)
+                    return this.ForEachIterationRunsUserCode(forEach) || this.ForEachUntypedLoopVariableIsUsed(
+                        forEach
+                    ) ||
+                        this.LoopRegionLosesByReferenceNarrowing(forEach)
                 }
                 case _ is Microsoft
                     .CodeAnalysis
@@ -5648,7 +5651,7 @@ partial class CSharpToGSharpTranslator {
                     .WhileStatementSyntax or
                     _ is DoStatementSyntax or
                     _ is ForStatementSyntax {
-                    return !this.LoopHeaderIsLiteralFalse(node) && this.ContainsNestedForEach(node)
+                    return !this.LoopHeaderIsLiteralFalse(node) && this.LoopRegionLosesByReferenceNarrowing(node)
                 }
                 case identifier is IdentifierNameSyntax when identifier.Parent is MemberAccessExpressionSyntax{
                     Name: var name
@@ -6148,30 +6151,373 @@ partial class CSharpToGSharpTranslator {
         /// Whether the condition of a `while`, `do` or `for` loop is the literal `false`. gsc does not apply a loop's
         /// region at the entry of such a loop (`HeaderIsLiteralFalse`), because it has no back edge.
         private func LoopHeaderIsLiteralFalse(loop Microsoft.CodeAnalysis.SyntaxNode) bool {
-            var condition Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = nil
-            if loop is Microsoft.CodeAnalysis.CSharp.Syntax.WhileStatementSyntax whileLoop {
-                condition = whileLoop.Condition
-            } else if loop is DoStatementSyntax doLoop {
-                condition = doLoop.Condition
-            } else if loop is ForStatementSyntax forLoop {
-                condition = forLoop.Condition
-            }
+            var condition Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = this.GetLoopCondition(loop)
             while condition is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
                 condition = parenthesized.Expression
             }
             return condition != nil && condition.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.FalseLiteralExpression)
         }
 
-        /// ADR-0213 section 9 (#5650): gsc scans a loop's region without types, so a `for ... in` nested in the body
-        /// of a loop counts as an iteration that runs user code for the enclosing loop, whatever its collection is.
-        /// The loop then removes the fact at its entry, and the fact stays removed after the loop.
-        private func ContainsNestedForEach(loop Microsoft.CodeAnalysis.SyntaxNode) bool {
-            return loop.DescendantNodes(
+        private func GetLoopCondition(loop Microsoft.CodeAnalysis.SyntaxNode?) Microsoft
+            .CodeAnalysis
+            .CSharp
+            .Syntax
+            .ExpressionSyntax? -> switch loop {
+            case whileLoop is Microsoft.CodeAnalysis.CSharp.Syntax.WhileStatementSyntax: whileLoop.Condition
+            case doLoop is DoStatementSyntax: doLoop.Condition
+            case forLoop is ForStatementSyntax: forLoop.Condition
+            default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+        }
+
+        /// When [`guard`](paramref) is in the condition of a `while`, `for` or `do` loop and [`use`](paramref) is
+        /// after that loop, returns that loop. In gsc (`RecordLoopExitFacts`, ADR-0213 R7 (f)), the exit state of a
+        /// loop is the state of its header, not of its body or `for` post statement.
+        private func GetExitedConditionLoop(
+            $guard Microsoft.CodeAnalysis.SyntaxNode,
+            use Microsoft.CodeAnalysis.SyntaxNode
+        ) Microsoft
+            .CodeAnalysis
+            .CSharp
+            .Syntax
+            .StatementSyntax? {
+            for var current Microsoft.CodeAnalysis.SyntaxNode? = $guard; current != nil; current = current!!.Parent {
+                switch current.Parent {
+                    case whileLoop is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .WhileStatementSyntax when whileLoop.Condition == current {
+                        return if use.SpanStart >= whileLoop.Span.End {
+                            cast[Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax](whileLoop)
+                        } else {
+                            default(Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax?)
+                        }
+                    }
+                    case forLoop is ForStatementSyntax when forLoop.Condition == current {
+                        return if use.SpanStart >= forLoop.Span.End {
+                            cast[Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax](forLoop)
+                        } else {
+                            default(Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax?)
+                        }
+                    }
+                    case doLoop is DoStatementSyntax when doLoop.Condition == current {
+                        return if use.SpanStart >= doLoop.Span.End {
+                            cast[Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax](doLoop)
+                        } else {
+                            default(Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax?)
+                        }
+                    }
+                    case Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax,
+                    Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .PrefixUnaryExpressionSyntax,
+                    Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .BinaryExpressionSyntax {
+                        continue
+                    }
+                    default {
+                        return nil
+                    }
+                }
+            }
+            return nil
+        }
+
+        /// ADR-0213 section 9 (#5650, #5692): gsc scans a loop's region without types, so a `for ... in` nested in the
+        /// body of a loop counts as an iteration that runs user code for the enclosing loop, whatever its collection
+        /// is, and a conversion emitted as `T(x)` counts as a construction call (`CallIsIndirect`). The loop then
+        /// removes the fact at its entry, and the fact stays removed after the loop.
+        private func LoopRegionLosesByReferenceNarrowing(loop Microsoft.CodeAnalysis.SyntaxNode) bool {
+            let root Microsoft.CodeAnalysis.SyntaxNode = if loop is CommonForEachStatementSyntax forEach {
+                forEach.Statement
+            } else {
+                loop
+            }
+            return root.DescendantNodesAndSelf(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> !(
                     node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax
                 )
             )
-                .Any((node Microsoft.CodeAnalysis.SyntaxNode) -> node is CommonForEachStatementSyntax)
+                .Any(
+                (node Microsoft.CodeAnalysis.SyntaxNode) -> !object.ReferenceEquals(node, loop) &&
+                    !this.IsInForInitializer(loop, node) &&
+                    (node is CommonForEachStatementSyntax || this.NodeEmitsTypeConversionCall(node))
+            )
+        }
+
+        private func IsInForInitializer(
+            loop Microsoft.CodeAnalysis.SyntaxNode,
+            node Microsoft.CodeAnalysis.SyntaxNode
+        ) bool {
+            if loop is not ForStatementSyntax forLoop {
+                return false
+            }
+            if forLoop.Declaration != nil && forLoop.Declaration!!.Span.Contains(node.Span) {
+                return true
+            }
+            return forLoop.Initializers.Any(
+                (initializer Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) -> initializer.Span.Contains(
+                    node.Span
+                )
+            )
+        }
+
+        /// ADR-0213 L1 (#5692): gsc gives no origin to the variables of a deconstructing `for (a, b) in items` loop,
+        /// and cannot resolve the element origin of an untyped `for x in collection` loop when the collection is a
+        /// call or other expression without a receiver path. Any use of such a loop variable in the body then counts
+        /// as an untyped operator, read, or conversion that removes a by-reference fact.
+        private func ForEachUntypedLoopVariableIsUsed(forEach CommonForEachStatementSyntax) bool {
+            let locals = List[ILocalSymbol]()
+            switch forEach {
+                case deconstructing is ForEachVariableStatementSyntax {
+                    for designation in deconstructing
+                        .Variable
+                        .DescendantNodesAndSelf()
+                        .OfType[SingleVariableDesignationSyntax]() {
+                        if this.context.GetDeclaredSymbol(designation) is ILocalSymbol local {
+                            locals.Add(local)
+                        }
+                    }
+                }
+                case typed is ForEachStatementSyntax {
+                    let info = this.context.SemanticModel.GetForEachStatementInfo(typed)
+                    if (typed.Type.IsVar || info.ElementConversion.IsIdentity) && !this.ForEachCollectionHasRegionPath(
+                        typed.Expression
+                    ) &&
+                        this
+                        .context
+                        .GetDeclaredSymbol(typed) is ILocalSymbol local {
+                        locals.Add(local)
+                    }
+                }
+            }
+            if locals.Count == 0 {
+                return false
+            }
+            return forEach
+                .Statement
+                .DescendantNodesAndSelf(
+                (node Microsoft.CodeAnalysis.SyntaxNode) -> !(
+                    node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax
+                )
+            )
+                .OfType[IdentifierNameSyntax]()
+                .Any(
+                (identifier IdentifierNameSyntax) -> !IsNameofArgument(identifier) &&
+                    this
+                    .context
+                    .GetSymbolInfo(identifier)
+                    .Symbol is ILocalSymbol referenced &&
+                    locals.Any((local ILocalSymbol) -> SymbolEqualityComparer.Default.Equals(local, referenced))
+            )
+        }
+
+        private func ForEachCollectionHasRegionPath(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            switch StripParentheses(expression) {
+                case IdentifierNameSyntax,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ThisExpressionSyntax,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .LiteralExpressionSyntax,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .InterpolatedStringExpressionSyntax {
+                    return true
+                }
+                case suppression is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .PostfixUnaryExpressionSyntax when suppression
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression) {
+                    return this.ForEachCollectionHasRegionPath(suppression.Operand)
+                }
+                case member is MemberAccessExpressionSyntax {
+                    return this.ForEachCollectionHasRegionPath(member.Expression)
+                }
+                case element is Microsoft.CodeAnalysis.CSharp.Syntax.ElementAccessExpressionSyntax {
+                    return this.ForEachCollectionHasRegionPath(element.Expression)
+                }
+                default {
+                    return false
+                }
+            }
+        }
+
+        /// ADR-0213 L1 (#5692): whether the translator emits [`node`](paramref) with a G# conversion call (`T(x)` or
+        /// `cast[T](x)`), which gsc's region scanner counts as a construction call (`CallIsIndirect`).
+        private func NodeEmitsTypeConversionCall(node Microsoft.CodeAnalysis.SyntaxNode) bool {
+            switch node {
+                case cast is CastExpressionSyntax {
+                    if IsNameofArgument(cast) {
+                        return false
+                    }
+                    let targetSymbol = this.context.GetTypeInfo(cast.Type).Type
+                    let isNullDefault = StripParentheses(cast.Expression).IsKind(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.NullLiteralExpression
+                    ) &&
+                        (
+                        (targetSymbol != nil && targetSymbol.IsReferenceType) ||
+                            cast.Type is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .NullableTypeSyntax ||
+                            targetSymbol
+                            ?.OriginalDefinition
+                            .SpecialType == SpecialType.System_Nullable_T
+                    )
+                    return !isNullDefault
+                }
+                case assignment is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax {
+                    if assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) ||
+                        assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.LeftShiftAssignmentExpression) ||
+                        assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.RightShiftAssignmentExpression) ||
+                        assignment.IsKind(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.UnsignedRightShiftAssignmentExpression
+                    ) {
+                        return false
+                    }
+                    return TryGetNumericKind(this.context.GetTypeInfo(assignment.Left).Type, out var leftKind) &&
+                        TryGetNumericKind(this.context.GetTypeInfo(assignment.Right).Type, out var rightKind) &&
+                        leftKind != rightKind
+                }
+                case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax {
+                    if binary.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.LeftShiftExpression) || binary.IsKind(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.RightShiftExpression
+                    ) ||
+                        binary
+                        .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.UnsignedRightShiftExpression) {
+                        let shiftLeft = this.context.GetTypeInfo(binary.Left)
+                        return TryGetNumericKind(shiftLeft.Type, out var shiftKind) &&
+                            TryGetNumericKind(shiftLeft.ConvertedType, out var shiftConverted) &&
+                            shiftKind != shiftConverted &&
+                            IsNonNullableValueType(shiftLeft.ConvertedType)
+                    }
+                    let leftInfo = this.context.GetTypeInfo(binary.Left)
+                    let rightInfo = this.context.GetTypeInfo(binary.Right)
+                    if binary.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression) {
+                        let resultType = this.context.GetTypeInfo(binary).Type
+                        return TryGetNumericKind(leftInfo.Type, out var coalesceLeft) &&
+                            TryGetNumericKind(rightInfo.Type, out var coalesceRight) &&
+                            coalesceLeft != coalesceRight &&
+                            TryGetNumericKind(resultType, out var coalesceResult) &&
+                            coalesceRight != coalesceResult
+                    }
+                    if !IsNumericPromotionOperator(binary.OperatorToken.Text) ||
+                        !TryGetNumericKind(leftInfo.Type, out var leftUnderlying) ||
+                        !TryGetNumericKind(rightInfo.Type, out var rightUnderlying) ||
+                        leftUnderlying == rightUnderlying {
+                        return false
+                    }
+                    let leftConst = this.context.SemanticModel.GetConstantValue(binary.Left).HasValue
+                    let rightConst = this.context.SemanticModel.GetConstantValue(binary.Right).HasValue
+                    let bothIntegral = IsIntegralNumericKind(leftUnderlying) && IsIntegralNumericKind(rightUnderlying)
+                    let isComparison = IsComparisonOperator(binary.OperatorToken.Text)
+                    if rightConst &&
+                        !leftConst &&
+                        bothIntegral &&
+                        (isComparison || !this.OperandWidenedToConstantType(binary.Left, rightUnderlying)) &&
+                        this.IntegralConstantFits(binary.Right, leftUnderlying) {
+                        return IsNonNullableValueType(leftInfo.Type)
+                    }
+                    if leftConst &&
+                        !rightConst &&
+                        bothIntegral &&
+                        (isComparison || !this.OperandWidenedToConstantType(binary.Right, leftUnderlying)) &&
+                        this.IntegralConstantFits(binary.Left, rightUnderlying) {
+                        return IsNonNullableValueType(rightInfo.Type)
+                    }
+                    return (
+                        TryGetNumericKind(leftInfo.ConvertedType, out var leftConv) &&
+                            leftConv != leftUnderlying &&
+                            IsNonNullableValueType(leftInfo.ConvertedType)
+                    ) ||
+                        (
+                        TryGetNumericKind(rightInfo.ConvertedType, out var rightConv) &&
+                            rightConv != rightUnderlying &&
+                            IsNonNullableValueType(rightInfo.ConvertedType)
+                    )
+                }
+                case conditional is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax {
+                    let conditionalInfo = this.context.GetTypeInfo(conditional)
+                    let resultType = conditionalInfo.Type ?? conditionalInfo.ConvertedType
+                    if resultType == nil ||
+                        !IsNonNullableValueType(resultType) ||
+                        !TryGetNumericKind(resultType, out var resultKind) {
+                        return false
+                    }
+                    return (
+                        TryGetNumericKind(this.context.GetTypeInfo(conditional.WhenTrue).Type, out var trueKind) &&
+                            trueKind != resultKind
+                    ) ||
+                        (
+                        TryGetNumericKind(this.context.GetTypeInfo(conditional.WhenFalse).Type, out var falseKind) &&
+                            falseKind != resultKind
+                    )
+                }
+                case arm is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax {
+                    let info = this.context.GetTypeInfo(arm.Expression)
+                    return TryGetNumericKind(info.Type, out var armSource) &&
+                        TryGetNumericKind(info.ConvertedType, out var armConverted) &&
+                        armSource != armConverted &&
+                        IsNonNullableValueType(info.ConvertedType)
+                }
+                case argument is ArgumentSyntax when argument.Parent is ArgumentListSyntax &&
+                    !this
+                    .GSharpAcceptsImplicitNumericArgument(argument) {
+                    let info = this.context.GetTypeInfo(argument.Expression)
+                    if argument.Expression is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .LiteralExpressionSyntax literal &&
+                        literal
+                        .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NumericLiteralExpression) {
+                        return (
+                            TryGetNumericKind(info.Type, out var litSource) &&
+                                TryGetNumericKind(info.ConvertedType, out var litTarget) &&
+                                litSource != litTarget &&
+                                !this.TargetsConcreteNumericParameter(argument) &&
+                                IsNonNullableValueType(info.ConvertedType)
+                        ) ||
+                            (
+                            info.Type != nil && info.ConvertedType != nil && !SymbolEqualityComparer.Default.Equals(
+                                info.Type,
+                                info.ConvertedType
+                            ) &&
+                                IsSignedIntegerSpecialType(info.Type!!.SpecialType) &&
+                                IsUnsignedIntegerSpecialType(info.ConvertedType!!.SpecialType)
+                        )
+                    }
+                    return TryGetNumericKind(info.Type, out var argSource) &&
+                        TryGetNumericKind(info.ConvertedType, out var argTarget) &&
+                        argSource != argTarget &&
+                        IsNonNullableValueType(info.ConvertedType)
+                }
+                default {
+                    return false
+                }
+            }
         }
 
         /// Whether the `ref` expression [`reference`](paramref) initializes or reassigns a `ref readonly` local, which
@@ -6407,15 +6753,45 @@ partial class CSharpToGSharpTranslator {
                 .Any(WritesReferenceStorage) {
                 return true
             }
+            let exitedLoop = this.GetExitedConditionLoop(narrowingGuard, use)
+            let exitedCondition = if exitedLoop == nil {
+                default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            } else {
+                this.GetLoopCondition(exitedLoop)
+            }
             if $scope.DescendantNodes(OutsideNestedFunctions).Any(
-                (node Microsoft.CodeAnalysis.SyntaxNode) -> node.SpanStart >= narrowingGuard
-                    .Span
-                    .End &&
-                    node
-                    .Span
-                    .End <= use.SpanStart &&
-                    (RunsSourceCode(node) || WritesReferenceStorage(node)) &&
-                    !this.IsInThenBranchOfElseRead(node, use, $scope)
+                (node Microsoft.CodeAnalysis.SyntaxNode) -> (
+                    if exitedLoop != nil {
+                        (
+                            exitedCondition != nil && exitedCondition.Span.Contains(node.Span) &&
+                                !object.ReferenceEquals(node, narrowingGuard) &&
+                                (
+                                RunsSourceCode(node) ||
+                                    WritesReferenceStorage(node) ||
+                                    (byReference && this.NodeEmitsTypeConversionCall(node))
+                            )
+                        ) ||
+                            (
+                            node.SpanStart >= exitedLoop
+                                .Span
+                                .End &&
+                                node
+                                .Span
+                                .End <= use.SpanStart &&
+                                (RunsSourceCode(node) || WritesReferenceStorage(node)) &&
+                                !this.IsInThenBranchOfElseRead(node, use, $scope)
+                        )
+                    } else {
+                        node.SpanStart >= narrowingGuard
+                            .Span
+                            .End &&
+                            node
+                            .Span
+                            .End <= use.SpanStart &&
+                            (RunsSourceCode(node) || WritesReferenceStorage(node)) &&
+                            !this.IsInThenBranchOfElseRead(node, use, $scope)
+                    }
+                )
             ) {
                 return true
             }
@@ -6832,19 +7208,45 @@ partial class CSharpToGSharpTranslator {
             use Microsoft.CodeAnalysis.SyntaxNode?,
             $scope Microsoft.CodeAnalysis.SyntaxNode
         ) bool {
+            let exitedLoop = if use == nil {
+                default(Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax?)
+            } else {
+                this.GetExitedConditionLoop(start, use)
+            }
+            let exitedCondition = if exitedLoop == nil {
+                default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            } else {
+                this.GetLoopCondition(exitedLoop)
+            }
             return $scope.DescendantNodes(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> !(
                     (node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax)
                 )
             )
                 .Any(
-                (node Microsoft.CodeAnalysis.SyntaxNode) -> node.SpanStart > start
-                    .Span
-                    .End &&
-                    node
-                    .Span
-                    .End <= use!!.SpanStart &&
-                    this.SyntaxNodeWritesSymbol(node, symbol) && !this.IsInThenBranchOfElseRead(node, use!!, $scope)
+                (node Microsoft.CodeAnalysis.SyntaxNode) -> (
+                    if exitedLoop != nil {
+                        (exitedCondition != nil && exitedCondition.Span.Contains(node.Span)) ||
+                            (
+                            node.SpanStart >= exitedLoop
+                                .Span
+                                .End &&
+                                node
+                                .Span
+                                .End <= use!!.SpanStart &&
+                                !this.IsInThenBranchOfElseRead(node, use!!, $scope)
+                        )
+                    } else {
+                        node.SpanStart > start
+                            .Span
+                            .End &&
+                            node
+                            .Span
+                            .End <= use!!.SpanStart &&
+                            !this.IsInThenBranchOfElseRead(node, use!!, $scope)
+                    }
+                ) &&
+                    this.SyntaxNodeWritesSymbol(node, symbol)
             )
         }
 

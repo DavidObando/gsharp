@@ -1205,6 +1205,235 @@ public class Demo
         Assert.Equal(1, Regex.Matches(printed, `s!!`).Count)
     }
 
+    /// Issue #5692 (1): a numeric conversion in a loop that cs2gs emits as `T(x)` counts as a construction call in
+    /// gsc's region scanner (`CallIsIndirect`), which removes a by-reference fact at loop entry and after the loop.
+    /// Outside a loop, or after a guard inside the same loop body, the fact stays.
+    @Fact
+    func RefParameter_ReadAroundALoopWithAConversionCall_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+public class Demo
+{
+    public static int ForEachCharToInt(ref string? s, string text)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var c in text) total += c;
+        return s.Length + total;
+    }
+    public static long WhileIntToLong(ref string? s)
+    {
+        if (s == null) return 0;
+        long total = 0;
+        var i = 0;
+        while (i < 2)
+        {
+            total += s.Length;
+            i++;
+        }
+        return total + s.Length;
+    }
+    public static int GuardInsideLoop(ref string? s, string text)
+    {
+        var total = 0;
+        foreach (var c in text)
+        {
+            if (s == null) continue;
+            total += c;
+            total += s.Length + 1;
+        }
+        return total;
+    }
+    public static long OutsideLoop(ref string? s, int n)
+    {
+        if (s == null) return 0;
+        long wide = (long)n;
+        return s.Length + wide;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        return ForEachCharToInt(ref text, "xy") + "," + WhileIntToLong(ref text) + "," +
+            GuardInsideLoop(ref text, "z") + "," + OutsideLoop(ref text, 4);
+    }
+}`)
+        Assert.Contains("return s!!.Length + total", printed)
+        Assert.Contains("total += int64(s!!.Length)", printed)
+        Assert.Contains("return total + int64(s!!.Length)", printed)
+        Assert.Contains("total += s.Length + 1", printed)
+        Assert.Contains("return int64(s.Length) + wide", printed)
+    }
+
+    /// Issue #5692 (2): gsc's region scanner gives no origin to the variables of a deconstructing `for (a, b) in items`
+    /// loop, so using a deconstructed variable in the body removes a by-reference fact at loop entry and after it.
+    @Fact
+    func RefParameter_ReadAroundAForEachThatUsesADeconstructedLoopVariable_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+public class Demo
+{
+    public static int AfterLoop(ref string? s, (int, int)[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (a, b) in items) total += a + b;
+        return s.Length + total;
+    }
+    public static int InsideLoop(ref string? s, (int, int)[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (a, b) in items) total += a + s.Length;
+        return total;
+    }
+    public static int UnusedVariables(ref string? s, (int, int)[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (a, b) in items) total += s.Length + 1;
+        return s.Length + total;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        var items = new[] { (1, 2) };
+        return AfterLoop(ref text, items) + "," + InsideLoop(ref text, items) + "," + UnusedVariables(ref text, items);
+    }
+}`)
+        Assert.Contains("return s!!.Length + total", printed)
+        Assert.Contains("total += a + s!!.Length", printed)
+        Assert.Contains("total += s.Length + 1", printed)
+        Assert.Equal(2, Regex.Matches(printed, `s!!`).Count)
+    }
+
+    /// Issue #5692 (3): gsc's region scanner cannot resolve the element origin of an untyped `for x in call()` loop,
+    /// so reading a member of `x` in the body counts as a read on an untyped receiver (W5) and removes a by-reference
+    /// fact. Over a parameter slice `parts`, the scanner resolves the element and keeps the fact.
+    @Fact
+    func RefParameter_ReadAroundAForEachOverACallWhoseLoopVariableIsRead_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+public class Demo
+{
+    public static int AfterCallCollection(ref string? s)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in "a,b".Split(',')) total += part.Length;
+        return s.Length + total;
+    }
+    public static int InsideCallCollection(ref string? s)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in "a,b".Split(','))
+        {
+            total += part.Length;
+            total += s.Length;
+        }
+        return total;
+    }
+    public static int OverParameterArray(ref string? s, string[] parts)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in parts) total += part.Length;
+        return s.Length + total + 1;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        return AfterCallCollection(ref text) + "," + InsideCallCollection(ref text) + "," +
+            OverParameterArray(ref text, new[] { "a", "b" });
+    }
+}`)
+        Assert.Contains("return s!!.Length + total", printed)
+        Assert.Contains("total += s!!.Length", printed)
+        Assert.Contains("return s.Length + total + 1", printed)
+        Assert.Equal(2, Regex.Matches(printed, `s!!`).Count)
+    }
+
+    /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null
+    /// when no `break` targets the loop (`RecordLoopExitFacts`, ADR-0213 R7 (f)). A loop with a `break` targeting it,
+    /// or whose condition itself runs an accessor that can write by-reference storage, does not get the loop-exit fact
+    /// on main, so its read after the loop stays asserted.
+    @Fact
+    func RefParameter_ReadAfterALoopWhoseExitConditionProvesNonNull_StaysBare() {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+public sealed class Box
+{
+    public int F;
+}
+public class Demo
+{
+    public static int DoLoop(ref string? s, Box box)
+    {
+        do { box.F = 1; s = box.F > 0 ? "abc" : null; } while (s == null);
+        return s.Length + 1;
+    }
+    public static int DoLoopWithGuardAndForEach(ref string? s, Box box, int[] items)
+    {
+        if (s == null) return 0;
+        do
+        {
+            foreach (var i in items) { box.F = i; s = i > 0 ? "abc" : null; }
+        } while (s == null);
+        return s.Length + 2;
+    }
+    public static int WhileLoop(ref string? s, Box box)
+    {
+        s = null;
+        while (s == null)
+        {
+            box.F = 1;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 3;
+    }
+    public static int ForLoop(ref string? s, Box box)
+    {
+        s = null;
+        for (var i = 0; s == null; i++)
+        {
+            box.F = 1;
+            s = i >= 0 ? "abc" : null;
+        }
+        return s.Length + 4;
+    }
+    public static int WhileLoopWithBreak(ref string? s, Box box)
+    {
+        while (s == null)
+        {
+            s = "abc";
+            if (box.F == 0) break;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 5;
+    }
+    public static int WhileConditionRunsAccessor(ref string? s, Lazy<int> lazy)
+    {
+        while (lazy.Value < 0 || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 6;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        return DoLoop(ref text, new Box()) + "," + DoLoopWithGuardAndForEach(ref text, new Box(), new[] { 1 }) + "," +
+            WhileLoop(ref text, new Box()) + "," + ForLoop(ref text, new Box()) + "," +
+            WhileLoopWithBreak(ref text, new Box()) + "," +
+            WhileConditionRunsAccessor(ref text, new Lazy<int>(() => 1));
+    }
+}`)
+        Assert.Contains("return s.Length + 1", printed)
+        Assert.Contains("return s.Length + 2", printed)
+        Assert.Contains("return s.Length + 3", printed)
+        Assert.Contains("return s.Length + 4", printed)
+        Assert.Contains("return s!!.Length + 5", printed)
+        Assert.Contains("return s!!.Length + 6", printed)
+        Assert.Equal(2, Regex.Matches(printed, `s!!`).Count)
+    }
+
     shared {
         /// Runs `Demo.Run()` of the C# and of its translation and compares the output. [`library`](paramref) is C#
         /// that both reference as a prebuilt assembly (`Lib5617`), so its types are imported in the G#.

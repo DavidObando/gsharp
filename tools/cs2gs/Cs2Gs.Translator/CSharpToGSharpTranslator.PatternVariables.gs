@@ -1431,12 +1431,30 @@ partial class CSharpToGSharpTranslator {
                         case whileStatement is WhileStatementSyntax when whileStatement.Condition == node {
                             if whenTrue {
                                 regions.Add(whileStatement.Statement)
+                            } else if !includeWhenClauseRegion && CanNarrowAfterLoopExit(whileStatement) {
+                                AddFollowingStatements(whileStatement, regions)
                             }
                             return regions
                         }
                         case forStatement is ForStatementSyntax when forStatement.Condition == node {
                             if whenTrue {
                                 regions.Add(forStatement.Statement)
+                            } else if !includeWhenClauseRegion &&
+                                (forStatement.Declaration?.Variables.Count ?? 0) <= 1 &&
+                                forStatement
+                                .Initializers
+                                .Count <= 1 &&
+                                forStatement
+                                .Incrementors
+                                .Count <= 1 &&
+                                CanNarrowAfterLoopExit(forStatement) {
+                                AddFollowingStatements(forStatement, regions)
+                            }
+                            return regions
+                        }
+                        case doStatement is DoStatementSyntax when doStatement.Condition == node {
+                            if !whenTrue && !includeWhenClauseRegion && CanNarrowAfterLoopExit(doStatement) {
+                                AddFollowingStatements(doStatement, regions)
                             }
                             return regions
                         }
@@ -1543,13 +1561,77 @@ partial class CSharpToGSharpTranslator {
                 }
             }
 
-            // The statements after `ifStatement` in its enclosing statement list.
+            // ADR-0213 R7 (f) (#5697): gsc narrows after a loop whose exit condition proves a fact when no `break`
+            // targets the loop, the function has no user label or `goto`, and the condition stays in the loop header.
+            private func CanNarrowAfterLoopExit(loop StatementSyntax) bool {
+                let condition ExpressionSyntax? = switch loop {
+                    case whileLoop is WhileStatementSyntax: whileLoop.Condition
+                    case forLoop is ForStatementSyntax: forLoop.Condition
+                    case doLoop is DoStatementSyntax: doLoop.Condition
+                    default: default(ExpressionSyntax?)
+                }
+                if condition == nil || ClauseContainsAssignment(condition) {
+                    return false
+                }
+                if loop is ForStatementSyntax forLoop &&
+                    forLoop
+                    .Initializers
+                    .Concat(forLoop.Incrementors)
+                    .Any(ClauseContainsAssignment) {
+                    return false
+                }
+                if LoopHasBreakTargetingIt(loop) {
+                    return false
+                }
+                let body = loop.Ancestors().FirstOrDefault(
+                    (node SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
+                        node is AccessorDeclarationSyntax ||
+                        node is LocalFunctionStatementSyntax ||
+                        node is AnonymousFunctionExpressionSyntax
+                ) ??
+                    loop
+                    .SyntaxTree
+                    .GetRoot()
+                return !body.DescendantNodes(
+                    (node SyntaxNode) -> !(
+                        node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax
+                    )
+                )
+                    .Any(
+                    (node SyntaxNode) -> node is LabeledStatementSyntax ||
+                        (node is GotoStatementSyntax jump && jump.IsKind(SyntaxKind.GotoStatement))
+                )
+            }
+
+            private func LoopHasBreakTargetingIt(loop StatementSyntax) bool {
+                return loop
+                    .DescendantNodes(
+                    (node SyntaxNode) -> !(
+                        node is LocalFunctionStatementSyntax ||
+                            node is AnonymousFunctionExpressionSyntax ||
+                            node is SwitchStatementSyntax ||
+                            (
+                            !object.ReferenceEquals(node, loop) &&
+                                (
+                                node is WhileStatementSyntax ||
+                                    node is DoStatementSyntax ||
+                                    node is ForStatementSyntax ||
+                                    node is CommonForEachStatementSyntax
+                            )
+                        )
+                    )
+                )
+                    .OfType[BreakStatementSyntax]()
+                    .Any()
+            }
+
+            // The statements after `target` in its enclosing statement list.
             // Only a direct child of a block (or switch section) leaks in G#; an
             // `else if` never does, because the outer condition's other path
             // reaches the following statements without the match.
-            private func AddFollowingStatements(ifStatement IfStatementSyntax, regions List[SyntaxNode]) {
+            private func AddFollowingStatements(target StatementSyntax, regions List[SyntaxNode]) {
                 var statements SyntaxList[StatementSyntax]
-                switch ifStatement.Parent {
+                switch target.Parent {
                     case block is BlockSyntax {
                         statements = block.Statements
                     }
@@ -1564,7 +1646,7 @@ partial class CSharpToGSharpTranslator {
                 for statement in statements {
                     if after {
                         regions.Add(statement)
-                    } else if statement == ifStatement {
+                    } else if statement == target {
                         after = true
                     }
                 }
