@@ -56,6 +56,38 @@ shared class ClrTypeUtilities {
         ConcurrentDictionary[(Token int32, Flags BindingFlags, Kind MemberTypes, Name string, Safe bool), MemberInfo]
     ]()
 
+    private let openMethodsByMappedMethod ConditionalWeakTable[MethodInfo, MethodInfo] = ConditionalWeakTable[
+        MethodInfo,
+        MethodInfo
+    ]()
+
+    /// Maps [`openMethod`](paramref) onto [`constructedDeclaringType`](paramref) via
+    /// (cref:TypeBuilder.GetMethod) and records the reverse link to [`openMethod`](paramref)
+    /// so later metadata and nullability readers can recover the definition without
+    /// asking the synthetic member for its (cref:MemberInfo.MetadataToken) (issue #4760).
+    /// @param constructedDeclaringType The `TypeBuilderInstantiation` declaring type.
+    /// @param openMethod The method on the open generic definition.
+    /// @returns The constructed `MethodInfo`.
+    internal func MapConstructedGenericMethod(constructedDeclaringType Type, openMethod MethodInfo) MethodInfo {
+        let mapped = TypeBuilder.GetMethod(constructedDeclaringType, openMethod)
+        openMethodsByMappedMethod.GetValue(mapped, (_ MethodInfo) -> openMethod)
+        return mapped
+    }
+
+    /// Recovers the open method definition recorded when [`method`](paramref) was
+    /// synthesized by (cref:MapConstructedGenericMethod).
+    /// @param method The candidate constructed method.
+    /// @param openMethod The recorded open method definition, when present.
+    /// @returns `true` when [`method`](paramref) was mapped through `TypeBuilder.GetMethod`.
+    internal func TryGetMappedOpenMethod(method MethodInfo, out openMethod MethodInfo) bool {
+        if openMethodsByMappedMethod.TryGetValue(method, out var mapped) && mapped != nil {
+            openMethod = mapped
+            return true
+        }
+        openMethod = method
+        return false
+    }
+
     /// Finds a member on an open declaring type without changing the caller's reflection view.
     /// @param type The target declaring type.
     /// @param member The member whose module and metadata token identify the declaration.
@@ -69,6 +101,18 @@ shared class ClrTypeUtilities {
         safeEnumeration bool = false
     ) MemberInfo? {
         CompilationMeasurements.Count("metadata.definition-requests")
+        var member = member
+        if member is MethodInfo mappedMethod && TryGetMappedOpenMethod(mappedMethod, out var mappedOpen) {
+            if object.ReferenceEquals(mappedOpen.DeclaringType, type) {
+                return mappedOpen
+            }
+            member = mappedOpen
+        }
+        if IsTypeBuilderInstantiation(member.DeclaringType) ||
+            IsUnfinishedEmitType(member.DeclaringType) ||
+            IsUnfinishedEmitType(member as Type) {
+            return FindTokenlessMetadataDefinition(type, member, flags, safeEnumeration)
+        }
         var token int32
         var module Module
         try {
@@ -76,18 +120,7 @@ shared class ClrTypeUtilities {
             module = member.Module
         } catch (exception Exception) when exception is InvalidOperationException ||
             exception is NotSupportedException {
-            // An empty original enumeration never asked a tokenless member for its identity.
-            CompilationMeasurements.Count("metadata.definition-scans")
-            for candidate in EnumerateMetadataDefinitions(type, member, flags, safeEnumeration) {
-                CompilationMeasurements.Count("metadata.definition-members")
-                if candidate.MetadataToken == member.MetadataToken && object.ReferenceEquals(
-                    candidate.Module,
-                    member.Module
-                ) {
-                    return candidate
-                }
-            }
-            return nil
+            return FindTokenlessMetadataDefinition(type, member, flags, safeEnumeration)
         }
         let kind = member.MemberType
         let name = if member is MethodBase {
@@ -117,6 +150,59 @@ shared class ClrTypeUtilities {
             }
         }
         return nil
+    }
+
+    private func FindTokenlessMetadataDefinition(
+        type Type,
+        member MemberInfo,
+        flags BindingFlags,
+        safeEnumeration bool
+    ) MemberInfo? {
+        CompilationMeasurements.Count("metadata.definition-scans")
+        var match MemberInfo? = nil
+        for candidate in EnumerateMetadataDefinitions(type, member, flags, safeEnumeration) {
+            CompilationMeasurements.Count("metadata.definition-members")
+            if !MatchesTokenlessMetadataDefinition(candidate, member) {
+                continue
+            }
+            if match != nil {
+                return nil
+            }
+            match = candidate
+        }
+        return match
+    }
+
+    private func MatchesTokenlessMetadataDefinition(candidate MemberInfo, member MemberInfo) bool {
+        if candidate.MemberType != member.MemberType || !string.Equals(
+            candidate.Name,
+            member.Name,
+            StringComparison.Ordinal
+        ) {
+            return false
+        }
+        if candidate is MethodInfo candidateMethod && member is MethodInfo memberMethod {
+            if candidateMethod.IsStatic != memberMethod.IsStatic ||
+                candidateMethod.IsGenericMethod != memberMethod.IsGenericMethod {
+                return false
+            }
+            try {
+                return candidateMethod.GetParameters().Length == memberMethod.GetParameters().Length
+            } catch (NotSupportedException) {
+                return true
+            }
+        }
+        if candidate is ConstructorInfo candidateCtor && member is ConstructorInfo memberCtor {
+            if candidateCtor.IsStatic != memberCtor.IsStatic {
+                return false
+            }
+            try {
+                return candidateCtor.GetParameters().Length == memberCtor.GetParameters().Length
+            } catch (NotSupportedException) {
+                return true
+            }
+        }
+        return true
     }
 
     private func EnumerateMetadataDefinitions(
@@ -1131,7 +1217,7 @@ shared class ClrTypeUtilities {
             openType.GetGenericArguments(),
             type.GetGenericArguments()
         )
-        return TypeBuilder.GetMethod(constructedDeclaringType, methodDefinition)
+        return MapConstructedGenericMethod(constructedDeclaringType, methodDefinition)
     }
 
     private func SubstituteGenericTypeArguments(type Type, openTypeArguments[]Type, typeArguments[]Type) Type {
