@@ -36,6 +36,7 @@ shared class SemanticLookup {
             InterfaceDeclarations = List[InterfaceDeclarationSyntax]()
             EnumDeclarations = List[EnumDeclarationSyntax]()
             DelegateDeclarations = List[DelegateDeclarationSyntax]()
+            AnonymousClasses = List[AnonymousClassExpressionSyntax]()
             Imports = List[ImportSyntax]()
             Packages = List[PackageSyntax]()
         }
@@ -73,6 +74,10 @@ shared class SemanticLookup {
         }
 
         prop DelegateDeclarations List[DelegateDeclarationSyntax] {
+            get;
+        }
+
+        prop AnonymousClasses List[AnonymousClassExpressionSyntax] {
             get;
         }
 
@@ -1033,84 +1038,15 @@ shared class SemanticLookup {
                 if !seenStructs.Add(aggregate) {
                     continue
                 }
-                // Per-struct member mapping below is O(members); check between structs
-                // so cancellation lands within one cold build instead of after it.
                 ct.ThrowIfCancellationRequested()
-                globals[aggregate.Name] = aggregate
-                if aggregate.Declaration != nil {
-                    declarations[aggregate.Declaration!!.Identifier] = aggregate
-                    for var i = 0; i < aggregate.Declaration!!.Fields.Length && i < aggregate.Fields.Length; i++ {
-                        declarations[aggregate.Declaration!!.Fields[i].Identifier] = aggregate.Fields[i]
-                    }
-                    var allPropertyIdentifiers = aggregate.Declaration!!.Properties.Select(
-                        (p PropertyDeclarationSyntax) -> p.Identifier
-                    )
-                    var allEventIdentifiers = aggregate.Declaration!!.Events.Select(
-                        (e EventDeclarationSyntax) -> e.Identifier
-                    )
-                    var allMethodIdentifiers = aggregate.Declaration!!.Methods.Select(
-                        (m FunctionDeclarationSyntax) -> m.Identifier
-                    )
-                    if aggregate.Declaration!!.SharedBlock != nil {
-                        allPropertyIdentifiers = allPropertyIdentifiers.Concat(
-                            aggregate.Declaration!!.SharedBlock!!.Properties.Select(
-                                (p PropertyDeclarationSyntax) -> p.Identifier
-                            )
-                        )
-                        allEventIdentifiers = allEventIdentifiers.Concat(
-                            aggregate.Declaration!!.SharedBlock!!.Events.Select(
-                                (e EventDeclarationSyntax) -> e.Identifier
-                            )
-                        )
-                        allMethodIdentifiers = allMethodIdentifiers.Concat(
-                            aggregate.Declaration!!.SharedBlock!!.Methods.Select(
-                                (m FunctionDeclarationSyntax) -> m.Identifier
-                            )
-                        )
-                        if !aggregate.StaticFields.IsDefaultOrEmpty {
-                            for var si = 0;
-                                si < aggregate.Declaration!!.SharedBlock!!
-                                .Fields
-                                .Length &&
-                                si < aggregate
-                                .StaticFields
-                                .Length;
-                                si++ {
-                                let fieldId SyntaxToken? = aggregate.Declaration!!.SharedBlock!!.Fields[si].Identifier
-                                if fieldId != nil {
-                                    declarations[fieldId] = aggregate.StaticFields[si]
-                                }
-                            }
-                        }
-                    }
-                    MapMembersByName(
-                        declarations,
-                        allPropertyIdentifiers,
-                        aggregate.Properties.Concat(aggregate.StaticProperties)
-                    )
-                    MapMembersByName(declarations, allEventIdentifiers, aggregate.Events.Concat(aggregate.StaticEvents))
-                    MapMembersByName(
-                        declarations,
-                        allMethodIdentifiers,
-                        aggregate.Methods.Concat(aggregate.StaticMethods)
-                    )
-                    // Register the parameter declarations of struct/class methods so that hover,
-                    // go-to-definition, etc. work on them.
-                    for method in aggregate.Methods.Concat(aggregate.StaticMethods) {
-                        if method.Declaration != nil {
-                            MapParameters(method.Declaration!!.Parameters.ToArray(), method.Parameters, declarations)
-                        }
-                    }
-                    // Issue #894: the same for user-defined `init(...)` constructors.
-                    for constructor in aggregate.ExplicitConstructors {
-                        if constructor.Declaration != nil {
-                            MapParameters(
-                                constructor.Declaration!!.Parameters.ToArray(),
-                                constructor.Parameters,
-                                declarations
-                            )
-                        }
-                    }
+                MapStructDeclaration(aggregate, declarations, globals)
+            }
+            for anonSyntax in bucketsByTree[tree].AnonymousClasses {
+                if coreModel.GetTypeInfo(anonSyntax, ct).Type is StructSymbol anonStruct && seenStructs.Add(
+                    anonStruct
+                ) {
+                    ct.ThrowIfCancellationRequested()
+                    MapStructDeclaration(anonStruct, declarations, globals)
                 }
             }
         }
@@ -1162,9 +1098,8 @@ shared class SemanticLookup {
                 }
             }
             for packageSyntax in bucketsByTree[tree].Packages {
-                if coreModel.GetDeclaredSymbol(packageSyntax, ct) is PackageSymbol package_ &&
-                    package_.Declaration != nil {
-                    for identifier in package_.Declaration!!.Identifiers {
+                if coreModel.GetDeclaredSymbol(packageSyntax, ct) is PackageSymbol package_ {
+                    for identifier in packageSyntax.Identifiers {
                         declarations[identifier] = package_
                     }
                 }
@@ -1202,6 +1137,72 @@ shared class SemanticLookup {
             }
         }
         return SemanticModel(compilation, declarations, globals, bucketsByTree)
+    }
+
+    private func MapStructDeclaration(
+        aggregate StructSymbol,
+        declarations Dictionary[SyntaxToken, Symbol],
+        globals Dictionary[string, Symbol]
+    ) {
+        globals[aggregate.Name] = aggregate
+        if aggregate.Declaration != nil {
+            declarations[aggregate.Declaration!!.Identifier] = aggregate
+            for var i = 0; i < aggregate.Declaration!!.Fields.Length && i < aggregate.Fields.Length; i++ {
+                declarations[aggregate.Declaration!!.Fields[i].Identifier] = aggregate.Fields[i]
+            }
+            var allPropertyIdentifiers = aggregate.Declaration!!.Properties.Select(
+                (p PropertyDeclarationSyntax) -> p.Identifier
+            )
+            var allEventIdentifiers = aggregate.Declaration!!.Events.Select((e EventDeclarationSyntax) -> e.Identifier)
+            var allMethodIdentifiers = aggregate.Declaration!!.Methods.Select(
+                (m FunctionDeclarationSyntax) -> m.Identifier
+            )
+            if aggregate.Declaration!!.SharedBlock != nil {
+                allPropertyIdentifiers = allPropertyIdentifiers.Concat(
+                    aggregate.Declaration!!.SharedBlock!!.Properties.Select(
+                        (p PropertyDeclarationSyntax) -> p.Identifier
+                    )
+                )
+                allEventIdentifiers = allEventIdentifiers.Concat(
+                    aggregate.Declaration!!.SharedBlock!!.Events.Select((e EventDeclarationSyntax) -> e.Identifier)
+                )
+                allMethodIdentifiers = allMethodIdentifiers.Concat(
+                    aggregate.Declaration!!.SharedBlock!!.Methods.Select((m FunctionDeclarationSyntax) -> m.Identifier)
+                )
+                if !aggregate.StaticFields.IsDefaultOrEmpty {
+                    for var si = 0;
+                        si < aggregate.Declaration!!.SharedBlock!!
+                        .Fields
+                        .Length &&
+                        si < aggregate
+                        .StaticFields
+                        .Length;
+                        si++ {
+                        let fieldId SyntaxToken? = aggregate.Declaration!!.SharedBlock!!.Fields[si].Identifier
+                        if fieldId != nil {
+                            declarations[fieldId] = aggregate.StaticFields[si]
+                        }
+                    }
+                }
+            }
+            MapMembersByName(
+                declarations,
+                allPropertyIdentifiers,
+                aggregate.Properties.Concat(aggregate.StaticProperties)
+            )
+            MapMembersByName(declarations, allEventIdentifiers, aggregate.Events.Concat(aggregate.StaticEvents))
+            MapMembersByName(declarations, allMethodIdentifiers, aggregate.Methods.Concat(aggregate.StaticMethods))
+            for method in aggregate.Methods.Concat(aggregate.StaticMethods) {
+                if method.Declaration != nil {
+                    MapParameters(method.Declaration!!.Parameters.ToArray(), method.Parameters, declarations)
+                }
+            }
+            for constructor in aggregate.ExplicitConstructors {
+                if constructor.Declaration != nil {
+                    MapParameters(constructor.Declaration!!.Parameters.ToArray(), constructor.Parameters, declarations)
+                }
+            }
+        }
     }
 
     private func MapParameters(
@@ -1310,6 +1311,9 @@ shared class SemanticLookup {
             }
             case d is DelegateDeclarationSyntax {
                 buckets.DelegateDeclarations.Add(d)
+            }
+            case anon is AnonymousClassExpressionSyntax {
+                buckets.AnonymousClasses.Add(anon)
             }
             case imp is ImportSyntax {
                 buckets.Imports.Add(imp)

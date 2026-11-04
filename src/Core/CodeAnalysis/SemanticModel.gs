@@ -552,18 +552,22 @@ partial class SemanticModel {
                     declaredBySyntax.TryAdd(importDeclaration, import_)
                 }
             }
-            for package_ in globalScope.Packages {
-                if package_.Declaration is {} packageDeclaration && object.ReferenceEquals(
-                    packageDeclaration.SyntaxTree,
-                    tree
-                ) {
-                    declaredBySyntax.TryAdd(packageDeclaration, package_)
-                }
-            }
             let treePackageName = Binder.PackageNameOfTree(
                 tree,
                 compilation.Submission?.DefaultPackageName ?? "Default"
             )
+            for package_ in globalScope.Packages {
+                if package_.Declaration != nil && string.Equals(
+                    package_.Name,
+                    treePackageName,
+                    StringComparison.Ordinal
+                ) {
+                    for packageDeclaration in tree.Root.Members.OfType[PackageSyntax]() {
+                        declaredBySyntax.TryAdd(packageDeclaration, package_)
+                    }
+                    break
+                }
+            }
             for typeAlias in tree.Root.Members.OfType[TypeAliasDeclarationSyntax]() {
                 if !typeAlias.Identifier.IsMissing {
                     let aliasName = typeAlias.Identifier.ValueText
@@ -726,6 +730,9 @@ partial class SemanticModel {
                 for property in declaredInterface.Properties {
                     yield property
                 }
+                for declaredEvent in declaredInterface.Events {
+                    yield declaredEvent
+                }
             }
             for declaredStruct in program.Structs {
                 // ADR-0169 / issue #3795: anchor member containment as the model's
@@ -739,6 +746,9 @@ partial class SemanticModel {
                 yield declaredStruct
                 for property in declaredStruct.Properties.Concat(declaredStruct.StaticProperties) {
                     yield property
+                }
+                for declaredEvent in declaredStruct.Events.Concat(declaredStruct.StaticEvents) {
+                    yield declaredEvent
                 }
             }
             // Signature-only functions (e.g. bodies that failed to bind) still
@@ -760,6 +770,16 @@ partial class SemanticModel {
                 if object.ReferenceEquals(declaration.SyntaxTree, tree) && !declaredBySyntax.ContainsKey(declaration) {
                     declaredBySyntax.Add(declaration, symbol)
                 }
+            }
+            if symbol is EventSymbol{Declaration: {} eventDeclaration} && object.ReferenceEquals(
+                eventDeclaration.Identifier.SyntaxTree,
+                tree
+            ) &&
+                !eventDeclaration
+                .Identifier
+                .IsMissing &&
+                !declaredBySyntax.ContainsKey(eventDeclaration.Identifier) {
+                declaredBySyntax.Add(eventDeclaration.Identifier, symbol)
             }
         }
 

@@ -170,6 +170,25 @@ class Box {}
         let bazToken = SemanticLookup.FindTokenAt(bazTree, bazSource.IndexOf("Coord", StringComparison.Ordinal))
         Assert.Same(TypeSymbol.Int32, SemanticLookup.ResolveSymbol(projectCompilation, fooToken))
         Assert.Same(TypeSymbol.Int64, SemanticLookup.ResolveSymbol(projectCompilation, bazToken))
+        let editedFoo = "package Foo\ntype Coord = int32\nfunc F() int32 { return 1 }\n"
+        project.UpdateFile("/test/foo.gs", editedFoo)
+        let beforeEditComp = project.GetCompilation()
+        SemanticLookup.WarmUp(beforeEditComp)
+        let editedFoo2 = "package Foo\ntype Coord = int32\nfunc F() int32 { return 2 }\n"
+        project.UpdateFile("/test/foo.gs", editedFoo2)
+        let afterEditComp = project.GetCompilation()
+        Assert.True(project.TryGetSyntaxTree("/test/foo.gs", out var editedFooTree))
+        let pkgToken = SemanticLookup.FindTokenAt(editedFooTree, editedFoo2.IndexOf("Foo", StringComparison.Ordinal))
+        let pkgSymbol = Assert.IsType[PackageSymbol](SemanticLookup.ResolveSymbol(afterEditComp, pkgToken))
+        Assert.Equal("Foo", pkgSymbol.Name)
+        let anonSource = "package P\nfunc F() {\n    let x = object {\n        event Changed (int32) -> void\n    }\n}\n"
+        let anonContent = LanguageServerTestHelpers.Content(anonSource)
+        let anonHover = HoverComputer.ComputeHover(
+            anonContent,
+            LanguageServerTestHelpers.PositionOf(anonSource, "Changed")
+        )
+        Assert.NotNull(anonHover)
+        Assert.Contains("Changed", anonHover!!.Contents.ToString(), StringComparison.Ordinal)
     }
 
     shared {
