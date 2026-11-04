@@ -174,6 +174,8 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
         defer Console.Write("")
         (nil, 2)
     })
+    let isMatched = (d ? (nil, "x") : (nil, nil)) is { }
+    let asObj = (d ? (nil, "x") : (nil, nil)) as object
     return if standalone.Item1 == nil &&
         da == nil &&
         (db != nil || !d) &&
@@ -200,7 +202,9 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
         anonObj.Pair.Item1 == nil &&
         dataObj.Pair.Item1 == nil &&
         (nestedOuterNil != nil || !d) &&
-        cleanupTuple.Item1 == nil {
+        cleanupTuple.Item1 == nil &&
+        isMatched &&
+        asObj != nil {
         (a.Item2, b.Item2)
     } else {
         ("bad", "bad")

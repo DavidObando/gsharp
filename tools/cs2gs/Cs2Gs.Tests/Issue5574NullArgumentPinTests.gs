@@ -852,8 +852,14 @@ namespace Demo
             var captured = p switch { PinnedSymbol x => x.Declaration };
             return new Sink().Take(captured);
         }
+        public static string UnguardedNullableLocalPins(DelegateDeclarationSyntax p)
+        {
+            SyntaxNode? q = p;
+            return new Sink().Take(q);
+        }
         public static string Run()
         {
+            if (false) UnguardedNullableLocalPins(default(DelegateDeclarationSyntax)!);
             var synth = new DelegateTypeSymbol("<>RefFunc0", declaration: null!);
             var real = new DelegateTypeSymbol("D", declaration: new DelegateDeclarationSyntax { Implicit = true });
             return IsImplicit(synth) + " " + IsImplicit(real) + " " +
@@ -868,6 +874,7 @@ namespace Demo
         Assert.Contains("(d.Declaration as SyntaxNode)", printed)
         Assert.Contains("declaration: nil", printed)
         Assert.Contains("init(declaration DelegateDeclarationSyntax)", printed)
+        Assert.Contains("UnguardedNullableLocalPins(p DelegateDeclarationSyntax)", printed)
     }
 
     shared {

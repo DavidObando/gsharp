@@ -2205,6 +2205,13 @@ internal partial class ExpressionBinder {
 
     private func BindIsExpression(syntax IsExpressionSyntax) BoundExpression {
         var expression = BindExpression(syntax.Expression)
+        if expression.Type is TupleTypeSymbol{HasNilElement: true} unresolvedTuple {
+            expression = conversions.BindConversion(
+                syntax.Expression.Location,
+                expression,
+                TupleTypeSymbol.ResolveNilElements(unresolvedTuple)
+            )
+        }
         var pattern = patterns.BindPattern(syntax.Pattern, expression.Type, allowBindings: false, preferTypeNames: true)
         if NativeProtocolOperations.GetProtocol(expression.Type) is {} sourceProtocol {
             let inspector = NativeProtocolPatternInspector(binderCtx.RootScope, sourceProtocol, syntax.Location)
@@ -2296,6 +2303,13 @@ internal partial class ExpressionBinder {
         let targetType TypeSymbol? = bindTypeClause(syntax.TypeClause)
         if targetType == nil || targetType == TypeSymbol.Error {
             return BoundErrorExpression(nil)
+        }
+        if expression.Type is TupleTypeSymbol{HasNilElement: true} unresolvedTuple {
+            expression = conversions.BindConversion(
+                syntax.Expression.Location,
+                expression,
+                TupleTypeSymbol.ResolveNilElements(unresolvedTuple, targetType)
+            )
         }
         // Per C# §11.11.10: the `as` operator requires that the target type be
         // either a reference type or a nullable value type. A non-nullable value
