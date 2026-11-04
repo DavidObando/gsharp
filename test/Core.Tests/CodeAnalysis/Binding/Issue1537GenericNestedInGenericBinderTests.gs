@@ -242,7 +242,8 @@ func BadNestedInterfaceNestedNullabilityMismatch(
         Assert.Equal(12, unclosedErrors.Length)
         Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0157"))
         Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0113"))
-        Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0156"))
+        Assert.Equal(2, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0155"))
+        Assert.Equal(1, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0156"))
         Assert.Equal(1, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0187"))
         Assert.Equal(2, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0202"))
 

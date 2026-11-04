@@ -74,7 +74,6 @@ internal class LambdaBinder {
     private let getCurrentFunction() -> FunctionSymbol?
     private let setCurrentFunction(FunctionSymbol?) -> void
     private let bindParameterAttributes(ParameterSyntax) -> ImmutableArray[BoundAttribute]
-    private let reportUnsafeBackwardGotoNarrowings() -> void
     private let isolateExternalCallableAliases() -> HashSet[VariableSymbol]
     private let restoreExternalCallableAliases(HashSet[VariableSymbol]) -> void
     private let bindLambdaBodyExpression((ExpressionSyntax, TypeSymbol?) -> BoundExpression)?
@@ -172,9 +171,6 @@ internal class LambdaBinder {
     /// @param bindParameterAttributes Callback that binds user
     /// annotations on a lambda parameter using the declaration binder's
     /// standard parameter-target validation.
-    /// @param reportUnsafeBackwardGotoNarrowings Callback that reports
-    /// deferred backward-goto narrowing diagnostics before nested-frame state
-    /// is restored.
     /// @param isolateExternalCallableAliases Callback that snapshots and
     /// clears the enclosing function's callable-alias provenance.
     /// @param restoreExternalCallableAliases Callback that restores the
@@ -212,7 +208,6 @@ internal class LambdaBinder {
         getCurrentFunction() -> FunctionSymbol?,
         setCurrentFunction(FunctionSymbol?) -> void,
         bindParameterAttributes(ParameterSyntax) -> ImmutableArray[BoundAttribute],
-        reportUnsafeBackwardGotoNarrowings() -> void,
         isolateExternalCallableAliases() -> HashSet[VariableSymbol],
         restoreExternalCallableAliases(HashSet[VariableSymbol]) -> void,
         bindLocalVariable(SyntaxToken, bool, TypeSymbol) -> VariableSymbol,
@@ -241,8 +236,6 @@ internal class LambdaBinder {
         this.getCurrentFunction = getCurrentFunction ?? throw ArgumentNullException("getCurrentFunction")
         this.setCurrentFunction = setCurrentFunction ?? throw ArgumentNullException("setCurrentFunction")
         this.bindParameterAttributes = bindParameterAttributes ?? throw ArgumentNullException("bindParameterAttributes")
-        this.reportUnsafeBackwardGotoNarrowings = reportUnsafeBackwardGotoNarrowings ??
-            throw ArgumentNullException("reportUnsafeBackwardGotoNarrowings")
         this.isolateExternalCallableAliases = isolateExternalCallableAliases ??
             throw ArgumentNullException("isolateExternalCallableAliases")
         this.restoreExternalCallableAliases = restoreExternalCallableAliases ??
@@ -1392,11 +1385,6 @@ internal class LambdaBinder {
         } else {
             default(DeferredReturnState?)
         }
-        placeholder.InferredReturnNarrowings = if placeholder.IsReturnTypeInferred || defersReturnConversion {
-            DeferredReturnState()
-        } else {
-            default(DeferredReturnState?)
-        }
         let outerScope = Scope
         let outerFunction = getCurrentFunction()
         Scope = BoundScope(outerScope)
@@ -1534,11 +1522,7 @@ internal class LambdaBinder {
                 true,
                 deferredReturns
             )
-            // A backward `goto` narrowing check of a target conversion fails the target, as the eager bind does.
-            let targetDiagnostics = deferredReturns
-                .NarrowingDiagnostics()
-                .AddRange(deferredReturns.OperandDiagnostics())
-                .AddRange(Diagnostics.Skip(trialMark))
+            let targetDiagnostics = deferredReturns.OperandDiagnostics().AddRange(Diagnostics.Skip(trialMark))
             Diagnostics.TruncateTo(trialMark)
             // The body fits the target only when the target-typed inference adopts the target return type, which
             // also checks a trailing value that is not a `return`.
@@ -1549,18 +1533,9 @@ internal class LambdaBinder {
             } else {
                 TypeSymbol.Error
             }
-            // The natural type is not used when its result also needs a narrowing that a held use reports. Issue
-            // #5603: the uses of the natural values count too, because a target conversion can read a declared value
-            // and record no use.
             if naturalReturnType != TypeSymbol.Error && !Diagnostics.Skip(startMark).Any(
                 (diagnostic Diagnostic) -> diagnostic.IsError
             ) &&
-                !deferredReturns.NaturalTypeNeedsHeldNarrowing(naturalReturnType) && !Invariant.Required(
-                placeholder.InferredReturnNarrowings,
-                "a deferred return conversion has natural narrowing uses",
-                expression: "placeholder.InferredReturnNarrowings"
-            )
-                .NaturalTypeNeedsHeldNarrowing(naturalReturnType) &&
                 acceptsNaturalType!!(
                 FunctionTypeSymbol.Get(
                     parameterTypes.ToImmutable(),
@@ -1612,11 +1587,6 @@ internal class LambdaBinder {
         // ADR-0076 / issue #716: rewrite the bound body so every return
         // statement's expression is converted to the inferred return type.
         // We deferred the conversion in BindReturnStatement; apply it now.
-        // Issue #5603: the backward `goto` checks of the `return` values ran where they bound, with the narrowings
-        // in scope. Report the uses that the inferred result needs.
-        if placeholder.IsReturnTypeInferred {
-            placeholder.InferredReturnNarrowings?.ReportInferredResultNarrowings(Diagnostics, returnType)
-        }
         boundBody = ApplyInferredReturnTypeConversion(boundBody, syntax, returnType, defersReturnConversion)
         // Synthesize the lambda's BoundBlockStatement body: for void bodies, an
         // ExpressionStatement; for value bodies, a ReturnStatement.
@@ -2410,16 +2380,7 @@ internal class LambdaBinder {
         binderCtx.UserLabels.Clear()
         binderCtx.DefinedUserLabels.Clear()
         binderCtx.UnresolvedGotoLabels.Clear()
-        binderCtx.PendingGotoAssignmentStarts.Clear()
-        binderCtx.AssignmentNarrowingGenerations.Clear()
-        this.binderCtx.AssignmentNarrowingGeneration = 0
-        binderCtx.PendingGotoNarrowingSnapshots.Clear()
-        binderCtx.BackwardGotoNarrowingStates.Clear()
-        // Issue #5635: the narrowed reads of the nested body are captured against its own labels.
-        this.binderCtx.NarrowingFunctionFrame = Object()
-        binderCtx.ReachableUserLabels.Clear()
-        binderCtx.DeferredUnreachableGotoEdges.Clear()
-        this.binderCtx.PotentialReachabilityLabel = nil
+        binderCtx.NarrowingFlow.Clear()
         binderCtx.LoopStack.Clear()
         this.binderCtx.CurrentFallthroughTarget = nil
         this.binderCtx.CurrentFallthroughAnchor = nil
@@ -2436,7 +2397,6 @@ internal class LambdaBinder {
     /// labels (never silently satisfied by an outer label of the same
     /// name).
     private func FinalizeNestedFrameLabels() {
-        reportUnsafeBackwardGotoNarrowings()
         for entry in binderCtx.UnresolvedGotoLabels {
             Diagnostics.ReportUndefinedGotoLabel(entry.Value, entry.Key)
         }
@@ -2460,32 +2420,7 @@ internal class LambdaBinder {
         for kvp in saved.UnresolvedGotoLabels {
             binderCtx.UnresolvedGotoLabels[kvp.Key] = kvp.Value
         }
-        binderCtx.PendingGotoAssignmentStarts.Clear()
-        for kvp in saved.PendingGotoAssignmentStarts {
-            binderCtx.PendingGotoAssignmentStarts[kvp.Key] = kvp.Value
-        }
-        binderCtx.AssignmentNarrowingGenerations.Clear()
-        for kvp in saved.AssignmentNarrowingGenerations {
-            binderCtx.AssignmentNarrowingGenerations[kvp.Key] = kvp.Value
-        }
-        this.binderCtx.AssignmentNarrowingGeneration = saved.AssignmentNarrowingGeneration
-        this.binderCtx.NarrowingFunctionFrame = saved.NarrowingFunctionFrame
-        binderCtx.PendingGotoNarrowingSnapshots.Clear()
-        for kvp in saved.PendingGotoNarrowingSnapshots {
-            binderCtx.PendingGotoNarrowingSnapshots[kvp.Key] = kvp
-                .Value
-                .Select((snapshot GotoNarrowingSnapshot) -> snapshot.Clone())
-                .ToList()
-        }
-        binderCtx.BackwardGotoNarrowingStates.Clear()
-        for kvp in saved.BackwardGotoNarrowingStates {
-            binderCtx.BackwardGotoNarrowingStates[kvp.Key] = kvp.Value.Clone()
-        }
-        binderCtx.ReachableUserLabels.Clear()
-        binderCtx.ReachableUserLabels.UnionWith(saved.ReachableUserLabels)
-        binderCtx.DeferredUnreachableGotoEdges.Clear()
-        binderCtx.DeferredUnreachableGotoEdges.AddRange(saved.DeferredUnreachableGotoEdges)
-        this.binderCtx.PotentialReachabilityLabel = saved.PotentialReachabilityLabel
+        binderCtx.NarrowingFlow.Restore(saved.PendingJumps)
         // BinderContext.LoopStack.ToArray() orders elements top-of-stack
         // first; push back bottom-first so the restored stack's top matches
         // the snapshot exactly.
@@ -2698,11 +2633,6 @@ internal class LambdaBinder {
             ReferenceEqualityComparer.Instance
         )
 
-        // The backward `goto` narrowing uses of the target conversions and their diagnostics, in report order.
-        private let narrowingUses List[
-            (Access BackwardGotoNarrowingAccess, Diagnostics ImmutableArray[Diagnostic])
-        ] = List[(Access BackwardGotoNarrowingAccess, Diagnostics ImmutableArray[Diagnostic])]()
-
         /// Records the target-typed value of a return statement and the diagnostics of both passes.
         /// @param syntax The return statement.
         /// @param value The target-typed value.
@@ -2724,8 +2654,7 @@ internal class LambdaBinder {
         internal func Holds(syntax ReturnStatementSyntax) bool -> targetValues.ContainsKey(syntax)
 
         /// Records the conversion of a return value to the target, bound where the return value binds, as an eager
-        /// bind converts it. Narrowing checks (backward `goto` uses) apply there, so the decision after the body
-        /// uses this result and does not convert the value again.
+        /// bind converts it.
         /// @param value The return value, before the conversion.
         /// @param converted The value converted to the target.
         /// @param diagnostics The diagnostics of the conversion.
@@ -2762,70 +2691,13 @@ internal class LambdaBinder {
             return false
         }
 
-        /// Records a backward `goto` that removes a narrowing which a target conversion of a `return` value
-        /// (cref:HoldConversion) needs, with the diagnostic that the `goto` check reported for it.
-        /// @param access The narrowing use.
-        /// @param diagnostics The diagnostics of the use.
-        internal func HoldNarrowingUse(access BackwardGotoNarrowingAccess, diagnostics ImmutableArray[Diagnostic]) {
-            narrowingUses.Add((access, diagnostics))
-        }
-
-        /// Gets the diagnostics of the held narrowing uses, in report order.
-        /// @returns The diagnostics.
-        internal func NarrowingDiagnostics() ImmutableArray[Diagnostic] {
-            let builder = ImmutableArray.CreateBuilder[Diagnostic]()
-            for use in narrowingUses {
-                builder.AddRange(use.Diagnostics)
-            }
-            return builder.ToImmutable()
-        }
-
-        /// Issue #5603: reports each held narrowing use of a lambda body with an inferred result that the result
-        /// needs (cref:ConversionClassifier.ConversionNeedsNarrowedSource). The `return` value then does not convert
-        /// to the result without the narrowing, as at a declared result. For another use, the result conversion reads
-        /// the declared value (see `ReturnConversionRewriter`).
-        /// @param diagnostics The bag that receives the diagnostics.
-        /// @param resultType The inferred result type.
-        internal func ReportInferredResultNarrowings(diagnostics DiagnosticBag, resultType TypeSymbol) {
-            if resultType == TypeSymbol.Error || resultType == TypeSymbol.Void {
-                return
-            }
-            for use in narrowingUses {
-                if NeedsNarrowing(use.Access, resultType) {
-                    diagnostics.ReportCannotConvert(use.Access.Location, use.Access.DeclaredType, resultType)
-                }
-            }
-        }
-
-        /// Gets a value indicating whether the natural function type needs a narrowing that a held use reports
-        /// as removed: its result type converts the same narrowed reads, under the rule of
-        /// (cref:ConversionClassifier.ConversionNeedsNarrowedSource).
-        /// @param naturalReturnType The natural result type.
-        /// @returns `true` when the natural type cannot take the place of the target.
-        internal func NaturalTypeNeedsHeldNarrowing(naturalReturnType TypeSymbol) bool -> narrowingUses.Any(
-            (use(Access BackwardGotoNarrowingAccess, Diagnostics ImmutableArray[Diagnostic])) -> NeedsNarrowing(
-                use.Access,
-                naturalReturnType
-            )
-        )
-
-        private func NeedsNarrowing(
-            access BackwardGotoNarrowingAccess,
-            resultType TypeSymbol
-        ) bool -> ConversionClassifier.ConversionNeedsNarrowedSource(
-            access.DeclaredType,
-            access.RequiredType,
-            resultType
-        )
-
-        /// Captures the held values, conversions and narrowing uses, for a binder that discards a bind (see
+        /// Captures the held values and conversions, for a binder that discards a bind (see
         /// `StatementBinder.CaptureSpeculativeBindState`).
         /// @returns The captured collections.
         internal func Capture() DeferredReturnSnapshot -> DeferredReturnSnapshot(
             operands.ToArray(),
             targetValues.ToArray(),
-            targetConversions.ToArray(),
-            narrowingUses.ToArray()
+            targetConversions.ToArray()
         )
 
         /// Puts back the collections that (cref:Capture) captured.
@@ -2841,8 +2713,6 @@ internal class LambdaBinder {
             for entry in snapshot.TargetConversions {
                 targetConversions.Add(entry.Key, entry.Value)
             }
-            narrowingUses.Clear()
-            narrowingUses.AddRange(snapshot.NarrowingUses)
         }
 
         /// Gets the diagnostics of every held target pass, in source order.
@@ -2920,7 +2790,6 @@ internal class LambdaBinder {
             BoundExpression,
             (Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
         ]
-        internal let NarrowingUses[](Access BackwardGotoNarrowingAccess, Diagnostics ImmutableArray[Diagnostic])
 
         init(
             operands[](
@@ -2932,13 +2801,11 @@ internal class LambdaBinder {
             targetConversions[]KeyValuePair[
                 BoundExpression,
                 (Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
-            ],
-            narrowingUses[](Access BackwardGotoNarrowingAccess, Diagnostics ImmutableArray[Diagnostic])
+            ]
         ) {
             Operands = operands
             TargetValues = targetValues
             TargetConversions = targetConversions
-            NarrowingUses = narrowingUses
         }
     }
 
@@ -3029,33 +2896,7 @@ internal class LambdaBinder {
             UserLabels = Dictionary[string, BoundLabel](ctx.UserLabels)
             DefinedUserLabels = HashSet[string](ctx.DefinedUserLabels)
             UnresolvedGotoLabels = Dictionary[string, TextLocation](ctx.UnresolvedGotoLabels)
-            PendingGotoAssignmentStarts = Dictionary[string, int32](ctx.PendingGotoAssignmentStarts)
-            AssignmentNarrowingGenerations = Dictionary[VariableSymbol, int32](ctx.AssignmentNarrowingGenerations)
-            AssignmentNarrowingGeneration = ctx.AssignmentNarrowingGeneration
-            NarrowingFunctionFrame = ctx.NarrowingFunctionFrame
-            PendingGotoNarrowingSnapshots = ctx.PendingGotoNarrowingSnapshots.ToDictionary(
-                (entry KeyValuePair[string, List[GotoNarrowingSnapshot]]) -> entry.Key,
-                (entry KeyValuePair[string, List[GotoNarrowingSnapshot]]) -> entry
-                    .Value
-                    .Select((snapshot GotoNarrowingSnapshot) -> snapshot.Clone())
-                    .ToList()
-            )
-            BackwardGotoNarrowingStates = ctx.BackwardGotoNarrowingStates.ToDictionary(
-                (entry KeyValuePair[string, BackwardGotoNarrowingState]) -> entry.Key,
-                (entry KeyValuePair[string, BackwardGotoNarrowingState]) -> entry.Value.Clone()
-            )
-            ReachableUserLabels = HashSet[string](ctx.ReachableUserLabels)
-            DeferredUnreachableGotoEdges = ctx
-                .DeferredUnreachableGotoEdges
-                .Select(
-                (edge(SourceLabel string?, TargetLabel string, Snapshot GotoNarrowingSnapshot)) -> (
-                    edge.SourceLabel,
-                    edge.TargetLabel,
-                    edge.Snapshot.Clone()
-                )
-            )
-                .ToList()
-            PotentialReachabilityLabel = ctx.PotentialReachabilityLabel
+            PendingJumps = ctx.NarrowingFlow.Clone()
             LoopStack = ctx.LoopStack.ToArray()
             FallthroughTarget = ctx.CurrentFallthroughTarget
             FallthroughAnchor = ctx.CurrentFallthroughAnchor
@@ -3075,41 +2916,7 @@ internal class LambdaBinder {
             get;
         }
 
-        prop PendingGotoAssignmentStarts Dictionary[string, int32] {
-            get;
-        }
-
-        prop AssignmentNarrowingGenerations Dictionary[VariableSymbol, int32] {
-            get;
-        }
-
-        prop AssignmentNarrowingGeneration int32 {
-            get;
-        }
-
-        prop NarrowingFunctionFrame object {
-            get;
-        }
-
-        prop PendingGotoNarrowingSnapshots Dictionary[string, List[GotoNarrowingSnapshot]] {
-            get;
-        }
-
-        prop BackwardGotoNarrowingStates Dictionary[string, BackwardGotoNarrowingState] {
-            get;
-        }
-
-        prop ReachableUserLabels HashSet[string] {
-            get;
-        }
-
-        prop DeferredUnreachableGotoEdges List[
-            (SourceLabel string?, TargetLabel string, Snapshot GotoNarrowingSnapshot)
-        ] {
-            get;
-        }
-
-        prop PotentialReachabilityLabel string? {
+        prop PendingJumps Dictionary[string, List[NarrowingJumpState]] {
             get;
         }
 

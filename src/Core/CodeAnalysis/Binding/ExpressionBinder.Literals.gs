@@ -3645,24 +3645,9 @@ internal partial class ExpressionBinder {
             } else {
                 elementNames.Add(nil)
             }
-            // Issue #5635: the element takes the type of its value with no conversion, so a narrowed read that the
-            // element yields (the value, or the trailing value of a block) is decided for that type where it binds,
-            // as `let t = s` is.
-            var elementRead NarrowedBranchValue? = nil
-            var be = BindBranchValue(
-                e,
-                nil,
-                nil,
-                (read NarrowedBranchValue) -> {
-                    elementRead = read
-                }
-            )
+            var be = BindExpression(e)
             if be.Type == TypeSymbol.Error {
                 return BoundErrorExpression(nil)
-            }
-            if elementRead is {} read {
-                be = conversions.ResolveNarrowedValue(be, read, be.Type)
-                binderCtx.CaptureNarrowedRead(be, read)
             }
             bound.Add(be)
             elementTypes.Add(be.Type)

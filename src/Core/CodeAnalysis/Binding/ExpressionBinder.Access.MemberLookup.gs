@@ -229,19 +229,19 @@ internal partial class ExpressionBinder {
     }
 
     private func ImportedExtensionMayApply(type TypeSymbol, name string, callSyntax CallExpressionSyntax?) bool {
-        let argumentNames = if callSyntax != nil {
+        let argumentCount = if callSyntax != nil && callSyntax.TypeArgumentList == nil {
+            callSyntax.Arguments.Count
+        } else {
+            default(int32?)
+        }
+        let argumentNames = if callSyntax != nil && callSyntax.TypeArgumentList == nil {
             BuildDeferredArgumentNames(callSyntax, 1)
         } else {
             default(IReadOnlyList[string?]?)
         }
         for candidate in this.memberLookup.CollectImportedExtensionMethods(name) {
             try {
-                if ClrOverloadResolution.MayAcceptExtensionReceiver(
-                    candidate,
-                    type,
-                    callSyntax?.Arguments.Count,
-                    argumentNames
-                ) {
+                if ClrOverloadResolution.MayAcceptExtensionReceiver(candidate, type, argumentCount, argumentNames) {
                     return true
                 }
             } catch (ex Exception) when !(ex is OutOfMemoryException) {
@@ -271,8 +271,7 @@ internal partial class ExpressionBinder {
             receiverStart
         )
         let unwrappedResult = UnwrapTransparentMemberResult(result)
-        var recoveredDeclaredReceiver = false
-        if receiver != nil && binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out var receiverPath, out _) &&
+        if receiver != nil && binderCtx.TryGetNarrowedAccessPath(receiver, out var receiverPath, out _) &&
             TryGetDeclaredReceiver(receiverPath!!, receiver) is {} declaredCallReceiver &&
             rightPart is CallExpressionSyntax callSyntax &&
             unwrappedResult is BoundUserInstanceCallExpression call &&
@@ -282,10 +281,6 @@ internal partial class ExpressionBinder {
             call.Method,
             receiver.Type
         ) is {} declaredMethod {
-            binderCtx.UntrackBackwardGotoNarrowingConversion(
-                receiverPath!!,
-                receiverSyntax?.Location ?? rightPart.Location
-            )
             receiver = declaredCallReceiver
             result = RewrapTransparentMemberResult(
                 result,
@@ -299,8 +294,7 @@ internal partial class ExpressionBinder {
                     call.ConstrainedInterfaceType
                 ){MethodTypeArguments = call.MethodTypeArguments}
             )
-            recoveredDeclaredReceiver = true
-        } else if receiver != nil && binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out receiverPath, out _) &&
+        } else if receiver != nil && binderCtx.TryGetNarrowedAccessPath(receiver, out receiverPath, out _) &&
             TryGetDeclaredReceiver(receiverPath!!, receiver) is {} declaredClrReceiver &&
             rightPart is CallExpressionSyntax &&
             unwrappedResult is BoundImportedInstanceCallExpression importedCall &&
@@ -310,10 +304,6 @@ internal partial class ExpressionBinder {
             importedCall.Type,
             receiver.Type
         ) is {} declaredClrMethod {
-            binderCtx.UntrackBackwardGotoNarrowingConversion(
-                receiverPath!!,
-                receiverSyntax?.Location ?? rightPart.Location
-            )
             receiver = declaredClrReceiver
             result = RewrapTransparentMemberResult(
                 result,
@@ -330,8 +320,7 @@ internal partial class ExpressionBinder {
                     importedCall.IsNonVirtualBaseCall
                 )
             )
-            recoveredDeclaredReceiver = true
-        } else if receiver != nil && binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out receiverPath, out _) &&
+        } else if receiver != nil && binderCtx.TryGetNarrowedAccessPath(receiver, out receiverPath, out _) &&
             TryGetDeclaredReceiver(receiverPath!!, receiver) is {} declaredMemberReceiver &&
             rightPart is NameExpressionSyntax {
             let diagnosticCount = Diagnostics.Count
@@ -358,17 +347,9 @@ internal partial class ExpressionBinder {
                 UnwrapTransparentMemberResult(result).Type,
                 UnwrapTransparentMemberResult(declaredResult).Type
             ) {
-                binderCtx.UntrackBackwardGotoNarrowingConversion(
-                    receiverPath!!,
-                    receiverSyntax?.Location ?? rightPart.Location
-                )
                 receiver = declaredMemberReceiver
                 result = declaredResult
-                recoveredDeclaredReceiver = true
             }
-        }
-        if !recoveredDeclaredReceiver {
-            TrackBackwardGotoNarrowingAccess(receiver, rightPart, result)
         }
         if receiver == nil && classSymbol != nil && rightPart is (NameExpressionSyntax or CallExpressionSyntax) {
             let owner = classSymbol.ConstructedReceiver ??
@@ -447,61 +428,6 @@ internal partial class ExpressionBinder {
     private enum MemberOperation {
         Read,
         Write
-    }
-
-    private func TrackBackwardGotoNarrowingAccess(
-        receiver BoundExpression?,
-        rightPart ExpressionSyntax,
-        result BoundExpression
-    ) {
-        var result = result
-        result = UnwrapTransparentMemberResult(result)
-        var location TextLocation
-        var memberName string?
-        var isInvocation bool
-        switch rightPart {
-            case name is NameExpressionSyntax {
-                location = name.Location
-                memberName = name.IdentifierToken.ValueText
-                isInvocation = false
-            }
-            case call is CallExpressionSyntax {
-                location = call.Identifier.Location
-                memberName = call.Identifier.ValueText
-                isInvocation = true
-            }
-            default {
-                return
-            }
-        }
-        var path AccessPath
-        if receiver is BoundVariableExpression{NarrowedType: not nil} variableRead {
-            path = AccessPath.ForVariable(variableRead.Variable)
-        } else if receiver == nil || !SmartCastStability.TryGetStableMemberPath(receiver, out var stablePath, out _) {
-            return
-        } else {
-            path = Invariant.Required(
-                stablePath,
-                "a narrowed stable member receiver has an access path",
-                expression: "stablePath"
-            )
-        }
-        let kind = if isInvocation {
-            BackwardGotoNarrowingUseKind.Function
-        } else {
-            BackwardGotoNarrowingUseKind.Member
-        }
-        let requiredType = switch result {
-            case call is BoundUserInstanceCallExpression: call.Method.ContainingType
-            case call is BoundImportedInstanceCallExpression: call.CalledFunction.ContainingType
-            case field is BoundFieldAccessExpression: field.Field.ContainingType
-            case property is BoundPropertyAccessExpression: property.Property.ContainingType
-            case property is BoundClrPropertyAccessExpression: property.ReferencedProperty?.ContainingType
-            case group is BoundMethodGroupExpression: group.Function?.ContainingType
-            case group is BoundClrMethodGroupExpression: group.Method?.ContainingType
-            default: default(TypeSymbol?)
-        }
-        binderCtx.TrackBackwardGotoNarrowingUse(path, location, memberName!!, kind, requiredType: requiredType)
     }
 
     /// ADR-0186 §4 and §5, in one move: replaces a platform-typed receiver
@@ -1555,7 +1481,6 @@ internal partial class ExpressionBinder {
         indexSyntaxes GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
         targetLocation TextLocation
     ) BoundExpression {
-        TrackBackwardGotoIndexUse(target, targetLocation)
         let rectangular RectangularArrayTypeSymbol? = GetRectangularArrayTypeForBinding(target.Type)
         if rectangular == nil && (target.Type is StructSymbol or InterfaceSymbol) {
             // ADR-0187 / issue #4350: a multi-parameter user indexer
@@ -1750,7 +1675,6 @@ internal partial class ExpressionBinder {
         boundIndexOverride BoundExpression? = nil
     ) BoundExpression {
         var target = target
-        TrackBackwardGotoIndexUse(target, targetLocation)
         // ADR-0186 §4/§5: an indexer receiver is a receiver. Checked and
         // unwrapped here for the same two reasons `BindAccessorStep` does it
         // — see `CheckPlatformReceiver`. Without the unwrap, indexing a
@@ -2003,12 +1927,7 @@ internal partial class ExpressionBinder {
                 out var readReported,
                 out var readView
             ) {
-                ReplaceBackwardGotoIndexUse(
-                    target,
-                    targetLocation,
-                    readIndexer!!.ContainingType ?? readView ?? target.Type
-                )
-                if binderCtx.TryGetBackwardGotoNarrowingPath(target, out var targetPath, out _) &&
+                if binderCtx.TryGetNarrowedAccessPath(target, out var targetPath, out _) &&
                     !targetPath!!.HasMembers &&
                     !(targetPath!!.Root.Type is NullableTypeSymbol) &&
                     FindDeclaredIndexer(
@@ -2018,7 +1937,6 @@ internal partial class ExpressionBinder {
                     target.Type,
                     readSubstitution
                 ) is {} declaredIndexer {
-                    binderCtx.UntrackBackwardGotoNarrowingIndex(targetPath!!.Root, targetLocation)
                     target = DeclaredReceiver(targetPath!!.Root, target.Syntax)
                     readIndexer = declaredIndexer.Indexer
                     readSubstitution = declaredIndexer.Substitution
@@ -2147,41 +2065,6 @@ internal partial class ExpressionBinder {
     /// static receiver TYPE at the call site, exactly like ordinary named
     /// members), building the type-parameter substitution for a constructed
     /// generic receiver (e.g. `IBox[int32]` over `interface IBox[T]`).
-    private func TrackBackwardGotoIndexUse(
-        target BoundExpression,
-        location TextLocation,
-        requiredType TypeSymbol? = nil
-    ) {
-        var requiredType = requiredType
-        if binderCtx.TryGetBackwardGotoNarrowingPath(target, out var path, out _) {
-            if requiredType == nil &&
-                target.Type is StructSymbol structType &&
-                TryGetUserIndexer(structType, out var structIndexer, out _) {
-                requiredType = structIndexer!!.ContainingType
-            } else if requiredType == nil &&
-                target.Type is InterfaceSymbol interfaceType &&
-                TryGetUserIndexer(interfaceType, out var interfaceIndexer, out _) {
-                requiredType = interfaceIndexer!!.ContainingType
-            }
-            binderCtx.TrackBackwardGotoNarrowingUse(
-                path!!,
-                location,
-                string.Empty,
-                BackwardGotoNarrowingUseKind.Index,
-                requiredType: requiredType
-            )
-        }
-    }
-
-    private func ReplaceBackwardGotoIndexUse(target BoundExpression, location TextLocation, requiredType TypeSymbol) {
-        if binderCtx.TryGetBackwardGotoNarrowingPath(target, out var path, out _) {
-            if !(path!!.Root.Type is NullableTypeSymbol) {
-                binderCtx.UntrackBackwardGotoNarrowingIndexUse(path!!.Root, location)
-            }
-            TrackBackwardGotoIndexUse(target, location, requiredType)
-        }
-    }
-
     private func BindIndexedWriteThroughChain(
         chainBase BoundExpression?,
         remainingChain ExpressionSyntax,
@@ -2710,7 +2593,6 @@ internal partial class ExpressionBinder {
         // Member/indexer lookup sees the effective type while loads still refer
         // to the original variable slot.
         var target = BuildNarrowedVariableRead(variable, diagnosticLocation)
-        TrackBackwardGotoIndexUse(target, diagnosticLocation)
         // ADR-0186 §4/§5, issue #4323: the indexer WRITE path needs the same
         // receiver check and unwrap the READ path gets in
         // `BindIndexAgainstTarget`. This is failure mode 1 of the ADR's own
@@ -3106,7 +2988,7 @@ internal partial class ExpressionBinder {
                 out var writeReported,
                 out var writeView
             ) {
-                if binderCtx.TryGetBackwardGotoNarrowingPath(target, out var targetPath, out _) &&
+                if binderCtx.TryGetNarrowedAccessPath(target, out var targetPath, out _) &&
                     !targetPath!!.HasMembers &&
                     !(targetPath!!.Root.Type is NullableTypeSymbol) &&
                     FindDeclaredIndexer(
@@ -3116,17 +2998,10 @@ internal partial class ExpressionBinder {
                     target.Type,
                     writeSubstitution
                 ) is {} declaredIndexer {
-                    binderCtx.UntrackBackwardGotoNarrowingIndex(targetPath!!.Root, diagnosticLocation)
                     target = DeclaredReceiver(targetPath!!.Root, target.Syntax)
                     writeIndexer = declaredIndexer.Indexer
                     writeSubstitution = declaredIndexer.Substitution
                     writeView = declaredIndexer.View ?? target.Type
-                } else {
-                    ReplaceBackwardGotoIndexUse(
-                        target,
-                        diagnosticLocation,
-                        writeIndexer!!.ContainingType ?? writeView ?? target.Type
-                    )
                 }
                 target = ViewIndexerReceiver(target, writeView, diagnosticLocation)
                 let selectedIndexer = writeIndexer

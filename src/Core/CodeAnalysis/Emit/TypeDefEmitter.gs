@@ -2394,7 +2394,8 @@ internal class TypeDefEmitter {
                 // ECMA-335 II.10.1.7 mandates that the value-type constraint
                 // implies the default-constructor constraint — the emitter
                 // forces both bits whenever `struct` is set.
-                if tp.HasReferenceTypeConstraint {
+                if tp.HasReferenceTypeConstraint ||
+                    (tp.TypeParameterBound != nil && Binder.IsReferenceTypeForConstraint(tp)) {
                     attrs |= GenericParameterAttributes.ReferenceTypeConstraint
                 }
                 if tp.HasValueTypeConstraint {

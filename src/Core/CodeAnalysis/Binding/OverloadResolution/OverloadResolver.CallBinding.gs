@@ -1048,16 +1048,6 @@ internal partial class OverloadResolver {
         } else {
             default(TypeSymbol?)
         }
-        if syntax.NullableQuestionToken == nil &&
-            symbol is VariableSymbol narrowedCallTarget &&
-            narrowedCallTargetType != nil {
-            binderCtx.TrackBackwardGotoNarrowingUse(
-                GetNarrowedVariablePath(narrowedCallTarget),
-                syntax.Identifier.Location,
-                syntax.Identifier.ValueText,
-                BackwardGotoNarrowingUseKind.Function
-            )
-        }
         // Issue #1566: an accessible in-scope member of the enclosing type
         // shadows a same-named top-level EXTENSION function for an unqualified,
         // receiver-less call — mirroring C#, where an in-scope member hides an
@@ -1710,7 +1700,8 @@ internal partial class OverloadResolver {
                     // vector, so build the positional map before asking.
                     let explicitVector = BuildTypeArgumentVector(
                         candidate.TypeParameters,
-                        explicitOverloadTypeArguments
+                        explicitOverloadTypeArguments,
+                        candidate.StaticOwnerType ?? candidate.ReceiverType
                     )
                     var constraintsSatisfied = true
                     for var i = 0; i < candidate.TypeParameters.Length; i++ {
@@ -2845,18 +2836,6 @@ internal partial class OverloadResolver {
                         expression: "expectedType"
                     )
                 )
-            } else if expectedType != nil {
-                // Issue #5635: an argument that goes into its parameter with no conversion (the parameter has the
-                // argument's type, also an inferred type argument) keeps the backward `goto` check of a narrowed read.
-                boundArguments[i] = conversions.DecideNarrowedConversion(
-                    if i < parameterSyntax.Length {
-                        parameterSyntax[i]?.Location ?? syntax.Identifier.Location
-                    } else {
-                        syntax.Identifier.Location
-                    },
-                    argument,
-                    expectedType
-                )
             }
         }
         // Issue #951: any deferred un-typed arrow lambda that did not map to a
@@ -2974,6 +2953,8 @@ internal partial class OverloadResolver {
             typeParameters = genericStruct.TypeParameters
         } else if type is InterfaceSymbol{IsGenericDefinition: true} genericInterface {
             typeParameters = genericInterface.TypeParameters
+        } else if type is DelegateTypeSymbol{IsGenericDefinition: true} genericDelegate {
+            typeParameters = genericDelegate.TypeParameters
         } else {
             return type
         }
@@ -3000,6 +2981,26 @@ internal partial class OverloadResolver {
             typeArguments.Add(typeArgument)
         }
         let arguments = typeArguments.MoveToImmutable()
+        if type is DelegateTypeSymbol targetDelegate {
+            // Issue #4762: route generic named-delegate conversions through the
+            // shared type-clause checker so forwarded open bounds are accepted
+            // and unforwarded open arguments report GS0580.
+            if GSharp
+                .Core
+                .CodeAnalysis
+                .Binding
+                .Binder
+                .CheckUserGenericTypeClauseConstraints(
+                Scope,
+                Diagnostics,
+                (targetDelegate.Definition ?? targetDelegate).TypeParameters,
+                arguments,
+                syntax.Identifier.Location
+            ) {
+                return nil
+            }
+            return DelegateTypeSymbol.Construct(targetDelegate, arguments)
+        }
         let clauseVector = BuildTypeArgumentVector(typeParameters, arguments)
         for var i = 0; i < typeParameters.Length; i++ {
             if !satisfiesConstraint(arguments[i], typeParameters[i], clauseVector) {
