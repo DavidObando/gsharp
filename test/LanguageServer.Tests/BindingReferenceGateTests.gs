@@ -70,11 +70,8 @@ open class BindingReferenceGateTests {
         // ADR-0212 slice S2 baseline. Remove entries as slices S4 to S7 migrate their uses.
         private let Allowed HashSet[string] = HashSet[string](AllowanceEntries(), StringComparer.Ordinal)
 
-        // Simple names in the binding namespace, one per line.
-        private const AllowedNames string = `
-            BoundGlobalScope
-            BoundProgram
-`
+        // Simple names in the binding namespace, one per line (empty after ADR-0212 slice S7b).
+        private const AllowedNames string = ""
 
         private func AllowanceEntries() List[string] {
             let entries = List[string]()
