@@ -726,6 +726,129 @@ func Run(ex Exception, callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(Exception("boom"), func() { }))`, "GS0158@21:14", "reject", ""}
+            yield[]object{"d33_5640_defer_repeated_callback_argument_executes_to_fixed_point", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(v int32) { }
+func Run(repeat Func[Action, int32], callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    var saved = callback
+    defer Consume(repeat.Invoke(func() {
+        saved()
+        saved = func() { action = clear }
+    }))
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(func(f Action) int32 {
+    f()
+    f()
+    return 1
+}, func() { }))`, "GS0158@17:14", "reject", ""}
+            yield[]object{"d34_5640_defer_nested_finally_returns_scale_linearly_and_preserve_return_state", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(v int32) { }
+func Run(stop bool, callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    let flip = func() { action = clear }
+    defer Consume({
+        (func() {
+            try {
+                if stop {
+                    flip()
+                    return
+                }
+                return
+            } finally {
+                try { return } finally {
+                    try { return } finally {
+                        try { return } finally {
+                            try { return } finally {
+                                try { return } finally {
+                                    try { return } finally {
+                                        try { return } finally {
+                                            try { return } finally {
+                                                try { return } finally {
+                                                    try { return } finally {
+                                                        try { return } finally {
+                                                            try { return } finally {
+                                                                try { return } finally {
+                                                                    try { return } finally {
+                                                                        try { return } finally {
+                                                                            return
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })()
+        1
+    })
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(true, func() { }))`, "GS0158@57:14", "reject", ""}
+            yield[]object{"d35_5640_defer_declaration_copy_of_mixed_external_unknown_callable_preserves_unknown", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(v int32) { }
+func Run(stop bool, callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    let flip = func() { action = clear }
+    defer Consume({
+        if stop { flip() }
+        let copy = action
+        action = copy
+        1
+    })
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(true, func() { }))`, "GS0158@19:14", "reject", ""}
+            yield[]object{"d36_5640_defer_self_assignment_of_mixed_external_unknown_callable_preserves_unknown", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(v int32) { }
+func Run(stop bool, callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    let flip = func() { action = clear }
+    defer Consume({
+        if stop { flip() }
+        action = action
+        1
+    })
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(true, func() { }))`, "GS0158@18:14", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

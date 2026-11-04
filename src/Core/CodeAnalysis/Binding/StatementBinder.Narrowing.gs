@@ -2902,26 +2902,36 @@ internal partial class StatementBinder {
             if snapshots == nil {
                 return
             }
-            for maybeSnapshot in snapshots {
-                if maybeSnapshot is not{} snapshot {
-                    continue
+            var previous = CaptureCallableState()
+            while true {
+                for maybeSnapshot in snapshots {
+                    if maybeSnapshot is not{} snapshot {
+                        continue
+                    }
+                    VisitCallableTargets(
+                        snapshot.NormalTargets,
+                        normalKeepsEntry: true,
+                        snapshot.AllTargets,
+                        allKeepsEntry: true
+                    )
+                    if snapshot.IsExternal {
+                        MarkMayMutateGlobalRoots(runsSourceCode: false)
+                    }
+                    if snapshot.IsNormalUnknown {
+                        normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                    }
+                    if snapshot.IsUnknown {
+                        MayMutateAnyRoot = true
+                        allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                    }
                 }
-                VisitCallableTargets(
-                    snapshot.NormalTargets,
-                    normalKeepsEntry: true,
-                    snapshot.AllTargets,
-                    allKeepsEntry: true
-                )
-                if snapshot.IsExternal {
-                    MarkMayMutateGlobalRoots(runsSourceCode: false)
+                MergeCallableState(previous)
+                let joined = CaptureCallableState()
+                if CallableStatesEqual(previous, joined) {
+                    RestoreCallableState(joined)
+                    return
                 }
-                if snapshot.IsNormalUnknown {
-                    normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-                }
-                if snapshot.IsUnknown {
-                    MayMutateAnyRoot = true
-                    allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-                }
+                previous = joined
             }
         }
 
@@ -3143,35 +3153,34 @@ internal partial class StatementBinder {
             if node.FinallyBlock != nil {
                 let declaredStart = declaredRegionLabels.Count
                 let jumpedStart = jumpedRegionLabels.Count
-                normalCallableState.RestoreFrom(joinedNormal ?? finallyEntries)
+                let finallyNormalEntry = if tryReturnState is {} returningEntry {
+                    CallableAliasState.Join(joinedNormal, returningEntry.Normal)
+                } else {
+                    joinedNormal
+                }
+                normalCallableState.RestoreFrom(finallyNormalEntry ?? finallyEntries)
                 allEntryCallableState.RestoreFrom(finallyEntries)
                 VisitStatement(node.FinallyBlock)
+                if hasFinally && tryReturnState != nil && !StatementBinder.EndsInUnconditionalExit(
+                    node.FinallyBlock,
+                    gotoExits: false
+                ) {
+                    let returnAfterFinally = CaptureCallableState()
+                    if functionLiteralFinallyDepth > 0 {
+                        functionLiteralTryReturnState = JoinCallableStates(
+                            functionLiteralTryReturnState,
+                            returnAfterFinally
+                        )
+                    } else {
+                        functionLiteralReturnState = JoinCallableStates(functionLiteralReturnState, returnAfterFinally)
+                    }
+                }
                 if joinedNormal == nil || StatementBinder.EndsInUnconditionalExit(
                     node.FinallyBlock,
                     gotoExits: false
                 ) ||
                     HasEscapingRegionJump(declaredStart, jumpedStart) {
                     normalCallableState.RestoreFrom(allEntryCallableState)
-                }
-                if hasFinally && tryReturnState is {} returningState {
-                    let fallthroughAfterFinally = CaptureCallableState()
-                    RestoreCallableState(returningState)
-                    VisitStatement(node.FinallyBlock)
-                    let returnAfterFinally = CaptureCallableState()
-                    RestoreCallableState(fallthroughAfterFinally)
-                    if !StatementBinder.EndsInUnconditionalExit(node.FinallyBlock, gotoExits: false) {
-                        if functionLiteralFinallyDepth > 0 {
-                            functionLiteralTryReturnState = JoinCallableStates(
-                                functionLiteralTryReturnState,
-                                returnAfterFinally
-                            )
-                        } else {
-                            functionLiteralReturnState = JoinCallableStates(
-                                functionLiteralReturnState,
-                                returnAfterFinally
-                            )
-                        }
-                    }
                 }
             } else {
                 normalCallableState.RestoreFrom(joinedNormal ?? finallyEntries)
@@ -3765,15 +3774,14 @@ internal partial class StatementBinder {
                 }
                 let preserveCaptured = inFunctionLiteral && CapturedVariables.Contains(node.Variable)
                 let externalCallable = IsExternalCallable(initializer)
+                let unknownCallable = IsUnknownCallable(initializer)
                 if TryGetFunctionLiterals(initializer, out var literals) {
                     if preserveCaptured && Literals.TryGetValue(node.Variable, out var existing) {
                         existing.UnionWith(literals!!)
                     } else {
                         Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals!!)
                     }
-                    if UnwrapCallable(initializer) is BoundVariableExpression source && Unknown.Contains(
-                        source.Variable
-                    ) {
+                    if unknownCallable {
                         Unknown.Add(node.Variable)
                     } else if !preserveCaptured {
                         Unknown.Remove(node.Variable)
@@ -3786,6 +3794,10 @@ internal partial class StatementBinder {
                 } else if externalCallable {
                     if !preserveCaptured {
                         Literals.Remove(node.Variable)
+                    }
+                    if unknownCallable {
+                        Unknown.Add(node.Variable)
+                    } else if !preserveCaptured {
                         Unknown.Remove(node.Variable)
                     }
                     External.Add(node.Variable)
@@ -3823,6 +3835,7 @@ internal partial class StatementBinder {
                     node.Variable
                 )
                 let externalCallable = IsExternalCallable(node.Expression)
+                let unknownCallable = IsUnknownCallable(node.Expression)
                 if TryGetFunctionLiterals(node.Expression, out var literals) {
                     if (pendingConditionalTargetsCount > 0 || preserveCaptured) && Literals.TryGetValue(
                         node.Variable,
@@ -3832,9 +3845,7 @@ internal partial class StatementBinder {
                     } else {
                         Literals[node.Variable] = HashSet[BoundFunctionLiteralExpression](literals!!)
                     }
-                    if UnwrapCallable(node.Expression) is BoundVariableExpression source && Unknown.Contains(
-                        source.Variable
-                    ) {
+                    if unknownCallable {
                         Unknown.Add(node.Variable)
                     } else if pendingConditionalTargetsCount == 0 && !preserveCaptured {
                         Unknown.Remove(node.Variable)
@@ -3847,6 +3858,10 @@ internal partial class StatementBinder {
                 } else if externalCallable {
                     if pendingConditionalTargetsCount == 0 && !preserveCaptured {
                         Literals.Remove(node.Variable)
+                    }
+                    if unknownCallable {
+                        Unknown.Add(node.Variable)
+                    } else if pendingConditionalTargetsCount == 0 && !preserveCaptured {
                         Unknown.Remove(node.Variable)
                     }
                     MarkExternalAssignment(node.Variable, pendingConditionalTargetsCount)
