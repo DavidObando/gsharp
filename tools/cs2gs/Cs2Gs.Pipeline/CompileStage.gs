@@ -34,6 +34,9 @@ class CompileStage : IMigrationStage {
         if context == nil {
             throw ArgumentNullException("context")
         }
+        if HasInvalidProjectReference(context) {
+            return Task.FromResult(StageOutcome.DependencyBlocked())
+        }
         if context.EmittedFiles.Count == 0 {
             return Task.FromResult(StageOutcome.Passed())
         }
@@ -69,9 +72,6 @@ class CompileStage : IMigrationStage {
                     ?.StartsWith("Microsoft.CodeAnalysis", StringComparison.OrdinalIgnoreCase) != true
             )
                 .ToList()
-        }
-        if HasInvalidProjectReference(context) {
-            return Task.FromResult(StageOutcome.DependencyBlocked())
         }
         if context.Options.CompileViaSdk {
             let runner = SdkCompileRunner()

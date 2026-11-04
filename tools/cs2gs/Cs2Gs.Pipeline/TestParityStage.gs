@@ -783,6 +783,9 @@ stderr:
             if project.WorkspaceLoadFailed {
                 return TranslatedProject.LoadFailed(project.WorkspaceLoadErrors)
             }
+            if project.ReferencedWorkspaceLoadFailed {
+                return TranslatedProject.LoadFailed(project.ReferencedWorkspaceLoadErrors)
+            }
             // Issue #2321: a benign NuGet audit vulnerability advisory (CS2GS0003)
             // does not fail the workspace load gate above; carry it forward to the
             // caller so it can be recorded (not silently dropped) regardless of

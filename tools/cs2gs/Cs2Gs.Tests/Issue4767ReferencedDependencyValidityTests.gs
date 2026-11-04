@@ -1423,6 +1423,119 @@ public static class Consumer
                 []CorpusApp{app}
             )
             Assert.True(case4dResult.Succeeded)
+
+            // Case 4e (`PRRT_kwDOCzQNb86z2XLr`): when Consumer references both a
+            // malformed producer (BadModels.csproj) and a nonexistent project
+            // (Missing.csproj), Consumer's own missing-reference error must stay on
+            // the root project so Consumer reports a consumer-owned CS2GS0001
+            // artifact instead of artifact-free dependency-blocked.
+            File.WriteAllText(
+                consumerProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <ItemGroup>\n" +
+                    "    <ProjectReference Include=\"../BadModels/BadModels.csproj\" />\n" +
+                    "    <ProjectReference Include=\"../Missing/Missing.csproj\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            let loadedBoth = await CSharpProjectLoader.LoadProjectAsync(consumerProject, configuration: "Release")
+            Assert.True(loadedBoth.WorkspaceLoadFailed)
+            Assert.NotEmpty(loadedBoth.WorkspaceLoadErrors)
+            Assert.True(loadedBoth.ReferencedWorkspaceLoadFailed)
+            let case4eOptions = PipelineOptions{
+                GscPath: compiler,
+                Config: "Release",
+                OutputRoot: Path.Combine(corpusRoot, "runs-case4e"),
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true
+            }
+            let case4eResult = await MigrationPipeline(case4eOptions, []IMigrationStage{TranslateStage()}).RunAsync(
+                []CorpusApp{app}
+            )
+            Assert.False(case4eResult.Succeeded)
+            let case4eApp = Assert.Single(case4eResult.Apps)
+            Assert.Equal("translation-unsupported", case4eApp.FailureCategory)
+            Assert.Single(case4eApp.Fingerprints)
+
+            // Case 4f (`PRRT_kwDOCzQNb86z2XLU`): a library whose `.Tests` project
+            // has a failing referenced dependency must fail TestParityStage with
+            // ProjectLoadFailure instead of passing parity.
+            File.WriteAllText(
+                consumerProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <ItemGroup>\n" +
+                    "    <ProjectReference Include=\"../BadModels/BadModels.csproj\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            let baselinePath = Path.Combine(corpusRoot, "baseline.tests.json")
+            File.WriteAllText(baselinePath, `{ "tests": [] }`)
+            let libApp = CorpusApp(
+                "corpus/Models",
+                modelsProject,
+                TargetKind.Library,
+                testsProjectPath: consumerProject,
+                testsBaselinePath: baselinePath
+            )
+            let parityArtifactDir = Path.Combine(corpusRoot, "runs-case4f")
+            Directory.CreateDirectory(parityArtifactDir)
+            let dummyDllPath = Path.Combine(parityArtifactDir, "Models.dll")
+            File.WriteAllText(dummyDllPath, "dummy")
+            let parityContext = StageExecutionContext(
+                libApp,
+                PipelineOptions{
+                    GscPath: compiler,
+                    Config: "Release",
+                    OutputRoot: parityArtifactDir,
+                    SourceRoot: corpusRoot
+                },
+                GscInvoker(compiler),
+                parityArtifactDir,
+                TriageBuilder("run_parity", "2026-10-05T00:00:00Z", "0.5.0", libApp.Id)
+            )
+            parityContext.EmittedAssemblyPath = dummyDllPath
+            let parityOutcome = await TestParityStage().ExecuteAsync(parityContext)
+            Assert.Equal(StageStatus.Failed, parityOutcome.Status)
+            let parityArtifact = Assert.Single(parityOutcome.Artifacts)
+            Assert.Equal("test-parity-failure", parityArtifact.Category)
+            Assert.Equal(CSharpProjectLoader.WorkspaceLoadFailureDiagnosticId, parityArtifact.Diagnostic?.Id)
+
+            // Case 4g (`PRRT_kwDOCzQNb86z2XK3`): a source-less consumer
+            // (`EmittedFiles.Count == 0`) whose required producer failed compilation
+            // must be marked dependency-blocked in CompileStage before the
+            // empty-emission early return.
+            let invalidCompiledSet = HashSet[string](StringComparer.OrdinalIgnoreCase)
+            invalidCompiledSet.Add(Path.GetFullPath(modelsProject))
+            let sourcelessOptions = PipelineOptions{
+                GscPath: compiler,
+                Config: "Release",
+                OutputRoot: Path.Combine(corpusRoot, "runs-case4g"),
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true,
+                InvalidCompiledProjectPaths: invalidCompiledSet
+            }
+            let sourcelessContext = StageExecutionContext(
+                app,
+                sourcelessOptions,
+                GscInvoker(compiler),
+                Path.Combine(corpusRoot, "runs-case4g"),
+                TriageBuilder("run_sourceless", "2026-10-05T00:00:00Z", "0.5.0", app.Id)
+            )
+            sourcelessContext.EvaluatedProjectReferencesResolved = true
+            sourcelessContext.EvaluatedProjectReferencePaths.Add(Path.GetFullPath(modelsProject))
+            Assert.Empty(sourcelessContext.EmittedFiles)
+            let sourcelessCompileOutcome = await CompileStage().ExecuteAsync(sourcelessContext)
+            Assert.Equal(StageStatus.Failed, sourcelessCompileOutcome.Status)
+            Assert.Equal("dependency-blocked", sourcelessCompileOutcome.FailureCategory)
+            Assert.Empty(sourcelessCompileOutcome.Artifacts)
         } finally {
             Directory.Delete(corpusRoot, recursive: true)
         }
