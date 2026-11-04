@@ -34,26 +34,16 @@ internal partial class StatementBinder {
                 return (inElse, inThen)
             }
             case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
-                var (leftThen, _) = ClassifyIfConditionNarrowing(bin.Left, removedFacts)
-                leftThen = FilterLeftConditionNarrowings(bin.Right, leftThen)
-                let (rightThen, _) = ClassifyIfConditionNarrowing(bin.Right, removedFacts)
-                let combinedThen Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftThen, rightThen)
-                if combinedThen == nil || combinedThen.Count == 0 {
-                    return (nil, nil)
-                }
-                return (combinedThen, nil)
+                let (leftThenRaw, leftElse) = ClassifyIfConditionNarrowing(bin.Left, removedFacts)
+                let leftThen = FilterLeftConditionNarrowings(bin.Right, leftThenRaw)
+                let (rightThen, rightElse) = ClassifyIfConditionNarrowing(bin.Right, removedFacts)
+                return CombineLogicalAndNarrowings(leftThenRaw, leftThen, leftElse, rightThen, rightElse)
             }
             case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
-                var (leftThen, leftElse) = ClassifyIfConditionNarrowing(bin.Left, removedFacts)
-                leftElse = FilterLeftConditionNarrowings(bin.Right, leftElse)
+                let (leftThen, leftElseRaw) = ClassifyIfConditionNarrowing(bin.Left, removedFacts)
+                let leftElse = FilterLeftConditionNarrowings(bin.Right, leftElseRaw)
                 let (rightThen, rightElse) = ClassifyIfConditionNarrowing(bin.Right, removedFacts)
-                let combinedThen Dictionary[AccessPath, TypeSymbol]? = IntersectNarrowingFrames(leftThen, rightThen)
-                let combinedElse Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftElse, rightElse)
-                if (combinedThen == nil || combinedThen.Count == 0) &&
-                    (combinedElse == nil || combinedElse.Count == 0) {
-                    return (nil, nil)
-                }
-                return (combinedThen, combinedElse)
+                return CombineLogicalOrNarrowings(leftThen, leftElseRaw, leftElse, rightThen, rightElse)
             }
         }
         // Phase 3.C.4/6.6: recognise one top-level nullable guard. Boolean
@@ -1125,26 +1115,16 @@ internal partial class StatementBinder {
                 return (inElse, inThen)
             }
             case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
-                var (leftThen, _) = TryClassifyBoolCallNarrowing(bin.Left)
-                leftThen = FilterLeftConditionNarrowings(bin.Right, leftThen)
-                let (rightThen, _) = TryClassifyBoolCallNarrowing(bin.Right)
-                let combinedThen Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftThen, rightThen)
-                if combinedThen == nil || combinedThen.Count == 0 {
-                    return (nil, nil)
-                }
-                return (combinedThen, nil)
+                let (leftThenRaw, leftElse) = TryClassifyBoolCallNarrowing(bin.Left)
+                let leftThen = FilterLeftConditionNarrowings(bin.Right, leftThenRaw)
+                let (rightThen, rightElse) = TryClassifyBoolCallNarrowing(bin.Right)
+                return CombineLogicalAndNarrowings(leftThenRaw, leftThen, leftElse, rightThen, rightElse)
             }
             case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
-                var (leftThen, leftElse) = TryClassifyBoolCallNarrowing(bin.Left)
-                leftElse = FilterLeftConditionNarrowings(bin.Right, leftElse)
+                let (leftThen, leftElseRaw) = TryClassifyBoolCallNarrowing(bin.Left)
+                let leftElse = FilterLeftConditionNarrowings(bin.Right, leftElseRaw)
                 let (rightThen, rightElse) = TryClassifyBoolCallNarrowing(bin.Right)
-                let combinedThen Dictionary[AccessPath, TypeSymbol]? = IntersectNarrowingFrames(leftThen, rightThen)
-                let combinedElse Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftElse, rightElse)
-                if (combinedThen == nil || combinedThen.Count == 0) &&
-                    (combinedElse == nil || combinedElse.Count == 0) {
-                    return (nil, nil)
-                }
-                return (combinedThen, combinedElse)
+                return CombineLogicalOrNarrowings(leftThen, leftElseRaw, leftElse, rightThen, rightElse)
             }
         }
         return TryClassifyBoolCallNarrowingLeaf(
@@ -1825,6 +1805,113 @@ internal partial class StatementBinder {
                 }
             }
             return result
+        }
+
+        internal func IsNullableWidening(path AccessPath, type TypeSymbol) bool -> !path.HasMembers &&
+            !(path.Root.Type is NullableTypeSymbol) &&
+            type is NullableTypeSymbol
+
+        internal func CombineLogicalAndNarrowings(
+            leftThenRaw Dictionary[AccessPath, TypeSymbol]?,
+            leftThenFiltered Dictionary[AccessPath, TypeSymbol]?,
+            leftElse Dictionary[AccessPath, TypeSymbol]?,
+            rightThen Dictionary[AccessPath, TypeSymbol]?,
+            rightElse Dictionary[AccessPath, TypeSymbol]?
+        )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
+            var combinedThen = MergeNarrowingFrames(leftThenFiltered, PreserveNullableWidenings(leftThenRaw))
+            combinedThen = MergeNarrowingFrames(combinedThen, rightThen)
+            var combinedElse = PreserveNullableWidenings(leftElse)
+            if leftThenRaw != nil {
+                for kv in leftThenRaw {
+                    if IsNullableWidening(kv.Key, kv.Value) &&
+                        !DischargesNullableWidening(rightElse, rightThen, kv.Key) {
+                        combinedElse ??= Dictionary[AccessPath, TypeSymbol]()
+                        combinedElse!![kv.Key] = kv.Value
+                    }
+                }
+            }
+            if rightElse != nil {
+                for kv in rightElse {
+                    if IsNullableWidening(kv.Key, kv.Value) {
+                        combinedElse ??= Dictionary[AccessPath, TypeSymbol]()
+                        combinedElse!![kv.Key] = kv.Value
+                    }
+                }
+            }
+            if (combinedThen == nil || combinedThen.Count == 0) && (combinedElse == nil || combinedElse.Count == 0) {
+                return (nil, nil)
+            }
+            return (combinedThen, combinedElse)
+        }
+
+        internal func CombineLogicalOrNarrowings(
+            leftThen Dictionary[AccessPath, TypeSymbol]?,
+            leftElseRaw Dictionary[AccessPath, TypeSymbol]?,
+            leftElseFiltered Dictionary[AccessPath, TypeSymbol]?,
+            rightThen Dictionary[AccessPath, TypeSymbol]?,
+            rightElse Dictionary[AccessPath, TypeSymbol]?
+        )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
+            var combinedThen = IntersectNarrowingFrames(leftThen, rightThen)
+            if leftThen != nil {
+                for kv in leftThen {
+                    if IsNullableWidening(kv.Key, kv.Value) {
+                        combinedThen ??= Dictionary[AccessPath, TypeSymbol]()
+                        combinedThen!![kv.Key] = kv.Value
+                    }
+                }
+            }
+            if leftElseRaw != nil {
+                for kv in leftElseRaw {
+                    if IsNullableWidening(kv.Key, kv.Value) &&
+                        !DischargesNullableWidening(rightThen, rightElse, kv.Key) {
+                        combinedThen ??= Dictionary[AccessPath, TypeSymbol]()
+                        combinedThen!![kv.Key] = kv.Value
+                    }
+                }
+            }
+            if rightThen != nil {
+                for kv in rightThen {
+                    if IsNullableWidening(kv.Key, kv.Value) {
+                        combinedThen ??= Dictionary[AccessPath, TypeSymbol]()
+                        combinedThen!![kv.Key] = kv.Value
+                    }
+                }
+            }
+            var combinedElse = MergeNarrowingFrames(leftElseFiltered, PreserveNullableWidenings(leftElseRaw))
+            combinedElse = MergeNarrowingFrames(combinedElse, rightElse)
+            if (combinedThen == nil || combinedThen.Count == 0) && (combinedElse == nil || combinedElse.Count == 0) {
+                return (nil, nil)
+            }
+            return (combinedThen, combinedElse)
+        }
+
+        private func PreserveNullableWidenings(frame Dictionary[AccessPath, TypeSymbol]?) Dictionary[
+            AccessPath,
+            TypeSymbol
+        ]? {
+            if frame == nil || frame.Count == 0 {
+                return nil
+            }
+            var result Dictionary[AccessPath, TypeSymbol]? = nil
+            for kv in frame {
+                if IsNullableWidening(kv.Key, kv.Value) {
+                    result ??= Dictionary[AccessPath, TypeSymbol]()
+                    result!![kv.Key] = kv.Value
+                }
+            }
+            return result
+        }
+
+        private func DischargesNullableWidening(
+            takenBranch Dictionary[AccessPath, TypeSymbol]?,
+            siblingBranch Dictionary[AccessPath, TypeSymbol]?,
+            path AccessPath
+        ) bool {
+            if takenBranch != nil && takenBranch.TryGetValue(path, out var refined) {
+                return !IsNullableWidening(path, refined)
+            }
+            return siblingBranch != nil && siblingBranch.TryGetValue(path, out var siblingVal) &&
+                IsNullableWidening(path, siblingVal)
         }
 
         private func IsNarrowableVariable(expr BoundExpression, out variable VariableSymbol?) bool {

@@ -380,6 +380,37 @@ func Check(ref text string?, ref count int32) int32 -> TryCheck(ref text, ref co
     }
 
     @Theory
+    @InlineData("return (dict.TryGetValue(\"missing\", out value) && flag) ? 0 : value.Length", "GS0158:Length")
+    @InlineData("return (flag && dict.TryGetValue(\"missing\", out value)) ? 0 : value.Length", "GS0158:Length")
+    @InlineData(
+        "if dict.TryGetValue(\"missing\", out value) && flag { return 0 } else { return value.Length }",
+        "GS0158:Length"
+    )
+    @InlineData("return (!dict.TryGetValue(\"missing\", out value) || flag) ? value.Length : 0", "GS0158:Length")
+    @InlineData("return (flag || !dict.TryGetValue(\"missing\", out value)) ? value.Length : 0", "GS0158:Length")
+    @InlineData("return (dict.TryGetValue(\"missing\", out value) || flag) ? value.Length : 0", "GS0158:Length")
+    @InlineData(
+        "if !dict.TryGetValue(\"missing\", out value) || flag { return value.Length } else { return 0 }",
+        "GS0158:Length"
+    )
+    @InlineData("return (dict.TryGetValue(\"missing\", out value) && flag) ? value.Length : 0", "")
+    @InlineData("return (!dict.TryGetValue(\"missing\", out value) || flag) ? 0 : value.Length", "")
+    @InlineData(
+        "return (dict.TryGetValue(\"a\", out value) || dict.TryGetValue(\"b\", out value)) ? value.Length : 0",
+        ""
+    )
+    func Composed_MaybeNullWhen_Preserves_Widening_Across_And_And_Or(body string, expected string) {
+        let source = (`package Issue4969.ComposedMaybeNull
+import System.Collections.Generic
+func Check(dict Dictionary[string, string], flag bool) int32 {
+    var value = "seed"
+    ` + body + `
+}
+`)
+        Assert.Equal(expected, DiagnoseSource(source))
+    }
+
+    @Theory
     @InlineData("Has(s, (s = nil)) ? s.Length : 0")
     @InlineData("if Has(s, (s = nil)) { s.Length } else { 0 }")
     @InlineData("Has(s, (s = nil)) && s.Length > 0 ? 1 : 0")

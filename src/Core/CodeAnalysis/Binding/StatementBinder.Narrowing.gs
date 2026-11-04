@@ -1596,10 +1596,11 @@ internal partial class StatementBinder {
                 return (inElse, inThen, falseAliases, trueAliases)
             }
             case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
-                var (leftThen, _, leftTrueAliases, leftFalseAliases) = ComputeConditionNarrowingInOrder(
+                let (leftThenRaw, leftElse, leftTrueAliases, leftFalseAliases) = ComputeConditionNarrowingInOrder(
                     bin.Left,
                     beforeAliases
                 )
+                var leftThen = leftThenRaw
                 if leftThen != nil && leftThen.Count > 0 {
                     leftThen = Dictionary[AccessPath, TypeSymbol](leftThen)
                     ClearAssignedRoots(bin.Right, leftThen, leftTrueAliases)
@@ -1607,18 +1608,25 @@ internal partial class StatementBinder {
                         leftThen = nil
                     }
                 }
-                let (rightThen, _, rightTrueAliases, rightFalseAliases) = ComputeConditionNarrowingInOrder(
+                let (rightThen, rightElse, rightTrueAliases, rightFalseAliases) = ComputeConditionNarrowingInOrder(
                     bin.Right,
                     leftTrueAliases
                 )
-                let combinedThen = MergeNarrowingFrames(leftThen, rightThen)
-                return (combinedThen, nil, rightTrueAliases, JoinAliases(leftFalseAliases, rightFalseAliases))
+                let (combinedThen, combinedElse) = CombineLogicalAndNarrowings(
+                    leftThenRaw,
+                    leftThen,
+                    leftElse,
+                    rightThen,
+                    rightElse
+                )
+                return (combinedThen, combinedElse, rightTrueAliases, JoinAliases(leftFalseAliases, rightFalseAliases))
             }
             case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
-                var (leftThen, leftElse, leftTrueAliases, leftFalseAliases) = ComputeConditionNarrowingInOrder(
+                let (leftThen, leftElseRaw, leftTrueAliases, leftFalseAliases) = ComputeConditionNarrowingInOrder(
                     bin.Left,
                     beforeAliases
                 )
+                var leftElse = leftElseRaw
                 if leftElse != nil && leftElse.Count > 0 {
                     leftElse = Dictionary[AccessPath, TypeSymbol](leftElse)
                     ClearAssignedRoots(bin.Right, leftElse, leftFalseAliases)
@@ -1630,8 +1638,13 @@ internal partial class StatementBinder {
                     bin.Right,
                     leftFalseAliases
                 )
-                let combinedThen = IntersectNarrowingFrames(leftThen, rightThen)
-                let combinedElse = MergeNarrowingFrames(leftElse, rightElse)
+                let (combinedThen, combinedElse) = CombineLogicalOrNarrowings(
+                    leftThen,
+                    leftElseRaw,
+                    leftElse,
+                    rightThen,
+                    rightElse
+                )
                 return (combinedThen, combinedElse, JoinAliases(leftTrueAliases, rightTrueAliases), rightFalseAliases)
             }
         }

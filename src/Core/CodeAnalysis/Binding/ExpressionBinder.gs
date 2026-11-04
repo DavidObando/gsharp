@@ -1173,7 +1173,11 @@ internal partial class ExpressionBinder {
             }
             case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
                 {
-                    var (leftThen, _) = ClassifyTypeTestNarrowing(binary.Left, restrictBareVariableToLocalsAndParams)
+                    let (leftThenRaw, leftElse) = ClassifyTypeTestNarrowing(
+                        binary.Left,
+                        restrictBareVariableToLocalsAndParams
+                    )
+                    var leftThen = leftThenRaw
                     if leftThen != nil && leftThen.Count > 0 {
                         leftThen = Dictionary[AccessPath, TypeSymbol](leftThen)
                         clearAssignedRoots(binary.Right, leftThen)
@@ -1181,35 +1185,26 @@ internal partial class ExpressionBinder {
                             leftThen = nil
                         }
                     }
-                    let (rightThen, _) = ClassifyTypeTestNarrowing(binary.Right, restrictBareVariableToLocalsAndParams)
-                    if (leftThen == nil || leftThen.Count == 0) && (rightThen == nil || rightThen.Count == 0) {
-                        return (nil, nil)
-                    }
-                    let combined = if leftThen == nil {
-                        Dictionary[AccessPath, TypeSymbol]()
-                    } else {
-                        Dictionary[AccessPath, TypeSymbol](leftThen)
-                    }
-                    if rightThen != nil {
-                        for kv in rightThen {
-                            combined[kv.Key] = kv.Value
-                        }
-                    }
-                    return (combined, nil)
+                    let (rightThen, rightElse) = ClassifyTypeTestNarrowing(
+                        binary.Right,
+                        restrictBareVariableToLocalsAndParams
+                    )
+                    return StatementBinder.CombineLogicalAndNarrowings(
+                        leftThenRaw,
+                        leftThen,
+                        leftElse,
+                        rightThen,
+                        rightElse
+                    )
                 }
             }
             case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
                 {
-                    // ADR-0069 addendum / issue #712: De Morgan dual of `&&`.
-                    // For `A || B`: then = intersection of thenL and thenR
-                    // (a narrowing only survives the OR if both operands prove it);
-                    // else = elseL ∪ elseR (both operands were false → both
-                    // negations apply). This is the expression-level mirror
-                    // of the if-condition classifier in StatementBinder.
-                    var (leftThen, leftElse) = ClassifyTypeTestNarrowing(
+                    let (leftThen, leftElseRaw) = ClassifyTypeTestNarrowing(
                         binary.Left,
                         restrictBareVariableToLocalsAndParams
                     )
+                    var leftElse = leftElseRaw
                     if leftElse != nil && leftElse.Count > 0 {
                         leftElse = Dictionary[AccessPath, TypeSymbol](leftElse)
                         clearAssignedRoots(binary.Right, leftElse)
@@ -1221,33 +1216,13 @@ internal partial class ExpressionBinder {
                         binary.Right,
                         restrictBareVariableToLocalsAndParams
                     )
-                    var combinedThen Dictionary[AccessPath, TypeSymbol]? = nil
-                    if leftThen != nil && leftThen.Count > 0 && rightThen != nil && rightThen.Count > 0 {
-                        for kv in leftThen {
-                            if rightThen.TryGetValue(kv.Key, out var other) && other == kv.Value {
-                                combinedThen ??= Dictionary[AccessPath, TypeSymbol]()
-                                combinedThen!![kv.Key] = kv.Value
-                            }
-                        }
-                    }
-                    var combinedElse Dictionary[AccessPath, TypeSymbol]? = nil
-                    if (leftElse != nil && leftElse.Count > 0) || (rightElse != nil && rightElse.Count > 0) {
-                        combinedElse = if leftElse == nil {
-                            Dictionary[AccessPath, TypeSymbol]()
-                        } else {
-                            Dictionary[AccessPath, TypeSymbol](leftElse)
-                        }
-                        if rightElse != nil {
-                            for kv in rightElse {
-                                combinedElse!![kv.Key] = kv.Value
-                            }
-                        }
-                    }
-                    if (combinedThen == nil || combinedThen.Count == 0) &&
-                        (combinedElse == nil || combinedElse.Count == 0) {
-                        return (nil, nil)
-                    }
-                    return (combinedThen, combinedElse)
+                    return StatementBinder.CombineLogicalOrNarrowings(
+                        leftThen,
+                        leftElseRaw,
+                        leftElse,
+                        rightThen,
+                        rightElse
+                    )
                 }
             }
         }
