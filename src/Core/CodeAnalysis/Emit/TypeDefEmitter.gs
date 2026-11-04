@@ -2140,6 +2140,9 @@ internal class TypeDefEmitter {
     /// @param typeHandle The inline struct TypeDef handle.
     private func EmitIsReadOnlyAttribute(typeHandle TypeDefinitionHandle) {
         let ctorRef = this.wellKnown.GetIsReadOnlyAttributeCtorRef()
+        if ctorRef.IsNil {
+            return
+        }
         let valueBlob = BlobBuilder()
         valueBlob.WriteUInt16(0x0001)
         valueBlob.WriteUInt16(0)
@@ -2335,11 +2338,12 @@ internal class TypeDefEmitter {
             ps ParametersEncoder,
             parameter ParameterSymbol,
             encodeTypeSymbol(SignatureTypeEncoder, TypeSymbol) -> void,
-            wellKnown WellKnownReferences
+            wellKnown WellKnownReferences,
+            importedParameter ParameterInfo? = nil
         ) {
             let paramEncoder = ps.AddParameter()
             if parameter.RefKind == RefKind.In {
-                let isReadOnlyAttrType = wellKnown.GetIsReadOnlyAttributeTypeRef()
+                let isReadOnlyAttrType = wellKnown.GetInParameterModifierTypeRef(importedParameter)
                 if !isReadOnlyAttrType.IsNil {
                     paramEncoder.CustomModifiers().AddModifier(isReadOnlyAttrType, isOptional: false)
                 }
