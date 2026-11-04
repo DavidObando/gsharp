@@ -372,11 +372,22 @@ internal partial class StatementBinder {
     internal func BindStatementList(
         statementSyntaxes ImmutableArray[StatementSyntax],
         beforeBind((StatementSyntax) -> void)? = nil,
-        trailingStatement(() -> BoundStatement)? = nil
+        trailingStatement(() -> BoundStatement)? = nil,
+        trailingSyntax SyntaxNode? = nil
     ) ImmutableArray[BoundStatement] {
-        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-        let _ = BindBlockStatements(statementSyntaxes, 0, statements, beforeBind, trailingStatement)
-        return statements.ToImmutable()
+        let previousTopLevelStatements = topLevelStatementList
+        if statementSyntaxes.Length > 0 &&
+            statementSyntaxes[0].Parent is GlobalStatementSyntax or
+            StaticInitializerBlockSyntax {
+            topLevelStatementList = statementSyntaxes
+        }
+        try {
+            let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+            let _ = BindBlockStatements(statementSyntaxes, 0, statements, beforeBind, trailingStatement, trailingSyntax)
+            return statements.ToImmutable()
+        } finally {
+            topLevelStatementList = previousTopLevelStatements
+        }
     }
 
     /// Shared prepare-then-bind grouping for a consecutive run of local-
@@ -458,15 +469,14 @@ internal partial class StatementBinder {
         startIndex int32,
         statements ImmutableArray[BoundStatement].Builder,
         beforeBind((StatementSyntax) -> void)? = nil,
-        trailingStatement(() -> BoundStatement)? = nil
+        trailingStatement(() -> BoundStatement)? = nil,
+        trailingSyntax SyntaxNode? = nil
     ) bool {
         // Issue #208: push a persistent narrowing frame for this statement list.
         // After each call statement whose method carries [MemberNotNull], the
         // named fields are added to this frame and remain narrowed for all
         // subsequent statements in the block (until assignment invalidates them).
-        let inheritedAssignmentGenerations = Dictionary[VariableSymbol, int32](binderCtx.AssignmentNarrowingGenerations)
         let inheritedFallthrough = currentStatementListFallsThrough
-        let inheritedPotentialReachabilityLabel = binderCtx.PotentialReachabilityLabel
         let memberNotNullFrame = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol]())
         let shadowSavedOverlay = ShadowEnterList()
         let shadowSavedBase = binderCtx.ShadowOverlayBase
@@ -474,6 +484,7 @@ internal partial class StatementBinder {
             for var i = startIndex; i < statementSyntaxes.Length; i++ {
                 let statementSyntax = statementSyntaxes[i]
                 beforeBind?(statementSyntax)
+                EnterBackwardJumpSpanIfFirstStatement(statementSyntax)
                 if IsGenericLocalFunctionDeclaration(statementSyntax) && prepareGenericLocalFunctionDeclaration != nil {
                     i = BindLocalFunctionLiteralGroup(
                         statementSyntaxes,
@@ -762,11 +773,15 @@ internal partial class StatementBinder {
                     currentStatementListFallsThrough || hasInternallyReachableFallthrough
                 ) &&
                     canCompleteNormally
-                if !canCompleteNormally && !hasInternallyReachableFallthrough {
-                    this.binderCtx.PotentialReachabilityLabel = nil
-                }
             }
             if trailingStatement != nil {
+                if trailingSyntax != nil {
+                    EnterBackwardJumpSpanIfFirstStatement(trailingSyntax)
+                } else if statementSyntaxes.Length > 0 &&
+                    statementSyntaxes[0].Parent is BlockExpressionSyntax blockExpr &&
+                    blockExpr.Expression is {} tailExpr {
+                    EnterBackwardJumpSpanIfFirstStatement(tailExpr)
+                }
                 statements.Add(trailingStatement())
             }
             return currentStatementListFallsThrough
@@ -774,12 +789,7 @@ internal partial class StatementBinder {
             ShadowLeaveList(shadowSavedOverlay, shadowSavedBase)
             NoteListExit()
             binderCtx.EndNarrowingProof()
-            binderCtx.AssignmentNarrowingGenerations.Clear()
-            for entry in inheritedAssignmentGenerations {
-                binderCtx.AssignmentNarrowingGenerations.Add(entry.Key, entry.Value)
-            }
             currentStatementListFallsThrough = inheritedFallthrough
-            this.binderCtx.PotentialReachabilityLabel = inheritedPotentialReachabilityLabel
         }
     }
 

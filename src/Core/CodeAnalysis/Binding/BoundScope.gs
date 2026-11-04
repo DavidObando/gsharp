@@ -3594,6 +3594,39 @@ class BoundScope {
                 if !substitution.TryGetValue(tp, out var arg) {
                     return false
                 }
+                // Issue #4744: when the extension declares additional type parameters
+                // referenced by the receiver's constraint, unify the constraint
+                // against the receiver argument before checking satisfaction.
+                if extension.TypeParameters.Length > mentioned.Count {
+                    let strippedArg = PlatformTypeSymbol.StripTopLevel(arg)
+                    if tp.InterfaceConstraint is {} ifaceConstraint && TypeSymbol.ContainsTypeParameter(
+                        ifaceConstraint
+                    ) {
+                        if strippedArg is StructSymbol structArg {
+                            for current in structArg.GetHierarchy() {
+                                for implemented in current.Interfaces {
+                                    if implemented != nil {
+                                        for candidate in implemented.SelfAndAllBaseInterfaces() {
+                                            Binder.InferTypeArguments(ifaceConstraint, candidate, substitution)
+                                        }
+                                    }
+                                }
+                            }
+                        } else if strippedArg is InterfaceSymbol ifaceArg {
+                            for candidate in ifaceArg.SelfAndAllBaseInterfaces() {
+                                Binder.InferTypeArguments(ifaceConstraint, candidate, substitution)
+                            }
+                        }
+                    }
+                    if tp.ClassConstraint is StructSymbol classConstraint && TypeSymbol.ContainsTypeParameter(
+                        classConstraint
+                    ) &&
+                        strippedArg is StructSymbol classArg {
+                        for current in classArg.GetHierarchy() {
+                            Binder.InferTypeArguments(classConstraint, current, substitution)
+                        }
+                    }
+                }
                 if !Binder.SatisfiesConstraint(arg, tp, substitution) {
                     return false
                 }

@@ -132,7 +132,14 @@ partial class Binder {
             syntax ExpressionSyntax,
             targetType TypeSymbol?
         ) BoundExpression {
-            return Statements.OutsideExceptionHandlers(() -> Expressions.BindLambdaBodyExpression(syntax, targetType))
+            return Statements.OutsideExceptionHandlers(
+                () -> {
+                    if syntax !is BlockExpressionSyntax {
+                        Statements.EnterBackwardJumpSpanIfFirstStatement(syntax)
+                    }
+                    return Expressions.BindLambdaBodyExpression(syntax, targetType)
+                }
+            )
         }
         binderCtx = BinderContext(parent)
         // Declaration binding captures lexical unsafe context. Metadata ownership does not establish that context.
@@ -348,7 +355,6 @@ partial class Binder {
                 "a parameter declaration",
                 AttributeTargets.Parameter
             ),
-            reportUnsafeBackwardGotoNarrowings: () -> Statements.FinalizeNestedUserLabelNarrowings(),
             isolateExternalCallableAliases: () -> Statements.IsolateExternalCallableAliases(),
             restoreExternalCallableAliases: (
                 saved HashSet[VariableSymbol]
@@ -534,8 +540,9 @@ partial class Binder {
             getCurrentFunction: () -> this.function,
             bindStatementList: (
                 syntax ImmutableArray[StatementSyntax],
-                trailing(() -> BoundStatement)?
-            ) -> Statements.BindStatementList(syntax, trailingStatement: trailing),
+                trailing(() -> BoundStatement)?,
+                trailingSyntax SyntaxNode?
+            ) -> Statements.BindStatementList(syntax, trailingStatement: trailing, trailingSyntax: trailingSyntax),
             bindLocalVariable: (
                 identifier SyntaxToken,
                 isReadOnly bool,
@@ -4775,6 +4782,13 @@ partial class Binder {
                         )
                         return nil
                     }
+                    // Issue #4762: validate generic named-delegate type arguments against
+                    // the definition's type-parameter constraints.
+                    CheckUserGenericTypeClauseConstraints(
+                        (genericDelegate.Definition ?? genericDelegate).TypeParameters,
+                        typeArgs,
+                        identifierToken.Location
+                    )
                     element = DelegateTypeSymbol.Construct(genericDelegate, typeArgs)
                 } else {
                     Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.ValueText)
@@ -5202,7 +5216,14 @@ partial class Binder {
             case genericDelegate is DelegateTypeSymbol when genericDelegate.IsGenericDefinition &&
                 genericDelegate
                 .TypeParameters
-                .Length == typeArgs.Length {
+                .Length == typeArgs
+                .Length {
+                // Issue #4762: validate qualified generic named-delegate constructions.
+                CheckUserGenericTypeClauseConstraints(
+                    (genericDelegate.Definition ?? genericDelegate).TypeParameters,
+                    typeArgs,
+                    location
+                )
                 return DelegateTypeSymbol.Construct(genericDelegate, typeArgs)!!
             }
             default {
@@ -5887,17 +5908,7 @@ partial class Binder {
         typeArgs ImmutableArray[TypeSymbol],
         location TextLocation
     ) {
-        if declaredParameters.IsDefaultOrEmpty ||
-            typeArgs.IsDefaultOrEmpty ||
-            declaredParameters.Length != typeArgs.Length {
-            return
-        }
-        let pending = PendingUserGenericConstraintCheck(Diagnostics, declaredParameters, typeArgs, location)
-        if !$scope.IsDeferringUserGenericConstraintChecks() {
-            RunUserGenericTypeClauseConstraintCheck(pending)
-            return
-        }
-        $scope.GetPendingUserGenericConstraintChecks().Add(pending)
+        CheckUserGenericTypeClauseConstraints($scope, Diagnostics, declaredParameters, typeArgs, location)
     }
 
     /// ADR-0041: binds the return-type clause of a function (declaration,
@@ -9278,14 +9289,20 @@ partial class Binder {
                 binder.binderCtx.FunctionContainsUserGotoOrLabel = initBlocks.Any(
                     (b StaticInitializerBlockSyntax) -> StatementBinder.ContainsUserGotoOrLabel(b.Body)
                 )
-                let boundBlocks = ImmutableArray.CreateBuilder[BoundStatement]()
-                for initBlock in initBlocks {
-                    // Issue #3336: merged partial blocks retain the declaring part's tree.
-                    parentScope.SetCurrentReferencingSyntaxTree(initBlock.SyntaxTree)
-                    boundBlocks.Add(binder.statements.BindBlockStatement(initBlock.Body))
-                }
+                let staticInitBodies = initBlocks.Select(
+                    (b StaticInitializerBlockSyntax) -> cast[StatementSyntax](b.Body)
+                )
+                    .ToImmutableArray()
+                let boundBlocks = binder.statements.BindStatementList(
+                    staticInitBodies,
+                    (statement StatementSyntax) -> {
+                        // Issue #3336: merged partial blocks retain the declaring part's tree.
+                        parentScope.SetCurrentReferencingSyntaxTree(statement.SyntaxTree)
+                        return
+                    }
+                )
                 binder.statements.FinalizeUserLabels()
-                let combined = BoundBlockStatement(nil, boundBlocks.ToImmutable())
+                let combined = BoundBlockStatement(nil, boundBlocks)
                 ProtectedReceiverDiagnostics.Report(combined, context, binder.Diagnostics)
                 let lowered = Lowerer.Lower(combined, structSym)
                 MethodGroupDiagnostics.ReportUnresolved(lowered, binder.Diagnostics)
@@ -12124,6 +12141,26 @@ partial class Binder {
             }
         }
 
+        internal func CheckUserGenericTypeClauseConstraints(
+            $scope BoundScope,
+            diagnostics DiagnosticBag,
+            declaredParameters ImmutableArray[TypeParameterSymbol],
+            typeArgs ImmutableArray[TypeSymbol],
+            location TextLocation
+        ) bool {
+            if declaredParameters.IsDefaultOrEmpty ||
+                typeArgs.IsDefaultOrEmpty ||
+                declaredParameters.Length != typeArgs.Length {
+                return false
+            }
+            let pending = PendingUserGenericConstraintCheck(diagnostics, declaredParameters, typeArgs, location)
+            if !$scope.IsDeferringUserGenericConstraintChecks() {
+                return RunUserGenericTypeClauseConstraintCheck(pending)
+            }
+            $scope.GetPendingUserGenericConstraintChecks().Add(pending)
+            return false
+        }
+
         /// Issues #4089/#4090: asks the OPEN (forwarding) question first and, only
         /// when it reports nothing, the CLOSED (satisfaction) question. They are
         /// complementary per position — an argument is either a bare type
@@ -12131,16 +12168,16 @@ partial class Binder {
         /// ordering only decides which of two positions in the SAME vector wins the
         /// one-diagnostic-per-construction budget.
         /// @param check The recorded construction.
-        private func RunUserGenericTypeClauseConstraintCheck(check PendingUserGenericConstraintCheck) {
+        private func RunUserGenericTypeClauseConstraintCheck(check PendingUserGenericConstraintCheck) bool {
             if ReportUnforwardedUserGenericConstraint(
                 check.Diagnostics,
                 check.DeclaredParameters,
                 check.TypeArgs,
                 check.Location
             ) {
-                return
+                return true
             }
-            ReportUnsatisfiedUserGenericTypeArgument(
+            return ReportUnsatisfiedUserGenericTypeArgument(
                 check.Diagnostics,
                 check.DeclaredParameters,
                 check.TypeArgs,
@@ -12400,16 +12437,17 @@ partial class Binder {
                 failedConstraint = "unmanaged"
                 return false
             }
-            if declared.HasReferenceTypeConstraint && !AnyBound(parameters, IsReferenceTypeForConstraint) {
+            if declared.HasReferenceTypeConstraint && !IsReferenceTypeForConstraint(argument) {
                 failedConstraint = "class"
                 return false
             }
             if declared.HasDefaultConstructorConstraint &&
-                !AnyParameter(
-                parameters,
-                (p TypeParameterSymbol) -> p.HasDefaultConstructorConstraint ||
-                    p.HasValueTypeConstraint ||
-                    p.HasUnmanagedConstraint
+                !(
+                argument.HasDefaultConstructorConstraint ||
+                    AnyParameter(
+                    parameters,
+                    (p TypeParameterSymbol) -> p.HasValueTypeConstraint || p.HasUnmanagedConstraint
+                )
             ) {
                 failedConstraint = "new()"
                 return false
@@ -13596,7 +13634,8 @@ partial class Binder {
                     let clrArgs = [substitutedArgs.Length]Type
                     var allClr = true
                     for var i = 0; i < substitutedArgs.Length; i++ {
-                        if TypeSymbol.RequiresSymbolicProjection(substitutedArgs[i]) {
+                        if TypeSymbol.RequiresSymbolicProjection(substitutedArgs[i]) ||
+                            TypeSymbol.ContainsSourceArrayShape(substitutedArgs[i]) {
                             allClr = false
                             break
                         }
@@ -13738,67 +13777,41 @@ partial class Binder {
                 return false
             }
             if tp.InterfaceConstraint != nil {
-                var expectedIface = tp.InterfaceConstraint
-                // Issue #1052: a self-referential generic user-interface constraint
-                // `[T IFace[T]]` carries the constrained parameter as its own type
-                // argument. Substitute it with the actual type argument before the
-                // implementation check, so `[T ICmp[T]]` validates that the argument
-                // implements `ICmp[argument]` (mirrors the CLR path below).
-                if !expectedIface!!
-                    .TypeArguments
-                    .IsDefaultOrEmpty &&
-                    expectedIface!!.Definition != nil &&
-                    !object
-                    .ReferenceEquals(expectedIface!!.Definition, expectedIface) {
-                    let substArgs = ImmutableArray.CreateBuilder[TypeSymbol](expectedIface!!.TypeArguments.Length)
-                    var changed = false
-                    for arg in expectedIface!!.TypeArguments {
-                        if object.ReferenceEquals(arg, tp) {
-                            substArgs.Add(typeArgument)
-                            changed = true
-                        } else {
-                            substArgs.Add(arg)
-                        }
-                    }
-                    if changed {
-                        expectedIface = InterfaceSymbol.Construct(
-                            expectedIface!!.Definition,
-                            substArgs.MoveToImmutable()
-                        )!!
-                    }
-                }
-                if !ImplementsInterface(typeArgument, expectedIface!!) {
+                // Issue #1052 / #4744: substitute self-referential and sibling
+                // type arguments into the source-interface constraint before
+                // checking implementation.
+                let expectedIface = SubstituteConstraintType(
+                    tp.InterfaceConstraint!!,
+                    tp,
+                    typeArgument,
+                    substitution
+                ) as InterfaceSymbol ??
+                    tp.InterfaceConstraint!!
+                if !ImplementsInterface(typeArgument, expectedIface) {
                     return false
                 }
             }
-            // Issue #943: enforce a CLR interface constraint (generic or not), e.g.
-            // `[T IComparable[T]]`. The type argument must implement the (self-ref
-            // substituted) closed interface.
-            //
-            // Issue #943: enforce a CLR interface constraint (generic or not), e.g.
-            // `[T IComparable[T]]`. The type argument must implement the (self-ref
-            // substituted) closed interface.
-            //
-            // A SAME-COMPILATION class has no CLR type while binding, so the
-            // reflective probe underneath this used to answer "no" for
-            // `class D : IDisposable` at `[TD IDisposable]` — a false rejection
-            // #4090's widening would have spread to every type clause. That is
-            // #4124, and PR #4138 repairs it at the shared leaf rather than here:
-            // the reflective body is split out of `SatisfiesClrInterfaceConstraint`
-            // and the symbolic walk wraps every exit of it, so this arm inherits
-            // the answer without routing. (#4136 was filed for the same thing from
-            // this site's `GS0152` witness and is closed as a duplicate; its
-            // proposed fix would have been a FIFTH copy of that fallback, which
-            // #4138 deleted rather than added to.)
-            if tp.ClrInterfaceConstraint != nil &&
-                !SatisfiesClrInterfaceConstraint(typeArgument, tp.ClrInterfaceConstraint!!, tp) {
-                return false
+            // Issue #943 / #4124 / #4744: substitute self-referential and sibling
+            // type arguments into the CLR interface constraint before checking
+            // implementation.
+            if tp.ClrInterfaceConstraint != nil {
+                let expectedClrIface = SubstituteConstraintType(
+                    tp.ClrInterfaceConstraint!!,
+                    tp,
+                    typeArgument,
+                    substitution
+                )
+                if !SatisfiesClrInterfaceConstraint(typeArgument, expectedClrIface, tp) {
+                    return false
+                }
             }
-            // Issue #1056: enforce a base-class constraint, e.g. `[T Animal]`. The
-            // type argument must be the constraint class itself or derive from it
-            // (mirrors C#'s `where T : BaseClass`).
-            if tp.ClassConstraint != nil && !SatisfiesClassConstraint(typeArgument, tp.ClassConstraint) {
-                return false
+            // Issue #1056 / #4744: substitute self-referential and sibling type
+            // arguments into the base-class constraint before checking derivation.
+            if tp.ClassConstraint != nil {
+                let expectedClass = SubstituteConstraintType(tp.ClassConstraint!!, tp, typeArgument, substitution)
+                if !SatisfiesClassConstraint(typeArgument, expectedClass) {
+                    return false
+                }
             }
             if tp.Constraint == TypeParameterConstraint.Comparable && !IsComparable(typeArgument) {
                 return false
@@ -13950,11 +13963,7 @@ partial class Binder {
             } catch (Exception) {
                 return false
             }
-            let expected = if boundArgument is ImportedTypeSymbol importedBound {
-                importedBound.TypeArguments
-            } else {
-                ImmutableArray[TypeSymbol].Empty
-            }
+            let expected = GetClrSlotAlignedArguments(boundArgument)
             for implemented in EnumerateDeclaredClrInterfaces(typeArgument) {
                 // A NON-generic bound has no arguments to disagree about, so
                 // reaching the interface at all is the whole answer — and reaching
@@ -13969,38 +13978,14 @@ partial class Binder {
                     }
                     continue
                 }
-                // A GENERIC bound is decided on the SYMBOLIC arguments, so
-                // `class Impl : IDep[Bee]` does not satisfy a bound of `IDep[A]`
-                // even though both project to the identical erased
-                // `IDep<object>` — the same distinction the imported-definition
-                // half of this repair makes.
-                if implemented is not ImportedTypeSymbol importedInterface ||
-                    importedInterface.OpenDefinition is not{} implementedOpen ||
-                    !string
-                    .Equals(
-                    implementedOpen.FullName ?? implementedOpen.Name,
+                if TryFindMatchingClrRelationship(
+                    implemented,
                     openDefinition.FullName ?? openDefinition.Name,
-                    StringComparison.Ordinal
+                    requireBaseOnly: false,
+                    expected,
+                    tp,
+                    typeArgument
                 ) {
-                    continue
-                }
-                let actual = importedInterface.TypeArguments
-                if actual.IsDefaultOrEmpty || actual.Length != expected.Length {
-                    continue
-                }
-                var allMatch = true
-                for var i = 0; i < expected.Length; i++ {
-                    // Issue #4124: a self-referential position names the
-                    // constrained parameter itself, and the argument is what it
-                    // stands for here — the same substitution the reflective half
-                    // performs.
-                    let expectedArgument = SubstituteSelfReference(expected[i], tp, typeArgument)
-                    if !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(actual[i], expectedArgument) {
-                        allMatch = false
-                        break
-                    }
-                }
-                if allMatch {
                     return true
                 }
             }
@@ -14107,44 +14092,170 @@ partial class Binder {
             }
             if classConstraint is StructSymbol classDef {
                 let constraintDef = classDef.Definition ?? classDef
+                let constraintArgs = Conversion.GetEffectiveStructTypeArguments(classDef)
+                let checkConstructedArguments = !constraintArgs.IsDefaultOrEmpty && !constraintArgs.Any(
+                    TypeSymbol.ContainsTypeParameter
+                )
                 if typeArgument is StructSymbol argClass {
                     for current in argClass.GetHierarchy() {
                         let currentDef = current.Definition ?? current
-                        if object.ReferenceEquals(currentDef, constraintDef) || object.ReferenceEquals(
-                            current,
-                            classConstraint
-                        ) {
+                        if object.ReferenceEquals(current, classConstraint) {
+                            return true
+                        }
+                        if !object.ReferenceEquals(currentDef, constraintDef) {
+                            continue
+                        }
+                        if !checkConstructedArguments || Conversion.GetEffectiveStructTypeArguments(current)
+                            .IsDefaultOrEmpty ||
+                            SameConstructedStruct(current, classDef) {
                             return true
                         }
                     }
                 }
                 return false
             }
-            // Imported reference class: use CLR assignability when both project to a
-            // CLR type.
+            // Imported reference class: use CLR assignability and compare
+            // symbolic generic arguments when both project to a CLR type.
             if classConstraint.ClrType is {} constraintClr {
-                if typeArgument!!.ClrType is {} argClr {
-                    // Issue #3705 (family 3): the constraint comes from imported
-                    // metadata (MetadataLoadContext) while the argument may be a
-                    // well-known TypeSymbol singleton wrapping a host `typeof(T)`.
-                    // Raw IsAssignableFrom is silently false across that boundary.
-                    return ClrLoadContext.IsAssignable(constraintClr, argClr)
+                if typeArgument!!.ClrType != nil {
+                    return SatisfiesImportedClassConstraint(typeArgument!!, classConstraint, constraintClr)
+                }
+                let constraintFullName = constraintClr.FullName
+                if string.Equals(constraintFullName, "System.Object", StringComparison.Ordinal) {
+                    return typeArgument is StructSymbol ||
+                        typeArgument is EnumSymbol ||
+                        typeArgument is InterfaceSymbol ||
+                        typeArgument is DelegateTypeSymbol
+                }
+                if string.Equals(constraintFullName, "System.ValueType", StringComparison.Ordinal) {
+                    return typeArgument is EnumSymbol ||
+                        (typeArgument is StructSymbol valueStruct && !valueStruct.IsClass)
+                }
+                if string.Equals(constraintFullName, "System.Enum", StringComparison.Ordinal) {
+                    return typeArgument is EnumSymbol
                 }
                 // Issue #3501: a SOURCE class deriving (possibly through source
                 // bases) from an imported CLR base has no ClrType of its own —
                 // walk the source base chain to the first ImportedBaseType and
-                // check CLR assignability there (`class Derived : ImportedBase`
-                // must satisfy `[T ImportedBase]`).
+                // check CLR assignability and generic arguments there.
                 if typeArgument is StructSymbol sourceClass {
                     for current in sourceClass.GetHierarchy() {
-                        if current.ImportedBaseType?.ClrType is {} importedBaseClr && ClrLoadContext.IsAssignable(
-                            constraintClr,
-                            importedBaseClr
-                        ) {
+                        if current.ImportedBaseType is {} importedBase &&
+                            SatisfiesImportedClassConstraint(importedBase, classConstraint, constraintClr) {
                             return true
                         }
                     }
                 }
+            }
+            return false
+        }
+
+        private func SatisfiesImportedClassConstraint(
+            candidate TypeSymbol,
+            classConstraint TypeSymbol,
+            constraintClr Type
+        ) bool {
+            if candidate.ClrType is not{} candidateClr {
+                return false
+            }
+            if !constraintClr.IsGenericType || constraintClr.IsGenericTypeDefinition {
+                return ClrLoadContext.IsAssignable(constraintClr, candidateClr)
+            }
+            let constraintPositions = GetClrSlotAlignedArguments(classConstraint)
+            if constraintPositions.IsDefaultOrEmpty || TypeSymbol.ContainsTypeParameter(classConstraint) {
+                return ClrLoadContext.IsAssignable(constraintClr, candidateClr)
+            }
+            return TryFindMatchingClrRelationship(
+                candidate,
+                constraintClr.GetGenericTypeDefinition().FullName,
+                requireBaseOnly: true,
+                constraintPositions,
+                tp: nil,
+                typeArgument: candidate
+            )
+        }
+
+        private func TryFindMatchingClrRelationship(
+            root TypeSymbol,
+            openTargetDefName string?,
+            requireBaseOnly bool,
+            expectedPositions ImmutableArray[TypeSymbol],
+            tp TypeParameterSymbol?,
+            typeArgument TypeSymbol?
+        ) bool {
+            if string.IsNullOrEmpty(openTargetDefName) {
+                return false
+            }
+            let pending = Queue[(Signature TypeSymbol, Depth int32)]()
+            let seen = HashSet[(Type, string)]()
+            pending.Enqueue((root, 0))
+            while pending.Count > 0 {
+                let (current, depth) = pending.Dequeue()
+                if depth >= 256 {
+                    break
+                }
+                if current.ClrType is {} currentClr {
+                    let flags = Convert.ToBase64String(NullableFlagsBuilder.Build(current).ToArray())
+                    if !seen.Add((currentClr, flags)) {
+                        continue
+                    }
+                }
+                if TryGetImportedGenericDefinitionAndArguments(current, out var currentOpen, out _) &&
+                    currentOpen != nil &&
+                    string
+                    .Equals(currentOpen.FullName ?? currentOpen.Name, openTargetDefName, StringComparison.Ordinal) {
+                    let alignedActual = GetClrSlotAlignedArguments(current)
+                    if alignedActual.Length == expectedPositions.Length {
+                        let openParameters = currentOpen.GetGenericArguments()
+                        var allMatch = true
+                        for var i = 0; i < expectedPositions.Length; i++ {
+                            let expectedArg = SubstituteSelfReference(expectedPositions[i], tp, typeArgument)
+                            let variance = if i < openParameters.Length {
+                                openParameters[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
+                            } else {
+                                GenericParameterAttributes.None
+                            }
+                            if !IsConstraintArgumentCompatible(alignedActual[i], expectedArg, variance) {
+                                allMatch = false
+                                break
+                            }
+                        }
+                        if allMatch {
+                            return true
+                        }
+                    }
+                }
+                for relationship in MemberLookup.GetClrRelationshipTypeSymbols(current) {
+                    if relationship.ClrType is not{} relClr {
+                        continue
+                    }
+                    if requireBaseOnly && relClr.IsInterface {
+                        continue
+                    }
+                    pending.Enqueue((relationship, depth + 1))
+                }
+            }
+            return false
+        }
+
+        private func IsReferenceClassConstraint(classConstraint TypeSymbol?) bool {
+            if classConstraint == nil {
+                return false
+            }
+            if classConstraint is StructSymbol structSym {
+                return structSym.IsClass
+            }
+            if classConstraint.ClrType is {} clr {
+                if !clr.IsClass || clr.IsValueType {
+                    return false
+                }
+                let fullName = clr.FullName
+                return !string.Equals(fullName, "System.Object", StringComparison.Ordinal) && !string.Equals(
+                    fullName,
+                    "System.ValueType",
+                    StringComparison.Ordinal
+                ) &&
+                    !string.Equals(fullName, "System.Enum", StringComparison.Ordinal)
             }
             return false
         }
@@ -14169,9 +14280,19 @@ partial class Binder {
             // ADR-0186: `T!` is a reference type exactly when `T` is.
             type = PlatformTypeSymbol.StripTopLevel(type)
             if type is TypeParameterSymbol tp {
-                // A class-base constraint proves the parameter is reference-shaped
-                // just as strongly as the explicit `class` flag.
-                return tp.HasReferenceTypeConstraint || tp.ClassConstraint != nil
+                // Direct `class` on `tp` itself, or a non-universal reference class
+                // bound anywhere in `tp`'s forwarded chain, proves `tp` cannot be
+                // instantiated with a value type. A bare `class` on a bounding
+                // parameter (`[A class, B A]`) or `System.Object`/`System.Enum`
+                // does not, because `A = object, B = int32` and `B = Color` are
+                // valid instantiations.
+                if tp.HasReferenceTypeConstraint {
+                    return true
+                }
+                return AnyParameter(
+                    EnumerateForwardedParameterChain(tp),
+                    (p TypeParameterSymbol) -> IsReferenceClassConstraint(p.ClassConstraint)
+                )
             }
             if type is StructSymbol structSym {
                 return structSym.IsClass
@@ -14211,7 +14332,10 @@ partial class Binder {
                 return false
             }
             if type is TypeParameterSymbol tp {
-                return tp.HasValueTypeConstraint
+                return AnyParameter(
+                    EnumerateForwardedParameterChain(tp),
+                    (p TypeParameterSymbol) -> p.HasValueTypeConstraint || p.HasUnmanagedConstraint
+                )
             }
             if type is StructSymbol structSym {
                 return !structSym.IsClass
@@ -14248,7 +14372,10 @@ partial class Binder {
                 return false
             }
             if type is TypeParameterSymbol tp {
-                return tp.HasUnmanagedConstraint
+                return AnyParameter(
+                    EnumerateForwardedParameterChain(tp),
+                    (p TypeParameterSymbol) -> p.HasUnmanagedConstraint
+                )
             }
             return BlittableDetector().IsUnmanaged(type)
         }
@@ -14331,11 +14458,18 @@ partial class Binder {
                     }
                 }
             }
-            if typeArgument is TypeParameterSymbol tp && tp.InterfaceConstraint != nil {
-                // Constraint propagation: a type parameter whose own interface
-                // constraint is or extends the target satisfies the bound.
-                for candidate in tp.InterfaceConstraint!!.SelfAndAllBaseInterfaces() {
-                    if candidate == iface || SameConstructedInterface(candidate, iface) {
+            if typeArgument is TypeParameterSymbol tp {
+                // Constraint propagation: follow the parameter's forwarded chain
+                // and check both interface and class constraints.
+                for chainParam in EnumerateForwardedParameterChain(tp) {
+                    if chainParam.InterfaceConstraint is {} paramIface {
+                        for candidate in paramIface.SelfAndAllBaseInterfaces() {
+                            if candidate == iface || SameConstructedInterface(candidate, iface) {
+                                return true
+                            }
+                        }
+                    }
+                    if chainParam.ClassConstraint is StructSymbol classBound && ImplementsInterface(classBound, iface) {
                         return true
                     }
                 }
@@ -14359,31 +14493,316 @@ partial class Binder {
             if !object.ReferenceEquals(defA, defB) {
                 return false
             }
-            if a
-                .TypeArguments
-                .IsDefaultOrEmpty ||
-                b
-                .TypeArguments
-                .IsDefaultOrEmpty ||
-                a
-                .TypeArguments
-                .Length != b
-                .TypeArguments
-                .Length {
+            return SameConstraintTypeArguments(a.TypeArguments, b.TypeArguments)
+        }
+
+        private func SameConstructedStruct(a StructSymbol?, b StructSymbol?) bool {
+            if a == nil || b == nil {
                 return false
             }
-            for var k = 0; k < a.TypeArguments.Length; k++ {
-                let ta = a.TypeArguments[k]
-                let tb = b.TypeArguments[k]
-                if ta == tb || object.ReferenceEquals(ta, tb) {
-                    continue
-                }
-                if ta is InterfaceSymbol ia && tb is InterfaceSymbol ib && SameConstructedInterface(ia, ib) {
-                    continue
-                }
+            let defA = a.Definition ?? a
+            let defB = b.Definition ?? b
+            if !object.ReferenceEquals(defA, defB) {
                 return false
+            }
+            return SameConstraintTypeArguments(
+                Conversion.GetEffectiveStructTypeArguments(a),
+                Conversion.GetEffectiveStructTypeArguments(b)
+            )
+        }
+
+        private func SameConstraintTypeArguments(a ImmutableArray[TypeSymbol], b ImmutableArray[TypeSymbol]) bool {
+            if a.IsDefaultOrEmpty || b.IsDefaultOrEmpty || a.Length != b.Length {
+                return false
+            }
+            for var k = 0; k < a.Length; k++ {
+                if !SameConstraintType(a[k], b[k]) {
+                    return false
+                }
             }
             return true
+        }
+
+        private func IsConstraintArgumentCompatible(
+            actualArg TypeSymbol,
+            expectedArg TypeSymbol,
+            variance GenericParameterAttributes
+        ) bool {
+            if SameConstraintType(actualArg, expectedArg) {
+                return true
+            }
+            let l = PlatformTypeSymbol.StripTopLevel(actualArg)
+            let r = PlatformTypeSymbol.StripTopLevel(expectedArg)
+            if (l is SliceTypeSymbol || l is ArrayTypeSymbol) && (r is SliceTypeSymbol || r is ArrayTypeSymbol) {
+                return false
+            }
+            return switch variance & GenericParameterAttributes.VarianceMask {
+                case GenericParameterAttributes.Covariant: Conversion.IsImplicitReferenceVariantSlot(
+                    actualArg,
+                    expectedArg
+                )
+                case GenericParameterAttributes.Contravariant: Conversion.IsImplicitReferenceVariantSlot(
+                    expectedArg,
+                    actualArg
+                )
+                default: false
+            }
+        }
+
+        // Issue #4744: compares constraint type arguments while preserving
+        // reference, platform, and value nullability contracts (`T?` vs `T!` vs `T`).
+        private func SameConstraintType(left TypeSymbol?, right TypeSymbol?) bool {
+            if left == right || object.ReferenceEquals(left, right) {
+                return true
+            }
+            if left == nil || right == nil {
+                return false
+            }
+            if left is PlatformTypeSymbol || right is PlatformTypeSymbol {
+                return left is PlatformTypeSymbol leftPlatform &&
+                    right is PlatformTypeSymbol rightPlatform &&
+                    SameConstraintType(leftPlatform.UnderlyingType, rightPlatform.UnderlyingType)
+            }
+            if left is NullableTypeSymbol || right is NullableTypeSymbol {
+                return left is NullableTypeSymbol leftNullable &&
+                    right is NullableTypeSymbol rightNullable &&
+                    SameConstraintType(leftNullable.UnderlyingType, rightNullable.UnderlyingType)
+            }
+            if left is InterfaceSymbol leftIface && right is InterfaceSymbol rightIface {
+                return SameConstructedInterface(leftIface, rightIface)
+            }
+            if left is StructSymbol leftStruct && right is StructSymbol rightStruct {
+                return SameConstructedStruct(leftStruct, rightStruct)
+            }
+            if left is DelegateTypeSymbol leftDel && right is DelegateTypeSymbol rightDel {
+                let defLeft = leftDel.Definition ?? leftDel
+                let defRight = rightDel.Definition ?? rightDel
+                return object.ReferenceEquals(defLeft, defRight) &&
+                    SameConstraintTypeArguments(leftDel.TypeArguments, rightDel.TypeArguments)
+            }
+            if left is SliceTypeSymbol leftSlice && right is SliceTypeSymbol rightSlice {
+                return SameConstraintType(leftSlice.ElementType, rightSlice.ElementType)
+            }
+            if left is ArrayTypeSymbol leftArray && right is ArrayTypeSymbol rightArray {
+                return leftArray.Length == rightArray.Length &&
+                    SameConstraintType(leftArray.ElementType, rightArray.ElementType)
+            }
+            if left is RectangularArrayTypeSymbol leftRect && right is RectangularArrayTypeSymbol rightRect {
+                return leftRect.Rank == rightRect.Rank &&
+                    SameConstraintType(leftRect.ElementType, rightRect.ElementType)
+            }
+            if (left is SliceTypeSymbol || left is ArrayTypeSymbol || left is RectangularArrayTypeSymbol) &&
+                (right is SliceTypeSymbol || right is ArrayTypeSymbol || right is RectangularArrayTypeSymbol) {
+                return false
+            }
+            if left is TupleTypeSymbol leftTuple && right is TupleTypeSymbol rightTuple {
+                return SameConstraintTypeArguments(leftTuple.ElementTypes, rightTuple.ElementTypes)
+            }
+            if IsValueTupleSymbol(left) && IsValueTupleSymbol(right) {
+                return SameConstraintTypeArguments(left.GetElementPositions(), right.GetElementPositions())
+            }
+            if left.ClrType is {IsArray: true} leftClrArr && right.ClrType is {IsArray: true} rightClrArr {
+                return leftClrArr.IsSZArray == rightClrArr.IsSZArray &&
+                    leftClrArr.GetArrayRank() == rightClrArr.GetArrayRank() &&
+                    SameConstraintTypeArguments(left.GetElementPositions(), right.GetElementPositions())
+            }
+            if TryGetImportedGenericDefinitionAndArguments(left, out var leftOpen, out var leftArgs) &&
+                TryGetImportedGenericDefinitionAndArguments(right, out var rightOpen, out var rightArgs) {
+                return ClrTypeUtilities.AreSame(leftOpen, rightOpen) && SameConstraintTypeArguments(leftArgs, rightArgs)
+            }
+            if left.GetElementPositions().IsDefaultOrEmpty && right.GetElementPositions()
+                .IsDefaultOrEmpty &&
+                left.ClrType is {ContainsGenericParameters: false} leftLeafClr &&
+                right.ClrType is {ContainsGenericParameters: false} rightLeafClr {
+                return ClrTypeUtilities.AreSame(leftLeafClr, rightLeafClr)
+            }
+            return false
+        }
+
+        private func IsValueTupleSymbol(type TypeSymbol) bool {
+            if type is TupleTypeSymbol {
+                return true
+            }
+            let bare = type.StripToBareShape()
+            let clr = if bare is ImportedTypeSymbol imp {
+                imp.OpenDefinition ?? imp.ClrType
+            } else {
+                bare.ClrType
+            }
+            if clr is not{IsGenericType: true} genericClr {
+                return false
+            }
+            let def = if genericClr.IsGenericTypeDefinition {
+                genericClr
+            } else {
+                genericClr.GetGenericTypeDefinition()
+            }
+            return def.FullName is {} name && name.StartsWith("System.ValueTuple`", StringComparison.Ordinal)
+        }
+
+        private func GetClrSlotAlignedArguments(type TypeSymbol) ImmutableArray[TypeSymbol] {
+            let positions = type.GetElementPositions()
+            if positions.Length < 8 || type.ClrType is not{IsGenericType: true, IsGenericTypeDefinition: false} clr {
+                return positions
+            }
+            let defName = clr.GetGenericTypeDefinition().FullName
+            if defName is not("System.ValueTuple`8" or "System.Tuple`8") {
+                return positions
+            }
+            return PackTupleClrSlotArguments(clr, positions, 0)
+        }
+
+        private func PackTupleClrSlotArguments(
+            tupleClr Type,
+            flatPositions ImmutableArray[TypeSymbol],
+            startIndex int32
+        ) ImmutableArray[TypeSymbol] {
+            let remaining = flatPositions.Length - startIndex
+            let clrArgs = tupleClr.GetGenericArguments()
+            if remaining <= 7 || clrArgs.Length != 8 {
+                let tail = ImmutableArray.CreateBuilder[TypeSymbol](Math.Max(0, remaining))
+                for var i = startIndex; i < flatPositions.Length; i++ {
+                    tail.Add(flatPositions[i])
+                }
+                return tail.MoveToImmutable()
+            }
+            let builder = ImmutableArray.CreateBuilder[TypeSymbol](8)
+            for var i = 0; i < 7; i++ {
+                builder.Add(flatPositions[startIndex + i])
+            }
+            let restClr = clrArgs[7]
+            let restCount = remaining - 7
+            let restSymbol TypeSymbol = if restCount >= 8 && restClr.IsGenericType {
+                ImportedTypeSymbol.GetConstructed(
+                    restClr,
+                    restClr.GetGenericTypeDefinition(),
+                    PackTupleClrSlotArguments(restClr, flatPositions, startIndex + 7)
+                )
+            } else if restCount >= 2 && restClr.IsGenericType && restClr.GetGenericTypeDefinition()
+                .FullName is {} restDefName &&
+                restDefName
+                .StartsWith("System.ValueTuple`", StringComparison.Ordinal) {
+                let restElements = ImmutableArray.CreateBuilder[TypeSymbol](restCount)
+                for var i = startIndex + 7; i < flatPositions.Length; i++ {
+                    restElements.Add(flatPositions[i])
+                }
+                TupleTypeSymbol.Get(restElements.MoveToImmutable())
+            } else if restClr.IsGenericType {
+                let restElements = ImmutableArray.CreateBuilder[TypeSymbol](restCount)
+                for var i = startIndex + 7; i < flatPositions.Length; i++ {
+                    restElements.Add(flatPositions[i])
+                }
+                ImportedTypeSymbol.GetConstructed(
+                    restClr,
+                    restClr.GetGenericTypeDefinition(),
+                    restElements.MoveToImmutable()
+                )
+            } else {
+                flatPositions[startIndex + 7]
+            }
+            builder.Add(restSymbol)
+            return builder.MoveToImmutable()
+        }
+
+        private func TryGetImportedGenericDefinitionAndArguments(
+            type TypeSymbol,
+            out openDefinition Type?,
+            out arguments ImmutableArray[TypeSymbol]
+        ) bool {
+            openDefinition = nil
+            arguments = ImmutableArray[TypeSymbol].Empty
+            let bare = type.StripToBareShape()
+            if MapTypeSymbol.TryGetMapShape(bare, out _, out _) {
+                openDefinition = typeof(Dictionary[_, _])
+            } else if SequenceTypeSymbol.TryGetEnumerableInterfaceShape(bare, out var seqDef, out _) {
+                openDefinition = seqDef
+            } else if bare is ChannelTypeSymbol channel {
+                openDefinition = ChannelTypeSymbol.OpenClrDefinition(channel.Direction)
+            } else if bare is FunctionTypeSymbol fn {
+                let isVoid = FunctionTypeSymbol.IsVoidReturn(fn.ReturnType)
+                if fn.Arity > 0 || !isVoid {
+                    let erased = ImmutableArray.CreateBuilder[TypeSymbol](fn.Arity)
+                    for var i = 0; i < fn.Arity; i++ {
+                        erased.Add(TypeSymbol.Object)
+                    }
+                    let natural = fn.ClrType ?? FunctionTypeSymbol.Get(
+                        erased.MoveToImmutable(),
+                        if isVoid {
+                            TypeSymbol.Void
+                        } else {
+                            TypeSymbol.Object
+                        }
+                    )
+                        .ClrType
+                    if natural is {IsGenericType: true} generic {
+                        openDefinition = generic.GetGenericTypeDefinition()
+                    }
+                }
+            } else if bare is ImportedTypeSymbol imported && imported.OpenDefinition != nil {
+                openDefinition = imported.OpenDefinition
+            } else if bare.ClrType is {IsGenericType: true} clr {
+                openDefinition = if clr.IsGenericTypeDefinition {
+                    clr
+                } else {
+                    clr.GetGenericTypeDefinition()
+                }
+            }
+            if openDefinition == nil {
+                return false
+            }
+            arguments = type.GetElementPositions()
+            return !arguments.IsDefaultOrEmpty
+        }
+
+        private func ProjectOpenClrTypeWithArguments(
+            openClr Type,
+            outerArguments ImmutableArray[TypeSymbol]
+        ) TypeSymbol? {
+            if openClr.IsGenericParameter {
+                let pos = openClr.GenericParameterPosition
+                return if uint32(pos) < uint32(outerArguments.Length) {
+                    outerArguments[pos]
+                } else {
+                    default(TypeSymbol?)
+                }
+            }
+            if openClr.IsArray {
+                if openClr.GetElementType() is {} elemClr &&
+                    ProjectOpenClrTypeWithArguments(elemClr, outerArguments) is {} elemSym {
+                    let rank = openClr.GetArrayRank()
+                    return if openClr.IsSZArray {
+                        cast[TypeSymbol](SliceTypeSymbol.Get(elemSym))
+                    } else if rank == 1 {
+                        MemberLookup.ConstructRankOneNonSzArray(elemSym, openClr)
+                    } else {
+                        cast[TypeSymbol](RectangularArrayTypeSymbol.Get(elemSym, rank))
+                    }
+                }
+                return nil
+            }
+            if openClr.IsGenericType {
+                let openDef = openClr.GetGenericTypeDefinition()
+                let openArgs = openClr.GetGenericArguments()
+                if openArgs.Length == 1 && string.Equals(
+                    openDef.FullName,
+                    "System.Nullable`1",
+                    StringComparison.Ordinal
+                ) {
+                    if ProjectOpenClrTypeWithArguments(openArgs[0], outerArguments) is {} innerSym {
+                        return NullableLifting.WrapValueTypeNullable(innerSym)
+                    }
+                    return nil
+                }
+                let projected = ImmutableArray.CreateBuilder[TypeSymbol](openArgs.Length)
+                for oa in openArgs {
+                    if ProjectOpenClrTypeWithArguments(oa, outerArguments) is not{} p {
+                        return nil
+                    }
+                    projected.Add(p)
+                }
+                return ImportedTypeSymbol.GetConstructed(openClr, openDef, projected.MoveToImmutable())
+            }
+            return TypeSymbol.FromClrTypeWithoutNullability(openClr, NullabilityFreeReason.TypeStructure)
         }
 
         /// Issue #943: returns `true` when [`typeArgument`](paramref)
@@ -14440,11 +14859,16 @@ partial class Binder {
             // Constraint propagation: another type parameter constrained to the same
             // interface trivially satisfies the constraint.
             if typeArgument is TypeParameterSymbol argTp {
-                return argTp.ClrInterfaceConstraint != nil && string.Equals(
-                    argTp.ClrInterfaceConstraint!!.ClrType?.FullName,
-                    constraint.ClrType?.FullName,
-                    StringComparison.Ordinal
-                )
+                for chainParam in EnumerateForwardedParameterChain(argTp) {
+                    if chainParam.ClrInterfaceConstraint is {} paramClrIface && !object.ReferenceEquals(
+                        paramClrIface,
+                        typeArgument
+                    ) &&
+                        SatisfiesClrInterfaceConstraint(paramClrIface, constraint, tp) {
+                        return true
+                    }
+                }
+                return false
             }
             let typeArgClr Type? = typeArgument?.ClrType
             let constraintClr Type? = constraint?.ClrType
@@ -14464,12 +14888,89 @@ partial class Binder {
                 return false
             }
             let openDefName = constraintClr.GetGenericTypeDefinition().FullName
+            let constraintPositions = GetClrSlotAlignedArguments(constraint)
+            if !constraintPositions.IsDefaultOrEmpty && MemberLookup.GetProjectionReceiverImportedType(
+                typeArgument
+            ) != nil {
+                return TryFindMatchingClrRelationship(
+                    typeArgument,
+                    openDefName,
+                    requireBaseOnly: false,
+                    constraintPositions,
+                    tp,
+                    typeArgument
+                )
+            }
+            let typeArgPositions = GetClrSlotAlignedArguments(typeArgument)
+            if !constraintPositions.IsDefaultOrEmpty && !typeArgPositions.IsDefaultOrEmpty {
+                if typeArgClr.IsGenericType && !typeArgClr.IsGenericTypeDefinition {
+                    let openTypeArgClr = typeArgClr.GetGenericTypeDefinition()
+                    for openCandidate in EnumerateSelfAndInterfaces(openTypeArgClr) {
+                        if !openCandidate.IsGenericType || !string.Equals(
+                            openCandidate.GetGenericTypeDefinition().FullName,
+                            openDefName,
+                            StringComparison.Ordinal
+                        ) {
+                            continue
+                        }
+                        let openCandidateArgs = openCandidate.GetGenericArguments()
+                        if openCandidateArgs.Length != constraintPositions.Length {
+                            continue
+                        }
+                        let openParameters = openCandidate.GetGenericTypeDefinition().GetGenericArguments()
+                        var allMatch = true
+                        for var i = 0; i < openCandidateArgs.Length; i++ {
+                            let actualArg = ProjectOpenClrTypeWithArguments(openCandidateArgs[i], typeArgPositions)
+                            let expectedArg = SubstituteSelfReference(constraintPositions[i], tp, typeArgument)
+                            let variance = if i < openParameters.Length {
+                                openParameters[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
+                            } else {
+                                GenericParameterAttributes.None
+                            }
+                            if actualArg == nil || !IsConstraintArgumentCompatible(actualArg, expectedArg, variance) {
+                                allMatch = false
+                                break
+                            }
+                        }
+                        if allMatch {
+                            return true
+                        }
+                    }
+                    return false
+                }
+                if typeArgClr.IsArray && typeArgClr.GetArrayRank() == 1 &&
+                    typeArgPositions.Length == 1 &&
+                    constraintPositions.Length == 1 {
+                    for candidate in EnumerateSelfAndInterfaces(typeArgClr) {
+                        if !candidate.IsGenericType || !string.Equals(
+                            candidate.GetGenericTypeDefinition().FullName,
+                            openDefName,
+                            StringComparison.Ordinal
+                        ) {
+                            continue
+                        }
+                        let openParameters = candidate.GetGenericTypeDefinition().GetGenericArguments()
+                        let variance = if openParameters.Length == 1 {
+                            openParameters[0].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
+                        } else {
+                            GenericParameterAttributes.None
+                        }
+                        let expectedArg = SubstituteSelfReference(constraintPositions[0], tp, typeArgument)
+                        if IsConstraintArgumentCompatible(typeArgPositions[0], expectedArg, variance) {
+                            return true
+                        }
+                    }
+                    return false
+                }
+            }
             // constraint is this method's own non-nullable parameter (the
             // `constraint?.ClrType` read above is a redundant null-conditional,
             // not a narrowing of constraint).
-            let constraintArgs = MemberLookup.GetImportedTypeSymbol(constraint)
-                ?.TypeArguments ??
-                ImmutableArray[TypeSymbol].Empty
+            let constraintArgs = if !constraintPositions.IsDefaultOrEmpty {
+                constraintPositions
+            } else {
+                MemberLookup.GetImportedTypeSymbol(constraint)?.TypeArguments ?? ImmutableArray[TypeSymbol].Empty
+            }
             let constraintClrArgs = constraintClr.GetGenericArguments()
             for candidate in EnumerateSelfAndInterfaces(typeArgClr) {
                 if !candidate.IsGenericType || !string.Equals(
@@ -14592,6 +15093,42 @@ partial class Binder {
                 return SubstituteType(expected, Dictionary[TypeParameterSymbol, TypeSymbol]{[tp] = typeArgument})
             } catch (Exception) {
                 return expected
+            }
+        }
+
+        // Issue #4744: substitutes the constrained parameter and any resolved
+        // sibling or owner type arguments into a declared constraint type.
+        private func SubstituteConstraintType(
+            constraint TypeSymbol,
+            tp TypeParameterSymbol?,
+            typeArgument TypeSymbol?,
+            substitution IReadOnlyDictionary[TypeParameterSymbol, TypeSymbol]? = nil
+        ) TypeSymbol {
+            if !TypeSymbol.ContainsTypeParameter(constraint) &&
+                !(
+                constraint is StructSymbol nestedStruct && !StructSymbol.CollectEnclosingTypeParameters(nestedStruct)
+                    .IsDefaultOrEmpty
+            ) {
+                return constraint
+            }
+            let subst = Dictionary[TypeParameterSymbol, TypeSymbol]()
+            if substitution != nil {
+                for pair in substitution {
+                    if pair.Key != nil && pair.Value != nil {
+                        subst[pair.Key] = pair.Value
+                    }
+                }
+            }
+            if tp != nil && typeArgument != nil && !subst.ContainsKey(tp) {
+                subst[tp] = typeArgument
+            }
+            if subst.Count == 0 {
+                return constraint
+            }
+            try {
+                return SubstituteType(constraint, subst)
+            } catch (Exception) {
+                return constraint
             }
         }
 

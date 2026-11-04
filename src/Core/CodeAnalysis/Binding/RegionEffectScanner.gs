@@ -129,9 +129,13 @@ internal sealed class RegionEffectScanner {
     func ScanStatements(statements IEnumerable[SyntaxNode]) RegionEffects {
         let savedScopes = scopes
         let savedCurrent = current
+        let savedClosure = closureDepth
+        let savedPatterns = patternNames
         scopes = List[ScopeFrame]()
         scopes.Add(ScopeFrame())
         current = RegionEffects()
+        closureDepth = 0
+        patternNames = HashSet[string]()
         let before = NodesVisited
         let list = statements.ToArray()
         VisitList(list)
@@ -140,6 +144,8 @@ internal sealed class RegionEffectScanner {
         let result = current
         scopes = savedScopes
         current = savedCurrent
+        closureDepth = savedClosure
+        patternNames = savedPatterns
         return result
     }
 
