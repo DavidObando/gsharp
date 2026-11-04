@@ -280,13 +280,37 @@ internal shared class ByRefStorageMatching {
         return if elementClr == nil {
             pointeeType
         } else {
-            PreserveNominalClrTypeCore(elementClr, pointeeType)
+            PreserveNominalClrTypeCore(elementClr, pointeeType, preserveNominalArray: true)
         }
     }
 
-    private func PreserveNominalClrTypeCore(clrType Type, typeSymbol TypeSymbol) TypeSymbol {
+    func PreserveReferenceTupleIdentity(clrType Type?, typeSymbol TypeSymbol) TypeSymbol {
+        if clrType == nil {
+            return typeSymbol
+        }
+        return PreserveNominalClrTypeCore(clrType, typeSymbol, preserveNominalArray: false)
+    }
+
+    private func PreserveNominalClrTypeCore(
+        clrType Type,
+        typeSymbol TypeSymbol,
+        preserveNominalArray bool = true
+    ) TypeSymbol {
+        if typeSymbol is ByRefTypeSymbol byRef {
+            let pointeeClr = if clrType.IsByRef {
+                clrType.GetElementType() ?? clrType
+            } else {
+                clrType
+            }
+            let inner = PreserveNominalClrTypeCore(pointeeClr, byRef.PointeeType, preserveNominalArray)
+            return if object.ReferenceEquals(inner, byRef.PointeeType) {
+                typeSymbol
+            } else {
+                ByRefTypeSymbol.Get(inner)
+            }
+        }
         if typeSymbol is PlatformTypeSymbol platform {
-            let inner = PreserveNominalClrTypeCore(clrType, platform.UnderlyingType)
+            let inner = PreserveNominalClrTypeCore(clrType, platform.UnderlyingType, preserveNominalArray)
             return if object.ReferenceEquals(inner, platform.UnderlyingType) {
                 typeSymbol
             } else {
@@ -295,7 +319,7 @@ internal shared class ByRefStorageMatching {
         }
         if typeSymbol is NullableTypeSymbol nullable {
             let underlyingClr = NullableLifting.GetValueTypeNullableUnderlyingClr(clrType) ?? clrType
-            let inner = PreserveNominalClrTypeCore(underlyingClr, nullable.UnderlyingType)
+            let inner = PreserveNominalClrTypeCore(underlyingClr, nullable.UnderlyingType, preserveNominalArray)
             return if object.ReferenceEquals(inner, nullable.UnderlyingType) {
                 typeSymbol
             } else {
@@ -303,11 +327,13 @@ internal shared class ByRefStorageMatching {
             }
         }
         if typeSymbol is NullabilityAnnotatedTypeSymbol annotated {
-            let inner = PreserveNominalClrTypeCore(clrType, annotated.BaseType)
+            let inner = PreserveNominalClrTypeCore(clrType, annotated.BaseType, preserveNominalArray)
             return if object.ReferenceEquals(inner, annotated.BaseType) {
                 typeSymbol
-            } else {
+            } else if preserveNominalArray {
                 inner
+            } else {
+                NullabilityAnnotatedTypeSymbol(inner, annotated.NullableFlags)
             }
         }
         if clrType.IsGenericType {
@@ -318,7 +344,12 @@ internal shared class ByRefStorageMatching {
             }
             if openDef.FullName?.StartsWith("System.Tuple`", StringComparison.Ordinal) == true &&
                 typeSymbol is TupleTypeSymbol tuple &&
-                ReconstructReferenceTupleFromFlattenedElements(clrType, tuple.ElementTypes, 0) is {} reconstructed {
+                ReconstructReferenceTupleFromFlattenedElements(
+                clrType,
+                tuple.ElementTypes,
+                0,
+                preserveNominalArray
+            ) is {} reconstructed {
                 return reconstructed
             }
             if openDef.FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true &&
@@ -331,7 +362,11 @@ internal shared class ByRefStorageMatching {
                     let builder = ImmutableArray.CreateBuilder[TypeSymbol](clrElements.Count)
                     var changed = false
                     for var i = 0; i < clrElements.Count; i++ {
-                        let updated = PreserveNominalClrTypeCore(clrElements[i], valueTuple.ElementTypes[i])
+                        let updated = PreserveNominalClrTypeCore(
+                            clrElements[i],
+                            valueTuple.ElementTypes[i],
+                            preserveNominalArray
+                        )
                         changed |= !object.ReferenceEquals(updated, valueTuple.ElementTypes[i])
                         builder.Add(updated)
                     }
@@ -348,7 +383,7 @@ internal shared class ByRefStorageMatching {
                     let builder = ImmutableArray.CreateBuilder[TypeSymbol](clrArgs.Length)
                     var changed = false
                     for var i = 0; i < clrArgs.Length; i++ {
-                        let updated = PreserveNominalClrTypeCore(clrArgs[i], symArgs[i])
+                        let updated = PreserveNominalClrTypeCore(clrArgs[i], symArgs[i], preserveNominalArray)
                         changed |= !object.ReferenceEquals(updated, symArgs[i])
                         builder.Add(updated)
                     }
@@ -366,7 +401,7 @@ internal shared class ByRefStorageMatching {
             !clrType.IsSZArray &&
             typeSymbol is RectangularArrayTypeSymbol rectangular &&
             clrType.GetElementType() is {} rectElemClr {
-            let updatedRectElem = PreserveNominalClrTypeCore(rectElemClr, rectangular.ElementType)
+            let updatedRectElem = PreserveNominalClrTypeCore(rectElemClr, rectangular.ElementType, preserveNominalArray)
             return if object.ReferenceEquals(updatedRectElem, rectangular.ElementType) {
                 typeSymbol
             } else {
@@ -374,7 +409,14 @@ internal shared class ByRefStorageMatching {
             }
         }
         if clrType.IsSZArray && typeSymbol is SliceTypeSymbol slice && clrType.GetElementType() is {} elemClr {
-            let updatedElem = PreserveNominalClrTypeCore(elemClr, slice.ElementType)
+            let updatedElem = PreserveNominalClrTypeCore(elemClr, slice.ElementType, preserveNominalArray)
+            if !preserveNominalArray {
+                return if object.ReferenceEquals(updatedElem, slice.ElementType) {
+                    typeSymbol
+                } else {
+                    SliceTypeSymbol.Get(updatedElem)
+                }
+            }
             if !HasErasedRuntimeShape(updatedElem) && NullableLifting.GetEffectiveClrType(
                 updatedElem
             ) is {} concreteElemClr {
@@ -395,7 +437,8 @@ internal shared class ByRefStorageMatching {
     private func ReconstructReferenceTupleFromFlattenedElements(
         clrType Type,
         elements ImmutableArray[TypeSymbol],
-        offset int32
+        offset int32,
+        preserveNominalArray bool = true
     ) TypeSymbol? {
         if !clrType.IsGenericType {
             return nil
@@ -416,13 +459,18 @@ internal shared class ByRefStorageMatching {
             clrType
         }
         if clrArgs.Length == 8 && remaining >= 8 && IsTupleRestClrType(clrArgs[7]) {
-            let restSymbol = ReconstructTupleRestFromFlattenedElements(clrArgs[7], elements, offset + 7)
+            let restSymbol = ReconstructTupleRestFromFlattenedElements(
+                clrArgs[7],
+                elements,
+                offset + 7,
+                preserveNominalArray
+            )
             if restSymbol == nil {
                 return nil
             }
             let builder = ImmutableArray.CreateBuilder[TypeSymbol](8)
             for var i = 0; i < 7; i++ {
-                builder.Add(PreserveNominalClrTypeCore(clrArgs[i], elements[offset + i]))
+                builder.Add(PreserveNominalClrTypeCore(clrArgs[i], elements[offset + i], preserveNominalArray))
             }
             builder.Add(restSymbol)
             return ImportedTypeSymbol.GetConstructed(closedOrOpen, openDef, builder.MoveToImmutable())
@@ -432,7 +480,7 @@ internal shared class ByRefStorageMatching {
         }
         let directBuilder = ImmutableArray.CreateBuilder[TypeSymbol](clrArgs.Length)
         for var i = 0; i < clrArgs.Length; i++ {
-            directBuilder.Add(PreserveNominalClrTypeCore(clrArgs[i], elements[offset + i]))
+            directBuilder.Add(PreserveNominalClrTypeCore(clrArgs[i], elements[offset + i], preserveNominalArray))
         }
         return ImportedTypeSymbol.GetConstructed(closedOrOpen, openDef, directBuilder.MoveToImmutable())
     }
@@ -440,7 +488,8 @@ internal shared class ByRefStorageMatching {
     private func ReconstructTupleRestFromFlattenedElements(
         restClrType Type,
         elements ImmutableArray[TypeSymbol],
-        offset int32
+        offset int32,
+        preserveNominalArray bool = true
     ) TypeSymbol? {
         if !restClrType.IsGenericType {
             return nil
@@ -451,7 +500,7 @@ internal shared class ByRefStorageMatching {
             restClrType.GetGenericTypeDefinition()
         }
         if openDef.FullName?.StartsWith("System.Tuple`", StringComparison.Ordinal) == true {
-            return ReconstructReferenceTupleFromFlattenedElements(restClrType, elements, offset)
+            return ReconstructReferenceTupleFromFlattenedElements(restClrType, elements, offset, preserveNominalArray)
         }
         if openDef.FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true {
             let remaining = elements.Length - offset
@@ -464,7 +513,9 @@ internal shared class ByRefStorageMatching {
                 return ImportedTypeSymbol.GetConstructed(
                     closedOrOpen,
                     openDef,
-                    ImmutableArray.Create(PreserveNominalClrTypeCore(singleRestArgs[0], elements[offset]))
+                    ImmutableArray.Create(
+                        PreserveNominalClrTypeCore(singleRestArgs[0], elements[offset], preserveNominalArray)
+                    )
                 )
             }
             if remaining >= 2 {
@@ -472,7 +523,11 @@ internal shared class ByRefStorageMatching {
                 for var i = offset; i < elements.Length; i++ {
                     subBuilder.Add(elements[i])
                 }
-                return PreserveNominalClrTypeCore(restClrType, TupleTypeSymbol.Get(subBuilder.MoveToImmutable()))
+                return PreserveNominalClrTypeCore(
+                    restClrType,
+                    TupleTypeSymbol.Get(subBuilder.MoveToImmutable()),
+                    preserveNominalArray
+                )
             }
         }
         return nil

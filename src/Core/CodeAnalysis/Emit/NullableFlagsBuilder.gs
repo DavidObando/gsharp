@@ -214,15 +214,23 @@ internal shared class NullableFlagsBuilder {
                 return PointerTypeSymbol.Get(Merge(pointer.PointeeType, layout.GetElementType()!!))
             }
             if layout.IsArray {
+                let nullable NullableTypeSymbol? = projected as NullableTypeSymbol
+                let core = nullable?.UnderlyingType ?? projected
+                let hasRetainedNonSzElement = core is ImportedTypeSymbol{
+                    ClrType: {IsArray: true, IsSZArray: false} nonSzCheck,
+                    TypeArguments: {Length: 1}
+                } &&
+                    nonSzCheck.GetArrayRank() == 1
                 // Issues #4402/#4449: FromClrType represents a concrete array
                 // as an imported CLR type, not one of the symbolic array
                 // shapes. With no open slot to preserve, let the canonical
                 // direct funnel reader decode the complete subtree instead of
                 // skipping its child.
                 if !layout.ContainsGenericParameters &&
-                    !(projected is ArrayTypeSymbol) &&
-                    !(projected is SliceTypeSymbol) &&
-                    !(projected is RectangularArrayTypeSymbol) {
+                    !(core is ArrayTypeSymbol) &&
+                    !(core is SliceTypeSymbol) &&
+                    !(core is RectangularArrayTypeSymbol) &&
+                    !hasRetainedNonSzElement {
                     return ReadConcretePosition(layout)
                 }
                 let flag = declaredFlags[position++]
@@ -231,7 +239,7 @@ internal shared class NullableFlagsBuilder {
                     "an array type has an element type",
                     expression: "layout.GetElementType()"
                 )
-                let merged = switch projected {
+                var merged = switch core {
                     case array is ArrayTypeSymbol: cast[TypeSymbol](
                         ArrayTypeSymbol.Get(Merge(array.ElementType, elementLayout), array.Length)
                     )
@@ -241,7 +249,15 @@ internal shared class NullableFlagsBuilder {
                     case rectangular is RectangularArrayTypeSymbol: cast[TypeSymbol](
                         RectangularArrayTypeSymbol.Get(Merge(rectangular.ElementType, elementLayout), rectangular.Rank)
                     )
-                    default: SkipChildren(projected, elementLayout)
+                    case ImportedTypeSymbol{
+                        ClrType: {IsArray: true, IsSZArray: false} nonSzClr,
+                        TypeArguments: {Length: 1} nonSzArguments
+                    } when nonSzClr.GetArrayRank() == 1:
+                    MemberLookup.ConstructRankOneNonSzArray(Merge(nonSzArguments[0], elementLayout), nonSzClr)
+                    default: SkipChildren(core, elementLayout)
+                }
+                if nullable != nil {
+                    merged = NullabilityImportRule.RestorePeeledNullable(merged)
                 }
                 return if layout.IsValueType {
                     merged
@@ -575,6 +591,8 @@ internal shared class NullableFlagsBuilder {
                 for arg in imported.TypeArguments {
                     Append(arg, builder)
                 }
+            } else if clr != nil && clr.IsArray {
+                AppendClrType(clr.GetElementType(), builder)
             } else if clr != nil && clr.IsGenericType && !clr.IsGenericTypeDefinition {
                 for clrArg in clr.GetGenericArguments() {
                     AppendClrType(clrArg, builder)
@@ -725,6 +743,10 @@ internal shared class NullableFlagsBuilder {
                 return
             }
             let clr Type? = imported.ClrType
+            if clr != nil && clr.IsArray {
+                AppendClrType(clr.GetElementType(), builder)
+                return
+            }
             if clr != nil && clr.IsGenericType && !clr.IsGenericTypeDefinition {
                 for clrArg in clr.GetGenericArguments() {
                     AppendClrType(clrArg, builder)

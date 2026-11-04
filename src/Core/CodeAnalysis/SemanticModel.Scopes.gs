@@ -742,12 +742,14 @@ partial class SemanticModel {
 
     private let NoExtents List[TextSpan] = List[TextSpan]()
 
-    /// The extents of the parts of a merged partial type that lie in this tree; empty for any other node.
+    /// The extents of the parts of a merged partial type or `shared` block in this tree (#5455, #5465).
     private func PartialPartExtentsInTree(node SyntaxNode) List[TextSpan] {
         let extents = if node is StructDeclarationSyntax structDeclaration {
             structDeclaration.PartialPartExtents
         } else if node is InterfaceDeclarationSyntax interfaceDeclaration {
             interfaceDeclaration.PartialPartExtents
+        } else if node is SharedBlockSyntax sharedBlock {
+            sharedBlock.PartialPartExtents
         } else {
             ImmutableArray[TextLocation].Empty
         }
