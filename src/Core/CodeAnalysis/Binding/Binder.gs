@@ -4772,6 +4772,13 @@ partial class Binder {
                         )
                         return nil
                     }
+                    // Issue #4762: validate generic named-delegate type arguments against
+                    // the definition's type-parameter constraints.
+                    CheckUserGenericTypeClauseConstraints(
+                        (genericDelegate.Definition ?? genericDelegate).TypeParameters,
+                        typeArgs,
+                        identifierToken.Location
+                    )
                     element = DelegateTypeSymbol.Construct(genericDelegate, typeArgs)
                 } else {
                     Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.ValueText)
@@ -5199,7 +5206,14 @@ partial class Binder {
             case genericDelegate is DelegateTypeSymbol when genericDelegate.IsGenericDefinition &&
                 genericDelegate
                 .TypeParameters
-                .Length == typeArgs.Length {
+                .Length == typeArgs
+                .Length {
+                // Issue #4762: validate qualified generic named-delegate constructions.
+                CheckUserGenericTypeClauseConstraints(
+                    (genericDelegate.Definition ?? genericDelegate).TypeParameters,
+                    typeArgs,
+                    location
+                )
                 return DelegateTypeSymbol.Construct(genericDelegate, typeArgs)!!
             }
             default {
@@ -13582,67 +13596,41 @@ partial class Binder {
                 return false
             }
             if tp.InterfaceConstraint != nil {
-                var expectedIface = tp.InterfaceConstraint
-                // Issue #1052: a self-referential generic user-interface constraint
-                // `[T IFace[T]]` carries the constrained parameter as its own type
-                // argument. Substitute it with the actual type argument before the
-                // implementation check, so `[T ICmp[T]]` validates that the argument
-                // implements `ICmp[argument]` (mirrors the CLR path below).
-                if !expectedIface!!
-                    .TypeArguments
-                    .IsDefaultOrEmpty &&
-                    expectedIface!!.Definition != nil &&
-                    !object
-                    .ReferenceEquals(expectedIface!!.Definition, expectedIface) {
-                    let substArgs = ImmutableArray.CreateBuilder[TypeSymbol](expectedIface!!.TypeArguments.Length)
-                    var changed = false
-                    for arg in expectedIface!!.TypeArguments {
-                        if object.ReferenceEquals(arg, tp) {
-                            substArgs.Add(typeArgument)
-                            changed = true
-                        } else {
-                            substArgs.Add(arg)
-                        }
-                    }
-                    if changed {
-                        expectedIface = InterfaceSymbol.Construct(
-                            expectedIface!!.Definition,
-                            substArgs.MoveToImmutable()
-                        )!!
-                    }
-                }
-                if !ImplementsInterface(typeArgument, expectedIface!!) {
+                // Issue #1052 / #4744: substitute self-referential and sibling
+                // type arguments into the source-interface constraint before
+                // checking implementation.
+                let expectedIface = SubstituteConstraintType(
+                    tp.InterfaceConstraint!!,
+                    tp,
+                    typeArgument,
+                    substitution
+                ) as InterfaceSymbol ??
+                    tp.InterfaceConstraint!!
+                if !ImplementsInterface(typeArgument, expectedIface) {
                     return false
                 }
             }
-            // Issue #943: enforce a CLR interface constraint (generic or not), e.g.
-            // `[T IComparable[T]]`. The type argument must implement the (self-ref
-            // substituted) closed interface.
-            //
-            // Issue #943: enforce a CLR interface constraint (generic or not), e.g.
-            // `[T IComparable[T]]`. The type argument must implement the (self-ref
-            // substituted) closed interface.
-            //
-            // A SAME-COMPILATION class has no CLR type while binding, so the
-            // reflective probe underneath this used to answer "no" for
-            // `class D : IDisposable` at `[TD IDisposable]` — a false rejection
-            // #4090's widening would have spread to every type clause. That is
-            // #4124, and PR #4138 repairs it at the shared leaf rather than here:
-            // the reflective body is split out of `SatisfiesClrInterfaceConstraint`
-            // and the symbolic walk wraps every exit of it, so this arm inherits
-            // the answer without routing. (#4136 was filed for the same thing from
-            // this site's `GS0152` witness and is closed as a duplicate; its
-            // proposed fix would have been a FIFTH copy of that fallback, which
-            // #4138 deleted rather than added to.)
-            if tp.ClrInterfaceConstraint != nil &&
-                !SatisfiesClrInterfaceConstraint(typeArgument, tp.ClrInterfaceConstraint!!, tp) {
-                return false
+            // Issue #943 / #4124 / #4744: substitute self-referential and sibling
+            // type arguments into the CLR interface constraint before checking
+            // implementation.
+            if tp.ClrInterfaceConstraint != nil {
+                let expectedClrIface = SubstituteConstraintType(
+                    tp.ClrInterfaceConstraint!!,
+                    tp,
+                    typeArgument,
+                    substitution
+                )
+                if !SatisfiesClrInterfaceConstraint(typeArgument, expectedClrIface, tp) {
+                    return false
+                }
             }
-            // Issue #1056: enforce a base-class constraint, e.g. `[T Animal]`. The
-            // type argument must be the constraint class itself or derive from it
-            // (mirrors C#'s `where T : BaseClass`).
-            if tp.ClassConstraint != nil && !SatisfiesClassConstraint(typeArgument, tp.ClassConstraint) {
-                return false
+            // Issue #1056 / #4744: substitute self-referential and sibling type
+            // arguments into the base-class constraint before checking derivation.
+            if tp.ClassConstraint != nil {
+                let expectedClass = SubstituteConstraintType(tp.ClassConstraint!!, tp, typeArgument, substitution)
+                if !SatisfiesClassConstraint(typeArgument, expectedClass) {
+                    return false
+                }
             }
             if tp.Constraint == TypeParameterConstraint.Comparable && !IsComparable(typeArgument) {
                 return false
@@ -13951,13 +13939,24 @@ partial class Binder {
             }
             if classConstraint is StructSymbol classDef {
                 let constraintDef = classDef.Definition ?? classDef
+                let checkConstructedArguments = !classDef
+                    .TypeArguments
+                    .IsDefaultOrEmpty &&
+                    !TypeSymbol.ContainsTypeParameter(classDef)
                 if typeArgument is StructSymbol argClass {
                     for current in argClass.GetHierarchy() {
                         let currentDef = current.Definition ?? current
-                        if object.ReferenceEquals(currentDef, constraintDef) || object.ReferenceEquals(
-                            current,
-                            classConstraint
-                        ) {
+                        if object.ReferenceEquals(current, classConstraint) {
+                            return true
+                        }
+                        if !object.ReferenceEquals(currentDef, constraintDef) {
+                            continue
+                        }
+                        if !checkConstructedArguments ||
+                            current
+                            .TypeArguments
+                            .IsDefaultOrEmpty ||
+                            TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(current, classDef) {
                             return true
                         }
                     }
@@ -14175,11 +14174,18 @@ partial class Binder {
                     }
                 }
             }
-            if typeArgument is TypeParameterSymbol tp && tp.InterfaceConstraint != nil {
-                // Constraint propagation: a type parameter whose own interface
-                // constraint is or extends the target satisfies the bound.
-                for candidate in tp.InterfaceConstraint!!.SelfAndAllBaseInterfaces() {
-                    if candidate == iface || SameConstructedInterface(candidate, iface) {
+            if typeArgument is TypeParameterSymbol tp {
+                // Constraint propagation: follow the parameter's forwarded chain
+                // and check both interface and class constraints.
+                for chainParam in EnumerateForwardedParameterChain(tp) {
+                    if chainParam.InterfaceConstraint is {} paramIface {
+                        for candidate in paramIface.SelfAndAllBaseInterfaces() {
+                            if candidate == iface || SameConstructedInterface(candidate, iface) {
+                                return true
+                            }
+                        }
+                    }
+                    if chainParam.ClassConstraint is StructSymbol classBound && ImplementsInterface(classBound, iface) {
                         return true
                     }
                 }
@@ -14219,7 +14225,8 @@ partial class Binder {
             for var k = 0; k < a.TypeArguments.Length; k++ {
                 let ta = a.TypeArguments[k]
                 let tb = b.TypeArguments[k]
-                if ta == tb || object.ReferenceEquals(ta, tb) {
+                if ta == tb || object.ReferenceEquals(ta, tb) ||
+                    TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(ta, tb) {
                     continue
                 }
                 if ta is InterfaceSymbol ia && tb is InterfaceSymbol ib && SameConstructedInterface(ia, ib) {
@@ -14436,6 +14443,38 @@ partial class Binder {
                 return SubstituteType(expected, Dictionary[TypeParameterSymbol, TypeSymbol]{[tp] = typeArgument})
             } catch (Exception) {
                 return expected
+            }
+        }
+
+        // Issue #4744: substitutes the constrained parameter and any resolved
+        // sibling or owner type arguments into a declared constraint type.
+        private func SubstituteConstraintType(
+            constraint TypeSymbol,
+            tp TypeParameterSymbol?,
+            typeArgument TypeSymbol?,
+            substitution IReadOnlyDictionary[TypeParameterSymbol, TypeSymbol]? = nil
+        ) TypeSymbol {
+            if !TypeSymbol.ContainsTypeParameter(constraint) {
+                return constraint
+            }
+            let subst = Dictionary[TypeParameterSymbol, TypeSymbol]()
+            if substitution != nil {
+                for pair in substitution {
+                    if pair.Key != nil && pair.Value != nil {
+                        subst[pair.Key] = PlatformTypeSymbol.StripTopLevel(pair.Value)
+                    }
+                }
+            }
+            if tp != nil && typeArgument != nil {
+                subst[tp] = PlatformTypeSymbol.StripTopLevel(typeArgument)
+            }
+            if subst.Count == 0 {
+                return constraint
+            }
+            try {
+                return SubstituteType(constraint, subst)
+            } catch (Exception) {
+                return constraint
             }
         }
 

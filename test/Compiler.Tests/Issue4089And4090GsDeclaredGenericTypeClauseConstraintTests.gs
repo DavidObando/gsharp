@@ -348,6 +348,28 @@ class DisposableSource : IDisposable {
 
 class EnumerableSource : ArrayList {
 }
+
+delegate GsRefDelegate[TR class](value TR) TR;
+
+delegate GsOptionsDelegate[TO SchemeOptions](value TO) TO;
+
+interface IValue4744[V] {
+    prop Value V { get; }
+}
+
+data class Item4744[V](Saved V) : IValue4744[V] {
+    public prop Value V -> Saved
+}
+
+open class ValueBase4744[V] {
+    public var Saved V
+}
+
+class IntDerived4744 : ValueBase4744[int32] {
+    init() {
+        Saved = 11
+    }
+}
 `)
 
         /// Every G#-declared generic type-clause construction that must now be
@@ -463,6 +485,37 @@ Console.WriteLine("x")`, "GS0152", "GS0580"}
 }
 
 Console.WriteLine("x")`, "GS0152", "GS0580"}
+            // ---- #4762: named-delegate constructions validate closed and open
+            // type-parameter constraints just like class and interface clauses.
+            yield[]object{
+                "the-4762-repro-a-closed-violating-argument-at-a-named-delegate-typeof",
+                `Console.WriteLine(typeof(GsRefDelegate[int32]))`,
+                "GS0152",
+                "GS0580"
+            }
+            yield[]object{"a-closed-violating-argument-at-a-qualified-named-delegate", `var d P.GsOptionsDelegate[Unrelated]
+Console.WriteLine("x")`, "GS0152", "GS0580"}
+            yield[]object{"an-unforwarded-named-delegate-at-a-field-type", `class Holder[U] {
+    public var D GsRefDelegate[U]
+}
+
+Console.WriteLine("x")`, "GS0580", "GS0152"}
+            yield[]object{"a-named-delegate-declared-below-the-field-that-uses-it", `class Holder[U] {
+    public var D LateDelegate[U]
+}
+
+delegate LateDelegate[TL SchemeOptions](value TL) TL;
+
+Console.WriteLine("x")`, "GS0580", "GS0152"}
+            // ---- #4744: dependent source-interface and source-class constraints
+            // reject mismatched closed type arguments after substitution.
+            yield[]object{"the-4744-negative-a-mismatched-dependent-source-interface-method-constraint", `func readValue[V, T IValue4744[V]](item T) V -> item.Value
+
+let item = Item4744[int32]{Saved: 7}
+Console.WriteLine(readValue[string, Item4744[int32]](item))`, "GS0152", "GS0580"}
+            yield[]object{"a-mismatched-dependent-source-class-method-constraint", `func readBase[V, T ValueBase4744[V]](item T) V -> item.Saved
+
+Console.WriteLine(readBase[string, IntDerived4744](IntDerived4744()))`, "GS0152", "GS0580"}
         }
 
         /// Every shape the two rules must NOT reject. A false GS0152 or GS0580 is a
@@ -610,6 +663,43 @@ Console.WriteLine(s.Find())`, []string{"Blue"}}
             yield[]object{"the-constructor-spelling-of-a-source-class-carrying-an-imported-interface", `let a = GsDisposable[DisposableSource]()
 let b = GsEnumerable[EnumerableSource]()
 Console.WriteLine(a.Tag + b.Tag)`, []string{"de"}}
+            // #4744: a dependent source-interface or source-class constraint is
+            // substituted with the call's or type clause's type-argument map before
+            // checking satisfaction.
+            yield[]object{"the-4744-repro-a-dependent-source-interface-and-class-constraint", `func readValue[V, T IValue4744[V]](item T) V -> item.Value
+func readInferred[V, T IValue4744[V]](seed V, item T) V -> item.Value
+func readBase[V, T ValueBase4744[V]](item T) V -> item.Saved
+
+class Owner4744[V] {
+    public func Read[T IValue4744[V]](item T) V -> item.Value
+    shared {
+        public func ReadStatic[T IValue4744[V]](item T) V -> item.Value
+    }
+}
+
+func (item T) ReadExt[V, T IValue4744[V]](seed V) V -> item.Value
+
+delegate ValueReader4744[V, T IValue4744[V]](item T) V;
+
+let item = Item4744[int32]{Saved: 7}
+let reader ValueReader4744[int32, Item4744[int32]] = (x Item4744[int32]) -> x.Value
+Console.WriteLine(readValue[int32, Item4744[int32]](item))
+Console.WriteLine(readInferred(0, item))
+Console.WriteLine(Owner4744[int32]().Read[Item4744[int32]](item))
+Console.WriteLine(Owner4744[int32].ReadStatic[Item4744[int32]](item))
+Console.WriteLine(item.ReadExt(0))
+Console.WriteLine(reader(item))
+Console.WriteLine(readBase[int32, IntDerived4744](IntDerived4744()))`, []string{"7", "7", "7", "7", "7", "7", "11"}}
+            // #4762: satisfied closed and forwarded open generic named-delegate
+            // constructions compile, IL-verify, and run.
+            yield[]object{"the-4762-control-satisfied-and-forwarded-named-delegate-constructions", `class Holder[U class] {
+    public var D GsRefDelegate[U]
+}
+
+let del GsOptionsDelegate[DerivedOptions] = (x DerivedOptions) -> x
+let res = del(DerivedOptions{Name: "ok", Extra: 3})
+Console.WriteLine(typeof(GsRefDelegate[string]).Name)
+Console.WriteLine(res.Name + ":" + res.Extra.ToString())`, []string{"GsRefDelegate`1", "ok:3"}}
         }
 
         private func Compile(dir string, fileName string, source string, outPath string, extra ...string) string {

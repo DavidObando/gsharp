@@ -60,6 +60,7 @@ class Issue4757RecursiveDelegateDriverTests {
         int32(34)
     )
     @InlineData("shared class Bad { func Get() Type -> typeof(RefBox[int32]) }", "GS0152", int32(46))
+    @InlineData("shared class Bad { func Get() Type -> typeof(NullableParameter[int32]) }", "GS0152", int32(46))
     @InlineData("func Bad(value Growing[int32]?) Growing[int32] -> value", "GS0155", int32(51))
     func RealDriver_RejectsOpenAttributeOperandsConstraintsAndNullableNarrowing(
         invalid string,

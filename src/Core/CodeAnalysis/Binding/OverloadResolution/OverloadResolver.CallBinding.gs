@@ -1710,7 +1710,8 @@ internal partial class OverloadResolver {
                     // vector, so build the positional map before asking.
                     let explicitVector = BuildTypeArgumentVector(
                         candidate.TypeParameters,
-                        explicitOverloadTypeArguments
+                        explicitOverloadTypeArguments,
+                        candidate.StaticOwnerType ?? candidate.ReceiverType
                     )
                     var constraintsSatisfied = true
                     for var i = 0; i < candidate.TypeParameters.Length; i++ {
@@ -2973,6 +2974,8 @@ internal partial class OverloadResolver {
             typeParameters = genericStruct.TypeParameters
         } else if type is InterfaceSymbol{IsGenericDefinition: true} genericInterface {
             typeParameters = genericInterface.TypeParameters
+        } else if type is DelegateTypeSymbol{IsGenericDefinition: true} genericDelegate {
+            typeParameters = genericDelegate.TypeParameters
         } else {
             return type
         }
@@ -3025,6 +3028,9 @@ internal partial class OverloadResolver {
                 } else {
                     InterfaceSymbol.Construct(targetInterface, arguments)
                 }
+            )
+            case targetDelegate is DelegateTypeSymbol: cast[TypeSymbol](
+                DelegateTypeSymbol.Construct(targetDelegate, arguments)
             )
             default: type
         }
