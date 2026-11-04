@@ -6847,6 +6847,7 @@ internal partial class StatementBinder {
             member Symbol,
             references ReferenceResolver?
         ) TypeSymbol {
+            let memberType = GetDeconstructionMemberType(receiverType, member, references)
             if aggregate.IsData &&
                 aggregate.HasPrimaryConstructor &&
                 index >= 0 &&
@@ -6854,31 +6855,44 @@ internal partial class StatementBinder {
                 .PrimaryConstructorParameters
                 .Length {
                 if aggregate.ClrType is not{} aggregateClrType {
-                    return aggregate.PrimaryConstructorParameters[index].Type
+                    let positionalType = aggregate.PrimaryConstructorParameters[index].Type
+                    return if TypeMemberModel.PositionalTypeSatisfiedByInheritedGetter(memberType, positionalType) {
+                        positionalType
+                    } else {
+                        memberType
+                    }
                 }
                 if member is PropertySymbol{ImportedMember: PropertyInfo importedProperty} && !ClrTypeUtilities.AreSame(
                     importedProperty.DeclaringType,
                     aggregateClrType
                 ) {
-                    if receiverType is ImportedTypeSymbol{TypeArguments: {IsDefaultOrEmpty: false}} &&
+                    let positionalType = if receiverType is ImportedTypeSymbol{
+                        TypeArguments: {IsDefaultOrEmpty: false}
+                    } &&
                         ImportedTypeSymbol.FindPrimaryConstructor(
                         aggregateClrType,
                         aggregate.PrimaryConstructorParameters
                     ) is {} primaryCtor {
-                        return ImportedTypeSymbol.NormalizeSemanticAggregate(
+                        ImportedTypeSymbol.NormalizeSemanticAggregate(
                             MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, primaryCtor, index),
                             importedProperty.PropertyType,
                             references
                         )
+                    } else {
+                        ImportedTypeSymbol.NormalizeSemanticAggregate(
+                            aggregate.PrimaryConstructorParameters[index].Type,
+                            importedProperty.PropertyType,
+                            references
+                        )
                     }
-                    return ImportedTypeSymbol.NormalizeSemanticAggregate(
-                        aggregate.PrimaryConstructorParameters[index].Type,
-                        importedProperty.PropertyType,
-                        references
-                    )
+                    return if TypeMemberModel.PositionalTypeSatisfiedByInheritedGetter(memberType, positionalType) {
+                        positionalType
+                    } else {
+                        memberType
+                    }
                 }
             }
-            return GetDeconstructionMemberType(receiverType, member, references)
+            return memberType
         }
 
         private func GetDeconstructionMemberType(

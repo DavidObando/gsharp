@@ -195,6 +195,9 @@ internal shared class ImportedAssemblySemantics {
         let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly
         var baseType Type? = type.BaseType
         while baseType != nil {
+            if ClrTypeUtilities.SafeGetFields(baseType, flags).Any((candidate FieldInfo) -> candidate.Name == name) {
+                return nil
+            }
             let prop = ClrTypeUtilities.SafeGetProperties(baseType, flags).FirstOrDefault(
                 (candidate PropertyInfo) -> candidate.Name == name && candidate.GetIndexParameters().Length == 0
             )

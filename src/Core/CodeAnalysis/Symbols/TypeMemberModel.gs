@@ -72,7 +72,8 @@ shared class TypeMemberModel {
                     if property.Name == parameter.Name &&
                         property.HasGetter &&
                         !property.IsStatic &&
-                        !property.IsIndexer {
+                        !property.IsIndexer &&
+                        !property.HasExplicitInterfaceClause {
                         matched = property
                         break
                     }
@@ -362,6 +363,8 @@ shared class TypeMemberModel {
         out declaringType TypeSymbol?
     ) bool {
         if type is StructSymbol structSymbol {
+            var explicitFallback PropertySymbol? = nil
+            var explicitFallbackOwner TypeSymbol? = nil
             for c in GetHierarchy(structSymbol) {
                 for p in c.Properties {
                     // ADR-0118 / issue #944: an indexer ('Item') is not reachable
@@ -370,11 +373,23 @@ shared class TypeMemberModel {
                         continue
                     }
                     if p.Name == name {
+                        if p.HasExplicitInterfaceClause {
+                            if explicitFallback == nil {
+                                explicitFallback = p
+                                explicitFallbackOwner = c
+                            }
+                            continue
+                        }
                         property = p
                         declaringType = c
                         return true
                     }
                 }
+            }
+            if explicitFallback != nil {
+                property = explicitFallback
+                declaringType = explicitFallbackOwner
+                return true
             }
         } else if type is InterfaceSymbol interfaceSymbol {
             // Issue #1006: walk base interfaces too.
@@ -497,6 +512,121 @@ shared class TypeMemberModel {
         return false
     }
 
+    internal func ArePositionalRuntimeTypesEquivalent(left TypeSymbol?, right TypeSymbol?) bool {
+        if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(left, right) {
+            return true
+        }
+        if left == nil || right == nil {
+            return false
+        }
+        let bareLeft = left.StripToBareShape()
+        let bareRight = right.StripToBareShape()
+        if bareLeft is ImportedTypeSymbol leftImported && bareRight is ImportedTypeSymbol rightImported {
+            let leftOpen = leftImported.OpenDefinition ??
+                (
+                if leftImported.ClrType is {IsGenericType: true} leftClr && !leftClr.IsGenericTypeDefinition {
+                    leftClr.GetGenericTypeDefinition()
+                } else {
+                    default(Type?)
+                }
+            )
+            let rightOpen = rightImported.OpenDefinition ??
+                (
+                if rightImported.ClrType is {IsGenericType: true} rightClr && !rightClr.IsGenericTypeDefinition {
+                    rightClr.GetGenericTypeDefinition()
+                } else {
+                    default(Type?)
+                }
+            )
+            if leftOpen != nil && rightOpen != nil && ClrTypeUtilities.AreSame(leftOpen, rightOpen) {
+                let leftPositions = left.GetElementPositions()
+                let rightPositions = right.GetElementPositions()
+                if leftPositions.Length == rightPositions.Length && leftPositions.Length > 0 {
+                    for var i = 0; i < leftPositions.Length; i++ {
+                        if !ArePositionalRuntimeTypesEquivalent(leftPositions[i], rightPositions[i]) {
+                            return false
+                        }
+                    }
+                    return true
+                }
+            }
+        }
+        let leftElemPositions = left.GetElementPositions()
+        let rightElemPositions = right.GetElementPositions()
+        if bareLeft.GetType() == bareRight.GetType() &&
+            leftElemPositions.Length == rightElemPositions.Length &&
+            leftElemPositions.Length > 0 &&
+            bareLeft.ClrType != nil &&
+            bareRight.ClrType != nil &&
+            ClrTypeUtilities
+            .AreSame(bareLeft.ClrType, bareRight.ClrType) {
+            for var i = 0; i < leftElemPositions.Length; i++ {
+                if !ArePositionalRuntimeTypesEquivalent(leftElemPositions[i], rightElemPositions[i]) {
+                    return false
+                }
+            }
+            return true
+        }
+        return false
+    }
+
+    internal func PositionalTypeSatisfiedByInheritedGetter(
+        source TypeSymbol,
+        target TypeSymbol,
+        allowTopLevelWidening bool = true
+    ) bool {
+        if !ArePositionalRuntimeTypesEquivalent(source, target) {
+            return false
+        }
+        let sourceRef = source.ReferenceNullability
+        let targetRef = target.ReferenceNullability
+        if sourceRef != targetRef {
+            if !allowTopLevelWidening ||
+                sourceRef != ReferenceNullabilityKind.NotNull ||
+                targetRef != ReferenceNullabilityKind.Nullable {
+                return false
+            }
+        }
+        let bareSource = source.StripToBareShape()
+        let bareTarget = target.StripToBareShape()
+        if bareSource is FunctionTypeSymbol sourceFn && bareTarget is FunctionTypeSymbol targetFn {
+            if sourceFn.ParameterTypes.Length != targetFn.ParameterTypes.Length {
+                return false
+            }
+            for var i = 0; i < sourceFn.ParameterTypes.Length; i++ {
+                if !PositionalTypeSatisfiedByInheritedGetter(
+                    targetFn.ParameterTypes[i],
+                    sourceFn.ParameterTypes[i],
+                    allowTopLevelWidening: true
+                ) {
+                    return false
+                }
+            }
+            return object.ReferenceEquals(sourceFn.ReturnType, TypeSymbol.Void) ||
+                PositionalTypeSatisfiedByInheritedGetter(
+                sourceFn.ReturnType,
+                targetFn.ReturnType,
+                allowTopLevelWidening: true
+            )
+        }
+        let isTuplePair = bareSource is TupleTypeSymbol && bareTarget is TupleTypeSymbol
+        let sourcePositions = source.GetElementPositions()
+        let targetPositions = target.GetElementPositions()
+        if sourcePositions.Length != targetPositions.Length {
+            return false
+        }
+        for var i = 0; i < sourcePositions.Length; i++ {
+            if !PositionalTypeSatisfiedByInheritedGetter(
+                sourcePositions[i],
+                targetPositions[i],
+                allowTopLevelWidening: isTuplePair
+            ) {
+                return false
+            }
+        }
+        return true
+    }
+
     internal func TryGetInheritedDataPositionalProperty(
         type StructSymbol,
         parameter ParameterSymbol,
@@ -510,33 +640,46 @@ shared class TypeMemberModel {
         }
         if type.BaseClass is {} baseClass {
             for ancestor in GetHierarchy(baseClass) {
+                for field in ancestor.Fields {
+                    if !field.IsStatic && field.Name == parameter.Name {
+                        return false
+                    }
+                }
                 for candidate in ancestor.Properties {
                     if candidate.IsStatic || candidate.IsIndexer || candidate.Name != parameter.Name {
                         continue
                     }
                     if IsSourcePropertyVisibleFromDerived(candidate, ancestor, type) &&
-                        TypeSymbol
-                        .AreRuntimeEquivalentIgnoringReferenceNullability(candidate.Type, parameter.Type) {
+                        ArePositionalRuntimeTypesEquivalent(candidate.Type, parameter.Type) {
                         property = candidate
                         declaringType = ancestor
                         return true
                     }
                     return false
                 }
+                for candidate in ancestor.InheritedPositionalProperties {
+                    if candidate.Name != parameter.Name {
+                        continue
+                    }
+                    if ArePositionalRuntimeTypesEquivalent(candidate.Type, parameter.Type) {
+                        property = candidate
+                        declaringType = ResolveInheritedPropertyOwner(ancestor, candidate)
+                        return true
+                    }
+                    return false
+                }
             }
         }
-        for current in GetHierarchy(type) {
-            for candidate in current.InheritedPositionalProperties {
-                if candidate.Name != parameter.Name {
-                    continue
-                }
-                if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(candidate.Type, parameter.Type) {
-                    property = candidate
-                    declaringType = ResolveInheritedPropertyOwner(current, candidate)
-                    return true
-                }
-                return false
+        for candidate in type.InheritedPositionalProperties {
+            if candidate.Name != parameter.Name {
+                continue
             }
+            if ArePositionalRuntimeTypesEquivalent(candidate.Type, parameter.Type) {
+                property = candidate
+                declaringType = ResolveInheritedPropertyOwner(type, candidate)
+                return true
+            }
+            return false
         }
         return false
     }
@@ -570,13 +713,17 @@ shared class TypeMemberModel {
         }
         if type.BaseClass is {} baseClass {
             for ancestor in GetHierarchy(baseClass) {
+                for field in ancestor.Fields {
+                    if !field.IsStatic && field.Name == parameter.Name {
+                        return false
+                    }
+                }
                 for candidate in ancestor.Properties {
                     if candidate.IsStatic || candidate.IsIndexer || candidate.Name != parameter.Name {
                         continue
                     }
                     if IsSourcePropertyVisibleFromDerived(candidate, ancestor, type) &&
-                        TypeSymbol
-                        .AreRuntimeEquivalentIgnoringReferenceNullability(candidate.Type, parameter.Type) {
+                        ArePositionalRuntimeTypesEquivalent(candidate.Type, parameter.Type) {
                         property = candidate
                         declaringType = ancestor
                         return true
@@ -587,12 +734,8 @@ shared class TypeMemberModel {
                     if candidate.Name != parameter.Name {
                         continue
                     }
-                    if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(candidate.Type, parameter.Type) {
-                        property = if object.ReferenceEquals(candidate.Type, parameter.Type) {
-                            candidate
-                        } else {
-                            candidate.WithSignature(parameter.Type, candidate.Parameters)
-                        }
+                    if ArePositionalRuntimeTypesEquivalent(candidate.Type, parameter.Type) {
+                        property = candidate
                         declaringType = ResolveInheritedPropertyOwner(ancestor, candidate)
                         return true
                     }
@@ -607,13 +750,16 @@ shared class TypeMemberModel {
             var clrCurrent Type? = importedBase.ClrType
             while clrCurrent != nil {
                 let includeInternal = references != nil && references.CanAccessInternalMembers(clrCurrent.Assembly)
-                for clrProp in ClrTypeUtilities.SafeGetProperties(
-                    clrCurrent,
-                    System.Reflection.BindingFlags.Instance |
-                    System.Reflection.BindingFlags.Public |
-                    System.Reflection.BindingFlags.NonPublic |
-                    System.Reflection.BindingFlags.DeclaredOnly
-                ) {
+                let declaredFlags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.Public |
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.DeclaredOnly
+                for clrField in ClrTypeUtilities.SafeGetFields(clrCurrent, declaredFlags) {
+                    if clrField.Name == parameter.Name {
+                        return false
+                    }
+                }
+                for clrProp in ClrTypeUtilities.SafeGetProperties(clrCurrent, declaredFlags) {
                     if clrProp.Name != parameter.Name || clrProp.GetIndexParameters().Length != 0 {
                         continue
                     }
@@ -627,10 +773,7 @@ shared class TypeMemberModel {
                     } else {
                         clrPropertyType
                     }
-                    if !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
-                        effectiveClrPropertyType,
-                        parameter.Type
-                    ) {
+                    if !ArePositionalRuntimeTypesEquivalent(effectiveClrPropertyType, parameter.Type) {
                         return false
                     }
                     let getterAcc = MapClrAccessorAccessibility(getter)
@@ -656,7 +799,7 @@ shared class TypeMemberModel {
                     }
                     let synthesized = PropertySymbol(
                         parameter.Name,
-                        parameter.Type,
+                        effectiveClrPropertyType,
                         propAcc,
                         hasGetter: true,
                         hasSetter: visibleSetter != nil,
@@ -1281,6 +1424,9 @@ shared class TypeMemberModel {
     ) bool {
         if !instance.IsDefaultOrEmpty {
             for s in instance {
+                if s is PropertySymbol{IsIndexer: true} || s is PropertySymbol{HasExplicitInterfaceClause: true} {
+                    continue
+                }
                 if s.Name == name {
                     result = s
                     return true
@@ -1289,6 +1435,9 @@ shared class TypeMemberModel {
         }
         if !static.IsDefaultOrEmpty {
             for s in static {
+                if s is PropertySymbol{IsIndexer: true} || s is PropertySymbol{HasExplicitInterfaceClause: true} {
+                    continue
+                }
                 if s.Name == name {
                     result = s
                     return true

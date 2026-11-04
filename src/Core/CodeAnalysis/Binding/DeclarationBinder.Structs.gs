@@ -1721,6 +1721,24 @@ internal partial class DeclarationBinder {
             let positionalPropertyIndices = Dictionary[string, int32](StringComparer.Ordinal)
             if structSymbol.IsData && structSymbol.HasPrimaryConstructor {
                 for parameter in structSymbol.PrimaryConstructorParameters {
+                    let primaryConstructorParameters = syntax.PrimaryConstructorParameters ??
+                        throw InvalidOperationException(
+                        "A data positional property requires primary constructor parameters."
+                    )
+                    var parameterSyntax ParameterSyntax? = nil
+                    for candidate in primaryConstructorParameters {
+                        // ADR-0185: a primary-constructor parameter never
+                        // comes from the destructured arrow-lambda path.
+                        if candidate.Identifier!!.ValueText == parameter.Name {
+                            parameterSyntax = candidate
+                            break
+                        }
+                    }
+                    parameterSyntax = Invariant.Required(
+                        parameterSyntax,
+                        "a data positional property has matching primary constructor syntax",
+                        expression: "parameterSyntax"
+                    )
                     let hasExplicitReplacement = !syntax.Properties.IsDefaultOrEmpty && syntax.Properties.Any(
                         (propSyntax PropertyDeclarationSyntax) -> !propSyntax.IsIndexer &&
                             !propSyntax.HasExplicitInterfaceClause &&
@@ -1735,9 +1753,20 @@ internal partial class DeclarationBinder {
                         out var inheritedProperty,
                         out var inheritedDeclaringType
                     ) {
-                        if inheritedProperty is {} resolvedInheritedProperty &&
-                            (inheritedDeclaringType == nil || inheritedDeclaringType.ClrType != nil) {
-                            inheritedPositionalBuilder.Add(resolvedInheritedProperty)
+                        if inheritedProperty is {} resolvedInheritedProperty {
+                            if !TypeMemberModel.PositionalTypeSatisfiedByInheritedGetter(
+                                resolvedInheritedProperty.Type,
+                                parameter.Type
+                            ) {
+                                Diagnostics.ReportCannotConvert(
+                                    parameterSyntax.Location,
+                                    resolvedInheritedProperty.Type,
+                                    parameter.Type
+                                )
+                            }
+                            if inheritedDeclaringType == nil || inheritedDeclaringType.ClrType != nil {
+                                inheritedPositionalBuilder.Add(resolvedInheritedProperty)
+                            }
                         }
                         continue
                     }
@@ -1761,24 +1790,6 @@ internal partial class DeclarationBinder {
                             Accessibility.Internal
                         },
                         isReadOnly: false
-                    )
-                    let primaryConstructorParameters = syntax.PrimaryConstructorParameters ??
-                        throw InvalidOperationException(
-                        "A data positional property requires primary constructor parameters."
-                    )
-                    var parameterSyntax ParameterSyntax? = nil
-                    for candidate in primaryConstructorParameters {
-                        // ADR-0185: a primary-constructor parameter never
-                        // comes from the destructured arrow-lambda path.
-                        if candidate.Identifier!!.ValueText == parameter.Name {
-                            parameterSyntax = candidate
-                            break
-                        }
-                    }
-                    parameterSyntax = Invariant.Required(
-                        parameterSyntax,
-                        "a data positional property has matching primary constructor syntax",
-                        expression: "parameterSyntax"
                     )
                     let propertyAttributes = BindDataPositionalPropertyAttributes(parameterSyntax)
                     if !propertyAttributes.IsDefaultOrEmpty {

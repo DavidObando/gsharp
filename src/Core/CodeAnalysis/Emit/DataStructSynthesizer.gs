@@ -2175,18 +2175,15 @@ internal class DataStructSynthesizer {
             expression: "structSym.DataPrintMembers"
         )
 
-        private func GetDeconstructionMemberType(
-            structSym StructSymbol,
-            index int32,
-            member Symbol
-        ) TypeSymbol -> if structSym.HasPrimaryConstructor &&
-            index >= 0 &&
-            index < structSym
-            .PrimaryConstructorParameters
-            .Length {
-            structSym.PrimaryConstructorParameters[index].Type
-        } else {
-            GetDeconstructionMemberType(member)
+        private func GetDeconstructionMemberType(structSym StructSymbol, index int32, member Symbol) TypeSymbol {
+            let memberType = GetDeconstructionMemberType(member)
+            if structSym.HasPrimaryConstructor && index >= 0 && index < structSym.PrimaryConstructorParameters.Length {
+                let positionalType = structSym.PrimaryConstructorParameters[index].Type
+                if TypeMemberModel.PositionalTypeSatisfiedByInheritedGetter(memberType, positionalType) {
+                    return positionalType
+                }
+            }
+            return memberType
         }
 
         private func GetDeconstructionMemberType(member Symbol) TypeSymbol -> switch member {
