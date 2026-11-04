@@ -318,13 +318,7 @@ internal partial class ExpressionBinder {
         // Issue #3355: prefix statements bind normally; the expected type
         // flows into the trailing expression.
         if syntax is BlockExpressionSyntax blockExpression {
-            return BindBlockExpressionValue(
-                blockExpression,
-                canBeVoid: false,
-                targetType,
-                preserveEmptyBlock: true,
-                captureValue: TakeBlockValueCapture()
-            )
+            return BindBlockExpressionValue(blockExpression, canBeVoid: false, targetType, preserveEmptyBlock: true)
         }
         // Issue #1112: a switch-expression honors the target type (C#-style
         // target-typing) — bind it with the target so the result type can be
@@ -431,9 +425,6 @@ internal partial class ExpressionBinder {
         // re-binds and duplicated diagnostics.
         if !(result is BoundErrorExpression) {
             result.AnchorSyntax(syntax)
-            // Issue #5635: a consumer can decide a narrowed read after later values bind, so the read keeps the
-            // backward `goto` facts where it binds.
-            binderCtx.CaptureNarrowedRead(result, syntax.Location)
         }
         return result
     }
@@ -613,8 +604,7 @@ internal partial class ExpressionBinder {
                 return BindBlockExpressionValue(
                     cast[BlockExpressionSyntax](syntax),
                     canBeVoid,
-                    preserveEmptyBlock: true,
-                    captureValue: TakeBlockValueCapture()
+                    preserveEmptyBlock: true
                 )
             }
             case SyntaxKind.ThrowExpression {
@@ -911,9 +901,6 @@ internal partial class ExpressionBinder {
     }
 
     private func BuildNarrowedVariableRead(variable VariableSymbol, location TextLocation? = nil) BoundExpression {
-        if location is {} useLocation {
-            binderCtx.TrackBackwardGotoNarrowingRead(variable, useLocation)
-        }
         let makeNarrowedVariable(TypeSymbol) -> BoundExpression = (narrowedType TypeSymbol) -> BoundVariableExpression(
             nil,
             variable,

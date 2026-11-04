@@ -900,6 +900,10 @@ internal partial class StatementBinder {
             Diagnostics.ReportLockTargetMustBeReferenceType(syntax.Expression.Location, target.Type ?? TypeSymbol.Error)
             return BindErrorStatement()
         }
+        if target.Type is NullableTypeSymbol nullableLockTarget {
+            Diagnostics.ReportCannotConvert(syntax.Expression.Location, target.Type, nullableLockTarget.UnderlyingType)
+            return BindErrorStatement()
+        }
         let tempVar = LocalVariableSymbol(
             "$$lock$$target$$${binderCtx.SyntheticLocalCounter++}",
             isReadOnly: true,
@@ -1025,7 +1029,7 @@ internal partial class StatementBinder {
             if NarrowingComparison.LoopsEnabled {
                 ReportBackwardJumpSpan(syntax)
             }
-            let userLabel = DefineUserLabel(labelName, syntax.LabelIdentifier.Location)
+            let userLabel = DefineUserLabel(labelName, syntax.LabelIdentifier.Location, syntax)
             let boundInner = BindStatement(inner)
             let labeledStatement = BoundBlockStatement(
                 syntax,
@@ -1232,7 +1236,7 @@ internal partial class StatementBinder {
             return type!!.ClrType == nil || !type!!.ClrType!!.IsValueType
         }
 
-        private func IsLabelableLoop(stmt StatementSyntax) bool {
+        internal func IsLabelableLoop(stmt SyntaxNode) bool {
             return switch stmt.Kind {
                 case SyntaxKind.WhileLetStatement: true
                 case SyntaxKind.WhileStatement: true

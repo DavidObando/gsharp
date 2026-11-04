@@ -78,8 +78,6 @@ internal partial class ExpressionBinder {
         let earlyScopes = [syntax.Arms.Length]BoundScope?
         // #5629: whether a header so far can remove the discriminant's fact, in dispatch order.
         var discriminantStale = false
-        // Issue #5613: the narrowed read that each arm result yields, in arm order, captured where it binds.
-        let armReads = List[NarrowedBranchValue?](syntax.Arms.Length)
         for var armIndex = 0; armIndex < syntax.Arms.Length; armIndex++ {
             let armSyntax = syntax.Arms[armIndex]
             var pattern BoundPattern? = nil
@@ -89,17 +87,8 @@ internal partial class ExpressionBinder {
                 }
                 hasDefault = true
                 let defaultIndex = armIndex
-                var defaultRead NarrowedBranchValue? = nil
                 let bindDefaultResult = func () BoundExpression {
-                    return BindBranchValue(
-                        armSyntax.Result,
-                        nil,
-                        targetType,
-                        (read NarrowedBranchValue) -> {
-                            defaultRead = read
-                        },
-                        canBeVoid
-                    )
+                    return BindExpressionWithNarrowing(armSyntax.Result, nil, targetType, canBeVoid)
                 }
                 let result = if defaultIndex == syntax.Arms.Length - 1 {
                     bindDefaultResult()
@@ -138,7 +127,6 @@ internal partial class ExpressionBinder {
                     )
                 }
                 boundArmBuilders.Add((armSyntax, pattern, default(BoundExpression), result))
-                armReads.Add(defaultRead)
                 continue
             }
             let patternSyntax = Invariant.Required(
@@ -174,24 +162,14 @@ internal partial class ExpressionBinder {
             }
             // ADR-0166: the arm result sees the guard's when-true pattern variables.
             let (guardWhenTrue, _) = PatternVariables.Classify(guard_)
-            var armRead NarrowedBranchValue? = nil
             let armResult = BindWithPatternVariables(
                 guardWhenTrue,
                 () -> {
-                    return BindBranchValue(
-                        armSyntax.Result,
-                        frame,
-                        targetType,
-                        (read NarrowedBranchValue) -> {
-                            armRead = read
-                        },
-                        canBeVoid
-                    )
+                    return BindExpressionWithNarrowing(armSyntax.Result, frame, targetType, canBeVoid)
                 }
             )
             $scope = $scope.Pop()
             boundArmBuilders.Add((armSyntax, pattern, guard_, armResult))
-            armReads.Add(armRead)
         }
         let armResults = List[BoundExpression](boundArmBuilders.Count)
         for arm in boundArmBuilders {
@@ -243,19 +221,13 @@ internal partial class ExpressionBinder {
                     anyArmFailed = true
                 }
                 result = BoundErrorExpression(nil)
-            } else if !conversion.IsIdentity || armReads[armIndex] != nil {
+            } else if !conversion.IsIdentity {
                 // Issue #1151: route the materialised conversion through
                 // BindConversion so value-type `nil → T?` arms are lowered to a
                 // BoundDefaultExpression (the verifiable Nullable<T> default),
                 // matching the if-expression path. The Conversion.Classify check
                 // above still governs the GS0179 arm-mismatch diagnostic.
-                // Issue #5613: a narrowed read is decided for the result type as a conditional branch is.
-                result = ConvertConditionalBranch(
-                    BranchValueLocation(arm.Syntax.Result),
-                    result,
-                    resultType,
-                    armReads[armIndex]
-                )
+                result = ConvertConditionalBranch(BranchValueLocation(arm.Syntax.Result), result, resultType)
             }
             arms.Add(BoundSwitchExpressionArm(nil, arm.Pattern, arm.Guard, result))
         }

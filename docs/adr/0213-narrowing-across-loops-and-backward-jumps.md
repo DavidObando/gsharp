@@ -935,8 +935,25 @@ Details per row:
 - **R8.** `Issue4519GotoAssignmentNarrowingTests` has 102 `BackwardGoto_*`
   tests; the family-by-family inventory of the ADR-0208 draft (commit
   001ee4ff5, section 16, "R8") is the re-expectation list and L2 copies it
-  into its PR body with the new id for each row that changes. Outcome (a)
-  has no pinning test today; L2 adds one (red on today's compiler by
+  into its PR body with the new id for each row that changes (bound at the
+  declared type: `*ReportsIndirectInvocation` and
+  `*ReportsParenthesizedIndirectInvocation` `GS0159` -> `GS0503`;
+  `*ReportsDeconstructionSource` `GS0155` -> `GS0164`;
+  `*SubtypeOnlyOverloadStillRequiresNarrowedType`,
+  `*SubtypeOnlyIndexerOverloadStillRequiresNarrowedType`, and
+  `*TracksSelectedInheritedIndexerOverload` `GS0159`/`GS0116` -> `GS0154`;
+  `*TracksSelectedInheritedIndexerWriteOverload` `GS0116` -> `GS0155`;
+  `*TypeTestNarrowingAtForSource_ReportsConversion` `GS0155` -> `GS0116`;
+  `*TypeTestNarrowingThroughNullSafeCall_ReportsConversion` `GS0155` -> `GS0159`;
+  `*InvalidatesNarrowedCallableMemberPath` `GS0159` -> `GS0503`;
+  `*GetterOnlyPropertyDoesNotValidateSubtypeSetter` and
+  `*SetterOnlyPropertyDoesNotValidateSubtypeGetter` `GS0158` -> `GS0127`;
+  `*TypeTestNarrowingThroughUpcast_ReportsConversion`,
+  `*TypeTestNarrowingThroughNullableUpcast_ReportsConversion`, and
+  `*SiblingInterfacePropertySlotsDoNotAlias` flip to accepted under outcome (b);
+  `*ThroughNonNullFinallyAssignment_RemainsNarrowed` flips to `GS0158` under
+  outcome (a')). Outcome (a)
+  has no pinning test today; L2 adds one (`m01_5318`, red on today's compiler by
   running the program: a span that reassigns from a non-null-typed variable
   and then jumps back). e15 and e18/Run flip to accepted (b'); e18/Run2,
   c3a and c3b stay rejected. Compatibility: user `goto` is rare (none in

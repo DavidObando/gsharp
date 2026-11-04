@@ -2862,7 +2862,8 @@ internal partial class StatementBinder {
 
     /// ADR-0213 section 6 (slice L1): applies the lower bound `Lower(S, R)` of the loop whose body is
     /// [`body`](paramref) to the frames, before the header and the body are bound. `S` is the facts of the
-    /// frames, `R` the region of the loop. A fact that the consumer rule of section 7 removes leaves its
+    /// frames joined with any forward `goto` from outside the loop to a label inside it (section 6, J6),
+    /// `R` the region of the loop. A fact that the consumer rule of section 7 removes leaves its
     /// frame, and stays out of it after the loop. The external callable aliases that the region may
     /// reassign leave their set. When `GSHARP_NARROWING_COMPARE` is set, the decision for every fact goes
     /// to the `.loops` report.
@@ -2892,6 +2893,10 @@ internal partial class StatementBinder {
             }
             return
         }
+        JoinPendingForwardJumpsIntoNode(loop)
+        if !HasAnyActiveNarrowings() && externalCallableAliases.Count == 0 {
+            return
+        }
         // The names that a closure of the function assigns decide the shared predicates below. They are
         // computed on first use, and until then every name is assumed assigned.
         EnsureClosureAssignedNames(loop)
@@ -2907,10 +2912,32 @@ internal partial class StatementBinder {
             CompilationMeasurements.Count("narrowing.region-walks")
             CompilationMeasurements.Count("narrowing.region-nodes", cast[int64](scanner.NodesVisited - visitedBefore))
         }
+        let (factCount, killedCount) = ApplyRegionLowerBoundCore(effects, loop, reportLoop: true)
+        if NarrowingComparison.LoopsEnabled {
+            NarrowingComparison.ReportLoopSummary(
+                loop.Location,
+                factCount,
+                killedCount,
+                factCount - killedCount,
+                "nodes=${effects.NodesVisited} reads=${effects.MemberReadCount} ${effects}"
+            )
+        }
+    }
+
+    /// ADR-0213 sections 6, 7 and 13 (slices L1 and L2, #5317, #5318, #5461, #5671): the one shared
+    /// application of `Lower(S, R)` to the narrowing frames and `externalCallableAliases` for a loop or a
+    /// backward-jump span.
+    private func ApplyRegionLowerBoundCore(effects RegionEffects, regionNode SyntaxNode, reportLoop bool)(
+        FactCount int32,
+        KilledCount int32
+    ) {
+        EnsureClosureAssignedNames(regionNode)
+        let frameCount = binderCtx.NarrowedVariables.Count
+        let invalidations = List[(FrameIndex int32, Path AccessPath)]()
         let resolved = ResolveRegionWrites(effects)
         var filterNames HashSet[string]? = nil
         if effects.ContainsHandler || RegionRunsCode(effects, resolved) {
-            let filters = CollectCatchFiltersAbove(loop)
+            let filters = CollectCatchFiltersAbove(regionNode)
             if filters.Count > 0 {
                 filterNames = CollectEnclosingFilterNames(filters)
             }
@@ -2920,7 +2947,7 @@ internal partial class StatementBinder {
         var factCount = 0
         var killedCount = 0
         var memberReadsWithLiveFacts = 0
-        let location = loop.Location
+        let location = regionNode.Location
         for var i = frameCount - 1; i >= 0; i-- {
             for entry in binderCtx.NarrowedVariables[i] {
                 let path = entry.Key
@@ -2947,7 +2974,7 @@ internal partial class StatementBinder {
                 if effects.MemberReadCount > 0 && MayBeMutatedByUnknownCallable(path) {
                     memberReadsWithLiveFacts++
                 }
-                if NarrowingComparison.LoopsEnabled && decision.Killed {
+                if reportLoop && NarrowingComparison.LoopsEnabled && decision.Killed {
                     NarrowingComparison.ReportLoopKill(
                         location,
                         path.ToString(),
@@ -2960,8 +2987,8 @@ internal partial class StatementBinder {
         }
         JournalLoopEntryKills(invalidations)
         InvalidateInheritedNarrowings(invalidations)
-        // ADR-0213 section 13: a function value that the region may reassign is no longer external at the
-        // loop header, so a call in the loop can reach a closure.
+        // ADR-0213 section 13 (#5461, #5671): a function value that the region may reassign is no longer
+        // external at the region entry, so a call in the region can reach a closure.
         if effects.ContainsUnknownKind || effects.ContainsPointerWrite {
             externalCallableAliases.Clear()
         } else if externalCallableAliases.Count > 0 && resolved.Roots.Count > 0 {
@@ -2980,14 +3007,236 @@ internal partial class StatementBinder {
                 )
             }
         }
-        if NarrowingComparison.LoopsEnabled {
-            NarrowingComparison.ReportLoopSummary(
-                location,
-                factCount,
-                killedCount,
-                factCount - killedCount,
-                "nodes=${effects.NodesVisited} reads=${effects.MemberReadCount} ${effects}"
-            )
+        return (factCount, killedCount)
+    }
+
+    private sealed class SpanEntrySnapshot {
+        init(frames[]Dictionary[AccessPath, TypeSymbol], externalCallableAliases[]VariableSymbol) {
+            Frames = frames
+            ExternalCallableAliases = externalCallableAliases
+        }
+
+        prop Frames[]Dictionary[AccessPath, TypeSymbol] {
+            get;
+        }
+
+        prop ExternalCallableAliases[]VariableSymbol {
+            get;
+        }
+    }
+
+    private let spansByBody Dictionary[SyntaxNode, BackwardJumpSpan?] = Dictionary[SyntaxNode, BackwardJumpSpan?]()
+    private let effectsBySpan Dictionary[BackwardJumpSpan, RegionEffects] = Dictionary[
+        BackwardJumpSpan,
+        RegionEffects
+    ]()
+    private let spanEntryStates Dictionary[BackwardJumpSpan, SpanEntrySnapshot] = Dictionary[
+        BackwardJumpSpan,
+        SpanEntrySnapshot
+    ]()
+
+    private func ClearBackwardJumpSpanCaches() {
+        spansByBody.Clear()
+        effectsBySpan.Clear()
+        spanEntryStates.Clear()
+    }
+
+    private func FindEnclosingFunctionBody(node SyntaxNode) SyntaxNode? {
+        for var current SyntaxNode? = cast[SyntaxNode?](node); current != nil; current = current!!.Parent {
+            if current is FunctionDeclarationSyntax declaration {
+                return declaration.Body
+            }
+            if current is FunctionLiteralExpressionSyntax literal {
+                return literal.Body
+            }
+            if current is LambdaExpressionSyntax lambda {
+                return lambda.Body
+            }
+            if current is ConstructorDeclarationSyntax constructor {
+                return constructor.Body
+            }
+            if current is PropertyAccessorSyntax accessor {
+                return accessor.Body
+            }
+            if current is EventAccessorSyntax eventAccessor {
+                return eventAccessor.Body
+            }
+            if current is DeinitDeclarationSyntax destructor {
+                return destructor.Body
+            }
+            if current is StaticInitializerBlockSyntax staticInit {
+                return staticInit.Body
+            }
+            if current is GlobalStatementSyntax && current.Parent is CompilationUnitSyntax unit {
+                return unit
+            }
+        }
+        return nil
+    }
+
+    private func GetEnclosingBackwardJumpSpan(node SyntaxNode) BackwardJumpSpan? {
+        if !binderCtx.FunctionContainsUserGotoOrLabel {
+            return nil
+        }
+        let body = FindEnclosingFunctionBody(node)
+        if body == nil {
+            return nil
+        }
+        if spansByBody.TryGetValue(body, out var cached) {
+            return cached
+        }
+        let span = BackwardJumpSpans.Compute(body)
+        spansByBody[body] = span
+        if span != nil {
+            let keyNode = body.Parent ?? body
+            let key = NarrowingComparison.Format(keyNode.Location) + ":" + keyNode.Span.Start.ToString()
+            if NarrowingComparison.TryRegisterSpanFunction("span:" + key) && NarrowingComparison.LoopsEnabled {
+                let effects = GetSpanEffects(span)
+                NarrowingComparison.ReportSpan(
+                    span.FirstStatement.Location,
+                    "labels=${string.Join(",", span.Labels)} gotos=${span.GotoCount}",
+                    effects.ToString()
+                )
+            }
+        }
+        return span
+    }
+
+    private func GetSpanEffects(span BackwardJumpSpan) RegionEffects {
+        if effectsBySpan.TryGetValue(span, out var cached) {
+            return cached
+        }
+        let scanner = GetRegionScanner()
+        let visitedBefore = scanner.NodesVisited
+        let regionsBefore = scanner.Regions
+        let effects = scanner.ScanStatements(span.Statements())
+        if scanner.Regions != regionsBefore {
+            CompilationMeasurements.Count("narrowing.region-walks")
+            CompilationMeasurements.Count("narrowing.region-nodes", cast[int64](scanner.NodesVisited - visitedBefore))
+        }
+        effectsBySpan[span] = effects
+        return effects
+    }
+
+    /// ADR-0213 section 11 (slice L2): when [`node`](paramref) is the first statement of the enclosing
+    /// function's backward-jump span, applies `L = Lower(S, span)` before the statement is bound.
+    private func EnterBackwardJumpSpanIfFirstStatement(node SyntaxNode) {
+        if !binderCtx.FunctionContainsUserGotoOrLabel {
+            return
+        }
+        let span = GetEnclosingBackwardJumpSpan(node)
+        if span == nil || !object.ReferenceEquals(span.FirstStatement, node) {
+            return
+        }
+        ApplySpanEntryLowerBound(span)
+    }
+
+    private func ApplySpanEntryLowerBound(span BackwardJumpSpan) {
+        JoinPendingForwardJumpsIntoRegion(span.Labels)
+        if HasAnyActiveNarrowings() || externalCallableAliases.Count > 0 {
+            let _ = ApplyRegionLowerBoundCore(GetSpanEffects(span), span.FirstStatement, reportLoop: false)
+        }
+        spanEntryStates[span] = SpanEntrySnapshot(
+            binderCtx
+                .NarrowedVariables
+                .Select((frame NarrowingFrame) -> Dictionary[AccessPath, TypeSymbol](frame))
+                .ToArray(),
+            externalCallableAliases.ToArray()
+        )
+    }
+
+    /// ADR-0213 section 11 (slice L2, #5318, #5671): binds a participant label of [`span`](paramref) under
+    /// `L = Lower(S, span)`.
+    private func ApplySpanLabelLowerBound(
+        span BackwardJumpSpan,
+        labelName string,
+        wasReachable bool,
+        hadIncomingForwardJump bool
+    ) {
+        if !spanEntryStates.TryGetValue(span, out var entryState) {
+            ApplySpanEntryLowerBound(span)
+            entryState = spanEntryStates[span]
+        }
+        if !wasReachable && !hadIncomingForwardJump && span.TargetedLabels.Contains(labelName) {
+            let limit = Math.Min(entryState.Frames.Length, binderCtx.NarrowedVariables.Count)
+            for var i = 0; i < limit; i++ {
+                let frame = binderCtx.NarrowedVariables[i]
+                frame.Clear()
+                for entry in entryState.Frames[i] {
+                    frame.Add(entry.Key, entry.Value)
+                }
+            }
+            externalCallableAliases.Clear()
+            for alias in entryState.ExternalCallableAliases {
+                externalCallableAliases.Add(alias)
+            }
+        }
+        if span.EnteredFromOutsideLabels.Contains(labelName) {
+            for var i = entryState.Frames.Length; i < binderCtx.NarrowedVariables.Count; i++ {
+                binderCtx.NarrowedVariables[i].Clear()
+            }
+        }
+        JoinPendingForwardJumpsIntoRegion(span.Labels)
+        if HasAnyActiveNarrowings() || externalCallableAliases.Count > 0 {
+            let _ = ApplyRegionLowerBoundCore(GetSpanEffects(span), span.FirstStatement, reportLoop: false)
+        }
+    }
+
+    // ADR-0213 section 6 and section 10 (J6): joins every pending forward `goto` targeting a label inside
+    // `node` into the region's entry state `S`. The jumps stay in `NarrowingFlow` for the labels' own joins.
+    private func JoinPendingForwardJumpsIntoNode(node SyntaxNode) {
+        if !binderCtx.NarrowingFlow.HasPendingJumps {
+            return
+        }
+        let labels = List[string]()
+        CollectUserLabelsInRegion(node, labels)
+        if labels.Count > 0 {
+            JoinPendingForwardJumpsIntoRegion(labels)
+        }
+    }
+
+    private func CollectUserLabelsInRegion(node SyntaxNode, labels List[string]) {
+        if node is FunctionLiteralExpressionSyntax or
+            LambdaExpressionSyntax or
+            FunctionDeclarationSyntax or
+            AnonymousClassExpressionSyntax {
+            return
+        }
+        if node is LabeledStatementSyntax labeled && !IsLabelableLoop(labeled.Statement) {
+            let name = labeled.LabelIdentifier.ValueText
+            if !labels.Contains(name) {
+                labels.Add(name)
+            }
+        }
+        for child in node.GetChildren() {
+            CollectUserLabelsInRegion(child, labels)
+        }
+    }
+
+    private func JoinPendingForwardJumpsIntoRegion(labels IReadOnlyList[string]) {
+        if !binderCtx.NarrowingFlow.HasPendingJumps {
+            return
+        }
+        var incoming List[NarrowingJumpState]? = nil
+        var activeFinallySet HashSet[FinallyClauseSyntax]? = nil
+        var activeCleanupSet HashSet[BoundStatement]? = nil
+        for labelName in labels {
+            let pending = binderCtx.NarrowingFlow.PeekJumps(labelName)
+            if pending == nil || pending.Count == 0 {
+                continue
+            }
+            activeFinallySet ??= HashSet[FinallyClauseSyntax](activeFinallyClauses)
+            activeCleanupSet ??= HashSet[BoundStatement](activeCleanupStatements)
+            for jump in pending {
+                let copy = jump.Clone()
+                if ApplyExitedFinallyEffects(copy, activeFinallySet!!, activeCleanupSet!!) {
+                    incoming ??= List[NarrowingJumpState]()
+                    incoming!!.Add(copy)
+                }
+            }
+        }
+        if incoming != nil && incoming.Count > 0 {
+            ApplyIncomingJumpJoin(incoming, currentStatementListFallsThrough)
         }
     }
 
@@ -3212,59 +3461,6 @@ internal partial class StatementBinder {
     /// Computes and reports the backward-jump span of the function that holds the label at
     /// [`labeled`](paramref) (ADR-0213 section 11). A function asks once per label, and it counts once.
     private func ReportBackwardJumpSpan(labeled SyntaxNode) {
-        var function SyntaxNode? = nil
-        for var current SyntaxNode? = cast[SyntaxNode?](labeled); current != nil; current = current!!.Parent {
-            if current is FunctionDeclarationSyntax or
-                FunctionLiteralExpressionSyntax or
-                LambdaExpressionSyntax or
-                ConstructorDeclarationSyntax or
-                PropertyAccessorSyntax or
-                EventAccessorSyntax or
-                DeinitDeclarationSyntax {
-                function = current
-                break
-            }
-        }
-        if function == nil {
-            return
-        }
-        let location = function.Location
-        if !NarrowingComparison.TryRegisterSpanFunction(
-            NarrowingComparison.Format(location) + ":" + function.Span.Start.ToString()
-        ) {
-            return
-        }
-        var body SyntaxNode? = nil
-        if function is FunctionDeclarationSyntax declaration {
-            body = declaration.Body
-        } else if function is FunctionLiteralExpressionSyntax literal {
-            body = literal.Body
-        } else if function is ConstructorDeclarationSyntax constructor {
-            body = constructor.Body
-        } else if function is PropertyAccessorSyntax accessor {
-            body = accessor.Body
-        } else if function is EventAccessorSyntax eventAccessor {
-            body = eventAccessor.Body
-        } else if function is DeinitDeclarationSyntax destructor {
-            body = destructor.Body
-        } else if function is LambdaExpressionSyntax lambda && lambda.Body is BlockExpressionSyntax lambdaBlock {
-            body = lambdaBlock
-        }
-        if body == nil {
-            return
-        }
-        let span = BackwardJumpSpans.Compute(body)
-        if span == nil {
-            return
-        }
-        NarrowingComparison.TryRegisterSpanFunction(
-            "span:" + NarrowingComparison.Format(location) + ":" + function.Span.Start.ToString()
-        )
-        let effects = GetRegionScanner().ScanStatements(span.Statements())
-        NarrowingComparison.ReportSpan(
-            span.FirstStatement.Location,
-            "labels=${string.Join(",", span.Labels)} gotos=${span.GotoCount}",
-            effects.ToString()
-        )
+        let _ = GetEnclosingBackwardJumpSpan(labeled)
     }
 }

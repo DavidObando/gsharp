@@ -191,7 +191,7 @@ Again:
 
 Run()`)
         let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0159")
-        Assert.Equal("ToString", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.Equal("ToString()", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
@@ -258,7 +258,7 @@ Again:
 }
 
 Run()`)
-        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0159")
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0503")
         Assert.Equal("f", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
@@ -282,7 +282,7 @@ Again:
 }
 
 Run()`)
-        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0159")
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0503")
         Assert.Equal("(f)", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
@@ -381,8 +381,8 @@ Again:
 }
 
 Run()`)
-        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0155")
-        Assert.Equal("x", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0164")
+        Assert.Equal("(", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
@@ -409,7 +409,7 @@ func Run() string {
 
 Run()`)
         let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0159")
-        Assert.Equal("Bark", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.Equal("Bark()", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
@@ -436,7 +436,7 @@ func Run() string {
 
 Run()`)
         let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0159")
-        Assert.Equal("Bark", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.Equal("Bark()", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
@@ -498,7 +498,7 @@ func Run() string {
 
 Run()`)
         let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0159")
-        Assert.Equal("Name", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.Equal("Name()", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
@@ -1051,8 +1051,8 @@ func Run() string {
 }
 
 Run()`)
-        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0159")
-        Assert.Equal("Describe", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0154")
+        Assert.Equal("\"dog\"", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
@@ -1207,8 +1207,8 @@ func Run() string {
 }
 
 Run()`)
-        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0116")
-        Assert.Equal("x", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0154")
+        Assert.Equal("\"dog\"", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
@@ -1247,8 +1247,8 @@ func Run() string {
 }
 
 Run()`)
-        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0116")
-        Assert.Equal("x", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0154")
+        Assert.Equal("\"key\"", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
@@ -1285,8 +1285,8 @@ func Run() {
 }
 
 Run()`)
-        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0116")
-        Assert.Equal("x", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0155")
+        Assert.Equal("\"key\"", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
@@ -1326,7 +1326,7 @@ Run()`)
 }
 
 Run()`)
-        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0155")
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0116")
         Assert.Equal("x", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
@@ -1342,19 +1342,23 @@ class Cat : Animal {
 
 func Run() object {
     var x Animal = Dog{}
+    var count = 0
     if x is Dog {
     Again:
         let result object = x
-        x = Cat{}
-        goto Again
+        if count == 0 {
+            count++
+            x = Cat{}
+            goto Again
+        }
+        return result
     }
     return x
 }
 
 Run()`)
-        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0155")
-        Assert.Equal("x", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
-        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+        Assert.Empty(result.Diagnostics)
+        Assert.NotNull(result.Value)
     }
 
     @Fact
@@ -1368,19 +1372,23 @@ class Cat : Animal {
 
 func Run() object? {
     var x Animal = Dog{}
+    var count = 0
     if x is Dog {
     Again:
         let result object? = x
-        x = Cat{}
-        goto Again
+        if count == 0 {
+            count++
+            x = Cat{}
+            goto Again
+        }
+        return result
     }
     return x
 }
 
 Run()`)
-        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0155")
-        Assert.Equal("x", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
-        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+        Assert.Empty(result.Diagnostics)
+        Assert.NotNull(result.Value)
     }
 
     @Fact
@@ -1405,8 +1413,8 @@ func Run() string? {
 }
 
 Run()`)
-        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0155")
-        Assert.Equal("x", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0159")
+        Assert.Equal("Bark()", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
@@ -1546,16 +1554,9 @@ func Run() string {
 }
 
 Run()`, []string{typeof(Issue4519ImportedGenericHolder[_]).Assembly.Location})
-        let diagnostics = result.Diagnostics.Where((d Diagnostic) -> d.Id == "GS0155").ToArray()
-        Assert.Equal(2, diagnostics.Length)
-        Assert.All(
-            diagnostics,
-            (diagnostic Diagnostic) -> Assert.Contains("'string?'", diagnostic.Message, StringComparison.Ordinal)
-        )
-        Assert.Contains(
-            diagnostics,
-            (diagnostic Diagnostic) -> diagnostic.Location.Text!!.ToString(diagnostic.Location.Span) == "box.Value"
-        )
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0155")
+        Assert.Contains("'string?'", diagnostic.Message, StringComparison.Ordinal)
+        Assert.Equal("box.Value", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
@@ -2930,8 +2931,8 @@ func Run() int32 {
 }
 
 Run()`)
-        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0159")
-        Assert.Equal("Invoke", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0503")
+        Assert.Equal("Callback", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
@@ -3607,7 +3608,7 @@ Run()`)
 
     @Fact
     func BackwardGoto_ThroughNonNullFinallyAssignment_RemainsNarrowed() {
-        AssertRuns(`import System
+        let result = Evaluate(`import System
 
 func Run() int32 {
     var x string? = nil
@@ -3627,7 +3628,10 @@ Again:
     return length
 }
 
-Console.WriteLine(Run())`, "4")
+Run()`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
     @Fact
@@ -5761,19 +5765,25 @@ class Cat : Left {
 
 func Run() string {
     var x Left = Dog{}
+    var count = 0
+    var seen = ""
     if x is Right {
     Again:
         let value = x.Value
-        x = Cat{}
-        goto Again
+        seen = seen + value + ","
+        if count == 0 {
+            count++
+            x = Cat{}
+            goto Again
+        }
+        return seen
     }
     return ""
 }
 
 Run()`)
-        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
-        Assert.Equal("Value", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
-        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("left,cat,", result.Value)
     }
 
     @Fact
@@ -6239,8 +6249,8 @@ func Run() {
 }
 
 Run()`)
-        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
-        Assert.Equal("Value", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0127")
+        Assert.Equal("=", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
     }
 
     @Fact
@@ -6267,7 +6277,7 @@ func Run() string {
 }
 
 Run()`)
-        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0127")
         Assert.Equal("Value", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
     }
 

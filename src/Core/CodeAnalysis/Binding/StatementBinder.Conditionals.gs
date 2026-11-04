@@ -1162,7 +1162,6 @@ internal partial class StatementBinder {
         frame Dictionary[AccessPath, TypeSymbol]?
     ) BoundStatement {
         let inheritedFallthrough = currentStatementListFallsThrough
-        let inheritedPotentialReachabilityLabel = binderCtx.PotentialReachabilityLabel
         try {
             if frame == nil {
                 return Invariant.Required(
@@ -1183,7 +1182,6 @@ internal partial class StatementBinder {
             }
         } finally {
             currentStatementListFallsThrough = inheritedFallthrough
-            this.binderCtx.PotentialReachabilityLabel = inheritedPotentialReachabilityLabel
         }
     }
 

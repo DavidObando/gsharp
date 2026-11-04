@@ -335,7 +335,6 @@ partial class Binder {
                 "a parameter declaration",
                 AttributeTargets.Parameter
             ),
-            reportUnsafeBackwardGotoNarrowings: () -> Statements.FinalizeNestedUserLabelNarrowings(),
             isolateExternalCallableAliases: () -> Statements.IsolateExternalCallableAliases(),
             restoreExternalCallableAliases: (
                 saved HashSet[VariableSymbol]

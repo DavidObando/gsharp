@@ -253,24 +253,6 @@ internal partial class ExpressionBinder {
         ) {
             return BindExpression(syntax, nonNullTargetType)
         }
-        // Issue #5635: a block value in parentheses or `checked` binds with no target and converts to the target
-        // below, so the narrowed read that it yields is decided for the target.
-        if targetType is {} blockTargetType && blockTargetType != TypeSymbol.Error && IsBlockValueSyntax(syntax) {
-            var blockRead NarrowedBranchValue? = nil
-            let value = BindBranchValue(
-                syntax,
-                nil,
-                nil,
-                (read NarrowedBranchValue) -> {
-                    blockRead = read
-                }
-            )
-            return if blockRead is {} read {
-                conversions.ResolveNarrowedValue(value, read, blockTargetType)
-            } else {
-                value
-            }
-        }
         return BindExpression(syntax)
     }
 
@@ -1147,14 +1129,6 @@ internal partial class ExpressionBinder {
         // proven by the active if-let/null-guard frame.
         var assignmentReceiver = implicitFieldReceiverExpr ??
             BuildNarrowedVariableRead(variable, syntax.FieldIdentifier.Location)
-        if assignmentReceiver is BoundVariableExpression variableRead && variableRead.NarrowedType != nil {
-            binderCtx.TrackBackwardGotoNarrowingUse(
-                variableRead.Variable,
-                syntax.FieldIdentifier.Location,
-                syntax.FieldIdentifier.ValueText,
-                BackwardGotoNarrowingUseKind.Member
-            )
-        }
         let assignmentReceiverType = assignmentReceiver.Type
         // Stream B: instance-CLR receiver → property/field write via reflection.
         if !(assignmentReceiverType is StructSymbol) &&
@@ -3811,7 +3785,6 @@ internal partial class ExpressionBinder {
                 target = BuildNarrowedVariableRead(variable, diagnosticLocation)
             }
         }
-        TrackBackwardGotoIndexUse(target, diagnosticLocation)
         let rectangular RectangularArrayTypeSymbol? = GetRectangularArrayTypeForBinding(target.Type)
         // ADR-0187 / issue #4350: a multi-parameter user indexer write.
         if rectangular == nil &&
@@ -3964,14 +3937,6 @@ internal partial class ExpressionBinder {
         var receiver = BindExpression(syntax.Receiver)
         if receiver is BoundErrorExpression {
             return receiver
-        }
-        if binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out var path, out _) {
-            binderCtx.TrackBackwardGotoNarrowingUse(
-                path!!,
-                syntax.FieldIdentifier.Location,
-                syntax.FieldIdentifier.ValueText,
-                BackwardGotoNarrowingUseKind.Member
-            )
         }
         // ADR-0186 §4/§5: the WRITE side of a member access has its own
         // receiver path, and failure mode 1 of ADR-0186's catalogue is
@@ -4372,7 +4337,7 @@ internal partial class ExpressionBinder {
         requiredType TypeSymbol,
         receiverLocation TextLocation? = nil
     ) BoundExpression {
-        if !binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out var path, out _) ||
+        if !binderCtx.TryGetNarrowedAccessPath(receiver, out var path, out _) ||
             path!!.HasMembers ||
             path!!
             .Root
@@ -4380,24 +4345,7 @@ internal partial class ExpressionBinder {
             !CanRecoverDeclaredMemberWriteReceiver(path!!.Root.Type, requiredType) {
             return receiver
         }
-        UntrackDeclaredWriteReceiver(path!!, location, receiverLocation)
         return DeclaredReceiver(path!!.Root, receiver.Syntax)
-    }
-
-    // The receiver read (and its runtime-changing conversion) is recorded at
-    // the receiver expression's span, while the member use is recorded at the
-    // member token; a parenthesized or otherwise explicit receiver makes those
-    // two spans differ, so untrack the conversion at both.
-    private func UntrackDeclaredWriteReceiver(
-        path AccessPath,
-        memberLocation TextLocation,
-        receiverLocation TextLocation?
-    ) {
-        binderCtx.UntrackBackwardGotoNarrowingConversion(path, memberLocation)
-        if receiverLocation is {} receiverSpan {
-            binderCtx.UntrackBackwardGotoNarrowingConversion(path, receiverSpan)
-        }
-        binderCtx.UntrackBackwardGotoNarrowingMemberUse(path, memberLocation)
     }
 
     private func BindPropertyAssignmentWithDeclaredReceiver(
@@ -4546,7 +4494,7 @@ internal partial class ExpressionBinder {
     private func TryGetDeclaredWriteReceiver(
         receiver BoundExpression,
         @NotNullWhen(true) out path AccessPath?
-    ) bool -> binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out path, out _) &&
+    ) bool -> binderCtx.TryGetNarrowedAccessPath(receiver, out path, out _) &&
         !path!!.HasMembers &&
         !(path!!.Root.Type is NullableTypeSymbol)
 
@@ -4555,10 +4503,7 @@ internal partial class ExpressionBinder {
         path AccessPath,
         location TextLocation,
         receiverLocation TextLocation? = nil
-    ) BoundExpression {
-        UntrackDeclaredWriteReceiver(path, location, receiverLocation)
-        return DeclaredReceiver(path.Root, receiver.Syntax)
-    }
+    ) BoundExpression -> DeclaredReceiver(path.Root, receiver.Syntax)
 
     /// Issue #1559: binds a write to a static field or property reached through
     /// a constructed generic *type* receiver — `Foo[int32].x = v` (user

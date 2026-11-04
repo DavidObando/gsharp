@@ -184,7 +184,6 @@ internal partial class StatementBinder {
 
     private func SetPersistentNarrowing(frame NarrowingFrame, path AccessPath, narrowedType TypeSymbol) {
         frame[path] = narrowedType
-        NoteAssignmentNarrowing(path)
     }
 
     private func SetPersistentNarrowing(
@@ -193,14 +192,6 @@ internal partial class StatementBinder {
         narrowedType TypeSymbol
     ) {
         frame[path] = narrowedType
-        NoteAssignmentNarrowing(path)
-    }
-
-    private func NoteAssignmentNarrowing(path AccessPath) {
-        if !path.HasMembers {
-            binderCtx.AssignmentNarrowingGeneration++
-            binderCtx.AssignmentNarrowingGenerations[path.Root] = binderCtx.AssignmentNarrowingGeneration
-        }
     }
 
     // `if !TryGet(out var v) || v == nil { return }` tests `v` AFTER the
@@ -735,12 +726,12 @@ internal partial class StatementBinder {
             isLabeledStatement = true
             statement = labeledBlock.Statements[1]
         }
-        // Issue #4285: suppress lifts that a user goto can bypass. A guard
-        // attached directly to its target label is different: every entry
-        // executes the guard. Limit that exception to bare variables, whose
-        // proof generations the goto join can track.
+        // Issue #4285 / ADR-0213 L2: a guard without nested user labels lifts bare-variable nullability
+        // facts when its then-branch exits without `goto`, and lifts any bare-variable fact when attached
+        // directly to its target label. Forward jumps into a label or region join at that entry, and
+        // backward-jump spans apply `Lower(S, span)` at entry and at participant labels.
         if binderCtx.FunctionContainsUserGotoOrLabel &&
-            !(isLabeledStatement && statement is BoundIfStatement && !ContainsUserLabel(statement.Syntax)) {
+            !(statement is BoundIfStatement && !ContainsUserLabel(statement.Syntax)) {
             return
         }
         if statement is BoundIfStatement ifStmt {
@@ -756,7 +747,20 @@ internal partial class StatementBinder {
                 return
             }
             for kv in elseFrame {
-                if binderCtx.FunctionContainsUserGotoOrLabel && !kv.Key.Members.IsDefaultOrEmpty {
+                if binderCtx.FunctionContainsUserGotoOrLabel &&
+                    (
+                    !kv
+                        .Key
+                        .Members
+                        .IsDefaultOrEmpty ||
+                        (
+                        !isLabeledStatement &&
+                            (
+                            !EndsInUnconditionalExit(ifStmt.ThenStatement, gotoExits: false) ||
+                                !IsBareNullabilityGuardFact(kv.Key.Root.Type, kv.Value)
+                        )
+                    )
+                ) {
                     continue
                 }
                 SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value)
@@ -776,6 +780,12 @@ internal partial class StatementBinder {
                 SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value)
             }
         }
+    }
+
+    private func IsBareNullabilityGuardFact(declared TypeSymbol, fact TypeSymbol) bool -> switch declared {
+        case nullable is NullableTypeSymbol: object.Equals(nullable.UnderlyingType, fact)
+        case platform is PlatformTypeSymbol: object.Equals(platform.UnderlyingType, fact)
+        default: false
     }
 
     /// Issue #1123: assignment-based smart cast. When the bound statement is a
@@ -818,18 +828,12 @@ internal partial class StatementBinder {
         }
     }
 
-    /// Issue #4519: joins the current narrowing state with forward jumps that
-    /// can reach [`labelName`](paramref). Only assignment narrowings
-    /// created after such a jump are removed; narrowings established before
-    /// every jump, unrelated variables, and assignments after the label remain.
-    private func InvalidateAssignmentNarrowingsBypassedByGoto(
-        labelName string,
-        fallthroughReachesLabel bool
-    ) IReadOnlyList[GotoNarrowingSnapshot]? {
-        if !binderCtx.PendingGotoAssignmentStarts.Remove(labelName, out _) {
-            return nil
-        }
-        binderCtx.PendingGotoNarrowingSnapshots.Remove(labelName, out var incomingSnapshots)
+    /// Issue #4519 / ADR-0213 section 11: joins the current narrowing state with forward jumps that
+    /// can reach [`labelName`](paramref).
+    private func JoinForwardJumpsAtLabel(labelName string, fallthroughReachesLabel bool) IReadOnlyList[
+        NarrowingJumpState
+    ]? {
+        let incomingSnapshots = binderCtx.NarrowingFlow.TakeJumps(labelName)
         if incomingSnapshots != nil {
             let activeFinallySet = HashSet[FinallyClauseSyntax](activeFinallyClauses)
             let activeCleanupSet = HashSet[BoundStatement](activeCleanupStatements)
@@ -845,8 +849,16 @@ internal partial class StatementBinder {
         if !(incomingSnapshots != nil && incomingSnapshots.Count > 0) {
             return incomingSnapshots
         }
-        JoinExternalCallableAliases(incomingSnapshots, fallthroughReachesLabel)
-        if !fallthroughReachesLabel {
+        ApplyIncomingJumpJoin(incomingSnapshots, fallthroughReachesLabel)
+        return incomingSnapshots
+    }
+
+    private func ApplyIncomingJumpJoin(
+        incomingSnapshots IReadOnlyList[NarrowingJumpState],
+        fallthroughReachesTarget bool
+    ) {
+        JoinExternalCallableAliases(incomingSnapshots, fallthroughReachesTarget)
+        if !fallthroughReachesTarget {
             let commonIncoming = Dictionary[AccessPath, TypeSymbol]()
             let commonFrameIndices = Dictionary[AccessPath, int32]()
             for entry in incomingSnapshots[0].NarrowedVariables {
@@ -864,7 +876,7 @@ internal partial class StatementBinder {
                     if incomingSnapshots[0].NarrowingFrameIndices.TryGetValue(entry.Key, out var frameIndex) &&
                         incomingSnapshots
                         .All(
-                        (snapshot GotoNarrowingSnapshot) -> snapshot.NarrowingFrameIndices.TryGetValue(
+                        (snapshot NarrowingJumpState) -> snapshot.NarrowingFrameIndices.TryGetValue(
                             entry.Key,
                             out var incomingFrame
                         ) &&
@@ -877,7 +889,6 @@ internal partial class StatementBinder {
             for frame in binderCtx.NarrowedVariables {
                 frame.Clear()
             }
-            binderCtx.AssignmentNarrowingGenerations.Clear()
             for entry in commonIncoming {
                 let targetFrame = if commonFrameIndices.TryGetValue(entry.Key, out var frameIndex) &&
                     frameIndex < binderCtx
@@ -888,22 +899,8 @@ internal partial class StatementBinder {
                     binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1]
                 }
                 targetFrame.Add(entry.Key, entry.Value)
-                if !entry.Key.HasMembers && incomingSnapshots[0].AssignmentGenerations.TryGetValue(
-                    entry.Key.Root,
-                    out var generation
-                ) &&
-                    incomingSnapshots
-                    .All(
-                    (snapshot GotoNarrowingSnapshot) -> snapshot.AssignmentGenerations.TryGetValue(
-                        entry.Key.Root,
-                        out var incomingGeneration
-                    ) &&
-                        incomingGeneration == generation
-                ) {
-                    binderCtx.AssignmentNarrowingGenerations.Add(entry.Key.Root, generation)
-                }
             }
-            return incomingSnapshots
+            return
         }
         let targetNarrowings = Dictionary[AccessPath, TypeSymbol]()
         for frame in binderCtx.NarrowedVariables {
@@ -939,11 +936,10 @@ internal partial class StatementBinder {
                 binderCtx.NarrowedVariables[targetFrameIndex].Add(path, joinedType)
             }
         }
-        return incomingSnapshots
     }
 
     private func JoinExternalCallableAliases(
-        incomingSnapshots IReadOnlyList[GotoNarrowingSnapshot],
+        incomingSnapshots IReadOnlyList[NarrowingJumpState],
         fallthroughReachesLabel bool
     ) {
         if !fallthroughReachesLabel {
@@ -955,83 +951,8 @@ internal partial class StatementBinder {
         }
     }
 
-    internal func ReportUnsafeBackwardGotoNarrowings() {
-        let reported = HashSet[BackwardGotoNarrowingAccess]()
-        for state in binderCtx.BackwardGotoNarrowingStates.Values {
-            let targetFinallySet = HashSet[FinallyClauseSyntax](state.TargetSnapshot.ActiveFinallyClauses)
-            let targetCleanupSet = HashSet[BoundStatement](state.TargetSnapshot.ActiveCleanupStatements)
-            for edge in state.Edges {
-                let sourceSnapshot = edge.SourceSnapshot.Clone()
-                if !ApplyExitedFinallyEffects(sourceSnapshot, targetFinallySet, targetCleanupSet) {
-                    continue
-                }
-                for access in edge.Accesses {
-                    let sourceType TypeSymbol? = if sourceSnapshot.NarrowedVariables.TryGetValue(
-                        access.Path,
-                        out var narrowedSourceType
-                    ) {
-                        narrowedSourceType
-                    } else {
-                        (
-                            if access.Path.HasMembers || access.DeclaredType is NullableTypeSymbol {
-                                default(TypeSymbol?)
-                            } else {
-                                access.DeclaredType
-                            }
-                        )
-                    }
-                    if (sourceType == nil || !IsRepresentationPreservingJoin(sourceType, access.RequiredType)) &&
-                        reported
-                        .Add(access) {
-                        let accessMark = Diagnostics.Count
-                        switch access.Kind {
-                            case BackwardGotoNarrowingUseKind.Function {
-                                Diagnostics.ReportUnableToFindFunction(access.Location, access.MemberName)
-                            }
-                            case BackwardGotoNarrowingUseKind.Conversion {
-                                Diagnostics.ReportCannotConvert(
-                                    access.Location,
-                                    access.DeclaredType,
-                                    Invariant.Required(
-                                        access.TargetType,
-                                        "a deferred conversion has a target type",
-                                        expression: "access.TargetType"
-                                    )
-                                )
-                            }
-                            case BackwardGotoNarrowingUseKind.Index {
-                                Diagnostics.ReportTypeNotIndexable(access.Location, access.DeclaredType)
-                            }
-                            case BackwardGotoNarrowingUseKind.NonNullUse {
-                                Diagnostics.ReportCannotConvert(
-                                    access.Location,
-                                    access.DeclaredType,
-                                    Invariant.Required(
-                                        access.TargetType,
-                                        "a deferred non-null use has a target type",
-                                        expression: "access.TargetType"
-                                    )
-                                )
-                            }
-                            default {
-                                Diagnostics.ReportUnableToFindMember(access.Location, access.MemberName)
-                            }
-                        }
-                        // Issue #5569: a use of a speculative lambda's `return` conversion to its delegate result
-                        // waits for the lambda binder's choice of the function type. Issue #5603: a use of a
-                        // `return` value of a lambda with an inferred result waits for that result type.
-                        if access.HeldBy is {} owner {
-                            owner.HoldNarrowingUse(access, Diagnostics.Skip(accessMark).ToImmutableArray())
-                            Diagnostics.TruncateTo(accessMark)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     private func ApplyExitedFinallyEffects(
-        snapshot GotoNarrowingSnapshot,
+        snapshot NarrowingJumpState,
         activeFinallySet HashSet[FinallyClauseSyntax],
         activeCleanupSet HashSet[BoundStatement]
     ) bool {
@@ -1185,7 +1106,7 @@ internal partial class StatementBinder {
         }
     }
 
-    private func ApplyFlowSummary(snapshot GotoNarrowingSnapshot, summary FinallyFlowSummary) {
+    private func ApplyFlowSummary(snapshot NarrowingJumpState, summary FinallyFlowSummary) {
         for entry in snapshot.NarrowedVariables.ToArray() {
             if MayBeMutatedByUnknownWrite(summary.Mutations, entry.Key) || summary.Mutations.MayMutateGlobalRoot(
                 entry.Key.Root,
@@ -3957,20 +3878,6 @@ internal partial class StatementBinder {
                             )
                         }
                     )
-                } else if type is {} declaredType && declaredType != TypeSymbol.Error {
-                    // Issue #5635: a block value converts to the declared type below, so the narrowed read that it
-                    // yields is decided for that type, as a branch value is for the common type.
-                    var blockRead NarrowedBranchValue? = nil
-                    initializer = binderCtx.BindWithBlockValueCapture(
-                        syntax.Initializer!!,
-                        (read NarrowedBranchValue) -> {
-                            blockRead = read
-                        },
-                        () -> bindExpression(syntax.Initializer!!, false)
-                    )
-                    if blockRead is {} read {
-                        initializer = conversions.ResolveNarrowedValue(initializer, read, declaredType)
-                    }
                 } else {
                     initializer = bindExpression(syntax.Initializer!!, false)
                 }
