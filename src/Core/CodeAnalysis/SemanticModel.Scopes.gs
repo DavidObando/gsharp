@@ -1155,12 +1155,6 @@ partial class SemanticModel {
             ) {
                 AddGlobalEntry(ordered, byName, declaredAlias.Name, declaredAlias)
             }
-            for alias in globalScope.TypeAliases.OrderBy(
-                (pair KeyValuePair[string, TypeSymbol]) -> pair.Key,
-                StringComparer.Ordinal
-            ) {
-                AddGlobalEntry(ordered, byName, alias.Key, alias.Value)
-            }
             // Source order across kinds: by file name, then position. A symbol without syntax comes last.
             // The sort is stable, so equal keys keep their kind order.
             let sorted = ordered
