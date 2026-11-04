@@ -2479,8 +2479,8 @@ internal partial class StatementBinder {
                     }
                 }
                 if calledFunction.HasCaptures {
-                    normalCallableState.InvalidateClosureAssigned(isClosureAssigned)
-                    allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned)
+                    normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                    allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
                 }
             }
             if node is BoundCallOperationExpression{
@@ -2995,11 +2995,11 @@ internal partial class StatementBinder {
                     MarkMayMutateGlobalRoots(runsSourceCode: false)
                 }
                 if snapshot.IsNormalUnknown {
-                    normalCallableState.InvalidateClosureAssigned(isClosureAssigned)
+                    normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
                 }
                 if snapshot.IsUnknown {
                     MayMutateAnyRoot = true
-                    allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned)
+                    allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
                 }
             }
         }
@@ -3232,22 +3232,24 @@ internal partial class StatementBinder {
                     HasEscapingRegionJump(declaredStart, jumpedStart) {
                     normalCallableState.RestoreFrom(allEntryCallableState)
                 }
-                if hasFinally && tryReturnState is {} returningState && !StatementBinder.EndsInUnconditionalExit(
-                    node.FinallyBlock,
-                    gotoExits: false
-                ) {
+                if hasFinally && tryReturnState is {} returningState {
                     let fallthroughAfterFinally = CaptureCallableState()
                     RestoreCallableState(returningState)
                     VisitStatement(node.FinallyBlock)
                     let returnAfterFinally = CaptureCallableState()
                     RestoreCallableState(fallthroughAfterFinally)
-                    if functionLiteralFinallyDepth > 0 {
-                        functionLiteralTryReturnState = JoinCallableStates(
-                            functionLiteralTryReturnState,
-                            returnAfterFinally
-                        )
-                    } else {
-                        functionLiteralReturnState = JoinCallableStates(functionLiteralReturnState, returnAfterFinally)
+                    if !StatementBinder.EndsInUnconditionalExit(node.FinallyBlock, gotoExits: false) {
+                        if functionLiteralFinallyDepth > 0 {
+                            functionLiteralTryReturnState = JoinCallableStates(
+                                functionLiteralTryReturnState,
+                                returnAfterFinally
+                            )
+                        } else {
+                            functionLiteralReturnState = JoinCallableStates(
+                                functionLiteralReturnState,
+                                returnAfterFinally
+                            )
+                        }
                     }
                 }
             } else {
@@ -3319,8 +3321,8 @@ internal partial class StatementBinder {
             }
             if callable is not BoundVariableExpression variable {
                 MayMutateAnyRoot = true
-                normalCallableState.InvalidateClosureAssigned(isClosureAssigned)
-                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned)
+                normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
                 return
             }
             callableInvocations.Add(variable.Variable)
@@ -3359,10 +3361,10 @@ internal partial class StatementBinder {
             // and cannot capture this function's local slots.
             MayMutateAnyRoot |= isUnknown
             if isNormalUnknown {
-                normalCallableState.InvalidateClosureAssigned(isClosureAssigned)
+                normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
             }
             if isUnknown {
-                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned)
+                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
             }
             if isExternal {
                 MarkMayMutateGlobalRoots(runsSourceCode: false)
@@ -3573,8 +3575,18 @@ internal partial class StatementBinder {
             if node.Variable != nil {
                 writableReferenceAliases.Remove(node.Variable)
                 tryAssignedVariables?.Add(node.Variable)
-                normalCallableState.ApplyAssignment(node, pendingConditionalTargets.Count, mayShareStorage)
-                allEntryCallableState.ApplyAssignment(node, pendingConditionalTargets.Count, mayShareStorage)
+                normalCallableState.ApplyAssignment(
+                    node,
+                    pendingConditionalTargets.Count,
+                    mayShareStorage,
+                    tryAssignedVariables
+                )
+                allEntryCallableState.ApplyAssignment(
+                    node,
+                    pendingConditionalTargets.Count,
+                    mayShareStorage,
+                    tryAssignedVariables
+                )
                 Roots.Add(node.Variable)
                 if !assignments.TryGetValue(node.Variable, out var rootAssignments) {
                     rootAssignments = List[BoundAssignmentExpression]()
@@ -3614,8 +3626,8 @@ internal partial class StatementBinder {
                 Roots.Add(variable.Variable)
                 WritableReferenceRoots.Add(variable.Variable)
                 if invalidateCallableState {
-                    normalCallableState.InvalidateVariable(variable.Variable, mayShareStorage)
-                    allEntryCallableState.InvalidateVariable(variable.Variable, mayShareStorage)
+                    normalCallableState.InvalidateVariable(variable.Variable, mayShareStorage, tryAssignedVariables)
+                    allEntryCallableState.InvalidateVariable(variable.Variable, mayShareStorage, tryAssignedVariables)
                 }
                 return
             }
@@ -3640,8 +3652,8 @@ internal partial class StatementBinder {
             } else {
                 Roots.Add(path.Root)
                 if invalidateCallableState {
-                    normalCallableState.InvalidateVariable(path.Root, mayShareStorage)
-                    allEntryCallableState.InvalidateVariable(path.Root, mayShareStorage)
+                    normalCallableState.InvalidateVariable(path.Root, mayShareStorage, tryAssignedVariables)
+                    allEntryCallableState.InvalidateVariable(path.Root, mayShareStorage, tryAssignedVariables)
                 }
             }
         }
@@ -3737,17 +3749,20 @@ internal partial class StatementBinder {
 
             func InvalidateVariable(
                 variable VariableSymbol,
-                mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?
+                mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?,
+                tryAssignedVariables HashSet[VariableSymbol]? = nil
             ) {
                 Literals.Remove(variable)
                 External.Remove(variable)
                 Unknown.Add(variable)
+                tryAssignedVariables?.Add(variable)
                 if mayShareStorage != nil {
                     for other in Literals.Keys.Concat(External).Concat(Unknown).ToArray() {
                         if !object.ReferenceEquals(other, variable) && mayShareStorage(variable, other) {
                             Literals.Remove(other)
                             External.Remove(other)
                             Unknown.Add(other)
+                            tryAssignedVariables?.Add(other)
                         }
                     }
                 }
@@ -3775,7 +3790,10 @@ internal partial class StatementBinder {
                 LocalParameters
             )
 
-            func InvalidateClosureAssigned(isClosureAssigned((VariableSymbol) -> bool)?) {
+            func InvalidateClosureAssigned(
+                isClosureAssigned((VariableSymbol) -> bool)?,
+                tryAssignedVariables HashSet[VariableSymbol]? = nil
+            ) {
                 if isClosureAssigned == nil {
                     return
                 }
@@ -3784,6 +3802,7 @@ internal partial class StatementBinder {
                         Literals.Remove(variable)
                         External.Remove(variable)
                         Unknown.Add(variable)
+                        tryAssignedVariables?.Add(variable)
                     }
                 }
             }
@@ -3861,7 +3880,8 @@ internal partial class StatementBinder {
             func ApplyAssignment(
                 node BoundAssignmentExpression,
                 pendingConditionalTargetsCount int32,
-                mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?
+                mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?,
+                tryAssignedVariables HashSet[VariableSymbol]? = nil
             ) {
                 if node.Variable == nil {
                     return
@@ -3874,6 +3894,7 @@ internal partial class StatementBinder {
                             Literals.Remove(other)
                             External.Remove(other)
                             Unknown.Add(other)
+                            tryAssignedVariables?.Add(other)
                         }
                     }
                 }
