@@ -4767,10 +4767,13 @@ partial class CSharpToGSharpTranslator {
                     return RawStatement("// unsupported: delegate multicast '$combineOp'")
                 }
                 case assignment is AssignmentExpressionSyntax {
+                    let isVoidAssignment = this.context.GetTypeInfo(assignment).Type?.SpecialType ==
+                    SpecialType.System_Void || this.context.GetSymbolInfo(assignment.Left).Symbol is IEventSymbol
                     return AssignmentStatement(
                         this.TranslateAssignmentTarget(assignment.Left),
                         this.TranslateAssignmentValue(assignment),
-                        assignment.OperatorToken.Text
+                        assignment.OperatorToken.Text,
+                        isVoid: isVoidAssignment
                     )
                 }
                 case postfix is PostfixUnaryExpressionSyntax when postfix.IsKind(SyntaxKind.PostIncrementExpression) ||

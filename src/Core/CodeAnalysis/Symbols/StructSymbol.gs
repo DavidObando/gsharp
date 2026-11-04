@@ -48,6 +48,7 @@ class StructSymbol : TypeSymbol {
     private var constFields ImmutableArray[FieldSymbol] = ImmutableArray[FieldSymbol].Empty
     private var fieldsStore ImmutableArray[FieldSymbol] = ImmutableArray[FieldSymbol].Empty
     private var propertiesStore ImmutableArray[PropertySymbol] = ImmutableArray[PropertySymbol].Empty
+    private var inheritedPositionalPropertiesStore ImmutableArray[PropertySymbol] = ImmutableArray[PropertySymbol].Empty
     private var staticPropertiesStore ImmutableArray[PropertySymbol] = ImmutableArray[PropertySymbol].Empty
     private var staticEventsStore ImmutableArray[EventSymbol] = ImmutableArray[EventSymbol].Empty
 
@@ -85,6 +86,10 @@ class StructSymbol : TypeSymbol {
     private var substitutedPropertiesSource ImmutableArray[PropertySymbol]
     private var substitutedPropertiesVersion int32 = -1
     private var substitutedPropertiesComputed bool
+    private var substitutedInheritedPositionalProperties ImmutableArray[PropertySymbol]
+    private var substitutedInheritedPositionalPropertiesSource ImmutableArray[PropertySymbol]
+    private var substitutedInheritedPositionalPropertiesVersion int32 = -1
+    private var substitutedInheritedPositionalPropertiesComputed bool
     private var substitutedStaticProperties ImmutableArray[PropertySymbol]
     private var substitutedStaticPropertiesSource ImmutableArray[PropertySymbol]
     private var substitutedStaticPropertiesVersion int32 = -1
@@ -1357,6 +1362,22 @@ class StructSymbol : TypeSymbol {
         Properties = properties
     }
 
+    internal prop InheritedPositionalProperties ImmutableArray[PropertySymbol] {
+        get -> if Definition != nil && !object.ReferenceEquals(Definition, this) {
+            GetSubstitutedInheritedPositionalProperties()
+        } else {
+            inheritedPositionalPropertiesStore
+        }
+    }
+
+    internal func SetInheritedPositionalProperties(properties ImmutableArray[PropertySymbol]) {
+        inheritedPositionalPropertiesStore = if properties.IsDefault {
+            ImmutableArray[PropertySymbol].Empty
+        } else {
+            properties
+        }
+    }
+
     /// Sets (cref:Events) after binding event declarations (ADR-0052).
     /// @param events The bound event symbols owned by this type.
     func SetEvents(events ImmutableArray[EventSymbol]) {
@@ -2248,6 +2269,23 @@ class StructSymbol : TypeSymbol {
         substitutedPropertiesSource = source
         substitutedPropertiesVersion = version
         substitutedPropertiesComputed = true
+        return result
+    }
+
+    private func GetSubstitutedInheritedPositionalProperties() ImmutableArray[PropertySymbol] {
+        let source = Definition!!.InheritedPositionalProperties
+        let version = Definition!!.memberDefaultVersion
+        if substitutedInheritedPositionalPropertiesComputed && substitutedInheritedPositionalPropertiesSource.Equals(
+            source
+        ) &&
+            substitutedInheritedPositionalPropertiesVersion == version {
+            return substitutedInheritedPositionalProperties
+        }
+        let result = SubstituteProperties(source, GetSubstitutionMap(), mapClrType)
+        substitutedInheritedPositionalProperties = result
+        substitutedInheritedPositionalPropertiesSource = source
+        substitutedInheritedPositionalPropertiesVersion = version
+        substitutedInheritedPositionalPropertiesComputed = true
         return result
     }
 

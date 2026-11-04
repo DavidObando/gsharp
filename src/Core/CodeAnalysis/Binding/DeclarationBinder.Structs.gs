@@ -1664,10 +1664,28 @@ internal partial class DeclarationBinder {
         // consumers see the same ABI as C# records.
         if !syntax.Properties.IsDefaultOrEmpty || (structSymbol.IsData && structSymbol.HasPrimaryConstructor) {
             let propertiesBuilder = ImmutableArray.CreateBuilder[PropertySymbol]()
+            let inheritedPositionalBuilder = ImmutableArray.CreateBuilder[PropertySymbol]()
             let positionalPropertyIndices = Dictionary[string, int32](StringComparer.Ordinal)
             if structSymbol.IsData && structSymbol.HasPrimaryConstructor {
                 for parameter in structSymbol.PrimaryConstructorParameters {
-                    if TypeMemberModel.TryGetInheritedDataPositionalProperty(structSymbol, parameter, out _, out _) {
+                    let hasExplicitReplacement = !syntax.Properties.IsDefaultOrEmpty && syntax.Properties.Any(
+                        (propSyntax PropertyDeclarationSyntax) -> !propSyntax.IsIndexer &&
+                            !propSyntax.HasExplicitInterfaceClause &&
+                            propSyntax
+                            .Identifier
+                            .ValueText == parameter.Name
+                    )
+                    if !hasExplicitReplacement && TypeMemberModel.ResolveInheritedDataPositionalProperty(
+                        structSymbol,
+                        parameter,
+                        binderCtx.References,
+                        out var inheritedProperty,
+                        out var inheritedDeclaringType
+                    ) {
+                        if inheritedProperty is {} resolvedInheritedProperty &&
+                            (inheritedDeclaringType == nil || inheritedDeclaringType.ClrType != nil) {
+                            inheritedPositionalBuilder.Add(resolvedInheritedProperty)
+                        }
                         continue
                     }
                     let property = PropertySymbol(
@@ -2212,6 +2230,9 @@ internal partial class DeclarationBinder {
                 } else {
                     propertiesBuilder.Add(propertySymbol)
                 }
+            }
+            if inheritedPositionalBuilder.Count > 0 {
+                structSymbol.SetInheritedPositionalProperties(inheritedPositionalBuilder.ToImmutable())
             }
             structSymbol.SetProperties(propertiesBuilder.ToImmutable())
         }
@@ -4073,6 +4094,8 @@ internal partial class DeclarationBinder {
         if containerSyntax.NestedTypes.IsDefaultOrEmpty {
             return
         }
+        let nestedStructs = List[StructDeclarationSyntax]()
+        let nestedStructsByName = Dictionary[string, int32](StringComparer.Ordinal)
         for nested in containerSyntax.NestedTypes {
             // Issue #950: a `protected` nested type is only meaningful when the
             // container is an inheritable `open class`. Otherwise nothing can
@@ -4082,11 +4105,10 @@ internal partial class DeclarationBinder {
             }
             switch nested {
                 case nestedStruct is StructDeclarationSyntax {
-                    // The shell (and its own nested shells, recursively) was
-                    // declared in phase 1; bind its body now. Binding the body
-                    // recurses into BindNestedTypeBodies for nested-in-nested.
-                    if nestedStructShells.TryGetValue(nestedStruct, out var nestedStructSymbol) {
-                        BindStructDeclarationBody(nestedStruct, $package, nestedStructSymbol)
+                    let index = nestedStructs.Count
+                    nestedStructs.Add(nestedStruct)
+                    if !nestedStructsByName.ContainsKey(nestedStruct.Identifier.ValueText) {
+                        nestedStructsByName[nestedStruct.Identifier.ValueText] = index
                     }
                 }
                 case EnumDeclarationSyntax { }
@@ -4097,6 +4119,155 @@ internal partial class DeclarationBinder {
                 }
             }
         }
+        if nestedStructs.Count == 0 {
+            return
+        }
+        let bindingState = [nestedStructs.Count]uint8
+        let bindingOrder = List[int32](nestedStructs.Count)
+        for var i = 0; i < nestedStructs.Count; i++ {
+            VisitNestedBaseFirst(i, containerSyntax, nestedStructs, nestedStructsByName, bindingState, bindingOrder)
+        }
+        for index in bindingOrder {
+            let nestedStruct = nestedStructs[index]
+            if nestedStructShells.TryGetValue(nestedStruct, out var nestedStructSymbol) {
+                BindStructDeclarationBody(nestedStruct, $package, nestedStructSymbol)
+            }
+        }
+    }
+
+    private func FindNestedSiblingBaseIndex(
+        syntax StructDeclarationSyntax,
+        containerSyntax StructDeclarationSyntax,
+        nestedStructs List[StructDeclarationSyntax],
+        nestedStructsByName Dictionary[string, int32],
+        shadowedNestedNames HashSet[string]?
+    ) int32 {
+        if !syntax.IsClass {
+            return -1
+        }
+        let baseClause TypeClauseSyntax? = if syntax.BaseTypeClauses.Count > 0 {
+            syntax.BaseTypeClauses[0]
+        } else if syntax.BaseTypeIdentifier != nil {
+            TypeClauseSyntax(syntax.BaseTypeIdentifier.SyntaxTree, syntax.BaseTypeIdentifier)
+        } else {
+            default(TypeClauseSyntax?)
+        }
+        if baseClause == nil {
+            return -1
+        }
+        var candidateName string? = nil
+        if !baseClause.HasQualifier {
+            let text = baseClause.Identifier?.Text
+            if text != nil && (shadowedNestedNames == nil || !shadowedNestedNames.Contains(text)) {
+                candidateName = text
+            }
+        } else {
+            let firstQualifier = baseClause.QualifierIdentifierTokens[0].Text
+            if firstQualifier == containerSyntax
+                .Identifier
+                .ValueText &&
+                baseClause
+                .QualifierIdentifierTokens
+                .Length == 1 {
+                candidateName = baseClause.Identifier?.Text
+            } else if shadowedNestedNames == nil || !shadowedNestedNames.Contains(firstQualifier) {
+                candidateName = firstQualifier
+            }
+        }
+        if candidateName != nil && nestedStructsByName.TryGetValue(candidateName, out var baseIndex) &&
+            nestedStructs[baseIndex].IsClass {
+            return baseIndex
+        }
+        return -1
+    }
+
+    private func AddDescendantNestedBaseDependencies(
+        currentContainer StructDeclarationSyntax,
+        containerSyntax StructDeclarationSyntax,
+        nestedStructs List[StructDeclarationSyntax],
+        nestedStructsByName Dictionary[string, int32],
+        bindingState[]uint8,
+        bindingOrder List[int32],
+        inheritedShadowedNames HashSet[string]
+    ) {
+        if currentContainer.NestedTypes.IsDefaultOrEmpty {
+            return
+        }
+        let shadowedNames = HashSet[string](inheritedShadowedNames, StringComparer.Ordinal)
+        for child in currentContainer.NestedTypes.OfType[StructDeclarationSyntax]() {
+            shadowedNames.Add(child.Identifier.ValueText)
+        }
+        for child in currentContainer.NestedTypes.OfType[StructDeclarationSyntax]() {
+            let baseIndex = FindNestedSiblingBaseIndex(
+                child,
+                containerSyntax,
+                nestedStructs,
+                nestedStructsByName,
+                shadowedNames
+            )
+            if baseIndex >= 0 {
+                VisitNestedBaseFirst(
+                    baseIndex,
+                    containerSyntax,
+                    nestedStructs,
+                    nestedStructsByName,
+                    bindingState,
+                    bindingOrder
+                )
+            }
+            AddDescendantNestedBaseDependencies(
+                child,
+                containerSyntax,
+                nestedStructs,
+                nestedStructsByName,
+                bindingState,
+                bindingOrder,
+                shadowedNames
+            )
+        }
+    }
+
+    private func VisitNestedBaseFirst(
+        index int32,
+        containerSyntax StructDeclarationSyntax,
+        nestedStructs List[StructDeclarationSyntax],
+        nestedStructsByName Dictionary[string, int32],
+        bindingState[]uint8,
+        bindingOrder List[int32]
+    ) {
+        if bindingState[index] != uint8(0) {
+            return
+        }
+        bindingState[index] = uint8(1)
+        let nestedStruct = nestedStructs[index]
+        let baseIndex = FindNestedSiblingBaseIndex(
+            nestedStruct,
+            containerSyntax,
+            nestedStructs,
+            nestedStructsByName,
+            nil
+        )
+        if baseIndex >= 0 {
+            VisitNestedBaseFirst(
+                baseIndex,
+                containerSyntax,
+                nestedStructs,
+                nestedStructsByName,
+                bindingState,
+                bindingOrder
+            )
+        }
+        AddDescendantNestedBaseDependencies(
+            nestedStruct,
+            containerSyntax,
+            nestedStructs,
+            nestedStructsByName,
+            bindingState,
+            bindingOrder,
+            HashSet[string](StringComparer.Ordinal)
+        )
+        bindingState[index] = uint8(2)
+        bindingOrder.Add(index)
     }
 
     /// Issue #1069 (phase 1): declares the type-name shells of the nested types

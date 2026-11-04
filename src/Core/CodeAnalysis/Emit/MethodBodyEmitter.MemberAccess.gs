@@ -854,7 +854,8 @@ internal partial class MethodBodyEmitter {
                 .TryGetValue(assn.Property, out var handles) &&
                 (handles.Setter != nil) {
                 setterHandle = handles.Setter!!
-            } else if assn.StructType is StructSymbol structType && structType.ClrType != nil {
+            } else if assn.StructType is StructSymbol structType &&
+                (structType.ClrType != nil || assn.Property.ImportedMember != nil) {
                 // Issue #2291: mirrors the getter fallback above for IMPORTED
                 // properties with no planned PropertyAccessorHandles entry.
                 setterHandle = this

@@ -458,6 +458,18 @@ shared class TypeMemberModel {
                     return true
                 }
             }
+            if !boundProperty.IsStatic && owner is StructSymbol inheritedOwner {
+                for candidate in inheritedOwner.InheritedPositionalProperties {
+                    if object.ReferenceEquals(candidate, boundProperty) ||
+                        (
+                        boundProperty.ImportedMember != nil && candidate.ImportedMember == boundProperty.ImportedMember
+                    ) {
+                        property = candidate
+                        declaringType = (inheritedOwner.ImportedBaseType as StructSymbol) ?? inheritedOwner
+                        return true
+                    }
+                }
+            }
         }
         property = nil
         declaringType = nil
@@ -466,6 +478,25 @@ shared class TypeMemberModel {
 
     /// Issue #4874: resolves an accessible inherited instance property that a derived
     /// `data class` positional parameter reuses instead of synthesizing a duplicate property.
+    internal func TryGetInheritedDataPositionalProperty(
+        type StructSymbol,
+        name string,
+        @NotNullWhen(true) out property PropertySymbol?,
+        out declaringType StructSymbol?
+    ) bool {
+        property = nil
+        declaringType = nil
+        if !type.IsData || !type.IsClass {
+            return false
+        }
+        for parameter in type.PrimaryConstructorParameters {
+            if parameter.Name == name {
+                return TryGetInheritedDataPositionalProperty(type, parameter, out property, out declaringType)
+            }
+        }
+        return false
+    }
+
     internal func TryGetInheritedDataPositionalProperty(
         type StructSymbol,
         parameter ParameterSymbol,
@@ -483,8 +514,7 @@ shared class TypeMemberModel {
                     if candidate.IsStatic || candidate.IsIndexer || candidate.Name != parameter.Name {
                         continue
                     }
-                    if candidate.Accessibility != Accessibility.Private &&
-                        candidate.HasGetter &&
+                    if IsSourcePropertyVisibleFromDerived(candidate, ancestor, type) &&
                         TypeSymbol
                         .AreRuntimeEquivalentIgnoringReferenceNullability(candidate.Type, parameter.Type) {
                         property = candidate
@@ -496,27 +526,90 @@ shared class TypeMemberModel {
             }
         }
         for current in GetHierarchy(type) {
-            if current.ImportedBaseType is not{} importedBase {
-                continue
+            for candidate in current.InheritedPositionalProperties {
+                if candidate.Name != parameter.Name {
+                    continue
+                }
+                if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(candidate.Type, parameter.Type) {
+                    property = candidate
+                    declaringType = (current.ImportedBaseType as StructSymbol) ?? current
+                    return true
+                }
+                return false
             }
-            if importedBase is StructSymbol importedStruct {
-                for candidate in importedStruct.Properties {
+        }
+        return false
+    }
+
+    internal func ResolveInheritedDataPositionalProperty(
+        type StructSymbol,
+        parameter ParameterSymbol,
+        references ReferenceResolver?,
+        @NotNullWhen(true) out property PropertySymbol?,
+        out declaringType StructSymbol?
+    ) bool {
+        property = nil
+        declaringType = nil
+        if !type.IsData || !type.IsClass {
+            return false
+        }
+        if type.BaseClass is {} baseClass {
+            for ancestor in GetHierarchy(baseClass) {
+                for candidate in ancestor.Properties {
                     if candidate.IsStatic || candidate.IsIndexer || candidate.Name != parameter.Name {
                         continue
                     }
-                    if candidate.Accessibility != Accessibility.Private &&
-                        candidate.HasGetter &&
+                    if IsSourcePropertyVisibleFromDerived(candidate, ancestor, type) &&
                         TypeSymbol
                         .AreRuntimeEquivalentIgnoringReferenceNullability(candidate.Type, parameter.Type) {
                         property = candidate
-                        declaringType = importedStruct
+                        declaringType = ancestor
+                        return true
+                    }
+                    return false
+                }
+                for candidate in ancestor.InheritedPositionalProperties {
+                    if candidate.Name != parameter.Name {
+                        continue
+                    }
+                    if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(candidate.Type, parameter.Type) {
+                        property = candidate
+                        declaringType = ancestor.ImportedBaseType as StructSymbol
                         return true
                     }
                     return false
                 }
             }
+        }
+        for current in GetHierarchy(type) {
+            if current.ImportedBaseType is not{} importedBase {
+                continue
+            }
+            if importedBase is StructSymbol importedStruct {
+                for importedAncestor in GetHierarchy(importedStruct) {
+                    let includeInternal = references != nil &&
+                        importedAncestor.ClrType is {} clrOwner &&
+                        references.CanAccessInternalMembers(clrOwner.Assembly)
+                    for candidate in importedAncestor.Properties {
+                        if candidate.IsStatic || candidate.IsIndexer || candidate.Name != parameter.Name {
+                            continue
+                        }
+                        if candidate.HasGetter &&
+                            IsImportedAccessibilityVisibleFromDerived(candidate.Accessibility, includeInternal) &&
+                            IsImportedAccessibilityVisibleFromDerived(candidate.GetterAccessibility, includeInternal) &&
+                            TypeSymbol
+                            .AreRuntimeEquivalentIgnoringReferenceNullability(candidate.Type, parameter.Type) {
+                            property = candidate
+                            declaringType = importedAncestor
+                            return true
+                        }
+                        return false
+                    }
+                }
+            }
             var clrCurrent Type? = importedBase.ClrType
             while clrCurrent != nil {
+                let includeInternal = references != nil && references.CanAccessInternalMembers(clrCurrent.Assembly)
                 for clrProp in ClrTypeUtilities.SafeGetProperties(
                     clrCurrent,
                     System.Reflection.BindingFlags.Instance |
@@ -527,37 +620,93 @@ shared class TypeMemberModel {
                     if clrProp.Name != parameter.Name || clrProp.GetIndexParameters().Length != 0 {
                         continue
                     }
-                    if clrProp.GetGetMethod(nonPublic: true) is {IsStatic: false, IsPrivate: false} getter {
-                        let setter = clrProp.GetSetMethod(nonPublic: true)
-                        let hasVisibleSetter = setter != nil && !setter.IsStatic && !setter.IsPrivate
-                        let synthesized = PropertySymbol(
-                            parameter.Name,
-                            parameter.Type,
-                            if getter.IsPublic {
-                                Accessibility.Public
-                            } else if getter.IsFamily || getter.IsFamilyOrAssembly {
-                                Accessibility.Protected
-                            } else {
-                                Accessibility.Internal
-                            },
-                            hasGetter: true,
-                            hasSetter: hasVisibleSetter,
-                            isAutoProperty: false,
-                            isVirtual: getter.IsVirtual,
-                            isOverride: ClrTypeUtilities.SafeIsOverride(getter),
-                            isInitOnly: setter != nil && ImportedTypeSymbol.IsInitOnlySetter(setter),
-                            metadataIsAbstract: getter.IsAbstract
-                        ){ReturnRefKind = RefCapabilities.GetReturnRefKind(clrProp)}
-                        synthesized.ImportedMember = clrProp
-                        property = synthesized
-                        return true
+                    let getter = clrProp.GetGetMethod(nonPublic: true)
+                    if getter == nil || getter.IsStatic || !IsClrAccessorVisibleFromDerived(getter, includeInternal) {
+                        return false
                     }
-                    return false
+                    let clrPropertyType = MemberLookup.GetClrPropertyTypeSymbol(importedBase, clrProp)
+                    if !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(clrPropertyType, parameter.Type) {
+                        return false
+                    }
+                    let getterAcc = MapClrAccessorAccessibility(getter)
+                    let rawSetter = clrProp.GetSetMethod(nonPublic: true)
+                    let visibleSetter = if rawSetter != nil &&
+                        !rawSetter.IsStatic &&
+                        IsClrAccessorVisibleFromDerived(rawSetter, includeInternal) {
+                        rawSetter
+                    } else {
+                        default(System.Reflection.MethodInfo?)
+                    }
+                    let setterAcc = if visibleSetter == nil {
+                        getterAcc
+                    } else {
+                        MapClrAccessorAccessibility(visibleSetter)
+                    }
+                    let propAcc = if getterAcc == Accessibility.Public || setterAcc == Accessibility.Public {
+                        Accessibility.Public
+                    } else if getterAcc == Accessibility.Protected || setterAcc == Accessibility.Protected {
+                        Accessibility.Protected
+                    } else {
+                        Accessibility.Internal
+                    }
+                    let synthesized = PropertySymbol(
+                        parameter.Name,
+                        clrPropertyType,
+                        propAcc,
+                        hasGetter: true,
+                        hasSetter: visibleSetter != nil,
+                        isAutoProperty: false,
+                        isVirtual: getter.IsVirtual,
+                        isOverride: ClrTypeUtilities.SafeIsOverride(getter),
+                        isInitOnly: visibleSetter != nil && ImportedTypeSymbol.IsInitOnlySetter(visibleSetter),
+                        getterAccessibility: getterAcc,
+                        setterAccessibility: setterAcc,
+                        metadataIsAbstract: getter.IsAbstract
+                    ){ReturnRefKind = RefCapabilities.GetReturnRefKind(clrProp)}
+                    synthesized.ImportedMember = clrProp
+                    property = synthesized
+                    declaringType = nil
+                    return true
                 }
                 clrCurrent = clrCurrent.BaseType
             }
         }
         return false
+    }
+
+    private func IsSourcePropertyVisibleFromDerived(
+        property PropertySymbol,
+        declaringType StructSymbol,
+        derivedType StructSymbol
+    ) bool -> property.HasGetter &&
+        property.Accessibility != Accessibility.Private &&
+        property.GetterAccessibility != Accessibility.Private &&
+        AccessibilityChecker.IsAccessibleFromType(property.Accessibility, declaringType, derivedType) &&
+        AccessibilityChecker.IsAccessibleFromType(property.GetterAccessibility, declaringType, derivedType)
+
+    private func IsImportedAccessibilityVisibleFromDerived(
+        accessibility Accessibility,
+        includeInternal bool
+    ) bool -> accessibility == Accessibility.Public ||
+        accessibility == Accessibility.Protected ||
+        (includeInternal && accessibility == Accessibility.Internal)
+
+    private func IsClrAccessorVisibleFromDerived(
+        accessor System.Reflection.MethodInfo,
+        includeInternal bool
+    ) bool -> accessor.IsPublic ||
+        accessor.IsFamily ||
+        accessor.IsFamilyOrAssembly ||
+        (includeInternal && (accessor.IsAssembly || accessor.IsFamilyAndAssembly))
+
+    private func MapClrAccessorAccessibility(
+        accessor System.Reflection.MethodInfo
+    ) Accessibility -> if accessor.IsPublic {
+        Accessibility.Public
+    } else if accessor.IsFamily || accessor.IsFamilyOrAssembly {
+        Accessibility.Protected
+    } else {
+        Accessibility.Internal
     }
 
     /// Issue #2150: tries to find a data-class positional (primary-constructor)

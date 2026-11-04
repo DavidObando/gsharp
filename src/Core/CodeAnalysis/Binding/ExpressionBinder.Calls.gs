@@ -178,11 +178,19 @@ internal partial class ExpressionBinder {
             // back to a settable property with the same name so `with`
             // updates a record's positional member through its setter/init
             // accessor instead of failing to find a field at all.
-            if TypeMemberModel.TryGetProperty(
-                structType,
-                memberName,
-                out var property,
-                out var propertyDeclaringType
+            if (
+                TypeMemberModel.TryGetProperty(
+                    structType,
+                    memberName,
+                    out var property,
+                    out var propertyDeclaringType
+                ) ||
+                    TypeMemberModel.TryGetInheritedDataPositionalProperty(
+                    structType,
+                    memberName,
+                    out property,
+                    out propertyDeclaringType
+                )
             ) &&
                 property!!
                 .HasSetter {

@@ -1376,6 +1376,27 @@ internal class UserTokenResolver {
             )
         }
         if !this.cache.PropertyAccessorHandles.TryGetValue(defProp, out var handles) {
+            if defProp.ImportedMember is PropertyInfo importedPositionalProp {
+                let importedAccessor MethodInfo? = if wantSetter {
+                    importedPositionalProp.GetSetMethod(nonPublic: true)
+                } else {
+                    importedPositionalProp.GetGetMethod(nonPublic: true)
+                }
+                if importedAccessor != nil {
+                    var importedOwner TypeSymbol? = nil
+                    for ancestor in containingType.GetHierarchy() {
+                        if ancestor.ImportedBaseType is {} baseType {
+                            importedOwner = baseType
+                            break
+                        }
+                    }
+                    return if importedOwner != nil {
+                        this.memberRefs.GetMethodEntityHandle(importedAccessor, importedOwner)
+                    } else {
+                        this.memberRefs.GetMethodReference(importedAccessor)
+                    }
+                }
+            }
             if containingType.ClrType != nil {
                 let bindingFlags = (
                     if property.IsStatic {

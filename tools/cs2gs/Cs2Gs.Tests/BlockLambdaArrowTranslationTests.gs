@@ -193,8 +193,22 @@ namespace Demo
         {
             var list = new List<int> { 1, 2 };
             var sb = new StringBuilder();
+            int count = 0;
 
             var directCall = Pick(() => { Step(1); });
+            var assignTail = Pick(() => { count = 10; });
+            var incTail = Pick(() => { count++; });
+            var nestedAssignTail = Pick(() =>
+            {
+                if (flag)
+                {
+                    count = 20;
+                }
+                else
+                {
+                    count++;
+                }
+            });
             var ifElseSameType = Pick(() =>
             {
                 if (flag)
@@ -244,7 +258,7 @@ namespace Demo
             taskRun.GetAwaiter().GetResult();
             bool isPlainTask = taskRun.GetType() == typeof(Task) || taskRun.GetType().BaseType == typeof(Task);
 
-            return string.Join("|", directCall, ifElseSameType, ifElseMixedTypes, ifLetChain, usingBlock, asyncVoidTask, isPlainTask);
+            return string.Join("|", directCall, assignTail, incTail, nestedAssignTail, count, ifElseSameType, ifElseMixedTypes, ifLetChain, usingBlock, asyncVoidTask, isPlainTask);
         }
     }
 }`
@@ -259,6 +273,8 @@ namespace Demo
         )
         let printed = TranslateUnit(source)
         Assert.Contains("Step(1)\n            return", printed, StringComparison.Ordinal)
+        Assert.Contains("count = 10\n            return", printed, StringComparison.Ordinal)
+        Assert.Contains("count++\n            return", printed, StringComparison.Ordinal)
         using let gsharpImage = MemoryStream()
         let compilation = GSharpCompilation(GSharpSyntaxTree.Parse(SourceText.From(printed))){IsLibrary = true}
         let emit = compilation.Emit(gsharpImage, nil, nil, "Issue4977Translated")
@@ -269,7 +285,7 @@ namespace Demo
             []object{"hello", true}
         )
         Assert.Equal(expected, actual)
-        Assert.Equal("Action|Action|Action|Action|Action|FuncTask|True", actual)
+        Assert.Equal("Action|Action|Action|Action|20|Action|Action|Action|Action|FuncTask|True", actual)
     }
 
     shared {

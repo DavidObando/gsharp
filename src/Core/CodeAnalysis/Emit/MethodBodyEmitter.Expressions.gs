@@ -1667,7 +1667,7 @@ internal partial class MethodBodyEmitter {
         property PropertySymbol,
         isGeneric bool
     ) EntityHandle {
-        if isGeneric {
+        if isGeneric || property.ImportedMember != nil {
             return this.outer.userTokens.ResolveUserPropertyAccessorToken(structType, property, wantSetter: true)
         }
         if this.outer.cache.PropertyAccessorHandles.TryGetValue(property, out var handles) && (handles.Setter != nil) {

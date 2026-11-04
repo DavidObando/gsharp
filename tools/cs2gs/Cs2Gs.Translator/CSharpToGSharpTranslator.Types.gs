@@ -3749,6 +3749,8 @@ partial class CSharpToGSharpTranslator {
 
             private func StatementHasValueCapableTail(statement GStatement) bool -> switch statement {
                 case exprStmt is ExpressionStatement: !exprStmt.IsVoid && ExpressionProducesValue(exprStmt.Expression)
+                case assignStmt is AssignmentStatement: !assignStmt.IsVoid && ExpressionProducesValue(assignStmt.Value)
+                case IncrementDecrementStatement: true
                 case block is BlockStatement: !block.IsUnsafe &&
                     !block.IsChecked &&
                     !block.IsUnchecked &&
