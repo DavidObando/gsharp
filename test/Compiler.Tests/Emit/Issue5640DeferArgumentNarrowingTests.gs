@@ -519,6 +519,31 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "GS0158@15:14", "reject", ""}
+            yield[]object{"d24_5640_defer_repeated_invocation_preserves_captured_parameter_provenance", `import System
+class C {
+    var Value int32 = 7
+}
+func Consume(v int32) { }
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    defer Consume({
+        var saved = callback
+        let invoke = func(f () -> void) int32 {
+            saved()
+            saved = func() { f() }
+            return 1
+        }
+        invoke(func() { action = clear })
+        action = callback
+        invoke(callback)
+    })
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(func() { }))`, "GS0158@23:14", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

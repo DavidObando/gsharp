@@ -3360,7 +3360,6 @@ internal partial class StatementBinder {
                 return
             }
             let parameters = literal.Function.Parameters
-            let priorState = CaptureCallableState()
             for var i = 0; i < parameters.Length; i++ {
                 let parameter = parameters[i]
                 if !IsCallableType(parameter.Type) {
@@ -3389,14 +3388,6 @@ internal partial class StatementBinder {
             try {
                 VisitStatement(body)
             } finally {
-                for parameter in parameters {
-                    if priorState.Normal.LocalParameters.Contains(parameter) {
-                        normalCallableState.MergeVariableFrom(parameter, priorState.Normal)
-                    }
-                    if priorState.AllEntry.LocalParameters.Contains(parameter) {
-                        allEntryCallableState.MergeVariableFrom(parameter, priorState.AllEntry)
-                    }
-                }
                 if declaredRegionLabels.Count > declaredBefore {
                     declaredRegionLabels.RemoveRange(declaredBefore, declaredRegionLabels.Count - declaredBefore)
                 }
@@ -3547,42 +3538,30 @@ internal partial class StatementBinder {
                 LocalParameters.UnionWith(other.LocalParameters)
             }
 
-            func MergeVariableFrom(variable VariableSymbol, other CallableAliasState) {
-                if other.Literals.TryGetValue(variable, out var otherLiterals) {
-                    if !Literals.TryGetValue(variable, out var literals) {
-                        literals = HashSet[BoundFunctionLiteralExpression]()
-                        Literals.Add(variable, literals)
-                    }
-                    literals.UnionWith(otherLiterals)
-                }
-                if other.Unknown.Contains(variable) {
-                    Unknown.Add(variable)
-                }
-                if other.External.Contains(variable) {
-                    External.Add(variable)
-                }
-            }
-
             func ApplyParameterSnapshot(
                 parameter ParameterSymbol,
                 targets[]?BoundFunctionLiteralExpression,
                 isExternal bool,
                 isUnknown bool
             ) {
-                LocalParameters.Add(parameter)
+                let isFirstBinding = LocalParameters.Add(parameter)
                 if targets != nil && targets.Length > 0 {
-                    Literals[parameter] = HashSet[BoundFunctionLiteralExpression](targets)
-                } else {
+                    if !isFirstBinding && Literals.TryGetValue(parameter, out var existing) {
+                        existing.UnionWith(targets)
+                    } else {
+                        Literals[parameter] = HashSet[BoundFunctionLiteralExpression](targets)
+                    }
+                } else if isFirstBinding {
                     Literals.Remove(parameter)
                 }
                 if isExternal {
                     External.Add(parameter)
-                } else {
+                } else if isFirstBinding {
                     External.Remove(parameter)
                 }
                 if isUnknown || ((targets == nil || targets.Length == 0) && !isExternal) {
                     Unknown.Add(parameter)
-                } else {
+                } else if isFirstBinding {
                     Unknown.Remove(parameter)
                 }
             }
