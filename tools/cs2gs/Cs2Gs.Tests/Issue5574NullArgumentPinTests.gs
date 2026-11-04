@@ -861,7 +861,8 @@ namespace Demo
         {
             SyntaxNode? q = p;
             SyntaxNode? r = c ? q : q;
-            return r == null;
+            SyntaxNode? s = c ? r : r;
+            return s == null;
         }
         public static string Run()
         {
