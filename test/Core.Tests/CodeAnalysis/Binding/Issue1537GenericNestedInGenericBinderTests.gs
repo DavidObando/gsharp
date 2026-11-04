@@ -217,13 +217,15 @@ func BadInheritedTypeClause(item Derived.InheritedInner) { }
 func BadInheritedLiteral() {
     let item = Derived.InheritedInner{}
 }
+@Attribute
+class TypeTagAttribute(Value System.Type) { }
 class InterfaceOwner[T] {
     public interface IPlain { }
     public interface I[U] { }
     public interface IDep[U T] { }
+    @TypeTag(typeof(I[int32]))
+    public func BadLexicalAttrGeneric() { }
 }
-@Attribute
-class TypeTagAttribute(Value System.Type) { }
 @TypeTag(typeof(InterfaceOwner[T].I[int32]))
 class BadAttrGeneric[T] { }
 @TypeTag(typeof(InterfaceOwner[T].IPlain))
@@ -247,14 +249,14 @@ class DepDerived : DepBase[string] {
     public func Bad(x IDep[int32]) { }
 }`)
         let unclosedErrors = unclosedOutsideOwnerDiagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
-        Assert.Equal(14, unclosedErrors.Length)
+        Assert.Equal(15, unclosedErrors.Length)
         Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0157"))
         Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0113"))
         Assert.Equal(2, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0152"))
         Assert.Equal(2, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0155"))
         Assert.Equal(1, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0156"))
         Assert.Equal(1, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0187"))
-        Assert.Equal(2, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0202"))
+        Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0202"))
 
         let validScopedAndConstructedDiagnostics = GetDiagnostics(`package Issue4774BinderValid
 class Outer[T] {

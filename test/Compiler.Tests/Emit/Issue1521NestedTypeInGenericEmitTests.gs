@@ -296,7 +296,7 @@ class Right {
     public class Item { }
 }
 @TypeTag(typeof(Outer[string].IPlain), typeof(Outer[string].IGeneric[int32]))
-class PlainImpl : Outer[string].IPlain, Outer[string].IGeneric[int32], Outer[string].IGeneric[PlainImpl], Outer[string].IMarker, Outer[int32].IMarker, Outer[Left.Item].IMarker, Outer[Right.Item].IMarker {
+class PlainImpl : Outer[string].IPlain, Outer[string].IGeneric[int32], Outer[string].IGeneric[PlainImpl], Outer[string].IMarker, Outer[int32].IMarker, Outer[Left.Item].IMarker, Outer[Right.Item].IMarker, Outer[in chan[int32]].IMarker, Outer[out chan[int32]].IMarker, Outer[(Left.Item) -> void].IMarker, Outer[(Right.Item) -> void].IMarker {
     public prop Tag string -> "tag"
     public func ReadPlain(seed string) string -> seed + ":" + Tag + ":21"
     public func EchoInner(x Outer[string].Inner) Outer[string].Inner -> x
@@ -308,6 +308,10 @@ class PlainImpl : Outer[string].IPlain, Outer[string].IGeneric[int32], Outer[str
     private func (Outer[int32].IMarker) Code() int32 -> 202
     private func (Outer[Left.Item].IMarker) Code() int32 -> 303
     private func (Outer[Right.Item].IMarker) Code() int32 -> 404
+    private func (Outer[in chan[int32]].IMarker) Code() int32 -> 505
+    private func (Outer[out chan[int32]].IMarker) Code() int32 -> 606
+    private func (Outer[(Left.Item) -> void].IMarker) Code() int32 -> 707
+    private func (Outer[(Right.Item) -> void].IMarker) Code() int32 -> 808
 }
 func UseSelfRef[T Outer[string].IGeneric[T]](x T) string -> x.ReadGeneric("self", x)
 class SelfOwnerImpl : Outer[SelfOwnerImpl].IPlain, Outer[SelfOwnerImpl].IGeneric[SelfOwnerImpl] {
@@ -325,6 +329,10 @@ func UseMarkerString(m Outer[string].IMarker) int32 -> m.Code()
 func UseMarkerInt(m Outer[int32].IMarker) int32 -> m.Code()
 func UseMarkerLeft(m Outer[Left.Item].IMarker) int32 -> m.Code()
 func UseMarkerRight(m Outer[Right.Item].IMarker) int32 -> m.Code()
+func UseMarkerInChan(m Outer[in chan[int32]].IMarker) int32 -> m.Code()
+func UseMarkerOutChan(m Outer[out chan[int32]].IMarker) int32 -> m.Code()
+func UseMarkerLeftFn(m Outer[(Left.Item) -> void].IMarker) int32 -> m.Code()
+func UseMarkerRightFn(m Outer[(Right.Item) -> void].IMarker) int32 -> m.Code()
 func Main() {
     let item = Outer[string].Inner{Value: 7}
     let owner = Outer[string]{}
@@ -337,17 +345,21 @@ func Main() {
     let intMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[int32].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
     let leftMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[QualifiedNested4774.Left.Item].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
     let rightMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[QualifiedNested4774.Right.Item].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
+    let inChanMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[in chan[int32]].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
+    let outChanMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[out chan[int32]].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
+    let leftFnMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[(QualifiedNested4774.Left.Item) -> void].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
+    let rightFnMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[(QualifiedNested4774.Right.Item) -> void].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
     Console.WriteLine(item.Read())
     Console.WriteLine(owner.ReadScoped() + owner.UseMiddleLeaf(leaf))
     Console.WriteLine(UsePlain(owner.EchoIface(impl), item))
     Console.WriteLine(UseGeneric(impl) + ":" + UseSelfRef(impl) + ":" + UseSelfEnclosing(selfOwner))
     Console.WriteLine(tag.First == typeof(Outer[string].IPlain) && tag.Second == typeof(Outer[string].IGeneric[int32]))
     Console.WriteLine(baseIface == typeof(IComparable[int32]))
-    Console.WriteLine(UseMarkerString(impl).ToString() + ":" + UseMarkerInt(impl).ToString() + ":" + UseMarkerLeft(impl).ToString() + ":" + UseMarkerRight(impl).ToString() + ":" + (strMarkerMethod != nil && intMarkerMethod != nil && leftMarkerMethod != nil && rightMarkerMethod != nil && leftMarkerMethod != rightMarkerMethod).ToString())
+    Console.WriteLine(UseMarkerString(impl).ToString() + ":" + UseMarkerInt(impl).ToString() + ":" + UseMarkerLeft(impl).ToString() + ":" + UseMarkerRight(impl).ToString() + ":" + UseMarkerInChan(impl).ToString() + ":" + UseMarkerOutChan(impl).ToString() + ":" + UseMarkerLeftFn(impl).ToString() + ":" + UseMarkerRightFn(impl).ToString() + ":" + (strMarkerMethod != nil && intMarkerMethod != nil && leftMarkerMethod != nil && rightMarkerMethod != nil && inChanMarkerMethod != nil && outChanMarkerMethod != nil && leftFnMarkerMethod != nil && rightFnMarkerMethod != nil && inChanMarkerMethod != outChanMarkerMethod && leftFnMarkerMethod != rightFnMarkerMethod).ToString())
 }`
         let output = CompileAndRun(validSource)
         Assert.Equal(
-            "12${Environment.NewLine}16${Environment.NewLine}p:tag:21:12${Environment.NewLine}g:8:self:tag:self-enclosing${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}101:202:303:404:True${Environment.NewLine}",
+            "12${Environment.NewLine}16${Environment.NewLine}p:tag:21:12${Environment.NewLine}g:8:self:tag:self-enclosing${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}101:202:303:404:505:606:707:808:True${Environment.NewLine}",
             output
         )
 

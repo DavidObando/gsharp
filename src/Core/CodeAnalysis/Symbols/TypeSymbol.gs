@@ -519,12 +519,7 @@ open partial class TypeSymbol : Symbol {
                         !st
                         .TypeArguments
                         .IsDefaultOrEmpty {
-                        for arg in st.EnclosingTypeArguments {
-                            if AnyTypeParameter(arg, match) {
-                                return true
-                            }
-                        }
-                        for arg in st.TypeArguments {
+                        for arg in GSharp.Core.CodeAnalysis.Binding.Conversion.GetEffectiveStructTypeArguments(st) {
                             if AnyTypeParameter(arg, match) {
                                 return true
                             }
@@ -537,12 +532,12 @@ open partial class TypeSymbol : Symbol {
                         !iface
                         .TypeArguments
                         .IsDefaultOrEmpty {
-                        for arg in iface.EnclosingTypeArguments {
-                            if AnyTypeParameter(arg, match) {
-                                return true
-                            }
-                        }
-                        for arg in iface.TypeArguments {
+                        for arg in GSharp
+                            .Core
+                            .CodeAnalysis
+                            .Binding
+                            .Conversion
+                            .GetEffectiveInterfaceTypeArguments(iface) {
                             if AnyTypeParameter(arg, match) {
                                 return true
                             }

@@ -180,7 +180,62 @@ internal shared class ExplicitInterfaceMetadataNaming {
                 return "async sequence[${FormatTypeArgument(aseq.ElementType)}]"
             }
             case ch is ChannelTypeSymbol {
-                return "chan[${FormatTypeArgument(ch.ElementType)}]"
+                return ChannelTypeSymbol.FormatName(FormatTypeArgument(ch.ElementType), ch.Direction)
+            }
+            case fn is FunctionTypeSymbol {
+                let hasVariadicFlags = !fn.IsVariadic.IsDefaultOrEmpty
+                let paramParts = [fn.ParameterTypes.Length]string
+                for var i = 0; i < fn.ParameterTypes.Length; i++ {
+                    if hasVariadicFlags && fn.IsVariadic[i] {
+                        let variadicParam = if fn.ParameterTypes[i] is SliceTypeSymbol slice {
+                            FormatTypeArgument(slice.ElementType)
+                        } else {
+                            FormatTypeArgument(fn.ParameterTypes[i])
+                        }
+                        paramParts[i] = "...$variadicParam"
+                    } else {
+                        paramParts[i] = FormatTypeArgument(fn.ParameterTypes[i])
+                    }
+                }
+                let retPart = if fn.ReturnType != nil && !object.ReferenceEquals(fn.ReturnType, TypeSymbol.Void) {
+                    FormatTypeArgument(fn.ReturnType)
+                } else {
+                    "void"
+                }
+                return "(${string.Join(", ", paramParts)}) -> $retPart"
+            }
+            case fnPtr is FunctionPointerTypeSymbol {
+                let paramParts = [fnPtr.ParameterTypes.Length]string
+                for var i = 0; i < fnPtr.ParameterTypes.Length; i++ {
+                    paramParts[i] = FormatTypeArgument(fnPtr.ParameterTypes[i])
+                }
+                if fnPtr.IsManaged {
+                    return if !object.ReferenceEquals(fnPtr.ReturnType, TypeSymbol.Void) {
+                        "*func(${string.Join(", ", paramParts)}) ${FormatTypeArgument(fnPtr.ReturnType)}"
+                    } else {
+                        "*func(${string.Join(", ", paramParts)})"
+                    }
+                }
+                let retPart = if !object.ReferenceEquals(fnPtr.ReturnType, TypeSymbol.Void) {
+                    FormatTypeArgument(fnPtr.ReturnType)
+                } else {
+                    "void"
+                }
+                if fnPtr.IsUnmanagedExtended {
+                    let convSuffix = if !fnPtr.UnmanagedConventions.IsDefaultOrEmpty {
+                        "[${string.Join(", ", fnPtr.UnmanagedConventions)}]"
+                    } else {
+                        string.Empty
+                    }
+                    return "unmanaged$convSuffix (${string.Join(", ", paramParts)}) -> $retPart"
+                }
+                let convLabel = switch fnPtr.CallingConvention {
+                    case System.Runtime.InteropServices.CallingConvention.StdCall: "Stdcall"
+                    case System.Runtime.InteropServices.CallingConvention.ThisCall: "Thiscall"
+                    case System.Runtime.InteropServices.CallingConvention.FastCall: "Fastcall"
+                    default: fnPtr.CallingConvention.ToString()
+                }
+                return "unmanaged[$convLabel] (${string.Join(", ", paramParts)}) -> $retPart"
             }
             case s is StructSymbol {
                 return FormatUserAggregateName(
