@@ -3561,6 +3561,73 @@ internal partial class ExpressionBinder {
             return binderCtx.RootScope.TryLookupSymbol("this") as ParameterSymbol
         }
 
+        internal func ResolvesBareMethodGroup(
+            entryScope BoundScope,
+            binderCtx BinderContext,
+            current FunctionSymbol?,
+            name string
+        ) bool {
+            let overloads = entryScope.TryLookupFunctions(name)
+            if !overloads.IsDefaultOrEmpty {
+                var usableCount = 0
+                var first FunctionSymbol? = nil
+                for candidate in overloads {
+                    if !IsMethodGroupCandidateUsable(candidate) {
+                        continue
+                    }
+                    first ??= candidate
+                    usableCount++
+                }
+                if usableCount == 1 {
+                    return first!!.ReturnRefKind == RefKind.None || first!!.LocalDeclaration == nil
+                }
+                if usableCount > 1 {
+                    return true
+                }
+            }
+            let effThis ParameterSymbol? = GetEffectiveThisParameter(binderCtx, current)
+            if effThis != nil && effThis.Type is StructSymbol thisStruct {
+                if HasNonVariadicMethod(
+                    TypeMemberModel.GetMethods(thisStruct, name, MemberQuery.Instance(MemberKinds.Method))
+                ) {
+                    return true
+                }
+            }
+            if current != nil {
+                let enclosingType StructSymbol? = (current.ReceiverType as StructSymbol) ??
+                    (current.StaticOwnerType as StructSymbol) ??
+                    (current.LexicalEnclosingType as StructSymbol)
+                if enclosingType != nil &&
+                    HasNonVariadicMethod(
+                    TypeMemberModel.GetMethods(enclosingType, name, MemberQuery.Static(MemberKinds.Method))
+                ) {
+                    return true
+                }
+            }
+            return entryScope.TryLookupSymbol(name) is FunctionSymbol single &&
+                IsMethodGroupCandidateUsable(single) &&
+                (single.ReturnRefKind == RefKind.None || single.LocalDeclaration == nil)
+        }
+
+        internal func HasNonVariadicMethod(methods ImmutableArray[FunctionSymbol]) bool {
+            if methods.IsDefaultOrEmpty {
+                return false
+            }
+            for method in methods {
+                var hasVariadic = false
+                for parameter in method.Parameters {
+                    if parameter.IsVariadic {
+                        hasVariadic = true
+                        break
+                    }
+                }
+                if !hasVariadic {
+                    return true
+                }
+            }
+            return false
+        }
+
         internal func TryResolveInterfaceInstancePropertyByBareName(
             binderCtx BinderContext,
             current FunctionSymbol?,

@@ -40,6 +40,48 @@ open class Issue5470And5657RegionWalkerTests {
             for reference in TrustedPlatformAssemblies() {
                 args.Add("/reference:" + reference)
             }
+            if source.Contains("import ImportedClrFixture.", StringComparison.Ordinal) {
+                let fixtureSrcPath = Path.Combine(tempDir, "ImportedClrFixture.gs")
+                let fixtureOutPath = Path.Combine(tempDir, "ImportedClrFixture.dll")
+                File.WriteAllText(fixtureSrcPath, `package ImportedClrFixture
+import System
+public class ClrSeedHolder {
+    shared {
+        public var OnInit Action? = nil
+        public var Seed int32 = 1
+        init {
+            if OnInit is {} cb { cb() }
+        }
+    }
+}`)
+                let fixtureArgs = List[string]{
+                    "/out:" + fixtureOutPath,
+                    "/target:library",
+                    "/targetframework:net10.0",
+                    "/nowarn:GS9100"
+                }
+                for reference in TrustedPlatformAssemblies() {
+                    fixtureArgs.Add("/reference:" + reference)
+                }
+                fixtureArgs.Add(fixtureSrcPath)
+                using let fixtureOut = StringWriter()
+                using let fixtureErr = StringWriter()
+                let prevFixtureOut = Console.Out
+                let prevFixtureErr = Console.Error
+                Console.SetOut(fixtureOut)
+                Console.SetError(fixtureErr)
+                try {
+                    Program.Main(fixtureArgs.ToArray())
+                } finally {
+                    Console.SetOut(prevFixtureOut)
+                    Console.SetError(prevFixtureErr)
+                }
+                Assert.True(
+                    File.Exists(fixtureOutPath),
+                    "Fixture must compile. Log:\n" + fixtureOut.ToString() + fixtureErr.ToString()
+                )
+                args.Add("/reference:" + fixtureOutPath)
+            }
             args.Add(srcPath)
             using let compileOut = StringWriter()
             using let compileErr = StringWriter()
@@ -579,6 +621,108 @@ var g C? = C()
 var s C? = C()
 let err BaseError = BadError()
 Console.WriteLine(err.ReadInLoop(ref s) + err.ReadInSpan(ref s) + ChannelInLoop(ref s, Cap{Raw: 1}) + ChannelInSpan(ref s, Cap{Raw: 1}))`, "GS0155@22:23 GS0155@23:23 GS0155@33:19 GS0155@34:19 GS0155@53:19 GS0155@54:19 GS0155@64:15 GS0155@65:15", "reject", ""}
+            yield[]object{"imported_clr_static_field_and_implicit_static_write_initializers_remove_facts_5470_5657", `package T
+import System
+import ImportedClrFixture.ClrSeedHolder
+class C { }
+class Outer {
+    shared {
+        var LocalSeed int32 = 0
+        init {
+            g = nil
+        }
+    }
+    class Inner {
+        func WriteInLoop() int32 {
+            if g == nil { return 0 }
+            var n = 0
+            while n < 2 {
+                let a C = g
+                LocalSeed = 1
+                n = n + 1
+            }
+            return n
+        }
+        func WriteInSpan() int32 {
+            if g == nil { return 0 }
+            var n = 0
+            Again:
+            let a C = g
+            LocalSeed = 1
+            n = n + 1
+            if n < 2 { goto Again }
+            return n
+        }
+    }
+}
+func ReadClrInLoop() int32 {
+    if g == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let a C = g
+        let v = Seed
+        n = n + 1
+    }
+    return n
+}
+func ReadClrInSpan() int32 {
+    if g == nil { return 0 }
+    var n = 0
+    Again:
+    let a C = g
+    let v = Seed
+    n = n + 1
+    if n < 2 { goto Again }
+    return n
+}
+var g C? = C()
+let inner = Outer.Inner{}
+Console.WriteLine(inner.WriteInLoop() + inner.WriteInSpan() + ReadClrInLoop() + ReadClrInSpan())`, "GS0155@17:27 GS0155@27:23 GS0155@39:19 GS0155@49:15", "reject", ""}
+            yield[]object{"method_group_collision_beats_static_import_property_in_loop_and_span_5470", `package T
+import System
+import T.Host
+class C {
+    var Value int32
+}
+class Host {
+    shared {
+        prop Level int32 {
+            get {
+                return 99
+            }
+        }
+    }
+}
+func Level() int32 {
+    return 7
+}
+func InLoop(ref item C?) int32 {
+    if item == nil { return 0 }
+    var total = 0
+    var n = 0
+    while n < 2 {
+        let b C = item
+        let callback = Level
+        total = total + b.Value
+        n = n + 1
+    }
+    return total + Level()
+}
+func InSpan(ref item C?) int32 {
+    if item == nil { return 0 }
+    var total = 0
+    var n = 0
+    Again:
+    let b C = item
+    let callback = Level
+    total = total + b.Value
+    n = n + 1
+    if n < 2 { goto Again }
+    return total + Level()
+}
+var s C? = C{Value: 10}
+Console.WriteLine(InLoop(ref s))
+Console.WriteLine(InSpan(ref s))`, "", "run", "27|27"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

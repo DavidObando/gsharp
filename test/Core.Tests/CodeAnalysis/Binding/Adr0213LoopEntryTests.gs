@@ -154,6 +154,49 @@ func Main() { }`}, EmittedOracleOptions{References: []string{fixture.AssemblyPat
     }
 
     @Fact
+    func BareStaticImportOfImportedClrFieldWithTypeInitializer_RemovesFactsInLoopAndSpan() {
+        // An imported CLR static field read through a static import (`import Adr0213ClrStaticInit.ClrHolder`) can run
+        // the declaring type's `.cctor`, removing mutable-global facts at loop and backward-jump entry (#5470, #5657).
+        using let fixture = CSharpFixture(`namespace Adr0213ClrStaticInit;
+public static class ClrHolder {
+    public static System.Action? OnInit;
+    public static int Seed = 1;
+    static ClrHolder() { OnInit?.Invoke(); }
+}`)
+        let result = EmittedOracle.Evaluate([]string{`package T
+import Adr0213ClrStaticInit.ClrHolder
+class C { }
+var g C? = C()
+func ReadInLoop() int32 {
+    if g == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let a C = g
+        let v = Seed
+        n = n + 1
+    }
+    return n
+}
+func ReadInSpan() int32 {
+    if g == nil { return 0 }
+    var n = 0
+    Again:
+    let a C = g
+    let v = Seed
+    n = n + 1
+    if n < 2 { goto Again }
+    return n
+}
+func Main() { }`}, EmittedOracleOptions{References: []string{fixture.AssemblyPath}})
+        let errors = result
+            .Diagnostics
+            .Where((d Diagnostic) -> d.IsError)
+            .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("GS0155@9:19 GS0155@19:15", string.Join(" ", errors))
+    }
+
+    @Fact
     func CompoundGenericParameterOfAnImportedConversion_IsAConversion() {
         // `Use(payload, 1)` infers `T = int32` from the second argument and converts `Payload` to `List[int32]` with
         // an imported operator, which can write the storage that a `ref` parameter aliases.
@@ -3709,6 +3752,72 @@ func RunChannel(ref item C?, cap Cap) int32 {
     return n
 }
 func Main() { }`, "GS0155@33:19 GS0155@34:19 GS0155@21:23 GS0155@22:23")
+            Add(
+                "implicit-static-field-write-initializes-enclosing-owner-and-method-group-beats-static-import-property (#5470, #5657)",
+                `package T
+import System
+import T.Host
+class C { }
+var g C? = C()
+class Host {
+    shared {
+        prop Level int32 {
+            get {
+                g = nil
+                return 1
+            }
+        }
+    }
+}
+func Level() int32 -> 7
+class Outer {
+    shared {
+        var Seed int32 = 0
+        init {
+            g = nil
+        }
+    }
+    class Inner {
+        func WriteInLoop() int32 {
+            if g == nil { return 0 }
+            var n = 0
+            while n < 2 {
+                let a C = g
+                Seed = 1
+                n = n + 1
+            }
+            return n
+        }
+        func WriteInSpan() int32 {
+            if g == nil { return 0 }
+            var n = 0
+            Again:
+            let a C = g
+            Seed = 1
+            n = n + 1
+            if n < 2 { goto Again }
+            return n
+        }
+    }
+}
+func KeepRefAcrossMethodGroup(ref item C?) int32 {
+    if item == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let b C = item
+        let cb = Level
+        n = n + 1
+    }
+    Again:
+    let c C = item
+    let cb2 = Level
+    n = n + 1
+    if n < 4 { goto Again }
+    return n
+}
+func Main() { }`,
+                "GS0155@29:27 GS0155@39:23"
+            )
             return rows
         }
     }

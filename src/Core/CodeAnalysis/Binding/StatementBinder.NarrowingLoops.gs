@@ -166,17 +166,28 @@ internal partial class StatementBinder {
         out type TypeSymbol?,
         out isProperty bool,
         out getterRunsUserCode bool,
-        out touchesInitializingType bool
+        out touchesInitializingType bool,
+        forWrite bool = false
     ) bool {
         type = nil
         isProperty = false
         getterRunsUserCode = false
         touchesInitializingType = false
+        if !forWrite && ExpressionBinder.ResolvesBareMethodGroup($scope, binderCtx, function, name) {
+            return false
+        }
         if $scope.SubmissionImports is {} submissions &&
             $scope.References is {} references &&
             submissions.TryFindMemberContainer(references, name, out var programType) &&
             programType != nil &&
-            TryResolveClrStaticMemberByBareName(programType, name, out type, out isProperty, out getterRunsUserCode) {
+            TryResolveClrStaticMemberByBareName(
+            programType,
+            name,
+            out type,
+            out isProperty,
+            out getterRunsUserCode,
+            out touchesInitializingType
+        ) {
             return true
         }
         let hasLexicalOwner = (function?.StaticOwnerType ?? function?.ReceiverType) is {} lexicalOwner && MemberLookup(
@@ -219,6 +230,11 @@ internal partial class StatementBinder {
                     touchesInitializingType = TypeInitializationRunsUserCode(propertyOwner, true)
                     return true
                 }
+                if !forWrite && ExpressionBinder.HasNonVariadicMethod(
+                    TypeMemberModel.GetMethods(match, name, MemberQuery.InheritedStatic(MemberKinds.Method))
+                ) {
+                    return false
+                }
                 if TypeMemberModel.GetNearestImportedBase(match)
                     ?.ClrType is {} baseClr &&
                     TryResolveClrStaticMemberByBareName(
@@ -226,7 +242,8 @@ internal partial class StatementBinder {
                     name,
                     out type,
                     out isProperty,
-                    out getterRunsUserCode
+                    out getterRunsUserCode,
+                    out touchesInitializingType
                 ) {
                     return true
                 }
@@ -251,7 +268,8 @@ internal partial class StatementBinder {
                     name,
                     out type,
                     out isProperty,
-                    out getterRunsUserCode
+                    out getterRunsUserCode,
+                    out touchesInitializingType
                 ) {
                     return true
                 }
@@ -301,27 +319,42 @@ internal partial class StatementBinder {
         name string,
         out type TypeSymbol?,
         out isProperty bool,
-        out getterRunsUserCode bool
+        out getterRunsUserCode bool,
+        out touchesInitializingType bool
     ) bool {
         type = nil
         isProperty = false
         getterRunsUserCode = false
-        let flags = BindingFlags.Static | BindingFlags.Public
+        touchesInitializingType = false
+        let flags = BindingFlags.Static | BindingFlags.Public | BindingFlags.FlattenHierarchy
         for property in ClrTypeUtilities.SafeGetProperties(clrType, flags) {
             if ClrTypeUtilities.EmittedMemberNameMatches(property, name) && property.GetIndexParameters().Length == 0 {
                 type = ClrNullability.GetPropertyTypeSymbol(property)
                 isProperty = true
                 getterRunsUserCode = !IsStableClrGetter(property)
+                touchesInitializingType = ClrStaticMemberOwnerInitializes(property.DeclaringType ?? clrType)
                 return true
             }
         }
         for field in ClrTypeUtilities.SafeGetFields(clrType, flags) {
             if ClrTypeUtilities.EmittedMemberNameMatches(field, name) {
                 type = ClrNullability.GetFieldTypeSymbol(field)
+                touchesInitializingType = !field.IsLiteral &&
+                    ClrStaticMemberOwnerInitializes(field.DeclaringType ?? clrType)
                 return true
             }
         }
         return false
+    }
+
+    private func ClrStaticMemberOwnerInitializes(owner Type) bool -> if ReflectionType(owner) is {} reflected {
+        ClrTypeUtilities.SafeGetConstructors(
+            reflected,
+            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic
+        )
+            .Length > 0
+    } else {
+        true
     }
 
     private func TryLookupRegionVariableType(name string) TypeSymbol? {
@@ -396,7 +429,12 @@ internal partial class StatementBinder {
             ) {
                 resolved.ReadsUserCodeProperty = true
             }
-            if symbol is not VariableSymbol &&
+            if symbol is not VariableSymbol && !ExpressionBinder.ResolvesBareMethodGroup(
+                $scope,
+                binderCtx,
+                function,
+                name
+            ) &&
                 TryResolveBareFallbackMember(
                 name,
                 out _,
@@ -431,7 +469,8 @@ internal partial class StatementBinder {
                     out _,
                     out var isProperty,
                     out _,
-                    out var touchesInitializingType
+                    out var touchesInitializingType,
+                    forWrite: true
                 ) {
                     resolved.ImplicitMemberWrite = true
                     if isProperty || touchesInitializingType {
@@ -444,6 +483,10 @@ internal partial class StatementBinder {
                 continue
             }
             if variable is ImplicitPropertyVariableSymbol or ImplicitStaticPropertyVariableSymbol {
+                resolved.RunsUserCodeOnWrite = true
+            }
+            if BareStaticOwnerInitializes(variable) {
+                resolved.TouchesInitializingType = true
                 resolved.RunsUserCodeOnWrite = true
             }
             if variable is ImplicitFieldVariableSymbol or
