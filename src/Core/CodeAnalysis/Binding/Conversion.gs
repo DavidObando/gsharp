@@ -497,6 +497,8 @@ class Conversion {
                     Conversion.Identity
                 }
             }
+            let annotatedFrom = from
+            let annotatedTo = to
             // Inner generic nullability metadata does not change the outer CLR type's
             // conversion rules. Expose the symbolic generic/interface shape beneath
             // it before applying identity, hierarchy, and variance classification.
@@ -921,7 +923,7 @@ class Conversion {
             // bind instead of failing GS0155.
             if from is ImportedTypeSymbol fromImported &&
                 to is ImportedTypeSymbol toImported &&
-                AreConstructedGenericShapesIdentical(fromImported, toImported) {
+                AreConstructedGenericShapesIdentical(annotatedFrom!!, annotatedTo!!, fromImported, toImported) {
                 return Conversion.Identity
             }
             // Issue #2523: a constructed imported reference type may carry
@@ -3211,7 +3213,12 @@ class Conversion {
         /// `int32`) resolve to the SAME (cref:TypeSymbol). Requires at
         /// least one side to be symbolic so genuinely CLR-backed comparisons keep
         /// flowing through the existing (variance-aware) rules.
-        private func AreConstructedGenericShapesIdentical(from ImportedTypeSymbol, to ImportedTypeSymbol) bool {
+        private func AreConstructedGenericShapesIdentical(
+            annotatedFrom TypeSymbol,
+            annotatedTo TypeSymbol,
+            from ImportedTypeSymbol,
+            to ImportedTypeSymbol
+        ) bool {
             let fromSymbolic = !from.TypeArguments.IsDefaultOrEmpty
             let toSymbolic = !to.TypeArguments.IsDefaultOrEmpty
             // Scope to the asymmetric case: the symmetric symbolic/symbolic and the
@@ -3219,8 +3226,8 @@ class Conversion {
             if fromSymbolic == toSymbolic {
                 return false
             }
-            if !TryGetConstructedGenericShape(from, out var fromOpen, out var fromArgs) ||
-                !TryGetConstructedGenericShape(to, out var toOpen, out var toArgs) {
+            if !TryGetConstructedGenericShape(annotatedFrom, out var fromOpen, out var fromArgs) ||
+                !TryGetConstructedGenericShape(annotatedTo, out var toOpen, out var toArgs) {
                 return false
             }
             if !fromOpen.IsSameAs(toOpen) || fromArgs.Length != toArgs.Length {
