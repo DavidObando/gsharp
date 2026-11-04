@@ -100,7 +100,7 @@ internal partial class StatementBinder {
         }
         var effects AssignedRootsCollector? = nil
         var branchEffects AssignedRootsCollector? = nil
-        var filterNames HashSet[string]? = nil
+        var filterWrites List[(TryBlock SyntaxNode?, Names HashSet[string])]? = nil
         var branchesMutateMembers = false
         var statementMutatesMembers = false
         var branchesMutateReferenceStorage = false
@@ -116,10 +116,10 @@ internal partial class StatementBinder {
                 if syntax != nil {
                     EnsureClosureAssignedNames(syntax)
                 }
-                filterNames = if syntax == nil {
-                    default(HashSet[string]?)
+                filterWrites = if syntax == nil {
+                    default(List[(TryBlock SyntaxNode?, Names HashSet[string])]?)
                 } else {
-                    EnclosingFilterNames(syntax, effects)
+                    EnclosingFilterWrites(syntax, effects)
                 }
                 let branches = BranchStatements(statement)
                 branchEffects = NewCollector(nil, aliasesAtEntry)
@@ -141,8 +141,8 @@ internal partial class StatementBinder {
                     syntax == nil ||
                     SyntaxMayMutateMemberPaths(syntax)
             }
-            let killedByFilter = filterNames != nil &&
-                (filterNames.Contains(path.Root.Name) || MayBeMutatedByUnknownCallable(path))
+            let killedByFilter = filterWrites != nil &&
+                (FilterWritesVariable(filterWrites, path.Root) || MayBeMutatedByUnknownCallable(path))
             if !killedByFilter &&
                 !KillsJoinGain(
                 path,
