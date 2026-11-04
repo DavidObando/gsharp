@@ -878,7 +878,8 @@ partial class CSharpToGSharpTranslator {
                     .CodeAnalysis
                     .NullableAnnotation
                     .Annotated ||
-                    (this.IsObliviousCompilation() && this.IsNullablePromotedValue(expression))
+                    (this.IsObliviousCompilation() && this.IsNullablePromotedValue(expression)) ||
+                    this.IsTranslatorWidenedDeclaration(this.context.GetSymbolInfo(expression).Symbol)
             )
             if nullableValue {
                 return ParenthesizedExpression(BinaryExpression(translated, "as", TypeExpression(target)))

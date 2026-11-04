@@ -806,6 +806,69 @@ namespace Demo
         Assert.DoesNotContain("!!", printed)
     }
 
+    /// A read through a switch expression, conditional or coalesce into an explicitly typed nullable
+    /// reference local (`SyntaxNode? declaration = type switch { DelegateTypeSymbol d => d.Declaration, _ => null }`)
+    /// takes the null, so `DelegateTypeSymbol(declaration: null!)` widens `declaration` and `Declaration`,
+    /// the upcast arm emits `d.Declaration as SyntaxNode`, and the call `declaration: nil` compiles and
+    /// runs. Control: a read through a switch arm into an inferred `var` local still pins.
+    @Fact
+    func AReadThroughASwitchOrConditionalIntoAnExplicitNullableLocal_DoesNotPin() {
+        let compilation = CompileFiles("App", nil, ("Delegates.cs", `
+namespace Demo
+{
+    public class SyntaxNode { public bool Implicit; }
+    public sealed class DelegateDeclarationSyntax : SyntaxNode { }
+    public abstract class TypeSymbol { }
+    public sealed class DelegateTypeSymbol : TypeSymbol
+    {
+        public DelegateTypeSymbol(string name, DelegateDeclarationSyntax declaration)
+        {
+            Name = name;
+            Declaration = declaration;
+        }
+        public string Name { get; }
+        public DelegateDeclarationSyntax Declaration { get; }
+    }
+    public sealed class PinnedSymbol : TypeSymbol
+    {
+        public PinnedSymbol(DelegateDeclarationSyntax declaration) { Declaration = declaration; }
+        public DelegateDeclarationSyntax Declaration { get; }
+    }
+    public class Sink { public virtual string Take(SyntaxNode n) => "taken"; }
+    public static class BoundScope
+    {
+        public static bool IsImplicit(TypeSymbol type)
+        {
+            SyntaxNode? declaration = type switch
+            {
+                DelegateTypeSymbol d => d.Declaration,
+                _ => null,
+            };
+            return declaration != null && declaration.Implicit;
+        }
+        public static string PinnedRead(PinnedSymbol p)
+        {
+            var captured = p switch { PinnedSymbol x => x.Declaration };
+            return new Sink().Take(captured);
+        }
+        public static string Run()
+        {
+            var synth = new DelegateTypeSymbol("<>RefFunc0", declaration: null!);
+            var real = new DelegateTypeSymbol("D", declaration: new DelegateDeclarationSyntax { Implicit = true });
+            return IsImplicit(synth) + " " + IsImplicit(real) + " " +
+                PinnedRead(new PinnedSymbol(default(DelegateDeclarationSyntax)!));
+        }
+    }
+}`))
+        let printed = TranslateFile(compilation, "Delegates.cs", []CSharpCompilation{compilation})
+        Assert.Equal("False True taken", CompileAndRun([]string{printed}, "Demo.BoundScope.Run()").Trim())
+        Assert.Contains("declaration DelegateDeclarationSyntax?", printed)
+        Assert.Contains("prop Declaration DelegateDeclarationSyntax?", printed)
+        Assert.Contains("(d.Declaration as SyntaxNode)", printed)
+        Assert.Contains("declaration: nil", printed)
+        Assert.Contains("init(declaration DelegateDeclarationSyntax)", printed)
+    }
+
     shared {
         private func TranslateBound(source(Path string, Source string)) string {
             let compilation = CompileFiles("Snippet", nil, source)

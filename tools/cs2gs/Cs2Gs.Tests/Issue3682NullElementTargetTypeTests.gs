@@ -292,6 +292,32 @@ namespace Demo
         Assert.Contains("[]object?{program, nil}", printed)
     }
 
+    @Fact
+    func GenericTupleCallTarget_NullElementUsesTypedDefault() {
+        let printed = TranslateUnit(`
+namespace Demo
+{
+    public static class AssertLike
+    {
+        public static void Equal<T>(T expected, T actual) { }
+    }
+
+    public static class ChannelOpsLike
+    {
+        public static (string Value, bool Ok) Receive2() => (null, false);
+        public static (string? Value, bool Ok) Receive2Nullable() => (null, false);
+
+        public static void F()
+        {
+            AssertLike.Equal((null, false), Receive2());
+            AssertLike.Equal((null, false), Receive2Nullable());
+        }
+    }
+}`)
+        Assert.Contains("AssertLike.Equal((default(string), false), Receive2())", printed, StringComparison.Ordinal)
+        Assert.Contains("AssertLike.Equal((nil, false), Receive2Nullable())", printed, StringComparison.Ordinal)
+    }
+
     shared {
         private func TranslateUnit(source string) string {
             let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})
