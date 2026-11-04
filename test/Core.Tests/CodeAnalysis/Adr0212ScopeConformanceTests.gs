@@ -605,22 +605,27 @@ open class Adr0212ScopeConformanceTests {
         }
 
         private func Equivalent(found Symbol, bound Symbol) bool {
-            if object.ReferenceEquals(found, bound) {
+            let effectiveFound = if found is TypeAliasSymbol alias {
+                alias.Target
+            } else {
+                found
+            }
+            if object.ReferenceEquals(effectiveFound, bound) {
                 return true
             }
-            if !string.Equals(found.Name, bound.Name, StringComparison.Ordinal) {
+            if !string.Equals(effectiveFound.Name, bound.Name, StringComparison.Ordinal) {
                 return false
             }
             // One symbol per name: a call's overload and a constructed member are the name's symbol.
-            if found is FunctionSymbol && bound is FunctionSymbol {
-                return SameOwner(found, bound)
+            if effectiveFound is FunctionSymbol && bound is FunctionSymbol {
+                return SameOwner(effectiveFound, bound)
             }
-            let foundSyntax = found.DeclaringSyntaxNodes
+            let foundSyntax = effectiveFound.DeclaringSyntaxNodes
             let boundSyntax = bound.DeclaringSyntaxNodes
             if !foundSyntax.IsDefaultOrEmpty && !boundSyntax.IsDefaultOrEmpty {
                 return object.ReferenceEquals(foundSyntax[0], boundSyntax[0])
             }
-            return found.GetType() == bound.GetType()
+            return effectiveFound.GetType() == bound.GetType()
         }
 
         /// A type clause that names a single type must answer it, whatever declares the clause.
@@ -682,7 +687,8 @@ open class Adr0212ScopeConformanceTests {
                 found[0] is StructSymbol or
                 EnumSymbol or
                 InterfaceSymbol or
-                DelegateTypeSymbol
+                DelegateTypeSymbol or
+                TypeAliasSymbol
         }
 
         private const Program string = `package Conformance

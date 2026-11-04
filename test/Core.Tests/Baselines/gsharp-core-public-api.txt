@@ -863,6 +863,7 @@ type enum GSharp.Core.CodeAnalysis.Symbols.SymbolKind : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind Parameter = 3
   field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind Property = 11
   field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind Type = 4
+  field public const GSharp.Core.CodeAnalysis.Symbols.SymbolKind TypeAlias = 13
 type enum GSharp.Core.CodeAnalysis.Symbols.TypeParameterConstraint : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.TypeParameterConstraint Any = 0
   field public const GSharp.Core.CodeAnalysis.Symbols.TypeParameterConstraint Comparable = 1
@@ -5363,6 +5364,18 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.TupleTypeSymbol : GSharp.Core
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.FieldSymbol> TupleElements { get; }
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeSymbol> ElementTypes { get; }
   property public System.Collections.Immutable.ImmutableArray`1<String> ElementNames { get; }
+type sealed class GSharp.Core.CodeAnalysis.Symbols.TypeAliasSymbol : GSharp.Core.CodeAnalysis.Symbols.Symbol
+  method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_Target()
+  method public GSharp.Core.CodeAnalysis.Syntax.TypeAliasDeclarationSyntax get_Declaration()
+  method public Void .ctor(String name, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol target, GSharp.Core.CodeAnalysis.Syntax.TypeAliasDeclarationSyntax declaration = null)
+  method public virtual override GSharp.Core.CodeAnalysis.Symbols.SymbolKind get_Kind()
+  method public virtual override String get_ContainingNamespace()
+  method public virtual override System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxNode> get_DeclaringSyntaxNodes()
+  property public GSharp.Core.CodeAnalysis.Symbols.SymbolKind Kind { get; }
+  property public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol Target { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.TypeAliasDeclarationSyntax Declaration { get; }
+  property public String ContainingNamespace { get; }
+  property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxNode> DeclaringSyntaxNodes { get; }
 type sealed class GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol : GSharp.Core.CodeAnalysis.Symbols.TypeSymbol
   method public Boolean get_DependentBoundProvesReferenceType()
   method public Boolean get_HasDefaultConstructorConstraint()
