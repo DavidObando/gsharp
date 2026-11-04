@@ -40,8 +40,9 @@ public func ForwardBeforeDeclaration(
     negated float64 = -Size,
     small uint8 = SmallCount,
     tag string = Prefix + "-v1",
-    missing string? = MissingTag
-) string -> "${value}:${imported}:${shifted}:${negated}:${small}:${tag}:${missing ?? "nil"}"
+    missing string? = MissingTag,
+    missingObj object? = MissingTag
+) string -> "${value}:${imported}:${shifted}:${negated}:${small}:${tag}:${missing ?? "nil"}:${missingObj ?? "nil"}"
 
 public class Holder(Scale float64 = Size) {
     public func Compute(
@@ -202,7 +203,7 @@ public func RunConsumer() string {
                 )!!
                 let actual = Assert.IsType[string](runConsumer.Invoke(nil, nil))
                 Assert.Equal(
-                    "14:14:14:14:15.5:-14:7:tok-v1:nil:59.5:14:14:36.5:10:14:7:17:7:11:-2147483648:1:1:1:7:1:v:14:14:30:-2147483648:1:1:7",
+                    "14:14:14:14:15.5:-14:7:tok-v1:nil:nil:59.5:14:14:36.5:10:14:7:17:7:11:-2147483648:1:1:1:7:1:v:14:14:30:-2147483648:1:1:7",
                     actual
                 )
             } finally {
@@ -250,6 +251,7 @@ class Tokens {
     shared {
         const MinInt int32 = -2147483648
         const OverflowByte int32 = 257
+        const Empty string? = nil
     }
 }
 
@@ -257,6 +259,7 @@ func BadCheckedNeg(value int64 = checked(-Tokens.MinInt)) int64 -> value
 func BadCheckedConvInt(value int32 = checked(uint8(Tokens.OverflowByte))) int32 -> value
 func BadCheckedConvFloat(value float64 = checked(uint8(Tokens.OverflowByte))) float64 -> value
 func BadCheckedNullableConv(value uint8? = checked(cast[uint8?](Tokens.OverflowByte))) uint8? -> value
+func BadIncompatibleNilConst(value int32? = Tokens.Empty) int32? -> value
 
 class Outer {
     shared {
@@ -294,7 +297,7 @@ interface ICollide {
         )
         Assert.False(result.Success)
         let gs0265 = result.Diagnostics.Where((diagnostic Diagnostic) -> diagnostic.Id == "GS0265").ToArray()
-        Assert.Equal(4, gs0265.Length)
+        Assert.Equal(5, gs0265.Length)
         Assert.Contains(result.Diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "GS0102")
         Assert.Contains(
             result.Diagnostics,

@@ -458,6 +458,9 @@ partial class Binder {
             return Expressions.BindTypeOfExpression(syntax)
         }
         let BindExpressionForDeclarations = func (syntax ExpressionSyntax) BoundExpression {
+            if syntax is RefArgumentExpressionSyntax refArgument {
+                return Expressions.BindRefArgumentExpression(refArgument, parameter: nil)
+            }
             return Expressions.BindExpression(syntax)
         }
         declarations = DeclarationBinder(

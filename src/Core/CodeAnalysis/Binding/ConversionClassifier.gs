@@ -5685,6 +5685,11 @@ internal class ConversionClassifier {
             // `nil` is only valid for a reference-compatible or nullable parameter type.
             if value == nil {
                 if parameterType is NullableTypeSymbol || (parameterType.ClrType is Type ct && !ct.IsValueType) {
+                    if expressionType != TypeSymbol.Null && !Conversion.Classify(expressionType, parameterType)
+                        .IsImplicit {
+                        reason = "the default value of type '${expressionType.Name}' is not implicitly convertible to parameter type '${parameterType.Name}'."
+                        return false
+                    }
                     return true
                 }
                 reason = "'nil' is not a valid default for value-type parameter of type '${parameterType.Name}'."
@@ -6027,6 +6032,12 @@ internal class ConversionClassifier {
             }
             if mapped.Equals(expected) {
                 return true
+            }
+            if mapped is NullableTypeSymbol mappedNullable &&
+                expected is NullableTypeSymbol expectedNullable &&
+                NullableLifting.IsAnyValueTypeNullable(mappedNullable) ==
+            NullableLifting.IsAnyValueTypeNullable(expectedNullable) {
+                return IsSameSymbolicType(mappedNullable.UnderlyingType, expectedNullable.UnderlyingType)
             }
             if !(mapped is ImportedTypeSymbol{OpenDefinition: {} mappedOpen} mappedImported) ||
                 !(expected is ImportedTypeSymbol{OpenDefinition: {} expectedOpen} expectedImported) ||
