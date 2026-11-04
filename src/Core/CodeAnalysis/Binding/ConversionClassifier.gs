@@ -818,7 +818,11 @@ internal class ConversionClassifier {
                     }
                 }
             }
-            return BoundErrorExpression(nil)
+            return if expression is BoundErrorExpression {
+                expression
+            } else {
+                BoundErrorExpression(nil)
+            }
         }
         if !allowExplicit && conversion.IsExplicit {
             if callParameter == nil {
@@ -2174,6 +2178,7 @@ internal class ConversionClassifier {
             // delegate signature supplies pointee types. The filter above has
             // already checked every closed slot, so a sole closed by-ref
             // candidate is final. Open generic candidates still need inference.
+            using let _ = CallCandidateRecorder.Enter(false)
             var resolvedMethod MethodInfo? = if hasByRefTarget &&
                 applicable.Count == 1 &&
                 !applicable[0].IsGenericMethodDefinition {

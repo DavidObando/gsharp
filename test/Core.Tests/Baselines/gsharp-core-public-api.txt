@@ -4606,6 +4606,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol : GSharp.Core.
   method public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.TypeParameterSymbol> get_TypeParameters()
   method public System.Reflection.MethodInfo get_ExplicitInterfaceSlot()
   method public System.Reflection.MethodInfo get_ExternalOverriddenMethod()
+  method public System.Reflection.MethodInfo get_ImportedMember()
   method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> parameters, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax declaration = null, GSharp.Core.CodeAnalysis.Symbols.PackageSymbol package = null, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility = 0)
   method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> parameters, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax declaration, GSharp.Core.CodeAnalysis.Symbols.PackageSymbol package, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, GSharp.Core.CodeAnalysis.Symbols.StructSymbol receiverType)
   method public Void .ctor(String name, System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Symbols.ParameterSymbol> parameters, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol type, GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax declaration, GSharp.Core.CodeAnalysis.Symbols.PackageSymbol package, GSharp.Core.CodeAnalysis.Symbols.Accessibility accessibility, GSharp.Core.CodeAnalysis.Symbols.StructSymbol receiverType, Boolean isOpen, Boolean isOverride)
@@ -4693,6 +4694,7 @@ type sealed class GSharp.Core.CodeAnalysis.Symbols.FunctionSymbol : GSharp.Core.
   property public System.Collections.Immutable.ImmutableArray`1<GSharp.Core.CodeAnalysis.Syntax.SyntaxNode> DeclaringSyntaxNodes { get; }
   property public System.Reflection.MethodInfo ExplicitInterfaceSlot { get; set; }
   property public System.Reflection.MethodInfo ExternalOverriddenMethod { get; set; }
+  property public System.Reflection.MethodInfo ImportedMember { get; }
 type sealed class GSharp.Core.CodeAnalysis.Symbols.FunctionTypeSymbol : GSharp.Core.CodeAnalysis.Symbols.TypeSymbol
   method public Boolean get_HasVariadic()
   method public GSharp.Core.CodeAnalysis.Symbols.TypeSymbol get_ReturnType()

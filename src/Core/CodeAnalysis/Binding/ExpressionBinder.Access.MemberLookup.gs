@@ -4276,9 +4276,19 @@ internal partial class ExpressionBinder {
         leftName NameExpressionSyntax,
         rightPart ExpressionSyntax
     ) BoundExpression {
-        let result = BindTypeParameterStaticAccessorStepCore(tpSym, leftName, rightPart)
-        RecordStaticTypeQualifier(result, tpSym, rightPart)
-        return result
+        let frame = if rightPart is CallExpressionSyntax ce {
+            CallCandidateRecorder.Begin(ce, tpSym.ClrInterfaceConstraint ?? tpSym.InterfaceConstraint)
+        } else {
+            default(CallCandidateRecorder.Frame?)
+        }
+        try {
+            let result = BindTypeParameterStaticAccessorStepCore(tpSym, leftName, rightPart)
+            RecordStaticTypeQualifier(result, tpSym, rightPart)
+            CallCandidateRecorder.Stamp(frame, result)
+            return result
+        } finally {
+            CallCandidateRecorder.End(frame)
+        }
     }
 
     private func BindTypeParameterStaticAccessorStepCore(
@@ -4340,12 +4350,14 @@ internal partial class ExpressionBinder {
                 {
                     let methodName = callSyntax.Identifier.ValueText
                     if tpSym.InterfaceConstraint != nil {
-                        var slot FunctionSymbol? = nil
-                        for candidate in TypeMemberModel.GetMethods(
+                        let candidates = TypeMemberModel.GetMethods(
                             tpSym.InterfaceConstraint!!,
                             methodName,
                             MemberQuery.Static(MemberKinds.Method)
-                        ) {
+                        )
+                        CallCandidateRecorder.RecordFunctions(candidates, tpSym.InterfaceConstraint)
+                        var slot FunctionSymbol? = nil
+                        for candidate in candidates {
                             if candidate.Parameters.Length == callSyntax.Arguments.Count {
                                 slot = candidate
                                 break
@@ -4500,6 +4512,7 @@ internal partial class ExpressionBinder {
         if candidates.Count == 0 {
             return false
         }
+        CallCandidateRecorder.RecordMethods(candidates, constraintType)
         if !overloads.TryAnalyzeCallArgumentLayout(callSyntax.Arguments, out _, out var argumentNames) {
             result = BoundErrorExpression(callSyntax)
             return true
