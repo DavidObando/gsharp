@@ -611,10 +611,17 @@ partial class CSharpToGSharpTranslator {
                     // class; the translator emits `open` on translatable
                     // non-sealed classes so this maps cleanly.
                     // Issue #4759: a lifted nested delegate is emitted at top
-                    // level outside its enclosing class hierarchy, so a
-                    // `protected` nested type it references must be `internal`.
+                    // level outside its enclosing class hierarchy. Because G#
+                    // has no `protected internal` (`FamORAssem`) modifier, widen
+                    // to `public` when the enclosing chain is externally visible
+                    // (preserving cross-assembly derived-type access) and to
+                    // `internal` otherwise.
                     if CSharpToGSharpTranslator.IsReferencedByLiftedDelegate(context.Compilation, symbol) {
-                        return Visibility.Internal
+                        return if symbol.ContainingType != nil && IsExternallyVisible(symbol.ContainingType) {
+                            Visibility.Default
+                        } else {
+                            Visibility.Internal
+                        }
                     }
                     return Visibility.Protected
                 }

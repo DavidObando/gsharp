@@ -527,16 +527,18 @@ partial class CSharpToGSharpTranslator {
             let symbol ITypeSymbol? = this.context.GetTypeInfo(type).Type
             if type is NameSyntax nameSyntax && HasOmittedTypeArgument(nameSyntax) {
                 if symbol is INamedTypeSymbol unboundNamed && CSharpTypeMapper.IsLiftedNestedDelegate(unboundNamed) {
-                    let liftedName = this.typeMapper.LiftedNestedDelegateName(unboundNamed, this.context)
-                    return if unboundNamed.Arity == 0 {
-                        NamedTypeReference(liftedName)
-                    } else {
-                        NamedTypeReference(
-                            liftedName,
-                            Enumerable.Repeat(cast[GTypeReference](NamedTypeReference("_")), unboundNamed.Arity)
-                                .ToList()
+                    if CSharpTypeMapper.HasGenericContainingType(unboundNamed) {
+                        this.context.ReportUnsupported(
+                            type,
+                            "unbound typeof over nested delegate '${unboundNamed.ToDisplayString()}' inside a generic containing type cannot preserve its enclosing generic arity when lifted to top level."
                         )
+                        return NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType)
                     }
+                    let liftedName = this.typeMapper.LiftedNestedDelegateName(unboundNamed, this.context)
+                    return NamedTypeReference(
+                        liftedName,
+                        Enumerable.Repeat(cast[GTypeReference](NamedTypeReference("_")), unboundNamed.Arity).ToList()
+                    )
                 }
                 if this.RenderUnboundGenericName(nameSyntax) is {} unboundName {
                     return NamedTypeReference(unboundName)
@@ -3654,10 +3656,10 @@ partial class CSharpToGSharpTranslator {
         private func RenderUnboundGenericName(name NameSyntax) string? {
             switch name {
                 case identifier is IdentifierNameSyntax {
-                    return this.EmittedName(identifier, identifier.Identifier, GSharpIdentifierNameContext.Type)
+                    return this.RenderUnboundTypeSimpleName(identifier)
                 }
                 case generic is GenericNameSyntax {
-                    let emitted = this.EmittedName(generic, generic.Identifier, GSharpIdentifierNameContext.Type)
+                    let emitted = this.RenderUnboundTypeSimpleName(generic)
                     return "$emitted[" + string.Join(
                         ", ",
                         Enumerable.Repeat("_", generic.TypeArgumentList.Arguments.Count)
@@ -3682,6 +3684,13 @@ partial class CSharpToGSharpTranslator {
                     return nil
                 }
             }
+        }
+
+        private func RenderUnboundTypeSimpleName(syntax SimpleNameSyntax) string? {
+            if this.context.SemanticModel.GetAliasInfo(syntax) is IAliasSymbol alias {
+                return this.EmittedName(alias, syntax.Identifier.ValueText, GSharpIdentifierNameContext.Type)
+            }
+            return this.EmittedName(syntax, syntax.Identifier, GSharpIdentifierNameContext.Type)
         }
 
         shared {

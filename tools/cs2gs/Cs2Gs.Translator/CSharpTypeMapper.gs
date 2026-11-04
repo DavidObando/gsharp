@@ -2700,7 +2700,7 @@ class CSharpTypeMapper {
             )
         }
 
-        private func HasGenericContainingType(named INamedTypeSymbol) bool {
+        internal func HasGenericContainingType(named INamedTypeSymbol) bool {
             for var containing INamedTypeSymbol? = named.ContainingType;
                 containing != nil;
                 containing = containing!!.ContainingType {
