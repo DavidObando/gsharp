@@ -152,6 +152,19 @@ open class Adr0212ExtensionFeatureTests {
                 .ElementAt(mixedStaticHelp!!.ActiveParameter)
                 .Label
         )
+        let mixedStaticExtensionHelp = HelpIn(content, SourceExtensionFileA, "HostB.Scale(2, ")
+        Assert.NotNull(mixedStaticExtensionHelp)
+        Assert.Equal(1, mixedStaticExtensionHelp!!.ActiveSignature)
+        Assert.Equal(1, mixedStaticExtensionHelp!!.ActiveParameter)
+        Assert.Equal(
+            "factor int32",
+            mixedStaticExtensionHelp!!
+                .Signatures
+                .ElementAt(mixedStaticExtensionHelp!!.ActiveSignature)
+                .Parameters
+                .ElementAt(mixedStaticExtensionHelp!!.ActiveParameter)
+                .Label
+        )
     }
 
     @Fact
@@ -238,6 +251,17 @@ open class Adr0212ExtensionFeatureTests {
         let comparerSignature = Assert.Single(comparerHelp!!.Signatures)
         Assert.DoesNotContain("compareInfo", comparerSignature.Label, StringComparison.Ordinal)
         Assert.Equal("options CompareOptions", Assert.Single(comparerSignature.Parameters).Label)
+        const qualifiedStaticSource = "package Ext\nfunc Use(xs []int32) {\n    let arr = System.Linq.Enumerable.ToArray(xs)\n}\n"
+        let qualifiedStaticContent = LanguageServerTestHelpers.Content(qualifiedStaticSource)
+        let qualifiedStaticHelp = HelpIn(
+            qualifiedStaticContent,
+            qualifiedStaticSource,
+            "System.Linq.Enumerable.ToArray("
+        )
+        Assert.NotNull(qualifiedStaticHelp)
+        let qualifiedStaticSignature = Assert.Single(qualifiedStaticHelp!!.Signatures)
+        Assert.Contains("source IEnumerable[int32]", qualifiedStaticSignature.Label, StringComparison.Ordinal)
+        Assert.Equal("source IEnumerable[int32]", Assert.Single(qualifiedStaticSignature.Parameters).Label)
     }
 
     @Fact
@@ -356,6 +380,7 @@ func Use(n int32, xs []int32) {
     let c = n.Repeat("x")
     let d = xs.Pick(0)
     let e = HostB.Scale(2)
+    let f = HostB.Scale(2, 3, 4)
 }
 `
 

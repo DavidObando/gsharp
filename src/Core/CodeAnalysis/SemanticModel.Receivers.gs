@@ -680,8 +680,15 @@ partial class SemanticModel {
         case property is BoundPropertyReferenceOperationExpression: property.Instance
         case field is BoundFieldAccessExpression: field.Receiver
         case tuple is BoundTupleElementAccessExpression: tuple.Receiver
-        case call is BoundCallExpression when call.Function.IsExtension && call.Arguments.Length > 0: call.Arguments[0]
-        case call is BoundImportedCallExpression when call
+        case call is BoundCallExpression when call
+            .Function
+            .IsExtension &&
+            call.StaticQualifierType == nil &&
+            call
+            .Arguments
+            .Length > 0: call.Arguments[0]
+        case call is BoundImportedCallExpression when call.StaticQualifierType == nil &&
+            call
             .Arguments
             .Length > 0 &&
             IsExtensionMethod(call.Function?.Method): UnwrapExtensionReceiver(call.Arguments[0], call.Syntax)

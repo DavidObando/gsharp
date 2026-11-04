@@ -1091,6 +1091,9 @@ shared class SignatureHelpComputer {
             !object.ReferenceEquals(accessor.RightPart, ce) {
             return false
         }
+        if BoundSemantics.GetNodeSymbol(compilation, accessor.LeftPart) is TypeSymbol {
+            return false
+        }
         if BoundSemantics.GetExpressionType(compilation, accessor.LeftPart) is {} receiverType {
             return BoundSemantics.IsReceiverExtension(candidate, receiverType)
         }
@@ -1101,6 +1104,8 @@ shared class SignatureHelpComputer {
             if SemanticLookup.ResolveImportedClrType(tree, compilation, name.IdentifierToken.Text) != nil {
                 return false
             }
+        } else if SemanticLookup.ResolveImportedClrType(tree, compilation, accessor.LeftPart.ToString()) != nil {
+            return false
         }
         return true
     }
