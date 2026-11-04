@@ -604,9 +604,15 @@ func Reject(value ` + sourceType + `) ` + targetType + ` -> value
             psi.ArgumentList.Add(Path.ChangeExtension(outPath, ".runtimeconfig.json"))
             psi.ArgumentList.Add(outPath)
             using let proc = Process.Start(psi) ?? throw InvalidOperationException("Failed to start dotnet exec")
-            let stdout = proc.StandardOutput.ReadToEnd()
-            let stderr = proc.StandardError.ReadToEnd()
-            Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out")
+            let stdoutTask = proc.StandardOutput.ReadToEndAsync()
+            let stderrTask = proc.StandardError.ReadToEndAsync()
+            if !proc.WaitForExit(30_000) {
+                proc.Kill(entireProcessTree: true)
+                Assert.Fail("dotnet exec timed out")
+            }
+            proc.WaitForExit()
+            let stdout = stdoutTask.GetAwaiter().GetResult()
+            let stderr = stderrTask.GetAwaiter().GetResult()
             Assert.True(proc.ExitCode == 0, "exited ${proc.ExitCode}\nstdout:\n$stdout\nstderr:\n$stderr")
             return stdout.ReplaceLineEndings(Environment.NewLine)
         }
