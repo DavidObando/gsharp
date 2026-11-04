@@ -205,7 +205,8 @@ internal shared class IfLetBindingSupport {
         bindGuard(ExpressionSyntax) -> BoundExpression,
         classifyGuardNarrowing(BoundExpression) -> Dictionary[AccessPath, TypeSymbol]?,
         bindThen() -> TThen,
-        thenSyntax SyntaxNode? = nil
+        thenSyntax SyntaxNode? = nil,
+        afterClause((IfLetBindingClauseSyntax, BoundIfLetBinding) -> void)? = nil
     )(Clauses ImmutableArray[BoundIfLetClause], Guard BoundExpression?, Then TThen) {
         let clauses = ImmutableArray.CreateBuilder[BoundIfLetClause](bindings.Count)
         binderCtx.RootScope = BoundScope(binderCtx.RootScope)
@@ -231,6 +232,9 @@ internal shared class IfLetBindingSupport {
                     declareLocal,
                     reportNonNullable
                 )
+                if afterClause != nil {
+                    afterClause(binding, bound)
+                }
                 if bound.IsValid &&
                     guardSyntax != nil &&
                     i == bindings.Count - 1 &&

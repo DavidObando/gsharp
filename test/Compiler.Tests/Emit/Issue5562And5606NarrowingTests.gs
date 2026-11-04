@@ -179,6 +179,89 @@ func Run(ref text string?) int32 {
 }
 var s string? = "abc"
 Console.WriteLine(Run(ref s))`, "GS0158@13:27", "reject", ""}
+            yield[]object{"r5562_control_deep_ctor_hierarchy_removes_ref_parameter_narrowing", `import System
+
+class Box {
+    shared {
+        var Clear (() -> void)?
+    }
+}
+open class C0 { init() { Box.Clear?() } }
+open class C1 : C0 {}
+open class C2 : C1 {}
+open class C3 : C2 {}
+open class C4 : C3 {}
+open class C5 : C4 {}
+open class C6 : C5 {}
+open class C7 : C6 {}
+open class C8 : C7 {}
+open class C9 : C8 {}
+open class C10 : C9 {}
+open class C11 : C10 {}
+open class C12 : C11 {}
+open class C13 : C12 {}
+open class C14 : C13 {}
+open class C15 : C14 {}
+open class C16 : C15 {}
+open class C17 : C16 {}
+open class C18 : C17 {}
+open class C19 : C18 {}
+open class C20 : C19 {}
+open class C21 : C20 {}
+open class C22 : C21 {}
+open class C23 : C22 {}
+open class C24 : C23 {}
+open class C25 : C24 {}
+open class C26 : C25 {}
+open class C27 : C26 {}
+open class C28 : C27 {}
+open class C29 : C28 {}
+open class C30 : C29 {}
+open class C31 : C30 {}
+open class C32 : C31 {}
+open class C33 : C32 {}
+open class C34 : C33 {}
+open class C35 : C34 {}
+open class C36 : C35 {}
+open class C37 : C36 {}
+open class C38 : C37 {}
+open class C39 : C38 {}
+open class C40 : C39 {}
+open class C41 : C40 {}
+open class C42 : C41 {}
+open class C43 : C42 {}
+open class C44 : C43 {}
+open class C45 : C44 {}
+open class C46 : C45 {}
+open class C47 : C46 {}
+open class C48 : C47 {}
+open class C49 : C48 {}
+open class C50 : C49 {}
+open class C51 : C50 {}
+open class C52 : C51 {}
+open class C53 : C52 {}
+open class C54 : C53 {}
+open class C55 : C54 {}
+open class C56 : C55 {}
+open class C57 : C56 {}
+open class C58 : C57 {}
+open class C59 : C58 {}
+open class C60 : C59 {}
+open class C61 : C60 {}
+open class C62 : C61 {}
+open class C63 : C62 {}
+class C64 : C63 {
+    var Id int32
+}
+func Run(ref text string?) int32 {
+    if text == nil {
+        return 0
+    }
+    let made = C64()
+    return made.Id + text.Length
+}
+var s string? = "abc"
+Console.WriteLine(Run(ref s))`, "GS0158@80:27", "reject", ""}
             yield[]object{"r5606_if_condition_gained_alias_carried_into_then_branch", `import System
 
 func Run(callback () -> string) int32 {
@@ -375,6 +458,67 @@ func Run(seed object?) int32 {
 }
 var clear (() -> void)? = nil
 Console.WriteLine(Run("abcd"))`, "GS0158@11:18", "reject", ""}
+            yield[]object{"r5606_control_if_let_explicit_type_conversion_invalidates_gained_alias", `import System
+
+class Holder {
+    shared {
+        var Hook (() -> void)?
+    }
+}
+class Source {
+}
+class Target {
+    var Value int32
+    shared {
+        func operator implicit(s Source?) Target? {
+            Holder.Hook?()
+            return Target{Value: 1}
+        }
+    }
+}
+func Run(src Source?, callback () -> string) int32 {
+    var x string? = "abc"
+    var action = callback
+    Holder.Hook = func() {
+        action = func() string {
+            x = nil
+            return "z"
+        }
+    }
+    if x == nil {
+        return 0
+    }
+    if let v Target = ({
+        action = callback
+        src
+    }) {
+        action()
+        return v.Value + x.Length
+    }
+    return 0
+}
+Console.WriteLine(Run(Source{}, () -> "abc"))`, "GS0158@36:28", "reject", ""}
+            yield[]object{"r5606_control_or_skipped_block_expression_rejects_in_then_branch", `import System
+
+func Run(flag bool, callback () -> string) int32 {
+    var x string? = "abc"
+    var action = func() string {
+        x = nil
+        return "z"
+    }
+    if x == nil {
+        return 0
+    }
+    if flag || ({
+        action = callback
+        false
+    }) {
+        action()
+        return x.Length
+    }
+    return 0
+}
+Console.WriteLine(Run(true, () -> "abc"))`, "GS0158@17:18", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

@@ -50,7 +50,9 @@ internal partial class StatementBinder {
 
     private func BindIfStatement(syntax IfStatementSyntax) BoundStatement {
         if syntax.Initializer == nil {
+            let conditionEntryAliases = CaptureExternalCallableAliases()
             let condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
+            RestoreExternalCallableAliases(conditionEntryAliases)
             let removedFacts = ApplyConditionEffectsToNarrowings(syntax.Condition, condition)
             let (aliasesAt, callableWhenTrue, callableWhenFalse) = AliasesAtTests(
                 ApplyHeaderCallableEffects(condition),
@@ -148,7 +150,9 @@ internal partial class StatementBinder {
             ApplyInitializerEffectsToNarrowings(syntax.Initializer!!, initStatement)
             UpdateExternalCallableAliases(initStatement, initializerAliasesAtEntry)
         }
+        let initConditionEntryAliases = CaptureExternalCallableAliases()
         let initCondition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
+        RestoreExternalCallableAliases(initConditionEntryAliases)
         let initRemovedFacts = ApplyConditionEffectsToNarrowings(syntax.Condition, initCondition)
         let (initAliasesAt, initCallableWhenTrue, initCallableWhenFalse) = AliasesAtTests(
             ApplyHeaderCallableEffects(initCondition),
@@ -267,6 +271,7 @@ internal partial class StatementBinder {
         let callableEntry = CaptureExternalCallableAliases()
         var callableThenExit = callableEntry
         var callableWhenFalse HashSet[VariableSymbol]? = nil
+        var clauseEntryAliases = callableEntry
         // The else-branch starts from the state before the header: the guard's facts hold only in the then-branch.
         let elseEntry = binderCtx.Narrowing
         var outerConditionKills = conditionKillJournal
@@ -281,19 +286,9 @@ internal partial class StatementBinder {
             conversions,
             bindTypeClause,
             (initializer ExpressionSyntax) -> {
+                clauseEntryAliases = CaptureExternalCallableAliases()
                 let bound = bindExpression(initializer, false)
-                let (_, initWhenTrue, initWhenFalse) = AliasesAtTests(
-                    ApplyHeaderCallableEffects(bound),
-                    initializer,
-                    bound
-                )
-                RestoreExternalCallableAliases(initWhenTrue)
-                callableWhenFalse = if callableWhenFalse == nil {
-                    initWhenFalse
-                } else {
-                    JoinAliases(callableWhenFalse, initWhenFalse)
-                }
-                header.Add((initializer, bound))
+                RestoreExternalCallableAliases(clauseEntryAliases)
                 return bound
             },
             (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> bindLocalVariable(
@@ -302,7 +297,9 @@ internal partial class StatementBinder {
                 type
             ),
             (guardSyntax ExpressionSyntax) -> {
+                let guardEntryAliases = CaptureExternalCallableAliases()
                 let bound = bindExpressionWithTargetType(guardSyntax, TypeSymbol.Bool)
+                RestoreExternalCallableAliases(guardEntryAliases)
                 let (aliasesAt, guardWhenTrue, guardWhenFalse) = AliasesAtTests(
                     ApplyHeaderCallableEffects(bound),
                     guardSyntax,
@@ -333,7 +330,22 @@ internal partial class StatementBinder {
                 RestoreExternalCallableAliases(callableWhenFalse ?? callableEntry)
                 return then
             },
-            syntax.ThenStatement
+            syntax.ThenStatement,
+            (clauseSyntax IfLetBindingClauseSyntax, bound IfLetBindingSupport.BoundIfLetBinding) -> {
+                RestoreExternalCallableAliases(clauseEntryAliases)
+                let (_, initWhenTrue, initWhenFalse) = AliasesAtTests(
+                    ApplyHeaderCallableEffects(bound.Initializer),
+                    clauseSyntax,
+                    bound.Initializer
+                )
+                RestoreExternalCallableAliases(initWhenTrue)
+                callableWhenFalse = if callableWhenFalse == nil {
+                    initWhenFalse
+                } else {
+                    JoinAliases(callableWhenFalse, initWhenFalse)
+                }
+                header.Add((clauseSyntax.Initializer, bound.Initializer))
+            }
         )
         testAliasesAt = nil
         let callableElseEntry = callableWhenFalse ?? callableEntry
@@ -925,11 +937,12 @@ internal partial class StatementBinder {
         WhenFalse HashSet[VariableSymbol]
     ) {
         if (removed == nil || removed.Count == 0) && !header.DescendantNodesAndSelf().Any(
-            (node SyntaxNode) -> node is AssignmentExpressionSyntax
+            (node SyntaxNode) -> node is AssignmentExpressionSyntax or BlockExpressionSyntax
         ) {
             let current = CaptureExternalCallableAliases()
             return (nil, current, HashSet[VariableSymbol](current))
         }
+        EnsureClosureAssignedNames(header)
         let entry = HashSet[VariableSymbol](externalCallableAliases)
         if removed != nil {
             entry.UnionWith(removed)

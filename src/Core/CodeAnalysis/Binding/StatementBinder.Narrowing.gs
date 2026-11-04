@@ -2437,10 +2437,12 @@ internal partial class StatementBinder {
             if sourcePropertyRunsUserCode && node is BoundPropertyAccessExpression {
                 MayMutateMemberPaths = true
             }
+            var nodeRunsEscapedClosure = false
             // ADR-0208 R16 and R17 (#5231, #5532): an imported accessor that is not on the stable list is a call,
             // like a source accessor.
             if StatementBinder.ClrAccessRunsUserCode(node) {
                 MarkMayMutateGlobalRoots()
+                nodeRunsEscapedClosure = true
             }
             let sourceConstructionRunsUserCode = (
                 node is BoundConstructorCallExpression construction &&
@@ -2465,6 +2467,7 @@ internal partial class StatementBinder {
                 sourceConstructionRunsUserCode ||
                 StatementBinder.StaticMemberAccessRunsUserCode(node) || node is BoundClrConversionCallExpression {
                 MarkMayMutateGlobalRoots()
+                nodeRunsEscapedClosure = true
             }
             // ADR-0208 R15 (#5237): a call of any kind can run a closure that escaped, except a call through a
             // callable value, which keeps its own classification (AnalyzeCallableInvocation).
@@ -2477,6 +2480,7 @@ internal partial class StatementBinder {
                 BoundClrEventSubscriptionExpression or
                 BoundTypeParameterConstructionExpression {
                 MarkRunsEscapedClosure()
+                nodeRunsEscapedClosure = true
             }
             // A hole of a type other than a built-in value or a string calls its `ToString`.
             if node is BoundInterpolatedStringExpression interpolation {
@@ -2485,6 +2489,7 @@ internal partial class StatementBinder {
                         hole.Type
                     ) {
                         MarkRunsEscapedClosure()
+                        nodeRunsEscapedClosure = true
                         break
                     }
                 }
@@ -2497,6 +2502,7 @@ internal partial class StatementBinder {
             }
             if node is BoundCallOperationExpression && !IsCallableValueInvocation(node) {
                 MarkRunsEscapedClosure()
+                nodeRunsEscapedClosure = true
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function} {
                 // ADR-0208 R12 (#5292, #5663, #5665, amendment A3): a plain function call does not write by-reference storage.
@@ -2523,10 +2529,10 @@ internal partial class StatementBinder {
                         RecordWritableReference(arguments[i], invalidateCallableState: true)
                     }
                 }
-                if calledFunction.HasCaptures {
-                    normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-                    allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-                }
+            }
+            if nodeRunsEscapedClosure {
+                normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
             }
             if node is BoundCallOperationExpression{
                 CalledFunction: ImportedFunctionSymbol importedFunction
@@ -6510,7 +6516,7 @@ internal partial class StatementBinder {
                 }
                 current = definition.BaseClass
             }
-            return false
+            return current != nil
         }
 
         /// ADR-0208 R12 (#5171, #5292, amendment A3): whether the effects of a node invalidate the narrowing of
