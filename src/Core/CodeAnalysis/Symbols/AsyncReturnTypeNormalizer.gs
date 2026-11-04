@@ -100,7 +100,7 @@ internal shared class AsyncReturnTypeNormalizer {
             let annotatedOpenName = annotatedOpen?.FullName
             if annotatedOpenName == "System.Threading.Tasks.Task`1" ||
                 annotatedOpenName == "System.Threading.Tasks.ValueTask`1" {
-                awaited = annotated.GetTypeArgumentSymbol(0)
+                awaited = PlatformTypeSymbol.StripTopLevel(annotated.GetTypeArgumentSymbol(0))
                 isValueTask = annotatedOpenName == "System.Threading.Tasks.ValueTask`1"
                 return true
             }

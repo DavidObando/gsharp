@@ -821,6 +821,69 @@ Console.WriteLine(CountLoop(box))`, validPath, "/target:exe", "/reference:" + li
         }
     }
 
+    /// Issue #4626: an imported `[Suspending]` method returning `ValueTask<string?>`
+    /// preserves its nullable result contract across implicit completion and
+    /// `ImportedFunctionSymbol.LogicalReturnType`.
+    @Fact
+    func ImportedSuspendingNullableReturn_PreservesResultNullability() {
+        let tempDir = Directory.CreateTempSubdirectory("gs_4626_susp_").FullName
+        try {
+            let libPath = Path.Combine(tempDir, "SuspLib.dll")
+            let libLog = Compile(tempDir, "SuspLib.gs", `package SuspLib
+
+public class Reader {
+    shared {
+        public suspend func ReadMaybe(s string?) string? {
+            return s
+        }
+    }
+}`, libPath, "/target:library")
+            Assert.DoesNotContain(" error ", libLog, StringComparison.Ordinal)
+            Assert.True(File.Exists(libPath), "SuspLib must compile. Log:\n" + libLog)
+
+            let badPath = Path.Combine(tempDir, "BadSusp.dll")
+            let badLog = Compile(tempDir, "BadSusp.gs", `package P
+import System
+import SuspLib
+
+suspend func Check() string {
+    let bad string = Reader.ReadMaybe(nil)
+    return bad
+}
+Console.WriteLine("x")`, badPath, "/target:exe", "/reference:" + libPath)
+            Assert.False(
+                File.Exists(badPath),
+                "Assigning string? suspending result to string must fail. Log:\n" + badLog
+            )
+            Assert.Contains("error GS0155:", badLog, StringComparison.Ordinal)
+            Assert.Contains("Cannot convert type 'string?' to 'string'", badLog, StringComparison.Ordinal)
+
+            let okPath = Path.Combine(tempDir, "OkSusp.dll")
+            let okLog = Compile(tempDir, "OkSusp.gs", `package P
+import System
+import SuspLib
+
+suspend func Check(s string?) string {
+    let v string? = Reader.ReadMaybe(s)
+    return v ?? "null"
+}
+Console.WriteLine(Check(nil))
+Console.WriteLine(Check("hi"))`, okPath, "/target:exe", "/reference:" + libPath)
+            Assert.DoesNotContain(" error ", okLog, StringComparison.Ordinal)
+            Assert.True(File.Exists(okPath), "OkSusp must compile. Log:\n" + okLog)
+            let (exit, output) = RunDotnet(okPath)
+            Assert.True(exit == 0, "OkSusp must run. Output:\n" + output)
+            let lines = output
+                .Split('\n')
+                .Select((line string) -> line.TrimEnd('\r'))
+                .Where((line string) -> line.Length > 0)
+                .ToArray()
+            Assert.Equal([]string{"null", "hi"}, lines)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     /// Issue #4618: a missing or mismatched implementation of an imported
     /// interface's static abstract member is diagnosed at compile time.
     /// @param name The case name.
