@@ -4,9 +4,11 @@
 
 package GSharp.Core.CodeAnalysis.Symbols
 
+import GSharp.Core.CodeAnalysis.Binding
 import System
 import System.Collections.Concurrent
 import System.Collections.Generic
+import System.Collections.Immutable
 
 /// Represents a sequence type `sequence[T]` — alias for `IEnumerable<T>` (ADR-0040).
 class SequenceTypeSymbol : TypeSymbol {
@@ -79,9 +81,14 @@ class SequenceTypeSymbol : TypeSymbol {
                 let definition = clrType.GetGenericTypeDefinition()
                 if IsEnumerableInterfaceDefinition(definition) {
                     openDefinition = definition
-                    elementType = TypeSymbol.FromClrTypeWithoutNullability(
+                    elementType = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                         clrType.GetGenericArguments()[0],
-                        NullabilityFreeReason.TypeStructure
+                        openDefinition: nil,
+                        ImmutableArray[TypeSymbol].Empty,
+                        openMethodDefinition: nil,
+                        default(ImmutableArray[TypeSymbol?]),
+                        NullabilityFreeReason.TypeStructure,
+                        preserveReferenceTupleIdentity: true
                     )
                     return true
                 }

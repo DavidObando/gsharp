@@ -17,7 +17,8 @@ partial class SemanticModel {
     /// Binds [`expression`](paramref) as if it stood at [`position`](paramref) and
     /// returns its type. The enclosing declared function comes from
     /// (cref:GetEnclosingSymbol), the locals and parameters from
-    /// (cref:LookupSymbols) with their declared types, and the file's imports from
+    /// (cref:LookupSymbols) with their declared types, the in-scope local function
+    /// overloads from the enclosing blocks, and the file's imports from
     /// the compilation. Binding runs under the compilation's nullability mode.
     /// No diagnostic escapes.
     /// @remarks Flow-sensitive state is excluded from the contract (ADR-0212 Q15):
@@ -41,6 +42,8 @@ partial class SemanticModel {
         var function FunctionSymbol? = nil
         var inConstructorInitializer = false
         let locals = List[VariableSymbol](LookupSymbols(position, nil, cancellationToken).OfType[VariableSymbol]())
+        let localFunctionScopes = ScopedLocalFunctionScopes(position)
+        let localTypeParameters = EnclosingLocalFunctionTypeParameters(position)
         if GetEnclosingSymbol(position, cancellationToken) is FunctionSymbol enclosing {
             function = enclosing
             // The scope query leaves `this` out where the receiver does not exist yet, as in the
@@ -54,9 +57,11 @@ partial class SemanticModel {
             compilation.References ?? ReferenceResolver.Default(),
             function,
             locals,
+            localFunctionScopes,
             expression,
             syntaxTree,
-            inConstructorInitializer
+            inConstructorInitializer,
+            localTypeParameters
         )
         return TypeInfo(type)
     }

@@ -211,7 +211,7 @@ open partial class TypeSymbol : Symbol {
                     currentClrType.GetArrayRank()
                 )
             }
-            if currentClrType.IsArray && ClrNullability.ContainsFunctionPointer(clrType) {
+            if currentClrType.IsSZArray && ClrNullability.ContainsFunctionPointer(clrType) {
                 return SliceTypeSymbol.Get(FromClrType(clrType.GetElementType()))
             }
             // Issue #1922: a `System.ValueTuple<...>`/`System.Tuple<...>` CLR type
@@ -1059,6 +1059,14 @@ open partial class TypeSymbol : Symbol {
                 ) &&
                     AreRuntimeEquivalentIgnoringReferenceNullability(leftSequenceElement, rightSequenceElement)
             }
+            let leftIsMap = MapTypeSymbol.TryGetMapShape(left, out var leftKeyType, out var leftValueType)
+            let rightIsMap = MapTypeSymbol.TryGetMapShape(right, out var rightKeyType, out var rightValueType)
+            if leftIsMap || rightIsMap {
+                return leftIsMap &&
+                    rightIsMap &&
+                    AreRuntimeEquivalentIgnoringReferenceNullability(leftKeyType, rightKeyType) &&
+                    AreRuntimeEquivalentIgnoringReferenceNullability(leftValueType, rightValueType)
+            }
             if left is NullableTypeSymbol || right is NullableTypeSymbol {
                 let leftNullable NullableTypeSymbol? = left as NullableTypeSymbol
                 let rightNullable NullableTypeSymbol? = right as NullableTypeSymbol
@@ -1100,6 +1108,19 @@ open partial class TypeSymbol : Symbol {
                     rightDelegate.Definition ?? rightDelegate,
                     rightDelegate.TypeArguments
                 )
+            }
+            let leftIsNonSzRankOne = DeclarationBinder.TryGetRankOneNonSzArrayElementType(
+                left,
+                out var leftNonSzElement
+            )
+            let rightIsNonSzRankOne = DeclarationBinder.TryGetRankOneNonSzArrayElementType(
+                right,
+                out var rightNonSzElement
+            )
+            if leftIsNonSzRankOne || rightIsNonSzRankOne {
+                return leftIsNonSzRankOne &&
+                    rightIsNonSzRankOne &&
+                    AreRuntimeEquivalentIgnoringReferenceNullability(leftNonSzElement, rightNonSzElement)
             }
             if left is ImportedTypeSymbol{OpenDefinition: not nil} leftImported &&
                 !leftImported
@@ -1337,6 +1358,31 @@ open partial class TypeSymbol : Symbol {
                         type
                     } else {
                         cast[TypeSymbol](NullabilityAnnotatedTypeSymbol(annotatedBase, annotated.NullableFlags))
+                    }
+                    return true
+                }
+                case ImportedTypeSymbol{
+                    OpenDefinition: nil,
+                    ClrType: {IsArray: true} importedArrayClr,
+                    TypeArguments: {Length: 1} importedArrayArgs
+                } {
+                    let substitutedElement = substitute(importedArrayArgs[0])
+                    if object.ReferenceEquals(substitutedElement, importedArrayArgs[0]) {
+                        result = type
+                    } else if importedArrayClr.IsSZArray {
+                        let effectiveElementClr = NullableLifting.GetEffectiveClrType(substitutedElement)
+                        let arrayClr = if effectiveElementClr != nil && !effectiveElementClr.ContainsGenericParameters {
+                            effectiveElementClr.MakeArrayType()
+                        } else {
+                            importedArrayClr
+                        }
+                        result = ImportedTypeSymbol.GetConstructed(
+                            arrayClr,
+                            openDefinition: nil,
+                            ImmutableArray.Create(substitutedElement)
+                        )
+                    } else {
+                        result = MemberLookup.ConstructRankOneNonSzArray(substitutedElement, importedArrayClr)
                     }
                     return true
                 }
