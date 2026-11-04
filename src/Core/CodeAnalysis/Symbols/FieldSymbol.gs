@@ -112,6 +112,14 @@ class FieldSymbol : Symbol {
         get;
     }
 
+    /// Gets a value indicating whether (cref:SetConstantValue) has been called
+    /// on this field. Distinguishes a folded `nil` reference constant from an
+    /// unfolded `const` field.
+    internal prop HasConstantValue bool {
+        get;
+        private set;
+    }
+
     /// Gets the compile-time constant value for a (cref:IsConst) field
     /// (Issue #948), or `null` for non-const fields. The binder folds the
     /// field initializer to a literal and writes it here; the emitter uses it
@@ -161,6 +169,7 @@ class FieldSymbol : Symbol {
     /// called once by the binder after folding the initializer to a literal.
     /// @param value The compile-time constant value.
     func SetConstantValue(value object?) {
+        HasConstantValue = true
         ConstantValue = value
     }
 

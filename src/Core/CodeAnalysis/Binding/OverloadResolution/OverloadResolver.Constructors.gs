@@ -1202,6 +1202,30 @@ internal partial class OverloadResolver {
             } else {
                 syntax.Identifier.Location
             }
+            if parameter.RefKind != RefKind.None || argumentSyntax is RefArgumentExpressionSyntax {
+                var argRefKind = if argumentSyntax is RefArgumentExpressionSyntax explicitRefArg {
+                    getRefKindFromModifier(explicitRefArg.RefKindModifier)
+                } else {
+                    RefKind.None
+                }
+                if argRefKind == RefKind.None &&
+                    (argument is BoundAddressOfExpression || argument is BoundConditionalAddressExpression) &&
+                    parameter.RefKind != RefKind.None {
+                    argRefKind = parameter.RefKind
+                }
+                if argRefKind != parameter.RefKind && !(parameter.RefKind == RefKind.In && argRefKind == RefKind.None) {
+                    Diagnostics.ReportRefKindMismatch(
+                        refArgumentLocation,
+                        i + 1,
+                        parameter.Name,
+                        refKindToString(parameter.RefKind),
+                        refKindToString(argRefKind)
+                    )
+                    hasErrors = true
+                    convertedArguments.Add(argument)
+                    continue
+                }
+            }
             if parameter.RefKind != RefKind.None && argument is BoundAddressOfExpression addrCtor {
                 let pointee TypeSymbol? = addrCtor.Operand?.Type
                 if pointee == TypeSymbol.Error ||
@@ -1563,13 +1587,26 @@ internal partial class OverloadResolver {
             let inferenceBoundArguments = ImmutableArray.CreateBuilder[BoundExpression](syntax.Arguments.Count)
             for var i = 0; i < syntax.Arguments.Count; i++ {
                 let argument = UnwrapNamedArgumentValue(syntax.Arguments[i])
-                if argument is RefArgumentExpressionSyntax && argument.IsInlineDeclaration == true {
-                    inferenceArgumentTypes[i] = BindExplicitConstructorInferenceArgument(argument)
-                    inferenceBoundArguments.Add(BoundErrorExpression(argument))
+                if argument is RefArgumentExpressionSyntax refArgument {
+                    if refArgument.IsInlineDeclaration {
+                        let inlineOutType = BindExplicitConstructorInferenceArgument(argument)
+                        inferenceArgumentTypes[i] = inlineOutType
+                        inferenceBoundArguments.Add(
+                            BoundAddressOfExpression(
+                                argument,
+                                BoundDefaultExpression(argument, inlineOutType ?? TypeSymbol.Error)
+                            )
+                        )
+                    } else {
+                        let boundRefArgument = bindRefArgumentExpression(refArgument, nil)
+                        inferenceArgumentTypes[i] = ByRefStorageMatching.TryGetStorageType(boundRefArgument) ??
+                            boundRefArgument.Type
+                        inferenceBoundArguments.Add(boundRefArgument)
+                    }
                     continue
                 }
                 let boundArgument = bindExpression(argument)
-                inferenceArgumentTypes[i] = boundArgument.Type
+                inferenceArgumentTypes[i] = ByRefStorageMatching.TryGetStorageType(boundArgument) ?? boundArgument.Type
                 inferenceBoundArguments.Add(boundArgument)
             }
             let candidates = List[(Function FunctionSymbol, Substitution Dictionary[TypeParameterSymbol, TypeSymbol])]()
@@ -1620,11 +1657,19 @@ internal partial class OverloadResolver {
                 let candidateType = ConstructExplicitConstructorType(classType, tps, candidateSubstitution)
                 let candidateFunction = CreateConstructedConstructorCandidate(constructor, candidateType)
                 if !IsApplicableUserCallable(candidateFunction, syntax.Arguments.Count, argumentNames) ||
+                    !IsRefKindApplicable(
+                    candidateFunction,
+                    syntax.Arguments.Count,
+                    argumentNames,
+                    inferenceBoundArguments,
+                    syntax
+                ) ||
                     !IsConvertibilityApplicable(
                     candidateFunction,
                     syntax.Arguments.Count,
                     argumentNames,
-                    inferenceBoundArguments
+                    inferenceBoundArguments,
+                    callSyntax: syntax
                 ) ||
                     !ConstructorAcceptsTypedInlineOutArguments(
                     syntax,
@@ -1687,7 +1732,8 @@ internal partial class OverloadResolver {
                     argumentNames,
                     inferenceBoundArguments.ToImmutable(),
                     out var ambiguous,
-                    out _
+                    out _,
+                    callSyntax: syntax
                 )
                 if selected == nil {
                     if ambiguous {
@@ -1953,7 +1999,7 @@ internal partial class OverloadResolver {
                     // The callback uses null to mean that overload resolution has
                     // not identified the ref parameter yet; its legacy non-null
                     // annotation predates that two-pass binding contract.
-                    boundArgsBuilder.Add(bindRefArgumentExpression(refArg, parameterForArg!!))
+                    boundArgsBuilder.Add(bindRefArgumentExpression(refArg, parameterForArg))
                 } else {
                     boundArgsBuilder.Add(BindOverloadArgumentValue(argument))
                 }
@@ -1975,7 +2021,8 @@ internal partial class OverloadResolver {
                 argumentNames,
                 boundArgsBuilder.ToImmutable(),
                 out var ambiguous,
-                out var nullSafetyFailure
+                out var nullSafetyFailure,
+                callSyntax: syntax
             )
             if selectedFn == nil {
                 if nullSafetyFailure != nil {
@@ -2108,11 +2155,48 @@ internal partial class OverloadResolver {
                 convertedArgs.Add(argument)
                 continue
             }
+            let argumentSyntax = if i < parameterSyntax.Length && parameterSyntax[i] != nil {
+                UnwrapNamedArgumentValue(parameterSyntax[i]!!)
+            } else {
+                default(ExpressionSyntax?)
+            }
+            if parameter.RefKind != RefKind.None || argumentSyntax is RefArgumentExpressionSyntax {
+                var argRefKind = if argumentSyntax is RefArgumentExpressionSyntax explicitRefArg {
+                    getRefKindFromModifier(explicitRefArg.RefKindModifier)
+                } else {
+                    RefKind.None
+                }
+                if argRefKind == RefKind.None &&
+                    (argument is BoundAddressOfExpression || argument is BoundConditionalAddressExpression) &&
+                    parameter.RefKind != RefKind.None {
+                    argRefKind = parameter.RefKind
+                }
+                if argRefKind != parameter.RefKind && !(parameter.RefKind == RefKind.In && argRefKind == RefKind.None) {
+                    Diagnostics.ReportRefKindMismatch(
+                        argLocation,
+                        i + 1,
+                        parameter.Name,
+                        refKindToString(parameter.RefKind),
+                        refKindToString(argRefKind)
+                    )
+                    hadErrors = true
+                    convertedArgs.Add(argument)
+                    continue
+                }
+            }
             // ADR-0060: when the parameter is ref-kind, the bound argument is
             // a BoundAddressOfExpression of type *T; bypass the standard
             // convertibility check so the address is forwarded as-is.
             if parameter.RefKind != RefKind.None && argument is BoundAddressOfExpression addrInit {
                 let pointee TypeSymbol? = addrInit.Operand?.Type
+                if pointee == TypeSymbol.Error &&
+                    argumentSyntax is RefArgumentExpressionSyntax{
+                    IsInlineDeclaration: true,
+                    DeclaredType: nil
+                } inlineOut {
+                    convertedArgs.Add(bindRefArgumentExpression(inlineOut, parameter))
+                    continue
+                }
                 if pointee == TypeSymbol.Error ||
                     parameter.Type == TypeSymbol.Error ||
                     (

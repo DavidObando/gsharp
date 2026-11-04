@@ -458,6 +458,9 @@ partial class Binder {
             return Expressions.BindTypeOfExpression(syntax)
         }
         let BindExpressionForDeclarations = func (syntax ExpressionSyntax) BoundExpression {
+            if syntax is RefArgumentExpressionSyntax refArgument {
+                return Expressions.BindRefArgumentExpression(refArgument, parameter: nil)
+            }
             return Expressions.BindExpression(syntax)
         }
         declarations = DeclarationBinder(
@@ -7197,7 +7200,6 @@ partial class Binder {
             // Draining after those loops left that flag false for every
             // not-yet-drained class parameter, so such a call was wrongly
             // rejected instead of reaching the intended diagnostic.
-            binder.declarations.BindPendingParameterDefaultValues()
             for (ifaceSyntax, ifaceSymbol) in declaredInterfaces {
                 let owningPackage = packageByTree[ifaceSyntax.SyntaxTree]
                 RunWithPackage(
@@ -7206,6 +7208,8 @@ partial class Binder {
                     () -> binder.declarations.BindInterfaceMembers(ifaceSyntax, ifaceSymbol, owningPackage)
                 )
             }
+            binder.declarations.BindPendingConstInitializers()
+            binder.declarations.BindPendingParameterDefaultValues()
             let functionDeclarations = syntaxTrees.SelectMany((st SyntaxTree) -> st.Root.Members.AsEnumerable())
                 .OfType[FunctionDeclarationSyntax]()
             for function in functionDeclarations {

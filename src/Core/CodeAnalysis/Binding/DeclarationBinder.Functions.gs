@@ -18,7 +18,11 @@ import GSharp.Core.CodeAnalysis
 import System.Threading
 
 internal partial class DeclarationBinder {
-    private func BindIndexerParameters(propSyntax PropertyDeclarationSyntax) ImmutableArray[ParameterSymbol] {
+    private func BindIndexerParameters(
+        propSyntax PropertyDeclarationSyntax,
+        ownerType TypeSymbol? = nil,
+        $package PackageSymbol? = nil
+    ) ImmutableArray[ParameterSymbol] {
         let indexerParamBuilder = ImmutableArray.CreateBuilder[ParameterSymbol]()
         let seenIndexParamNames = HashSet[string]()
         for indexParamSyntax in propSyntax.Parameters {
@@ -63,7 +67,13 @@ internal partial class DeclarationBinder {
             // Issue #4350 (review): an indexer parameter may declare
             // a default (`this[row int32, column int32 = 0]`), which
             // was previously dropped silently.
-            conversions.BindAndAttachParameterDefaultValue(indexParamSyntax, indexerParam)
+            if ownerType is StructSymbol structSymbol && $package != nil {
+                DeferParameterDefaultValueBinding(indexParamSyntax, indexerParam, structSymbol, $package)
+            } else if ownerType is InterfaceSymbol interfaceSymbol && $package != nil {
+                DeferInterfaceParameterDefaultValueBinding(indexParamSyntax, indexerParam, interfaceSymbol, $package)
+            } else {
+                conversions.BindAndAttachParameterDefaultValue(indexParamSyntax, indexerParam)
+            }
             indexerParamBuilder.Add(indexerParam)
         }
         return indexerParamBuilder.ToImmutable()
@@ -3269,8 +3279,16 @@ internal partial class DeclarationBinder {
                 return aIsTuple && bIsTuple && TypeArgumentsEquivalent(aTupleElements, bTupleElements, typeParamMap)
             }
             if a is StructSymbol sa && b is StructSymbol sb {
-                return object.ReferenceEquals(sa.Definition, sb.Definition) &&
-                    TypeArgumentsEquivalent(sa.TypeArguments, sb.TypeArguments, typeParamMap)
+                return object.ReferenceEquals(sa.Definition ?? sa, sb.Definition ?? sb) &&
+                    TypeArgumentsEquivalent(
+                    Conversion.GetEffectiveStructTypeArguments(sa),
+                    Conversion.GetEffectiveStructTypeArguments(sb),
+                    typeParamMap
+                )
+            }
+            if a is EnumSymbol ea && b is EnumSymbol eb {
+                return object.ReferenceEquals(ea.Definition ?? ea, eb.Definition ?? eb) &&
+                    TypeArgumentsEquivalent(ea.EnclosingTypeArguments, eb.EnclosingTypeArguments, typeParamMap)
             }
             if a is InterfaceSymbol ia && b is InterfaceSymbol ib {
                 return object.ReferenceEquals(ia.Definition, ib.Definition) &&
@@ -3308,19 +3326,33 @@ internal partial class DeclarationBinder {
                     TypeArgumentsEquivalent(dta.TypeArguments, dtb.TypeArguments, typeParamMap)
             }
             if a is ImportedTypeSymbol pa && b is ImportedTypeSymbol pb {
-                // Constructed imported generics carrying symbolic arguments (e.g.
-                // `IEnumerator[T]`) are compared by open definition and ordered
-                // arguments so an unbound type parameter compares by identity
-                // rather than by its erased `object` CLR projection.
-                if pa.OpenDefinition != nil && pb.OpenDefinition != nil && pa.OpenDefinition == pb.OpenDefinition {
-                    return TypeArgumentsEquivalent(pa.TypeArguments, pb.TypeArguments, typeParamMap)
+                let openA = pa.OpenDefinition ??
+                    (
+                    if pa.Type.IsGenericType {
+                        pa.Type.GetGenericTypeDefinition()
+                    } else {
+                        default(Type?)
+                    }
+                )
+                let openB = pb.OpenDefinition ??
+                    (
+                    if pb.Type.IsGenericType {
+                        pb.Type.GetGenericTypeDefinition()
+                    } else {
+                        default(Type?)
+                    }
+                )
+                if openA != nil && openB != nil && ClrTypeUtilities.AreSame(openA, openB) {
+                    return TypeArgumentsEquivalent(
+                        pa.ConstructedTypeArguments,
+                        pb.ConstructedTypeArguments,
+                        typeParamMap
+                    )
                 }
-                // Otherwise (one or both sides expressed as a plain closed CLR
-                // type, e.g. a fully concrete `IEnumerator[int32]`) fall back to a
-                // closed-type comparison. This is only sound when neither side
-                // carries an unbound type parameter, whose CLR shape is erased to
-                // `object` and would otherwise equate distinct constructions.
-                if !TypeSymbol.ContainsTypeParameter(pa) && !TypeSymbol.ContainsTypeParameter(pb) {
+                if openA == nil && openB == nil && !TypeSymbol.ContainsTypeParameter(pa) &&
+                    !TypeSymbol.ContainsTypeParameter(pb) && !TypeSymbol.ContainsSameCompilationUserType(pa) &&
+                    !TypeSymbol
+                    .ContainsSameCompilationUserType(pb) {
                     return pa.ClrType != nil && pb.ClrType != nil && ClrTypeUtilities.AreSame(pa.ClrType, pb.ClrType)
                 }
                 return false

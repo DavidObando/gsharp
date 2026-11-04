@@ -93,7 +93,8 @@ func f(xs ...int32 = 0) int32 { return 0 }
     @Fact
     func OptionalParameter_NonConstantDefault_DiagnosesGS0265() {
         let source = `
-func f(x int32 = 1 + 2) int32 { return x }
+func nonConst() int32 { return 3 }
+func f(x int32 = nonConst()) int32 { return x }
 `
         let result = Evaluate(source)
         AssertHasDiagnosticId(result.Diagnostics, "GS0265")
