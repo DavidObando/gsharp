@@ -18,7 +18,7 @@ import System.Threading
 
 internal partial class StatementBinder {
     private func BindSwitchStatement(syntax SwitchStatementSyntax) BoundStatement {
-        let discriminant = bindExpression(syntax.Expression, false)
+        var discriminant = bindExpression(syntax.Expression, false)
         if NativeProtocolOperations.GetProtocol(discriminant.Type) != nil {
             Diagnostics.ReportNativeProtocol(
                 syntax.Location,
@@ -27,8 +27,20 @@ internal partial class StatementBinder {
             return BindErrorStatement()
         }
         ApplyHeaderCallableEffects(discriminant)
+        let materializedDiscriminantType = TypeSymbol.MaterializeNeverFunctionReturns(discriminant.Type)
+        if !object.ReferenceEquals(materializedDiscriminantType, discriminant.Type) {
+            discriminant = conversions.BindConversion(
+                syntax.Expression.Location,
+                discriminant,
+                materializedDiscriminantType
+            )
+        }
         let switchType = discriminant.Type
         if switchType == TypeSymbol.Error {
+            return BindErrorStatement()
+        }
+        if TypeSymbol.ContainsNeverType(switchType) {
+            Diagnostics.ReportExpressionMustHaveValue(syntax.Expression.Location)
             return BindErrorStatement()
         }
         let arms = ImmutableArray.CreateBuilder[BoundPatternSwitchArm](syntax.Cases.Length)
@@ -1247,6 +1259,10 @@ internal partial class StatementBinder {
         name string,
         prefix ImmutableArray[BoundStatement].Builder
     ) BoundExpression {
+        if expression.Type == TypeSymbol.Never {
+            prefix.Add(BoundExpressionStatement(nil, expression))
+            return BoundThrowExpression(nil, BoundLiteralExpression(nil, value: nil))
+        }
         let variable = LocalVariableSymbol(name, isReadOnly: true, expression.Type ?? TypeSymbol.Error)
         $scope.TryDeclareVariable(variable)
         prefix.Add(BoundVariableDeclaration(nil, variable, expression))
@@ -2295,7 +2311,12 @@ internal partial class StatementBinder {
                     "a send select arm binds a value",
                     expression: "cases[i].Value"
                 )
-                let valueLocal = LocalVariableSymbol("<select$$value$$$id$$$i>", isReadOnly: true, value.Type)
+                let valueType = if value.Type == TypeSymbol.Never {
+                    shapes[i].Element ?? TypeSymbol.Object
+                } else {
+                    value.Type
+                }
+                let valueLocal = LocalVariableSymbol("<select$$value$$$id$$$i>", isReadOnly: true, valueType)
                 $scope.TryDeclareVariable(valueLocal)
                 valueLocals[i] = valueLocal
                 statements.Add(BoundVariableDeclaration(nil, valueLocal, value))

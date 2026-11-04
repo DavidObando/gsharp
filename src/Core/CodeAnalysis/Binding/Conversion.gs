@@ -1350,7 +1350,10 @@ class Conversion {
             // tuples were rejected with GS0155 in every `object` / `object?`
             // position (argument, return, assignment) while the all-CLR-backed
             // same-shape tuple boxed fine. Element names are irrelevant here.
-            if from is TupleTypeSymbol && (to == TypeSymbol.Object || to?.ClrType.IsSameAs(typeof(object)) == true) {
+            if from is TupleTypeSymbol && !TypeSymbol.ContainsNullLiteralType(from) && !TypeSymbol.ContainsNeverType(
+                TypeSymbol.MaterializeNeverFunctionReturns(from)
+            ) &&
+                (to == TypeSymbol.Object || to?.ClrType.IsSameAs(typeof(object)) == true) {
                 return Conversion.Implicit
             }
             // Issue #3310 / ADR-0159: same-element `[]T → sequence[T]` for the

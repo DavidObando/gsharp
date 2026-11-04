@@ -1108,9 +1108,16 @@ internal partial class OverloadResolver {
             )
         }
         if callee.Type is FunctionTypeSymbol fnType {
+            var resolvedFnType = fnType
+            if TypeSymbol.MaterializeNeverFunctionReturns(resolvedFnType) is FunctionTypeSymbol materializedFnType &&
+                !object
+                .ReferenceEquals(materializedFnType, resolvedFnType) {
+                callee = conversions.BindConversion(calleeLocation, callee, materializedFnType)
+                resolvedFnType = materializedFnType
+            }
             if !TryBindFunctionTypeArguments(
                 calleeName,
-                fnType,
+                resolvedFnType,
                 syntax,
                 boundArguments.ToImmutable(),
                 GetIndirectCallableParameterNames(callee),
@@ -1118,7 +1125,7 @@ internal partial class OverloadResolver {
             ) {
                 return BoundErrorExpression(nil)
             }
-            return CompleteInvocation(BoundIndirectCallExpression(syntax, callee, fnType, convertedArgs))
+            return CompleteInvocation(BoundIndirectCallExpression(syntax, callee, resolvedFnType, convertedArgs))
         }
         if callee.Type is DelegateTypeSymbol delegateSym {
             if !TryBindNamedDelegateArguments(

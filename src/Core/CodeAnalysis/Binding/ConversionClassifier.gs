@@ -404,6 +404,86 @@ internal class ConversionClassifier {
         if expression.Type == TypeSymbol.Never {
             return expression
         }
+        if type != nil && type != TypeSymbol.Error && type != TypeSymbol.Void && !TypeSymbol.ContainsNeverType(type) &&
+            TypeSymbol
+            .ContainsNeverType(expression.Type) {
+            if expression is BoundBlockExpression neverBlock {
+                return BoundBlockExpression(
+                    neverBlock.Syntax,
+                    neverBlock.Statements,
+                    BindConversion(
+                        diagnosticLocation,
+                        neverBlock.Expression,
+                        type,
+                        allowExplicit,
+                        callParameter,
+                        trackNarrowing
+                    )
+                )
+            }
+            if expression is BoundConditionalExpression neverConditional {
+                return BoundConditionalExpression(
+                    neverConditional.Syntax,
+                    neverConditional.Condition,
+                    BindConversion(
+                        diagnosticLocation,
+                        neverConditional.WhenTrue,
+                        type,
+                        allowExplicit,
+                        callParameter,
+                        trackNarrowing
+                    ),
+                    BindConversion(
+                        diagnosticLocation,
+                        neverConditional.WhenFalse,
+                        type,
+                        allowExplicit,
+                        callParameter,
+                        trackNarrowing
+                    ),
+                    type
+                )
+            }
+            if expression is BoundSwitchExpression neverSwitch {
+                let convertedArms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](neverSwitch.Arms.Length)
+                for arm in neverSwitch.Arms {
+                    convertedArms.Add(
+                        BoundSwitchExpressionArm(
+                            arm.Syntax,
+                            arm.Pattern,
+                            arm.Guard,
+                            BindConversion(
+                                diagnosticLocation,
+                                arm.Result,
+                                type,
+                                allowExplicit,
+                                callParameter,
+                                trackNarrowing
+                            )
+                        )
+                    )
+                }
+                return BoundSwitchExpression(
+                    neverSwitch.Syntax,
+                    neverSwitch.Discriminant,
+                    convertedArms.MoveToImmutable(),
+                    type
+                )
+            }
+            if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out _) && !(type is TupleTypeSymbol) {
+                let materialized = TypeSymbol.MaterializeNeverFunctionReturns(expression.Type)
+                if !object.ReferenceEquals(materialized, expression.Type) {
+                    expression = BindConversion(
+                        diagnosticLocation,
+                        expression,
+                        materialized,
+                        allowExplicit,
+                        callParameter,
+                        trackNarrowing
+                    )
+                }
+            }
+        }
         // ADR-0100 / issue #795: a typeless bare-`default` placeholder
         // (produced by ExpressionBinder.BindDefaultExpression when the
         // syntax has no type-clause) takes its concrete type from the

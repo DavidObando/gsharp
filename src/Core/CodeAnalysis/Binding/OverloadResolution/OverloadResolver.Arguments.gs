@@ -954,6 +954,20 @@ internal partial class OverloadResolver {
                     }
                     continue
                 }
+                if argument.Type == TypeSymbol.Never {
+                    evaluations.Add(BoundExpressionStatement(argument.Syntax, argument))
+                    let trap BoundExpression = BoundThrowExpression(
+                        argument.Syntax,
+                        BoundLiteralExpression(argument.Syntax, value: nil)
+                    )
+                    if parameterIndex == paramsIndex {
+                        paramsElements[paramsElementIndex] = trap
+                        paramsElementIndex++
+                    } else {
+                        replacements[parameterIndex] = trap
+                    }
+                    continue
+                }
                 let temp = LocalVariableSymbol("<>expandedNamedArg$sourceIndex", isReadOnly: true, argument.Type)
                 evaluations.Add(BoundVariableDeclaration(argument.Syntax, temp, argument))
                 let tempLoad BoundExpression = BoundVariableExpression(argument.Syntax, temp)
@@ -1545,6 +1559,14 @@ internal partial class OverloadResolver {
                     } else {
                         argument
                     }
+                    continue
+                }
+                if argument.Type == TypeSymbol.Never {
+                    evaluations.Add(BoundExpressionStatement(argument.Syntax, argument))
+                    replacements[slot] = BoundThrowExpression(
+                        argument.Syntax,
+                        BoundLiteralExpression(argument.Syntax, value: nil)
+                    )
                     continue
                 }
                 let temp = LocalVariableSymbol("<>namedArg$sourceIndex", isReadOnly: true, captureType ?? argument.Type)

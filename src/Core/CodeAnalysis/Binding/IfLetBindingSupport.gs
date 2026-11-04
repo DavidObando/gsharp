@@ -126,7 +126,15 @@ internal shared class IfLetBindingSupport {
                     initializerType
                 )
             }
-            let errorVar = declareLocal(binding.Identifier, true, declaredUnderlying ?? initializerType)
+            let errorVarType = declaredUnderlying ??
+                (
+                if TypeSymbol.ContainsNeverType(initializerType) {
+                    TypeSymbol.Error
+                } else {
+                    initializerType
+                }
+            )
+            let errorVar = declareLocal(binding.Identifier, true, errorVarType)
             return BoundIfLetBinding(errorVar, nil, initializerExpr)
         }
         // If the user gave an explicit type clause, the underlying type

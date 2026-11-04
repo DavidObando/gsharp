@@ -830,6 +830,142 @@ Console.WriteLine(Describe(Dog()))
 Console.WriteLine(Describe(Animal()))`, "woof\nanimal\n")
     }
 
+    // Issue #4994: a targetless arrow lambda whose expression body is `never`
+    // (a throw expression, or an if/switch every branch of which exits)
+    // materializes its return type to `void`, while target-typed adaptation
+    // (#2716) continues to shape it to any delegate return type.
+    @Fact
+    func TargetlessNeverExpressionLambda_MaterializesToVoid() {
+        AssertOutput(`import System
+import System.Threading.Tasks
+var f = () -> throw Exception("zero")
+let g = (x int32) -> throw Exception("arg:${x}")
+let h = (c bool) -> if c { throw Exception("if-t") } else { throw Exception("if-f") }
+let s = (k int32) -> switch k { case 1: throw Exception("sw-1") default: throw Exception("sw-d") }
+let nested = () -> (() -> throw Exception("nested"))
+let cond = if true { () -> throw Exception("cond-t") } else { () -> throw Exception("cond-f") }
+let tup = (() -> throw Exception("tup"), 9)
+let (deconFn, deconVal) = (() -> throw Exception("decon"), 5)
+let anon = object { let F = () -> throw Exception("anon") let N = 3 }
+let asyncFn = async () -> throw Exception("async")
+let typedFunc Func[int32] = () -> throw Exception("func")
+let typedAction Action = () -> throw Exception("action")
+let swFirst = switch 2 { case 1: () -> throw Exception("sw-first") default: () -> 42 }
+try { f() } catch (e Exception) { Console.WriteLine(e.Message) }
+f = () -> Console.WriteLine("reassigned")
+f()
+try { g(7) } catch (e Exception) { Console.WriteLine(e.Message) }
+try { h(false) } catch (e Exception) { Console.WriteLine(e.Message) }
+try { s(1) } catch (e Exception) { Console.WriteLine(e.Message) }
+try { nested()() } catch (e Exception) { Console.WriteLine(e.Message) }
+try { cond() } catch (e Exception) { Console.WriteLine(e.Message) }
+try { tup.Item1() } catch (e Exception) { Console.WriteLine("${e.Message}:${tup.Item2}") }
+try { deconFn() } catch (e Exception) { Console.WriteLine("${e.Message}:${deconVal}") }
+try { anon.F() } catch (e Exception) { Console.WriteLine("${e.Message}:${anon.N}") }
+try { (() -> throw Exception("direct"))() } catch (e Exception) { Console.WriteLine(e.Message) }
+try { ((n int32) -> throw Exception("direct:${n}"))(4) } catch (e Exception) { Console.WriteLine(e.Message) }
+try { asyncFn().GetAwaiter().GetResult() } catch (e Exception) { Console.WriteLine(e.Message) }
+try { Console.WriteLine(typedFunc()) } catch (e Exception) { Console.WriteLine(e.Message) }
+try { typedAction() } catch (e Exception) { Console.WriteLine(e.Message) }
+Console.WriteLine(swFirst())`, "zero\nreassigned\narg:7\nif-f\nsw-1\nnested\ncond-t\ntup:9\ndecon:5\nanon:3\ndirect\ndirect:4\nasync\nfunc\naction\n42\n")
+    }
+
+    // Issue #5003: a `never` operand in a generic call or composite yields to
+    // concrete sibling bounds when present, and reports a clean diagnostic
+    // (never GS9998) when no concrete type can be inferred.
+    @Fact
+    func NeverInGenericAndCompositeInference_UnifiesOrReportsCleanDiagnostic() {
+        AssertOutput(`import System
+func Choose[T](a T, b T) T -> a
+data struct Point(X int32, Y int32)
+func Sink(a int32, b int32) int32 -> a + b
+Console.WriteLine(Choose(1, false ? throw Exception("r") : 2))
+try { Console.WriteLine(Choose(1, throw Exception("choose-r"))) } catch (e Exception) { Console.WriteLine(e.Message) }
+try { Console.WriteLine(Choose(throw Exception("choose-l"), 1)) } catch (e Exception) { Console.WriteLine(e.Message) }
+try { Console.WriteLine(Choose((1, 2), (1, throw Exception("tup-r"))).Item1) } catch (e Exception) { Console.WriteLine(e.Message) }
+try { Console.WriteLine(Choose((1, throw Exception("tup-l")), (1, 2)).Item1) } catch (e Exception) { Console.WriteLine(e.Message) }
+let pickFn = Choose(() -> 11, () -> throw Exception("lam-r"))
+Console.WriteLine(pickFn())
+let xs = []int32{10, 20}
+try { Console.WriteLine(Array.IndexOf(xs, throw Exception("clr-idx"))) } catch (e Exception) { Console.WriteLine(e.Message) }
+try { Console.WriteLine(Sink(b: throw Exception("named"), a: 1)) } catch (e Exception) { Console.WriteLine(e.Message) }
+try {
+    defer Sink(1, throw Exception("defer-arg"))
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+try {
+    let p = Point{ X: 1, Y: throw Exception("struct-lit") }
+    Console.WriteLine(p.X)
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}`, "1\nchoose-r\nchoose-l\ntup-r\ntup-l\n11\nclr-idx\nnamed\ndefer-arg\nstruct-lit\n")
+
+        AssertDiagnostic(`import System
+func Id[T](x T) T -> x
+func f() int32 {
+    Id(throw Exception("x"))
+    return 0
+}`, "GS0151", 4, 5)
+        AssertDiagnostic(`import System
+func Id[T](x T) T -> x
+func f() int32 {
+    Id((1, throw Exception("x")))
+    return 0
+}`, "GS0151", 4, 5)
+        AssertDiagnostic(`import System
+class Box[T] { init(x T) { } }
+func f() int32 {
+    let b = Box(throw Exception("x"))
+    return 0
+}`, "GS0151", 4, 13)
+        AssertDiagnostic(`import System
+import System.Threading.Tasks
+func f() {
+    Task.FromResult(throw Exception("x"))
+}`, "GS0159", 4, 10)
+        AssertDiagnostic(`import System
+func f() {
+    let (a, b) = (1, throw Exception("x"))
+}`, "GS0124", 3, 18)
+        AssertDiagnostic(`import System
+func f() {
+    let o = object { let X = throw Exception("x") }
+}`, "GS0124", 3, 30)
+        AssertDiagnostic(`import System
+func f() {
+    let o = object { let X = (1, throw Exception("x")) }
+}`, "GS0124", 3, 30)
+        AssertDiagnostic(`import System
+func f() {
+    switch throw Exception("x") {
+    default { }
+    }
+}`, "GS0124", 3, 12)
+        AssertDiagnostic(`import System
+func f() int32 {
+    return switch (1, throw Exception("x")) {
+    default: 0
+    }
+}`, "GS0124", 3, 19)
+        AssertDiagnostic(`import System
+func f() bool {
+    return (throw Exception("x")) is var v
+}`, "GS0124", 3, 12)
+        AssertDiagnostic(`import System
+func f() int32 {
+    return (1, throw Exception("x")).Item1
+}`, "GS0124", 3, 12)
+        AssertDiagnostic(`import System
+func f() {
+    (1, throw Exception("x"))
+}`, "GS0124", 3, 5)
+        AssertDiagnostic(`import System
+func f() {
+    let o object = (1, throw Exception("x"))
+}`, "GS0155", 3, 20)
+    }
+
     shared {
         private func AssertOutput(source string, expected string) {
             let result = EmittedOracle.Evaluate(source)

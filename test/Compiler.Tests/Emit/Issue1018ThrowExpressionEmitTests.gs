@@ -207,6 +207,79 @@ Console.WriteLine("done")`
     }
 
     @Fact
+    func ThrowOnlyLambda_TargetlessAndGenericInference_EmitAndRun() {
+        // Issues #4994, #5003: targetless throw-expression lambdas materialize
+        // as void delegates (`Action` / `Action<...>`), and generic calls with
+        // both a `never` operand and a concrete operand infer the concrete type.
+        let source = `package P
+
+import System
+
+func Choose[T](a T, b T) T -> a
+
+let f = () -> throw Exception("zero")
+let g = (x int32) -> throw Exception("arg:${x}")
+let nested = () -> (() -> throw Exception("nested"))
+let tup = (() -> throw Exception("tup"), 7)
+
+try {
+    f()
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+try {
+    g(42)
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+try {
+    nested()()
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+try {
+    tup.Item1()
+} catch (e Exception) {
+    Console.WriteLine("${e.Message}:${tup.Item2}")
+}
+try {
+    Console.WriteLine(Choose(1, throw Exception("choose-r")))
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+try {
+    Console.WriteLine(Choose(throw Exception("choose-l"), 1))
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}`
+        let output = CompileAndRun(source)
+        Assert.Equal(
+            "zero${Environment.NewLine}arg:42${Environment.NewLine}nested${Environment.NewLine}tup:7${Environment.NewLine}choose-r${Environment.NewLine}choose-l${Environment.NewLine}",
+            output
+        )
+    }
+
+    @Theory
+    @InlineData("Id(throw Exception(\"x\"))", "GS0151")
+    @InlineData("Id((1, throw Exception(\"x\")))", "GS0151")
+    @InlineData("let t = (1, throw Exception(\"x\"))", "GS0124")
+    func ThrowExpression_UninferrableType_ReportsDiagnosticWithoutCrash(statement string, expectedId string) {
+        let source = `package P
+
+import System
+
+func Id[T](x T) T -> x
+
+func main() {
+    ` + statement + `
+}`
+        let (exitCode, _, diagnostics) = CompileExpectingFailure(source)
+        Assert.NotEqual(0, exitCode)
+        Assert.Contains(expectedId, diagnostics)
+        Assert.DoesNotContain("GS9998", diagnostics)
+    }
+
+    @Fact
     func ThrowExpression_InArgumentPosition() {
         let source = `package P
 

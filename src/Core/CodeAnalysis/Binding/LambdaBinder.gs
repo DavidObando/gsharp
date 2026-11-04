@@ -1825,7 +1825,9 @@ internal class LambdaBinder {
             ErasedFunctionLiteralAdapterRewriter(
                 replacementMap,
                 nestedSubstitution,
-                adapterResultType
+                adapterResultType,
+                conversions,
+                literal.Syntax?.Location ?? default(TextLocation)
             ).RewriteStatement(literal.Body)
         )
         if adapterPrefix.Count > 0 {
@@ -2504,7 +2506,21 @@ internal class LambdaBinder {
             return
         }
         if returnType == TypeSymbol.Void || returnType == TypeSymbol.Error {
-            bodyStatements.Add(BoundExpressionStatement(syntax.Body, trailing))
+            var discardedTrailing = trailing
+            let materializedTrailingType = TypeSymbol.MaterializeNeverFunctionReturns(discardedTrailing.Type)
+            if !object.ReferenceEquals(materializedTrailingType, discardedTrailing.Type) {
+                discardedTrailing = conversions.BindConversion(
+                    syntax.Body.Location,
+                    discardedTrailing,
+                    materializedTrailingType
+                )
+            } else if discardedTrailing.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(
+                discardedTrailing.Type
+            ) {
+                Diagnostics.ReportExpressionMustHaveValue(syntax.Body.Location)
+                discardedTrailing = BoundErrorExpression(syntax.Body)
+            }
+            bodyStatements.Add(BoundExpressionStatement(syntax.Body, discardedTrailing))
             if returnType == TypeSymbol.Void {
                 bodyStatements.Add(BoundReturnStatement(syntax.Body, expression: nil))
             }
@@ -3320,15 +3336,21 @@ internal class LambdaBinder {
         private let replacementMap Dictionary[VariableSymbol, BoundExpression]
         private let nestedSubstitution Dictionary[VariableSymbol, VariableSymbol]
         private let adapterReturnType TypeSymbol
+        private let conversions ConversionClassifier
+        private let defaultLocation TextLocation
 
         init(
             replacementMap Dictionary[VariableSymbol, BoundExpression],
             nestedSubstitution Dictionary[VariableSymbol, VariableSymbol],
-            adapterReturnType TypeSymbol
+            adapterReturnType TypeSymbol,
+            conversions ConversionClassifier,
+            defaultLocation TextLocation
         ) {
             this.replacementMap = replacementMap
             this.nestedSubstitution = nestedSubstitution
             this.adapterReturnType = adapterReturnType
+            this.conversions = conversions
+            this.defaultLocation = defaultLocation
         }
 
         protected override func RewriteVariableExpression(node BoundVariableExpression) BoundExpression {
@@ -3415,6 +3437,16 @@ internal class LambdaBinder {
             // A bottom-typed return never reaches the target slot.
             if expression.Type == this.adapterReturnType || expression.Type == TypeSymbol.Never {
                 return rewritten
+            }
+            if TypeSymbol.ContainsNeverType(expression.Type) {
+                return BoundReturnStatement(
+                    nil,
+                    this.conversions.BindConversion(
+                        rewritten.Syntax?.Location ?? this.defaultLocation,
+                        expression,
+                        this.adapterReturnType
+                    )
+                )
             }
             return BoundReturnStatement(nil, BoundConversionExpression(nil, this.adapterReturnType, expression))
         }
@@ -4098,7 +4130,7 @@ internal class LambdaBinder {
             // exactly as `() -> { throw e }` (a throw statement) already is.
             // An expression body `() -> throw e` keeps its `() -> never` type,
             // which adapts to any delegate signature (issue #2716).
-            let neverBlockTail = trailingType == TypeSymbol.Never && syntax.Body is BlockExpressionSyntax
+            let neverBlockTail = trailingType == TypeSymbol.Never && (syntax.Body is BlockExpressionSyntax || isAsync)
             if targetFunctionType == nil && !hasExplicitReturn && !trailingIsAssignment {
                 return if neverBlockTail {
                     TypeSymbol.Void
@@ -4196,7 +4228,7 @@ internal class LambdaBinder {
             // Issue #4965 (ADR-0202): a block body every return of which never
             // completes (`() -> { return { throw e } }`) has no value type
             // either; see `neverBlockTail` above.
-            if result == TypeSymbol.Never && syntax.Body is BlockExpressionSyntax {
+            if result == TypeSymbol.Never && (syntax.Body is BlockExpressionSyntax || isAsync) {
                 return TypeSymbol.Void
             }
             return result ?? TypeSymbol.Error

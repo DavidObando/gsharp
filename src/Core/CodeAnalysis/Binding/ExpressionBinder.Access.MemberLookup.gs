@@ -485,27 +485,43 @@ internal partial class ExpressionBinder {
         rightPart ExpressionSyntax,
         receiverSyntax ExpressionSyntax? = nil,
         receiverStart int32? = nil
-    ) BoundExpression -> if receiver != nil &&
-        ((receiver is BoundMethodGroupExpression or BoundClrMethodGroupExpression)) &&
-        !MethodGroupDiagnostics
-        .HasDelegateTarget(receiver) {
-        cast[BoundExpression](
-            MethodGroupDiagnostics.ReportRequiresTarget(
-                Diagnostics,
-                receiver,
-                receiverSyntax?.Location ?? rightPart.Location
-            )
-        )
-    } else {
-        (
-            if receiver != nil && receiver.Type == TypeSymbol.Error {
-                Diagnostics.SuppressMemberLookupCascadeIn(
-                    () -> BindAccessorStepCore(receiver, classSymbol, rightPart, receiverSyntax, receiverStart)
+    ) BoundExpression {
+        var receiver = receiver
+        if receiver is {} currentReceiver {
+            let materializedReceiverType = TypeSymbol.MaterializeNeverFunctionReturns(currentReceiver.Type)
+            if !object.ReferenceEquals(materializedReceiverType, currentReceiver.Type) {
+                receiver = conversions.BindConversion(
+                    receiverSyntax?.Location ?? rightPart.Location,
+                    currentReceiver,
+                    materializedReceiverType
                 )
-            } else {
-                BindAccessorStepCore(receiver, classSymbol, rightPart, receiverSyntax, receiverStart)
+            } else if currentReceiver.Type is TupleTypeSymbol && TypeSymbol.ContainsNeverType(currentReceiver.Type) {
+                Diagnostics.ReportExpressionMustHaveValue(receiverSyntax?.Location ?? rightPart.Location)
+                return BoundErrorExpression(nil)
             }
-        )
+        }
+        return if receiver != nil &&
+            ((receiver is BoundMethodGroupExpression or BoundClrMethodGroupExpression)) &&
+            !MethodGroupDiagnostics
+            .HasDelegateTarget(receiver) {
+            cast[BoundExpression](
+                MethodGroupDiagnostics.ReportRequiresTarget(
+                    Diagnostics,
+                    receiver,
+                    receiverSyntax?.Location ?? rightPart.Location
+                )
+            )
+        } else {
+            (
+                if receiver != nil && receiver.Type == TypeSymbol.Error {
+                    Diagnostics.SuppressMemberLookupCascadeIn(
+                        () -> BindAccessorStepCore(receiver, classSymbol, rightPart, receiverSyntax, receiverStart)
+                    )
+                } else {
+                    BindAccessorStepCore(receiver, classSymbol, rightPart, receiverSyntax, receiverStart)
+                }
+            )
+        }
     }
 
     private func BindAccessorStepCore(

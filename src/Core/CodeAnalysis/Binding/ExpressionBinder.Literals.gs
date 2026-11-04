@@ -1677,10 +1677,20 @@ internal partial class ExpressionBinder {
             } else {
                 bindTypeClause(member.TypeClause)
             }
-            let value = if memberType == nil {
+            var value = if memberType == nil {
                 BindExpression(member.Value)
             } else {
                 BindExpression(member.Value, memberType)
+            }
+            if memberType == nil {
+                let materializedMemberType = TypeSymbol.MaterializeNeverFunctionReturns(value.Type)
+                if !object.ReferenceEquals(materializedMemberType, value.Type) {
+                    value = conversions.BindConversion(member.Value.Location, value, materializedMemberType)
+                }
+                if TypeSymbol.ContainsNeverType(value.Type) {
+                    Diagnostics.ReportExpressionMustHaveValue(member.Value.Location)
+                    value = BoundErrorExpression(member.Value)
+                }
             }
             if value is BoundErrorExpression {
                 hadError = true
@@ -2563,7 +2573,18 @@ internal partial class ExpressionBinder {
                 let argumentName = "$$literalarg" + Interlocked.Increment(&binderCtx.SyntheticLocalCounter).ToString(
                     CultureInfo.InvariantCulture
                 )
-                let argument = LocalVariableSymbol(argumentName, isReadOnly: true, initializer.Value.Type)
+                let memberType = initializer.Field?.Type ?? Invariant.Required(
+                    initializer.Property,
+                    "a positional initializer targets a field or property",
+                    expression: "initializer.Property"
+                )
+                    .Type
+                let argumentType = if initializer.Value.Type == TypeSymbol.Never {
+                    memberType
+                } else {
+                    initializer.Value.Type
+                }
+                let argument = LocalVariableSymbol(argumentName, isReadOnly: true, argumentType)
                 $scope.TryDeclareVariable(argument)
                 argumentStatements!!.Add(BoundVariableDeclaration(nil, argument, initializer.Value))
                 let value = BoundVariableExpression(nil, argument)
@@ -2611,14 +2632,21 @@ internal partial class ExpressionBinder {
                     )
                     continue
                 }
-                let expression = BindExpression(
-                    member.Value,
-                    Invariant.Required(step.MemberType, "a positional member has a type", expression: "step.MemberType")
+                let memberType = Invariant.Required(
+                    step.MemberType,
+                    "a positional member has a type",
+                    expression: "step.MemberType"
                 )
+                let expression = BindExpression(member.Value, memberType)
                 let name = "$$literalarg" + Interlocked.Increment(&binderCtx.SyntheticLocalCounter).ToString(
                     CultureInfo.InvariantCulture
                 )
-                let argument = LocalVariableSymbol(name, isReadOnly: true, expression.Type)
+                let argumentType = if expression.Type == TypeSymbol.Never {
+                    memberType
+                } else {
+                    expression.Type
+                }
+                let argument = LocalVariableSymbol(name, isReadOnly: true, argumentType)
                 $scope.TryDeclareVariable(argument)
                 argumentStatements ??= ImmutableArray.CreateBuilder[BoundStatement]()
                 argumentStatements!!.Add(BoundVariableDeclaration(nil, argument, expression))
@@ -3895,6 +3923,12 @@ internal partial class ExpressionBinder {
         Load BoundExpression,
         Declaration BoundStatement
     ) {
+        if value.Type == TypeSymbol.Never {
+            return (
+                BoundThrowExpression(value.Syntax, BoundLiteralExpression(value.Syntax, value: nil)),
+                BoundExpressionStatement(value.Syntax, value)
+            )
+        }
         let counter = Interlocked.Increment(&binderCtx.SyntheticLocalCounter)
         let name = namePrefix + "_" + counter.ToString(CultureInfo.InvariantCulture)
         let local = LocalVariableSymbol(name, isReadOnly: true, value.Type)
