@@ -66,7 +66,8 @@ internal partial class StatementBinder {
     ) AssignedRootsCollector -> AssignedRootsCollector(
         assignmentPreservesNarrowing,
         externalFunctionValues,
-        (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second)
+        (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second),
+        (variable VariableSymbol) -> NamesClosureAssignedStorage(variable)
     )
 
     /// ADR-0208 R12 (#5171): removes the callable aliases that [`collector`](paramref) assigns, and
@@ -660,9 +661,12 @@ internal partial class StatementBinder {
             aliases.UnionWith(collector.DefinitelyExternalFunctionValues)
         } else {
             RemoveAssignedAliases(aliases, collector)
+            if collector.MayMutateAnyRoot {
+                aliases.IntersectWith(collector.DefinitelyExternalFunctionValues)
+            }
         }
         // ADR-0208 R15: a call can run an escaped closure that replaces a callable alias which a closure assigns.
-        if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
+        if collector.MayRunEscapedClosure {
             aliases.RemoveWhere(NamesClosureAssignedStorage)
         }
         if assignsExternalCallable {
@@ -2229,13 +2233,16 @@ internal partial class StatementBinder {
         private var escapedClosureProtectedRoots HashSet[VariableSymbol]?
         private var tryAssignedVariables HashSet[VariableSymbol]?
         private let mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?
+        private let isClosureAssigned((VariableSymbol) -> bool)?
 
         init(
             assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?,
             externalFunctionValues IEnumerable[VariableSymbol]? = nil,
-            mayShareStorage((VariableSymbol, VariableSymbol) -> bool)? = nil
+            mayShareStorage((VariableSymbol, VariableSymbol) -> bool)? = nil,
+            isClosureAssigned((VariableSymbol) -> bool)? = nil
         ) {
             this.mayShareStorage = mayShareStorage
+            this.isClosureAssigned = isClosureAssigned
             Roots = HashSet[VariableSymbol]()
             WritableReferenceRoots = HashSet[VariableSymbol]()
             VisitedCatchFilters = List[ExpressionSyntax]()
@@ -2446,6 +2453,8 @@ internal partial class StatementBinder {
                 )
                 if function.HasCaptures {
                     MayMutateAnyRoot = true
+                    normalCallableState.InvalidateClosureAssigned(isClosureAssigned)
+                    allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned)
                 }
                 let count = Math.Min(arguments.Length, function.Parameters.Length)
                 for var i = 0; i < count; i++ {
@@ -2817,8 +2826,12 @@ internal partial class StatementBinder {
                 if isExternal {
                     MarkMayMutateGlobalRoots(runsSourceCode: false)
                 }
+                if isNormalUnknown {
+                    normalCallableState.InvalidateClosureAssigned(isClosureAssigned)
+                }
                 if isUnknown {
                     MayMutateAnyRoot = true
+                    allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned)
                 }
             }
         }
@@ -3083,6 +3096,8 @@ internal partial class StatementBinder {
             }
             if callable is not BoundVariableExpression variable {
                 MayMutateAnyRoot = true
+                normalCallableState.InvalidateClosureAssigned(isClosureAssigned)
+                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned)
                 return
             }
             callableInvocations.Add(variable.Variable)
@@ -3109,6 +3124,12 @@ internal partial class StatementBinder {
             // A read-only callable parameter originates outside this function
             // and cannot capture this function's local slots.
             MayMutateAnyRoot |= isUnknown
+            if isNormalUnknown {
+                normalCallableState.InvalidateClosureAssigned(isClosureAssigned)
+            }
+            if isUnknown {
+                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned)
+            }
             if isExternal {
                 MarkMayMutateGlobalRoots(runsSourceCode: false)
                 MayMutateWritableReferenceRoots = true
@@ -3258,18 +3279,6 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitAssignmentExpression(node BoundAssignmentExpression) {
-            if node.Variable != nil {
-                writableReferenceAliases.Remove(node.Variable)
-                tryAssignedVariables?.Add(node.Variable)
-                normalCallableState.ApplyAssignment(node, pendingConditionalTargets.Count, mayShareStorage)
-                allEntryCallableState.ApplyAssignment(node, pendingConditionalTargets.Count, mayShareStorage)
-                Roots.Add(node.Variable)
-                if !assignments.TryGetValue(node.Variable, out var rootAssignments) {
-                    rootAssignments = List[BoundAssignmentExpression]()
-                    assignments.Add(node.Variable, rootAssignments)
-                }
-                rootAssignments.Add(node)
-            }
             let protectedGlobalRoot GlobalVariableSymbol? = node.Variable as GlobalVariableSymbol
             if protectedGlobalRoot != nil {
                 enclosingGlobalAssignments.Push(protectedGlobalRoot)
@@ -3283,6 +3292,18 @@ internal partial class StatementBinder {
             }
             if protectedGlobalRoot != nil {
                 enclosingGlobalAssignments.Pop()
+            }
+            if node.Variable != nil {
+                writableReferenceAliases.Remove(node.Variable)
+                tryAssignedVariables?.Add(node.Variable)
+                normalCallableState.ApplyAssignment(node, pendingConditionalTargets.Count, mayShareStorage)
+                allEntryCallableState.ApplyAssignment(node, pendingConditionalTargets.Count, mayShareStorage)
+                Roots.Add(node.Variable)
+                if !assignments.TryGetValue(node.Variable, out var rootAssignments) {
+                    rootAssignments = List[BoundAssignmentExpression]()
+                    assignments.Add(node.Variable, rootAssignments)
+                }
+                rootAssignments.Add(node)
             }
         }
 
@@ -3407,13 +3428,22 @@ internal partial class StatementBinder {
                 )
             }
 
-            func IsExternalCallable(expression BoundExpression) bool {
-                return UnwrapCallable(expression) is BoundVariableExpression variable &&
-                    (
-                    (variable.Variable is ParameterSymbol and {IsReadOnly: true}) || External.Contains(
-                        variable.Variable
-                    )
-                )
+            func IsExternalCallable(expression BoundExpression) bool -> StatementBinder.IsExternalCallableSource(
+                expression,
+                External
+            )
+
+            func InvalidateClosureAssigned(isClosureAssigned((VariableSymbol) -> bool)?) {
+                if isClosureAssigned == nil {
+                    return
+                }
+                for variable in Literals.Keys.Concat(External).ToArray() {
+                    if isClosureAssigned(variable) {
+                        Literals.Remove(variable)
+                        External.Remove(variable)
+                        Unknown.Add(variable)
+                    }
+                }
             }
 
             func IsUnknownCallable(expression BoundExpression) bool -> UnwrapCallable(

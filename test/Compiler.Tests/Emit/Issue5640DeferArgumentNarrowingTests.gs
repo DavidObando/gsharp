@@ -331,6 +331,57 @@ func Run(callback () -> void, ex Exception) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }, Exception("x")))`, "GS0158@23:14", "reject", ""}
+            yield[]object{"d15_5640_reassigning_external_callable_after_unknown_call_keeps_alias", `import System
+class C {
+    var Value int32 = 7
+}
+func RunBlock(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    let flip = func() {
+        action = clear
+    }
+    {
+        flip()
+        action = callback
+    }
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+func RunDefer(callback () -> void) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    let flip = func() {
+        action = clear
+    }
+    defer ({
+        flip()
+        action = callback
+        action
+    })()
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(RunBlock(func() { }) + RunDefer(func() { }))`, "", "run", "14"}
+            yield[]object{"d16_5640_defer_eager_target_assigning_method_group_keeps_alias", `import System
+class C {
+    var Value int32 = 7
+}
+func Noop() { }
+func Run() int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = clear
+    if x == nil { return 0 }
+    defer (action = Noop)()
+    action()
+    return x.Value
+}
+Console.WriteLine(Run())`, "", "run", "7"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
