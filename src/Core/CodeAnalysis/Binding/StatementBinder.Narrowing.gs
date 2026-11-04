@@ -4117,6 +4117,7 @@ internal partial class StatementBinder {
                     global.SetConstantValue(constValue)
                 } else if declaredVariable is LocalVariableSymbol constLocal {
                     constLocal.IsConst = true
+                    constLocal.ConstantValue = constValue
                 }
             } else if declaredVariable is GlobalVariableSymbol && !(convertedInitializer is BoundErrorExpression) {
                 Diagnostics.ReportConstFieldInitializerNotConstant(
@@ -5292,10 +5293,10 @@ internal partial class StatementBinder {
         private func StripNullability(type TypeSymbol?) TypeSymbol? {
             var current = type
             while current is NullableTypeSymbol or PlatformTypeSymbol {
-                current = if current is NullableTypeSymbol nullable {
-                    nullable.UnderlyingType
-                } else {
-                    (current as PlatformTypeSymbol)!!.UnderlyingType
+                if current is NullableTypeSymbol nullable {
+                    current = nullable.UnderlyingType
+                } else if current is PlatformTypeSymbol platform {
+                    current = platform.UnderlyingType
                 }
             }
             return current

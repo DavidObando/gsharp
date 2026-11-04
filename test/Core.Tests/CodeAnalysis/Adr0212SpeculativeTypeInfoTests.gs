@@ -25,6 +25,7 @@ import Xunit
 /// | Input | Answer | Test |
 /// | --- | --- | --- |
 /// | local or parameter of the enclosing function, declared before `position` | its declared type | `EnclosingLocal_IsInScope` |
+/// | local function of the enclosing block (non-generic or generic, inferred or explicit type arguments) | its return type; shadows globals and members; inner block shadows outer; sibling block out of scope | `NonGenericLocalFunction_IsInScope`, `GenericLocalFunction_IsInScope_InferredAndExplicitTypeArguments`, `LocalFunction_ShadowsGlobalFunctionAndInstanceMethod`, `NestedAndOutOfScopeLocalFunctions_RespectBlockScopes` |
 /// | local declared after `position` | not in scope: no type | `LocalDeclaredAfterPosition_IsNotInScope` |
 /// | receiver inside a method | `this` and the members resolve | `MethodBody_SeesThisAndMembers` |
 /// | no enclosing declared function | the globals resolve | `TopLevel_SeesGlobals` |
@@ -57,6 +58,77 @@ open class Adr0212SpeculativeTypeInfoTests {
         let (model, tree) = Create(Program)
         let expression = Expression(tree, "later", "BeforeLater")
         Assert.Null(model.GetSpeculativeTypeInfo(expression.Span.Start, expression).Type)
+    }
+
+    @Fact
+    func NonGenericLocalFunction_IsInScope() {
+        let (model, tree) = Create(Program)
+        let expression = Expression(tree, "Local(3)", "InLocalFunc")
+        Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(expression.Span.Start, expression).Type)
+    }
+
+    @Fact
+    func GenericLocalFunction_IsInScope_InferredAndExplicitTypeArguments() {
+        let (model, tree) = Create(Program)
+        let inferredInt = Expression(tree, "Twice(3)", "InLocalFunc")
+        let inferredString = Expression(tree, "Twice(\"abc\")", "InLocalFunc")
+        let explicitLong = Expression(tree, "Twice[int64](3)", "InLocalFunc")
+        let overloadedTwo = Expression(tree, "Pick(3, 0)", "InLocalFunc")
+        let overloadedOne = Expression(tree, "Pick(3)", "InLocalFunc")
+        Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(inferredInt.Span.Start, inferredInt).Type)
+        Assert.Same(TypeSymbol.String, model.GetSpeculativeTypeInfo(inferredString.Span.Start, inferredString).Type)
+        Assert.Same(TypeSymbol.Int64, model.GetSpeculativeTypeInfo(explicitLong.Span.Start, explicitLong).Type)
+        Assert.Same(TypeSymbol.String, model.GetSpeculativeTypeInfo(overloadedTwo.Span.Start, overloadedTwo).Type)
+        Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(overloadedOne.Span.Start, overloadedOne).Type)
+    }
+
+    @Fact
+    func LocalFunction_ShadowsGlobalFunctionAndInstanceMethod() {
+        let (model, tree) = Create(Program)
+        let beforeGroupGlobal = Expression(tree, "ShadowedGlobal(3)", "BeforeLocalFunc")
+        let shadowsGlobal = Expression(tree, "ShadowedGlobal(3)", "InLocalFunc")
+        let twiceCall = Expression(tree, "Twice(3)", "InLocalFunc")
+        let forwardCall = Expression(tree, "ForwardSecond[T](x)", "InForwardGroup")
+        let unshadowedGlobal = Expression(tree, "ShadowedGlobal(\"hi\")", "TopLevel")
+        let shadowsMethod = Expression(tree, "ShadowedMethod(3)", "InMethod")
+        Assert.Same(
+            TypeSymbol.String,
+            model.GetSpeculativeTypeInfo(beforeGroupGlobal.Span.Start, beforeGroupGlobal).Type
+        )
+        Assert.Null(model.GetSpeculativeTypeInfo(beforeGroupGlobal.Span.Start, twiceCall).Type)
+        Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(forwardCall.Span.Start, forwardCall).Type)
+        Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(shadowsGlobal.Span.Start, shadowsGlobal).Type)
+        Assert.Same(TypeSymbol.String, model.GetSpeculativeTypeInfo(unshadowedGlobal.Span.Start, unshadowedGlobal).Type)
+        Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(shadowsMethod.Span.Start, shadowsMethod).Type)
+    }
+
+    @Fact
+    func NestedAndOutOfScopeLocalFunctions_RespectBlockScopes() {
+        let (model, tree) = Create(Program)
+        let innerCall = Expression(tree, "Scoped(3)", "InInnerBlock")
+        let innerTwoArgCall = Expression(tree, "Scoped(3, 1)", "InInnerBlock")
+        let innerDefaultedOuterCall = Expression(tree, "DefaultedOuter(3)", "InInnerBlock")
+        let innerConstrainedOuterCall = Expression(tree, "ConstrainedOuter(3)", "InInnerBlock")
+        let innerReclaimedCall = Expression(tree, "Reclaimed(3)", "InReclaimedBlock")
+        let siblingCall = Expression(tree, "SiblingOnly(3)", "InSiblingBlock")
+        let outerCall = Expression(tree, "Scoped(3)", "AfterBlocks")
+        Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(innerCall.Span.Start, innerCall).Type)
+        Assert.Same(TypeSymbol.String, model.GetSpeculativeTypeInfo(innerTwoArgCall.Span.Start, innerTwoArgCall).Type)
+        Assert.Same(
+            TypeSymbol.String,
+            model.GetSpeculativeTypeInfo(innerDefaultedOuterCall.Span.Start, innerDefaultedOuterCall).Type
+        )
+        Assert.Same(
+            TypeSymbol.String,
+            model.GetSpeculativeTypeInfo(innerConstrainedOuterCall.Span.Start, innerConstrainedOuterCall).Type
+        )
+        Assert.Same(
+            TypeSymbol.String,
+            model.GetSpeculativeTypeInfo(innerReclaimedCall.Span.Start, innerReclaimedCall).Type
+        )
+        Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(siblingCall.Span.Start, siblingCall).Type)
+        Assert.Same(TypeSymbol.String, model.GetSpeculativeTypeInfo(outerCall.Span.Start, outerCall).Type)
+        Assert.Null(model.GetSpeculativeTypeInfo(outerCall.Span.Start, siblingCall).Type)
     }
 
     @Fact
@@ -250,6 +322,8 @@ import System.IO
 class Point { var X int32 }
 var Global = 1
 func Nothing() { }
+func ShadowedGlobal(x object) string { return "global" }
+func ShadowedGlobal(x object, y object) string { return "global2" }
 func Probe(p Point?, n int32) {
     let s = "abc"
     // InLocal
@@ -259,6 +333,57 @@ func Probe(p Point?, n int32) {
     // BeforeLater
     later
     let later = 2
+    // BeforeLocalFunc
+    ShadowedGlobal(3)
+    let Local = func(x int32) int32 { return LocalStep(x) }
+    let LocalStep = func(x int32) int32 { return x + 1 }
+    let Twice[T] = func(x T) T { return x }
+    let Pick[T] = func(x T, n int32) string { return "two" }
+    let Pick[T] = func(x T) T { return x }
+    let ForwardFirst[T] = func(x T) int32 {
+        // InForwardGroup
+        return ForwardSecond[T](x)
+    }
+    let ForwardSecond[U] = func(x U) int32 { return 7 }
+    let ShadowedGlobal[T] = func(x T) T { return x }
+    // InLocalFunc
+    Local(3)
+    Twice(3)
+    Twice("abc")
+    Twice[int64](3)
+    Pick(3, 0)
+    Pick(3)
+    ForwardFirst(3)
+    ShadowedGlobal(3)
+    let Scoped[T] = func(x T, extra int32 = 0) string { return "outer" }
+    let DefaultedOuter[T] = func(x T, extra int32 = 0) string { return "outer-default" }
+    let ConstrainedOuter[T] = func(x T) string { return "outer-unconstrained" }
+    let Reclaimed[T] = func(x T, extra int32 = 0) string { return "outer-reclaimed" }
+    if true {
+        let Scoped[T] = func(x T) T { return x }
+        let DefaultedOuter[U] = func(x U, extra int32) int32 { return extra }
+        let ConstrainedOuter[U IDisposable] = func(x U) int32 { return 1 }
+        // InInnerBlock
+        Scoped(3)
+        Scoped(3, 1)
+        DefaultedOuter(3)
+        ConstrainedOuter(3)
+    }
+    if true {
+        let Reclaimed = 0
+        if Reclaimed == 0 {
+            let Reclaimed[U] = func(x U, extra int32) int32 { return extra }
+            // InReclaimedBlock
+            Reclaimed(3)
+        }
+    }
+    if true {
+        let SiblingOnly[T] = func(x T) T { return x }
+        // InSiblingBlock
+        SiblingOnly(3)
+    }
+    // AfterBlocks
+    Scoped(3)
     // Failed
     Missing(1)
     // Void
@@ -273,9 +398,12 @@ func Probe(p Point?, n int32) {
 }
 class Holder {
     var Count int32
+    func ShadowedMethod[T](x T) string { return "member" }
     func M() {
+        let ShadowedMethod[T] = func(x T) T { return x }
         // InMethod
         Count + 1
+        ShadowedMethod(3)
     }
 }
 open class Base2 {
@@ -300,6 +428,7 @@ class Derived3 : Base2 {
 }
 // TopLevel
 Global + 1
+ShadowedGlobal("hi")
 `
 
         private func Create(source string)(SemanticModel, SyntaxTree) {
@@ -373,6 +502,31 @@ Global + 1
                         }
                         mismatches.Add(
                             "${category} @ ${file}:${name.Span.Start} ${name.IdentifierToken.Text} in ${name.Parent?.GetType()?.Name}: declared ${expected}, speculative ${actual}"
+                        )
+                    }
+                }
+                for call in tree.Root.DescendantNodes().OfType[CallExpressionSyntax]() {
+                    if call.Identifier.IsMissing || model.GetSymbolInfo(call.Identifier)
+                        .Symbol is not FunctionSymbol{LocalDeclaration: not nil} {
+                        continue
+                    }
+                    let boundType = model.GetTypeInfo(call).Type
+                    if boundType == nil || object.ReferenceEquals(boundType, TypeSymbol.Error) ||
+                        object.ReferenceEquals(boundType, TypeSymbol.Void) {
+                        continue
+                    }
+                    compared += 1
+                    let speculative = model.GetSpeculativeTypeInfo(call.Span.Start, call).Type
+                    let expected = boundType.ToString()
+                    let actual = speculative?.ToString() ?? "<none>"
+                    if expected != actual {
+                        let category = if speculative == nil {
+                            "no answer"
+                        } else {
+                            "different type"
+                        }
+                        mismatches.Add(
+                            "${category} @ ${file}:${call.Span.Start} ${call.Identifier.Text}(...) in ${call.Parent?.GetType()?.Name}: declared ${expected}, speculative ${actual}"
                         )
                     }
                 }

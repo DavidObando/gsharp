@@ -61,6 +61,10 @@ internal class BinderContext {
     /// `defer` argument values. Mutated in place by callers.
     var DeferArgumentCounter int32
 
+    /// Counter used to allocate unique synthetic-local names for the operands
+    /// a `go` statement evaluates on the spawning goroutine. Mutated in place by callers.
+    var GoArgumentCounter int32
+
     /// Counter used to allocate unique synthetic-local names for discarded
     /// `out` argument receivers. Mutated in place by callers.
     var OutDiscardCounter int32

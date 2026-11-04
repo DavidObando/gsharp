@@ -1519,8 +1519,9 @@ internal partial class StatementBinder {
             conversions.HasUserDefinedImplicitConversion(sourceValue, StripNullableValue(target))
     }
 
-    private func StripNullableValue(type TypeSymbol) TypeSymbol -> if IsNullableValueType(type) {
-        (type as NullableTypeSymbol)!!.UnderlyingType
+    private func StripNullableValue(type TypeSymbol) TypeSymbol -> if type is NullableTypeSymbol nullable &&
+        NullableLifting.IsValueTypeNullable(nullable) {
+        nullable.UnderlyingType
     } else {
         type
     }
@@ -2444,8 +2445,8 @@ internal partial class StatementBinder {
                     return current
                 }
                 current = nullable.UnderlyingType
-            } else {
-                current = (current as PlatformTypeSymbol)!!.UnderlyingType
+            } else if current is PlatformTypeSymbol platform {
+                current = platform.UnderlyingType
             }
         }
         return current

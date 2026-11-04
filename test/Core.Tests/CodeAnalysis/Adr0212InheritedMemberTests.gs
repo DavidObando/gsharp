@@ -11,6 +11,7 @@ import GSharp.Core.CodeAnalysis.Symbols.Display
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
+import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
 import Xunit
@@ -231,6 +232,237 @@ open class Adr0212InheritedMemberTests {
         Assert.Equal(2, enumerators.Length)
     }
 
+    // ---- Row: type parameter ----
+
+    @Fact
+    func TypeParameter_WithImportedInterfaceConstraint_ListsConstraintAndBaseInterfaceMembersThenObject() {
+        let comp = Query("PTComp")
+        let compareTo = comp.IndexOf(comp.First((m Symbol) -> m.Name == "CompareTo"))
+        let toString = comp.IndexOf(comp.First((m Symbol) -> m.Name == "ToString"))
+        Assert.True(compareTo >= 0 && compareTo < toString, "constraint members come before object members")
+        let compareToMember = cast[ImportedFunctionSymbol](Assert.Single(Query("PTComp", "CompareTo")))
+        Assert.Equal("IComparable`1", compareToMember.Method.DeclaringType!!.Name)
+        Assert.Equal(TypeSymbol.Int32, compareToMember.Type)
+        Assert.Empty(Query("PTComp", "ReferenceEquals"))
+        Assert.Empty(Query("PTComp", "Finalize"))
+
+        let count = cast[PropertySymbol](Assert.Single(Query("PTList", "Count")))
+        Assert.Equal("ICollection`1", count.ImportedMember!!.DeclaringType!!.Name)
+        Assert.Equal(TypeSymbol.Int32, count.Type)
+        Assert.Single(Query("PTList", "Add"))
+        let enumerators = Query("PTList", "GetEnumerator").OfType[ImportedFunctionSymbol]().ToList()
+        Assert.Equal(2, enumerators.Count)
+        let genericEnumerator = enumerators.First((f ImportedFunctionSymbol) -> f.Method.DeclaringType!!.IsGenericType)
+        Assert.Contains(
+            "[string?]",
+            SymbolDisplay.ToTypeDisplayString(genericEnumerator.Type),
+            StringComparison.Ordinal
+        )
+        Assert.NotEmpty(Query("PTList", "ToString"))
+    }
+
+    @Fact
+    func TypeParameter_WithSourceInterfaceConstraint_ListsInstanceStaticAndBaseMembersNotPrivateHelpers() {
+        let shape = Query("PTShape")
+        let area = shape.IndexOf(shape.First((m Symbol) -> m.Name == "Area"))
+        let toString = shape.IndexOf(shape.First((m Symbol) -> m.Name == "ToString"))
+        Assert.True(area >= 0 && area < toString)
+        Assert.NotEmpty(Query("PTShape", "Perimeter"))
+        Assert.NotEmpty(Query("PTShape", "Visible"))
+        Assert.Empty(Query("PTShape", "Secret"))
+        Assert.Equal("IBase", Assert.Single(Query("PTSubIface", "Hello")).ContainingType!!.Name)
+        Assert.Single(Query("PTCounted", "Count"))
+        Assert.Single(Query("PTCounted", "Add"))
+        let maybeEnumerator = Query("PTIMaybes", "GetEnumerator").OfType[ImportedFunctionSymbol]().First(
+            (f ImportedFunctionSymbol) -> f.Method.DeclaringType!!.IsGenericType
+        )
+        Assert.Contains("[string?]", SymbolDisplay.ToTypeDisplayString(maybeEnumerator.Type), StringComparison.Ordinal)
+        let boxValue = cast[PropertySymbol](Assert.Single(Query("PTBox", "Value")))
+        Assert.Equal(TypeSymbol.String, boxValue.Type)
+        let subBoxValue = cast[PropertySymbol](Assert.Single(Query("PTSubBox", "Value")))
+        Assert.Equal(TypeSymbol.Int32, subBoxValue.Type)
+        let boxChanged = cast[EventSymbol](Assert.Single(Query("PTBox", "Changed")))
+        Assert.Equal("(string) -> void", SymbolDisplay.ToTypeDisplayString(boxChanged.Type))
+        Assert.NotNull(boxChanged.GetDocumentation())
+        let subBoxChanged = cast[EventSymbol](Assert.Single(Query("PTSubBox", "Changed")))
+        Assert.Equal("(int32) -> void", SymbolDisplay.ToTypeDisplayString(subBoxChanged.Type))
+        Assert.NotNull(subBoxChanged.GetDocumentation())
+        let addStatic = cast[FunctionSymbol](Assert.Single(Query("PTAdd", "Add")))
+        Assert.True(addStatic.IsStatic)
+    }
+
+    @Fact
+    func TypeParameter_WithSourceClassConstraint_ListsInstanceBaseAndDefaultInterfaceMembersNotStatics() {
+        let buffer = Query("PTBuffer")
+        let own = buffer.IndexOf(buffer.First((m Symbol) -> m.Name == "Mark"))
+        let inherited = buffer.IndexOf(buffer.First((m Symbol) -> m.Name == "SetLength"))
+        Assert.True(
+            own >= 0 && own < inherited,
+            "source constraint members come before inherited imported base members"
+        )
+        Assert.NotEmpty(Query("PTBuffer", "Position"))
+        Assert.Empty(Query("PTBuffer", "EmptyBuffer"))
+        Assert.Empty(Query("PTBuffer", "Null"))
+
+        let shownToString = Assert.Single(Query("PTShown", "ToString"))
+        Assert.IsType[StructSymbol](shownToString.ContainingType)
+
+        let area = Assert.Single(Query("PTSquare", "Area"))
+        Assert.IsType[InterfaceSymbol](area.ContainingType)
+        Assert.Empty(Query("PTSquare", "Secret"))
+
+        let echoString = cast[FunctionSymbol](Assert.Single(Query("PTGBox", "Echo")))
+        Assert.Equal(TypeSymbol.String, echoString.Type)
+        Assert.Equal(TypeSymbol.String, echoString.Parameters.Single().Type)
+        Assert.NotNull(echoString.GetDocumentation())
+        let waitString = cast[FunctionSymbol](Assert.Single(Query("PTGBox", "Wait")))
+        Assert.Equal(TypeSymbol.String, waitString.Type)
+        Assert.True(waitString.IsSuspending)
+        let gboxChanged = cast[EventSymbol](Assert.Single(Query("PTGBox", "Changed")))
+        Assert.Equal("(string) -> void", SymbolDisplay.ToTypeDisplayString(gboxChanged.Type))
+        Assert.NotNull(gboxChanged.GetDocumentation())
+
+        let echoInt = cast[FunctionSymbol](Assert.Single(Query("PTGSubBox", "Echo")))
+        Assert.Equal(TypeSymbol.Int32, echoInt.Type)
+        Assert.Equal(TypeSymbol.Int32, echoInt.Parameters.Single().Type)
+        let gsubChanged = cast[EventSymbol](Assert.Single(Query("PTGSubBox", "Changed")))
+        Assert.Equal("(int32) -> void", SymbolDisplay.ToTypeDisplayString(gsubChanged.Type))
+
+        // A constructed class's properties are already substituted on the symbol; LookupMembers must not
+        // substitute them a second time when the type argument mentions the class's own type parameter.
+        let nestedProp = cast[PropertySymbol](Assert.Single(Query("PTGBoxNested", "Current")))
+        Assert.Equal("[]U", SymbolDisplay.ToTypeDisplayString(nestedProp.Type))
+    }
+
+    @Fact
+    func TypeParameter_WithImportedClassConstraint_ReadsMemberTypesAtTheConstraintAndSkipsStatics() {
+        let slice = cast[ImportedFunctionSymbol](Assert.Single(Query("PTMaybes", "GetRange")))
+        Assert.Contains("string?", SymbolDisplay.ToTypeDisplayString(slice.Type), StringComparison.Ordinal)
+        let inner = cast[PropertySymbol](Assert.Single(Query("PTException", "InnerException")))
+        Assert.IsType[NullableTypeSymbol](inner.Type)
+        let asyncValue = cast[PropertySymbol](Assert.Single(Query("PTAsync", "Value")))
+        Assert.IsType[NullableTypeSymbol](asyncValue.Type)
+        let boundAsyncValue = ModelOf().GetSymbolInfo(AccessAt("PTAsync").RightPart.GetFirstToken()).Symbol
+        Assert.Same(asyncValue, boundAsyncValue)
+        Assert.Empty(Query("PTBuffer", "Null"))
+        Assert.DoesNotContain(
+            Query("PTBuffer", "Dispose").OfType[ImportedFunctionSymbol](),
+            (m ImportedFunctionSymbol) -> m.Method.GetParameters().Length == 1
+        )
+    }
+
+    @Fact
+    func TypeParameter_WithDependentBoundChain_ListsConstraintsInOrderAndDeduplicates() {
+        Assert.Equal("IBase", Assert.Single(Query("PTChain", "Hello")).ContainingType!!.Name)
+        Assert.NotEmpty(Query("PTChain", "ToString"))
+        Assert.Equal("IShape", Assert.Single(Query("PTDeepChain", "Area")).ContainingType!!.Name)
+
+        // When two parameters in a forwarded chain share base interfaces or overrides, each member appears once
+        // and the receiver's own constraint comes before the bounding parameter's constraint.
+        let model = ModelOf()
+        let pos = Position("PTChain")
+        let isub = cast[InterfaceSymbol](model.LookupSymbols(pos, "ISub").Single())
+        let ishape = cast[InterfaceSymbol](model.LookupSymbols(pos, "IShape").Single())
+        let baseParam = TypeParameterSymbol("A", 0, TypeParameterConstraint.Any, TypeParameterVariance.None, ishape)
+        let derivedParam = TypeParameterSymbol("B", 1, TypeParameterConstraint.Any, TypeParameterVariance.None, isub){
+            TypeParameterBound = baseParam
+        }
+        let combined = model.LookupMembers(pos, derivedParam)
+        let helloIdx = combined.IndexOf(combined.First((m Symbol) -> m.Name == "Hello"))
+        let areaIdx = combined.IndexOf(combined.First((m Symbol) -> m.Name == "Area"))
+        let toStringIdx = combined.IndexOf(combined.First((m Symbol) -> m.Name == "ToString"))
+        Assert.True(helloIdx >= 0 && helloIdx < areaIdx && areaIdx < toStringIdx)
+        Assert.Single(combined.Where((m Symbol) -> m.Name == "ToString"))
+
+        // Overlapping source interfaces (ISub : IBase alongside IBase) list Hello once.
+        let ibase = cast[InterfaceSymbol](model.LookupSymbols(pos, "IBase").Single())
+        let baseIfaceParam = TypeParameterSymbol("A", 0, TypeParameterConstraint.Any, TypeParameterVariance.None, ibase)
+        let subIfaceParam = TypeParameterSymbol("B", 1, TypeParameterConstraint.Any, TypeParameterVariance.None, isub){
+            TypeParameterBound = baseIfaceParam
+        }
+        Assert.Single(model.LookupMembers(pos, subIfaceParam, "Hello"))
+
+        // Overlapping imported interfaces (IList[string] alongside ICollection[string]) list Count and Add once.
+        let ilistType = ReceiverOf("PIList")
+        let icollectionType = ImportedTypeSymbol.Get(typeof(ICollection[string]))
+        let colParam = TypeParameterSymbol("A", 0, TypeParameterConstraint.Any, TypeParameterVariance.None){
+            ClrInterfaceConstraint = icollectionType
+        }
+        let listParam = TypeParameterSymbol("B", 1, TypeParameterConstraint.Any, TypeParameterVariance.None){
+            ClrInterfaceConstraint = ilistType,
+            TypeParameterBound = colParam
+        }
+        Assert.Single(model.LookupMembers(pos, listParam, "Count"))
+        Assert.Single(model.LookupMembers(pos, listParam, "Add"))
+        Assert.Equal(2, model.LookupMembers(pos, listParam, "GetEnumerator").Length)
+
+        // Source class overriding an imported slot (Raw : MemoryStream) alongside the imported base (MemoryStream)
+        // keeps the override alone for SetLength.
+        let rawType = ReceiverOf("PStream")
+        let streamType = ImportedTypeSymbol.Get(typeof(System.IO.MemoryStream))
+        let streamParam = TypeParameterSymbol("A", 0, TypeParameterConstraint.Any, TypeParameterVariance.None){
+            ClassConstraint = streamType
+        }
+        let rawParam = TypeParameterSymbol("B", 1, TypeParameterConstraint.Any, TypeParameterVariance.None){
+            ClassConstraint = rawType,
+            TypeParameterBound = streamParam
+        }
+        let setLength = Assert.Single(model.LookupMembers(pos, rawParam, "SetLength"))
+        Assert.IsType[StructSymbol](setLength.ContainingType)
+
+        // Distinct constructed indexers (IBothIndex : IIndex[int32], IIndex[string]) keep both parameter signatures,
+        // while an overlapping IIndex[int32] constraint is not listed a second time.
+        let iindexDef = cast[InterfaceSymbol](model.LookupSymbols(pos, "IIndex").Single())
+        let iindexInt = InterfaceSymbol.Construct(iindexDef, ImmutableArray.Create[TypeSymbol](TypeSymbol.Int32))
+        let ibothIndex = cast[InterfaceSymbol](model.LookupSymbols(pos, "IBothIndex").Single())
+        let indexBaseParam = TypeParameterSymbol(
+            "A",
+            0,
+            TypeParameterConstraint.Any,
+            TypeParameterVariance.None,
+            iindexInt
+        )
+        let indexDerivedParam = TypeParameterSymbol(
+            "B",
+            1,
+            TypeParameterConstraint.Any,
+            TypeParameterVariance.None,
+            ibothIndex
+        ){TypeParameterBound = indexBaseParam}
+        let indexers = model.LookupMembers(pos, indexDerivedParam, "Item").OfType[PropertySymbol]().ToList()
+        Assert.Equal(
+            []TypeSymbol{TypeSymbol.Int32, TypeSymbol.String},
+            indexers.Select((p PropertySymbol) -> p.Parameters.Single().Type).ToArray()
+        )
+        let events = model.LookupMembers(pos, indexDerivedParam, "Notified").OfType[EventSymbol]().ToList()
+        Assert.Equal(
+            []string{"(int32) -> void", "(string) -> void"},
+            events.Select((e EventSymbol) -> SymbolDisplay.ToTypeDisplayString(e.Type)).ToArray()
+        )
+    }
+
+    @Fact
+    func TypeParameter_Unconstrained_ListsPublicInstanceMembersOfObject() {
+        let members = OwnMembers(Query("PTAny"))
+        Assert.Contains("ToString@ImportedFunctionSymbol", members)
+        Assert.Contains("GetHashCode@ImportedFunctionSymbol", members)
+        Assert.Contains("GetType@ImportedFunctionSymbol", members)
+        Assert.Contains("Equals@ImportedFunctionSymbol", members)
+        Assert.Empty(Query("PTAny", "ReferenceEquals"))
+        Assert.Empty(Query("PTAny", "Finalize"))
+    }
+
+    @Fact
+    func TypeParameter_NullableAndPlatformReceivers_AnswerForTheUnderlyingTypeParameter() {
+        let tp = ReceiverOf("PTComp")
+        let plain = Names(ModelOf().LookupMembers(Position("PTComp"), tp))
+        let nullable = Names(ModelOf().LookupMembers(Position("PTComp"), NullableTypeSymbol.Get(tp)))
+        let platform = Names(ModelOf().LookupMembers(Position("PTComp"), PlatformTypeSymbol.Get(tp)))
+        Assert.NotEmpty(plain)
+        Assert.Equal(plain, nullable)
+        Assert.Equal(plain, platform)
+    }
+
     // ---- The rows together ----
 
     @Fact
@@ -243,7 +475,12 @@ open class Adr0212InheritedMemberTests {
             "PIList",
             "PSquare",
             "PSub",
-            "PSliceSource"
+            "PSliceSource",
+            "PTComp",
+            "PTList",
+            "PTShape",
+            "PTBuffer",
+            "PTAny"
         } {
             let access = AccessAt(marker)
             let token = access.RightPart.GetFirstToken()
@@ -270,8 +507,9 @@ open class Adr0212InheritedMemberTests {
 
     @Fact
     func InheritedMembers_AreDeterministic() {
-        for marker in[]string{"PBuffer", "PIList", "PSquare", "PMapSource"} {
+        for marker in[]string{"PBuffer", "PIList", "PSquare", "PMapSource", "PTComp", "PTList", "PTBuffer"} {
             let first = Names(Query(marker))
+            Assert.NotEmpty(first)
             Assert.Equal(first, Names(Query(marker)))
             Assert.Equal(
                 first,
@@ -288,6 +526,15 @@ import System.Collections.Generic
 
 class Buffer : MemoryStream {
     func Mark() int32 { return 1 }
+    shared {
+        func EmptyBuffer() int32 { return 0 }
+    }
+}
+
+sealed interface IAdd {
+    shared {
+        func Add(a int32, b int32) int32;
+    }
 }
 
 open class Child : Exception { }
@@ -323,6 +570,38 @@ class Faulty : Exception {
 }
 
 interface ICounted : IList[string] { }
+
+interface IMaybes : IEnumerable[string?] { }
+
+interface IBox[U] {
+    prop Value U { get; }
+    /// Interface event docs.
+    event Changed (U) -> void
+}
+
+interface ISubBox[V] : IBox[V] { }
+
+interface IIndex[K] {
+    prop this[key K] int32 { get; }
+    event Notified (K) -> void
+}
+
+interface IBothIndex : IIndex[int32], IIndex[string] { }
+
+open class GBox[U] {
+    prop Current U { get; }
+    /// Class event docs.
+    event Changed (U) -> void
+    /// Echo docs.
+    func Echo(value U) U { return value }
+    suspend func Wait(value U) U { return value }
+    func ProbeNested(nested GBox[[]U]) int32 {
+        let slice = nested.Current // PTGBoxNested
+        return slice.Length
+    }
+}
+
+class GSubBox : GBox[int32] { }
 
 interface IShape {
     func Area() int32 { return 1 }
@@ -409,6 +688,72 @@ func Use(
     sequenceSource.GetEnumerator() // PSequenceSource
     sequencePrimitive.GetEnumerator() // PSequencePrimitive
 }
+
+func UseTypeParameters[
+    TComp IComparable[TComp],
+    TList IList[string?],
+    TShape IShape,
+    TSubIface ISub,
+    TCounted ICounted,
+    TIMaybes IMaybes,
+    TBox IBox[string],
+    TSubBox ISubBox[int32],
+    TAdd IAdd,
+    TBuffer Buffer,
+    TShown Shown,
+    TSquare Square,
+    TGBox GBox[string],
+    TGSubBox GSubBox,
+    TMaybes List[string?],
+    TException Exception,
+    TAsync System.Threading.AsyncLocal[string?],
+    TChain TSubIface,
+    TMid TShape,
+    TDeepChain TMid,
+    TAny
+](
+    comp TComp,
+    list TList,
+    shape TShape,
+    subIface TSubIface,
+    counted TCounted,
+    imaybes TIMaybes,
+    box TBox,
+    subBox TSubBox,
+    addWitness TAdd,
+    buf TBuffer,
+    shown TShown,
+    sq TSquare,
+    gbox TGBox,
+    gsubBox TGSubBox,
+    maybes TMaybes,
+    ex TException,
+    asyncLocal TAsync,
+    chain TChain,
+    deep TDeepChain,
+    anyVal TAny
+) {
+    let c0 = comp.CompareTo(comp) // PTComp
+    let c1 = list.Count // PTList
+    let c2 = shape.Perimeter() // PTShape
+    let c3 = subIface.Hello() // PTSubIface
+    let c4 = counted.ToString() // PTCounted
+    let c5 = TAdd.Add(1, 2) // PTAdd
+    let c6 = buf.Mark() // PTBuffer
+    let c7 = shown.ToString() // PTShown
+    let c8 = sq.Perimeter() // PTSquare
+    let c9 = maybes.GetRange(0, 1) // PTMaybes
+    let c10 = ex.InnerException // PTException
+    let c11 = chain.ToString() // PTChain
+    let c12 = deep.ToString() // PTDeepChain
+    let c13 = anyVal.ToString() // PTAny
+    let c14 = asyncLocal.Value // PTAsync
+    let c15 = imaybes.ToString() // PTIMaybes
+    let c16 = box.Value // PTBox
+    let c17 = subBox.Value // PTSubBox
+    let c18 = gbox.Echo("a") // PTGBox
+    let c19 = gsubBox.Echo(1) // PTGSubBox
+}
 `
 
         private let Tree SyntaxTree = SyntaxTree.Parse(SourceText.From(Source, "inh.gs"))
@@ -445,7 +790,8 @@ func Use(
         }
 
         private func ReceiverOf(marker string) TypeSymbol {
-            let type = ModelOf().GetReceiverTypeInfo(AccessAt(marker).LeftPart).Type
+            let left = AccessAt(marker).LeftPart
+            let type = ModelOf().GetReceiverTypeInfo(left).Type ?? (ModelOf().GetSymbolInfo(left).Symbol as TypeSymbol)
             return Invariant.Required(type, "a receiver type", expression: "type")
         }
 

@@ -251,12 +251,9 @@ conversions into a nil-accepting target; a non-nullable `Box` destination still
 requires a non-null result. The operand is evaluated once. A source-declared
 G# or imported CLR operator accepting `Token?` itself is an ordinary
 conversion, not this lift; it receives nil, controls its own result, and
-takes precedence over the lift of an operator accepting `Token`. Imported
-nullable-value operands are matched using their actual `Nullable<Token>`
-signature, not erased to `Token`. Their declared reference-result
-nullability remains part of the conversion contract. Other imported
-nullable-value signature gaps remain tracked in issue
-[#4737](https://github.com/DavidObando/gsharp/issues/4737).
+takes precedence over the lift of an operator accepting `Token`. Imported nullable-value operands and results are matched using their actual
+`Nullable<T>` signature, not erased to `T`. Their declared reference-result or
+value-result nullability remains part of the conversion contract.
 
 ```gsharp
 class Vec {

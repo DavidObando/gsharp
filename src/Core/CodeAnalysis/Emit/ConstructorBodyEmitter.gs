@@ -516,7 +516,10 @@ internal class ConstructorBodyEmitter {
         // Issue #640: pre-scan instance field initializer expressions for locals.
         var fieldInitBody BoundBlockStatement? = nil
         if NeedsInstanceFieldInitializerStatements(classSym) {
-            fieldInitBody = BoundBlockStatement(nil, BuildInstanceFieldInitializerStatements(classSym, thisParam))
+            fieldInitBody = Lowerer.Lower(
+                BoundBlockStatement(nil, BuildInstanceFieldInitializerStatements(classSym, thisParam)),
+                classSym
+            )
             session.Plan(fieldInitBody)
         }
         let paramSlots = Dictionary[ParameterSymbol, int32]{[thisParam] = 0}
@@ -616,16 +619,19 @@ internal class ConstructorBodyEmitter {
         // slots for those expressions either.
         var fieldInitBody BoundBlockStatement? = nil
         if !ctor.IsConvenience && NeedsInstanceFieldInitializerStatements(classSym) {
-            fieldInitBody = BoundBlockStatement(
-                nil,
-                BuildInstanceFieldInitializerStatements(
-                    classSym,
-                    Invariant.Required(
-                        function.ThisParameter,
-                        "an instance constructor has an instance receiver",
-                        expression: "function.ThisParameter"
+            fieldInitBody = Lowerer.Lower(
+                BoundBlockStatement(
+                    nil,
+                    BuildInstanceFieldInitializerStatements(
+                        classSym,
+                        Invariant.Required(
+                            function.ThisParameter,
+                            "an instance constructor has an instance receiver",
+                            expression: "function.ThisParameter"
+                        )
                     )
-                )
+                ),
+                classSym
             )
             session.Plan(fieldInitBody)
         }

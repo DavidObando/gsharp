@@ -949,6 +949,7 @@ internal partial class ExpressionBinder {
                 if importedBase.TryLookupMember(fieldName, ne: nil, out var inheritedStaticMember) &&
                     TryGetWritableClrMember(
                     inheritedStaticMember,
+                    userStruct,
                     out _,
                     out var inheritedTarget,
                     out _,
@@ -966,7 +967,10 @@ internal partial class ExpressionBinder {
                         inheritedStaticMember!!,
                         inheritedConverted,
                         inheritedTarget!!,
-                        staticContainerType: nil
+                        staticContainerType: MemberLookup.GetClrMemberDeclaringTypeSymbol(
+                            userStruct,
+                            inheritedStaticMember!!
+                        )
                     )
                 }
             }

@@ -59,6 +59,8 @@ internal class ConversionClassifier {
     private let binderCtx BinderContext
 
     private let memberLookup MemberLookup
+
+    internal prop MemberLookup MemberLookup -> memberLookup
     private let bindExpression(ExpressionSyntax) -> BoundExpression
     private let bindExpressionWithTargetType(ExpressionSyntax, TypeSymbol) -> BoundExpression
     private let isFormattableStringTargetType(TypeSymbol) -> bool
@@ -757,7 +759,7 @@ internal class ConversionClassifier {
             // Issue #4350: a conversion between symbolic generics (`Span[T]` ->
             // `ReadOnlySpan[T]`) resolves on the open definition first; the
             // CLR branch below would pick the erased `<object>` operator.
-            if TryResolveSymbolicImportedConversion(expression.Type, type, out var symbolicConvMethod) &&
+            if TryResolveSymbolicImportedConversion(expression.Type, type, out var symbolicConvMethod, allowExplicit) &&
                 (
                 allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
                     expression.Type,
@@ -908,7 +910,12 @@ internal class ConversionClassifier {
                     allowExplicit
                 )
             }
-            if TryResolveSymbolicImportedConversion(expression.Type, type, out var projectionSymbolicConvMethod) &&
+            if TryResolveSymbolicImportedConversion(
+                expression.Type,
+                type,
+                out var projectionSymbolicConvMethod,
+                allowExplicit
+            ) &&
                 (
                 allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
                     expression.Type,
@@ -4047,6 +4054,14 @@ internal class ConversionClassifier {
             if TryResolveUserDefinedSymbolConversion(sourceType, targetType, allowExplicit: false, out _) {
                 return true
             }
+            if TryResolveSymbolicImportedConversion(sourceType, targetType, out var symbolicMethod) &&
+                BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
+                sourceType,
+                targetType,
+                symbolicMethod!!
+            ) {
+                return true
+            }
             return sourceType?.ClrType != nil &&
                 targetType?.ClrType != nil &&
                 ClrOperatorResolution.TryResolveConversionForTypes(
@@ -4269,29 +4284,33 @@ internal class ConversionClassifier {
         func TryResolveSymbolicImportedConversion(
             source TypeSymbol?,
             target TypeSymbol?,
-            @NotNullWhen(true) out conversion MethodInfo?
+            @NotNullWhen(true) out conversion MethodInfo?,
+            allowExplicit bool = false
         ) bool {
             conversion = nil
             if source == nil || target == nil {
                 return false
             }
+            let bareSource = source.StripToBareShape()
+            let bareTarget = target.StripToBareShape()
             // Only the symbolic/open case is in scope: a fully CLR-backed pair
             // already resolves through ClrOperatorResolution, and re-resolving it
             // here would change which operator a concrete call site picks.
-            if !NeedsSymbolicConversion(target) && !NeedsSymbolicConversion(source) {
+            if !NeedsSymbolicConversion(bareTarget) && !NeedsSymbolicConversion(bareSource) {
                 return false
             }
             // Issue #3932: the operator declared on the TARGET's open definition
             // (`Memory`1::op_Implicit(!0[])`).
-            if target is ImportedTypeSymbol{OpenDefinition: {} targetOpen} importedTarget &&
+            if bareTarget is ImportedTypeSymbol{OpenDefinition: {} targetOpen} importedTarget &&
                 !importedTarget
                 .TypeArguments
                 .IsDefaultOrEmpty &&
-                TryFindSymbolicImplicitOperator(
+                TryFindSymbolicOperator(
                 targetOpen,
                 importedTarget.TypeArguments,
-                source,
-                target,
+                bareSource,
+                bareTarget,
+                "op_Implicit",
                 out conversion
             ) {
                 return true
@@ -4300,15 +4319,47 @@ internal class ConversionClassifier {
             // (`Span`1::op_Implicit(Span<!0>) : ReadOnlySpan<!0>`). The erased CLR
             // branch would otherwise bind `Span<object>`'s operator inside a
             // generic body and emit unverifiable IL.
-            return source is ImportedTypeSymbol{OpenDefinition: {} sourceOpen} importedSource &&
+            if bareSource is ImportedTypeSymbol{OpenDefinition: {} sourceOpen} importedSource &&
                 !importedSource
                 .TypeArguments
                 .IsDefaultOrEmpty &&
-                TryFindSymbolicImplicitOperator(
+                TryFindSymbolicOperator(
                 sourceOpen,
                 importedSource.TypeArguments,
-                source,
-                target,
+                bareSource,
+                bareTarget,
+                "op_Implicit",
+                out conversion
+            ) {
+                return true
+            }
+            if !allowExplicit {
+                return false
+            }
+            if bareTarget is ImportedTypeSymbol{OpenDefinition: {} explicitTargetOpen} explicitImportedTarget &&
+                !explicitImportedTarget
+                .TypeArguments
+                .IsDefaultOrEmpty &&
+                TryFindSymbolicOperator(
+                explicitTargetOpen,
+                explicitImportedTarget.TypeArguments,
+                bareSource,
+                bareTarget,
+                "op_Explicit",
+                out conversion
+            ) {
+                return true
+            }
+            return bareSource is ImportedTypeSymbol{OpenDefinition: {} explicitSourceOpen} explicitImportedSource &&
+                !explicitImportedSource
+                .TypeArguments
+                .IsDefaultOrEmpty &&
+                TryFindSymbolicOperator(
+                explicitSourceOpen,
+                explicitImportedSource.TypeArguments,
+                bareSource,
+                bareTarget,
+                "op_Explicit",
                 out conversion
             )
         }
@@ -4820,12 +4871,21 @@ internal class ConversionClassifier {
             ) &&
                 (allowExplicit || BoundClrConversionCallExpression.CanLiftImplicitlyTo(target)) &&
                 !TypeSymbol.IsByRefLike(source) && !TypeSymbol.IsByRefLike(target) &&
+                (
                 TryResolveUserDefinedSymbolConversion(
-                source.UnderlyingType,
-                targetUnderlying,
-                allowExplicit,
-                out method,
-                out methodOwner
+                    source.UnderlyingType,
+                    targetUnderlying,
+                    allowExplicit,
+                    out method,
+                    out methodOwner
+                ) ||
+                    TryResolveUserDefinedSymbolConversion(
+                    source.UnderlyingType,
+                    target,
+                    allowExplicit,
+                    out method,
+                    out methodOwner
+                )
             ) &&
                 methodOwner != nil &&
                 methodOwner.ClrType == nil &&
@@ -4842,10 +4902,15 @@ internal class ConversionClassifier {
                 methodOwner.SubstituteMemberType(method!!.Parameters[0].Type)!!
             )
                 .IsIdentity &&
-                TypeSymbol
-                .AreRuntimeEquivalentIgnoringReferenceNullability(
-                methodOwner.SubstituteMemberType(method!!.Type),
-                targetUnderlying
+                (
+                TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                    methodOwner.SubstituteMemberType(method!!.Type),
+                    targetUnderlying
+                ) ||
+                    TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                    methodOwner.SubstituteMemberType(method!!.Type),
+                    target
+                )
             )
         }
 
@@ -5420,14 +5485,17 @@ internal class ConversionClassifier {
         ) bool {
             value = nil
             reason = nil
-            // Unwrap a conversion that the binder may have inserted around a literal.
-            var inner = bound
-            while inner is BoundConversionExpression bce {
-                inner = bce.Expression
-            }
-            if ExpressionBinder.IsIntegerType(inner.Type) && ExpressionBinder.TryGetConstantIntegerValue(
-                inner,
-                out var integerValue
+            let expressionType = bound.Type
+            let projected = ProjectValueNullableConversions(bound)
+            if (expressionType is not NullableTypeSymbol || parameterType is NullableTypeSymbol) &&
+                ExpressionBinder.IsIntegerType(projected.Type) &&
+                (
+                ExpressionBinder.TryGetConstantIntegerValue(projected, out var integerValue) ||
+                    (
+                    ConstantExpressionEvaluator.TryEvaluate(projected, out var evaluatedInt) &&
+                        ExpressionBinder.IsIntegerLiteralValue(evaluatedInt) &&
+                        (integerValue = ExpressionBinder.ToBigInteger(evaluatedInt)) == integerValue
+                )
             ) &&
                 TryGetIntegralMetadataTarget(parameterType, out var integralTarget) {
                 if integralTarget == TypeSymbol.Char &&
@@ -5442,15 +5510,19 @@ internal class ConversionClassifier {
                 reason = "integer constant '$integerValue' is outside the range of parameter type '${parameterType.Name}'."
                 value = nil
                 return false
-            } else if inner is BoundLiteralExpression lit {
+            } else if projected is BoundLiteralExpression lit {
                 value = lit.Value
-            } else if inner is BoundDefaultExpression def {
+            } else if projected is BoundDefaultExpression def {
                 // Issue #1182: a value-type `default(T)` (and the zero-value `T()`
                 // form, which the binder also lowers to a BoundDefaultExpression for
                 // value types with no surfaced parameterless constructor) is a valid
                 // compile-time constant — the type's all-zero value. Accept it and
                 // record a constant the call site can materialize, mirroring C#.
                 return TryExtractValueTypeDefaultConstant(def, parameterType, out value, out reason)
+            } else if IsConvertedNilConstant(projected) {
+                value = nil
+            } else if ConstantExpressionEvaluator.TryEvaluate(projected, out var evaluated) {
+                value = evaluated
             } else {
                 reason = "the default value must be a compile-time constant (numeric, bool, char, string, enum, nil, or a value-type default(T))."
                 return false
@@ -5458,18 +5530,53 @@ internal class ConversionClassifier {
             // `nil` is only valid for a reference-compatible or nullable parameter type.
             if value == nil {
                 if parameterType is NullableTypeSymbol || (parameterType.ClrType is Type ct && !ct.IsValueType) {
+                    if expressionType != TypeSymbol.Null && !Conversion.Classify(expressionType, parameterType)
+                        .IsImplicit {
+                        reason = "the default value of type '${expressionType.Name}' is not implicitly convertible to parameter type '${parameterType.Name}'."
+                        return false
+                    }
                     return true
                 }
                 reason = "'nil' is not a valid default for value-type parameter of type '${parameterType.Name}'."
                 value = nil
                 return false
             }
-            if !Conversion.Classify(inner.Type, parameterType).IsImplicit {
-                reason = "the default value of type '${inner.Type.Name}' is not implicitly convertible to parameter type '${parameterType.Name}'."
+            if !Conversion.Classify(expressionType, parameterType).IsImplicit {
+                reason = "the default value of type '${expressionType.Name}' is not implicitly convertible to parameter type '${parameterType.Name}'."
                 value = nil
                 return false
             }
             return TryNormalizeMetadataConstant(value!!, parameterType, out value, out reason)
+        }
+
+        private func ProjectValueNullableConversions(expression BoundExpression) BoundExpression {
+            if expression is BoundConversionExpression conversion {
+                let inner = ProjectValueNullableConversions(conversion.Expression)
+                let targetType = if conversion.Type is NullableTypeSymbol nullable &&
+                    NullableLifting.IsAnyValueTypeNullable(nullable) {
+                    nullable.UnderlyingType
+                } else {
+                    conversion.Type
+                }
+                if inner is BoundDefaultExpression innerDef && DefaultTypeMatchesParameter(innerDef.Type, targetType) {
+                    return innerDef
+                }
+                if object.ReferenceEquals(inner, conversion.Expression) && object.ReferenceEquals(
+                    targetType,
+                    conversion.Type
+                ) {
+                    return conversion
+                }
+                return BoundConversionExpression(conversion.Syntax, targetType, inner, conversion.IsChecked)
+            }
+            return expression
+        }
+
+        private func IsConvertedNilConstant(expression BoundExpression) bool -> switch expression {
+            case BoundConversionExpression{Type: {IsValueType: false}} conversion:
+            IsConvertedNilConstant(conversion.Expression)
+            case BoundLiteralExpression{Value: nil}: true
+            default: false
         }
 
         private func TryGetIntegralMetadataTarget(parameterType TypeSymbol, out target TypeSymbol) bool {
@@ -5695,8 +5802,8 @@ internal class ConversionClassifier {
             return false
         }
 
-        private func NeedsSymbolicConversion(type TypeSymbol) bool {
-            if type is not ImportedTypeSymbol{OpenDefinition: not nil} imported ||
+        internal func NeedsSymbolicConversion(type TypeSymbol) bool {
+            if type.StripToBareShape() is not ImportedTypeSymbol{OpenDefinition: not nil} imported ||
                 imported
                 .TypeArguments
                 .IsDefaultOrEmpty {
@@ -5712,11 +5819,12 @@ internal class ConversionClassifier {
             return false
         }
 
-        private func TryFindSymbolicImplicitOperator(
+        private func TryFindSymbolicOperator(
             openDefinition Type,
             ownerTypeArguments ImmutableArray[TypeSymbol],
             source TypeSymbol,
             target TypeSymbol,
+            operatorName string,
             @NotNullWhen(true) out conversion MethodInfo?
         ) bool {
             conversion = nil
@@ -5727,7 +5835,7 @@ internal class ConversionClassifier {
                 return false
             }
             for candidate in candidates {
-                if !string.Equals(candidate.Name, "op_Implicit", StringComparison.Ordinal) {
+                if !string.Equals(candidate.Name, operatorName, StringComparison.Ordinal) {
                     continue
                 }
                 let parameters = candidate.GetParameters()
@@ -5764,7 +5872,7 @@ internal class ConversionClassifier {
             return false
         }
 
-        private func IsSameSymbolicType(mapped TypeSymbol?, expected TypeSymbol) bool {
+        internal func IsSameSymbolicType(mapped TypeSymbol?, expected TypeSymbol) bool {
             if mapped == nil || mapped == TypeSymbol.Error {
                 return false
             }
