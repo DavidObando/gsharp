@@ -398,8 +398,8 @@ partial class SemanticModel {
         }
         let leftSyntax = DeclarationOf(left)
         let rightSyntax = DeclarationOf(right)
-        if left is FunctionSymbol{ReceiverType: nil} &&
-            right is FunctionSymbol{ReceiverType: nil} &&
+        if left is FunctionSymbol{IsExtension: true} &&
+            right is FunctionSymbol{IsExtension: true} &&
             leftSyntax != nil &&
             object.ReferenceEquals(leftSyntax, rightSyntax) {
             return true
@@ -749,6 +749,7 @@ partial class SemanticModel {
             if !SpellsName(call.CalledFunction, token.ValueText) {
                 return ImmutableArray[Symbol].Empty
             }
+            let extensionCall = IsSourceExtensionCall(call, token)
             if !call.MemberGroup.IsDefaultOrEmpty {
                 let receiverType TypeSymbol? = switch call {
                     case instanceCall is BoundImportedInstanceCallExpression: instanceCall.ConstrainedInterfaceType ??
@@ -769,12 +770,9 @@ partial class SemanticModel {
                         }
                     }
                 }
-                return OrderMemberGroup(group.ToImmutable())
+                return OrderMemberGroup(group.ToImmutable(), extensionCall)
             }
-            if call is BoundCallExpression{Function: {IsExtension: true}, StaticQualifierType: nil} &&
-                token.Parent is CallExpressionSyntax ce &&
-                ce.Parent is AccessorExpressionSyntax accessor &&
-                object.ReferenceEquals(accessor.RightPart, ce) {
+            if extensionCall {
                 return ImmutableArray[Symbol].Empty
             }
         }
@@ -839,11 +837,11 @@ partial class SemanticModel {
     // Owners keep the order in which the resolver met them (derived first). Within an owner, imported
     // methods follow metadata order and source functions follow their file path (ordinal) and start, so
     // a partial type or a package's free functions do not depend on the order files were bound in.
-    private func OrderMemberGroup(group ImmutableArray[Symbol]) ImmutableArray[Symbol] {
+    private func OrderMemberGroup(group ImmutableArray[Symbol], extensionCall bool) ImmutableArray[Symbol] {
         let owners = List[object]()
         let ordered = List[(Symbol Symbol, Owner int32, File string, Start int32)]()
         for member in group {
-            let ownerKey = OwnerKeyOf(member)
+            let ownerKey = OwnerKeyOf(member, extensionCall)
             var owner = owners.FindIndex((o object) -> object.Equals(o, ownerKey))
             if owner < 0 {
                 owner = owners.Count
@@ -868,11 +866,17 @@ partial class SemanticModel {
     }
 
     // An owner is a type, not a name: `A.D` and `B.D` are two owners. A constructed type keeps its definition.
-    private func OwnerKeyOf(member Symbol) object -> switch member {
+    private func OwnerKeyOf(member Symbol, extensionCall bool) object -> switch member {
         case imported is ImportedFunctionSymbol: cast[object](imported.Method.DeclaringType)
-        case function is FunctionSymbol: OwnerOf(function)
+        case function is FunctionSymbol: OwnerOf(function, extensionCall)
         default: cast[object](member)
     }
+
+    private func IsSourceExtensionCall(call BoundCallOperationExpression, token SyntaxToken) bool ->
+    call is BoundCallExpression{Function: {IsExtension: true}, StaticQualifierType: nil} &&
+        token.Parent is CallExpressionSyntax ce &&
+        ce.Parent is AccessorExpressionSyntax accessor &&
+        object.ReferenceEquals(accessor.RightPart, ce)
 
     private func AddGroupMember(group ImmutableArray[Symbol].Builder, member Symbol, called Symbol) {
         for var i = 0; i < group.Count; i++ {
@@ -886,8 +890,8 @@ partial class SemanticModel {
         group.Add(member)
     }
 
-    private func OwnerOf(function FunctionSymbol) object {
-        if function.IsExtension {
+    private func OwnerOf(function FunctionSymbol, extensionCall bool) object {
+        if extensionCall && function.IsExtension {
             return typeof(FunctionSymbol)
         }
         let owner TypeSymbol? = function.ReceiverType ?? function.StaticOwnerType

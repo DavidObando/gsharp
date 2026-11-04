@@ -93,6 +93,19 @@ open class Adr0212MemberQueryTests {
             []string{"Put(int32)", "Put(int32, int32)"},
             group.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
         )
+        let dual = Group("PDualBoxed")
+        Assert.Equal(
+            []string{"Put(int32)", "Put(string)", "Put(int32, int32)", "Put(string, int32)"},
+            dual.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
+        )
+        let dualAccess = cast[AccessorExpressionSyntax](CallAt("PDualConstraint").Parent!!)
+        let dualModel = ModelOf(dualAccess)
+        let dualTypeParam = dualModel.GetReceiverTypeInfo(dualAccess.LeftPart).Type!!
+        let dualMembers = dualModel.LookupMembers(Position("PDualConstraint"), dualTypeParam, "Put")
+        Assert.Equal(
+            []string{"Put(int32)", "Put(int32, int32)", "Put(string)", "Put(string, int32)"},
+            dualMembers.OfType[FunctionSymbol]().Select(Describe).ToList()
+        )
     }
 
     @Fact
@@ -117,7 +130,7 @@ open class Adr0212MemberQueryTests {
     func MemberGroup_QualifiedStaticCall_ListsTheSharedOverloads() {
         let group = Group("PStatic")
         Assert.Equal(
-            []string{"Make(int32)", "Make(string)"},
+            []string{"Make(int32, int32)", "Make(int32)", "Make(string)", "Make(int32, bool)"},
             group.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToArray()
         )
     }
@@ -502,6 +515,9 @@ func (value int32) Repeat[T](item T) sequence[T?] {
 @ExtensionOwner(typeof(Animal))
 func (items IList[T]) Pick[T](index int32) T { return items[index] }
 
+@ExtensionOwner(typeof(Util))
+func (value int32) Make(extra int32) int32 { return value + extra }
+
 enum Color { Red, Green }
 
 interface IRead {
@@ -516,6 +532,9 @@ interface ISub : IRead {
 interface IBoxed[T] {
     func Put(v T) int32
     func Put(v T, n int32) int32
+}
+
+interface IDualBoxed : IBoxed[int32], IBoxed[string] {
 }
 
 open class Animal {
@@ -581,7 +600,11 @@ func Constrained[T IRead](t T) int32 {
     return t.Read(1) // PConstraint
 }
 
-func UseAll(c Cat, r IRead, b IBoxed[int32], p Parts, sb StringBuilder, n int32, xs []int32, cmp CompareInfo) {
+func ConstrainedDual[T IDualBoxed](t T) int32 {
+    return t.Put(1) // PDualConstraint
+}
+
+func UseAll(c Cat, r IRead, b IBoxed[int32], dual IDualBoxed, p Parts, sb StringBuilder, n int32, xs []int32, cmp CompareInfo) {
     Console.WriteLine("x") // PConsole
     sb.Append(1) // PAppend
     let local = func(q int32) int32 { return q }
@@ -590,6 +613,7 @@ func UseAll(c Cat, r IRead, b IBoxed[int32], p Parts, sb StringBuilder, n int32,
     c.Purr(1) // PCat
     r.Read(1) // PInterface
     b.Put(1) // PBoxed
+    dual.Put(1) // PDualBoxed
     p.Go(1) // PPartial
     Util.Make(1) // PStatic
     WriteLine(Console.WriteLine) // PProbe
@@ -616,6 +640,9 @@ func (value int32) Scale(factor int32, bonus int32) int32 { return (value * fact
 
 @ExtensionOwner(typeof(Cat))
 func (items IList[T]) Pick[T](index int32, fallback T) T { return fallback }
+
+@ExtensionOwner(typeof(Util))
+func (value int32) Make(extra bool) int32 { return value }
 
 partial class Parts {
     func Go(a bool) int32 { return 0 }

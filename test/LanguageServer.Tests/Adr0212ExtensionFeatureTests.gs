@@ -68,7 +68,7 @@ open class Adr0212ExtensionFeatureTests {
         Assert.DoesNotContain("overload", singleHover!!.Contents.ToString(), StringComparison.Ordinal)
         let overloadedHover = HoverComputer.ComputeHover(
             content,
-            LanguageServerTestHelpers.PositionOf(SourceExtensionFileA, "Scale", 2)
+            LanguageServerTestHelpers.PositionOf(SourceExtensionFileA, "Scale", 3)
         )
         Assert.NotNull(overloadedHover)
         Assert.Contains("*(+ 1 overload)*", overloadedHover!!.Contents.ToString(), StringComparison.Ordinal)
@@ -110,6 +110,13 @@ open class Adr0212ExtensionFeatureTests {
         Assert.DoesNotContain("fallback", pickLabels[0], StringComparison.Ordinal)
         Assert.Contains("fallback", pickLabels[1], StringComparison.Ordinal)
         Assert.Equal(0, genericOverloadedHelp!!.ActiveSignature)
+        let mixedStaticHelp = HelpIn(content, SourceExtensionFileA, "HostB.Scale(")
+        Assert.NotNull(mixedStaticHelp)
+        let mixedLabels = mixedStaticHelp!!.Signatures.Select((s SignatureInformation) -> s.Label).ToArray()
+        Assert.Equal(2, mixedLabels.Length)
+        Assert.DoesNotContain("bonus", mixedLabels[0], StringComparison.Ordinal)
+        Assert.Contains("bonus", mixedLabels[1], StringComparison.Ordinal)
+        Assert.Equal(0, mixedStaticHelp!!.ActiveSignature)
     }
 
     @Fact
@@ -247,7 +254,13 @@ func Use(n int32, xs []int32) {
 import System.Collections.Generic
 
 class HostA {}
-class HostB {}
+class HostB {
+    shared {
+        func Scale(only int32) int32 {
+            return only
+        }
+    }
+}
 
 func (value int32) Shout() int32 {
     return value
@@ -280,6 +293,7 @@ func Use(n int32, xs []int32) {
     let b = n.Scale(2)
     let c = n.Repeat("x")
     let d = xs.Pick(0)
+    let e = HostB.Scale(2)
 }
 `
 
