@@ -281,6 +281,10 @@ open class Adr0212InheritedMemberTests {
         Assert.Equal(TypeSymbol.String, boxValue.Type)
         let subBoxValue = cast[PropertySymbol](Assert.Single(Query("PTSubBox", "Value")))
         Assert.Equal(TypeSymbol.Int32, subBoxValue.Type)
+        let boxChanged = cast[EventSymbol](Assert.Single(Query("PTBox", "Changed")))
+        Assert.Equal("(string) -> void", SymbolDisplay.ToTypeDisplayString(boxChanged.Type))
+        let subBoxChanged = cast[EventSymbol](Assert.Single(Query("PTSubBox", "Changed")))
+        Assert.Equal("(int32) -> void", SymbolDisplay.ToTypeDisplayString(subBoxChanged.Type))
         let addStatic = cast[FunctionSymbol](Assert.Single(Query("PTAdd", "Add")))
         Assert.True(addStatic.IsStatic)
     }
@@ -304,6 +308,18 @@ open class Adr0212InheritedMemberTests {
         let area = Assert.Single(Query("PTSquare", "Area"))
         Assert.IsType[InterfaceSymbol](area.ContainingType)
         Assert.Empty(Query("PTSquare", "Secret"))
+
+        let echoString = cast[FunctionSymbol](Assert.Single(Query("PTGBox", "Echo")))
+        Assert.Equal(TypeSymbol.String, echoString.Type)
+        Assert.Equal(TypeSymbol.String, echoString.Parameters.Single().Type)
+        let gboxChanged = cast[EventSymbol](Assert.Single(Query("PTGBox", "Changed")))
+        Assert.Equal("(string) -> void", SymbolDisplay.ToTypeDisplayString(gboxChanged.Type))
+
+        let echoInt = cast[FunctionSymbol](Assert.Single(Query("PTGSubBox", "Echo")))
+        Assert.Equal(TypeSymbol.Int32, echoInt.Type)
+        Assert.Equal(TypeSymbol.Int32, echoInt.Parameters.Single().Type)
+        let gsubChanged = cast[EventSymbol](Assert.Single(Query("PTGSubBox", "Changed")))
+        Assert.Equal("(int32) -> void", SymbolDisplay.ToTypeDisplayString(gsubChanged.Type))
     }
 
     @Fact
@@ -405,6 +421,11 @@ open class Adr0212InheritedMemberTests {
         Assert.Equal(
             []TypeSymbol{TypeSymbol.Int32, TypeSymbol.String},
             indexers.Select((p PropertySymbol) -> p.Parameters.Single().Type).ToArray()
+        )
+        let events = model.LookupMembers(pos, indexDerivedParam, "Notified").OfType[EventSymbol]().ToList()
+        Assert.Equal(
+            []string{"(int32) -> void", "(string) -> void"},
+            events.Select((e EventSymbol) -> SymbolDisplay.ToTypeDisplayString(e.Type)).ToArray()
         )
     }
 
@@ -542,15 +563,24 @@ interface IMaybes : IEnumerable[string?] { }
 
 interface IBox[U] {
     prop Value U { get; }
+    event Changed (U) -> void
 }
 
 interface ISubBox[V] : IBox[V] { }
 
 interface IIndex[K] {
     prop this[key K] int32 { get; }
+    event Notified (K) -> void
 }
 
 interface IBothIndex : IIndex[int32], IIndex[string] { }
+
+open class GBox[U] {
+    event Changed (U) -> void
+    func Echo(value U) U { return value }
+}
+
+class GSubBox : GBox[int32] { }
 
 interface IShape {
     func Area() int32 { return 1 }
@@ -651,6 +681,8 @@ func UseTypeParameters[
     TBuffer Buffer,
     TShown Shown,
     TSquare Square,
+    TGBox GBox[string],
+    TGSubBox GSubBox,
     TMaybes List[string?],
     TException Exception,
     TAsync System.Threading.AsyncLocal[string?],
@@ -671,6 +703,8 @@ func UseTypeParameters[
     buf TBuffer,
     shown TShown,
     sq TSquare,
+    gbox TGBox,
+    gsubBox TGSubBox,
     maybes TMaybes,
     ex TException,
     asyncLocal TAsync,
@@ -696,6 +730,8 @@ func UseTypeParameters[
     let c15 = imaybes.ToString() // PTIMaybes
     let c16 = box.Value // PTBox
     let c17 = subBox.Value // PTSubBox
+    let c18 = gbox.Echo("a") // PTGBox
+    let c19 = gsubBox.Echo(1) // PTGSubBox
 }
 `
 

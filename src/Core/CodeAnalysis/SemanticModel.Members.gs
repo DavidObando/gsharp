@@ -90,14 +90,10 @@ partial class SemanticModel {
                 AddTupleMembers(tuple, name, result)
             }
             case structure is StructSymbol {
-                AddSourceMembers(
-                    structure,
-                    MemberQuery.Instance(MemberKinds.All),
-                    MemberQuery.Static(MemberKinds.All),
-                    name,
-                    access,
-                    result
-                )
+                AddStructInstanceMembers(structure, name, access, result)
+                for member in TypeMemberModel.EnumerateMembers(structure, MemberQuery.Static(MemberKinds.All)) {
+                    AddSourceMember(structure, SubstituteSourceMember(structure, member), name, access, result)
+                }
                 // A CLR-backed aggregate (an imported record) already holds the members it inherits.
                 if structure.ClrType == nil {
                     AddImportedBaseMembers(structure, name, result)
@@ -132,6 +128,25 @@ partial class SemanticModel {
         return result.ToImmutable()
     }
 
+    private func AddStructInstanceMembers(
+        structure StructSymbol,
+        name string?,
+        access MemberAccessContext,
+        result ImmutableArray[Symbol].Builder
+    ) {
+        let ownInstance = MemberQuery(
+            includeInstance: true,
+            includeStatic: false,
+            includeInherited: false,
+            MemberKinds.All
+        )
+        for current in structure.GetHierarchy() {
+            for member in TypeMemberModel.EnumerateMembers(current, ownInstance) {
+                AddSourceMember(structure, SubstituteSourceMember(current, member), name, access, result)
+            }
+        }
+    }
+
     /// Adds the members of [`declared`](paramref), its base interfaces and its transitive CLR base interfaces.
     private func AddInterfaceMembers(
         declared InterfaceSymbol,
@@ -147,14 +162,14 @@ partial class SemanticModel {
         )
         for iface in declared.SelfAndAllBaseInterfaces() {
             for member in TypeMemberModel.EnumerateMembers(iface, instanceQuery) {
-                AddSourceMember(declared, SubstituteInterfaceMember(iface, member), name, access, result)
+                AddSourceMember(declared, SubstituteSourceMember(iface, member), name, access, result)
             }
         }
         for member in TypeMemberModel.EnumerateMembers(
             declared,
             MemberQuery.Static(MemberKinds.Property | MemberKinds.Method)
         ) {
-            AddSourceMember(declared, SubstituteInterfaceMember(declared, member), name, access, result)
+            AddSourceMember(declared, SubstituteSourceMember(declared, member), name, access, result)
         }
         let clrInterfaces = ClrTypeUtilities.GetTransitiveClrBaseInterfaces(declared, out var contexts)
         for var i = 0; i < clrInterfaces.Count; i++ {
@@ -169,28 +184,116 @@ partial class SemanticModel {
         }
     }
 
-    private func SubstituteInterfaceMember(iface InterfaceSymbol, member Symbol) Symbol {
-        if member is not PropertySymbol property {
-            return member
-        }
-        let substitutedType = iface.SubstituteMemberType(property.Type)
-        var parameters = property.Parameters
-        var parametersChanged = false
-        if !parameters.IsDefaultOrEmpty {
-            let builder = ImmutableArray.CreateBuilder[ParameterSymbol](parameters.Length)
-            for parameter in parameters {
-                let parameterType = iface.SubstituteMemberType(parameter.Type)
-                parametersChanged |= !object.ReferenceEquals(parameterType, parameter.Type)
-                builder.Add(ParameterSymbol(parameter, parameterType, parameter.DeclaringSyntax))
+    private func SubstituteSourceMember(owner TypeSymbol, member Symbol) Symbol {
+        switch member {
+            case property is PropertySymbol {
+                let substitutedType = SubstituteMemberType(owner, property.Type)
+                let parameters = SubstituteParameters(owner, property.Parameters, out var parametersChanged)
+                if object.ReferenceEquals(substitutedType, property.Type) && !parametersChanged {
+                    return property
+                }
+                return property.WithSignature(substitutedType, parameters)
             }
-            if parametersChanged {
-                parameters = builder.MoveToImmutable()
+            case clrEvent is EventSymbol {
+                let substitutedType = SubstituteMemberType(owner, clrEvent.Type)
+                if object.ReferenceEquals(substitutedType, clrEvent.Type) {
+                    return clrEvent
+                }
+                let copy = EventSymbol(
+                    clrEvent.Name,
+                    substitutedType,
+                    clrEvent.Accessibility,
+                    clrEvent.IsFieldLike,
+                    clrEvent.IsVirtual,
+                    clrEvent.IsOverride,
+                    clrEvent.IsStatic,
+                    clrEvent.Declaration
+                )
+                copy.ExternalOverriddenAddMethod = clrEvent.ExternalOverriddenAddMethod
+                copy.ExternalOverriddenRemoveMethod = clrEvent.ExternalOverriddenRemoveMethod
+                copy.ExternalOverriddenRaiseMethod = clrEvent.ExternalOverriddenRaiseMethod
+                if clrEvent.ContainingType is {} containing {
+                    copy.AnchorContainingType(containing)
+                }
+                return copy
+            }
+            case function is FunctionSymbol when owner is StructSymbol {
+                let returnType = SubstituteMemberType(owner, function.Type)
+                let parameters = SubstituteParameters(owner, function.Parameters, out var parametersChanged)
+                if object.ReferenceEquals(returnType, function.Type) && !parametersChanged {
+                    return function
+                }
+                let copy = FunctionSymbol(
+                    function.Name,
+                    parameters,
+                    returnType,
+                    function.Declaration,
+                    function.Package,
+                    function.Accessibility,
+                    if function.ReceiverType != nil {
+                        owner
+                    } else {
+                        default(TypeSymbol?)
+                    },
+                    function.ExplicitReceiverParameter,
+                    function.IsOpen,
+                    function.IsOverride
+                )
+                copy.ReturnRefKind = function.ReturnRefKind
+                copy.IsStatic = function.IsStatic
+                copy.StaticOwnerType = if function.StaticOwnerType != nil {
+                    owner
+                } else {
+                    default(TypeSymbol?)
+                }
+                copy.IsAbstract = function.IsAbstract
+                copy.IsAsync = function.IsAsync
+                copy.OverriddenMethod = function.OverriddenMethod
+                copy.ExternalOverriddenMethod = function.ExternalOverriddenMethod
+                if !function.TypeParameters.IsDefaultOrEmpty {
+                    copy.TypeParameters = function.TypeParameters
+                }
+                if function.ContainingType is {} containing {
+                    copy.AnchorContainingType(containing)
+                }
+                return copy
+            }
+            default {
+                return member
             }
         }
-        if object.ReferenceEquals(substitutedType, property.Type) && !parametersChanged {
-            return property
+    }
+
+    private func SubstituteParameters(
+        owner TypeSymbol,
+        parameters ImmutableArray[ParameterSymbol],
+        out changed bool
+    ) ImmutableArray[ParameterSymbol] {
+        changed = false
+        if parameters.IsDefaultOrEmpty {
+            return parameters
         }
-        return property.WithSignature(substitutedType, parameters)
+        let builder = ImmutableArray.CreateBuilder[ParameterSymbol](parameters.Length)
+        for parameter in parameters {
+            let parameterType = SubstituteMemberType(owner, parameter.Type)
+            changed |= !object.ReferenceEquals(parameterType, parameter.Type)
+            let copy = ParameterSymbol(parameter, parameterType, parameter.DeclaringSyntax)
+            if parameter.HasExplicitDefaultValue {
+                copy.SetExplicitDefaultValue(parameter.ExplicitDefaultValue)
+            }
+            builder.Add(copy)
+        }
+        return if changed {
+            builder.MoveToImmutable()
+        } else {
+            parameters
+        }
+    }
+
+    private func SubstituteMemberType(owner TypeSymbol, type TypeSymbol) TypeSymbol -> switch owner {
+        case declared is InterfaceSymbol: declared.SubstituteMemberType(type)
+        case structure is StructSymbol: structure.SubstituteMemberType(type) ?? type
+        default: type
     }
 
     /// Adds the members that a type parameter takes from its constraints, in constraint order along the
@@ -228,9 +331,7 @@ partial class SemanticModel {
                 let classConstraint = UnwrapNullability(rawClassConstraint)
                 if classConstraint is StructSymbol structure {
                     hasClassConstraint = true
-                    for member in TypeMemberModel.EnumerateMembers(structure, MemberQuery.Instance(MemberKinds.All)) {
-                        AddSourceMember(structure, member, name, access, candidates)
-                    }
+                    AddStructInstanceMembers(structure, name, access, candidates)
                     if structure.ClrType == nil {
                         AddImportedBaseMembers(structure, name, candidates, overridden)
                     }
@@ -285,16 +386,25 @@ partial class SemanticModel {
                 MemberTypeOf(right)
             )
         }
-        let leftSyntax = left.DeclaringSyntaxNodes
-        let rightSyntax = right.DeclaringSyntaxNodes
-        return left.GetType() == right.GetType() &&
-            !leftSyntax.IsDefaultOrEmpty &&
-            !rightSyntax.IsDefaultOrEmpty &&
-            object.ReferenceEquals(leftSyntax[0], rightSyntax[0]) && object.Equals(
-            MemberTypeOf(left),
-            MemberTypeOf(right)
+        let leftSyntax = DeclarationOf(left)
+        let rightSyntax = DeclarationOf(right)
+        return left.GetType() == right.GetType() && leftSyntax != nil && object.ReferenceEquals(
+            leftSyntax,
+            rightSyntax
         ) &&
-            SameParameters(left, right)
+            object.Equals(MemberTypeOf(left), MemberTypeOf(right)) && SameParameters(left, right)
+    }
+
+    private func DeclarationOf(symbol Symbol) SyntaxNode? {
+        if symbol is EventSymbol clrEvent {
+            return clrEvent.Declaration
+        }
+        let syntax = symbol.DeclaringSyntaxNodes
+        return if syntax.IsDefaultOrEmpty {
+            default(SyntaxNode?)
+        } else {
+            syntax[0]
+        }
     }
 
     private func ImportedMemberOf(symbol Symbol) MemberInfo? -> switch symbol {
