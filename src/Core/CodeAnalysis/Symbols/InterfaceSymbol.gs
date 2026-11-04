@@ -319,7 +319,7 @@ class InterfaceSymbol : TypeSymbol {
 
     /// Gets the flattened enclosing type arguments when this interface is nested inside a constructed
     /// generic enclosing type.
-    prop EnclosingTypeArguments ImmutableArray[TypeSymbol] {
+    internal prop EnclosingTypeArguments ImmutableArray[TypeSymbol] {
         get {
             return _enclosingTypeArguments
         }
@@ -329,7 +329,7 @@ class InterfaceSymbol : TypeSymbol {
     }
 
     /// Gets a value indicating whether this interface carries enclosing generic type arguments.
-    prop IsConstructedNestedType bool -> !EnclosingTypeArguments.IsDefaultOrEmpty
+    internal prop IsConstructedNestedType bool -> !EnclosingTypeArguments.IsDefaultOrEmpty
 
     /// Gets a value indicating whether this is a generic definition (has type parameters and no type
     /// arguments).
@@ -828,7 +828,7 @@ class InterfaceSymbol : TypeSymbol {
         /// @param mapClrType Optional CLR type projector.
         /// @returns The constructed nested interface reference.
         @return: NotNullIfNotNull("nestedDefinition")
-        func ConstructNested(
+        internal func ConstructNested(
             nestedDefinition InterfaceSymbol?,
             enclosingTypeArguments ImmutableArray[TypeSymbol],
             mapClrType((Type) -> Type)? = nil
@@ -861,7 +861,7 @@ class InterfaceSymbol : TypeSymbol {
         /// @param mapClrType Optional CLR type projector.
         /// @returns The constructed nested generic interface reference.
         @return: NotNullIfNotNull("nestedDefinition")
-        func ConstructNestedGeneric(
+        internal func ConstructNestedGeneric(
             nestedDefinition InterfaceSymbol?,
             enclosingTypeArguments ImmutableArray[TypeSymbol],
             ownTypeArguments ImmutableArray[TypeSymbol],
@@ -1151,6 +1151,21 @@ class InterfaceSymbol : TypeSymbol {
                     },
                     mapClrType
                 )
+            }
+            if type is StructSymbol nestedStruct && nestedStruct.TypeArguments.IsDefaultOrEmpty {
+                let enclosingArgs = StructSymbol.SubstituteEnclosingArguments(
+                    nestedStruct,
+                    (argument TypeSymbol) -> {
+                        return SubstituteType(argument, subst, mapClrType)
+                    }
+                )
+                if !enclosingArgs.IsDefaultOrEmpty {
+                    return StructSymbol.ConstructNested(
+                        nestedStruct.Definition ?? nestedStruct,
+                        enclosingArgs,
+                        mapClrType
+                    )!!
+                }
             }
             // Issue #2340 follow-up (sibling to the #1503 branch already present
             // in StructSymbol.SubstituteTypeForConstruction, and the matching

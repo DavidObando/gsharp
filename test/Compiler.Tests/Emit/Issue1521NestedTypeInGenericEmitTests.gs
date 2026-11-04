@@ -265,6 +265,7 @@ class Outer[T] {
     public interface IPlain {
         prop Tag T { get; }
         func ReadPlain(seed T) T;
+        func EchoInner(x Inner) Inner;
     }
     public interface IGeneric[U] : IComparable[U] {
         func ReadGeneric(seed T, suffix U) string;
@@ -276,13 +277,17 @@ class Outer[T] {
     }
 }
 @TypeTag(typeof(Outer[string].IPlain), typeof(Outer[string].IGeneric[int32]))
-class PlainImpl : Outer[string].IPlain, Outer[string].IGeneric[int32] {
+class PlainImpl : Outer[string].IPlain, Outer[string].IGeneric[int32], Outer[string].IGeneric[PlainImpl] {
     public prop Tag string -> "tag"
     public func ReadPlain(seed string) string -> seed + ":" + Tag + ":21"
+    public func EchoInner(x Outer[string].Inner) Outer[string].Inner -> x
     public func ReadGeneric(seed string, suffix int32) string -> seed + ":" + suffix.ToString()
+    public func ReadGeneric(seed string, suffix PlainImpl) string -> seed + ":" + suffix.Tag
     public func CompareTo(other int32) int32 -> other
+    public func CompareTo(other PlainImpl?) int32 -> 0
 }
-func UsePlain(p Outer[string].IPlain) string -> p.ReadPlain("p")
+func UseSelfRef[T Outer[string].IGeneric[T]](x T) string -> x.ReadGeneric("self", x)
+func UsePlain(p Outer[string].IPlain, item Outer[string].Inner) string -> p.ReadPlain("p") + ":" + p.EchoInner(item).Read().ToString()
 func UseGeneric(g Outer[string].IGeneric[int32]) string -> g.ReadGeneric("g", 8)
 func Main() {
     let item = Outer[string].Inner{Value: 7}
@@ -292,14 +297,14 @@ func Main() {
     let baseIface = typeof(Outer[string].IGeneric[int32]).GetInterfaces()[0]
     Console.WriteLine(item.Read())
     Console.WriteLine(owner.ReadScoped())
-    Console.WriteLine(UsePlain(owner.EchoIface(impl)))
-    Console.WriteLine(UseGeneric(impl))
+    Console.WriteLine(UsePlain(owner.EchoIface(impl), item))
+    Console.WriteLine(UseGeneric(impl) + ":" + UseSelfRef(impl))
     Console.WriteLine(tag.First == typeof(Outer[string].IPlain) && tag.Second == typeof(Outer[string].IGeneric[int32]))
     Console.WriteLine(baseIface == typeof(IComparable[int32]))
 }`
         let output = CompileAndRun(validSource)
         Assert.Equal(
-            "12${Environment.NewLine}9${Environment.NewLine}p:tag:21${Environment.NewLine}g:8${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}",
+            "12${Environment.NewLine}9${Environment.NewLine}p:tag:21:12${Environment.NewLine}g:8:self:tag${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}",
             output
         )
 

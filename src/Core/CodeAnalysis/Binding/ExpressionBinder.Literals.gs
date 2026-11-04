@@ -163,6 +163,10 @@ internal partial class ExpressionBinder {
                         out typeSymbol
                     )
                 }
+            } else if typeClause.HasQualifier &&
+                !typeClause.HasTypeArguments &&
+                !typeClause.HasOuterSegmentTypeArguments {
+                TryResolveBareOpenGenericDeclaredQualifiedType(typeClause, out typeSymbol)
             } else if TryGetNestedUnboundGenericReflectionSegments(
                 typeClause,
                 out var reflectionSegments,
@@ -336,16 +340,22 @@ internal partial class ExpressionBinder {
     /// @returns `true` when a declared generic definition of that arity was found.
     private func TryResolveOpenGenericDeclaredType(name string, arity int32, out type TypeSymbol?) bool {
         type = nil
-        if !binderCtx.TryLookupSourceType(
+        if binderCtx.CurrentTypeParameters?.ContainsKey(name) ?? false {
+            return false
+        }
+        var candidate TypeSymbol? = lookupType(name)
+        if (candidate == nil || DeclaredGenericDefinitionArity(candidate) != arity) && binderCtx.TryLookupSourceType(
             $scope,
             name,
             arity,
             getCurrentFunction(),
-            out var candidate,
+            out var arityCandidate,
             out _,
             allowUnclosedEnclosingTypeParameters: true
-        ) ||
-            DeclaredGenericDefinitionArity(candidate!!) != arity {
+        ) {
+            candidate = arityCandidate
+        }
+        if candidate == nil || DeclaredGenericDefinitionArity(candidate) != arity {
             return false
         }
         type = candidate
@@ -373,6 +383,75 @@ internal partial class ExpressionBinder {
         reportObsoleteUseIfApplicable(location, candidate!!, candidate!!.Name)
         type = candidate
         return true
+    }
+
+    private func TryResolveBareOpenGenericDeclaredQualifiedType(
+        typeClause TypeClauseSyntax,
+        out type TypeSymbol?
+    ) bool {
+        type = nil
+        let names = GetTypeClauseSegmentNames(typeClause)
+        if names.Length < 2 {
+            return false
+        }
+        let currentFunction = getCurrentFunction()
+        for var head = 0; head < names.Length; head++ {
+            if head == 0 && (binderCtx.CurrentTypeParameters?.ContainsKey(names[0]) ?? false) {
+                continue
+            }
+            var current TypeSymbol? = lookupType(names[head])
+            if current == nil && binderCtx.TryLookupSourceType(
+                $scope,
+                names[head],
+                preferredArity: -1,
+                currentFunction,
+                out var unclosedHead,
+                out var ambiguousAcrossImportedPackages,
+                allowUnclosedEnclosingTypeParameters: true
+            ) &&
+                !ambiguousAcrossImportedPackages {
+                current = unclosedHead
+            }
+            if current == nil || !PrefixMatchesDeclaringPackage(current, names, head) {
+                continue
+            }
+            var resolved = true
+            var anyGenericSegment = DeclaredGenericDefinitionArity(current) > 0 ||
+                IsOpenGenericOrGenericEnclosingDefinition(current)
+            for var i = head + 1; i < names.Length; i++ {
+                let container = (current as StructSymbol)?.Definition ?? current
+                if !$scope.TryLookupNestedTypeAlias(container, names[i], preferredArity: -1, out var nested) &&
+                    !(
+                    container is StructSymbol containerStruct && $scope.TryLookupNestedTypeAliasIncludingInherited(
+                        containerStruct,
+                        names[i],
+                        preferredArity: -1,
+                        out nested,
+                        out _
+                    )
+                ) {
+                    resolved = false
+                    break
+                }
+                current = nested
+                anyGenericSegment |= DeclaredGenericDefinitionArity(current!!) > 0
+            }
+            if resolved &&
+                anyGenericSegment &&
+                IsOpenGenericOrGenericEnclosingDefinition(current!!) &&
+                binderCtx
+                .HasUnclosedEnclosingTypeParameters(current, currentFunction) {
+                let targetLocation = if typeClause.QualifierIdentifierTokens.IsDefaultOrEmpty {
+                    typeClause.Location
+                } else {
+                    typeClause.QualifierIdentifierTokens[typeClause.QualifierIdentifierTokens.Length - 1].Location
+                }
+                reportObsoleteUseIfApplicable(targetLocation, current!!, current!!.Name)
+                type = current
+                return true
+            }
+        }
+        return false
     }
 
     private func IsOpenGenericOrGenericEnclosingDefinition(type TypeSymbol) bool {
@@ -460,6 +539,9 @@ internal partial class ExpressionBinder {
     private func TryResolveOpenGenericDeclaredNestedType(names[]string, arities[]int32, out type TypeSymbol?) bool {
         type = nil
         for var head = 0; head < names.Length; head++ {
+            if head == 0 && (binderCtx.CurrentTypeParameters?.ContainsKey(names[0]) ?? false) {
+                continue
+            }
             if !binderCtx.TryLookupSourceType(
                 $scope,
                 names[head],

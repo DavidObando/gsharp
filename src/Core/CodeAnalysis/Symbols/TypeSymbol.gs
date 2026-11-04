@@ -531,7 +531,17 @@ open partial class TypeSymbol : Symbol {
                         }
                         return false
                     }
-                    case iface is InterfaceSymbol when !iface.TypeArguments.IsDefaultOrEmpty {
+                    case iface is InterfaceSymbol when !iface
+                        .EnclosingTypeArguments
+                        .IsDefaultOrEmpty ||
+                        !iface
+                        .TypeArguments
+                        .IsDefaultOrEmpty {
+                        for arg in iface.EnclosingTypeArguments {
+                            if AnyTypeParameter(arg, match) {
+                                return true
+                            }
+                        }
                         for arg in iface.TypeArguments {
                             if AnyTypeParameter(arg, match) {
                                 return true
@@ -617,7 +627,12 @@ open partial class TypeSymbol : Symbol {
                     .TypeArguments
                     .IsDefaultOrEmpty
                 case enumType is EnumSymbol: enumType.EnclosingTypeArguments.IsDefaultOrEmpty
-                case interfaceType is InterfaceSymbol: interfaceType.TypeArguments.IsDefaultOrEmpty
+                case interfaceType is InterfaceSymbol: interfaceType
+                    .EnclosingTypeArguments
+                    .IsDefaultOrEmpty &&
+                    interfaceType
+                    .TypeArguments
+                    .IsDefaultOrEmpty
                 case delegateType is DelegateTypeSymbol: delegateType.TypeArguments.IsDefaultOrEmpty
                 default: false
             }

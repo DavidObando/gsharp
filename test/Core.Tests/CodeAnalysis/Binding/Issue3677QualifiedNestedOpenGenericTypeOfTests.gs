@@ -77,10 +77,23 @@ typeof(Inner[_]).Name == "Inner` + "`" + `1" &&
 typeof(Inner).IsGenericTypeDefinition &&
 typeof(Inner).Name == "Inner` + "`" + `1" &&
 typeof(PlainInner).IsGenericTypeDefinition &&
-typeof(PlainInner).Name == "PlainInner"
+typeof(PlainInner).Name == "PlainInner" &&
+typeof(Outer.Inner).IsGenericTypeDefinition &&
+typeof(Outer.Inner).Name == "Inner` + "`" + `1" &&
+typeof(Outer.PlainInner).IsGenericTypeDefinition &&
+typeof(Outer.PlainInner).Name == "PlainInner"
 `)
         Assert.Empty(result.Diagnostics)
         Assert.Equal(true, result.Value)
+    }
+
+    @Fact
+    func TypeParameterShadowingSourceGeneric_ReportsUndefinedTypeGS0113() {
+        let result = EmittedOracle.Evaluate(Fixtures + `
+func Probe[Slot]() System.Type -> typeof(Slot[_])
+Probe[int32]()
+`)
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0113")
     }
 
     @Fact

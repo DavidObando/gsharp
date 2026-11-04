@@ -13729,8 +13729,9 @@ partial class Binder {
                         }
                     }
                     if changed {
-                        expectedIface = InterfaceSymbol.Construct(
+                        expectedIface = InterfaceSymbol.ConstructNestedGeneric(
                             expectedIface!!.Definition,
+                            expectedIface!!.EnclosingTypeArguments,
                             substArgs.MoveToImmutable()
                         )!!
                     }
