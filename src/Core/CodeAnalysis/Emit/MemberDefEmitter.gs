@@ -543,8 +543,9 @@ internal class MemberDefEmitter {
         } else if prop.IsVirtual {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
         } else if PropertyImplicitlyImplementsInterface(structSym, prop) {
-            // Issue #248: implicit interface implementation requires Virtual | NewSlot.
-            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
+            // Issue #248 / #5638: an implicit interface implementation that is
+            // neither `open` nor `override` requires Virtual | NewSlot | Final.
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         } else if this.emitCtx.InheritedInterfacePropertyAccessors.Contains((prop, true)) {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         } else if prop.ExplicitInterfaceMember != nil || prop.ExplicitInterfaceGetterSlot != nil {
@@ -671,8 +672,9 @@ internal class MemberDefEmitter {
         } else if prop.IsVirtual {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
         } else if PropertyImplicitlyImplementsInterface(structSym, prop) {
-            // Issue #248: implicit interface implementation requires Virtual | NewSlot.
-            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
+            // Issue #248 / #5638: an implicit interface implementation that is
+            // neither `open` nor `override` requires Virtual | NewSlot | Final.
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         } else if this.emitCtx.InheritedInterfacePropertyAccessors.Contains((prop, false)) {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         } else if prop.ExplicitInterfaceMember != nil || prop.ExplicitInterfaceSetterSlot != nil {
@@ -1112,65 +1114,6 @@ internal class MemberDefEmitter {
         return accessor
     }
 
-    /// ADR-0052: determines whether an event on a class/struct implicitly implements
-    /// an interface event (same name on any implemented interface).
-    private func EventImplicitlyImplementsInterface(structSym StructSymbol, ev EventSymbol) bool {
-        if !structSym.Interfaces.IsDefaultOrEmpty {
-            for iface in structSym.Interfaces {
-                // ADR-0149 follow-up (issue #2370): see the matching comment in
-                // PropertyImplicitlyImplementsInterface — Events is likewise
-                // never substituted onto a constructed generic interface
-                // instance, so this must resolve against the open Definition.
-                let defIface = iface.Definition ?? iface
-                if defIface.Events.IsDefaultOrEmpty {
-                    continue
-                }
-                for ifaceEvent in defIface.Events {
-                    if ifaceEvent.Name == ev.Name {
-                        return true
-                    }
-                }
-            }
-        }
-        // Issue #2380: mirror PropertyImplicitlyImplementsInterface's
-        // ImplementedClrInterfaces (issue #525) branch — this was entirely
-        // missing for events, so a class/struct event implicitly satisfying
-        // an IMPORTED CLR interface's event (of any handler-type shape,
-        // including one that nests a `Nullable<T>` generic argument, e.g.
-        // `EventHandler<Notification<int?>>`) was never promoted to
-        // Virtual|NewSlot and silently produced unverifiable IL, exactly
-        // like the property/method gaps this issue fixes. Uses the same
-        // effective-CLR-type comparison as the property branch.
-        if !structSym.ImplementedClrInterfaces.IsDefaultOrEmpty {
-            let evClr Type? = NullableLifting.GetEffectiveClrType(ev.Type)
-            for ifaceSym in structSym.ImplementedClrInterfaces {
-                let clrIface Type? = ifaceSym?.ClrType
-                if clrIface == nil {
-                    continue
-                }
-                for clrEvent in MemberLookup.EnumerateSelfAndInterfaces(clrIface).SelectMany(
-                    func (inherited Type) IEnumerable[EventInfo] {
-                        return inherited.GetEvents(BindingFlags.Public | BindingFlags.Instance)
-                    }
-                ) {
-                    if clrEvent.Name == ev.Name &&
-                        (
-                        evClr == nil ||
-                            (
-                            clrEvent.EventHandlerType is {} eventHandlerType && ClrTypeUtilities.AreSame(
-                                evClr,
-                                eventHandlerType
-                            )
-                        )
-                    ) {
-                        return true
-                    }
-                }
-            }
-        }
-        return false
-    }
-
     /// ADR-0052: emits add/remove accessor MethodDefs, EventDef rows, EventMap,
     /// and MethodSemantics rows for all events declared on a type.
     /// @param structSym The owning struct or class symbol whose instance events are emitted.
@@ -1465,12 +1408,12 @@ internal class MemberDefEmitter {
                 MethodAttributes.Public
             }
         ) | MethodAttributes.SpecialName | MethodAttributes.HideBySig
-        if ev.IsVirtual {
-            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
-        } else if ev.IsOverride {
+        if ev.IsOverride {
             methodAttrs |= MethodAttributes.Virtual
-        } else if this.EventImplicitlyImplementsInterface(structSym, ev) {
+        } else if ev.IsVirtual {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
+        } else if EventImplicitlyImplementsInterface(structSym, ev) {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         } else if ev.ExplicitInterfaceMember != nil || ev.ExplicitInterfaceAddSlot != nil {
             // ADR-0149: mirrors the property MethodImpl-bridge promotion —
             // a MethodImpl body method must be Virtual per ECMA-335 §II.10.3.3;
@@ -1555,12 +1498,12 @@ internal class MemberDefEmitter {
                 MethodAttributes.Public
             }
         ) | MethodAttributes.SpecialName | MethodAttributes.HideBySig
-        if ev.IsVirtual {
-            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
-        } else if ev.IsOverride {
+        if ev.IsOverride {
             methodAttrs |= MethodAttributes.Virtual
-        } else if this.EventImplicitlyImplementsInterface(structSym, ev) {
+        } else if ev.IsVirtual {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
+        } else if EventImplicitlyImplementsInterface(structSym, ev) {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         } else if ev.ExplicitInterfaceMember != nil || ev.ExplicitInterfaceRemoveSlot != nil {
             // ADR-0149: see the matching comment in EmitEventAddAccessor.
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
@@ -1658,10 +1601,12 @@ internal class MemberDefEmitter {
         ) | MethodAttributes.SpecialName | MethodAttributes.HideBySig
         if isStatic {
             methodAttrs |= MethodAttributes.Static
-        } else if ev.IsVirtual {
-            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
         } else if ev.IsOverride {
             methodAttrs |= MethodAttributes.Virtual
+        } else if ev.IsVirtual {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
+        } else if EventImplicitlyImplementsInterface(structSym, ev) {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         } else if ev.ExplicitInterfaceMember != nil || ev.ExplicitInterfaceRaiseSlot != nil {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         }
@@ -2034,6 +1979,64 @@ internal class MemberDefEmitter {
     }
 
     shared {
+        /// ADR-0052: determines whether an event implicitly implements an interface event.
+        /// @param structSym The type that declares the candidate event.
+        /// @param ev The candidate event.
+        /// @returns `true` when the event implements an interface event.
+        internal func EventImplicitlyImplementsInterface(structSym StructSymbol, ev EventSymbol) bool {
+            if ev.HasExplicitInterfaceClause {
+                return false
+            }
+            if !structSym.Interfaces.IsDefaultOrEmpty {
+                for iface in structSym.Interfaces {
+                    // Issue #2370: resolve events on the open definition because
+                    // constructed generic interfaces do not substitute Events.
+                    let defIface = iface.Definition ?? iface
+                    if defIface.Events.IsDefaultOrEmpty {
+                        continue
+                    }
+                    for ifaceEvent in defIface.Events {
+                        if ifaceEvent.Name == ev.Name && DeclarationBinder.InterfaceEventTypesEquivalent(
+                            iface,
+                            ifaceEvent,
+                            ev
+                        ) {
+                            return true
+                        }
+                    }
+                }
+            }
+            // Issue #2380: compare effective CLR types for imported interface events.
+            if !structSym.ImplementedClrInterfaces.IsDefaultOrEmpty {
+                let evClr Type? = NullableLifting.GetEffectiveClrType(ev.Type)
+                for ifaceSym in structSym.ImplementedClrInterfaces {
+                    let clrIface Type? = ifaceSym?.ClrType
+                    if clrIface == nil {
+                        continue
+                    }
+                    for clrEvent in MemberLookup.EnumerateSelfAndInterfaces(clrIface).SelectMany(
+                        func (inherited Type) IEnumerable[EventInfo] {
+                            return inherited.GetEvents(BindingFlags.Public | BindingFlags.Instance)
+                        }
+                    ) {
+                        if clrEvent.Name == ev.Name &&
+                            (
+                            evClr == nil ||
+                                (
+                                clrEvent.EventHandlerType is {} eventHandlerType && ClrTypeUtilities.AreSame(
+                                    evClr,
+                                    eventHandlerType
+                                )
+                            )
+                        ) {
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
+
         /// Issue #248: determines whether a property on a class/struct implicitly implements
         /// an interface property (same name and type on any implemented interface).
         /// @param structSym The type declaring the candidate property.
@@ -2092,10 +2095,13 @@ internal class MemberDefEmitter {
                         }
                     ) {
                         let indexParameters = clrProp.GetIndexParameters()
+                        let hasMatchingAccessor = (clrProp.GetMethod != nil && prop.HasGetter) ||
+                            (clrProp.SetMethod != nil && prop.HasSetter)
                         // Nullable reference annotations do not participate in CLR interface slots.
                         if prop.IsIndexer != (indexParameters.Length > 0) ||
-                            (clrProp.GetMethod != nil && !prop.HasGetter) ||
-                            (clrProp.SetMethod != nil && !prop.HasSetter) ||
+                            !hasMatchingAccessor ||
+                            (clrProp.GetMethod?.IsAbstract == true && !prop.HasGetter) ||
+                            (clrProp.SetMethod?.IsAbstract == true && !prop.HasSetter) ||
                             !MemberLookup
                             .PropertyMatchesClrInterfaceSignature(
                             prop,
@@ -2120,6 +2126,12 @@ internal class MemberDefEmitter {
             interfaceProperty PropertySymbol,
             typeParameterMap Dictionary[TypeParameterSymbol, TypeSymbol]?
         ) bool {
+            let hasMatchingAccessor = (interfaceProperty.HasGetter && property.HasGetter) ||
+                (interfaceProperty.HasSetter && property.HasSetter)
+            let requiresGetter = interfaceProperty.HasGetter &&
+                (interfaceProperty.GetterSymbol == nil || interfaceProperty.GetterSymbol!!.IsAbstract)
+            let requiresSetter = interfaceProperty.HasSetter &&
+                (interfaceProperty.SetterSymbol == nil || interfaceProperty.SetterSymbol!!.IsAbstract)
             if property.Name != interfaceProperty.Name ||
                 property.IsIndexer != interfaceProperty.IsIndexer ||
                 property
@@ -2127,13 +2139,14 @@ internal class MemberDefEmitter {
                 .Length != interfaceProperty
                 .Parameters
                 .Length ||
-                (interfaceProperty.HasGetter && !property.HasGetter) ||
-                (interfaceProperty.HasSetter && !property.HasSetter) ||
+                !hasMatchingAccessor ||
+                (requiresGetter && !property.HasGetter) ||
+                (requiresSetter && !property.HasSetter) ||
                 !DeclarationBinder
                 .IsInterfacePropertyTypeCompatible(
                 property.Type,
                 interfaceProperty.Type,
-                interfaceProperty.HasSetter,
+                property.HasSetter && interfaceProperty.HasSetter,
                 typeParameterMap
             ) {
                 return false
