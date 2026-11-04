@@ -239,3 +239,7 @@ d06 when another fact is in force at the loop entry; the row now gets the same r
 | m04 | as m02 with `g = Other` (a named function) inside the span | accepted, prints `2` | rejected (`GS0158`) |
 | m05 | `while count < 2 { if x != nil { g(); total += x.Value }; Inside: count++; i++ }; g = h; if i < 2 { goto Inside }` | accepted, prints `2` | rejected (`GS0158`) |
 
+## Issue #5460: joining `break` states at a loop exit (ADR-0213 table 9)
+
+[#5460](https://github.com/DavidObando/gsharp/issues/5460): `BindBreakStatement` records the narrowing state (with pending cleanup regions) onto the target loop's `break` label (`NarrowingFlow.RecordBreak`), and `RecordLoopExitFacts` takes the n-ary join `Jmp(break, header-false)` over all reachable `break` edges targeting that loop (after `ApplyExitedFinallyEffects`) and the loop's header-false exit state when reachable (`Unreachable` for an unconditional header such as `while true`, `for { }`, or `for init; ; post`). Corpus row `g1_with_break` in `Adr0208NarrowingCorpusTests` and the rows in `Issue5460LoopBreakExitJoinTests` pin the join and mutant M19.
+

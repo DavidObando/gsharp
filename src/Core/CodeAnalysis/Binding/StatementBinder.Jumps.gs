@@ -118,6 +118,7 @@ internal partial class StatementBinder {
         }
         binderCtx.UnresolvedGotoLabels.Clear()
         binderCtx.NarrowingFlow.Clear()
+        loopExitFacts.Clear()
         ClearBackwardJumpSpanCaches()
         boundFinallyBlocks.Clear()
         finallyEntryExternalCallableAliases.Clear()
@@ -172,7 +173,8 @@ internal partial class StatementBinder {
         out breakLabel BoundLabel,
         out continueLabel BoundLabel,
         bindIteration(() -> BoundStatement)? = nil,
-        iterationRunsUserCode bool = false
+        iterationRunsUserCode bool = false,
+        loopCondition(() -> BoundExpression?)? = nil
     ) BoundStatement {
         // ADR-0213 section 13 (#5461): the external callable aliases are part of the entry state.
         // A loop that reassigns an alias must remove it even when no fact is in force.
@@ -180,22 +182,27 @@ internal partial class StatementBinder {
         if HasAnyActiveNarrowings() || externalCallableAliases.Count > 0 || binderCtx.NarrowingFlow.HasPendingJumps {
             ApplyLoopEntryLowerBound(body, iterationRunsUserCode)
         }
+        let loopEntryState = binderCtx.Narrowing
         binderCtx.LabelCounter++
         breakLabel = BoundLabel("break${binderCtx.LabelCounter}")
         continueLabel = BoundLabel("continue${binderCtx.LabelCounter}")
         binderCtx.LoopStack.Push((labelName, breakLabel, continueLabel))
+        var boundBody BoundStatement
         try {
-            if bindIteration != nil {
-                return bindIteration()
+            boundBody = if bindIteration != nil {
+                bindIteration()
+            } else {
+                Invariant.Required(
+                    BindStatement(body),
+                    "a loop body has a bound statement",
+                    expression: "BindStatement(body)"
+                )
             }
-            return Invariant.Required(
-                BindStatement(body),
-                "a loop body has a bound statement",
-                expression: "BindStatement(body)"
-            )
         } finally {
             binderCtx.LoopStack.Pop()
         }
+        RecordLoopExitFacts(body, loopCondition?(), breakLabel, continueLabel, boundBody, loopEntryState)
+        return boundBody
     }
 
     /// The function-wide binder state that a speculative bind can change: diagnostics, narrowing frame
@@ -393,6 +400,9 @@ internal partial class StatementBinder {
                     breakLabel = frame.BreakLabel
                     if currentStatementListFallsThrough {
                         internallyReachableLoopExits.Add(breakLabel)
+                        if frame.ContinueLabel != nil {
+                            binderCtx.NarrowingFlow.RecordBreak(breakLabel, CaptureJumpState())
+                        }
                     }
                     return BoundGotoStatement(syntax, breakLabel)
                 }
@@ -404,10 +414,14 @@ internal partial class StatementBinder {
         // an unlabeled `break` in a switch arm exits the switch, not the
         // enclosing loop). Record the target so the switch appends its
         // break-label statement only when actually jumped to.
-        breakLabel = binderCtx.LoopStack.Peek().BreakLabel
+        let topFrame = binderCtx.LoopStack.Peek()
+        breakLabel = topFrame.BreakLabel
         binderCtx.UsedBreakLabels.Add(breakLabel)
         if currentStatementListFallsThrough {
             internallyReachableLoopExits.Add(breakLabel)
+            if topFrame.ContinueLabel != nil {
+                binderCtx.NarrowingFlow.RecordBreak(breakLabel, CaptureJumpState())
+            }
         }
         return BoundGotoStatement(syntax, breakLabel)
     }

@@ -73,6 +73,39 @@ func Run(c bool) int32 {
     return s!!.Length
 }`, "X")
         Assert.Equal([]string{"5|s|no-break|8"}, lines.Select((line string) -> Sites(line)).ToArray())
+        // Issue #5460: a reachable loop `break` reports `break`, while a `switch` `break` reports `no-break`.
+        let breakLines = Capture(`package T
+func Get() string? { return nil }
+func Fix() string { return "fix" }
+func RunLoopBreak(c bool) int32 {
+    var s string? = Get()
+    while s == nil {
+        if c {
+            s = Fix()
+            break
+        }
+        s = "ok"
+    }
+    return s!!.Length
+}
+func RunSwitchBreak(k int32) int32 {
+    var s string? = Get()
+    while s == nil {
+        switch k {
+            case 1 {
+                break
+            }
+            default {
+                s = "ok"
+            }
+        }
+    }
+    return s!!.Length
+}`, "X")
+        Assert.Equal(
+            []string{"17|s|no-break|27", "6|s|break|13"},
+            breakLines.Select((line string) -> Sites(line)).ToArray()
+        )
     }
 
     @Fact

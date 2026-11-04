@@ -88,7 +88,22 @@ internal sealed class NarrowingFlow {
     )
 
     /// Gets a value indicating whether any forward jump state is waiting for its target label.
-    prop HasPendingJumps bool -> pending.Count > 0
+    prop HasPendingJumps bool {
+        get {
+            for key in pending.Keys {
+                if !key.StartsWith("#", StringComparison.Ordinal) {
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
+    /// Records a `break` state on [`target`](paramref) with the cleanup regions still to run (ADR-0213 table 9, J1).
+    func RecordBreak(target BoundLabel, state NarrowingJumpState) -> RecordJump("#" + target.Name, state)
+
+    /// Removes and returns the recorded `break` states for [`target`](paramref), or `nil`.
+    func TakeBreaks(target BoundLabel) List[NarrowingJumpState]? -> TakeJumps("#" + target.Name)
 
     /// Records a forward jump state on [`target`](paramref) with the cleanup regions still to run.
     func RecordJump(target string, state NarrowingJumpState) {

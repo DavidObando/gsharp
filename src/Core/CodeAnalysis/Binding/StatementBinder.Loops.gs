@@ -693,11 +693,11 @@ internal partial class StatementBinder {
                 } finally {
                     $scope = headerParentScope
                 }
-            }
+            },
+            loopCondition: () -> boundCondition
         )
         condition = boundCondition
         post = boundPost
-        RecordLoopExitFacts(bodySyntax, boundCondition)
         return body
     }
 
@@ -1004,10 +1004,10 @@ internal partial class StatementBinder {
                 } finally {
                     $scope = headerParentScope
                 }
-            }
+            },
+            loopCondition: () -> condition
         )
         $scope = $scope.Pop()
-        RecordLoopExitFacts(bodySyntax, condition)
         let bodyLabel = BoundLabel("body${binderCtx.LabelCounter}")
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         statements.Add(BoundLabelStatement(originatingSyntax, bodyLabel))

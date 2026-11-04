@@ -3307,33 +3307,86 @@ internal partial class StatementBinder {
         return condition is LiteralExpressionSyntax literal && literal.LiteralToken.Kind == SyntaxKind.FalseKeyword
     }
 
-    // The facts that the header of a loop proves when the loop ends, by loop statement. Row R7 (f).
+    // The facts that the exit of a loop proves when the loop ends, by loop statement (ADR-0213 table 9, #5460).
     private let loopExitFacts Dictionary[SyntaxNode, Dictionary[AccessPath, TypeSymbol]] = Dictionary[
         SyntaxNode,
         Dictionary[AccessPath, TypeSymbol]
     ]()
 
-    /// Row R7 (f), table 9 column `Exit state`: a loop without a `break` ends only when its header is
-    /// false, so the facts that the condition proves false hold after the loop whatever the body wrote.
-    /// The header is bound under the lower bound of the loop, so each fact holds on every iteration.
-    /// A fact that the condition itself may remove is dropped, as for a statement (rule A2).
-    /// @remarks A loop with a `break` keeps today's exit (no fact is added): the states of the `break`
-    /// statements are not recorded yet, so the join of table 9 cannot be taken. The same holds in a
-    /// function with a user label or `goto` (#4285).
-    private func RecordLoopExitFacts(loopBody StatementSyntax, condition BoundExpression?) {
-        if condition == nil {
-            return
+    // Whether the loop header has no false exit edge (`for { }`, `for init; ; post`, `while true`, `for true`, `do { } while true`).
+    private func HeaderIsUnconditional(loop SyntaxNode) bool {
+        if loop.Kind == SyntaxKind.ForInfiniteStatement {
+            return true
         }
+        if loop is ForClauseStatementSyntax{Condition: nil} {
+            return true
+        }
+        var condition = HeaderSyntax(loop) as ExpressionSyntax
+        while condition is ParenthesizedExpressionSyntax parenthesized {
+            condition = parenthesized.Expression
+        }
+        return condition is LiteralExpressionSyntax literal && literal.LiteralToken.Kind == SyntaxKind.TrueKeyword
+    }
+
+    private func IsLoopHeaderExitReachable(loop SyntaxNode, continueLabel BoundLabel, boundBody BoundStatement) bool {
+        if HeaderIsUnconditional(loop) {
+            return false
+        }
+        if loop.Kind == SyntaxKind.DoWhileStatement {
+            return !EndsInUnconditionalExit(boundBody) ||
+                HasInternallyReachableFallthrough(boundBody) ||
+                internallyReachableLoopBacks.Contains(continueLabel)
+        }
+        return true
+    }
+
+    /// Row R7 (f) and issue #5460, table 9 column `Exit state`: the exit state of a loop is
+    /// `Jmp(break, header-false)`, joining every reachable `break` state targeting the loop (after
+    /// pending cleanup transfers) with the header's false state when the header exit is reachable.
+    /// The header is bound under the lower bound of the loop, so each fact holds on every iteration.
+    /// A fact that the condition itself may remove is dropped from the header-false state (rule A2).
+    /// In a function with a user label or `goto`, loop exit lifts stay off (#4285).
+    private func RecordLoopExitFacts(
+        loopBody StatementSyntax,
+        condition BoundExpression?,
+        breakLabel BoundLabel,
+        continueLabel BoundLabel,
+        boundBody BoundStatement,
+        loopEntryState NarrowingState
+    ) {
+        let rawBreaks = binderCtx.NarrowingFlow.TakeBreaks(breakLabel)
         let loop = loopBody.Parent
         if loop == nil {
             return
         }
-        let elseFacts = ComputeConditionNarrowing(condition).Else
-        if elseFacts == nil || elseFacts.Count == 0 {
+        var reachableBreaks List[NarrowingState]? = nil
+        if rawBreaks != nil && rawBreaks.Count > 0 {
+            let activeFinallySet = HashSet[FinallyClauseSyntax](activeFinallyClauses)
+            let activeCleanupSet = HashSet[BoundStatement](activeCleanupStatements)
+            for snapshot in rawBreaks {
+                if ApplyExitedFinallyEffects(snapshot, activeFinallySet, activeCleanupSet) {
+                    reachableBreaks ??= List[NarrowingState](rawBreaks.Count)
+                    reachableBreaks!!.Add(NarrowingState.Empty.WithAll(snapshot.NarrowedVariables))
+                }
+            }
+        }
+        let hasBreak = reachableBreaks != nil && reachableBreaks.Count > 0
+        let headerFalseReachable = IsLoopHeaderExitReachable(loop, continueLabel, boundBody)
+        if (currentStatementListFallsThrough || HasInternallyReachableFallthrough(boundBody)) && headerFalseReachable {
+            internallyReachableLoopExits.Add(breakLabel)
+        }
+        let elseFacts = if condition == nil || !headerFalseReachable {
+            default(Dictionary[AccessPath, TypeSymbol]?)
+        } else {
+            ComputeConditionNarrowing(condition).Else
+        }
+        if headerFalseReachable && (elseFacts == nil || elseFacts.Count == 0) {
             return
         }
-        let hasBreak = ContainsBreakFor(loop)
-        if NarrowingComparison.LoopsEnabled {
+        if !headerFalseReachable && !hasBreak {
+            return
+        }
+        if NarrowingComparison.LoopsEnabled && elseFacts != nil {
             for entry in elseFacts {
                 // The frames hold the state after the loop. A fact that they hold is not a gain.
                 if binderCtx.NarrowedVariables.Query(entry.Key) != nil {
@@ -3352,31 +3405,58 @@ internal partial class StatementBinder {
                 )
             }
         }
-        // The loop ends when the header is false, so the break of a block expression in the header or in the post
-        // statement also leaves it: the whole loop is scanned.
-        if hasBreak || binderCtx.FunctionContainsUserGotoOrLabel {
+        if binderCtx.FunctionContainsUserGotoOrLabel {
             return
         }
-        // The effects of the header decide which facts survive it, by the same rule as the entry (A2): a call,
-        // a getter, an operator, a write to the root, a write through `ref` or a filter of an enclosing try.
-        let headerSyntax = HeaderSyntax(loop)
-        if headerSyntax == nil {
-            return
+        var headerFalseState = NarrowingState.Unreachable
+        var survivingElseFacts Dictionary[AccessPath, TypeSymbol]? = nil
+        if headerFalseReachable {
+            // The effects of the header decide which facts survive it, by the same rule as the entry (A2): a call,
+            // a getter, an operator, a write to the root, a write through `ref` or a filter of an enclosing try.
+            let headerSyntax = HeaderSyntax(loop)
+            if headerSyntax == nil {
+                return
+            }
+            let headerEffects = GetRegionScanner().ScanStatements([]SyntaxNode{headerSyntax})
+            let resolved = ResolveRegionWrites(headerEffects)
+            let filters = CollectCatchFiltersAbove(loop)
+            var filterNames HashSet[string]? = nil
+            if filters.Count > 0 {
+                filterNames = CollectEnclosingFilterNames(filters)
+            }
+            headerFalseState = loopEntryState
+            for entry in elseFacts!! {
+                let path = entry.Key
+                // The enclosing filters apply when the header has a handler or runs code (W8, in `DecideRegionKill`).
+                let removed = DecideRegionKill(path, entry.Value, headerEffects, resolved, filterNames).Killed
+                if !removed {
+                    survivingElseFacts ??= Dictionary[AccessPath, TypeSymbol]()
+                    survivingElseFacts!![path] = entry.Value
+                    headerFalseState = headerFalseState.With(path, entry.Value)
+                }
+            }
+            if survivingElseFacts == nil {
+                return
+            }
         }
-        let headerEffects = GetRegionScanner().ScanStatements([]SyntaxNode{headerSyntax})
-        let resolved = ResolveRegionWrites(headerEffects)
-        let filters = CollectCatchFiltersAbove(loop)
-        var filterNames HashSet[string]? = nil
-        if filters.Count > 0 {
-            filterNames = CollectEnclosingFilterNames(filters)
+        let predecessors = List[NarrowingState]()
+        if reachableBreaks != nil {
+            predecessors.AddRange(reachableBreaks)
+        }
+        predecessors.Add(headerFalseState)
+        let exitState = NarrowingState.Join(predecessors)
+        if exitState.Count == 0 {
+            return
         }
         let facts = Dictionary[AccessPath, TypeSymbol]()
-        for entry in elseFacts {
-            let path = entry.Key
-            // The enclosing filters apply when the header has a handler or runs code (W8, in `DecideRegionKill`).
-            let removed = DecideRegionKill(path, entry.Value, headerEffects, resolved, filterNames).Killed
-            if !removed {
-                facts[path] = entry.Value
+        for path in exitState.Paths {
+            if exitState.NarrowedType(path) is not{} joined {
+                continue
+            }
+            let entryType = loopEntryState.NarrowedType(path)
+            if (entryType == nil || !IsWeakerOrEqual(entryType, joined)) ||
+                (survivingElseFacts != nil && survivingElseFacts.ContainsKey(path)) {
+                facts[path] = joined
             }
         }
         if facts.Count > 0 {
@@ -3405,9 +3485,9 @@ internal partial class StatementBinder {
         }
     }
 
-    /// Adds the facts that the header of the loop statement [`syntax`](paramref) proves on exit to
+    /// Adds the facts that the exit of the loop statement [`syntax`](paramref) proves to
     /// [`persistentFrame`](paramref). It runs after the statement's invalidation, which removes the
-    /// roots that the body writes: the exit state is the state of the header, not of the body.
+    /// roots that the body writes: the exit state is the join of the reachable exit edges.
     private func ApplyLoopExitNarrowings(syntax SyntaxNode, persistentFrame NarrowingFrame) {
         var node = syntax
         while node is LabeledStatementSyntax labeled {
@@ -3418,20 +3498,11 @@ internal partial class StatementBinder {
         }
         loopExitFacts.Remove(node)
         for entry in facts {
-            SetPersistentNarrowing(persistentFrame, entry.Key, entry.Value)
-        }
-    }
-
-    private func ContainsBreakFor(node SyntaxNode) bool {
-        if node.Kind == SyntaxKind.BreakStatement {
-            return true
-        }
-        for child in node.GetChildren() {
-            if ContainsBreakFor(child) {
-                return true
+            if $scope.TryLookupSymbol(entry.Key.Root.Name) is VariableSymbol inScope &&
+                SameRoot(inScope, entry.Key.Root) {
+                SetPersistentNarrowing(persistentFrame, entry.Key, entry.Value)
             }
         }
-        return false
     }
 
     // The `name!!` sites after the loop in its statement list and in the lists that enclose it, up to
