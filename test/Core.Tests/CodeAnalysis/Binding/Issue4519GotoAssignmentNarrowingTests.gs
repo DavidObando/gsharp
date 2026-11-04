@@ -7021,6 +7021,117 @@ Run(nil)`)
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
+    @Fact
+    func LabelInIfConditionReachesThenBranchBackwardGoto() {
+        let result = Evaluate(`func Run() int32 {
+    var x string? = nil
+    x = "safe"
+    var retry = true
+Again:
+    let n = x.Length
+    if !retry {
+        return n
+    }
+    goto Enter
+    if ({
+    Enter:
+        var marker = 0
+        true
+    }) {
+        retry = false
+        x = nil
+        goto Again
+    }
+    return n
+}
+
+Run()`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func NonFinalSwitchDefaultGotoIntoLaterGuardInvalidatesGuard() {
+        let result = Evaluate(`func Run(x int32, s string?) int32 {
+    switch x {
+        default {
+            goto Use
+        }
+        case 1 when ({
+            if s != nil {
+            Use:
+                return s.Length
+            }
+            false
+        }) {
+            return 0
+        }
+    }
+}
+
+Run(2, nil)`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func NonFinalSwitchExpressionDefaultGotoIntoLaterGuardInvalidatesGuard() {
+        let result = Evaluate(`func Run(x int32, s string?) int32 {
+    return switch x {
+        default -> {
+            goto Use
+            0
+        },
+        1 when ({
+            if s != nil {
+            Use:
+                return s.Length
+            }
+            false
+        }) -> 0
+    }
+}
+
+Run(2, nil)`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
+    @Fact
+    func SpanCallToClosureReassigningExternalCallableAliasInvalidatesAliasAtLabel() {
+        let result = Evaluate(`class Holder {
+    public var Value string?
+}
+
+func Run(cb (() -> void)) int32 {
+    let x = Holder{Value: "safe"}
+    var g = cb
+    let h = func() { x.Value = nil }
+    let reassign = func() { g = h }
+    var first = true
+Again:
+    if x.Value != nil {
+        g()
+        let n = x.Value.Length
+        if first {
+            first = false
+            reassign()
+            goto Again
+        }
+        return n
+    }
+    return 0
+}
+
+Run(func() { })`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
     shared {
         private func Evaluate(source string) EmittedOracleResult -> EmittedOracle.Evaluate(source)
 

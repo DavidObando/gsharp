@@ -486,7 +486,7 @@ internal shared class BackwardJumpSpans {
         labels List[LabelSite],
         gotos List[GotoSite],
         visitCounter List[int32]
-    ) {
+    ) bool {
         var deadHere = dead
         for var i = 0; i < statements.Length; i++ {
             let statement = statements[i]
@@ -506,6 +506,7 @@ internal shared class BackwardJumpSpans {
                 deadHere = true
             }
         }
+        return deadHere
     }
 
     private func Collect(
@@ -524,22 +525,190 @@ internal shared class BackwardJumpSpans {
                 .Select((globalStatement GlobalStatementSyntax) -> globalStatement.Statement)
                 .ToImmutableArray()
             if topStatements.Length > 0 {
-                CollectList(unit, topStatements, path, tries, dead, labels, gotos, visitCounter)
+                let _ = CollectList(unit, topStatements, path, tries, dead, labels, gotos, visitCounter)
             }
             return
         }
         if node is BlockStatementSyntax block {
-            CollectList(block, block.Statements, path, tries, dead, labels, gotos, visitCounter)
+            let _ = CollectList(block, block.Statements, path, tries, dead, labels, gotos, visitCounter)
             return
         }
         if node is BlockExpressionSyntax blockExpression {
-            CollectList(blockExpression, blockExpression.Statements, path, tries, dead, labels, gotos, visitCounter)
+            let tailDead = CollectList(
+                blockExpression,
+                blockExpression.Statements,
+                path,
+                tries,
+                dead,
+                labels,
+                gotos,
+                visitCounter
+            )
             let tail = blockExpression.Expression
             if tail != nil {
                 // The trailing expression follows the statements in the same list, so it has a step of its own.
                 path.Add(Step(blockExpression, blockExpression.Statements, blockExpression.Statements.Length))
-                Collect(tail, path, tries, dead, labels, gotos, visitCounter)
+                Collect(tail, path, tries, tailDead, labels, gotos, visitCounter)
                 path.RemoveAt(path.Count - 1)
+            }
+            return
+        }
+        if node is IfStatementSyntax ifStatement {
+            var branchDead = dead
+            let labelsBeforeHeader = labels.Count
+            if ifStatement.Initializer != nil {
+                Collect(ifStatement.Initializer, path, tries, branchDead, labels, gotos, visitCounter)
+                if labels.Count > labelsBeforeHeader {
+                    branchDead = false
+                }
+            }
+            Collect(ifStatement.Condition, path, tries, branchDead, labels, gotos, visitCounter)
+            if labels.Count > labelsBeforeHeader {
+                branchDead = false
+            }
+            Collect(ifStatement.ThenStatement, path, tries, branchDead, labels, gotos, visitCounter)
+            if ifStatement.ElseClause != nil {
+                Collect(ifStatement.ElseClause.ElseStatement, path, tries, branchDead, labels, gotos, visitCounter)
+            }
+            return
+        }
+        if node is IfExpressionSyntax ifExpression {
+            var branchDead = dead
+            let labelsBeforeHeader = labels.Count
+            if ifExpression.Initializer != nil {
+                Collect(ifExpression.Initializer, path, tries, branchDead, labels, gotos, visitCounter)
+                if labels.Count > labelsBeforeHeader {
+                    branchDead = false
+                }
+            }
+            Collect(ifExpression.Condition, path, tries, branchDead, labels, gotos, visitCounter)
+            if labels.Count > labelsBeforeHeader {
+                branchDead = false
+            }
+            Collect(ifExpression.ThenBlock, path, tries, branchDead, labels, gotos, visitCounter)
+            if ifExpression.ElseExpression != nil {
+                Collect(ifExpression.ElseExpression, path, tries, branchDead, labels, gotos, visitCounter)
+            }
+            return
+        }
+        if node is ConditionalExpressionSyntax conditionalExpression {
+            var branchDead = dead
+            let labelsBeforeCondition = labels.Count
+            Collect(conditionalExpression.Condition, path, tries, branchDead, labels, gotos, visitCounter)
+            if labels.Count > labelsBeforeCondition {
+                branchDead = false
+            }
+            Collect(conditionalExpression.WhenTrue, path, tries, branchDead, labels, gotos, visitCounter)
+            Collect(conditionalExpression.WhenFalse, path, tries, branchDead, labels, gotos, visitCounter)
+            return
+        }
+        if node is SwitchStatementSyntax switchStatement {
+            var armDead = dead
+            let labelsBeforeDiscriminant = labels.Count
+            Collect(switchStatement.Expression, path, tries, armDead, labels, gotos, visitCounter)
+            if labels.Count > labelsBeforeDiscriminant {
+                armDead = false
+            }
+            let headerVisited = [switchStatement.Cases.Length]bool
+            var seenDefault = false
+            var priorFallthroughReachable = false
+            for var caseIndex = 0; caseIndex < switchStatement.Cases.Length; caseIndex++ {
+                let arm = switchStatement.Cases[caseIndex]
+                if arm.IsDefault {
+                    if !seenDefault {
+                        seenDefault = true
+                        for var later = caseIndex + 1; later < switchStatement.Cases.Length; later++ {
+                            let laterArm = switchStatement.Cases[later]
+                            if laterArm.IsDefault {
+                                continue
+                            }
+                            headerVisited[later] = true
+                            let beforeHeader = labels.Count
+                            if laterArm.Value != nil {
+                                Collect(laterArm.Value, path, tries, armDead, labels, gotos, visitCounter)
+                            }
+                            if laterArm.Guard != nil {
+                                Collect(laterArm.Guard, path, tries, armDead, labels, gotos, visitCounter)
+                            }
+                            if labels.Count > beforeHeader {
+                                armDead = false
+                            }
+                        }
+                    }
+                } else if !headerVisited[caseIndex] {
+                    headerVisited[caseIndex] = true
+                    let beforeHeader = labels.Count
+                    if arm.Value != nil {
+                        Collect(arm.Value, path, tries, armDead, labels, gotos, visitCounter)
+                    }
+                    if arm.Guard != nil {
+                        Collect(arm.Guard, path, tries, armDead, labels, gotos, visitCounter)
+                    }
+                    if labels.Count > beforeHeader {
+                        armDead = false
+                    }
+                }
+                let bodyDead = armDead && !priorFallthroughReachable
+                let beforeBody = labels.Count
+                Collect(arm.Body, path, tries, bodyDead, labels, gotos, visitCounter)
+                let bodyReached = !bodyDead || labels.Count > beforeBody
+                let endsInFallthrough = arm
+                    .Body
+                    .Statements
+                    .Length > 0 &&
+                    arm
+                    .Body
+                    .Statements[arm.Body.Statements.Length - 1] is FallthroughStatementSyntax
+                priorFallthroughReachable = bodyReached && endsInFallthrough
+            }
+            return
+        }
+        if node is SwitchExpressionSyntax switchExpression {
+            var armDead = dead
+            let labelsBeforeDiscriminant = labels.Count
+            Collect(switchExpression.Expression, path, tries, armDead, labels, gotos, visitCounter)
+            if labels.Count > labelsBeforeDiscriminant {
+                armDead = false
+            }
+            let headerVisited = [switchExpression.Arms.Length]bool
+            var seenDefault = false
+            for var armIndex = 0; armIndex < switchExpression.Arms.Length; armIndex++ {
+                let arm = switchExpression.Arms[armIndex]
+                if arm.IsDefault {
+                    if !seenDefault {
+                        seenDefault = true
+                        for var later = armIndex + 1; later < switchExpression.Arms.Length; later++ {
+                            let laterArm = switchExpression.Arms[later]
+                            if laterArm.IsDefault {
+                                continue
+                            }
+                            headerVisited[later] = true
+                            let beforeHeader = labels.Count
+                            if laterArm.Value != nil {
+                                Collect(laterArm.Value, path, tries, armDead, labels, gotos, visitCounter)
+                            }
+                            if laterArm.Guard != nil {
+                                Collect(laterArm.Guard, path, tries, armDead, labels, gotos, visitCounter)
+                            }
+                            if labels.Count > beforeHeader {
+                                armDead = false
+                            }
+                        }
+                    }
+                } else if !headerVisited[armIndex] {
+                    headerVisited[armIndex] = true
+                    let beforeHeader = labels.Count
+                    if arm.Value != nil {
+                        Collect(arm.Value, path, tries, armDead, labels, gotos, visitCounter)
+                    }
+                    if arm.Guard != nil {
+                        Collect(arm.Guard, path, tries, armDead, labels, gotos, visitCounter)
+                    }
+                    if labels.Count > beforeHeader {
+                        armDead = false
+                    }
+                }
+                Collect(arm.Result, path, tries, armDead, labels, gotos, visitCounter)
             }
             return
         }
@@ -595,11 +764,16 @@ internal shared class BackwardJumpSpans {
             }
             return
         }
+        var deadChild = dead
         for child in node.GetChildren() {
             if IsFunctionLike(child) {
                 continue
             }
-            Collect(child, path, tries, dead, labels, gotos, visitCounter)
+            let labelsBeforeChild = labels.Count
+            Collect(child, path, tries, deadChild, labels, gotos, visitCounter)
+            if labels.Count > labelsBeforeChild {
+                deadChild = false
+            }
         }
     }
 }

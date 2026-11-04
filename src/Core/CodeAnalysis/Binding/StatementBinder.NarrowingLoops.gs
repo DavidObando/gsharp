@@ -2992,12 +2992,17 @@ internal partial class StatementBinder {
         // external at the region entry, so a call in the region can reach a closure.
         if effects.ContainsUnknownKind || effects.ContainsPointerWrite {
             externalCallableAliases.Clear()
-        } else if externalCallableAliases.Count > 0 && resolved.Roots.Count > 0 {
-            externalCallableAliases.RemoveWhere(
-                (alias VariableSymbol) -> resolved.Roots.Any(
-                    (written VariableSymbol) -> SameRoot(written, alias) || MayShareStorage(written, alias)
+        } else if externalCallableAliases.Count > 0 {
+            if resolved.Roots.Count > 0 {
+                externalCallableAliases.RemoveWhere(
+                    (alias VariableSymbol) -> resolved.Roots.Any(
+                        (written VariableSymbol) -> SameRoot(written, alias) || MayShareStorage(written, alias)
+                    )
                 )
-            )
+            }
+            if RegionRunsCode(effects, resolved) {
+                externalCallableAliases.RemoveWhere(NamesClosureAssignedStorage)
+            }
         }
         if effects.MemberReadCount > 0 {
             CompilationMeasurements.Count("narrowing.region-member-reads", cast[int64](effects.MemberReadCount))
