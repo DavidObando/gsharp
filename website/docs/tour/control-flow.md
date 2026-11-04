@@ -412,7 +412,7 @@ func Main() {
 
 ## Smart casts (flow narrowing)
 
-After a successful `is` or `!is` test against a local, parameter, or read-only top-level `let`, G# automatically narrows the receiver to the tested type for the rest of the flow region.
+After a successful `is` or `!is` test against a local, a parameter, or a stable member path, G# automatically narrows the receiver to the tested type for the rest of the flow region. A bare top-level `let` or `var` does not narrow on `is` / `!is` type tests (a read-only top-level `let` narrows as a `switch` discriminator or as the root of a stable member path, while top-level variables narrow on nil checks and non-null assignments until invalidated by a write, a call or other operation that can run user code, or a suspension point).
 
 ```gsharp title="SmartCasts.gs"
 package Tour.ControlFlow.SmartCasts
@@ -462,7 +462,7 @@ func Describe(a Animal) string {
 
 The branches of an `if` expression and of the conditional operator narrow the same way, so `(a is Dog) ? a.Bark() : a.Name` and `if a is Dog { a.Bark() } else { a.Name }` are equivalent; a nil guard narrows too (`s != nil ? s.Length : 0`).
 
-Reassignment to a narrowed receiver inside the narrowed region drops the narrowing for the remainder of the region. Fields, properties, and indexed expressions are never narrowed because their reads are not idempotent.
+Reassignment to a narrowed receiver inside the narrowed region drops the narrowing for the remainder of the region. A stable member path — a local, parameter, or read-only top-level `let` followed by read-only (`let`) instance fields or immutable, non-overridable auto-properties (such as `b.Pet` or `o.Box.Pet`) — also narrows, and its narrowing is invalidated when its root is reassigned or when an intervening call, non-auto or overridable property access, unlisted CLR accessor, or member/indexed/indirect write can run user code or mutate storage. Mutable (`var`) fields, settable or computed or overridable properties, static members, and indexed expressions are not narrowed.
 
 ## Pattern variables
 

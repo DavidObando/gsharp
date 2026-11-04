@@ -4,9 +4,11 @@
 
 package GSharp.Core.CodeAnalysis.Symbols
 
+import GSharp.Core.CodeAnalysis.Binding
 import System
 import System.Collections.Concurrent
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Diagnostics.CodeAnalysis
 import System.Reflection
 import System.Runtime.CompilerServices
@@ -130,13 +132,23 @@ class MapTypeSymbol : TypeSymbol {
                             if arguments.Length != 2 {
                                 return false
                             }
-                            keyType = TypeSymbol.FromClrTypeWithoutNullability(
+                            keyType = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                                 arguments[0],
-                                NullabilityFreeReason.TypeStructure
+                                openDefinition: nil,
+                                ImmutableArray[TypeSymbol].Empty,
+                                openMethodDefinition: nil,
+                                default(ImmutableArray[TypeSymbol?]),
+                                NullabilityFreeReason.TypeStructure,
+                                preserveReferenceTupleIdentity: true
                             )
-                            valueType = TypeSymbol.FromClrTypeWithoutNullability(
+                            valueType = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                                 arguments[1],
-                                NullabilityFreeReason.TypeStructure
+                                openDefinition: nil,
+                                ImmutableArray[TypeSymbol].Empty,
+                                openMethodDefinition: nil,
+                                default(ImmutableArray[TypeSymbol?]),
+                                NullabilityFreeReason.TypeStructure,
+                                preserveReferenceTupleIdentity: true
                             )
                             return keyType != nil && valueType != nil
                         }

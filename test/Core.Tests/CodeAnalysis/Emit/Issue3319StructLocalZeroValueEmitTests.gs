@@ -368,8 +368,10 @@ run()`)
         Assert.Equal(true, result.Value)
     }
 
-    @Fact
-    func NonMagicExplicitFieldInitializer_StillBypassedForBareDeclaration() {
+    @Theory
+    @InlineData("var")
+    @InlineData("let")
+    func NonMagicExplicitFieldInitializer_StillBypassedForBareDeclaration(bindingKeyword string) {
         // The narrower, unchanged half of the honesty clause: a NON-magic
         // field's EXPLICIT initializer still does not run for a bare
         // declaration, at any nesting depth — only the magic-collection
@@ -380,7 +382,7 @@ run()`)
         let result = EmittedOracle.Evaluate(`package P3319NonMagicBypassed
 
 struct S {
-    public var Count int32 = 5
+    public BINDING Count int32 = 5
     public var Items []int32
 }
 
@@ -389,7 +391,7 @@ func run() int32 {
     return s.Count * 100 + s.Items.Length
 }
 
-run()`)
+run()`.Replace("BINDING", bindingKeyword, StringComparison.Ordinal))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
         Assert.Equal(0, result.Value)
     }
