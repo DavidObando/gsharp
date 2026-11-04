@@ -17,6 +17,7 @@ open class Issue5623MissingEntryPointTests {
     @InlineData("Lowercase", "/target:exe", "lower.gs(5,6,5,10): error GS0634: ", true)
     @InlineData("ClassLowercase", "/target:exe", "lower.gs(4,10,4,14): error GS0634: ", true)
     @InlineData("NoFunction", "/target:exe", "lower.gs(1,1,1,1): error GS0634: ", false)
+    @InlineData("NoFunction", "/target:winexe", "lower.gs(1,1,1,1): error GS0634: ", false)
     @InlineData("Lowercase", "", "lower.gs(5,6,5,10): error GS0634: ", true)
     func Executable_WithoutEntryPoint_ReportsGs0634(shape string, target string, location string, hint bool) {
         let (exit, output, entryPoint) = Compile(Source(shape), target)
