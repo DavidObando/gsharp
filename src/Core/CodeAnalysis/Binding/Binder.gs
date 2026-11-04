@@ -13706,37 +13706,24 @@ partial class Binder {
                 return false
             }
             if tp.InterfaceConstraint != nil {
-                var expectedIface = tp.InterfaceConstraint
+                var expectedIface = tp.InterfaceConstraint!!
                 // Issue #1052: a self-referential generic user-interface constraint
-                // `[T IFace[T]]` carries the constrained parameter as its own type
-                // argument. Substitute it with the actual type argument before the
-                // implementation check, so `[T ICmp[T]]` validates that the argument
-                // implements `ICmp[argument]` (mirrors the CLR path below).
-                if !expectedIface!!
+                // (`[T IFace[T]]`, `[T Outer[T].I[T]]`, `[T Outer[T].IPlain]`)
+                // carries the constrained parameter in its own or enclosing type
+                // arguments. Substitute it with the actual type argument before the
+                // implementation check (mirrors the CLR path below).
+                if !expectedIface
                     .TypeArguments
-                    .IsDefaultOrEmpty &&
-                    expectedIface!!.Definition != nil &&
-                    !object
-                    .ReferenceEquals(expectedIface!!.Definition, expectedIface) {
-                    let substArgs = ImmutableArray.CreateBuilder[TypeSymbol](expectedIface!!.TypeArguments.Length)
-                    var changed = false
-                    for arg in expectedIface!!.TypeArguments {
-                        if object.ReferenceEquals(arg, tp) {
-                            substArgs.Add(typeArgument)
-                            changed = true
-                        } else {
-                            substArgs.Add(arg)
-                        }
-                    }
-                    if changed {
-                        expectedIface = InterfaceSymbol.ConstructNestedGeneric(
-                            expectedIface!!.Definition,
-                            expectedIface!!.EnclosingTypeArguments,
-                            substArgs.MoveToImmutable()
-                        )!!
+                    .IsDefaultOrEmpty ||
+                    !expectedIface
+                    .EnclosingTypeArguments
+                    .IsDefaultOrEmpty {
+                    let subst = Dictionary[TypeParameterSymbol, TypeSymbol](){[tp] = typeArgument,}
+                    if SubstituteType(expectedIface, subst) is InterfaceSymbol substitutedIface {
+                        expectedIface = substitutedIface
                     }
                 }
-                if !ImplementsInterface(typeArgument, expectedIface!!) {
+                if !ImplementsInterface(typeArgument, expectedIface) {
                     return false
                 }
             }

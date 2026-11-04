@@ -268,7 +268,15 @@ class GoodPlainImpl : Outer[string].IPlain, Outer[string].IGeneric[GoodPlainImpl
     public func EchoInner(x Outer[string].Inner) Outer[string].Inner -> x
     public func Combine(a string, b GoodPlainImpl) string -> a + ":" + b.Tag
 }
+class SelfOwnerImpl : Outer[SelfOwnerImpl].IPlain, Outer[SelfOwnerImpl].IGeneric[SelfOwnerImpl] {
+    public prop Tag SelfOwnerImpl -> this
+    public func Echo(v SelfOwnerImpl) SelfOwnerImpl -> v
+    public func EchoInner(x Outer[SelfOwnerImpl].Inner) Outer[SelfOwnerImpl].Inner -> x
+    public func Combine(a SelfOwnerImpl, b SelfOwnerImpl) string -> "self-owner"
+}
 func UseSelfRef[T Outer[string].IGeneric[T]](x T) string -> x.Combine("self", x)
+func UseSelfEnclosing[T Outer[T].IGeneric[T]](x T) string -> x.Combine(x, x)
+func UseSelfEnclosingPlain[T Outer[T].IPlain](x T) T -> x.Echo(x)
 open class Base[T] {
     public struct InheritedInner(Value int32) {
         public func Read() int32 -> Value
@@ -285,9 +293,11 @@ func Overload(x Outer[int32].IPlain) int32 -> 2
 func Outside(plain Outer[string].IPlain, generic Outer[int32].IGeneric[string], inherited Derived[int32].InheritedInner) string {
     let item = Outer[string].Inner{Value: 7}
     let selfImpl = GoodPlainImpl{}
+    let selfOwner = SelfOwnerImpl{}
+    let _ = UseSelfEnclosingPlain(selfOwner)
     let impl Outer[string].IPlain = selfImpl
     let echoed = impl.EchoInner(item)
-    return plain.Echo(impl.Tag) + ":" + Overload(plain).ToString() + ":" + UseSelfRef(selfImpl) + ":" + generic.Combine(echoed.Read(), "x") + ":" + inherited.Read().ToString()
+    return plain.Echo(impl.Tag) + ":" + Overload(plain).ToString() + ":" + UseSelfRef(selfImpl) + ":" + UseSelfEnclosing(selfOwner) + ":" + generic.Combine(echoed.Read(), "x") + ":" + inherited.Read().ToString()
 }`)
         Assert.Empty(validScopedAndConstructedDiagnostics)
 

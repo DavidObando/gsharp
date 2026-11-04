@@ -287,24 +287,34 @@ class PlainImpl : Outer[string].IPlain, Outer[string].IGeneric[int32], Outer[str
     public func CompareTo(other PlainImpl?) int32 -> 0
 }
 func UseSelfRef[T Outer[string].IGeneric[T]](x T) string -> x.ReadGeneric("self", x)
+class SelfOwnerImpl : Outer[SelfOwnerImpl].IPlain, Outer[SelfOwnerImpl].IGeneric[SelfOwnerImpl] {
+    public prop Tag SelfOwnerImpl -> this
+    public func ReadPlain(seed SelfOwnerImpl) SelfOwnerImpl -> seed
+    public func EchoInner(x Outer[SelfOwnerImpl].Inner) Outer[SelfOwnerImpl].Inner -> x
+    public func ReadGeneric(seed SelfOwnerImpl, suffix SelfOwnerImpl) string -> "self-enclosing"
+    public func CompareTo(other SelfOwnerImpl?) int32 -> 0
+}
+func UseSelfEnclosing[T Outer[T].IGeneric[T]](x T) string -> x.ReadGeneric(x, x)
+func UseSelfEnclosingPlain[T Outer[T].IPlain](x T) T -> x.ReadPlain(x)
 func UsePlain(p Outer[string].IPlain, item Outer[string].Inner) string -> p.ReadPlain("p") + ":" + p.EchoInner(item).Read().ToString()
 func UseGeneric(g Outer[string].IGeneric[int32]) string -> g.ReadGeneric("g", 8)
 func Main() {
     let item = Outer[string].Inner{Value: 7}
     let owner = Outer[string]{}
     let impl = PlainImpl{}
+    let selfOwner = UseSelfEnclosingPlain(SelfOwnerImpl{})
     let tag = cast[TypeTagAttribute](typeof(PlainImpl).GetCustomAttributes(typeof(TypeTagAttribute), false)[0])
     let baseIface = typeof(Outer[string].IGeneric[int32]).GetInterfaces()[0]
     Console.WriteLine(item.Read())
     Console.WriteLine(owner.ReadScoped())
     Console.WriteLine(UsePlain(owner.EchoIface(impl), item))
-    Console.WriteLine(UseGeneric(impl) + ":" + UseSelfRef(impl))
+    Console.WriteLine(UseGeneric(impl) + ":" + UseSelfRef(impl) + ":" + UseSelfEnclosing(selfOwner))
     Console.WriteLine(tag.First == typeof(Outer[string].IPlain) && tag.Second == typeof(Outer[string].IGeneric[int32]))
     Console.WriteLine(baseIface == typeof(IComparable[int32]))
 }`
         let output = CompileAndRun(validSource)
         Assert.Equal(
-            "12${Environment.NewLine}9${Environment.NewLine}p:tag:21:12${Environment.NewLine}g:8:self:tag${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}",
+            "12${Environment.NewLine}9${Environment.NewLine}p:tag:21:12${Environment.NewLine}g:8:self:tag:self-enclosing${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}",
             output
         )
 
