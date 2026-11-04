@@ -319,6 +319,10 @@ func f(s string?) int32 {
     @InlineData("return (g == nil || Clear()) ? 0 : g.Length")
     @InlineData("return (!string.IsNullOrEmpty(g) && ClearInt() < g.Length) ? 1 : 0")
     @InlineData("return (string.IsNullOrEmpty(g) || ClearInt() < g.Length) ? 1 : 0")
+    @InlineData("return !string.IsNullOrEmpty(g) ? ClearInt() + g.Length : 0")
+    @InlineData("return if !string.IsNullOrEmpty(g) { ClearInt() + g.Length } else { 0 }")
+    @InlineData("return string.IsNullOrEmpty(g) ? 0 : ClearInt() + g.Length")
+    @InlineData("return if string.IsNullOrEmpty(g) { 0 } else { ClearInt() + g.Length }")
     @InlineData("return HasGlobal(g) ? g.Length : 0")
     @InlineData("if HasGlobal(g) { return g.Length } else { return 0 }")
     @InlineData("return HasViaReset(g) ? g.Length : 0")
@@ -377,6 +381,67 @@ func TryCheck(@NotNullWhen(true) ref text string?, ref count int32) bool {
 func Check(ref text string?, ref count int32) int32 -> TryCheck(ref text, ref count) ? text.Length : 0
 `
         Assert.Equal("", DiagnoseSource(unrelatedRef))
+    }
+
+    @Fact
+    func ValueType_Nullable_Reassignment_In_ShortCircuit_Rhs_And_MaybeNullWhen_On_ValueTypes_Behave_Soundly() {
+        let reassignedRhs = `package Issue4969.ValueTypeRhsReassign
+func TakesInt(x int32) bool -> x > 0
+func Check(ref n int32?) bool -> n != nil && ((n = nil) == nil && TakesInt(n))
+`
+        Assert.Equal("GS0154:n", DiagnoseSource(reassignedRhs))
+
+        let valueTypeMaybeNull = `package Issue4969.ValueTypeMaybeNull
+import System
+import System.Collections.Generic
+import System.Diagnostics.CodeAnalysis
+
+struct Pair {
+    let X int32
+    init(x int32) { X = x }
+}
+
+func TryGetSourceInt(@MaybeNullWhen(false) out value int32) bool {
+    value = 0
+    return false
+}
+
+func CheckRhsLifted(n int32?) bool {
+    var local = n
+    return local != nil && ((local = nil) == nil && local > 0)
+}
+
+func CheckRhsOrLifted(n int32?) bool {
+    var local = n
+    return local == nil || ((local = nil) != nil || local > 0)
+}
+
+func CheckDict(dict Dictionary[string, int32]) int32 {
+    var value = 0
+    let a = dict.TryGetValue("missing", out value) ? 1 : value
+    let b = if dict.TryGetValue("missing", out value) { 1 } else { value }
+    let c = TryGetSourceInt(out value) ? 1 : value
+    return a + b + c
+}
+
+func CheckStructDict(dict Dictionary[string, Pair]) int32 {
+    var pair = Pair(7)
+    let p Pair = dict.TryGetValue("missing", out pair) ? Pair(1) : pair
+    return p.X
+}
+
+let dict = Dictionary[string, int32]()
+let structDict = Dictionary[string, Pair]()
+Console.WriteLine(CheckRhsLifted(5))
+Console.WriteLine(CheckRhsOrLifted(5))
+Console.WriteLine(CheckDict(dict))
+Console.WriteLine(CheckStructDict(structDict))
+`
+        let (output, _) = CompileAndRun(valueTypeMaybeNull)
+        Assert.Equal(`False
+False
+0
+0`, output.Replace("\r\n", "\n").TrimEnd('\n'))
     }
 
     @Theory

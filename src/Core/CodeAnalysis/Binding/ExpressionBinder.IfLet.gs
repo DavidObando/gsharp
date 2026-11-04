@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import System.Collections.Generic
 
 /// ```xmldoc
 /// <content>
@@ -64,6 +65,8 @@ internal partial class ExpressionBinder {
         // are bound through the header helper the STATEMENT form shares, so
         // scoping (then-region only, never the else branch), progressive
         // narrowing, and the guard rules cannot drift between the forms.
+        let beforeConditional = CaptureExpressionNarrowingFrames()
+        var afterHeader List[(Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol])]? = nil
         let (clauses, guard_, whenTrueBound) = IfLetBindingSupport.BindHeader(
             binderCtx,
             syntax.Bindings,
@@ -75,7 +78,16 @@ internal partial class ExpressionBinder {
             DeclareIfLetLocal,
             (guardSyntax ExpressionSyntax) -> BindExpression(guardSyntax, TypeSymbol.Bool),
             (boundGuard BoundExpression) -> ClassifyConditionalNarrowing(boundGuard).WhenTrue,
-            () -> BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType),
+            () -> {
+                afterHeader = CaptureExpressionNarrowingFrames()
+                let topFrame = binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1]
+                expressionNarrowingFrames.Add(topFrame)
+                try {
+                    return BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
+                } finally {
+                    expressionNarrowingFrames.RemoveAt(expressionNarrowingFrames.Count - 1)
+                }
+            },
             syntax.ThenBlock
         )
         var whenTrue = whenTrueBound
@@ -87,6 +99,7 @@ internal partial class ExpressionBinder {
         }
         // Bound AFTER the binding scope/frame is popped: the else branch never
         // sees the bindings.
+        RestoreExpressionNarrowingFrames(afterHeader)
         var whenFalse = BindIfLetElseBranch(syntax.ElseExpression!!, canBeVoid, targetType)
         if anyInvalid ||
             clauses.Length == 0 ||
@@ -111,6 +124,7 @@ internal partial class ExpressionBinder {
         if resultType == nil {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
+                RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
             Diagnostics.ReportConditionalNoCommonResultType(
@@ -129,6 +143,7 @@ internal partial class ExpressionBinder {
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
+                RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
             return BoundErrorExpression(nil)

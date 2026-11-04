@@ -83,6 +83,7 @@ internal partial class ExpressionBinder {
     ) -> HashSet[VariableSymbol]?
     private let bindAfterLaterArmTests(() -> void, bool, () -> BoundNode) -> BoundNode
     private let clearAssignedRoots(BoundNode, Dictionary[AccessPath, TypeSymbol]) -> void
+    private let expressionNarrowingFrames List[NarrowingFrame] = List[NarrowingFrame]()
 
     // Issue #5569: the diagnostics of each discarded literal target bind in the calls that are binding now.
     private let literalTargetDiagnostics List[ImmutableArray[Diagnostic]] = List[ImmutableArray[Diagnostic]]()
@@ -250,6 +251,94 @@ internal partial class ExpressionBinder {
         )
     }
 
+    private func PushExpressionNarrowingFrame(frame Dictionary[AccessPath, TypeSymbol]) NarrowingFrame {
+        let pushed = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol](frame))
+        expressionNarrowingFrames.Add(pushed)
+        return pushed
+    }
+
+    private func PopExpressionNarrowingFrame() {
+        expressionNarrowingFrames.RemoveAt(expressionNarrowingFrames.Count - 1)
+        binderCtx.EndNarrowingProof()
+    }
+
+    private func HasActiveExpressionNarrowings() bool {
+        for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
+            let frame = expressionNarrowingFrames[i]
+            if frame.Owner != nil && frame.Count > 0 {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func CaptureExpressionNarrowingFrames() List[
+        (Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol])
+    ]? {
+        if !HasActiveExpressionNarrowings() {
+            return nil
+        }
+        let snapshot = List[(Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol])](
+            expressionNarrowingFrames.Count
+        )
+        for frame in expressionNarrowingFrames {
+            if frame.Owner != nil {
+                snapshot.Add((frame, Dictionary[AccessPath, TypeSymbol](frame.Entries)))
+            }
+        }
+        return snapshot
+    }
+
+    private func RestoreExpressionNarrowingFrames(
+        snapshot List[(Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol])]?
+    ) {
+        if snapshot == nil {
+            return
+        }
+        for (frame, entries) in snapshot {
+            if frame.Owner == nil {
+                continue
+            }
+            frame.Clear()
+            for kv in entries {
+                frame.Add(kv.Key, kv.Value)
+            }
+        }
+    }
+
+    private func InvalidateExpressionNarrowingFrames(bound BoundExpression) {
+        if !HasActiveExpressionNarrowings() {
+            return
+        }
+        if bound is BoundErrorExpression or
+            BoundLiteralExpression or
+            BoundVariableExpression or
+            BoundDefaultExpression or
+            BoundTypeOfExpression or
+            BoundSizeOfExpression or
+            BoundFunctionLiteralExpression or
+            BoundAddressOfExpression or
+            BoundConditionalAddressExpression {
+            return
+        }
+        for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
+            let frame = expressionNarrowingFrames[i]
+            if frame.Owner == nil || frame.Count == 0 {
+                continue
+            }
+            let temp = Dictionary[AccessPath, TypeSymbol](frame.Entries)
+            clearAssignedRoots(bound, temp)
+            if temp.Count == frame.Count {
+                continue
+            }
+            for kv in frame.Entries.ToArray() {
+                if !StatementBinder.IsNullableWidening(kv.Key, kv.Value) && !temp.ContainsKey(kv.Key) {
+                    frame.Remove(kv.Key)
+                }
+            }
+        }
+    }
+
     private func BindExpressionWithNarrowing(
         syntax ExpressionSyntax,
         frame Dictionary[AccessPath, TypeSymbol]?,
@@ -263,7 +352,7 @@ internal partial class ExpressionBinder {
                 BindExpression(syntax, targetType)
             }
         }
-        binderCtx.PushNarrowingFrame(frame)
+        PushExpressionNarrowingFrame(frame)
         try {
             return if targetType == nil {
                 BindExpression(syntax, canBeVoid)
@@ -271,7 +360,7 @@ internal partial class ExpressionBinder {
                 BindExpression(syntax, targetType)
             }
         } finally {
-            binderCtx.EndNarrowingProof()
+            PopExpressionNarrowingFrame()
         }
     }
 
@@ -286,11 +375,11 @@ internal partial class ExpressionBinder {
         if frame == nil {
             return BindExpression(syntax, TypeSymbol.Bool)
         }
-        binderCtx.PushNarrowingFrame(frame)
+        PushExpressionNarrowingFrame(frame)
         try {
             return BindExpression(syntax, TypeSymbol.Bool)
         } finally {
-            binderCtx.EndNarrowingProof()
+            PopExpressionNarrowingFrame()
         }
     }
 
@@ -300,6 +389,7 @@ internal partial class ExpressionBinder {
         let result = BindExpressionWithTargetTypeCore(syntax, targetType)
         if !(result is BoundErrorExpression) {
             result.AnchorSyntax(syntax)
+            InvalidateExpressionNarrowingFrames(result)
         }
         return result
     }
@@ -432,6 +522,7 @@ internal partial class ExpressionBinder {
         // re-binds and duplicated diagnostics.
         if !(result is BoundErrorExpression) {
             result.AnchorSyntax(syntax)
+            InvalidateExpressionNarrowingFrames(result)
         }
         return result
     }

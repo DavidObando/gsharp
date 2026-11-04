@@ -645,7 +645,9 @@ internal partial class ExpressionBinder {
         let deferOnFailure = targetType == nil && binderCtx.DeferTargetlessConditional
         this.binderCtx.DeferTargetlessConditional = false
         let diagMark = Diagnostics.Count
+        let beforeConditional = CaptureExpressionNarrowingFrames()
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
+        let afterCondition = CaptureExpressionNarrowingFrames()
         // ADR-0100 / issue #795: a bare `default` branch takes its type
         // from the sibling branch. Bind whichever branch is typed first so
         // we have a concrete target type for the bare default. When both
@@ -682,6 +684,7 @@ internal partial class ExpressionBinder {
         var whenFalse BoundExpression
         if targetType != nil {
             whenTrue = bindWhenTrue(targetType)
+            RestoreExpressionNarrowingFrames(afterCondition)
             whenFalse = bindWhenFalse(targetType)
         } else if trueIsBareDefault && falseIsBareDefault {
             Diagnostics.ReportBareDefaultNoTargetType(
@@ -693,6 +696,7 @@ internal partial class ExpressionBinder {
             if whenFalse is BoundErrorExpression {
                 return BoundErrorExpression(nil)
             }
+            RestoreExpressionNarrowingFrames(afterCondition)
             whenTrue = BindWithPatternVariables(
                 patternWhenTrue,
                 () -> BoundDefaultExpression(syntax.WhenTrue, whenFalse.Type),
@@ -703,6 +707,7 @@ internal partial class ExpressionBinder {
             if whenTrue is BoundErrorExpression {
                 return BoundErrorExpression(nil)
             }
+            RestoreExpressionNarrowingFrames(afterCondition)
             whenFalse = BindWithPatternVariables(
                 patternWhenFalse,
                 () -> BoundDefaultExpression(syntax.WhenFalse, whenTrue.Type),
@@ -710,6 +715,7 @@ internal partial class ExpressionBinder {
             )
         } else {
             whenTrue = bindWhenTrue(nil)
+            RestoreExpressionNarrowingFrames(afterCondition)
             whenFalse = bindWhenFalse(nil)
         }
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
@@ -720,6 +726,7 @@ internal partial class ExpressionBinder {
         if resultType == nil {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
+                RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
             Diagnostics.ReportConditionalNoCommonResultType(
@@ -734,6 +741,7 @@ internal partial class ExpressionBinder {
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
+                RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
             return BoundErrorExpression(nil)
@@ -817,7 +825,9 @@ internal partial class ExpressionBinder {
         // Issue #4966 (ADR-0202): nil only for the void `if` of a discarded
         // position; BindIfExpression rejects it elsewhere (GS0276).
         let elseSyntax = syntax.ElseExpression
+        let beforeConditional = CaptureExpressionNarrowingFrames()
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
+        let afterCondition = CaptureExpressionNarrowingFrames()
         let (whenTrueNarrowing, whenFalseNarrowing) = ClassifyConditionalNarrowing(condition)
         // ADR-0166: each arm also sees the pattern variables the condition
         // definitely assigns on that arm.
@@ -839,6 +849,7 @@ internal partial class ExpressionBinder {
             return BindWithNarrowing(whenFalseNarrowing, bindWhenFalse)
         }
         var whenTrue = BindWithPatternVariables(patternWhenTrue, bindWhenTrueNarrowed, syntax.ThenBlock)
+        RestoreExpressionNarrowingFrames(afterCondition)
         var whenFalse = BindWithPatternVariables(patternWhenFalse, bindWhenFalseNarrowed, elseSyntax)
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
             return BoundErrorExpression(nil)
@@ -859,6 +870,7 @@ internal partial class ExpressionBinder {
         if resultType == nil {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
+                RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
             Diagnostics.ReportConditionalNoCommonResultType(
@@ -873,6 +885,7 @@ internal partial class ExpressionBinder {
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
+                RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
             return BoundErrorExpression(nil)
@@ -993,11 +1006,11 @@ internal partial class ExpressionBinder {
         if narrowing == nil {
             return bind()
         }
-        binderCtx.PushNarrowingFrame(narrowing)
+        PushExpressionNarrowingFrame(narrowing)
         try {
             return bind()
         } finally {
-            binderCtx.EndNarrowingProof()
+            PopExpressionNarrowingFrame()
         }
     }
 

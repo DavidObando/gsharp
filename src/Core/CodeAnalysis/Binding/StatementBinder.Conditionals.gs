@@ -2370,6 +2370,11 @@ internal partial class StatementBinder {
                     if widenArg is BoundVariableExpression widenVarExpr &&
                         (!restrictBareVariableToLocalsAndParams || widenVarExpr.Variable is LocalVariableSymbol) &&
                         !(widenVarExpr.Variable.Type is NullableTypeSymbol) &&
+                        !widenVarExpr
+                        .Variable
+                        .Type
+                        .IsValueType &&
+                        NullabilityImportRule.ClassifyArgument(widenVarExpr.Variable.Type) != TypeArgumentKind.Value &&
                         widenVarExpr
                         .Variable
                         .Type != TypeSymbol
@@ -2553,6 +2558,11 @@ internal partial class StatementBinder {
                     widenVarExpr != nil &&
                     (!restrictBareVariableToLocalsAndParams || widenVarExpr.Variable is LocalVariableSymbol) &&
                     !(widenVarExpr.Variable.Type is NullableTypeSymbol) &&
+                    !widenVarExpr
+                    .Variable
+                    .Type
+                    .IsValueType &&
+                    NullabilityImportRule.ClassifyArgument(widenVarExpr.Variable.Type) != TypeArgumentKind.Value &&
                     widenVarExpr
                     .Variable
                     .Type != TypeSymbol
