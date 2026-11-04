@@ -1075,13 +1075,38 @@ namespace Demo
         Assert.DoesNotContain("return nil", printed[0])
     }
 
-    /// Issue #4316 control: a reachable `return null;` or `return null!;` into a
-    /// non-nullable class return slot in hand-authored code stays `return nil`,
-    /// which gsc rejects with GS0155.
+    /// Issue #4316 (Issue2523Fixtures.cs:322): a suppressed `return null!;` or
+    /// `=> null!;` into a return slot that stays non-nullable emits `default(T)`
+    /// so the non-nullable return signature compiles under #4316's gsc, while a
+    /// reachable unsuppressed `return null;` in hand-authored code stays `return nil`
+    /// and is rejected with GS0155.
     @Fact
-    func ReachableReturnNullAndNullForgiven_InHandAuthoredCode_StayNil() {
-        let printed = TranslateEnabled(
-            "Round-trip only: reachable `return null` and `return null!` in hand-authored code stay `return nil` so gsc rejects the non-null sink with GS0155 (#4316).",
+    func SuppressedReturnNull_EmitsDefaultWhileUnsuppressedReturnNull_StaysNil() {
+        let suppressed = TranslateEnabled(("Stubs.cs", `
+namespace Demo
+{
+    public interface IChain<out TEntity, out TProperty> { }
+    public sealed class BoundSpillSequenceExpression { }
+    public static class QueryExtensions
+    {
+        public static IChain<TEntity, TProperty> Include<TEntity, TProperty>() => null!;
+        public static BoundSpillSequenceExpression Forgiven(int kind)
+        {
+            if (kind == 0)
+            {
+                return new BoundSpillSequenceExpression();
+            }
+            return null!;
+        }
+        public static BoundSpillSequenceExpression? NullableReturn() => null!;
+    }
+}`))
+        Assert.Contains("-> default(IChain[TEntity, TProperty])", suppressed[0])
+        Assert.Contains("return default(BoundSpillSequenceExpression)", suppressed[0])
+        Assert.Contains("func NullableReturn() BoundSpillSequenceExpression? -> nil", suppressed[0])
+
+        let plain = TranslateEnabled(
+            "Round-trip only: reachable unsuppressed `return null` in hand-authored code stays `return nil` so gsc rejects the non-null sink with GS0155 (#4316).",
             ("Spiller.cs", `
 namespace Demo
 {
@@ -1096,20 +1121,12 @@ namespace Demo
             }
             return null;
         }
-        public static BoundSpillSequenceExpression Forgiven(int kind)
-        {
-            if (kind == 0)
-            {
-                return new BoundSpillSequenceExpression();
-            }
-            return null!;
-        }
     }
 }`)
         )
-        Assert.Contains("return nil", printed[0])
-        Assert.DoesNotContain("default(BoundSpillSequenceExpression)", printed[0])
-        let ex = Assert.ThrowsAny[Exception](() -> TranslationTestValidation.AssertBinds(printed[0]))
+        Assert.Contains("return nil", plain[0])
+        Assert.DoesNotContain("default(BoundSpillSequenceExpression)", plain[0])
+        let ex = Assert.ThrowsAny[Exception](() -> TranslationTestValidation.AssertBinds(plain[0]))
         Assert.Contains("Cannot convert type 'nil' to 'BoundSpillSequenceExpression'.", ex.Message)
     }
 
