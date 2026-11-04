@@ -474,7 +474,8 @@ internal class BinderContext {
         preferredArity int32,
         currentFunction FunctionSymbol?,
         @NotNullWhen(true) out type TypeSymbol?,
-        out ambiguousAcrossImportedPackages bool
+        out ambiguousAcrossImportedPackages bool,
+        allowUnclosedEnclosingTypeParameters bool = false
     ) bool {
         let currentContainingType TypeSymbol? = CurrentContainingType ??
             currentFunction?.ReceiverType ??
@@ -485,11 +486,12 @@ internal class BinderContext {
             name,
             preferredArity,
             out type
-        ) {
+        ) &&
+            (allowUnclosedEnclosingTypeParameters || !HasUnclosedEnclosingTypeParameters(type, currentFunction)) {
             ambiguousAcrossImportedPackages = false
             return true
         }
-        let foundSource = $scope.TryLookupTypeAlias(name, preferredArity, out type, out ambiguousAcrossImportedPackages)
+        var foundSource = $scope.TryLookupTypeAlias(name, preferredArity, out type, out ambiguousAcrossImportedPackages)
         if foundSource &&
             type is {} sourceType &&
             ImportedTypeOverridesSourceType(
@@ -500,16 +502,101 @@ internal class BinderContext {
             currentFunction,
             importedType: nil
         ) &&
-            $scope
-            .TryResolveExplicitSourceTypeAlias(name, preferredArity, out var aliasedSourceType) {
+            $scope.TryResolveExplicitSourceTypeAlias(name, preferredArity, out var aliasedSourceType) &&
+            (
+            allowUnclosedEnclosingTypeParameters ||
+                !HasUnclosedEnclosingTypeParameters(aliasedSourceType, currentFunction)
+        ) {
             type = aliasedSourceType
             ambiguousAcrossImportedPackages = false
             return true
         }
+        if !allowUnclosedEnclosingTypeParameters &&
+            foundSource &&
+            HasUnclosedEnclosingTypeParameters(type, currentFunction) {
+            type = nil
+            foundSource = false
+        }
         if foundSource || ambiguousAcrossImportedPackages {
             return foundSource
         }
-        return $scope.TryResolveExplicitSourceTypeAlias(name, preferredArity, out type)
+        if !$scope.TryResolveExplicitSourceTypeAlias(name, preferredArity, out type) {
+            return false
+        }
+        if !allowUnclosedEnclosingTypeParameters && HasUnclosedEnclosingTypeParameters(type, currentFunction) {
+            type = nil
+            return false
+        }
+        return true
+    }
+
+    internal func HasUnclosedEnclosingTypeParameters(type TypeSymbol?, currentFunction FunctionSymbol?) bool {
+        if type == nil {
+            return false
+        }
+        let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(type)
+        if enclosingParams.IsDefaultOrEmpty {
+            return false
+        }
+        let currentContainingType TypeSymbol? = CurrentContainingType ??
+            currentFunction?.ReceiverType ??
+            currentFunction?.StaticOwnerType ??
+            currentFunction?.LexicalEnclosingType
+        let suppliedEnclosingArgs = switch type {
+            case s is StructSymbol: s.EnclosingTypeArguments
+            case e is EnumSymbol: e.EnclosingTypeArguments
+            case i is InterfaceSymbol: i.EnclosingTypeArguments
+            default: ImmutableArray[TypeSymbol].Empty
+        }
+        if !suppliedEnclosingArgs.IsDefaultOrEmpty && suppliedEnclosingArgs.Length == enclosingParams.Length {
+            let referencedTypeParameters = List[TypeParameterSymbol]()
+            for arg in suppliedEnclosingArgs {
+                TypeSymbol.CollectReferencedTypeParameters(arg, referencedTypeParameters, nil)
+            }
+            for tp in referencedTypeParameters {
+                if !IsTypeParameterInScope(tp, currentContainingType) {
+                    return true
+                }
+            }
+            return false
+        }
+        for tp in enclosingParams {
+            if !IsTypeParameterInScope(tp, currentContainingType) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func IsTypeParameterInScope(typeParameter TypeParameterSymbol, containingType TypeSymbol?) bool {
+        if CurrentTypeParameters != nil && CurrentTypeParameters!!.TryGetValue(typeParameter.Name, out var inScopeTp) &&
+            object.ReferenceEquals(inScopeTp, typeParameter) {
+            return true
+        }
+        return IsEnclosingTypeParameterOf(typeParameter, containingType)
+    }
+
+    private func IsEnclosingTypeParameterOf(typeParameter TypeParameterSymbol, containingType TypeSymbol?) bool {
+        for var current TypeSymbol? = containingType; current != nil; current = switch current {
+            case s is StructSymbol: (s.Definition ?? s).ContainingType
+            case e is EnumSymbol: (e.Definition ?? e).ContainingType
+            case i is InterfaceSymbol: (i.Definition ?? i).ContainingType
+            case d is DelegateTypeSymbol: (d.Definition ?? d).ContainingType
+            default: default(TypeSymbol?)
+        } {
+            let ownParams = switch current {
+                case s is StructSymbol: (s.Definition ?? s).DeclaredTypeParameters
+                case i is InterfaceSymbol: (i.Definition ?? i).TypeParameters
+                case d is DelegateTypeSymbol: (d.Definition ?? d).TypeParameters
+                default: ImmutableArray[TypeParameterSymbol].Empty
+            }
+            for candidate in ownParams {
+                if object.ReferenceEquals(candidate, typeParameter) {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     /// Returns whether an imported type should override a same-named source

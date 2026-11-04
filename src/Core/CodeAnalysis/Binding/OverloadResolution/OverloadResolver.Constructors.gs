@@ -2436,7 +2436,19 @@ internal partial class OverloadResolver {
                     }
                 }
             } else if owner is InterfaceSymbol ifaceOwner {
-                let ownParams = (ifaceOwner.Definition ?? ifaceOwner).TypeParameters
+                let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(ifaceOwner)
+                let enclosingArgs = ifaceOwner.EnclosingTypeArguments
+                for var i = 0; i < enclosingParams.Length; i++ {
+                    if !substitution.ContainsKey(enclosingParams[i]) {
+                        substitution[enclosingParams[i]] = if !enclosingArgs.IsDefaultOrEmpty &&
+                            i < enclosingArgs.Length {
+                            enclosingArgs[i]
+                        } else {
+                            enclosingParams[i]
+                        }
+                    }
+                }
+                let ownParams = (ifaceOwner.Definition ?? ifaceOwner).DeclaredTypeParameters
                 let ownArgs = ifaceOwner.TypeArguments
                 for var i = 0; i < ownParams.Length; i++ {
                     if !substitution.ContainsKey(ownParams[i]) {

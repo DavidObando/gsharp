@@ -1216,7 +1216,11 @@ internal class MemberDefEmitter {
         if type is StructSymbol structSym && this.cache.StructTypeDefs.TryGetValue(structSym, out var td) {
             return td
         }
-        if type is InterfaceSymbol ifaceSym && this.cache.InterfaceTypeDefs.TryGetValue(ifaceSym, out var ifaceDef) {
+        if type is InterfaceSymbol ifaceSym &&
+            this
+            .cache
+            .InterfaceTypeDefs
+            .TryGetValue(ifaceSym.Definition ?? ifaceSym, out var ifaceDef) {
             return ifaceDef
         }
         // Fallback: encode as System.Delegate.

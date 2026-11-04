@@ -77,9 +77,9 @@ internal class GenericRemapState {
     // GetUserStructFieldRef when the containing type is a generic SM class
     // (so its field-signature MemberRef matches the FieldDef blob exactly).
     private let iteratorStateMachineRemapsByClass Dictionary[
-        StructSymbol,
+        TypeSymbol,
         Dictionary[TypeParameterSymbol, int32]
-    ] = Dictionary[StructSymbol, Dictionary[TypeParameterSymbol, int32]]()
+    ] = Dictionary[TypeSymbol, Dictionary[TypeParameterSymbol, int32]](ReferenceEqualityComparer.Instance)
 
     // Issue #1537: for each user-declared type nested inside a generic enclosing
     // type that the emitter reifies over the flattened enclosing+own parameter
@@ -89,7 +89,7 @@ internal class GenericRemapState {
     // ResolveUserStructTypeSpecArguments consults this to split a use-site's
     // combined type-argument vector into its enclosing and own halves. Keyed by
     // the nested type's DEFINITION.
-    private let nestedTypeEnclosingArity Dictionary[StructSymbol, int32] = Dictionary[StructSymbol, int32](
+    private let nestedTypeEnclosingArity Dictionary[TypeSymbol, int32] = Dictionary[TypeSymbol, int32](
         ReferenceEqualityComparer.Instance
     )
 
@@ -140,7 +140,7 @@ internal class GenericRemapState {
     /// previous remap (or `null`) is restored.
     /// @param smClass The reified generic class whose remap to activate.
     /// @returns A disposable scope that restores the previous remap.
-    internal func PushSmRemap(smClass StructSymbol?) SmRemapScope {
+    internal func PushSmRemap(smClass TypeSymbol?) SmRemapScope {
         if smClass == nil || !this.iteratorStateMachineRemapsByClass.TryGetValue(smClass, out var remap) ||
             remap == nil {
             return SmRemapScope(this, nil, restore: false)
@@ -175,7 +175,7 @@ internal class GenericRemapState {
     /// iterator/async-iterator info loops.
     /// @param reifiedClass The reified generic class the remap is keyed by.
     /// @param remap The original-parameter → reified-slot remap.
-    internal func RegisterClassRemap(reifiedClass StructSymbol, remap Dictionary[TypeParameterSymbol, int32]) {
+    internal func RegisterClassRemap(reifiedClass TypeSymbol, remap Dictionary[TypeParameterSymbol, int32]) {
         this.iteratorStateMachineRemapsByClass[reifiedClass] = remap
     }
 
@@ -184,7 +184,7 @@ internal class GenericRemapState {
     /// nested type's DEFINITION.
     /// @param nestedTypeDef The nested type's definition.
     /// @param enclosingArity The number of enclosing type parameters.
-    internal func SetNestedTypeEnclosingArity(nestedTypeDef StructSymbol, enclosingArity int32) {
+    internal func SetNestedTypeEnclosingArity(nestedTypeDef TypeSymbol, enclosingArity int32) {
         this.nestedTypeEnclosingArity[nestedTypeDef] = enclosingArity
     }
 
@@ -194,7 +194,7 @@ internal class GenericRemapState {
     /// @param nestedTypeDef The nested type's definition.
     /// @param enclosingArity The recorded enclosing arity, when present.
     /// @returns `true` when an arity was recorded.
-    internal func TryGetNestedTypeEnclosingArity(nestedTypeDef StructSymbol, out enclosingArity int32) bool -> this
+    internal func TryGetNestedTypeEnclosingArity(nestedTypeDef TypeSymbol, out enclosingArity int32) bool -> this
         .nestedTypeEnclosingArity
         .TryGetValue(nestedTypeDef, out enclosingArity)
 
