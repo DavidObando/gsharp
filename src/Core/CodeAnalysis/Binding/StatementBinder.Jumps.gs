@@ -498,7 +498,7 @@ internal partial class StatementBinder {
             case _ is BlockStatementSyntax or
                 _ is BlockExpressionSyntax or
                 _ is IfStatementSyntax or
-                _ is SwitchCaseClauseSyntax or
+                _ is SwitchCaseSyntax or
                 _ is SwitchExpressionArmSyntax or
                 _ is TryStatementSyntax or
                 _ is CatchClauseSyntax or

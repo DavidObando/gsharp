@@ -391,12 +391,20 @@ func Main() {
     Console.WriteLine(Run(false))
 }`, "", "run", "4|2"}
             yield[]object{"control5_break_after_mutating_operand_in_expression", `import System
-var g string? = "ok"
-func Clear() int32 { g = nil; return 1 }
-func ClearBool() bool { g = nil; return true }
+func Clear() int32 {
+    g = nil
+    return 1
+}
+func ClearBool() bool {
+    g = nil
+    return true
+}
 class Box {
     func M(x int32) int32 { return x }
-    func ClearAndGet() Box { g = nil; return this }
+    func ClearAndGet() Box {
+        g = nil
+        return this
+    }
 }
 func RunAdd() int32 {
     while true {
@@ -448,9 +456,8 @@ func RunChainedCall(box Box) int32 {
     }
     return g.Length
 }
-func Main() {
-    Console.WriteLine(RunAdd() + RunAnd() + RunLabeledOr() + RunChainedCall(Box()))
-}`, "GS0158@19:14 GS0158@31:14 GS0158@45:14 GS0158@57:14", "reject", ""}
+var g string? = "ok"
+Console.WriteLine(RunAdd() + RunAnd() + RunLabeledOr() + RunChainedCall(Box()))`, "GS0158@27:14 GS0158@39:14 GS0158@53:14 GS0158@65:14", "reject", ""}
             yield[]object{"control7_killed_branch_and_loop_condition_facts_not_replayed_on_break", `import System
 func Get() string? { return "ok" }
 func RunShortCircuitKilled() int32 {
@@ -477,7 +484,6 @@ func Main() {
     Console.WriteLine(RunShortCircuitKilled() + RunLoopConditionKilled())
 }`, "GS0158@13:14 GS0158@21:14", "reject", ""}
             yield[]object{"control6a_labeled_break_crossing_for_in_runs_enumerator_disposal", `import System
-var s string? = "ok"
 func Gen() sequence[int32] {
     try {
         yield 1
@@ -504,9 +510,9 @@ func RunUnlabeledBreak() int32 {
     }
     return s.Length
 }
-func Main() { Console.WriteLine(RunLabeledBreak() + RunUnlabeledBreak()) }`, "GS0158@19:14 GS0158@27:14", "reject", ""}
-            yield[]object{"control6b_labeled_break_crossing_indexed_for_in_preserves_fact", `import System
 var s string? = "ok"
+Console.WriteLine(RunLabeledBreak() + RunUnlabeledBreak())`, "GS0158@18:14 GS0158@26:14", "reject", ""}
+            yield[]object{"control6b_labeled_break_crossing_indexed_for_in_preserves_fact", `import System
 func RunIndexed() int32 {
     let items = []int32{1, 2}
     outer: while true {
@@ -519,7 +525,8 @@ func RunIndexed() int32 {
     }
     return s.Length
 }
-func Main() { Console.WriteLine(RunIndexed()) }`, "", "run", "2"}
+var s string? = "ok"
+Console.WriteLine(RunIndexed())`, "", "run", "2"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
