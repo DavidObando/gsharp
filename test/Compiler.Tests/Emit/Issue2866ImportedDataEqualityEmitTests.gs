@@ -102,7 +102,17 @@ open class ProtBase {
     }
 }
 
-data class ProtDerived(Value int32, Extra int32) : ProtBase(Value)`
+data class ProtDerived(Value int32, Extra int32) : ProtBase(Value)
+
+open class RefBase {
+    private var slot int32
+    prop RefVal ref int32 { get { return ref slot } }
+    init(v int32) {
+        slot = v
+    }
+}
+
+data class ReusesRefVal(RefVal int32, Extra int32) : RefBase(RefVal)`
         const source = `package i2866d
 import i2866lib4
 
@@ -115,9 +125,14 @@ func Main() {
     let td = TupleDerived((Left: 10, Right: 20), 30)
     let (pair, textra) = td
     let (pv, pe) = ProtDerived(11, 22)
-    System.Console.WriteLine((a == b).ToString() + "|" + cid.ToString() + ":" + cextra.ToString() + "|" + pair.Left.ToString() + ":" + pair.Right.ToString() + ":" + textra.ToString() + "|" + pv.ToString() + ":" + pe.ToString())
+    let refLit = ReusesRefVal{RefVal: 88, Extra: 99}
+    let (rv, re) = refLit
+    System.Console.WriteLine((a == b).ToString() + "|" + cid.ToString() + ":" + cextra.ToString() + "|" + pair.Left.ToString() + ":" + pair.Right.ToString() + ":" + textra.ToString() + "|" + pv.ToString() + ":" + pe.ToString() + "|" + rv.ToString() + ":" + re.ToString())
 }`
-        Assert.Equal("False|7:6|10:20:30|11:22${Environment.NewLine}", CompileAndRun(source, library, "i2866lib4"))
+        Assert.Equal(
+            "False|7:6|10:20:30|11:22|88:99${Environment.NewLine}",
+            CompileAndRun(source, library, "i2866lib4")
+        )
     }
 
     @Fact

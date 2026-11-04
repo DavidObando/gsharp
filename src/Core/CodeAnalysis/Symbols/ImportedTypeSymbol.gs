@@ -847,7 +847,7 @@ class ImportedTypeSymbol : TypeSymbol {
                         member = ImportedAssemblySemantics.GetPrimaryConstructorSignatureMember(definition, i)
                     }
                     if member == nil || !ClrNullability.GetSignatureType(parameters[i]).Equals(
-                        ClrNullability.GetSignatureType(member)
+                        ImportedAssemblySemantics.GetPositionalValueSignatureType(member)
                     ) {
                         matches = false
                         break

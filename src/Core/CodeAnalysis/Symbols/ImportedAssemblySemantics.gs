@@ -139,7 +139,7 @@ internal shared class ImportedAssemblySemantics {
                 }
             }
             if allNamesMatch && ClrNullability.GetSignatureType(parameters[index]).Equals(
-                ClrNullability.GetSignatureType(inheritedProp)
+                GetPositionalValueSignatureType(inheritedProp)
             ) {
                 return parameters[index]
             }
@@ -164,6 +164,15 @@ internal shared class ImportedAssemblySemantics {
             }
         }
         return nil
+    }
+
+    internal func GetPositionalValueSignatureType(declaration ICustomAttributeProvider) Type {
+        let signatureType = ClrNullability.GetSignatureType(declaration)
+        return if declaration is PropertyInfo && signatureType.IsByRef {
+            signatureType.GetElementType() ?? signatureType
+        } else {
+            signatureType
+        }
     }
 
     internal func GetPrimaryConstructorSignatureMember(type Type, index int32) MemberInfo? {

@@ -32,8 +32,13 @@ internal partial class DeclarationBinder {
     internal func BindStructDeclarationBody(
         syntax StructDeclarationSyntax,
         $package PackageSymbol,
-        structSymbol StructSymbol
+        structSymbol StructSymbol,
+        bindNestedTypes bool = true
     ) {
+        let shouldBindOwnBody = boundStructBodies.Add(structSymbol)
+        if !shouldBindOwnBody && (!bindNestedTypes || boundNestedTypeContainers.Contains(structSymbol)) {
+            return
+        }
         let previousTypeParameters = binderCtx.CurrentTypeParameters
         let previousContainingType = binderCtx.CurrentContainingType
         this.binderCtx.CurrentContainingType = structSymbol
@@ -59,18 +64,23 @@ internal partial class DeclarationBinder {
                     }
                 }
             }
-            // Issue #2519: aggregate shells carry bare type parameters so every
-            // same-compilation constraint target can be published first.
-            // Resolve constraints now, with the declaring shell and all sibling
-            // source type shells visible, before binding signatures and members.
-            ResolvePartialTypeParameterConstraints(
-                syntax.TypeParameterList,
-                syntax.PartialTypeParameterLists,
-                structSymbol.TypeParameters,
-                structSymbol.Name,
-                syntax.PartialPartLocations
-            )
-            BindStructDeclarationBodyCore(syntax, $package, structSymbol)
+            if shouldBindOwnBody {
+                // Issue #2519: aggregate shells carry bare type parameters so every
+                // same-compilation constraint target can be published first.
+                // Resolve constraints now, with the declaring shell and all sibling
+                // source type shells visible, before binding signatures and members.
+                ResolvePartialTypeParameterConstraints(
+                    syntax.TypeParameterList,
+                    syntax.PartialTypeParameterLists,
+                    structSymbol.TypeParameters,
+                    structSymbol.Name,
+                    syntax.PartialPartLocations
+                )
+                BindStructDeclarationBodyCore(syntax, $package, structSymbol, bindNestedTypes)
+            } else if bindNestedTypes && boundNestedTypeContainers.Add(structSymbol) {
+                using let _ = binderCtx.PushUnsafeContext(syntax.IsUnsafe)
+                BindNestedTypeBodies(syntax, $package)
+            }
         } finally {
             this.binderCtx.CurrentTypeParameters = previousTypeParameters
             this.binderCtx.CurrentContainingType = previousContainingType
@@ -183,7 +193,8 @@ internal partial class DeclarationBinder {
     private func BindStructDeclarationBodyCore(
         syntax StructDeclarationSyntax,
         $package PackageSymbol,
-        structSymbol StructSymbol
+        structSymbol StructSymbol,
+        bindNestedTypes bool
     ) {
         // ADR-0122 / issue #1014: an `unsafe class` / `unsafe struct` binds all
         // of its members (field types, method signatures, …) within an unsafe
@@ -196,6 +207,7 @@ internal partial class DeclarationBinder {
         ValidateProtectedMemberPlacement(syntax)
         let fieldBinding = BindStructFieldsAndPrimaryConstructor(syntax, $package, structSymbol)
         let baseBinding = BindStructBaseAndInterfaces(syntax, structSymbol, fieldBinding)
+        EnsureBaseStructBodyBound(baseBinding.BaseClass)
         let memberBinding = CreateStructMemberBindingContext(structSymbol)
         BindStructInstanceMethods(syntax, $package, structSymbol, baseBinding, memberBinding)
         BindStructProperties(syntax, $package, structSymbol, memberBinding)
@@ -204,7 +216,39 @@ internal partial class DeclarationBinder {
         RegisterStructConversionOperators($package, structSymbol, memberBinding.PendingConversionOperators)
         RegisterStructDeferredInitializers($package, structSymbol, fieldBinding)
         RegisterStructInterfaceChecks(syntax, structSymbol, baseBinding)
-        BindStructFinalMembers(syntax, $package, structSymbol, baseBinding)
+        BindStructFinalMembers(syntax, $package, structSymbol, baseBinding, bindNestedTypes)
+    }
+
+    private func EnsureBaseStructBodyBound(baseClass StructSymbol?) {
+        if baseClass == nil {
+            return
+        }
+        let baseDefinition = baseClass.Definition ?? baseClass
+        if boundStructBodies.Contains(baseDefinition) {
+            return
+        }
+        if baseDefinition.Declaration is {} baseSyntax && nestedStructPackages.TryGetValue(
+            baseDefinition,
+            out var basePackage
+        ) {
+            let savedUnsafe = binderCtx.InUnsafeContext
+            var enclosingUnsafe = baseSyntax.IsUnsafe
+            var currentParent TypeSymbol? = baseDefinition.ContainingType
+            while !enclosingUnsafe && currentParent is StructSymbol parentStruct {
+                let parentDef = parentStruct.Definition ?? parentStruct
+                if parentDef.Declaration?.IsUnsafe == true {
+                    enclosingUnsafe = true
+                }
+                currentParent = parentDef.ContainingType
+            }
+            using let _ = binderCtx.PushUnsafeContext(enclosingUnsafe && !savedUnsafe)
+            let previousTree = $scope.SetCurrentReferencingSyntaxTree(baseSyntax.SyntaxTree)
+            try {
+                BindStructDeclarationBody(baseSyntax, basePackage, baseDefinition, bindNestedTypes: false)
+            } finally {
+                $scope.SetCurrentReferencingSyntaxTree(previousTree)
+            }
+        }
     }
 
     private func BindStructFieldsAndPrimaryConstructor(
@@ -3831,7 +3875,8 @@ internal partial class DeclarationBinder {
         syntax StructDeclarationSyntax,
         $package PackageSymbol,
         structSymbol StructSymbol,
-        baseBinding StructBaseBindingResult
+        baseBinding StructBaseBindingResult,
+        bindNestedTypes bool
     ) {
         let baseClassSymbol = baseBinding.BaseClass
         let importedBaseType = baseBinding.ImportedBaseType
@@ -3853,7 +3898,9 @@ internal partial class DeclarationBinder {
         // shells were declared earlier (DeclareNestedTypeShells) so sibling
         // member signatures could forward-reference them; here we fill in their
         // members. The emitter materialises real CLR nested types.
-        BindNestedTypeBodies(syntax, $package)
+        if bindNestedTypes && boundNestedTypeContainers.Add(structSymbol) {
+            BindNestedTypeBodies(syntax, $package)
+        }
         // Issue #987: queue the abstract-member contract check for classes. A
         // concrete (non-`open`) class with a base must override every inherited
         // abstract method; deferred so base-class methods are bound first.
@@ -4094,8 +4141,6 @@ internal partial class DeclarationBinder {
         if containerSyntax.NestedTypes.IsDefaultOrEmpty {
             return
         }
-        let nestedStructs = List[StructDeclarationSyntax]()
-        let nestedStructsByKey = Dictionary[(Name string, Arity int32), int32]()
         for nested in containerSyntax.NestedTypes {
             // Issue #950: a `protected` nested type is only meaningful when the
             // container is an inheritable `open class`. Otherwise nothing can
@@ -4105,11 +4150,8 @@ internal partial class DeclarationBinder {
             }
             switch nested {
                 case nestedStruct is StructDeclarationSyntax {
-                    let index = nestedStructs.Count
-                    nestedStructs.Add(nestedStruct)
-                    let key = (nestedStruct.Identifier.ValueText, nestedStruct.TypeParameterList?.Parameters.Count ?? 0)
-                    if !nestedStructsByKey.ContainsKey(key) {
-                        nestedStructsByKey[key] = index
+                    if nestedStructShells.TryGetValue(nestedStruct, out var nestedStructSymbol) {
+                        BindStructDeclarationBody(nestedStruct, $package, nestedStructSymbol)
                     }
                 }
                 case EnumDeclarationSyntax { }
@@ -4120,246 +4162,6 @@ internal partial class DeclarationBinder {
                 }
             }
         }
-        if nestedStructs.Count == 0 {
-            return
-        }
-        let enclosingChain = BuildNestedEnclosingChain(containerSyntax)
-        let packageSegments = if string.IsNullOrEmpty($package.Name) {
-            Array.Empty[string]()
-        } else {
-            $package.Name.Split('.')
-        }
-        let bindingState = [nestedStructs.Count]uint8
-        let bindingOrder = List[int32](nestedStructs.Count)
-        for var i = 0; i < nestedStructs.Count; i++ {
-            VisitNestedBaseFirst(
-                i,
-                enclosingChain,
-                packageSegments,
-                nestedStructs,
-                nestedStructsByKey,
-                bindingState,
-                bindingOrder
-            )
-        }
-        for index in bindingOrder {
-            let nestedStruct = nestedStructs[index]
-            if nestedStructShells.TryGetValue(nestedStruct, out var nestedStructSymbol) {
-                BindStructDeclarationBody(nestedStruct, $package, nestedStructSymbol)
-            }
-        }
-    }
-
-    private func BuildNestedEnclosingChain(containerSyntax StructDeclarationSyntax) List[(Name string, Arity int32)] {
-        let chain = List[(Name string, Arity int32)]()
-        if containerSyntax.NestedTypes.IsDefaultOrEmpty {
-            return chain
-        }
-        for nested in containerSyntax.NestedTypes {
-            if nested is StructDeclarationSyntax nestedStruct && nestedStructShells.TryGetValue(
-                nestedStruct,
-                out var nestedSymbol
-            ) {
-                var current TypeSymbol? = nestedSymbol.ContainingType
-                while current is StructSymbol enclosingStruct {
-                    let def = enclosingStruct.Definition ?? enclosingStruct
-                    let arity = def
-                        .Declaration
-                        ?.TypeParameterList
-                        ?.Parameters
-                        .Count ??
-                        def
-                        .DeclaredTypeParameters
-                        .Length
-                    chain.Insert(0, (def.Name, arity))
-                    current = def.ContainingType
-                }
-                break
-            }
-        }
-        if chain.Count == 0 {
-            chain.Add((containerSyntax.Identifier.ValueText, containerSyntax.TypeParameterList?.Parameters.Count ?? 0))
-        }
-        return chain
-    }
-
-    private func FindNestedSiblingBaseIndex(
-        syntax StructDeclarationSyntax,
-        enclosingChain List[(Name string, Arity int32)],
-        packageSegments[]string,
-        nestedStructs List[StructDeclarationSyntax],
-        nestedStructsByKey Dictionary[(Name string, Arity int32), int32],
-        shadowedNestedKeys HashSet[(Name string, Arity int32)]?
-    ) int32 {
-        if !syntax.IsClass {
-            return -1
-        }
-        let baseClause TypeClauseSyntax? = if syntax.BaseTypeClauses.Count > 0 {
-            syntax.BaseTypeClauses[0]
-        } else if syntax.BaseTypeIdentifier != nil {
-            TypeClauseSyntax(syntax.BaseTypeIdentifier.SyntaxTree, syntax.BaseTypeIdentifier)
-        } else {
-            default(TypeClauseSyntax?)
-        }
-        if baseClause == nil || baseClause.Identifier == nil {
-            return -1
-        }
-        let segments = List[(Name string, Arity int32)](baseClause.SegmentCount)
-        segments.Add((baseClause.Identifier!!.ValueText, baseClause.GetSegmentTypeArguments(0)?.Count ?? 0))
-        for var i = 0; i < baseClause.QualifierIdentifierTokens.Length; i++ {
-            segments.Add(
-                (
-                    baseClause.QualifierIdentifierTokens[i].ValueText,
-                    baseClause.GetSegmentTypeArguments(i + 1)?.Count ?? 0
-                )
-            )
-        }
-        var candidateKey(Name string, Arity int32)? = nil
-        let fullPrefixLen = packageSegments.Length + enclosingChain.Count
-        if packageSegments.Length > 0 && segments.Count > fullPrefixLen {
-            var matchesPackageAndChain = true
-            for var i = 0; i < packageSegments.Length; i++ {
-                if segments[i].Name != packageSegments[i] || segments[i].Arity != 0 {
-                    matchesPackageAndChain = false
-                    break
-                }
-            }
-            if matchesPackageAndChain {
-                for var i = 0; i < enclosingChain.Count; i++ {
-                    if segments[packageSegments.Length + i] != enclosingChain[i] {
-                        matchesPackageAndChain = false
-                        break
-                    }
-                }
-            }
-            if matchesPackageAndChain {
-                candidateKey = segments[fullPrefixLen]
-            }
-        }
-        if candidateKey == nil && segments.Count > 1 {
-            for var suffixLen = enclosingChain.Count; suffixLen >= 1; suffixLen-- {
-                if segments.Count <= suffixLen {
-                    continue
-                }
-                let startOffset = enclosingChain.Count - suffixLen
-                var matchesSuffix = true
-                for var i = 0; i < suffixLen; i++ {
-                    if segments[i] != enclosingChain[startOffset + i] {
-                        matchesSuffix = false
-                        break
-                    }
-                }
-                if matchesSuffix && (shadowedNestedKeys == nil || !shadowedNestedKeys.Contains(segments[0])) {
-                    candidateKey = segments[suffixLen]
-                    break
-                }
-            }
-        }
-        if candidateKey == nil && (shadowedNestedKeys == nil || !shadowedNestedKeys.Contains(segments[0])) {
-            candidateKey = segments[0]
-        }
-        if candidateKey is {} key && nestedStructsByKey.TryGetValue(key, out var baseIndex) &&
-            nestedStructs[baseIndex].IsClass {
-            return baseIndex
-        }
-        return -1
-    }
-
-    private func AddDescendantNestedBaseDependencies(
-        currentContainer StructDeclarationSyntax,
-        enclosingChain List[(Name string, Arity int32)],
-        packageSegments[]string,
-        nestedStructs List[StructDeclarationSyntax],
-        nestedStructsByKey Dictionary[(Name string, Arity int32), int32],
-        bindingState[]uint8,
-        bindingOrder List[int32],
-        inheritedShadowedKeys HashSet[(Name string, Arity int32)]
-    ) {
-        if currentContainer.NestedTypes.IsDefaultOrEmpty {
-            return
-        }
-        let shadowedKeys = HashSet[(Name string, Arity int32)](inheritedShadowedKeys)
-        for child in currentContainer.NestedTypes.OfType[StructDeclarationSyntax]() {
-            shadowedKeys.Add((child.Identifier.ValueText, child.TypeParameterList?.Parameters.Count ?? 0))
-        }
-        for child in currentContainer.NestedTypes.OfType[StructDeclarationSyntax]() {
-            let baseIndex = FindNestedSiblingBaseIndex(
-                child,
-                enclosingChain,
-                packageSegments,
-                nestedStructs,
-                nestedStructsByKey,
-                shadowedKeys
-            )
-            if baseIndex >= 0 {
-                VisitNestedBaseFirst(
-                    baseIndex,
-                    enclosingChain,
-                    packageSegments,
-                    nestedStructs,
-                    nestedStructsByKey,
-                    bindingState,
-                    bindingOrder
-                )
-            }
-            AddDescendantNestedBaseDependencies(
-                child,
-                enclosingChain,
-                packageSegments,
-                nestedStructs,
-                nestedStructsByKey,
-                bindingState,
-                bindingOrder,
-                shadowedKeys
-            )
-        }
-    }
-
-    private func VisitNestedBaseFirst(
-        index int32,
-        enclosingChain List[(Name string, Arity int32)],
-        packageSegments[]string,
-        nestedStructs List[StructDeclarationSyntax],
-        nestedStructsByKey Dictionary[(Name string, Arity int32), int32],
-        bindingState[]uint8,
-        bindingOrder List[int32]
-    ) {
-        if bindingState[index] != uint8(0) {
-            return
-        }
-        bindingState[index] = uint8(1)
-        let nestedStruct = nestedStructs[index]
-        let baseIndex = FindNestedSiblingBaseIndex(
-            nestedStruct,
-            enclosingChain,
-            packageSegments,
-            nestedStructs,
-            nestedStructsByKey,
-            nil
-        )
-        if baseIndex >= 0 {
-            VisitNestedBaseFirst(
-                baseIndex,
-                enclosingChain,
-                packageSegments,
-                nestedStructs,
-                nestedStructsByKey,
-                bindingState,
-                bindingOrder
-            )
-        }
-        AddDescendantNestedBaseDependencies(
-            nestedStruct,
-            enclosingChain,
-            packageSegments,
-            nestedStructs,
-            nestedStructsByKey,
-            bindingState,
-            bindingOrder,
-            HashSet[(Name string, Arity int32)]()
-        )
-        bindingState[index] = uint8(2)
-        bindingOrder.Add(index)
     }
 
     /// Issue #1069 (phase 1): declares the type-name shells of the nested types
@@ -4388,6 +4190,7 @@ internal partial class DeclarationBinder {
                     let nestedStructSymbol StructSymbol? = DeclareStructShell(nestedStruct, $package, containerSymbol)
                     if nestedStructSymbol != nil {
                         nestedStructShells[nestedStruct] = nestedStructSymbol
+                        nestedStructPackages[nestedStructSymbol] = $package
                         DeclareNestedTypeShells(nestedStruct, nestedStructSymbol, $package)
                     }
                 }

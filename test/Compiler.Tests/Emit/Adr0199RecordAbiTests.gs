@@ -646,6 +646,14 @@ class Outer {
         class BaseAfterDerived
         data class HolderDerived(Name string, Value int32) : Outer.BaseAfterDerived(Name)
     }
+    class Left {
+        data class D(Name string, Value int32) : Outer.Right.B(Name)
+        open data class A(Name string)
+    }
+    class Right {
+        data class E(Name string, Value int32) : Outer.Left.A(Name)
+        open data class B(Name string)
+    }
     data class Message[T](Name string, Data T) : Message(Name)
     open data class Message(Name string)
     data class EscapedDerived(Name string, Value int32) : $event(Name)
@@ -716,6 +724,10 @@ func Run() string {
         Assert.DoesNotContain(packageQualifiedDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
         let holderDerived = assembly.GetType("W.Outer+Holder+HolderDerived", throwOnError: true)!!
         Assert.DoesNotContain(holderDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let leftDerived = assembly.GetType("W.Outer+Left+D", throwOnError: true)!!
+        Assert.DoesNotContain(leftDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let rightDerived = assembly.GetType("W.Outer+Right+E", throwOnError: true)!!
+        Assert.DoesNotContain(rightDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
         let genericMessageDerived = assembly.GetType("W.Outer+Message`1", throwOnError: true)!!
         Assert.DoesNotContain(genericMessageDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
         let escapedDerived = assembly.GetType("W.Outer+EscapedDerived", throwOnError: true)!!
