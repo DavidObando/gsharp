@@ -73,13 +73,15 @@ class TranslateStage : IMigrationStage {
         // `LoadProjectWithReferencesAsync` call/workspace, and never touches
         // `projects`/`project` or anything derived from them.
         let projectPath = Path.GetFullPath(context.App.ProjectPath)
-        let projects IReadOnlyList[LoadedCSharpProject] = if context
+        var repositoryProject LoadedCSharpProject? = nil
+        let usedRepositoryLoadedProject = context
             .Options
             .RepositoryLoadedProjects != nil &&
             context
             .Options
-            .RepositoryLoadedProjects!!.TryGetValue(projectPath, out var repositoryProject) {
-            []LoadedCSharpProject{repositoryProject}
+            .RepositoryLoadedProjects!!.TryGetValue(projectPath, out repositoryProject)
+        let projects IReadOnlyList[LoadedCSharpProject] = if usedRepositoryLoadedProject {
+            []LoadedCSharpProject{repositoryProject!!}
         } else {
             (
                 if context.Options.CompileViaSdk {
@@ -176,7 +178,7 @@ class TranslateStage : IMigrationStage {
         // or anything the generated `.gsproj` depends on.
         var siblingCompilations IReadOnlyList[CSharpCompilation]
         var sdkReferencedProjects IReadOnlyList[LoadedCSharpProject]? = nil
-        if context.Options.CompileViaSdk {
+        if context.Options.CompileViaSdk || usedRepositoryLoadedProject {
             var taintOnlyProjects IReadOnlyList[LoadedCSharpProject]
             if !TryResolveRepositoryTransitiveProjects(
                 projectPath,
@@ -244,6 +246,19 @@ class TranslateStage : IMigrationStage {
                 let referencedPath = Path.GetFullPath(referencedProject.ProjectPath!!)
                 if !context.EvaluatedProjectReferencePaths.Contains(referencedPath, StringComparer.OrdinalIgnoreCase) {
                     context.EvaluatedProjectReferencePaths.Add(referencedPath)
+                }
+            }
+        }
+        if project.EvaluatedProjectReferencePaths != nil {
+            for evaluatedReferencePath in project.EvaluatedProjectReferencePaths!! {
+                if !string.IsNullOrEmpty(evaluatedReferencePath) {
+                    let fullEvaluatedPath = Path.GetFullPath(evaluatedReferencePath)
+                    if !context.EvaluatedProjectReferencePaths.Contains(
+                        fullEvaluatedPath,
+                        StringComparer.OrdinalIgnoreCase
+                    ) {
+                        context.EvaluatedProjectReferencePaths.Add(fullEvaluatedPath)
+                    }
                 }
             }
         }
@@ -851,7 +866,21 @@ class TranslateStage : IMigrationStage {
                 }
             }
         }
-        if context.Options.CompileViaSdk && sdkReferencedProjects != nil {
+        if context.Options.ProjectEmittedGsPaths != nil {
+            let ownGsPaths = context
+                .EmittedFiles
+                .Where((f EmittedGsFile) -> !f.IsFromReferencedProject && !string.IsNullOrEmpty(f.GsPath))
+                .Select((f EmittedGsFile) -> Path.GetFullPath(f.GsPath!!))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            context.Options.ProjectEmittedGsPaths!![projectPath] = ownGsPaths
+            if context.Options.GeneratedProjectPaths != nil && context.Options.GeneratedProjectPaths!!.TryGetValue(
+                projectPath,
+                out var generatedAppProjectPath
+            ) {
+                context.Options.ProjectEmittedGsPaths!![Path.GetFullPath(generatedAppProjectPath)] = ownGsPaths
+            }
+        }
+        if sdkReferencedProjects != nil {
             for referencedProject in sdkReferencedProjects.Skip(1) {
                 if string.IsNullOrEmpty(referencedProject.ProjectPath) {
                     continue
@@ -868,11 +897,7 @@ class TranslateStage : IMigrationStage {
                     )
                     continue
                 }
-                if context
-                    .Options
-                    .GeneratedProjectPaths
-                    ?.ContainsKey(referencedPath) != true &&
-                    !IsUnselectedReferencedProjectValid(
+                if !IsUnselectedReferencedProjectValid(
                     referencedProject,
                     siblingCompilations,
                     repositoryCompilations,

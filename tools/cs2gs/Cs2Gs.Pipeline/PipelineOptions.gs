@@ -258,6 +258,11 @@ class PipelineOptions {
     /// in this run (issue #4767).
     internal prop InvalidCompiledProjectPaths ISet[string]?
 
+    /// Gets or sets the normalized absolute emitted `.gs` file paths owned by
+    /// each project in this run (or hydrated from validation manifests during
+    /// `validate`), keyed by normalized source or generated project path.
+    internal prop ProjectEmittedGsPaths IDictionary[string, IReadOnlyCollection[string]]?
+
     /// Gets or sets cached translation-validity outcomes for unselected
     /// referenced projects (issue #4767).
     internal prop ValidatedReferencedProjects IDictionary[string, bool]?

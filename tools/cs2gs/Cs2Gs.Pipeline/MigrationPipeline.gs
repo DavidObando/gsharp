@@ -312,6 +312,9 @@ class MigrationPipeline {
         }
         this.options.InvalidTranslatedProjectPaths = HashSet[string](StringComparer.OrdinalIgnoreCase)
         this.options.InvalidCompiledProjectPaths = HashSet[string](StringComparer.OrdinalIgnoreCase)
+        this
+            .options
+            .ProjectEmittedGsPaths = Dictionary[string, IReadOnlyCollection[string]](StringComparer.OrdinalIgnoreCase)
         this.options.ValidatedReferencedProjects = Dictionary[string, bool](StringComparer.OrdinalIgnoreCase)
         let appResults = Dictionary[string, AppResult](StringComparer.OrdinalIgnoreCase)
         let orderedApps = this.OrderForSdkBuild(apps, evaluatedProjectReferences)
@@ -329,14 +332,21 @@ class MigrationPipeline {
             )
                 .ConfigureAwait(false)
             appResults[app.Id] = appResult
+            let fullProjectPath = Path.GetFullPath(app.ProjectPath)
+            if appResult.Stages.Any(
+                (s StageResult) -> s.Stage == TriageSerialization.StageName(MigrationStageKind.Translate) &&
+                    s.Status == "passed"
+            ) {
+                this.options.ValidatedReferencedProjects!![fullProjectPath] = true
+            }
             if !appResult.Succeeded {
                 runResult.Succeeded = false
-                let fullProjectPath = Path.GetFullPath(app.ProjectPath)
                 if appResult.Stages.Any(
                     (s StageResult) -> s.Stage == TriageSerialization.StageName(MigrationStageKind.Translate) &&
                         s.Status == "failed"
                 ) {
                     this.options.InvalidTranslatedProjectPaths!!.Add(fullProjectPath)
+                    this.options.ValidatedReferencedProjects!![fullProjectPath] = false
                 }
                 if appResult.Stages.Any(
                     (s StageResult) -> s.Stage == TriageSerialization.StageName(MigrationStageKind.Compile) &&
@@ -492,6 +502,39 @@ class MigrationPipeline {
             allApps.Select((app CorpusApp) -> app.ProjectPath),
             evaluatedProjectReferences
         )
+        this.options.InvalidTranslatedProjectPaths = HashSet[string](StringComparer.OrdinalIgnoreCase)
+        this.options.InvalidCompiledProjectPaths = HashSet[string](StringComparer.OrdinalIgnoreCase)
+        this
+            .options
+            .ProjectEmittedGsPaths = Dictionary[string, IReadOnlyCollection[string]](StringComparer.OrdinalIgnoreCase)
+        for candidateApp in allApps {
+            let candidateManifest ValidationManifest? = ValidationManifest.Read(
+                Path.Combine(
+                    manifestRunDir ?? string.Empty,
+                    ArtifactDirectoryName(candidateApp.Id, MigrationOutputLayout.Repository)
+                )
+            )
+            if candidateManifest == nil {
+                continue
+            }
+            let fullCandidatePath = Path.GetFullPath(candidateApp.ProjectPath)
+            if !candidateManifest.Translated {
+                this.options.InvalidTranslatedProjectPaths!!.Add(fullCandidatePath)
+            }
+            let emittedSet = HashSet[string](StringComparer.OrdinalIgnoreCase)
+            for manifestFile in candidateManifest.EmittedFiles {
+                if !string.IsNullOrEmpty(manifestFile.Path) {
+                    emittedSet.Add(Path.GetFullPath(Path.Combine(migratedRoot, manifestFile.Path)))
+                }
+            }
+            this.options.ProjectEmittedGsPaths!![fullCandidatePath] = emittedSet
+            if this.options.GeneratedProjectPaths != nil && this.options.GeneratedProjectPaths!!.TryGetValue(
+                fullCandidatePath,
+                out var generatedCandidatePath
+            ) {
+                this.options.ProjectEmittedGsPaths!![Path.GetFullPath(generatedCandidatePath)] = emittedSet
+            }
+        }
         let priorHistory = LoadPriorRetryEntries(outputRoot, runId)
         let runResult = RunResult{
             RunId: runId,
@@ -538,6 +581,12 @@ class MigrationPipeline {
             runResult.Apps.Add(appResult)
             if !appResult.Succeeded {
                 runResult.Succeeded = false
+                if appResult.Stages.Any(
+                    (s StageResult) -> s.Stage == TriageSerialization.StageName(MigrationStageKind.Compile) &&
+                        s.Status == "failed"
+                ) {
+                    this.options.InvalidCompiledProjectPaths!!.Add(Path.GetFullPath(app.ProjectPath))
+                }
             }
         }
         if runResult.Succeeded && runResult.Apps.Any((a AppResult) -> a.Unverified) {
@@ -554,7 +603,8 @@ class MigrationPipeline {
         apps IReadOnlyList[CorpusApp],
         evaluatedProjectReferences IReadOnlyDictionary[string, IReadOnlyList[string]]?
     ) IReadOnlyList[CorpusApp] {
-        if !this.options.CompileViaSdk || apps.Count <= 1 {
+        if (!this.options.CompileViaSdk && this.options.OutputLayout != MigrationOutputLayout.Repository) ||
+            apps.Count <= 1 {
             return apps
         }
         let byPath = apps.ToDictionary(

@@ -70,10 +70,10 @@ class CompileStage : IMigrationStage {
             )
                 .ToList()
         }
+        if HasInvalidProjectReference(context) {
+            return Task.FromResult(StageOutcome.DependencyBlocked())
+        }
         if context.Options.CompileViaSdk {
-            if HasInvalidProjectReference(context) {
-                return Task.FromResult(StageOutcome.DependencyBlocked())
-            }
             let runner = SdkCompileRunner()
             // Issue #3782: `survey` demotes GS0536 to a warning for this build
             // only, so one compile walks the WHOLE project graph and reports
@@ -476,18 +476,156 @@ class CompileStage : IMigrationStage {
             } else {
                 Path.GetDirectoryName(Path.GetFullPath(context.App.ProjectPath))
             }
+            let hasOwnConsumerFiles = context.EmittedFiles.Any((f EmittedGsFile) -> !f.IsFromReferencedProject)
             for referencedProjectPath in activeReferences {
                 let fullReferencedPath = Path.GetFullPath(referencedProjectPath)
-                let referencedSourceDir string? = Path.GetDirectoryName(fullReferencedPath)
-                if IsOwnedByReferencedDirectory(diagnosticPath, referencedSourceDir, ownOutputDir, ownSourceDir) {
+                var generatedProjectPath string? = nil
+                if context.Options.GeneratedProjectPaths != nil {
+                    context.Options.GeneratedProjectPaths!!.TryGetValue(fullReferencedPath, out generatedProjectPath)
+                }
+                if IsOwnedByReferencedCompileInputs(context, diagnosticPath, fullReferencedPath, generatedProjectPath) {
                     return true
                 }
-                if context.Options.GeneratedProjectPaths != nil && context.Options.GeneratedProjectPaths!!.TryGetValue(
-                    fullReferencedPath,
-                    out var generatedProjectPath
+                let referencedSourceDir string? = Path.GetDirectoryName(fullReferencedPath)
+                if IsOwnedByReferencedDirectory(
+                    diagnosticPath,
+                    referencedSourceDir,
+                    ownOutputDir,
+                    ownSourceDir,
+                    hasOwnConsumerFiles
                 ) {
+                    return true
+                }
+                if !string.IsNullOrEmpty(generatedProjectPath) {
                     let generatedDir string? = Path.GetDirectoryName(Path.GetFullPath(generatedProjectPath))
-                    if IsOwnedByReferencedDirectory(diagnosticPath, generatedDir, ownOutputDir, ownSourceDir) {
+                    if IsOwnedByReferencedDirectory(
+                        diagnosticPath,
+                        generatedDir,
+                        ownOutputDir,
+                        ownSourceDir,
+                        hasOwnConsumerFiles
+                    ) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func IsOwnedByReferencedCompileInputs(
+            context StageExecutionContext,
+            diagnosticPath string,
+            fullReferencedPath string,
+            generatedProjectPath string?
+        ) bool {
+            let emittedByProject = context.Options.ProjectEmittedGsPaths
+            if emittedByProject != nil {
+                if emittedByProject.TryGetValue(fullReferencedPath, out var sourceSet) && sourceSet.Contains(
+                    diagnosticPath
+                ) {
+                    return true
+                }
+                if !string.IsNullOrEmpty(generatedProjectPath) && emittedByProject.TryGetValue(
+                    Path.GetFullPath(generatedProjectPath),
+                    out var generatedSet
+                ) &&
+                    generatedSet.Contains(diagnosticPath) {
+                    return true
+                }
+            }
+            if context
+                .Options
+                .RepositoryLoadedProjects != nil &&
+                context
+                .Options
+                .RepositoryLoadedProjects!!
+                .TryGetValue(fullReferencedPath, out var loadedReferenced) {
+                for document in loadedReferenced.Documents {
+                    if MatchesMappedProjectSource(context, diagnosticPath, document.FilePath) {
+                        return true
+                    }
+                }
+            }
+            if IsDeclaredCompileInputOfProject(context, diagnosticPath, fullReferencedPath) {
+                return true
+            }
+            if !string.IsNullOrEmpty(generatedProjectPath) &&
+                IsDeclaredCompileInputOfProject(context, diagnosticPath, Path.GetFullPath(generatedProjectPath)) {
+                return true
+            }
+            return false
+        }
+
+        private func IsDeclaredCompileInputOfProject(
+            context StageExecutionContext,
+            diagnosticPath string,
+            projectPath string
+        ) bool {
+            if string.IsNullOrEmpty(projectPath) || !File.Exists(projectPath) {
+                return false
+            }
+            let projectDir string? = Path.GetDirectoryName(Path.GetFullPath(projectPath))
+            if string.IsNullOrEmpty(projectDir) {
+                return false
+            }
+            for item in DeclaredProjectItems.Read(projectPath, "Compile") {
+                if !string.IsNullOrWhiteSpace(item.ItemGroupCondition) || !string.IsNullOrWhiteSpace(
+                    item.Element.Attribute(XName?("Condition")!!)?.Value
+                ) {
+                    continue
+                }
+                let rawInclude = item
+                    .Element
+                    .Attribute(XName?("Include")!!)
+                    ?.Value ??
+                    item
+                    .Element
+                    .Attribute(XName?("Update")!!)
+                    ?.Value
+                if string.IsNullOrWhiteSpace(rawInclude) {
+                    continue
+                }
+                for part in rawInclude.Split(';', StringSplitOptions.RemoveEmptyEntries) {
+                    let trimmed = part.Trim()
+                    if string.IsNullOrEmpty(trimmed) || trimmed.Contains("$$(", StringComparison.Ordinal) ||
+                        trimmed.Contains("@(", StringComparison.Ordinal) || trimmed.Contains(
+                        '*',
+                        StringComparison.Ordinal
+                    ) ||
+                        trimmed.Contains('?', StringComparison.Ordinal) {
+                        continue
+                    }
+                    let normalized = trimmed.Replace('\\', Path.DirectorySeparatorChar).Replace(
+                        '/',
+                        Path.DirectorySeparatorChar
+                    )
+                    let fullItemPath = Path.GetFullPath(Path.Combine(projectDir, normalized))
+                    if MatchesMappedProjectSource(context, diagnosticPath, fullItemPath) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func MatchesMappedProjectSource(
+            context StageExecutionContext,
+            diagnosticPath string,
+            sourceOrGsPath string
+        ) bool {
+            if string.IsNullOrEmpty(sourceOrGsPath) {
+                return false
+            }
+            let directGsPath = Path.GetFullPath(Path.ChangeExtension(sourceOrGsPath, ".gs"))
+            if string.Equals(directGsPath, diagnosticPath, StringComparison.OrdinalIgnoreCase) {
+                return true
+            }
+            if !string.IsNullOrEmpty(context.Options.SourceRoot) && !string.IsNullOrEmpty(context.Options.OutputRoot) {
+                let fullSourceRoot = Path.GetFullPath(context.Options.SourceRoot!!)
+                if IsUnderDirectory(directGsPath, fullSourceRoot) {
+                    let relative = Path.GetRelativePath(fullSourceRoot, directGsPath)
+                    let mirroredGsPath = Path.GetFullPath(Path.Combine(context.Options.OutputRoot!!, relative))
+                    if string.Equals(mirroredGsPath, diagnosticPath, StringComparison.OrdinalIgnoreCase) {
                         return true
                     }
                 }
@@ -533,7 +671,8 @@ class CompileStage : IMigrationStage {
             diagnosticPath string,
             referencedDir string?,
             ownOutputDir string,
-            ownSourceDir string?
+            ownSourceDir string?,
+            hasOwnConsumerFiles bool
         ) bool {
             if string.IsNullOrEmpty(referencedDir) {
                 return false
@@ -543,17 +682,24 @@ class CompileStage : IMigrationStage {
                 return false
             }
             if IsUnderDirectory(diagnosticPath, ownOutputDir) &&
-                !IsStrictlyUnderDirectory(fullReferencedDir, ownOutputDir) {
+                !IsStrictlyUnderDirectory(fullReferencedDir, ownOutputDir) &&
+                !(hasOwnConsumerFiles && PathsEqual(fullReferencedDir, ownOutputDir)) {
                 return false
             }
             if !string.IsNullOrEmpty(ownSourceDir) {
                 let fullOwnSourceDir = Path.GetFullPath(ownSourceDir)
                 if IsUnderDirectory(diagnosticPath, fullOwnSourceDir) &&
-                    !IsStrictlyUnderDirectory(fullReferencedDir, fullOwnSourceDir) {
+                    !IsStrictlyUnderDirectory(fullReferencedDir, fullOwnSourceDir) &&
+                    !(hasOwnConsumerFiles && PathsEqual(fullReferencedDir, fullOwnSourceDir)) {
                     return false
                 }
             }
             return true
+        }
+
+        private func PathsEqual(left string, right string) bool {
+            let relative = Path.GetRelativePath(left, right)
+            return relative.Equals(".", StringComparison.Ordinal)
         }
 
         private func IsUnderDirectory(path string, directory string) bool {
