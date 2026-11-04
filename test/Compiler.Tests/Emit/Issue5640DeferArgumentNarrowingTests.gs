@@ -626,6 +626,7 @@ func Run(choose bool, callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(true, func() { }))`, "GS0158@17:14", "reject", ""}
+            // Early return inside `try`/`finally` in an invoked literal joins returning callable state through `finally`.
             yield[]object{"d29_5640_defer_invoked_literal_try_finally_return_preserves_returning_branch_state", `import System
 class C {
     var Value int32 = 7
