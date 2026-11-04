@@ -565,6 +565,18 @@ Console.WriteLine(readBase[string, IntDerived4744](IntDerived4744()))`, "GS0152"
 
 let item = Item4744[[]int32]{Saved: []int32{1, 2, 3}}
 Console.WriteLine(readFixedArray[Item4744[[]int32]](item))`, "GS0152", "GS0580"}
+            yield[]object{"a-nullable-self-argument-does-not-satisfy-an-invariant-imported-interface-constraint", `class SelfNullableList : List[SelfNullableList?] {
+}
+
+func first[T IList[T]](x T) T -> x[0]
+
+Console.WriteLine(first[SelfNullableList](SelfNullableList()))`, "GS0152", "GS0580"}
+            yield[]object{"a-nullable-self-argument-does-not-satisfy-an-invariant-imported-class-constraint", `class SelfNullableList : List[SelfNullableList?] {
+}
+
+func first[T List[T]](x T) int32 -> x.Count
+
+Console.WriteLine(first[SelfNullableList](SelfNullableList()))`, "GS0152", "GS0580"}
         }
 
         /// Every shape the two rules must NOT reject. A false GS0152 or GS0580 is a

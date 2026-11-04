@@ -14131,12 +14131,20 @@ partial class Binder {
                     .Equals(currentOpen.FullName ?? currentOpen.Name, openTargetDefName, StringComparison.Ordinal) {
                     let alignedActual = GetClrSlotAlignedArguments(current)
                     if alignedActual.Length == expectedPositions.Length {
+                        let openParameters = currentOpen.GetGenericArguments()
                         var allMatch = true
                         for var i = 0; i < expectedPositions.Length; i++ {
                             let expectedArg = SubstituteSelfReference(expectedPositions[i], tp, typeArgument)
+                            let isContravariant = i < openParameters.Length &&
+                                (
+                                openParameters[i].GenericParameterAttributes & GenericParameterAttributes.Contravariant
+                            ) != 0
                             if !SameConstraintType(alignedActual[i], expectedArg) &&
                                 !(
-                                typeArgument != nil && object.ReferenceEquals(expectedArg, typeArgument) &&
+                                isContravariant && typeArgument != nil && object.ReferenceEquals(
+                                    expectedArg,
+                                    typeArgument
+                                ) &&
                                     alignedActual[i] is NullableTypeSymbol nullableSelf &&
                                     SameConstraintType(nullableSelf.UnderlyingType, expectedArg)
                             ) {
