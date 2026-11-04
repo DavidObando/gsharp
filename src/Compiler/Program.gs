@@ -1096,7 +1096,8 @@ Options:
   /refout:<file>                Output reference assembly path.
   /assemblyname:<name>          Output assembly name.
   /version:<string>             Informational version stamped on the output assembly.
-  /target:exe|library|lib|dll   Output type (default: exe).
+  /target:exe|winexe|library|lib|dll
+                               Output type (default: exe).
   /targetframework:<tfm>        Target framework moniker (alias: /tfm:<tfm>).
   /r:<file>, /reference:<file>  Reference an assembly.
   /resource:<file>[,<name>[,public|private]]
@@ -1178,7 +1179,7 @@ Options:
                         }
                         case "target" {
                             result.Target = switch value!!.ToLowerInvariant() {
-                                case "exe": OutputTarget.Exe
+                                case "exe" or "winexe": OutputTarget.Exe
                                 case "library" or "lib" or "dll": OutputTarget.Library
                                 default: throw CommandLineException("Unsupported /target value: $value")
                             }
