@@ -111,6 +111,7 @@ class StructSymbol : TypeSymbol {
     private var dataClassCloneMethod FunctionSymbol?
     private var dataEqualsSelf FunctionSymbol?
     private var dataEqualsObject FunctionSymbol?
+    private var dataDeconstruct FunctionSymbol?
     private var dataPrintMembers FunctionSymbol?
     private var dataPrintMembersMethods ImmutableArray[FunctionSymbol]
     private var dataPrintMembersBase StructSymbol?
@@ -1026,6 +1027,42 @@ class StructSymbol : TypeSymbol {
             dataEqualsSelf
         }
     )!!
+
+    /// Gets the compiler-owned `Deconstruct` signature on this exact construction.
+    internal prop DataDeconstruct FunctionSymbol {
+        get {
+            if dataDeconstruct != nil {
+                return dataDeconstruct!!
+            }
+            let members = TypeMemberModel.GetDataDeconstructionMembers(this)
+            let parameters = ImmutableArray.CreateBuilder[ParameterSymbol](members.Length)
+            for var i = 0; i < members.Length; i++ {
+                let member = members[i]
+                let memberType = if HasPrimaryConstructor && i < PrimaryConstructorParameters.Length {
+                    PrimaryConstructorParameters[i].Type
+                } else {
+                    switch member {
+                        case f is FieldSymbol: f.Type
+                        case p is PropertySymbol: p.Type
+                        default: TypeSymbol.Error
+                    }
+                }
+                parameters.Add(ParameterSymbol(member.Name, memberType, refKind: RefKind.Out))
+            }
+            let created = FunctionSymbol(
+                "Deconstruct",
+                parameters.MoveToImmutable(),
+                TypeSymbol.Void,
+                declaration: nil,
+                $package: nil,
+                accessibility: Accessibility.Public,
+                receiverType: this,
+                isOpen: false,
+                isOverride: false
+            )
+            return Interlocked.CompareExchange(&dataDeconstruct, created, nil) ?? created
+        }
+    }
 
     /// Gets or sets a value indicating whether this type is the synthesized backing type of an
     /// anonymous literal (`data object { ... }` or `object { ... }`, ADR-0146).

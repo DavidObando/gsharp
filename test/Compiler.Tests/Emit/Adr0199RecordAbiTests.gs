@@ -640,7 +640,11 @@ data class Item(Id int32) {
 
 class Outer {
     data class DerivedBeforeBase(Name string, Value int32) : BaseAfterDerived(Name)
+    data class QualifiedDerivedBeforeBase(Name string, Value int32) : Bases.NestedBase(Name)
     open data class BaseAfterDerived(Name string)
+    class Bases {
+        open data class NestedBase(Name string)
+    }
 }
 
 open class BaseWithPrivateGetter {
@@ -649,21 +653,43 @@ open class BaseWithPrivateGetter {
 
 data class DerivedFromPrivateGetter(Hidden int32, Extra int32) : BaseWithPrivateGetter()
 
+open class BaseWithProtectedGetter {
+    protected prop Value int32 { get; set; }
+    init(v int32) {
+        Value = v
+    }
+}
+
+data class DerivedFromProtectedGetter(Value int32, Extra int32) : BaseWithProtectedGetter(Value)
+
+open data class TupleBase(Pair (X int32, Y int32))
+data class TupleDerived(Pair (Left int32, Right int32), Extra int32) : TupleBase(Pair)
+
 func Run() string {
     let d = Outer.DerivedBeforeBase("ok", 7)
     let (n, v) = d
+    let q = Outer.QualifiedDerivedBeforeBase("qual", 8)
+    let (qn, qv) = q
     let p = DerivedFromPrivateGetter(99, 5)
     let (h, e) = p
-    return "${d}|${n}:${v}|${p}|${h}:${e}"
+    let prot = DerivedFromProtectedGetter(15, 25)
+    let (pv, pe) = prot
+    let td = TupleDerived((3, 4), 10)
+    let (pair, te) = td
+    return "${d}|${n}:${v}|${q}|${qn}:${qv}|${p}|${h}:${e}|${pv}:${pe}|${pair.Left}:${pair.Right}:${te}"
 }`
         let assembly = Adr0199RecordAbiWitness.CompileGSharp(source)
         let declared = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
         let nestedDerived = assembly.GetType("W.Outer+DerivedBeforeBase", throwOnError: true)!!
         Assert.DoesNotContain(nestedDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let qualifiedDerived = assembly.GetType("W.Outer+QualifiedDerivedBeforeBase", throwOnError: true)!!
+        Assert.DoesNotContain(qualifiedDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
         let privateGetterDerived = assembly.GetType("W.DerivedFromPrivateGetter", throwOnError: true)!!
         Assert.Contains(privateGetterDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Hidden")
+        let protectedGetterDerived = assembly.GetType("W.DerivedFromProtectedGetter", throwOnError: true)!!
+        Assert.DoesNotContain(protectedGetterDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
         Assert.Equal(
-            "DerivedBeforeBase { Name = ok, Value = 7 }|ok:7|DerivedFromPrivateGetter { Hidden = 99, Extra = 5 }|99:5",
+            "DerivedBeforeBase { Name = ok, Value = 7 }|ok:7|QualifiedDerivedBeforeBase { Name = qual, Value = 8 }|qual:8|DerivedFromPrivateGetter { Hidden = 99, Extra = 5 }|99:5|15:25|3:4:10",
             Adr0199RecordAbiWitness.Invoke(assembly, "Run")
         )
     }
@@ -692,7 +718,8 @@ public record ClrBase
     public int IntProp => 10;
     internal int InternalProp => 20;
     private protected int PrivateProtectedProp => 30;
-}`
+}
+public record ClrGenericBase<T>(T Value);`
         let tempDir = Directory.CreateTempSubdirectory("gs_adr0199_clrbase_").FullName
         try {
             let extPath = Path.Combine(tempDir, "ExtLib.dll")
@@ -720,19 +747,31 @@ public record ClrBase
             let gsSource = `package W
 import ExtLib
 
-data class ReusesValue(Value int32, Extra int32) : ClrBase(Value)
+data class ReusesValue(Value int32, Extra int32) : ClrBase(Value) {
+    init() : base(11) {
+        Extra = 22
+    }
+}
+data class GenericReusesValue[T](Value T) : ClrGenericBase[T](Value)
 data class DifferentType(IntProp string, Extra int32) : ClrBase()
 data class InaccessibleGetters(InternalProp int32, PrivateProtectedProp int32) : ClrBase()
+class SpreadTarget {
+    var Value int32
+    var Extra int32
+}
 
 func Run() string {
     let a = ReusesValue{}
     let b = ReusesValue{Value: 42, Extra: 7}
     let (bv, be) = b
+    let spread = SpreadTarget{...b}
+    let ctorDefault = ReusesValue()
+    let gen = GenericReusesValue{Value: 77}
     let c = DifferentType("hello", 9)
     let (ci, ce) = c
     let d = InaccessibleGetters(1, 2)
     let (di, dp) = d
-    return "${a.Value}:${a.Extra}|${bv}:${be}|${ci}:${ce}|${di}:${dp}"
+    return "${a.Value}:${a.Extra}|${bv}:${be}|${spread.Value}:${spread.Extra}|${ctorDefault.Value}:${ctorDefault.Extra}|${gen.Value}|${ci}:${ce}|${di}:${dp}"
 }`
             let srcPath = Path.Combine(tempDir, "test.gs")
             let outPath = Path.Combine(tempDir, "test.dll")
@@ -764,7 +803,7 @@ func Run() string {
                 Assert.Contains(inaccType.GetProperties(declared), (p PropertyInfo) -> p.Name == "InternalProp")
                 Assert.Contains(inaccType.GetProperties(declared), (p PropertyInfo) -> p.Name == "PrivateProtectedProp")
                 let result = asm.GetType("W.<Program>", throwOnError: true)!!.GetMethod("Run")!!.Invoke(nil, nil)
-                Assert.Equal("0:0|42:7|hello:9|1:2", result)
+                Assert.Equal("0:0|42:7|42:7|11:22|77|hello:9|1:2", result)
             } finally {
                 alc.Unload()
             }

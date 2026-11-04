@@ -4156,22 +4156,19 @@ internal partial class DeclarationBinder {
             return -1
         }
         var candidateName string? = nil
+        let leadingSegment = baseClause.Identifier?.Text
         if !baseClause.HasQualifier {
-            let text = baseClause.Identifier?.Text
-            if text != nil && (shadowedNestedNames == nil || !shadowedNestedNames.Contains(text)) {
-                candidateName = text
+            if leadingSegment != nil && (shadowedNestedNames == nil || !shadowedNestedNames.Contains(leadingSegment)) {
+                candidateName = leadingSegment
             }
-        } else {
-            let firstQualifier = baseClause.QualifierIdentifierTokens[0].Text
-            if firstQualifier == containerSyntax
-                .Identifier
-                .ValueText &&
-                baseClause
-                .QualifierIdentifierTokens
-                .Length == 1 {
-                candidateName = baseClause.Identifier?.Text
-            } else if shadowedNestedNames == nil || !shadowedNestedNames.Contains(firstQualifier) {
-                candidateName = firstQualifier
+        } else if leadingSegment != nil {
+            if leadingSegment == containerSyntax.Identifier.ValueText {
+                let nextSegment = baseClause.QualifierIdentifierTokens[0].Text
+                if shadowedNestedNames == nil || !shadowedNestedNames.Contains(nextSegment) {
+                    candidateName = nextSegment
+                }
+            } else if shadowedNestedNames == nil || !shadowedNestedNames.Contains(leadingSegment) {
+                candidateName = leadingSegment
             }
         }
         if candidateName != nil && nestedStructsByName.TryGetValue(candidateName, out var baseIndex) &&

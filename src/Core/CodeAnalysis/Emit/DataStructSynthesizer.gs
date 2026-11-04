@@ -586,7 +586,7 @@ internal class DataStructSynthesizer {
         // (ReflectionMetadataEmitter) reserves one fewer MethodDef row for
         // such types to match.
         if !HasZeroDeconstructionMembers(structSym) {
-            this.EmitDataStructDeconstruct(structSym)
+            this.cache.MethodHandles[structSym.DataDeconstruct] = this.EmitDataStructDeconstruct(structSym)
         }
         // ADR-0199: the C#-record `PrintMembers(StringBuilder)` slot. It is the
         // LAST synthesized row (after Deconstruct) in both the class and the
@@ -1814,12 +1814,12 @@ internal class DataStructSynthesizer {
         return synthesizedMethod
     }
 
-    private func EmitDataStructDeconstruct(structSym StructSymbol) {
+    private func EmitDataStructDeconstruct(structSym StructSymbol) MethodDefinitionHandle {
         let members = TypeMemberModel.GetDataDeconstructionMembers(structSym)
         let il = InstructionEncoder(BlobBuilder())
         if !this.emitCtx.MetadataOnly {
             for var i = 0; i < members.Length; i++ {
-                let memberType = GetDeconstructionMemberType(members[i])
+                let memberType = GetDeconstructionMemberType(structSym, i, members[i])
                 let field FieldSymbol? = GetDeconstructionBackingField(members[i])
                 il.LoadArgument(i + 1)
                 il.LoadArgument(0)
@@ -1927,15 +1927,19 @@ internal class DataStructSynthesizer {
             members.Length,
             (r ReturnTypeEncoder) -> r.Void(),
             (ps ParametersEncoder) -> {
-                for member in members {
-                    this.encodeTypeSymbol(ps.AddParameter().Type(isByRef: true), GetDeconstructionMemberType(member))
+                for var i = 0; i < members.Length; i++ {
+                    this.encodeTypeSymbol(
+                        ps.AddParameter().Type(isByRef: true),
+                        GetDeconstructionMemberType(structSym, i, members[i])
+                    )
                 }
             }
         )
         let deconstructParameters = ImmutableArray.CreateBuilder[ParameterSymbol](members.Length)
-        for member in members {
+        for var i = 0; i < members.Length; i++ {
+            let member = members[i]
             deconstructParameters.Add(
-                ParameterSymbol(member.Name, GetDeconstructionMemberType(member), refKind: RefKind.Out)
+                ParameterSymbol(member.Name, GetDeconstructionMemberType(structSym, i, member), refKind: RefKind.Out)
             )
         }
         let synthesizedRows = this.AddSynthesizedRows(TypeSymbol.Void, deconstructParameters.MoveToImmutable())
@@ -1951,6 +1955,7 @@ internal class DataStructSynthesizer {
             parameterList: synthesizedRows.First
         )
         this.StampSynthesized(synthesizedMethod, synthesizedRows)
+        return synthesizedMethod
     }
 
     /// ADR-0087 §3 R3: resolves the right token for the call to
@@ -2169,6 +2174,20 @@ internal class DataStructSynthesizer {
             "a data type owns a print-members slot",
             expression: "structSym.DataPrintMembers"
         )
+
+        private func GetDeconstructionMemberType(
+            structSym StructSymbol,
+            index int32,
+            member Symbol
+        ) TypeSymbol -> if structSym.HasPrimaryConstructor &&
+            index >= 0 &&
+            index < structSym
+            .PrimaryConstructorParameters
+            .Length {
+            structSym.PrimaryConstructorParameters[index].Type
+        } else {
+            GetDeconstructionMemberType(member)
+        }
 
         private func GetDeconstructionMemberType(member Symbol) TypeSymbol -> switch member {
             case field is FieldSymbol: field.Type

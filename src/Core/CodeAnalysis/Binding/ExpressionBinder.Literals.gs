@@ -2139,8 +2139,15 @@ internal partial class ExpressionBinder {
                         structSymbol,
                         initSyntax.FieldIdentifier.ValueText,
                         out var property
+                    ) ||
+                        TypeMemberModel
+                        .TryGetInheritedDataPositionalProperty(
+                        structSymbol,
+                        initSyntax.FieldIdentifier.ValueText,
+                        out property,
+                        out _
                     ) {
-                        memberType = property.Type
+                        memberType = property!!.Type
                     } else {
                         continue
                     }

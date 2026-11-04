@@ -1137,6 +1137,8 @@ internal class UserTokenResolver {
                     "a constructed print-members slot has a definition",
                     expression: "definition.DataPrintMembers"
                 )
+            } else if method.Name == "Deconstruct" && object.ReferenceEquals(method, containingType.DataDeconstruct) {
+                method = definition.DataDeconstruct
             }
         }
         if !this.cache.MethodHandles.TryGetValue(method, out var openDef) && containingType.ClrType != nil {

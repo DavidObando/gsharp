@@ -532,13 +532,25 @@ shared class TypeMemberModel {
                 }
                 if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(candidate.Type, parameter.Type) {
                     property = candidate
-                    declaringType = (current.ImportedBaseType as StructSymbol) ?? current
+                    declaringType = ResolveInheritedPropertyOwner(current, candidate)
                     return true
                 }
                 return false
             }
         }
         return false
+    }
+
+    internal func ResolveInheritedPropertyOwner(owner StructSymbol, property PropertySymbol) StructSymbol {
+        if owner.ImportedBaseType is StructSymbol importedStruct {
+            for ancestor in GetHierarchy(importedStruct) {
+                if ancestor.Properties.Any((candidate PropertySymbol) -> candidate.Name == property.Name) {
+                    return ancestor
+                }
+            }
+            return importedStruct
+        }
+        return owner
     }
 
     internal func ResolveInheritedDataPositionalProperty(
@@ -573,8 +585,12 @@ shared class TypeMemberModel {
                         continue
                     }
                     if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(candidate.Type, parameter.Type) {
-                        property = candidate
-                        declaringType = ancestor.ImportedBaseType as StructSymbol
+                        property = if object.ReferenceEquals(candidate.Type, parameter.Type) {
+                            candidate
+                        } else {
+                            candidate.WithSignature(parameter.Type, candidate.Parameters)
+                        }
+                        declaringType = ResolveInheritedPropertyOwner(ancestor, candidate)
                         return true
                     }
                     return false
@@ -651,7 +667,7 @@ shared class TypeMemberModel {
                     }
                     let synthesized = PropertySymbol(
                         parameter.Name,
-                        clrPropertyType,
+                        parameter.Type,
                         propAcc,
                         hasGetter: true,
                         hasSetter: visibleSetter != nil,
