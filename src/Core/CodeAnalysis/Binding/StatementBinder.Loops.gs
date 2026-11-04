@@ -993,12 +993,12 @@ internal partial class StatementBinder {
             bindIteration: func () BoundStatement {
                 $scope = BoundScope(headerParentScope)
                 try {
-                    condition = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool)
                     let boundBody = Invariant.Required(
                         BindStatement(bodySyntax),
                         "a loop body has a bound statement",
                         expression: "BindStatement(bodySyntax)"
                     )
+                    condition = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool)
                     return boundBody
                 } finally {
                     $scope = headerParentScope

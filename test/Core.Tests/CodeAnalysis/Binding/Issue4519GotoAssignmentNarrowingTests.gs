@@ -7000,6 +7000,27 @@ f(nil)`)
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
+    @Fact
+    func DoWhileForwardGotoIntoConditionBlockInvalidatesGuard() {
+        let result = Evaluate(`func Run(s string?) int32 {
+    do {
+        goto Use
+    } while ({
+        if s != nil {
+        Use:
+            return s.Length
+        }
+        false
+    })
+    return 0
+}
+
+Run(nil)`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+    }
+
     shared {
         private func Evaluate(source string) EmittedOracleResult -> EmittedOracle.Evaluate(source)
 
