@@ -48,9 +48,54 @@ open class Adr0212InheritedFeatureTests {
     }
 
     @Fact
+    func Completion_OfATypeParameterWithConstraints_OffersConstraintAndObjectMembers() {
+        let comp = Complete("comp.")
+        Assert.Contains(comp, (i CompletionItem) -> i.Label == "CompareTo" && i.Kind == CompletionItemKind.Method)
+        Assert.Contains(comp, (i CompletionItem) -> i.Label == "ToString" && i.Kind == CompletionItemKind.Method)
+        Assert.DoesNotContain(comp, (i CompletionItem) -> i.Label == "ReferenceEquals")
+
+        let sub = Complete("sub.")
+        Assert.Contains(sub, (i CompletionItem) -> i.Label == "Area" && i.Kind == CompletionItemKind.Method)
+        Assert.Contains(sub, (i CompletionItem) -> i.Label == "ToString" && i.Kind == CompletionItemKind.Method)
+
+        let buf = Complete("buf.")
+        Assert.Contains(buf, (i CompletionItem) -> i.Label == "Mark" && i.Kind == CompletionItemKind.Method)
+        Assert.Contains(buf, (i CompletionItem) -> i.Label == "SetLength" && i.Kind == CompletionItemKind.Method)
+        Assert.Contains(buf, (i CompletionItem) -> i.Label == "Position" && i.Kind == CompletionItemKind.Property)
+        Assert.DoesNotContain(buf, (i CompletionItem) -> i.Label == "Null")
+    }
+
+    @Fact
+    func Hover_OnAConstrainedTypeParameterMember_ShowsTheConstraintMemberSignature() {
+        let compText = Text("let r = comp.CompareTo")
+        let compHover = HoverComputer.ComputeHover(
+            LanguageServerTestHelpers.Content(compText),
+            LanguageServerTestHelpers.PositionOf(compText, "CompareTo")
+        )
+        Assert.NotNull(compHover)
+        Assert.Contains("CompareTo", compHover!!.Contents.ToString(), StringComparison.Ordinal)
+
+        let subText = Text("let r = sub.Area")
+        let subHover = HoverComputer.ComputeHover(
+            LanguageServerTestHelpers.Content(subText),
+            LanguageServerTestHelpers.PositionOf(subText, "Area")
+        )
+        Assert.NotNull(subHover)
+        Assert.Contains("Area", subHover!!.Contents.ToString(), StringComparison.Ordinal)
+
+        let staticText = Text("let r = TAdd.Add(1, 2)")
+        let staticHover = HoverComputer.ComputeHover(
+            LanguageServerTestHelpers.Content(staticText),
+            LanguageServerTestHelpers.PositionOf(staticText, "Add")
+        )
+        Assert.NotNull(staticHover)
+        Assert.Contains("Add", staticHover!!.Contents.ToString(), StringComparison.Ordinal)
+    }
+
+    @Fact
     func LookupMembers_OnAProjectBackedReferenceSet_ReadsMetadataWithoutThrowing() {
         // A project's references load into a MetadataLoadContext: every row reads its members there.
-        let body = "let a1 = b.Position\n    let a2 = list.Count\n    let a3 = sq.ToString()\n    let a4 = items.Length\n    let a5 = lookup.Count"
+        let body = "let a1 = b.Position\n    let a2 = list.Count\n    let a3 = sq.ToString()\n    let a4 = items.Length\n    let a5 = lookup.Count\n    let a6 = comp.CompareTo(comp)"
         let tree = SyntaxTree.Parse(SourceText.From(Text(body), "ref.gs"))
         let compilation = Compilation(CreateReferencePackResolver(), tree)
         let model = compilation.GetSemanticModel(tree)
@@ -67,7 +112,7 @@ open class Adr0212InheritedFeatureTests {
             )
             compared++
         }
-        Assert.Equal(5, compared)
+        Assert.Equal(6, compared)
     }
 
     shared {
@@ -98,16 +143,31 @@ interface IShape {
     func Area() int32 { return 1 }
 }
 
+sealed interface IAdd {
+    shared {
+        func Add(a int32, b int32) int32;
+    }
+}
+
 class Square : IShape { }
 
 class Item { var X int32 = 0 }
 
-func Use(
+func Use[
+    TComp IComparable[TComp],
+    TBase IShape,
+    TSub TBase,
+    TBuf Buffer,
+    TAdd IAdd
+](
     b Buffer,
     list IList[string],
     sq Square,
     items []Item,
-    lookup map[string, Item]
+    lookup map[string, Item],
+    comp TComp,
+    sub TSub,
+    buf TBuf
 ) {
     @@
 }

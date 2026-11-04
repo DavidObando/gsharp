@@ -837,7 +837,7 @@ partial class SemanticModel {
                 BoundClrStaticCallExpression: call.CalledFunction
             case BoundConstrainedStaticCallExpression{ClrMethod: {}} constrained: constrained.CalledFunction
             case access is BoundClrPropertyAccessExpression: ImportedMemberSymbol(
-                access.Receiver?.Type ?? access.StaticContainerType,
+                access.ConstrainedInterfaceType ?? access.Receiver?.Type ?? access.StaticContainerType,
                 access.Member
             )
             default: default(Symbol?)
