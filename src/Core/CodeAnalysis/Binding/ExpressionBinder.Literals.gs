@@ -1930,6 +1930,7 @@ internal partial class ExpressionBinder {
         // instances are cached so reference-equality of TypeSymbols is
         // preserved (e.g. `Result[int, string]` always returns the same
         // StructSymbol object).
+        let initialStructSymbol = structSymbol
         if structSymbol.IsGenericDefinition {
             let substitution = Dictionary[TypeParameterSymbol, TypeSymbol]()
             let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(structSymbol)
@@ -2039,7 +2040,7 @@ internal partial class ExpressionBinder {
                     $scope.References!!.MapClrTypeToReferences
                 )
             }
-        } else if syntax.TypeArgumentList != nil && structSymbol!!.ClrType is not{IsConstructedGenericType: true} {
+        } else if syntax.TypeArgumentList != nil && initialStructSymbol.ClrType is not{IsConstructedGenericType: true} {
             Diagnostics.ReportWrongTypeArgumentCount(
                 syntax.TypeArgumentList!!.Location,
                 typeName,

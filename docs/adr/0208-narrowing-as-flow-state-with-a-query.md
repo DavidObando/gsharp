@@ -912,7 +912,9 @@ Details per row:
   the earlier filter's write reach the later clause. The defect in the
   current compiler is filed as #5168 (P1; d1 is its second shape); a
   narrower fix in the current scheme (invalidate the roots a filter writes
-  before binding the remaining clauses and every finally it encloses) may
+  before binding the remaining clauses and every finally it encloses, skipping
+  any variable declared inside that `try`'s protected block so shadowing
+  locals keep their facts, #5239) may
   land before this ADR, in which case R10 becomes a no-change row.
 - **R11, R12.** New tests from probes d3, d3b, d4 and d4b with run-time
   witnesses on today's compiler. Both are defects in 0.5.212 (#5170,
@@ -1016,11 +1018,10 @@ Details per row:
   and body see the headers (test and guard) of the cases before it: a case proves no narrowing of the discriminant
   when a header before it can remove that fact (rows a27 and a28), and a callable alias that a pattern or guard
   replaces is not external for the later cases (rows a29 to a31). The guard's effects also reach the narrowing that
-  its own pattern proves (rows a24 and a25). A `default` that is not last runs after the tests of the cases after it: those patterns bind in
+  its own pattern proves (rows a24 and a25).   A `default` that is not last runs after the tests of the cases after it: those patterns bind in
   dispatch order before its body, and their effects apply to its body only and are put back afterwards with the R18
-  journal (rows a03, a13, a14, a16 and a17). A statement in a guard block that binds early is not a condition, so the
-  facts it removes are recorded separately and put back the same way; each of those cases removes them again where
-  it is dispatched (rows a34 to a36). This holds unless the default falls through to the next case, whose body then
+  journal (rows a03, a13, a14, a16 and a17), statements in a guard block that binds early included (#5654, rows a34 to
+  a36). This holds unless the default falls through to the next case, whose body then
   runs on that path too (row a18).
   A loop's back edge includes a `switch`, `try` or `fixed` statement with a `continue` inside it: the control-flow
   graph keeps such a statement as one statement, so the jump adds no edge, and its block and the blocks before it
@@ -1050,7 +1051,8 @@ Details per row:
   (3) The member-path scan of the syntax (`SyntaxMayMutateMemberPaths`) does not enter a function literal or
   lambda: creating a closure runs none of its body, and a call of it is a call. This also applies to a statement
   (`action = func() { ... }` no longer removes member-path facts). (4) The condition of an `if` statement in a
-  then-branch runs only on that path, so the facts it removed from the enclosing frames are put back while the
+  then-branch and the statements of that branch (including statements inside a block expression of a condition) run
+  only on that path (#5654), so the facts they removed from the enclosing frames are put back while the
   sibling else-branch is bound and removed again after it, as section 9 binds the else-branch from the state after
   the condition: `if flag if Check(h) { } else { } else { return x.Value }` and the braced form compile (rows w20
   to w22). The then-branch of `if let` and its else-branch are siblings in the same way (rows w31 and w32); its
