@@ -1824,10 +1824,48 @@ internal class DataStructSynthesizer {
                 il.LoadArgument(i + 1)
                 il.LoadArgument(0)
                 if field != nil &&
+                    OwnsDeconstructionBackingField(structSym, members[i], field) &&
                     members[i] is not(PropertySymbol and {IsVirtual: true}) &&
                     members[i] is not(PropertySymbol and {IsOverride: true}) {
                     il.OpCode(ILOpCode.Ldfld)
                     il.Token(this.resolveUserFieldToken(structSym, field))
+                } else if members[i] is PropertySymbol{ImportedMember: PropertyInfo importedProperty} &&
+                    importedProperty.GetGetMethod(nonPublic: true) is {} importedGetter &&
+                    FindImportedBaseOwner(structSym) is {} importedBase {
+                    il.OpCode(
+                        if structSym.IsClass {
+                            ILOpCode.Callvirt
+                        } else {
+                            ILOpCode.Call
+                        }
+                    )
+                    il.Token(this.resolveImportedMethodRef(importedGetter, importedBase))
+                    if (members[i] is PropertySymbol and {ReturnRefKind: not RefKind.None}) {
+                        il.OpCode(ILOpCode.Ldobj)
+                        il.Token(this.getElementTypeToken(memberType))
+                    }
+                } else if members[i] is PropertySymbol inheritedProperty && !structSym.Properties.Contains(
+                    inheritedProperty
+                ) &&
+                    TypeMemberModel.TryGetProperty(
+                    structSym,
+                    inheritedProperty.Name,
+                    out var resolvedProperty,
+                    out var declaringStruct
+                ) &&
+                    declaringStruct != nil {
+                    il.OpCode(
+                        if structSym.IsClass {
+                            ILOpCode.Callvirt
+                        } else {
+                            ILOpCode.Call
+                        }
+                    )
+                    il.Token(this.resolveUserPropertyAccessorToken(declaringStruct, resolvedProperty!!, false))
+                    if (members[i] is PropertySymbol and {ReturnRefKind: not RefKind.None}) {
+                        il.OpCode(ILOpCode.Ldobj)
+                        il.Token(this.getElementTypeToken(memberType))
+                    }
                 } else {
                     let signature = BlobBuilder()
                     BlobEncoder(signature).MethodSignature(isInstanceMethod: true).Parameters(
@@ -2142,6 +2180,27 @@ internal class DataStructSynthesizer {
             case field is FieldSymbol: field
             case property is PropertySymbol: property.BackingField
             default: default(FieldSymbol?)
+        }
+
+        private func OwnsDeconstructionBackingField(
+            structSym StructSymbol,
+            member Symbol,
+            field FieldSymbol
+        ) bool -> switch member {
+            case FieldSymbol: structSym.Fields.Contains(field)
+            case property is PropertySymbol: structSym.Properties.Contains(property) && property.OwnsBackingField(
+                structSym
+            )
+            default: false
+        }
+
+        private func FindImportedBaseOwner(structSym StructSymbol) TypeSymbol? {
+            for current in structSym.GetHierarchy() {
+                if current.ImportedBaseType is {} importedBase {
+                    return importedBase
+                }
+            }
+            return nil
         }
 
         /// Issue #2363: a deterministic (build-reproducible, not process-

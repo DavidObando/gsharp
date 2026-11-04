@@ -1667,6 +1667,9 @@ internal partial class DeclarationBinder {
             let positionalPropertyIndices = Dictionary[string, int32](StringComparer.Ordinal)
             if structSymbol.IsData && structSymbol.HasPrimaryConstructor {
                 for parameter in structSymbol.PrimaryConstructorParameters {
+                    if TypeMemberModel.TryGetInheritedDataPositionalProperty(structSymbol, parameter, out _, out _) {
+                        continue
+                    }
                     let property = PropertySymbol(
                         parameter.Name,
                         parameter.Type,

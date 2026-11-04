@@ -9,7 +9,12 @@ import Cs2Gs.CodeModel.Printing
 import Cs2Gs.CodeModel.RoundTrip
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
+import GSharp.Core.CodeAnalysis.Text
+import GSharpCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation
+import GSharpSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree
 import System
+import System.IO
+import System.Reflection
 import Xunit
 
 /// Translator-fidelity tests (ADR-0128 / issue #1172, follow-up to #1160): now that
@@ -158,6 +163,113 @@ namespace Demo
         Assert.DoesNotContain("__local_F_Fact", printed)
         Assert.Contains("let Fact = func", printed)
         Assert.DoesNotContain("(n int32) -> {", printed)
+    }
+
+    @Fact
+    func VoidStatementLambda_WithValueCapableTails_EmitsTrailingReturn_AndPreservesActionOverloadChoice() {
+        const source = `
+namespace Demo
+{
+    using System;
+    using System.Collections.Generic;
+    using System.Text;
+    using System.Threading.Tasks;
+
+    public sealed class Disposer : IDisposable
+    {
+        public void Dispose() { }
+    }
+
+    public static class Probe
+    {
+        private static int Step(int x) => x + 1;
+        private static Task BgWork() => Task.CompletedTask;
+        private static string Pick(Action a) { a(); return "Action"; }
+        private static string Pick<T>(Func<T> f) { f(); return "Func"; }
+        private static string PickAsync(Func<Task> f) { f().GetAwaiter().GetResult(); return "FuncTask"; }
+        private static string PickAsync<T>(Func<Task<T>> f) { f().GetAwaiter().GetResult(); return "FuncTaskT"; }
+
+        public static string Run(object obj, bool flag)
+        {
+            var list = new List<int> { 1, 2 };
+            var sb = new StringBuilder();
+
+            var directCall = Pick(() => { Step(1); });
+            var ifElseSameType = Pick(() =>
+            {
+                if (flag)
+                {
+                    Step(1);
+                }
+                else
+                {
+                    Step(2);
+                }
+            });
+            var ifElseMixedTypes = Pick(() =>
+            {
+                if (flag)
+                {
+                    list.Remove(1);
+                }
+                else
+                {
+                    sb.Append('x');
+                }
+            });
+            var ifLetChain = Pick(() =>
+            {
+                if (obj is string s)
+                {
+                    Step(s.Length);
+                }
+                else
+                {
+                    Step(0);
+                }
+            });
+            var usingBlock = Pick(() =>
+            {
+                using (var d = new Disposer())
+                {
+                    Step(3);
+                }
+            });
+            var asyncVoidTask = PickAsync(async () =>
+            {
+                await Task.Yield();
+                Step(4);
+            });
+            var taskRun = Task.Run(() => { BgWork(); });
+            taskRun.GetAwaiter().GetResult();
+            bool isPlainTask = taskRun.GetType() == typeof(Task) || taskRun.GetType().BaseType == typeof(Task);
+
+            return string.Join("|", directCall, ifElseSameType, ifElseMixedTypes, ifLetChain, usingBlock, asyncVoidTask, isPlainTask);
+        }
+    }
+}`
+        let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        using let csharpImage = MemoryStream()
+        Assert.True(project.Compilation.Emit(csharpImage).Success)
+        let baseline = Assembly.Load(csharpImage.ToArray())
+        let expected = baseline.GetType("Demo.Probe", throwOnError: true)!!.GetMethod("Run")!!.Invoke(
+            nil,
+            []object{"hello", true}
+        )
+        let printed = TranslateUnit(source)
+        Assert.Contains("Step(1)\n            return", printed, StringComparison.Ordinal)
+        using let gsharpImage = MemoryStream()
+        let compilation = GSharpCompilation(GSharpSyntaxTree.Parse(SourceText.From(printed))){IsLibrary = true}
+        let emit = compilation.Emit(gsharpImage, nil, nil, "Issue4977Translated")
+        Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics))
+        let migrated = Assembly.Load(gsharpImage.ToArray())
+        let actual = migrated.GetType("Demo.Probe", throwOnError: true)!!.GetMethod("Run")!!.Invoke(
+            nil,
+            []object{"hello", true}
+        )
+        Assert.Equal(expected, actual)
+        Assert.Equal("Action|Action|Action|Action|Action|FuncTask|True", actual)
     }
 
     shared {

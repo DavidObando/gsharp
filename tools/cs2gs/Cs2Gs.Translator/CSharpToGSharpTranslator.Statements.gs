@@ -4807,7 +4807,13 @@ partial class CSharpToGSharpTranslator {
                     return this.TranslateSwitchExpressionAsStatement(switchExpression)
                 }
                 default {
-                    return ExpressionStatement(this.TranslateExpression(expression))
+                    let isVoid = expression != nil &&
+                        this
+                        .context
+                        .GetTypeInfo(expression)
+                        .Type
+                        ?.SpecialType == SpecialType.System_Void
+                    return ExpressionStatement(this.TranslateExpression(expression), isVoid: isVoid)
                 }
             }
         }
@@ -4833,7 +4839,9 @@ partial class CSharpToGSharpTranslator {
                 replacements
             )
             try {
-                statements.Add(ExpressionStatement(this.TranslateExpression(conditionalAccess.WhenNotNull)))
+                statements.Add(
+                    ExpressionStatement(this.TranslateExpression(conditionalAccess.WhenNotNull), isVoid: true)
+                )
             } finally {
                 this.ReleaseHoistedAssignments(embedded, replacements)
                 this.state.PendingSpillPrologue = outerSpillPrologue

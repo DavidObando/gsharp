@@ -5117,17 +5117,31 @@ internal class ReflectionMetadataEmitter {
             if type.TryGetField(name, out field) {
                 return true
             }
-            if TypeMemberModel.TryGetProperty(type, name, out var property) && property!!.BackingField != nil {
+            if TypeMemberModel.TryGetProperty(type, name, out var property, out var declaringType) &&
+                object.ReferenceEquals(declaringType, type) && property!!.BackingField != nil {
                 field = property!!.BackingField
                 return true
             }
             field = nil
             if type.IsData &&
                 property != nil &&
-                property.IsAutoProperty == false &&
-                property.HasGetter == true &&
-                property.IsStatic == false {
+                (
+                !object.ReferenceEquals(declaringType, type) ||
+                    (property.IsAutoProperty == false && property.HasGetter == true && property.IsStatic == false)
+            ) {
                 return false
+            }
+            if type.IsData && type.IsClass {
+                for parameter in type.PrimaryConstructorParameters {
+                    if parameter.Name == name && TypeMemberModel.TryGetInheritedDataPositionalProperty(
+                        type,
+                        parameter,
+                        out _,
+                        out _
+                    ) {
+                        return false
+                    }
+                }
             }
             throw InvalidOperationException("Type '${type.Name}' has no field for primary ctor parameter '$name'.")
         }

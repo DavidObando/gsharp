@@ -167,12 +167,19 @@ class LocalDeclarationStatement : GStatement {
 class ExpressionStatement : GStatement {
     /// Initializes a new instance of the (cref:ExpressionStatement) class.
     /// @param expression The expression.
-    init(expression GExpression) {
+    /// @param isVoid Whether the expression evaluates to `void`.
+    init(expression GExpression, isVoid bool = false) {
         Expression = expression
+        IsVoid = isVoid
     }
 
     /// Gets the expression.
     prop Expression GExpression {
+        get;
+    }
+
+    /// Gets a value indicating whether the expression evaluates to `void`.
+    prop IsVoid bool {
         get;
     }
 }

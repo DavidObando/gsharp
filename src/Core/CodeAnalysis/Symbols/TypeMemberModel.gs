@@ -67,14 +67,21 @@ shared class TypeMemberModel {
         let members = ImmutableArray.CreateBuilder[Symbol]()
         if type.HasPrimaryConstructor || type.Declaration?.HasPrimaryConstructor == true {
             for parameter in type.PrimaryConstructorParameters {
+                var matched PropertySymbol? = nil
                 for property in type.Properties {
                     if property.Name == parameter.Name &&
                         property.HasGetter &&
                         !property.IsStatic &&
                         !property.IsIndexer {
-                        members.Add(property)
+                        matched = property
                         break
                     }
+                }
+                if matched == nil {
+                    TryGetInheritedDataPositionalProperty(type, parameter, out matched, out _)
+                }
+                if matched != nil {
+                    members.Add(matched)
                 }
             }
             return members.ToImmutable()
@@ -454,6 +461,102 @@ shared class TypeMemberModel {
         }
         property = nil
         declaringType = nil
+        return false
+    }
+
+    /// Issue #4874: resolves an accessible inherited instance property that a derived
+    /// `data class` positional parameter reuses instead of synthesizing a duplicate property.
+    internal func TryGetInheritedDataPositionalProperty(
+        type StructSymbol,
+        parameter ParameterSymbol,
+        @NotNullWhen(true) out property PropertySymbol?,
+        out declaringType StructSymbol?
+    ) bool {
+        property = nil
+        declaringType = nil
+        if !type.IsData || !type.IsClass {
+            return false
+        }
+        if type.BaseClass is {} baseClass {
+            for ancestor in GetHierarchy(baseClass) {
+                for candidate in ancestor.Properties {
+                    if candidate.IsStatic || candidate.IsIndexer || candidate.Name != parameter.Name {
+                        continue
+                    }
+                    if candidate.Accessibility != Accessibility.Private &&
+                        candidate.HasGetter &&
+                        TypeSymbol
+                        .AreRuntimeEquivalentIgnoringReferenceNullability(candidate.Type, parameter.Type) {
+                        property = candidate
+                        declaringType = ancestor
+                        return true
+                    }
+                    return false
+                }
+            }
+        }
+        for current in GetHierarchy(type) {
+            if current.ImportedBaseType is not{} importedBase {
+                continue
+            }
+            if importedBase is StructSymbol importedStruct {
+                for candidate in importedStruct.Properties {
+                    if candidate.IsStatic || candidate.IsIndexer || candidate.Name != parameter.Name {
+                        continue
+                    }
+                    if candidate.Accessibility != Accessibility.Private &&
+                        candidate.HasGetter &&
+                        TypeSymbol
+                        .AreRuntimeEquivalentIgnoringReferenceNullability(candidate.Type, parameter.Type) {
+                        property = candidate
+                        declaringType = importedStruct
+                        return true
+                    }
+                    return false
+                }
+            }
+            var clrCurrent Type? = importedBase.ClrType
+            while clrCurrent != nil {
+                for clrProp in ClrTypeUtilities.SafeGetProperties(
+                    clrCurrent,
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.DeclaredOnly
+                ) {
+                    if clrProp.Name != parameter.Name || clrProp.GetIndexParameters().Length != 0 {
+                        continue
+                    }
+                    if clrProp.GetGetMethod(nonPublic: true) is {IsStatic: false, IsPrivate: false} getter {
+                        let setter = clrProp.GetSetMethod(nonPublic: true)
+                        let hasVisibleSetter = setter != nil && !setter.IsStatic && !setter.IsPrivate
+                        let synthesized = PropertySymbol(
+                            parameter.Name,
+                            parameter.Type,
+                            if getter.IsPublic {
+                                Accessibility.Public
+                            } else if getter.IsFamily || getter.IsFamilyOrAssembly {
+                                Accessibility.Protected
+                            } else {
+                                Accessibility.Internal
+                            },
+                            hasGetter: true,
+                            hasSetter: hasVisibleSetter,
+                            isAutoProperty: false,
+                            isVirtual: getter.IsVirtual,
+                            isOverride: ClrTypeUtilities.SafeIsOverride(getter),
+                            isInitOnly: setter != nil && ImportedTypeSymbol.IsInitOnlySetter(setter),
+                            metadataIsAbstract: getter.IsAbstract
+                        ){ReturnRefKind = RefCapabilities.GetReturnRefKind(clrProp)}
+                        synthesized.ImportedMember = clrProp
+                        property = synthesized
+                        return true
+                    }
+                    return false
+                }
+                clrCurrent = clrCurrent.BaseType
+            }
+        }
         return false
     }
 
