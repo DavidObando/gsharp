@@ -843,10 +843,9 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             !literal
             .StructType
             .IsClass &&
-            markerCount == 0 &&
             !literal
             .StructType
-            .NeedsSynthesizedValueStructDefaultCtor {
+            .UsesOwningZeroInitializerConstructor {
             return this.BuildZeroStorageStructLiteralExpression(literal, parameterMap)
         }
         var construction BoundExpression

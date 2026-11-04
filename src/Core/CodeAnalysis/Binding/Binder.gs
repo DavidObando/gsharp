@@ -6943,16 +6943,27 @@ partial class Binder {
             // user-named classes — no bespoke binder or emitter code path. The
             // literal site later binds to a parameterless construction of the
             // synthesized class (see ExpressionBinder.BindRichAnonymousClassExpression).
+            let mergedStructDeclarations = PartialTypeMerger.MergeStructs(
+                syntaxTrees.SelectMany((st SyntaxTree) -> st.Root.Members.AsEnumerable())
+                    .OfType[StructDeclarationSyntax](),
+                packageByTree,
+                binder.Diagnostics
+            )
             var anonClassCounter = 0
             let richAnonymousClasses = List[
                 (Node AnonymousClassExpressionSyntax, Declaration StructDeclarationSyntax)
             ]()
             {
                 using let discovery = CompilationMeasurements.BeginPhase("declarations.rich-anonymous-discovery")
+                var unsafeMergedSpans HashSet[(SourceText, TextSpan)]? = nil
                 for tree in syntaxTrees {
                     if !tree.MayContainAnonymousClasses {
                         CompilationMeasurements.Count("declarations.rich-anonymous.skipped-trees")
                         continue
+                    }
+                    if unsafeMergedSpans == nil {
+                        unsafeMergedSpans = HashSet[(SourceText, TextSpan)]()
+                        CollectMergedUnsafeSpans(mergedStructDeclarations, unsafeMergedSpans)
                     }
                     CompilationMeasurements.Count("declarations.rich-anonymous.scanned-trees")
                     CollectRichAnonymousObjectDeclarations(
@@ -6961,18 +6972,13 @@ partial class Binder {
                         richAnonymousClasses,
                         binder.Diagnostics,
                         &anonClassCounter,
-                        enclosingTypeParameters: ImmutableArray[TypeParameterListSyntax].Empty
+                        enclosingTypeParameters: ImmutableArray[TypeParameterListSyntax].Empty,
+                        inUnsafeContext: false,
+                        unsafeMergedSpans: unsafeMergedSpans
                     )
                 }
             }
-            let structDeclarations = PartialTypeMerger
-                .MergeStructs(
-                syntaxTrees.SelectMany((st SyntaxTree) -> st.Root.Members.AsEnumerable())
-                    .OfType[StructDeclarationSyntax](),
-                packageByTree,
-                binder.Diagnostics
-            )
-                .Concat(
+            let structDeclarations = mergedStructDeclarations.Concat(
                 richAnonymousClasses.Select(
                     (r(Node AnonymousClassExpressionSyntax, Declaration StructDeclarationSyntax)) -> r.Declaration
                 )
@@ -9287,21 +9293,27 @@ partial class Binder {
         /// @param references The reference resolver supplying imported types.
         /// @param containingFunction The function enclosing the expression, or `null` for top-level statements.
         /// @param additionalLocals In-scope locals/parameters to declare before binding, or `null`.
+        /// @param additionalFunctionScopes In-scope local functions grouped by lexical block depth from outermost
+        /// to innermost, or `null`.
         /// @param expression The expression to read a type for.
         /// @param referencingTree The tree (file) the expression stands in; its imports apply. An expression
         /// parsed on its own would otherwise look up names through its own, import-less tree.
         /// @param inConstructorInitializer Whether the expression stands in the arguments of a constructor's
         /// `: base(...)` or `: this(...)`; the binder then applies the restrictions of that context (no receiver,
         /// so instance access is rejected and the static members stay reachable).
+        /// @param additionalTypeParameters Type parameters of enclosing generic local functions from outermost
+        /// to innermost, or `null`.
         /// @returns The non-error, non-void type, or `null` when binding fails.
         internal func BindSpeculativeExpressionType(
             globalScope BoundGlobalScope?,
             references ReferenceResolver,
             containingFunction FunctionSymbol?,
             additionalLocals IEnumerable[VariableSymbol]?,
+            additionalFunctionScopes IEnumerable[ImmutableArray[FunctionSymbol]]?,
             expression ExpressionSyntax?,
             referencingTree SyntaxTree,
-            inConstructorInitializer bool = false
+            inConstructorInitializer bool = false,
+            additionalTypeParameters IEnumerable[TypeParameterSymbol]? = nil
         ) TypeSymbol? {
             if globalScope == nil || expression == nil {
                 return nil
@@ -9324,6 +9336,30 @@ partial class Binder {
                         for local in additionalLocals {
                             if local != nil {
                                 binder.$scope.TryDeclareVariable(local)
+                            }
+                        }
+                    }
+                    if additionalFunctionScopes != nil {
+                        // Each lexical block depth gets its own child scope from outermost to innermost,
+                        // so an inner local function with the same signature does not drop an outer one
+                        // whose defaults or type-parameter constraints differ.
+                        for functionScope in additionalFunctionScopes {
+                            if functionScope.IsDefaultOrEmpty {
+                                continue
+                            }
+                            binder.$scope = BoundScope(binder.$scope)
+                            for localFunction in functionScope {
+                                if localFunction != nil {
+                                    binder.$scope.TryDeclareFunction(localFunction)
+                                }
+                            }
+                        }
+                    }
+                    if additionalTypeParameters != nil {
+                        for typeParameter in additionalTypeParameters {
+                            if typeParameter != nil {
+                                binder.binderCtx.CurrentTypeParameters ??= Dictionary[string, TypeParameterSymbol]()
+                                binder.binderCtx.CurrentTypeParameters!![typeParameter.Name] = typeParameter
                             }
                         }
                     }
@@ -9523,7 +9559,7 @@ partial class Binder {
                 method.ReceiverType,
                 method.IsOpen,
                 method.IsOverride
-            ){ReturnRefKind = method.ReturnRefKind, IsAsync = method.IsAsync}
+            ){ReturnRefKind = method.ReturnRefKind, IsAsync = method.IsAsync, IsUnsafe = method.IsUnsafe}
             binding.TypeParameters = method.TypeParameters
             for var i = 0; i < parameters.Length; i++ {
                 parameterMap[parameters[i]] = method.Parameters[i]
@@ -11110,6 +11146,37 @@ partial class Binder {
             slot FunctionSymbol
         ) string -> "${slot.Name}(${string.Join(", ", slot.Parameters.Select((parameter ParameterSymbol) -> parameter.Type.Name))}) ${slot.Type.Name}"
 
+        private func CollectMergedUnsafeSpans(
+            declarations IEnumerable[StructDeclarationSyntax],
+            unsafeMergedSpans HashSet[(SourceText, TextSpan)]
+        ) {
+            for decl in declarations {
+                if decl.IsUnsafe {
+                    unsafeMergedSpans.Add((decl.SyntaxTree.Text, decl.Span))
+                    for extent in decl.PartialPartExtents {
+                        if extent.Text != nil {
+                            unsafeMergedSpans.Add((extent.Text, extent.Span))
+                        }
+                    }
+                }
+                for method in decl.Methods {
+                    if method.IsUnsafe && method.Body != nil {
+                        unsafeMergedSpans.Add((method.Body.SyntaxTree.Text, method.Body.Span))
+                    }
+                }
+                if decl.SharedBlock is {} sharedBlock {
+                    for method in sharedBlock.Methods {
+                        if method.IsUnsafe && method.Body != nil {
+                            unsafeMergedSpans.Add((method.Body.SyntaxTree.Text, method.Body.Span))
+                        }
+                    }
+                }
+                if !decl.NestedTypes.IsDefaultOrEmpty {
+                    CollectMergedUnsafeSpans(decl.NestedTypes.OfType[StructDeclarationSyntax](), unsafeMergedSpans)
+                }
+            }
+        }
+
         /// ADR-0146 / issue #2243: recursively walks a syntax subtree and, for
         /// every "rich" anonymous-object literal (one carrying a base/interface
         /// clause, a method, or an event), synthesizes a top-level class
@@ -11120,9 +11187,12 @@ partial class Binder {
             results List[(Node AnonymousClassExpressionSyntax, Declaration StructDeclarationSyntax)],
             diagnostics DiagnosticBag,
             ref counter int32,
-            enclosingTypeParameters ImmutableArray[TypeParameterListSyntax]
+            enclosingTypeParameters ImmutableArray[TypeParameterListSyntax],
+            inUnsafeContext bool = false,
+            unsafeMergedSpans HashSet[(SourceText, TextSpan)]? = nil
         ) {
             var enclosingTypeParameters = enclosingTypeParameters
+            var inUnsafeContext = inUnsafeContext
             let declaredTypeParameters TypeParameterListSyntax? = switch node {
                 case FunctionDeclarationSyntax{TypeParameterList: {} functionParameters}: functionParameters
                 case StructDeclarationSyntax{TypeParameterList: {} typeParameters}: typeParameters
@@ -11133,13 +11203,27 @@ partial class Binder {
             if declaredTypeParameters != nil {
                 enclosingTypeParameters = enclosingTypeParameters.Add(declaredTypeParameters)
             }
+            inUnsafeContext |= switch node {
+                case structDecl is StructDeclarationSyntax: structDecl.IsUnsafe || unsafeMergedSpans?.Contains(
+                    (structDecl.SyntaxTree.Text, structDecl.Span)
+                ) == true
+                case funcDecl is FunctionDeclarationSyntax: funcDecl.IsUnsafe ||
+                    (
+                    funcDecl.Body != nil && unsafeMergedSpans?.Contains(
+                        (funcDecl.Body.SyntaxTree.Text, funcDecl.Body.Span)
+                    ) == true
+                )
+                case BlockStatementSyntax{IsUnsafe: true}: true
+                default: false
+            }
             if node is AnonymousClassExpressionSyntax anon && IsRichAnonymousObject(anon) {
                 let decl = SynthesizeAnonymousClassDeclaration(
                     anon,
                     tree,
                     counter++,
                     diagnostics,
-                    enclosingTypeParameters
+                    enclosingTypeParameters,
+                    inUnsafeContext
                 )
                 results.Add((anon, decl))
             }
@@ -11150,7 +11234,9 @@ partial class Binder {
                     results,
                     diagnostics,
                     &counter,
-                    enclosingTypeParameters
+                    enclosingTypeParameters,
+                    inUnsafeContext,
+                    unsafeMergedSpans
                 )
             }
         }
@@ -11182,7 +11268,8 @@ partial class Binder {
             tree SyntaxTree,
             index int32,
             diagnostics DiagnosticBag,
-            enclosingTypeParameters ImmutableArray[TypeParameterListSyntax]
+            enclosingTypeParameters ImmutableArray[TypeParameterListSyntax],
+            inUnsafeContext bool = false
         ) StructDeclarationSyntax {
             let position = syntax.ObjectKeyword.Position
             let Tok = func (kind SyntaxKind, text string) SyntaxToken {
@@ -11303,6 +11390,9 @@ partial class Binder {
                 syntax.CloseBraceToken
             )
             decl.IsSynthesizedRichAnonymousObject = true
+            if inUnsafeContext {
+                decl.UnsafeModifier = Tok(SyntaxKind.IdentifierToken, "unsafe")
+            }
             let combinedTypeParameters = CombineRichTypeParameterLists(tree, position, enclosingTypeParameters)
             decl.TypeParameterList = combinedTypeParameters
             decl.RichAnonymousShellTypeParameterCount = combinedTypeParameters?.Parameters.Count ?? 0

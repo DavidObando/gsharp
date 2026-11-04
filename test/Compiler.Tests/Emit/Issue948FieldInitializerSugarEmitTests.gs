@@ -357,6 +357,211 @@ func Main() {}`
     }
 
     @Fact
+    func Issue4742_ExplicitNestedStructFieldInitializer_RunsInitOnlyAndPrivateStoresInOwningConstructor() {
+        let source = `package NestedLiteralVerifier
+import System
+
+struct Inner {
+    private let Reference readonly managed[int32] = {
+        var value = 7
+        readonly managed(value)
+    }
+    private var Items []int32
+    public func Read() int32 -> *Reference + Items.Length
+}
+
+struct PublicLetInner {
+    public let Reference readonly managed[int32] = {
+        var value = 11
+        readonly managed(value)
+    }
+    public var Items []int32 = []int32{3}
+    public func Read() int32 -> *Reference + Items[0]
+}
+
+struct EmptyPrimaryInner() {
+    private let Hidden int32 = 13
+    public func Read() int32 -> Hidden
+}
+
+data struct Outer(Value int32) {
+    public var Nested Inner = Inner{}
+    public var PublicNested PublicLetInner = PublicLetInner{}
+    public var EmptyNested EmptyPrimaryInner = EmptyPrimaryInner{}
+}
+
+struct PlainOuter {
+    public var Nested Inner = Inner{}
+    public var PublicNested PublicLetInner = PublicLetInner{}
+}
+
+open class BaseHolder {
+    public var Seed int32
+    public init(seed int32) {
+        Seed = seed
+    }
+}
+
+class DerivedHolder : BaseHolder {
+    public var Nested Inner = {
+        let inner = Inner{}
+        inner
+    }
+    public var PublicNested PublicLetInner = PublicLetInner{}
+    public var EmptyNested EmptyPrimaryInner = EmptyPrimaryInner{}
+
+    public init(seed int32) : base(seed) {
+    }
+}
+
+class GenericOuter[T](Item T) {
+    public var Nested Inner = Inner{}
+    public var PublicNested PublicLetInner = PublicLetInner{}
+
+    shared {
+        public var SharedInner Inner = Inner{}
+        public var SharedPublicInner PublicLetInner = PublicLetInner{}
+    }
+}
+
+func Main() {
+    let outer = Outer{Value: 1}
+    let plain = PlainOuter{}
+    let derived = DerivedHolder(5)
+    let generic = GenericOuter[int32](9)
+    Console.WriteLine(
+        outer.Value.ToString() + "|" +
+        outer.Nested.Read().ToString() + "|" +
+        outer.PublicNested.Read().ToString() + "|" +
+        outer.EmptyNested.Read().ToString() + "|" +
+        plain.Nested.Read().ToString() + "|" +
+        plain.PublicNested.Read().ToString() + "|" +
+        derived.Seed.ToString() + "|" +
+        derived.Nested.Read().ToString() + "|" +
+        derived.PublicNested.Read().ToString() + "|" +
+        derived.EmptyNested.Read().ToString() + "|" +
+        generic.Nested.Read().ToString() + "|" +
+        generic.PublicNested.Read().ToString() + "|" +
+        GenericOuter[int32].SharedInner.Read().ToString() + "|" +
+        GenericOuter[int32].SharedPublicInner.Read().ToString()
+    )
+}`
+        let output = CompileAndRun(source)
+        Assert.Equal("1|7|14|13|7|14|5|7|14|13|7|14|7|14${Environment.NewLine}", output)
+    }
+
+    @Fact
+    func Issue4753_ExplicitRawPointerArrayFieldInitializer_PreservesEnclosingUnsafeContext() {
+        let source = `package Demo
+import System
+
+interface IRunner {
+    func Run() int32;
+}
+
+public unsafe class C {
+    private let items []*int32 = [0]*int32
+    private var fixedItems []*int32 = [2]*int32
+    private let runner IRunner = object : IRunner {
+        func Run() int32 {
+            let localItems []*int32 = [0]*int32
+            return localItems.Length + 4
+        }
+    }
+
+    shared {
+        private let sharedItems []*int32 = [0]*int32
+        public func Run() int32 {
+            let c = C()
+            return c.items.Length + c.fixedItems.Length + c.runner.Run() + sharedItems.Length
+        }
+    }
+}
+
+unsafe struct UnsafeStruct {
+    private var items []*int32 = [0]*int32
+    public func Count() int32 -> items.Length
+}
+
+unsafe data struct UnsafeDataStruct(Seed int32) {
+    public var Items []*int32 = [0]*int32
+}
+
+unsafe class GenericUnsafe[T](Item T) {
+    private let items []*int32 = [0]*int32
+    public func Count() int32 -> items.Length
+}
+
+func Main() {
+    let s = UnsafeStruct{}
+    let d = UnsafeDataStruct{Seed: 9}
+    let g = GenericUnsafe[int32](3)
+    Console.WriteLine(
+        C.Run().ToString() + "|" +
+        s.Count().ToString() + "|" +
+        d.Items.Length.ToString() + "|" +
+        d.Seed.ToString() + "|" +
+        g.Count().ToString()
+    )
+}`
+        let output = CompileAndRun(source)
+        Assert.Equal("6|0|0|9|0${Environment.NewLine}", output)
+
+        let part1 = `package Demo
+import System
+
+interface IRunner {
+    func Run() int32;
+}
+
+public unsafe partial class SplitUnsafe {
+    private let first []*int32 = [0]*int32
+}
+
+public partial class OuterSplit {
+    public unsafe partial class NestedSplit {
+    }
+}`
+        let part2 = `package Demo
+import System
+
+public partial class SplitUnsafe {
+    private let second []*int32 = [0]*int32
+    private let runner IRunner = object : IRunner {
+        func Run() int32 {
+            let localItems []*int32 = [0]*int32
+            return localItems.Length + 7
+        }
+    }
+
+    shared {
+        public func Run() int32 {
+            let s = SplitUnsafe()
+            return s.first.Length + s.second.Length + s.runner.Run()
+        }
+    }
+}
+
+public partial class OuterSplit {
+    public partial class NestedSplit {
+        private let runner IRunner = object : IRunner {
+            func Run() int32 {
+                let localItems []*int32 = [0]*int32
+                return localItems.Length + 5
+            }
+        }
+        public func Run() int32 -> runner.Run()
+    }
+}
+
+func Main() {
+    Console.WriteLine(SplitUnsafe.Run().ToString() + "|" + OuterSplit.NestedSplit().Run().ToString())
+}`
+        let splitOutput = CompileAndRun(part1, part2)
+        Assert.Equal("7|5${Environment.NewLine}", splitOutput)
+    }
+
+    @Fact
     func Issue948_Negative_InstanceInitializerReferencesInstanceMember() {
         let source = `package P
 import System
@@ -403,8 +608,8 @@ Console.WriteLine(Foo.len.ToString())`
 
     shared {
         // Test infrastructure — mirrors Issue640FieldInitializerEmitTests pattern.
-        private func CompileAndRun(source string) string {
-            let (exit, stdout, stderr, _) = CompileAndRunRaw(source)
+        private func CompileAndRun(sources ...string) string {
+            let (exit, stdout, stderr, _) = CompileAndRunRaw(sources)
             Assert.True(exit == 0, (`exited ` + "$exit" + `
 stdout:
 ` + "$stdout" + `
@@ -452,17 +657,31 @@ stderr:
             }
         }
 
-        private func CompileAndRunRaw(source string)(ExitCode int32, Stdout string, Stderr string, CompileOut string) {
+        private func CompileAndRunRaw(sources ...string)(
+            ExitCode int32,
+            Stdout string,
+            Stderr string,
+            CompileOut string
+        ) {
             let tempDir = Directory.CreateTempSubdirectory("gs_issue948_").FullName
             try {
-                let srcPath = Path.Combine(tempDir, "test.gs")
                 let outPath = Path.Combine(tempDir, "test.dll")
-                File.WriteAllText(srcPath, source)
+                let valuesAssemblyPath = typeof(Gsharp.Values.ReadOnlyManagedRef[_]).Assembly.Location
+                File.Copy(
+                    valuesAssemblyPath,
+                    Path.Combine(tempDir, Path.GetFileName(valuesAssemblyPath)),
+                    overwrite: true
+                )
                 let args = List[string]{"/out:" + outPath, "/target:exe", "/targetframework:net10.0", "/nowarn:GS9100"}
                 for bcl in BclReferences.Value {
                     args.Add("/r:" + bcl)
                 }
-                args.Add(srcPath)
+                args.Add("/r:" + valuesAssemblyPath)
+                for var i = 0; i < sources.Length; i++ {
+                    let srcPath = Path.Combine(tempDir, "test$i.gs")
+                    File.WriteAllText(srcPath, sources[i])
+                    args.Add(srcPath)
+                }
                 using let compileOut = StringWriter()
                 using let compileErr = StringWriter()
                 let prevOut = Console.Out
