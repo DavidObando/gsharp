@@ -326,25 +326,28 @@ internal partial class StatementBinder {
         isProperty = false
         getterRunsUserCode = false
         touchesInitializingType = false
-        let flags = BindingFlags.Static | BindingFlags.Public | BindingFlags.FlattenHierarchy
-        for property in ClrTypeUtilities.SafeGetProperties(clrType, flags) {
-            if ClrTypeUtilities.EmittedMemberNameMatches(property, name) && property.GetIndexParameters().Length == 0 {
+        let imported = ImportedClassSymbol(clrType, declaration: nil, references: $scope.References)
+        if !imported.TryLookupMember(name, ne: nil, out var member) {
+            return false
+        }
+        switch member {
+            case property is PropertyInfo {
                 type = ClrNullability.GetPropertyTypeSymbol(property)
                 isProperty = true
                 getterRunsUserCode = !IsStableClrGetter(property)
                 touchesInitializingType = ClrStaticMemberOwnerInitializes(property.DeclaringType ?? clrType)
                 return true
             }
-        }
-        for field in ClrTypeUtilities.SafeGetFields(clrType, flags) {
-            if ClrTypeUtilities.EmittedMemberNameMatches(field, name) {
+            case field is FieldInfo {
                 type = ClrNullability.GetFieldTypeSymbol(field)
                 touchesInitializingType = !field.IsLiteral &&
                     ClrStaticMemberOwnerInitializes(field.DeclaringType ?? clrType)
                 return true
             }
+            default {
+                return false
+            }
         }
-        return false
     }
 
     private func ClrStaticMemberOwnerInitializes(owner Type) bool -> if ReflectionType(owner) is {} reflected {

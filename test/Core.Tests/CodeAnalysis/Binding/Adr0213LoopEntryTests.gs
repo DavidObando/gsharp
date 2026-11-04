@@ -156,14 +156,22 @@ func Main() { }`}, EmittedOracleOptions{References: []string{fixture.AssemblyPat
     @Fact
     func BareStaticImportOfImportedClrFieldWithTypeInitializer_RemovesFactsInLoopAndSpan() {
         // An imported CLR static field read through a static import (`import Adr0213ClrStaticInit.ClrHolder`) can run
-        // the declaring type's `.cctor`, removing mutable-global facts at loop and backward-jump entry (#5470, #5657).
+        // the declaring type's `.cctor`, removing mutable-global facts at loop and backward-jump entry (#5470, #5657),
+        // while a derived constant hiding a base static property (`ClrDerived.Hidden`) keeps by-reference facts.
         using let fixture = CSharpFixture(`namespace Adr0213ClrStaticInit;
 public static class ClrHolder {
     public static System.Action? OnInit;
     public static int Seed = 1;
     static ClrHolder() { OnInit?.Invoke(); }
+}
+public class ClrBase {
+    public static int Hidden => 99;
+}
+public class ClrDerived : ClrBase {
+    public new const int Hidden = 5;
 }`)
         let result = EmittedOracle.Evaluate([]string{`package T
+import Adr0213ClrStaticInit.ClrDerived
 import Adr0213ClrStaticInit.ClrHolder
 class C { }
 var g C? = C()
@@ -187,13 +195,28 @@ func ReadInSpan() int32 {
     if n < 2 { goto Again }
     return n
 }
+func KeepRefAcrossHidingConst(ref item C?) int32 {
+    if item == nil { return 0 }
+    var n = 0
+    while n < 2 {
+        let b C = item
+        let h = Hidden
+        n = n + h
+    }
+    Again:
+    let c C = item
+    let h2 = Hidden
+    n = n + h2
+    if n < 20 { goto Again }
+    return n
+}
 func Main() { }`}, EmittedOracleOptions{References: []string{fixture.AssemblyPath}})
         let errors = result
             .Diagnostics
             .Where((d Diagnostic) -> d.IsError)
             .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
             .ToArray()
-        Assert.Equal("GS0155@9:19 GS0155@19:15", string.Join(" ", errors))
+        Assert.Equal("GS0155@10:19 GS0155@20:15", string.Join(" ", errors))
     }
 
     @Fact

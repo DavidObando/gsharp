@@ -53,6 +53,20 @@ public class ClrSeedHolder {
             if OnInit is {} cb { cb() }
         }
     }
+}
+public open class ClrBase {
+    shared {
+        public prop Hidden int32 {
+            get {
+                return 99
+            }
+        }
+    }
+}
+public class ClrDerived : ClrBase {
+    shared {
+        public const Hidden int32 = 5
+    }
 }`)
                 let fixtureArgs = List[string]{
                     "/out:" + fixtureOutPath,
@@ -680,6 +694,7 @@ let inner = Outer.Inner{}
 Console.WriteLine(inner.WriteInLoop() + inner.WriteInSpan() + ReadClrInLoop() + ReadClrInSpan())`, "GS0155@17:27 GS0155@27:23 GS0155@39:19 GS0155@49:15", "reject", ""}
             yield[]object{"method_group_collision_beats_static_import_property_in_loop_and_span_5470", `package T
 import System
+import ImportedClrFixture.ClrDerived
 import T.Host
 class C {
     var Value int32
@@ -703,7 +718,8 @@ func InLoop(ref item C?) int32 {
     while n < 2 {
         let b C = item
         let callback = Level
-        total = total + b.Value
+        let h = Hidden
+        total = total + b.Value + h
         n = n + 1
     }
     return total + Level()
@@ -715,14 +731,15 @@ func InSpan(ref item C?) int32 {
     Again:
     let b C = item
     let callback = Level
-    total = total + b.Value
+    let h = Hidden
+    total = total + b.Value + h
     n = n + 1
     if n < 2 { goto Again }
     return total + Level()
 }
 var s C? = C{Value: 10}
 Console.WriteLine(InLoop(ref s))
-Console.WriteLine(InSpan(ref s))`, "", "run", "27|27"}
+Console.WriteLine(InSpan(ref s))`, "", "run", "37|37"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
