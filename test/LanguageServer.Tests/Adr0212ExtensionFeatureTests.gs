@@ -92,31 +92,66 @@ open class Adr0212ExtensionFeatureTests {
         let content = SourceExtensionProjectContent()
         let singleHelp = HelpIn(content, SourceExtensionFileA, "n.Shout(")
         Assert.NotNull(singleHelp)
-        Assert.Contains("Shout", Assert.Single(singleHelp!!.Signatures).Label, StringComparison.Ordinal)
+        let singleSignature = Assert.Single(singleHelp!!.Signatures)
+        Assert.Equal("func Shout() int32", singleSignature.Label)
+        Assert.Empty(singleSignature.Parameters)
         let overloadedHelp = HelpIn(content, SourceExtensionFileA, "n.Scale(")
         Assert.NotNull(overloadedHelp)
         let scaleLabels = overloadedHelp!!.Signatures.Select((s SignatureInformation) -> s.Label).ToArray()
-        Assert.Equal(2, scaleLabels.Length)
-        Assert.DoesNotContain("bonus", scaleLabels[0], StringComparison.Ordinal)
-        Assert.Contains("bonus", scaleLabels[1], StringComparison.Ordinal)
+        Assert.Equal(
+            []string{"func Scale(factor int32) int32", "func Scale(factor int32, bonus int32) int32"},
+            scaleLabels
+        )
         Assert.Equal(0, overloadedHelp!!.ActiveSignature)
+        Assert.Equal(0, overloadedHelp!!.ActiveParameter)
+        Assert.Equal(
+            "factor int32",
+            overloadedHelp!!
+                .Signatures
+                .ElementAt(overloadedHelp!!.ActiveSignature)
+                .Parameters
+                .ElementAt(overloadedHelp!!.ActiveParameter)
+                .Label
+        )
         let genericSingleHelp = HelpIn(content, SourceExtensionFileA, "n.Repeat(")
         Assert.NotNull(genericSingleHelp)
-        Assert.Contains("Repeat", Assert.Single(genericSingleHelp!!.Signatures).Label, StringComparison.Ordinal)
+        let repeatSignature = Assert.Single(genericSingleHelp!!.Signatures)
+        Assert.Equal("func Repeat[T](item T) sequence[T?]", repeatSignature.Label)
+        Assert.Equal("item T", Assert.Single(repeatSignature.Parameters).Label)
         let genericOverloadedHelp = HelpIn(content, SourceExtensionFileA, "xs.Pick(")
         Assert.NotNull(genericOverloadedHelp)
         let pickLabels = genericOverloadedHelp!!.Signatures.Select((s SignatureInformation) -> s.Label).ToArray()
-        Assert.Equal(2, pickLabels.Length)
-        Assert.DoesNotContain("fallback", pickLabels[0], StringComparison.Ordinal)
-        Assert.Contains("fallback", pickLabels[1], StringComparison.Ordinal)
+        Assert.Equal([]string{"func Pick[T](index int32) T", "func Pick[T](index int32, fallback T) T"}, pickLabels)
         Assert.Equal(0, genericOverloadedHelp!!.ActiveSignature)
+        Assert.Equal(
+            "index int32",
+            genericOverloadedHelp!!
+                .Signatures
+                .ElementAt(genericOverloadedHelp!!.ActiveSignature)
+                .Parameters
+                .ElementAt(genericOverloadedHelp!!.ActiveParameter)
+                .Label
+        )
         let mixedStaticHelp = HelpIn(content, SourceExtensionFileA, "HostB.Scale(")
         Assert.NotNull(mixedStaticHelp)
         let mixedLabels = mixedStaticHelp!!.Signatures.Select((s SignatureInformation) -> s.Label).ToArray()
-        Assert.Equal(2, mixedLabels.Length)
-        Assert.DoesNotContain("bonus", mixedLabels[0], StringComparison.Ordinal)
-        Assert.Contains("bonus", mixedLabels[1], StringComparison.Ordinal)
+        Assert.Equal(
+            []string{
+                "static func Scale(only int32) int32",
+                "static func Scale(value int32, factor int32, bonus int32) int32"
+            },
+            mixedLabels
+        )
         Assert.Equal(0, mixedStaticHelp!!.ActiveSignature)
+        Assert.Equal(
+            "only int32",
+            mixedStaticHelp!!
+                .Signatures
+                .ElementAt(mixedStaticHelp!!.ActiveSignature)
+                .Parameters
+                .ElementAt(mixedStaticHelp!!.ActiveParameter)
+                .Label
+        )
     }
 
     @Fact
@@ -159,23 +194,50 @@ open class Adr0212ExtensionFeatureTests {
         Assert.Equal(2, selectLabels.Length)
         Assert.All(
             selectLabels,
-            (label string) -> Assert.Contains("IEnumerable[TSource]", label, StringComparison.Ordinal)
+            (label string) -> Assert.DoesNotContain("source IEnumerable[TSource]", label, StringComparison.Ordinal)
         )
         Assert.Equal(0, selectHelp!!.ActiveSignature)
+        Assert.Equal(
+            "selector Func[TSource, TResult]",
+            selectHelp!!
+                .Signatures
+                .ElementAt(selectHelp!!.ActiveSignature)
+                .Parameters
+                .ElementAt(selectHelp!!.ActiveParameter)
+                .Label
+        )
         let toListHelp = HelpIn(content, ImportedExtensionSource, "xs.ToList(")
         Assert.NotNull(toListHelp)
-        Assert.Contains("IEnumerable[TSource]", Assert.Single(toListHelp!!.Signatures).Label, StringComparison.Ordinal)
+        let toListSignature = Assert.Single(toListHelp!!.Signatures)
+        Assert.DoesNotContain("source", toListSignature.Label, StringComparison.Ordinal)
+        Assert.Empty(toListSignature.Parameters)
         let toArrayHelp = HelpIn(content, ImportedExtensionSource, "xs.ToArray(")
         Assert.NotNull(toArrayHelp)
-        Assert.Contains("IEnumerable[TSource]", Assert.Single(toArrayHelp!!.Signatures).Label, StringComparison.Ordinal)
+        let toArraySignature = Assert.Single(toArrayHelp!!.Signatures)
+        Assert.DoesNotContain("source", toArraySignature.Label, StringComparison.Ordinal)
+        Assert.Empty(toArraySignature.Parameters)
         let asSpanHelp = HelpIn(content, ImportedExtensionSource, "s.AsSpan(")
         Assert.NotNull(asSpanHelp)
         let asSpanLabels = asSpanHelp!!.Signatures.Select((s SignatureInformation) -> s.Label).ToArray()
         Assert.Equal(5, asSpanLabels.Length)
-        Assert.All(asSpanLabels, (label string) -> Assert.Contains("text string", label, StringComparison.Ordinal))
+        Assert.All(
+            asSpanLabels,
+            (label string) -> Assert.DoesNotContain("text string", label, StringComparison.Ordinal)
+        )
+        Assert.Equal(
+            "start int32",
+            asSpanHelp!!
+                .Signatures
+                .ElementAt(asSpanHelp!!.ActiveSignature)
+                .Parameters
+                .ElementAt(asSpanHelp!!.ActiveParameter)
+                .Label
+        )
         let comparerHelp = HelpIn(content, ImportedExtensionSource, "cmp.GetStringComparer(")
         Assert.NotNull(comparerHelp)
-        Assert.Contains("GetStringComparer", Assert.Single(comparerHelp!!.Signatures).Label, StringComparison.Ordinal)
+        let comparerSignature = Assert.Single(comparerHelp!!.Signatures)
+        Assert.DoesNotContain("compareInfo", comparerSignature.Label, StringComparison.Ordinal)
+        Assert.Equal("options CompareOptions", Assert.Single(comparerSignature.Parameters).Label)
     }
 
     @Fact

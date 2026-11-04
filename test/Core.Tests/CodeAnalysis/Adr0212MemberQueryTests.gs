@@ -214,6 +214,24 @@ open class Adr0212MemberQueryTests {
             )
         )
         Assert.Same(comparerLookup, comparerSingle)
+        let reprojectInferred = selectModel.GetMemberGroup(CallAt("PReprojectInferred"))
+        let reprojectExplicit = selectModel.GetMemberGroup(CallAt("PReprojectExplicit"))
+        let reprojectLookup = selectModel.LookupMembers(
+            Position("PReprojectInferred"),
+            SliceTypeSymbol.Get(TypeSymbol.Int32),
+            "Reproject"
+        )
+        Assert.Equal(
+            []int32{1, 2},
+            reprojectInferred.Select((s Symbol) -> cast[ImportedFunctionSymbol](s).Method.GetParameters().Length)
+                .ToArray()
+        )
+        Assert.All(
+            reprojectExplicit,
+            (s Symbol) -> Assert.True(cast[ImportedFunctionSymbol](s).Method.IsGenericMethodDefinition)
+        )
+        Assert.Equal(reprojectInferred.ToList(), reprojectExplicit.ToList())
+        Assert.Equal(reprojectInferred.ToList(), reprojectLookup.ToList())
     }
 
     @Fact
@@ -489,6 +507,7 @@ open class Adr0212MemberQueryTests {
         }
 
         private const FileA string = `package Members
+import GSharp.Core.Tests.CodeAnalysis
 import System
 import System.Collections.Generic
 import System.Globalization
@@ -625,6 +644,8 @@ func UseAll(c Cat, r IRead, b IBoxed[int32], dual IDualBoxed, p Parts, sb String
     xs.ToList() // PImportedExtSingle
     "abc".AsSpan(1) // PImportedExtNonGeneric
     cmp.GetStringComparer(CompareOptions.None) // PImportedExtNonGenericSingle
+    xs.Reproject((x int32) -> x.ToString()) // PReprojectInferred
+    xs.Reproject[int32, string]() // PReprojectExplicit
     // PLookup
 }
 `
@@ -730,4 +751,21 @@ partial class Parts {
             return ModelOf(Trees[0].Root).LookupMembers(Position(marker), TypeNamed(typeName, marker))
         }
     }
+}
+
+class ImportedGenericExtensionFixture { }
+
+@ExtensionOwner(typeof(ImportedGenericExtensionFixture))
+func (items IEnumerable[T]) Reproject[T, U]() IEnumerable[U] {
+    return Enumerable.Empty[U]()
+}
+
+@ExtensionOwner(typeof(ImportedGenericExtensionFixture))
+func (items IEnumerable[T]) Reproject[T, U](selector(T) -> U) IEnumerable[U] {
+    return items.Select(selector)
+}
+
+@ExtensionOwner(typeof(ImportedGenericExtensionFixture))
+func (items ISet[T]) Reproject[T]() IEnumerable[T] {
+    return items
 }
