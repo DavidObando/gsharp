@@ -574,7 +574,12 @@ partial class Binder {
             Statements.EvolveCallableAliases(expr, aliases),
             recordExpressionNarrowingKill: (frame NarrowingFrame, path AccessPath, type TypeSymbol) ->
             Statements.RecordExpressionNarrowingKill(frame, path, type),
-            getCallableAliases: () -> Statements.CaptureExternalCallableAliasesForExpression()
+            getCallableAliases: () -> Statements.CaptureExternalCallableAliasesForExpression(),
+            setCallableAliases: (aliases HashSet[VariableSymbol]) ->
+            Statements.SetExternalCallableAliasesFromExpression(aliases)
+        )
+        Statements.SetSyncExpressionCallableAliases(
+            (aliases IReadOnlyCollection[VariableSymbol]) -> expressions.SyncActiveExpressionCallableAliases(aliases)
         )
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor

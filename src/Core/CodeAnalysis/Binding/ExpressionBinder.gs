@@ -90,9 +90,10 @@ internal partial class ExpressionBinder {
     private let evolveAliases(BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol]
     private let recordExpressionNarrowingKill(NarrowingFrame, AccessPath, TypeSymbol) -> void
     private let getCallableAliases() -> HashSet[VariableSymbol]
-    private let expressionNarrowingFrames List[(Frame NarrowingFrame, Aliases HashSet[VariableSymbol])] = List[
-        (Frame NarrowingFrame, Aliases HashSet[VariableSymbol])
-    ]()
+    private let setCallableAliases(HashSet[VariableSymbol]) -> void
+    private let expressionNarrowingFrames List[
+        (Frame NarrowingFrame, Aliases HashSet[VariableSymbol], SavedStatementAliases HashSet[VariableSymbol])
+    ] = List[(Frame NarrowingFrame, Aliases HashSet[VariableSymbol], SavedStatementAliases HashSet[VariableSymbol])]()
 
     // Issue #5569: the diagnostics of each discarded literal target bind in the calls that are binding now.
     private let literalTargetDiagnostics List[ImmutableArray[Diagnostic]] = List[ImmutableArray[Diagnostic]]()
@@ -144,7 +145,8 @@ internal partial class ExpressionBinder {
         clearAssignedRoots(BoundNode, Dictionary[AccessPath, TypeSymbol], IReadOnlyCollection[VariableSymbol]?) -> void,
         evolveAliases(BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol],
         recordExpressionNarrowingKill(NarrowingFrame, AccessPath, TypeSymbol) -> void,
-        getCallableAliases() -> HashSet[VariableSymbol]
+        getCallableAliases() -> HashSet[VariableSymbol],
+        setCallableAliases(HashSet[VariableSymbol]) -> void
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.memberLookup = memberLookup ?? throw ArgumentNullException("memberLookup")
@@ -174,6 +176,7 @@ internal partial class ExpressionBinder {
         this.evolveAliases = evolveAliases
         this.recordExpressionNarrowingKill = recordExpressionNarrowingKill
         this.getCallableAliases = getCallableAliases
+        this.setCallableAliases = setCallableAliases
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics
@@ -266,6 +269,19 @@ internal partial class ExpressionBinder {
         )
     }
 
+    internal func SyncActiveExpressionCallableAliases(aliases IReadOnlyCollection[VariableSymbol]) {
+        for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
+            let entry = expressionNarrowingFrames[i]
+            if entry.Frame.Owner != nil {
+                expressionNarrowingFrames[i] = (
+                    entry.Frame,
+                    HashSet[VariableSymbol](aliases),
+                    entry.SavedStatementAliases
+                )
+            }
+        }
+    }
+
     private func GetCurrentExpressionCallableAliases() HashSet[VariableSymbol] {
         for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
             let entry = expressionNarrowingFrames[i]
@@ -277,28 +293,37 @@ internal partial class ExpressionBinder {
     }
 
     private func PushExpressionNarrowingFrame(
-        frame Dictionary[AccessPath, TypeSymbol],
+        frame Dictionary[AccessPath, TypeSymbol]?,
         aliases HashSet[VariableSymbol]? = nil
     ) NarrowingFrame {
+        let savedStatementAliases = getCallableAliases()
         let initialAliases = if aliases != nil {
             HashSet[VariableSymbol](aliases)
         } else {
             GetCurrentExpressionCallableAliases()
         }
-        let pushed = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol](frame))
-        expressionNarrowingFrames.Add((pushed, initialAliases))
+        setCallableAliases(initialAliases)
+        let dict = if frame != nil {
+            Dictionary[AccessPath, TypeSymbol](frame)
+        } else {
+            Dictionary[AccessPath, TypeSymbol]()
+        }
+        let pushed = binderCtx.PushNarrowingFrame(dict)
+        expressionNarrowingFrames.Add((pushed, initialAliases, savedStatementAliases))
         return pushed
     }
 
     private func PopExpressionNarrowingFrame() {
+        let popped = expressionNarrowingFrames[expressionNarrowingFrames.Count - 1]
         expressionNarrowingFrames.RemoveAt(expressionNarrowingFrames.Count - 1)
         binderCtx.EndNarrowingProof()
+        setCallableAliases(popped.SavedStatementAliases)
     }
 
     private func HasActiveExpressionNarrowings() bool {
         for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
             let frame = expressionNarrowingFrames[i].Frame
-            if frame.Owner != nil && frame.Count > 0 {
+            if frame.Owner != nil {
                 return true
             }
         }
@@ -346,7 +371,11 @@ internal partial class ExpressionBinder {
             }
             for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
                 if object.ReferenceEquals(expressionNarrowingFrames[i].Frame, frame) {
-                    expressionNarrowingFrames[i] = (frame, HashSet[VariableSymbol](aliases))
+                    expressionNarrowingFrames[i] = (
+                        frame,
+                        HashSet[VariableSymbol](aliases),
+                        expressionNarrowingFrames[i].SavedStatementAliases
+                    )
                     break
                 }
             }
@@ -388,7 +417,7 @@ internal partial class ExpressionBinder {
                 }
             }
             aliases = evolveAliases(bound, aliases)
-            expressionNarrowingFrames[i] = (frame, aliases)
+            expressionNarrowingFrames[i] = (frame, aliases, entry.SavedStatementAliases)
         }
     }
 
@@ -399,7 +428,7 @@ internal partial class ExpressionBinder {
         canBeVoid bool = false,
         aliases HashSet[VariableSymbol]? = nil
     ) BoundExpression {
-        if frame == nil {
+        if frame == nil && aliases == nil {
             return if targetType == nil {
                 BindExpression(syntax, canBeVoid)
             } else {
@@ -1258,11 +1287,12 @@ internal partial class ExpressionBinder {
     /// `null` when no narrowing can be safely inferred.
     private func TryClassifyTypeTestNarrowingForAnd(
         boundLeft BoundExpression,
+        leftEntryAliases HashSet[VariableSymbol],
         out whenTrueAliases HashSet[VariableSymbol]
     ) Dictionary[AccessPath, TypeSymbol]? {
         let (thenFrame, _, trueAliases, _) = ClassifyTypeTestNarrowingInOrder(
             boundLeft,
-            GetCurrentExpressionCallableAliases(),
+            leftEntryAliases,
             restrictBareVariableToLocalsAndParams: true
         )
         whenTrueAliases = trueAliases
@@ -1281,11 +1311,12 @@ internal partial class ExpressionBinder {
     /// makes `!(x is T) || f(x)` bind `f(x)` with `x` narrowed to `T`.
     private func TryClassifyTypeTestNarrowingForOr(
         boundLeft BoundExpression,
+        leftEntryAliases HashSet[VariableSymbol],
         out whenFalseAliases HashSet[VariableSymbol]
     ) Dictionary[AccessPath, TypeSymbol]? {
         let (_, elseFrame, _, falseAliases) = ClassifyTypeTestNarrowingInOrder(
             boundLeft,
-            GetCurrentExpressionCallableAliases(),
+            leftEntryAliases,
             restrictBareVariableToLocalsAndParams: true
         )
         whenFalseAliases = falseAliases

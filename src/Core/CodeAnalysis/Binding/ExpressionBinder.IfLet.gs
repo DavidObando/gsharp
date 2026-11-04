@@ -69,6 +69,7 @@ internal partial class ExpressionBinder {
         var afterHeader List[
             (Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol], Aliases HashSet[VariableSymbol])
         ]? = nil
+        var guardEntryAliases HashSet[VariableSymbol]? = nil
         var guardTrueAliases HashSet[VariableSymbol]? = nil
         let (clauses, guard_, whenTrueBound) = IfLetBindingSupport.BindHeader(
             binderCtx,
@@ -79,20 +80,27 @@ internal partial class ExpressionBinder {
             bindTypeClause,
             (initializer ExpressionSyntax) -> BindExpression(initializer),
             DeclareIfLetLocal,
-            (guardSyntax ExpressionSyntax) -> BindExpression(guardSyntax, TypeSymbol.Bool),
+            (guardSyntax ExpressionSyntax) -> {
+                guardEntryAliases = GetCurrentExpressionCallableAliases()
+                return BindExpression(guardSyntax, TypeSymbol.Bool)
+            },
             (boundGuard BoundExpression) -> {
-                let classified = ClassifyConditionalNarrowing(boundGuard)
+                let classified = ClassifyConditionalNarrowing(boundGuard, guardEntryAliases)
                 guardTrueAliases = classified.WhenTrueAliases
                 return classified.WhenTrue
             },
             () -> {
                 afterHeader = CaptureExpressionNarrowingFrames()
+                let savedStatementAliases = getCallableAliases()
+                let initialAliases = guardTrueAliases ?? GetCurrentExpressionCallableAliases()
+                setCallableAliases(initialAliases)
                 let topFrame = binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1]
-                expressionNarrowingFrames.Add((topFrame, guardTrueAliases ?? GetCurrentExpressionCallableAliases()))
+                expressionNarrowingFrames.Add((topFrame, initialAliases, savedStatementAliases))
                 try {
                     return BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
                 } finally {
                     expressionNarrowingFrames.RemoveAt(expressionNarrowingFrames.Count - 1)
+                    setCallableAliases(savedStatementAliases)
                 }
             },
             syntax.ThenBlock

@@ -327,6 +327,7 @@ internal partial class StatementBinder {
         RestoreEntries(binderCtx.PendingSwitchExitFrames, state.PendingSwitchExitFrames)
         RestoreItems(binderCtx.DefinedUserLabels, state.DefinedUserLabels)
         RestoreItems(externalCallableAliases, state.ExternalCallableAliases)
+        SyncExpressionCallableAliasesNow()
         binderCtx.NarrowingFlow.Restore(state.PendingJumps)
         RestoreEntries(binderCtx.UserLabels, state.UserLabels)
         RestoreEntries(binderCtx.UnresolvedGotoLabels, state.UnresolvedGotoLabels)

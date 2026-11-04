@@ -646,6 +646,7 @@ internal partial class ExpressionBinder {
         this.binderCtx.DeferTargetlessConditional = false
         let diagMark = Diagnostics.Count
         let beforeConditional = CaptureExpressionNarrowingFrames()
+        let conditionEntryAliases = GetCurrentExpressionCallableAliases()
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
         let afterCondition = CaptureExpressionNarrowingFrames()
         // ADR-0100 / issue #795: a bare `default` branch takes its type
@@ -659,7 +660,8 @@ internal partial class ExpressionBinder {
         // the equivalent if-expression uses (`s != nil ? s.Length : 0`), so
         // the two conditional forms narrow identically.
         let (whenTrueNarrowing, whenFalseNarrowing, whenTrueAliases, whenFalseAliases) = ClassifyConditionalNarrowing(
-            condition
+            condition,
+            conditionEntryAliases
         )
         // ADR-0166: each branch sees the pattern variables the condition
         // definitely assigns on that branch (`x is T t ? t.Name : "none"`).
@@ -838,10 +840,12 @@ internal partial class ExpressionBinder {
         // position; BindIfExpression rejects it elsewhere (GS0276).
         let elseSyntax = syntax.ElseExpression
         let beforeConditional = CaptureExpressionNarrowingFrames()
+        let conditionEntryAliases = GetCurrentExpressionCallableAliases()
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
         let afterCondition = CaptureExpressionNarrowingFrames()
         let (whenTrueNarrowing, whenFalseNarrowing, whenTrueAliases, whenFalseAliases) = ClassifyConditionalNarrowing(
-            condition
+            condition,
+            conditionEntryAliases
         )
         // ADR-0166: each arm also sees the pattern variables the condition
         // definitely assigns on that arm.
@@ -1018,7 +1022,7 @@ internal partial class ExpressionBinder {
         bind() -> BoundExpression,
         aliases HashSet[VariableSymbol]? = nil
     ) BoundExpression {
-        if narrowing == nil {
+        if narrowing == nil && aliases == nil {
             return bind()
         }
         PushExpressionNarrowingFrame(narrowing, aliases)
@@ -1426,6 +1430,7 @@ internal partial class ExpressionBinder {
             this.binderCtx.DeferTargetlessConditional = false
         }
         let coalesceDiagMark = Diagnostics.Count
+        let leftEntryAliases = GetCurrentExpressionCallableAliases()
         var boundLeft = if coalesceTargetType != nil &&
             syntax
             .OperatorToken
@@ -1450,7 +1455,7 @@ internal partial class ExpressionBinder {
         // `!(x is T t) || t.Length > 0` likewise through the negation.
         var boundRight BoundExpression
         if syntax.OperatorToken.Kind == SyntaxKind.AmpersandAmpersandToken {
-            let rightFrame = TryClassifyTypeTestNarrowingForAnd(boundLeft, out var rightAliases)
+            let rightFrame = TryClassifyTypeTestNarrowingForAnd(boundLeft, leftEntryAliases, out var rightAliases)
             let (leftWhenTrue, _) = PatternVariables.Classify(boundLeft)
             boundRight = BindWithPatternVariables(
                 leftWhenTrue,
@@ -1461,7 +1466,7 @@ internal partial class ExpressionBinder {
             )
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenTrue, leftWhenTrue)
         } else if syntax.OperatorToken.Kind == SyntaxKind.PipePipeToken {
-            let rightFrame = TryClassifyTypeTestNarrowingForOr(boundLeft, out var rightAliases)
+            let rightFrame = TryClassifyTypeTestNarrowingForOr(boundLeft, leftEntryAliases, out var rightAliases)
             let (_, leftWhenFalse) = PatternVariables.Classify(boundLeft)
             boundRight = BindWithPatternVariables(
                 leftWhenFalse,
@@ -2787,14 +2792,14 @@ internal partial class ExpressionBinder {
     /// @returns The frame for the branch taken when the condition is true,
     /// and the frame for the branch taken when it is false. Either may be
     /// `nil` when that branch narrows nothing.
-    private func ClassifyConditionalNarrowing(condition BoundExpression)(
+    private func ClassifyConditionalNarrowing(condition BoundExpression, entryAliases HashSet[VariableSymbol]? = nil)(
         WhenTrue Dictionary[AccessPath, TypeSymbol]?,
         WhenFalse Dictionary[AccessPath, TypeSymbol]?,
         WhenTrueAliases HashSet[VariableSymbol],
         WhenFalseAliases HashSet[VariableSymbol]
     ) -> ClassifyTypeTestNarrowingInOrder(
         condition,
-        GetCurrentExpressionCallableAliases(),
+        entryAliases ?? GetCurrentExpressionCallableAliases(),
         restrictBareVariableToLocalsAndParams: false
     )
 

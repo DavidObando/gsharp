@@ -40,16 +40,32 @@ internal partial class StatementBinder {
     // ADR-0208 R18: the callable aliases at each operand of the condition being classified (cref:AliasesAtTests);
     // `nil` otherwise, and the current aliases apply.
     private var testAliasesAt Dictionary[BoundExpression, HashSet[VariableSymbol]]?
+    private var syncExpressionCallableAliases((IReadOnlyCollection[VariableSymbol]) -> void)?
+
+    internal func SetSyncExpressionCallableAliases(callback((IReadOnlyCollection[VariableSymbol]) -> void)?) {
+        syncExpressionCallableAliases = callback
+    }
+
+    internal func SyncExpressionCallableAliasesNow() {
+        syncExpressionCallableAliases?.Invoke(externalCallableAliases)
+    }
 
     internal func IsolateExternalCallableAliases() HashSet[VariableSymbol] {
         let saved = HashSet[VariableSymbol](externalCallableAliases)
         externalCallableAliases.Clear()
+        SyncExpressionCallableAliasesNow()
         return saved
     }
 
     internal func RestoreExternalCallableAliases(saved HashSet[VariableSymbol]) {
         externalCallableAliases.Clear()
         externalCallableAliases.UnionWith(saved)
+        SyncExpressionCallableAliasesNow()
+    }
+
+    internal func SetExternalCallableAliasesFromExpression(aliases HashSet[VariableSymbol]) {
+        externalCallableAliases.Clear()
+        externalCallableAliases.UnionWith(aliases)
     }
 
     private func CaptureExternalCallableAliases() HashSet[VariableSymbol] -> HashSet[VariableSymbol](
@@ -538,6 +554,7 @@ internal partial class StatementBinder {
                 RemoveFilterAffectedAliases(externalCallableAliases, filters)
             }
         }
+        SyncExpressionCallableAliasesNow()
     }
 
     // Returns the effect summary of [`statement`](paramref) for the entry alias
@@ -974,6 +991,7 @@ internal partial class StatementBinder {
         for snapshot in incomingSnapshots {
             externalCallableAliases.IntersectWith(snapshot.ExternalCallableAliases)
         }
+        SyncExpressionCallableAliasesNow()
     }
 
     private func ApplyExitedFinallyEffects(
@@ -1740,6 +1758,7 @@ internal partial class StatementBinder {
         }
         let before = HashSet[VariableSymbol](externalCallableAliases)
         RemoveHeaderAffectedAliases(externalCallableAliases, header)
+        SyncExpressionCallableAliasesNow()
         before.ExceptWith(externalCallableAliases)
         return before
     }
@@ -1972,6 +1991,7 @@ internal partial class StatementBinder {
         }
         if header.RemovedAliases is {} removed {
             externalCallableAliases.ExceptWith(removed)
+            SyncExpressionCallableAliasesNow()
         }
         return header.RemovedAliases
     }

@@ -482,8 +482,49 @@ func CheckSubsequentArguments(external () -> bool, seed string?) int32 {
     }
     return Has(s, (action = reset), action()) ? s.Length : 0
 }
+
+func CheckLateExternalAssignmentInNestedArm(external () -> bool, seed string?, n int32?) int32 {
+    var s = seed
+    var action = () -> {
+        s = nil
+        return true
+    }
+    return n != nil ? ((!string.IsNullOrEmpty(s) && action() && ((action = external) is {} a)) ? s.Length : 0) : 0
+}
+
+func CheckNestedIfBranchAliasRestore(external () -> bool, seed string?, flag bool) int32 {
+    var s = seed
+    var action = () -> {
+        s = nil
+        return true
+    }
+    return if s != nil {
+        if flag {
+            action = external
+            0
+        } else {
+            let n = action() ? s.Length : 0
+            n
+        }
+    } else {
+        0
+    }
+}
+
+func CheckNilFrameAliasPropagation(external () -> bool, seed string?) bool {
+    var s = seed
+    var action = external
+    let reset = () -> {
+        s = nil
+        return true
+    }
+    return ((action = reset) is {} a) && (!string.IsNullOrEmpty(s) && action() && s.Length > 0)
+}
 `
-        Assert.Equal("GS0158:Length;GS0158:Length;GS0158:Length", DiagnoseSource(callableReassignment))
+        Assert.Equal(
+            "GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length;GS0158:Length",
+            DiagnoseSource(callableReassignment)
+        )
 
         let nestedIfAndSwitch = `package Issue4969.NestedIfAndSwitch
 func NestedIfInIfExpr(ref s string?, flag bool) int32 -> if s != nil {
