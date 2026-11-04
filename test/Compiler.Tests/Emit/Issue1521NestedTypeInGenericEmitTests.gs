@@ -289,8 +289,14 @@ class Outer[T] {
         return scopedItem.Read()
     }
 }
+class Left {
+    public class Item { }
+}
+class Right {
+    public class Item { }
+}
 @TypeTag(typeof(Outer[string].IPlain), typeof(Outer[string].IGeneric[int32]))
-class PlainImpl : Outer[string].IPlain, Outer[string].IGeneric[int32], Outer[string].IGeneric[PlainImpl], Outer[string].IMarker, Outer[int32].IMarker {
+class PlainImpl : Outer[string].IPlain, Outer[string].IGeneric[int32], Outer[string].IGeneric[PlainImpl], Outer[string].IMarker, Outer[int32].IMarker, Outer[Left.Item].IMarker, Outer[Right.Item].IMarker {
     public prop Tag string -> "tag"
     public func ReadPlain(seed string) string -> seed + ":" + Tag + ":21"
     public func EchoInner(x Outer[string].Inner) Outer[string].Inner -> x
@@ -300,6 +306,8 @@ class PlainImpl : Outer[string].IPlain, Outer[string].IGeneric[int32], Outer[str
     public func CompareTo(other PlainImpl?) int32 -> 0
     private func (Outer[string].IMarker) Code() int32 -> 101
     private func (Outer[int32].IMarker) Code() int32 -> 202
+    private func (Outer[Left.Item].IMarker) Code() int32 -> 303
+    private func (Outer[Right.Item].IMarker) Code() int32 -> 404
 }
 func UseSelfRef[T Outer[string].IGeneric[T]](x T) string -> x.ReadGeneric("self", x)
 class SelfOwnerImpl : Outer[SelfOwnerImpl].IPlain, Outer[SelfOwnerImpl].IGeneric[SelfOwnerImpl] {
@@ -315,6 +323,8 @@ func UsePlain(p Outer[string].IPlain, item Outer[string].Inner) string -> p.Read
 func UseGeneric(g Outer[string].IGeneric[int32]) string -> g.ReadGeneric("g", 8)
 func UseMarkerString(m Outer[string].IMarker) int32 -> m.Code()
 func UseMarkerInt(m Outer[int32].IMarker) int32 -> m.Code()
+func UseMarkerLeft(m Outer[Left.Item].IMarker) int32 -> m.Code()
+func UseMarkerRight(m Outer[Right.Item].IMarker) int32 -> m.Code()
 func Main() {
     let item = Outer[string].Inner{Value: 7}
     let owner = Outer[string]{}
@@ -325,17 +335,19 @@ func Main() {
     let baseIface = typeof(Outer[string].IGeneric[int32]).GetInterfaces()[0]
     let strMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[string].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
     let intMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[int32].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
+    let leftMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[QualifiedNested4774.Left.Item].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
+    let rightMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[QualifiedNested4774.Right.Item].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
     Console.WriteLine(item.Read())
     Console.WriteLine(owner.ReadScoped() + owner.UseMiddleLeaf(leaf))
     Console.WriteLine(UsePlain(owner.EchoIface(impl), item))
     Console.WriteLine(UseGeneric(impl) + ":" + UseSelfRef(impl) + ":" + UseSelfEnclosing(selfOwner))
     Console.WriteLine(tag.First == typeof(Outer[string].IPlain) && tag.Second == typeof(Outer[string].IGeneric[int32]))
     Console.WriteLine(baseIface == typeof(IComparable[int32]))
-    Console.WriteLine(UseMarkerString(impl).ToString() + ":" + UseMarkerInt(impl).ToString() + ":" + (strMarkerMethod != nil && intMarkerMethod != nil && strMarkerMethod != intMarkerMethod).ToString())
+    Console.WriteLine(UseMarkerString(impl).ToString() + ":" + UseMarkerInt(impl).ToString() + ":" + UseMarkerLeft(impl).ToString() + ":" + UseMarkerRight(impl).ToString() + ":" + (strMarkerMethod != nil && intMarkerMethod != nil && leftMarkerMethod != nil && rightMarkerMethod != nil && leftMarkerMethod != rightMarkerMethod).ToString())
 }`
         let output = CompileAndRun(validSource)
         Assert.Equal(
-            "12${Environment.NewLine}16${Environment.NewLine}p:tag:21:12${Environment.NewLine}g:8:self:tag:self-enclosing${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}101:202:True${Environment.NewLine}",
+            "12${Environment.NewLine}16${Environment.NewLine}p:tag:21:12${Environment.NewLine}g:8:self:tag:self-enclosing${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}101:202:303:404:True${Environment.NewLine}",
             output
         )
 

@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Emit
 
 import GSharp.Core.CodeAnalysis.Symbols
+import System.Collections.Immutable
 
 /// ADR-0149: an explicit-interface qualifier clause (`func (IFoo) M(...)`
 /// / `prop (IFoo) P T`) keeps its declared, source-visible name plain —
@@ -55,47 +56,178 @@ internal shared class ExplicitInterfaceMetadataNaming {
         return "${interfaceName ?? target.Name}.$memberName"
     }
 
-    private func FormatSourceInterfaceName(sourceInterface InterfaceSymbol) string {
-        let enclosingArgs = sourceInterface.EnclosingTypeArguments
-        if enclosingArgs.IsDefaultOrEmpty {
-            return sourceInterface.Name
+    private func FormatSourceInterfaceName(sourceInterface InterfaceSymbol) string -> FormatUserAggregateName(
+        sourceInterface.Definition ?? sourceInterface,
+        sourceInterface.EnclosingTypeArguments,
+        sourceInterface.TypeArguments,
+        includePackage: false
+    )
+
+    private func FormatUserAggregateName(
+        definition TypeSymbol,
+        enclosingArgs ImmutableArray[TypeSymbol],
+        ownArgs ImmutableArray[TypeSymbol],
+        includePackage bool
+    ) string {
+        let ownSegment = if !ownArgs.IsDefaultOrEmpty {
+            let ownParts = [ownArgs.Length]string
+            for var i = 0; i < ownArgs.Length; i++ {
+                ownParts[i] = FormatTypeArgument(ownArgs[i])
+            }
+            "${definition.Name}[${string.Join(", ", ownParts)}]"
+        } else {
+            definition.Name
         }
-        let def = sourceInterface.Definition ?? sourceInterface
         let containers = System.Collections.Generic.List[TypeSymbol]()
-        var current = def.ContainingType
+        var current = definition.ContainingType
         while current != nil {
             containers.Add(current)
             current = current.ContainingType
         }
+        var body string
         if containers.Count == 0 {
-            let argParts = [enclosingArgs.Length]string
-            for var i = 0; i < enclosingArgs.Length; i++ {
-                argParts[i] = enclosingArgs[i].Name
-            }
-            return "${sourceInterface.Name}[${string.Join(", ", argParts)}]"
-        }
-        containers.Reverse()
-        let parts = [containers.Count + 1]string
-        var offset = 0
-        for var i = 0; i < containers.Count; i++ {
-            let containerDef = (containers[i] as StructSymbol)?.Definition ?? containers[i]
-            let arity = if containerDef is StructSymbol structDef {
-                structDef.DeclaredTypeParameters.Length
-            } else {
-                0
-            }
-            if arity > 0 && offset + arity <= enclosingArgs.Length {
-                let argParts = [arity]string
-                for var j = 0; j < arity; j++ {
-                    argParts[j] = enclosingArgs[offset + j].Name
+            if !enclosingArgs.IsDefaultOrEmpty {
+                let argParts = [enclosingArgs.Length]string
+                for var i = 0; i < enclosingArgs.Length; i++ {
+                    argParts[i] = FormatTypeArgument(enclosingArgs[i])
                 }
-                parts[i] = "${containerDef.Name}[${string.Join(", ", argParts)}]"
-                offset += arity
+                body = "${ownSegment}[${string.Join(", ", argParts)}]"
             } else {
-                parts[i] = containerDef.Name
+                body = ownSegment
+            }
+        } else {
+            containers.Reverse()
+            let parts = [containers.Count + 1]string
+            var offset = 0
+            for var i = 0; i < containers.Count; i++ {
+                let containerDef = (containers[i] as StructSymbol)?.Definition ?? containers[i]
+                let arity = if containerDef is StructSymbol structDef {
+                    structDef.DeclaredTypeParameters.Length
+                } else {
+                    0
+                }
+                if arity > 0 && !enclosingArgs.IsDefaultOrEmpty && offset + arity <= enclosingArgs.Length {
+                    let argParts = [arity]string
+                    for var j = 0; j < arity; j++ {
+                        argParts[j] = FormatTypeArgument(enclosingArgs[offset + j])
+                    }
+                    parts[i] = "${containerDef.Name}[${string.Join(", ", argParts)}]"
+                    offset += arity
+                } else {
+                    parts[i] = containerDef.Name
+                }
+            }
+            parts[containers.Count] = ownSegment
+            body = string.Join(".", parts)
+        }
+        if !includePackage {
+            return body
+        }
+        let packageName = switch definition {
+            case s is StructSymbol: s.PackageName
+            case i is InterfaceSymbol: i.PackageName
+            case e is EnumSymbol: e.PackageName
+            case d is DelegateTypeSymbol: d.PackageName
+            default: string.Empty
+        }
+        return if string.IsNullOrEmpty(packageName) {
+            body
+        } else {
+            "$packageName.$body"
+        }
+    }
+
+    private func FormatTypeArgument(type TypeSymbol) string {
+        switch type {
+            case annotated is NullabilityAnnotatedTypeSymbol {
+                return FormatTypeArgument(annotated.BaseType)
+            }
+            case platform is PlatformTypeSymbol {
+                return FormatTypeArgument(platform.UnderlyingType)
+            }
+            case nullable is NullableTypeSymbol {
+                return "${FormatTypeArgument(nullable.UnderlyingType)}?"
+            }
+            case slice is SliceTypeSymbol {
+                return "[]${FormatTypeArgument(slice.ElementType)}"
+            }
+            case array is ArrayTypeSymbol {
+                return "[${array.Length}]${FormatTypeArgument(array.ElementType)}"
+            }
+            case rect is RectangularArrayTypeSymbol {
+                return "[${System.String(',', rect.Rank - 1)}]${FormatTypeArgument(rect.ElementType)}"
+            }
+            case byRef is ByRefTypeSymbol {
+                return "${FormatTypeArgument(byRef.PointeeType)}&"
+            }
+            case ptr is PointerTypeSymbol {
+                return "*${FormatTypeArgument(ptr.PointeeType)}"
+            }
+            case tuple is TupleTypeSymbol {
+                let elemParts = [tuple.ElementTypes.Length]string
+                for var i = 0; i < tuple.ElementTypes.Length; i++ {
+                    elemParts[i] = FormatTypeArgument(tuple.ElementTypes[i])
+                }
+                return "(${string.Join(", ", elemParts)})"
+            }
+            case mapType is MapTypeSymbol {
+                return "map[${FormatTypeArgument(mapType.KeyType)}, ${FormatTypeArgument(mapType.ValueType)}]"
+            }
+            case seq is SequenceTypeSymbol {
+                return "sequence[${FormatTypeArgument(seq.ElementType)}]"
+            }
+            case aseq is AsyncSequenceTypeSymbol {
+                return "async sequence[${FormatTypeArgument(aseq.ElementType)}]"
+            }
+            case ch is ChannelTypeSymbol {
+                return "chan[${FormatTypeArgument(ch.ElementType)}]"
+            }
+            case s is StructSymbol {
+                return FormatUserAggregateName(
+                    s.Definition ?? s,
+                    s.EnclosingTypeArguments,
+                    s.TypeArguments,
+                    includePackage: true
+                )
+            }
+            case i is InterfaceSymbol {
+                return FormatUserAggregateName(
+                    i.Definition ?? i,
+                    i.EnclosingTypeArguments,
+                    i.TypeArguments,
+                    includePackage: true
+                )
+            }
+            case e is EnumSymbol {
+                return FormatUserAggregateName(
+                    e.Definition ?? e,
+                    e.EnclosingTypeArguments,
+                    ImmutableArray[TypeSymbol].Empty,
+                    includePackage: true
+                )
+            }
+            case d is DelegateTypeSymbol {
+                return FormatUserAggregateName(
+                    d.Definition ?? d,
+                    ImmutableArray[TypeSymbol].Empty,
+                    d.TypeArguments,
+                    includePackage: true
+                )
+            }
+            case imp is ImportedTypeSymbol when !imp.TypeArguments.IsDefaultOrEmpty {
+                let argParts = [imp.TypeArguments.Length]string
+                for var i = 0; i < imp.TypeArguments.Length; i++ {
+                    argParts[i] = FormatTypeArgument(imp.TypeArguments[i])
+                }
+                let baseName = imp.OpenDefinition?.FullName ?? imp.ClrType?.FullName ?? imp.Name
+                return "$baseName[${string.Join(", ", argParts)}]"
+            }
+            case impPlain is ImportedTypeSymbol when impPlain.ClrType?.FullName is {} fullName {
+                return fullName
+            }
+            default {
+                return type.Name
             }
         }
-        parts[containers.Count] = sourceInterface.Name
-        return string.Join(".", parts)
     }
 }
