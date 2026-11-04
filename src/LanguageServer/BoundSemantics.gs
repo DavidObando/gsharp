@@ -213,6 +213,21 @@ shared class BoundSemantics {
         return model.GetReceiverTypeInfo(expression).Type
     }
 
+    /// Gets the symbol the binder gave [`node`](paramref) (such as a static type qualifier), or null.
+    /// @param compilation The compilation the node's tree belongs to.
+    /// @param node A syntax node, typically the left-hand side of a member access.
+    /// @returns The bound symbol, or null when the binder has no answer for the node.
+    func GetNodeSymbol(compilation Compilation?, node SyntaxNode?) Symbol? {
+        if node == nil || compilation == nil {
+            return nil
+        }
+        let model = GetModel(compilation, node.SyntaxTree)
+        if model == nil {
+            return nil
+        }
+        return model.GetSymbolInfo(node).Symbol
+    }
+
     /// Gets the semantic model that answers for [`token`](paramref), and the token in that model's
     /// tree. A token of a stale parse of a file (a cached document that the project has since
     /// reparsed) is answered by the compilation's tree of the same file when the text is the same, for

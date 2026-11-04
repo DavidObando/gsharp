@@ -1039,7 +1039,10 @@ shared class SignatureHelpComputer {
         if candidates.Count == 0 {
             return nil
         }
-        let signatures = candidates.Select((c Symbol) -> BuildSignature(c)).ToList()
+        let signatures = candidates.Select(
+            (c Symbol) -> BuildSignature(c, IsExtensionReceiverCall(compilation, content.SyntaxTree, funcToken, c))
+        )
+            .ToList()
         var active = candidates.FindIndex((c Symbol) -> object.ReferenceEquals(c, resolved))
         // A constructed owner substitutes the candidates; the selected callee is the declared one.
         if active < 0 && resolved is FunctionSymbol{Declaration: {} resolvedDeclaration} {
@@ -1077,14 +1080,54 @@ shared class SignatureHelpComputer {
         }
     }
 
-    private func BuildSignature(candidate Symbol) SignatureInformation {
+    private func IsExtensionReceiverCall(
+        compilation Compilation,
+        tree SyntaxTree,
+        funcToken SyntaxToken?,
+        candidate Symbol
+    ) bool {
+        if !BoundSemantics.IsExtensionMember(candidate) {
+            return false
+        }
+        if funcToken?.Parent is not CallExpressionSyntax ce ||
+            ce.Parent is not AccessorExpressionSyntax accessor ||
+            !object.ReferenceEquals(accessor.RightPart, ce) {
+            return false
+        }
+        if BoundSemantics.GetNodeSymbol(compilation, accessor.LeftPart) is TypeSymbol {
+            return false
+        }
+        if BoundSemantics.GetExpressionType(compilation, accessor.LeftPart) is {} receiverType {
+            return BoundSemantics.IsReceiverExtension(candidate, receiverType)
+        }
+        if accessor.LeftPart is NameExpressionSyntax name {
+            if SemanticLookup.ResolveSymbol(compilation, name.IdentifierToken) is TypeSymbol {
+                return false
+            }
+            if SemanticLookup.ResolveImportedClrType(tree, compilation, name.IdentifierToken.Text) != nil {
+                return false
+            }
+        } else if SemanticLookup.ResolveImportedClrType(tree, compilation, accessor.LeftPart.ToString()) != nil {
+            return false
+        }
+        return true
+    }
+
+    private func BuildSignature(candidate Symbol, isReceiverExtension bool) SignatureInformation {
+        let skip = if isReceiverExtension {
+            1
+        } else {
+            0
+        }
         let parameters = switch candidate {
             case function is FunctionSymbol: function
                 .Parameters
+                .Skip(skip)
                 .Select((p ParameterSymbol) -> ParameterInformation{Label: "${p.Name} ${FormatType(p.Type)}"})
                 .ToList()
             case imported is ImportedFunctionSymbol: ImportedFunctionSymbol
                 .GetLogicalParameters(imported.Method)
+                .Skip(skip)
                 .Select(
                 (p ParameterInfo) -> ParameterInformation{
                     Label: "${p.Name} ${SymbolDisplay.ToTypeDisplayString(p.ParameterType, SymbolDisplayFormat.Signature.QualifyNames)}"
@@ -1093,7 +1136,49 @@ shared class SignatureHelpComputer {
                 .ToList()
             default: List[ParameterInformation]()
         }
-        return SignatureInformation{Label: HoverComputer.FormatSymbol(candidate), Parameters: parameters}
+        return SignatureInformation{Label: FormatSignatureLabel(candidate, isReceiverExtension), Parameters: parameters}
+    }
+
+    private func FormatSignatureLabel(candidate Symbol, isReceiverExtension bool) string {
+        if !isReceiverExtension {
+            return HoverComputer.FormatSymbol(candidate)
+        }
+        let parts = if candidate is ImportedFunctionSymbol imported {
+            SymbolDisplay.ToDisplayParts(imported.Method, SymbolDisplayFormat.Signature)
+        } else {
+            SymbolDisplay.ToDisplayParts(candidate, SymbolDisplayFormat.Signature)
+        }
+        var firstParam = -1
+        for var i = 0; i < parts.Length; i++ {
+            if parts[i].Kind == SymbolDisplayPartKind.ParameterName {
+                firstParam = i
+                break
+            }
+        }
+        if firstParam < 0 {
+            return HoverComputer.FormatSymbol(candidate)
+        }
+        var restStart = firstParam + 1
+        while restStart < parts.Length &&
+            parts[restStart].Kind != SymbolDisplayPartKind.ParameterName &&
+            !(parts[restStart].Kind == SymbolDisplayPartKind.Punctuation && parts[restStart].Text == ")") {
+            restStart++
+        }
+        let start = if parts.Length >= 2 &&
+            parts[0].Kind == SymbolDisplayPartKind.Keyword &&
+            parts[0].Text == "static" &&
+            parts[1].Kind == SymbolDisplayPartKind.Space {
+            2
+        } else {
+            0
+        }
+        let builder = System.Text.StringBuilder()
+        for var i = start; i < parts.Length; i++ {
+            if i < firstParam || i >= restStart {
+                builder.Append(parts[i].Text)
+            }
+        }
+        return builder.ToString()
     }
 
     private func FormatType(type TypeSymbol) string {

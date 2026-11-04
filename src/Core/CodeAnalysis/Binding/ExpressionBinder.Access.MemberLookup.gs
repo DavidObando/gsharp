@@ -229,19 +229,19 @@ internal partial class ExpressionBinder {
     }
 
     private func ImportedExtensionMayApply(type TypeSymbol, name string, callSyntax CallExpressionSyntax?) bool {
-        let argumentNames = if callSyntax != nil {
+        let argumentCount = if callSyntax != nil && callSyntax.TypeArgumentList == nil {
+            callSyntax.Arguments.Count
+        } else {
+            default(int32?)
+        }
+        let argumentNames = if callSyntax != nil && callSyntax.TypeArgumentList == nil {
             BuildDeferredArgumentNames(callSyntax, 1)
         } else {
             default(IReadOnlyList[string?]?)
         }
         for candidate in this.memberLookup.CollectImportedExtensionMethods(name) {
             try {
-                if ClrOverloadResolution.MayAcceptExtensionReceiver(
-                    candidate,
-                    type,
-                    callSyntax?.Arguments.Count,
-                    argumentNames
-                ) {
+                if ClrOverloadResolution.MayAcceptExtensionReceiver(candidate, type, argumentCount, argumentNames) {
                     return true
                 }
             } catch (ex Exception) when !(ex is OutOfMemoryException) {
