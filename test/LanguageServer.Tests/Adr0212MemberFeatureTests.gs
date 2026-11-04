@@ -7,9 +7,15 @@ package GSharp.LanguageServer.Tests
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.LanguageServer
 import GSharp.LanguageServer.Protocol
+import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
+import Microsoft.CodeAnalysis.Emit
+import Microsoft.CodeAnalysis.Text
 import System
 import System.Collections.Generic
+import System.IO
 import System.Linq
+import System.Text
 import System.Threading
 import Xunit
 
@@ -65,6 +71,222 @@ open class Adr0212MemberFeatureTests {
         )
         Assert.NotNull(help)
         Assert.Equal(2, help!!.Signatures.Count())
+    }
+
+    @Fact
+    func SignatureHelp_OnAnUnfinishedImportedCall_ListsEveryOverload() {
+        const unfinished = "package Members\nimport System.Text\nfunc Use(sb StringBuilder) {\n    sb.Append(\n}\n"
+        let call = "sb.Append("
+        let content = LanguageServerTestHelpers.Content(unfinished)
+        let position = LanguageServerTestHelpers.PositionOf(unfinished, call)
+        let help = SignatureHelpComputer.ComputeSignatureHelp(
+            content,
+            Position(position.Line, position.Character + call.Length)
+        )
+        Assert.NotNull(help)
+        Assert.True(help!!.Signatures.Count() > 5, "one signature for each Append overload")
+        Assert.All(
+            help!!.Signatures,
+            (s SignatureInformation) -> Assert.Contains("Append", s.Label, StringComparison.Ordinal)
+        )
+        const secondArg = "package Members\nimport System.Text\nfunc Use(sb StringBuilder) {\n    sb.Append(\"a\", \n}\n"
+        let secondPrefix = "sb.Append(\"a\", "
+        let secondContent = LanguageServerTestHelpers.Content(secondArg)
+        let secondPos = LanguageServerTestHelpers.PositionOf(secondArg, secondPrefix)
+        let secondHelp = SignatureHelpComputer.ComputeSignatureHelp(
+            secondContent,
+            Position(secondPos.Line, secondPos.Character + secondPrefix.Length)
+        )
+        Assert.NotNull(secondHelp)
+        Assert.Equal(1, secondHelp!!.ActiveParameter)
+    }
+
+    @Fact
+    func SignatureHelp_OnAnUnfinishedSourceAndBaseCall_ListsEveryOverload() {
+        const unfinished = `package Members
+func Pick(a int32) int32 { return a }
+func Pick(a int32, b int32) int32 { return a + b }
+
+open class Animal {
+    func Speak(a int32) string { return "" }
+    func Speak(a string) string { return a }
+    func Echo[T](a T) int32 { return 0 }
+    func Echo[T](a T, b int32) int32 { return b }
+}
+
+class Dog : Animal {
+    func Speak(a bool) string { return "" }
+    func Act() {
+        let n = 1 + Pick(1, 
+        let m = Pick(base[Animal].Echo[int32](1))
+        base.Speak(
+    }
+}
+`
+        let content = LanguageServerTestHelpers.Content(unfinished)
+        let pickPos = LanguageServerTestHelpers.PositionOf(unfinished, "Pick(1, ")
+        let pickHelp = SignatureHelpComputer.ComputeSignatureHelp(
+            content,
+            Position(pickPos.Line, pickPos.Character + "Pick(1, ".Length)
+        )
+        Assert.NotNull(pickHelp)
+        Assert.Equal(2, pickHelp!!.Signatures.Count())
+        Assert.Equal(1, pickHelp!!.ActiveSignature)
+        Assert.Equal(1, pickHelp!!.ActiveParameter)
+        let nestedBasePos = LanguageServerTestHelpers.PositionOf(unfinished, "Echo[int32](1")
+        let nestedBaseHelp = SignatureHelpComputer.ComputeSignatureHelp(
+            content,
+            Position(nestedBasePos.Line, nestedBasePos.Character + "Echo[int32](".Length)
+        )
+        Assert.NotNull(nestedBaseHelp)
+        Assert.Equal(2, nestedBaseHelp!!.Signatures.Count())
+        Assert.All(
+            nestedBaseHelp!!.Signatures,
+            (s SignatureInformation) -> Assert.Contains("Echo", s.Label, StringComparison.Ordinal)
+        )
+        let basePos = LanguageServerTestHelpers.PositionOf(unfinished, "base.Speak(")
+        let baseHelp = SignatureHelpComputer.ComputeSignatureHelp(
+            content,
+            Position(basePos.Line, basePos.Character + "base.Speak(".Length)
+        )
+        Assert.NotNull(baseHelp)
+        Assert.Equal(
+            []string{"func (Animal) Speak(a int32) string", "func (Animal) Speak(a string) string"},
+            baseHelp!!.Signatures.Select((s SignatureInformation) -> s.Label).ToArray()
+        )
+    }
+
+    @Fact
+    func Completion_InsideAnInterface_OffersItsPrivateHelpersAndHidesThemOutside() {
+        const source = `package Members
+interface IWorker {
+    func Work(w IWorker, c Worker) int32 {
+        let a = w.
+        let d = c.
+        return 0
+    }
+    private func PrivateWork() int32 { return 1 }
+}
+class Worker : IWorker {
+}
+func Outside(w IWorker) {
+    let b = w.
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let InsideItems = (anchor string, occurrence int32) -> {
+            let at = LanguageServerTestHelpers.PositionOf(source, anchor, occurrence)
+            return CompletionComputer.ComputeCompletions(content, Position(at.Line, at.Character + anchor.Length))
+        }
+        let insideInstance = InsideItems("w.", 0)
+        Assert.Contains(insideInstance, (i CompletionItem) -> i.Label == "PrivateWork")
+        Assert.Contains(insideInstance, (i CompletionItem) -> i.Label == "Work")
+        let insideClass = InsideItems("c.", 0)
+        Assert.DoesNotContain(insideClass, (i CompletionItem) -> i.Label == "PrivateWork")
+        Assert.Contains(insideClass, (i CompletionItem) -> i.Label == "Work")
+        let outsideInstance = InsideItems("w.", 1)
+        Assert.DoesNotContain(outsideInstance, (i CompletionItem) -> i.Label == "PrivateWork")
+        Assert.Contains(outsideInstance, (i CompletionItem) -> i.Label == "Work")
+    }
+
+    @Fact
+    func Definition_OnAnImportedRecordMethodAndProperty_NavigatesToSource() {
+        let root = Path.Combine(AppContext.BaseDirectory, "Adr0212RecordDef", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root)
+        try {
+            let csPath = Path.Combine(root, "Badge.cs")
+            let dllPath = Path.Combine(root, "BadgeLib.dll")
+            let pdbPath = Path.Combine(root, "BadgeLib.pdb")
+            const csSource = `namespace RecordDef
+{
+    public record Badge(string Label)
+    {
+        public string Format()
+        {
+            return Label;
+        }
+
+        public string Format(string prefix)
+        {
+            return prefix + Label;
+        }
+    }
+}
+`
+            File.WriteAllText(csPath, csSource, UTF8Encoding(false))
+            let csText = SourceText.From(csSource, UTF8Encoding(false), SourceHashAlgorithm.Sha256)
+            let referencePaths = (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)?.Split(
+                Path.PathSeparator
+            ) ??
+                Array.Empty[string]()
+            let references = referencePaths
+                .Where(File.Exists)
+                .Select((p string) -> cast[MetadataReference](MetadataReference.CreateFromFile(p)))
+                .ToList()
+            let csCompilation = CSharpCompilation.Create(
+                "BadgeLib",
+                []Microsoft.CodeAnalysis.SyntaxTree{CSharpSyntaxTree.ParseText(csText, path: csPath)},
+                references,
+                CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary,
+                    optimizationLevel: OptimizationLevel.Debug
+                )
+            )
+            {
+                using let peStream = File.Create(dllPath)
+                using let pdbStream = File.Create(pdbPath)
+                let emitResult = csCompilation.Emit(
+                    peStream,
+                    pdbStream,
+                    options: EmitOptions(
+                        debugInformationFormat: DebugInformationFormat.PortablePdb,
+                        pdbFilePath: pdbPath
+                    )
+                )
+                Assert.True(emitResult.Success, string.Join(Environment.NewLine, emitResult.Diagnostics))
+            }
+            const gsSource = `package Consumer
+import RecordDef
+func Use(b Badge) string {
+    let label = b.Label
+    return b.Format("#")
+}
+`
+            let gsPath = Path.Combine(root, "Consumer.gs")
+            File.WriteAllText(gsPath, gsSource)
+            let project = ProjectState(Path.Combine(root, "Consumer.gsproj"))
+            project.References = []string{dllPath}
+            let tree = project.UpdateFile(gsPath, gsSource)
+            let lines = Enumerable.Range(0, gsSource.Length).Where((i int32) -> gsSource[i] == '\n').ToList()
+            let content = DocumentContent(tree, lines, project, WorkspaceState())
+            let uri = DocumentUri.FromFileSystemPath(gsPath)!!
+            let formatPos = LanguageServerTestHelpers.PositionOf(gsSource, "Format")
+            let formatLoc = DefinitionComputer.ComputeDefinition(uri, content, formatPos)
+            Assert.NotNull(formatLoc)
+            Assert.Equal(csPath, formatLoc!!.Uri!!.GetFileSystemPath())
+            Assert.True(
+                formatLoc!!.Range.Start.Line >= 9,
+                "expected Format(string prefix) line: ${formatLoc!!.Range.Start.Line}"
+            )
+            let formatHover = HoverComputer.ComputeHover(content, formatPos)
+            Assert.NotNull(formatHover)
+            Assert.Contains(
+                "func (Badge) Format(prefix string",
+                formatHover!!.Contents.ToString(),
+                StringComparison.Ordinal
+            )
+            let hints = InlayHintComputer.ComputeHints(content)
+            Assert.Contains(hints, (h InlayHint) -> h.Label.String == "prefix:")
+            let labelLoc = DefinitionComputer.ComputeDefinition(
+                uri,
+                content,
+                LanguageServerTestHelpers.PositionOf(gsSource, "Label")
+            )
+            Assert.NotNull(labelLoc)
+            Assert.Equal(csPath, labelLoc!!.Uri!!.GetFileSystemPath())
+        } finally {
+            Directory.Delete(root, recursive: true)
+        }
     }
 
     @Fact
