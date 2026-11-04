@@ -3364,6 +3364,60 @@ public static class Obj {
                 eligible(project.Compilation, Assert.Single(indexer.Parameters), "0")
             )
         )
+        let fixture = this.EmitFixture()
+        let printed = Translate((`using System;
+using Issue4719Fixture;
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter, AllowMultiple = true)]
+public sealed class TagAttribute : Attribute {
+    public TagAttribute(string name) { Name = name; }
+    public string Name { get; }
+}
+public sealed partial class Rows {
+    #nullable ` + "${(if strictDefinition { "enable" } else { "disable" })}" + `
+    [Tag("member")]
+    public partial int this[(string Required, string? Optional, int Code) row, [Tag("param")] int step = 2] { get; }
+    #nullable ` + "${(if strictImplementation { "enable" } else { "disable" })}" + `
+    public partial int this[(string Required, string? Optional, int Code) row, int step] {
+        get { return (row.Required == null ? 0 : row.Required.Length) + (row.Optional == null ? 0 : 10) + row.Code + step; }
+    }
+}
+public static class Obj {
+    public static bool Missing;
+    public static int Reads;
+    #nullable enable
+    public static string? Text { get { Reads++; return Missing ? null : "keep"; } }
+    #nullable disable
+    public static bool Check(bool missing) {
+        Missing = missing;
+        Reads = 0;
+        bool asserted = false;
+        int code = 0;
+        var rows = new Rows();
+        try {
+            code = rows[(Text, null, 1)];
+        }
+        catch (NullReferenceException) { asserted = true; }
+        return Reads == 1 && (missing
+            ? (` + "${(if strict { "asserted" } else { "!asserted && code == 3" })}" + `)
+            : (!asserted && code == 7));
+    }
+    public static void Main() {
+        var rows = new Rows();
+        Console.WriteLine(Check(false) && Check(true) && rows[("ab", "opt", 1), 5] == 18 ? 15 : -1);
+    }
+}`), fixture)
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15")
+        Assert.Single(Regex.Matches(printed, `\bprop this\[`))
+        Assert.Contains("@Tag(\"member\")", printed)
+        Assert.Contains("@Tag(\"param\") step int32 = 2", printed)
+        Assert.Contains(
+            if strict {
+                "row (Required string, Optional string?, Code int32)"
+            } else {
+                "row (Required string?, Optional string?, Code int32)"
+            },
+            printed
+        )
     }
 
     @Theory

@@ -2153,10 +2153,19 @@ partial class CSharpToGSharpTranslator {
             // member read (`entry.GsNamespace`) binds the property — query the
             // parameter's taint for such a property so the value bridge and the
             // promoted declaration agree.
+            if PartialCounterpart(symbol) is {} counterpart && PromotableDeclaredType(
+                counterpart
+            )?.NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated {
+                return true
+            }
             if declared.NullableAnnotation == Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
                 .None &&
+                PartialPartnerAllowsObliviousPromotion(symbol) &&
                 ObliviousNullabilityAnalyzer
                 .IsTainted(this.context.Compilation, NormalizePositionalRecordProperty(symbol), taintCompilations) {
                 return true
@@ -2586,7 +2595,12 @@ partial class CSharpToGSharpTranslator {
         private func GetNullabilityScope(symbol ISymbol?) SyntaxNode? {
             switch symbol {
                 case parameter is IParameterSymbol {
-                    return parameter.ContainingSymbol?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    let owner ISymbol? = switch parameter.ContainingSymbol {
+                        case method is IMethodSymbol: method.PartialImplementationPart ?? method
+                        case property is IPropertySymbol: property.PartialImplementationPart ?? property
+                        default: parameter.ContainingSymbol
+                    }
+                    return owner?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
                 }
                 case field is IFieldSymbol {
                     return field.ContainingType?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
@@ -2616,6 +2630,31 @@ partial class CSharpToGSharpTranslator {
                 ConcurrentDictionary[ISymbol, bool]
             ] = ConditionalWeakTable[CSharpCompilation, ConcurrentDictionary[ISymbol, bool]]()
 
+            private func PartialCounterpart(symbol ISymbol?) ISymbol? -> switch symbol {
+                case method is IMethodSymbol: method.PartialDefinitionPart ?? method.PartialImplementationPart
+                case property is IPropertySymbol: property.PartialDefinitionPart ?? property.PartialImplementationPart
+                case parameter is IParameterSymbol: switch PartialCounterpart(parameter.ContainingSymbol) {
+                    case method is IMethodSymbol when parameter.Ordinal >= 0 &&
+                        parameter.Ordinal < method
+                        .Parameters
+                        .Length: method.Parameters[parameter.Ordinal]
+                    case property is IPropertySymbol when parameter.Ordinal >= 0 &&
+                        parameter.Ordinal < property
+                        .Parameters
+                        .Length: property.Parameters[parameter.Ordinal]
+                    default: default(ISymbol?)
+                }
+                default: default(ISymbol?)
+            }
+
+            private func PartialPartnerAllowsObliviousPromotion(symbol ISymbol?) bool -> PartialCounterpart(
+                symbol
+            ) is not{} counterpart ||
+                PromotableDeclaredType(counterpart)?.NullableAnnotation != Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .NotAnnotated
+
             // The #1072 usage scan proper: whether `scope` compares `symbol` with
             // `null`, assigns it `null`, coalesces a local, tests it `is null`, or
             // initializes it to `null`. `model` binds `scope`'s tree — this
@@ -2623,12 +2662,14 @@ partial class CSharpToGSharpTranslator {
             // declares, see DeclaringCompilationPromotes) the declaring
             // compilation's, so the consumer asks exactly what the producer asked.
             private func ScopeUsesAsNullable(model SemanticModel, symbol ISymbol?, $scope SyntaxNode?) bool {
+                let counterpart ISymbol? = PartialCounterpart(symbol)
                 let BindsTo = func (expression ExpressionSyntax) bool {
                     return model.GetSymbolInfo(Unparenthesize(expression)!!)
                         .Symbol is {} bound &&
-                        SymbolEqualityComparer
-                        .Default
-                        .Equals(bound, symbol)
+                        (
+                        SymbolEqualityComparer.Default.Equals(bound, symbol) ||
+                            (counterpart != nil && SymbolEqualityComparer.Default.Equals(bound, counterpart))
+                    )
                 }
                 for node in $scope!!.DescendantNodes() {
                     switch node {

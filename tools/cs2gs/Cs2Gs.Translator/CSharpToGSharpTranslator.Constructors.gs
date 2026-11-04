@@ -73,6 +73,13 @@ partial class CSharpToGSharpTranslator {
             // ADR-0118 / issue #944: a C# indexer (`public T this[int i] => ...`)
             // maps to the canonical G# indexer member (`prop this[i int32] T`).
             let symbol IPropertySymbol? = this.context.GetDeclaredSymbol(node) as IPropertySymbol
+            // Issue #4781: C# 14 partial indexers have no G# partial-property
+            // surface (ADR-0143 §D / ADR-0192 §F). Skip the defining declaration
+            // and emit only the implementing declaration.
+            if symbol != nil && symbol.IsPartialDefinition {
+                this.ReportGeneratedPartialImplementation(node, symbol, symbol.PartialImplementationPart)
+                return (nil, false)
+            }
             let isStatic = symbol != nil && symbol.IsStatic
             // Issue #3879 (ADR-0060 amendment): a C# `ref` INDEXER now has a
             // canonical G# form — `prop this[i int32] ref T { get { return ref
@@ -182,10 +189,18 @@ partial class CSharpToGSharpTranslator {
             if symbol != nil {
                 type = this.PromoteIfUsedAsNullable(type, symbol)
             }
-            let indexParameters = if symbol != nil {
+            var indexParameters = if symbol != nil {
                 symbol.Parameters.Select((p IParameterSymbol) -> this.MapParameter(p, node)).ToList()
             } else {
                 this.MapParameterList(node.ParameterList)
+            }
+            if !this.emitGeneratedImplementingParts &&
+                symbol is IPropertySymbol{PartialDefinitionPart: IPropertySymbol partialDefinition} implementation {
+                indexParameters = this.ReconcilePartialIndexerParameters(
+                    partialDefinition,
+                    implementation,
+                    indexParameters
+                )
             }
             var accessors = this.MapAccessors(node, "indexer 'this[]'")
             // Issue #1278 / ADR-0131: a C# expression-bodied indexer
@@ -1363,64 +1378,142 @@ partial class CSharpToGSharpTranslator {
         /// @param node The property, indexer, or explicit-event declaration.
         /// @returns The member's attribute list, including any hoisted `@UnscopedRef`.
         private func MapPropertyAttributes(node BasePropertyDeclarationSyntax) List[AttributeUse] {
-            let attributes = this.MapAttributes(node.AttributeLists)
-            if node.AccessorList == nil {
+            let propertySymbol IPropertySymbol? = this.context.GetDeclaredSymbol(node) as IPropertySymbol
+            let definitionNode BasePropertyDeclarationSyntax? = if !this.emitGeneratedImplementingParts {
+                propertySymbol
+                    ?.PartialDefinitionPart
+                    ?.DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax() as BasePropertyDeclarationSyntax
+            } else {
+                default(BasePropertyDeclarationSyntax?)
+            }
+            let declarations = if definitionNode != nil {
+                []BasePropertyDeclarationSyntax{definitionNode, node}
+            } else {
+                []BasePropertyDeclarationSyntax{node}
+            }
+            let attributes = List[AttributeUse]()
+            for declaration in declarations {
+                attributes.AddRange(this.MapAttributes(declaration.AttributeLists))
+            }
+            if !declarations.Any((declaration BasePropertyDeclarationSyntax) -> declaration.AccessorList != nil) {
                 return attributes
             }
-            let propertySymbol IPropertySymbol? = this.context.GetDeclaredSymbol(node) as IPropertySymbol
-            var hasUnscopedRef = propertySymbol?.GetAttributes().Any(
-                (attribute AttributeData) -> this.IsUnscopedRefAttribute(attribute.AttributeClass)
-            ) == true
-            for accessor in node.AccessorList!!.Accessors {
-                for list in accessor.AttributeLists {
-                    for attribute in list.Attributes {
-                        using let modelScope = this.context.UseSemanticModelFor(attribute.SyntaxTree)
-                        this.ResolveAttributeType(attribute, out var attributeType, out var sourceAlias)
-                        let isUnscopedRef = this.IsUnscopedRefAttribute(attributeType)
-                        // Only a GET-level `[UnscopedRef]` is equivalent to the
-                        // member-level placement: the member-level G# annotation
-                        // is emitted on the PropertyDef, which a C# consumer
-                        // (and gsc's own IsUnscopedRefIndexerGetter) reads as the
-                        // GETTER's contract.
-                        if isUnscopedRef && accessor.IsKind(
-                            Microsoft.CodeAnalysis.CSharp.SyntaxKind.GetAccessorDeclaration
-                        ) {
-                            if !hasUnscopedRef {
-                                this.typeMapper.TrackAttributeType(attributeType, sourceAlias)
-                                attributes.Add(
-                                    AttributeUse(this.TranslateAttributeName(attribute, attributeType, sourceAlias))
-                                )
-                                hasUnscopedRef = true
+            var hasUnscopedRef = (
+                propertySymbol
+                    ?.PartialDefinitionPart
+                    ?.GetAttributes()
+                    .Any((attribute AttributeData) -> this.IsUnscopedRefAttribute(attribute.AttributeClass)) == true
+            ) ||
+                (
+                propertySymbol?.GetAttributes().Any(
+                    (attribute AttributeData) -> this.IsUnscopedRefAttribute(attribute.AttributeClass)
+                ) == true
+            )
+            for declaration in declarations {
+                if declaration.AccessorList == nil {
+                    continue
+                }
+                for accessor in declaration.AccessorList!!.Accessors {
+                    for list in accessor.AttributeLists {
+                        for attribute in list.Attributes {
+                            using let modelScope = this.context.UseSemanticModelFor(attribute.SyntaxTree)
+                            this.ResolveAttributeType(attribute, out var attributeType, out var sourceAlias)
+                            let isUnscopedRef = this.IsUnscopedRefAttribute(attributeType)
+                            // Only a GET-level `[UnscopedRef]` is equivalent to the
+                            // member-level placement: the member-level G# annotation
+                            // is emitted on the PropertyDef, which a C# consumer
+                            // (and gsc's own IsUnscopedRefIndexerGetter) reads as the
+                            // GETTER's contract.
+                            if isUnscopedRef && accessor.IsKind(
+                                Microsoft.CodeAnalysis.CSharp.SyntaxKind.GetAccessorDeclaration
+                            ) {
+                                if !hasUnscopedRef {
+                                    this.typeMapper.TrackAttributeType(attributeType, sourceAlias)
+                                    attributes.Add(
+                                        AttributeUse(this.TranslateAttributeName(attribute, attributeType, sourceAlias))
+                                    )
+                                    hasUnscopedRef = true
+                                }
+                                continue
                             }
-                            continue
+                            let attributeName = attributeType?.ToDisplayString() ?? attribute.Name.ToString()
+                            let member = switch node {
+                                case property is Microsoft
+                                    .CodeAnalysis
+                                    .CSharp
+                                    .Syntax
+                                    .PropertyDeclarationSyntax: "property '${property.Identifier.ValueText}'"
+                                case eventDeclaration is EventDeclarationSyntax: "event '${eventDeclaration.Identifier.ValueText}'"
+                                default: "indexer"
+                            }
+                            let reason = if isUnscopedRef && hasUnscopedRef {
+                                "the $member already has @UnscopedRef, so another member annotation cannot preserve this '${accessor.Keyword.ValueText}'-specific placement"
+                            } else {
+                                "it was not hoisted because moving it to the member would change its meaning"
+                            }
+                            this.context.Report(
+                                TranslationDiagnostic(
+                                    accessor.Kind().ToString(),
+                                    "accessor-level attribute '$attributeName' on the '${accessor.Keyword.ValueText}' accessor of $member has no G# accessor-level representation and was dropped; $reason.",
+                                    attribute.GetLocation(),
+                                    TranslationSeverity.Warning
+                                ){DiagnosticId = CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId}
+                            )
                         }
-                        let attributeName = attributeType?.ToDisplayString() ?? attribute.Name.ToString()
-                        let member = switch node {
-                            case property is Microsoft
-                                .CodeAnalysis
-                                .CSharp
-                                .Syntax
-                                .PropertyDeclarationSyntax: "property '${property.Identifier.ValueText}'"
-                            case eventDeclaration is EventDeclarationSyntax: "event '${eventDeclaration.Identifier.ValueText}'"
-                            default: "indexer"
-                        }
-                        let reason = if isUnscopedRef && hasUnscopedRef {
-                            "the $member already has @UnscopedRef, so another member annotation cannot preserve this '${accessor.Keyword.ValueText}'-specific placement"
-                        } else {
-                            "it was not hoisted because moving it to the member would change its meaning"
-                        }
-                        this.context.Report(
-                            TranslationDiagnostic(
-                                accessor.Kind().ToString(),
-                                "accessor-level attribute '$attributeName' on the '${accessor.Keyword.ValueText}' accessor of $member has no G# accessor-level representation and was dropped; $reason.",
-                                attribute.GetLocation(),
-                                TranslationSeverity.Warning
-                            ){DiagnosticId = CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId}
-                        )
                     }
                 }
             }
             return attributes
+        }
+
+        private func ReconcilePartialIndexerParameters(
+            definition IPropertySymbol,
+            implementation IPropertySymbol,
+            parameters List[Parameter]
+        ) List[Parameter] {
+            let reconciled = List[Parameter](parameters.Count)
+            for var i = 0; i < parameters.Count; i++ {
+                let mapped = parameters[i]
+                if i >= definition.Parameters.Length || i >= implementation.Parameters.Length {
+                    reconciled.Add(mapped)
+                    continue
+                }
+                let definitionParameter = definition.Parameters[i]
+                let implementationParameter = implementation.Parameters[i]
+                let spellingSyntax Microsoft
+                    .CodeAnalysis
+                    .SyntaxNode? = implementationParameter
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax()
+                let defaultValue GExpression? = this.BuildOptionalParameterDefault(
+                    definitionParameter,
+                    mapped.Type,
+                    spellingSyntax,
+                    spellingNode: spellingSyntax
+                )
+                var attributes IReadOnlyList[AttributeUse]? = mapped.Attributes
+                if definitionParameter
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax() is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParameterSyntax{AttributeLists: {Count: > 0}} definitionParameterSyntax {
+                    let combined = this.MapAttributes(definitionParameterSyntax.AttributeLists)
+                    if attributes != nil {
+                        combined.AddRange(attributes)
+                    }
+                    attributes = combined
+                }
+                reconciled.Add(
+                    Parameter(mapped.Name, mapped.Type, mapped.IsVariadic, mapped.RefKind, defaultValue, attributes)
+                )
+            }
+            return reconciled
         }
 
         private func IsUnscopedRefAttribute(attributeType INamedTypeSymbol?) bool -> SymbolEqualityComparer

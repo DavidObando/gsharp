@@ -6506,10 +6506,24 @@ internal shared class ObliviousNullabilityAnalyzer {
                     AddReturnContractEdges(method, overridden, edges)
                     AddParameterContractEdges(method.Parameters, overridden.Parameters, edges)
                 }
+                if method.MethodKind == MethodKind.Ordinary &&
+                    method.PartialImplementationPart is IMethodSymbol implementation {
+                    AddReturnContractEdges(method, implementation, edges)
+                    AddParameterContractEdges(method.Parameters, implementation.Parameters, edges)
+                }
             }
             for property in type.GetMembers().OfType[IPropertySymbol]() {
                 if property.OverriddenProperty is IPropertySymbol overridden {
                     AddParameterContractEdges(property.Parameters, overridden.Parameters, edges)
+                }
+                if property.PartialImplementationPart is IPropertySymbol implementation {
+                    if IsEligibleScalarTarget(property) && IsEligibleScalarTarget(implementation) {
+                        let firstCanonical ISymbol? = Canonical(property)
+                        let secondCanonical ISymbol? = Canonical(implementation)
+                        edges.Add((firstCanonical, secondCanonical))
+                        edges.Add((secondCanonical, firstCanonical))
+                    }
+                    AddParameterContractEdges(property.Parameters, implementation.Parameters, edges)
                 }
             }
         }
@@ -6582,6 +6596,12 @@ internal shared class ObliviousNullabilityAnalyzer {
                         tupleTainted,
                         tupleEdges
                     )
+                    AddParameterTupleContractPairs(
+                        method.Parameters,
+                        implementation.Parameters,
+                        tupleTainted,
+                        tupleEdges
+                    )
                 }
             }
             for iface in type.AllInterfaces {
@@ -6625,6 +6645,12 @@ internal shared class ObliviousNullabilityAnalyzer {
                         tupleTainted,
                         tupleEdges
                     )
+                    AddParameterTupleContractPairs(
+                        property.Parameters,
+                        implementation.Parameters,
+                        tupleTainted,
+                        tupleEdges
+                    )
                 }
                 if property.OverriddenProperty is IPropertySymbol overridden {
                     AddTupleContractPair(
@@ -6637,6 +6663,25 @@ internal shared class ObliviousNullabilityAnalyzer {
                     )
                 }
             }
+        }
+    }
+
+    private func AddParameterTupleContractPairs(
+        first ImmutableArray[IParameterSymbol],
+        second ImmutableArray[IParameterSymbol],
+        tupleTainted HashSet[TupleElementKey],
+        tupleEdges List[(Target TupleElementKey, Source TupleElementKey)]
+    ) {
+        let count = Math.Min(first.Length, second.Length)
+        for var i = 0; i < count; i++ {
+            AddTupleContractPair(
+                first[i],
+                SymbolValueType(first[i]),
+                second[i],
+                SymbolValueType(second[i]),
+                tupleTainted,
+                tupleEdges
+            )
         }
     }
 

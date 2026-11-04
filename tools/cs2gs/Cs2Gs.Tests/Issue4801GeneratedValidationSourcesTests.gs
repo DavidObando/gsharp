@@ -84,6 +84,8 @@ public class Authored {
         [Fact] public void B() {}
         [Fact] public void C() {}
     }
+}
+namespace Native.Other {
     public class Extra {}
 }`)
         await Run(producer, "dotnet", "restore", "src/Probe/Probe.csproj", "--locked-mode", "-nr:false")
@@ -197,7 +199,18 @@ public class Authored {
         Assert.Equal(TimeSpan.FromMinutes(16), SdkCompileRunner.MirroredTestRunTimeoutFor(403))
         Assert.Equal(manifest.EmittedFiles.Count, probe.Context.EmittedFiles.Count)
         let generated = probe.Context.EmittedFiles.Where((f EmittedGsFile) -> f.GeneratedSource != nil).ToArray()
-        Assert.True(generated.Length >= 2)
+        Assert.True(generated.Length >= 3)
+        Assert.Contains(
+            generated,
+            (file EmittedGsFile) -> file.GsPath!!.EndsWith("ProducerDeclaration.gs", StringComparison.Ordinal)
+        )
+        Assert.Contains(
+            generated,
+            (file EmittedGsFile) -> file.GsPath!!.EndsWith(
+                "ProducerDeclaration.Native_Other.gs",
+                StringComparison.Ordinal
+            )
+        )
         Assert.All(
             generated,
             (file EmittedGsFile) -> {
@@ -206,7 +219,10 @@ public class Authored {
                     Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(file.GeneratedSource!!.Text!!))),
                     file.GeneratedSource!!.Sha256
                 )
-                Assert.StartsWith(authoritative + Path.DirectorySeparatorChar, file.CsFilePath)
+                Assert.StartsWith(
+                    CanonicalRootPath.Resolve(authoritative) + Path.DirectorySeparatorChar,
+                    file.CsFilePath
+                )
                 Assert.False(File.Exists(file.CsFilePath))
                 Assert.False(file.IsFromReferencedProject)
             }
@@ -356,7 +372,7 @@ public class Authored {
             Assert.Equal(configuration, configurationAttribute.ConstructorArguments[1].Value)
             let declaration Type? = assembly.GetType("Native.Generated.Declaration", throwOnError: true)
             Assert.Equal(73, declaration!!.GetMethod("Value")!!.Invoke(nil, nil))
-            Assert.NotNull(assembly.GetType("Native.Generated.Extra"))
+            Assert.NotNull(assembly.GetType("Native.Other.Extra"))
         }
 
         private func AssertNativeSources(assemblyPath string) {
