@@ -3361,10 +3361,6 @@ internal partial class ExpressionBinder {
     ) bool {
         result = nil
         let name = syntax.IdentifierToken.ValueText
-        if (this.function?.StaticOwnerType ?? this.function?.ReceiverType) is {} lexicalOwner &&
-            memberLookup.FindLexicalMemberOwner(lexicalOwner, name) != nil {
-            return false
-        }
         var match StructSymbol? = nil
         var ambiguous = false
         for importedType in binderCtx.GetStaticImportTypes() {
@@ -3376,6 +3372,12 @@ internal partial class ExpressionBinder {
             } else if !object.ReferenceEquals(match, importedType) {
                 ambiguous = true
                 break
+            }
+        }
+        if ambiguous || match != nil {
+            if (this.function?.StaticOwnerType ?? this.function?.ReceiverType) is {} lexicalOwner &&
+                memberLookup.FindLexicalMemberOwner(lexicalOwner, name) != nil {
+                return false
             }
         }
         if ambiguous {
@@ -3401,6 +3403,12 @@ internal partial class ExpressionBinder {
             } else if !clrMatch.IsSameAs(clrType) {
                 clrAmbiguous = true
                 break
+            }
+        }
+        if clrAmbiguous || clrMatch != nil {
+            if (this.function?.StaticOwnerType ?? this.function?.ReceiverType) is {} lexicalOwner &&
+                memberLookup.FindLexicalMemberOwner(lexicalOwner, name) != nil {
+                return false
             }
         }
         if clrAmbiguous {

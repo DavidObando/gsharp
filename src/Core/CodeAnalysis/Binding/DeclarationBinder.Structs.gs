@@ -3929,26 +3929,42 @@ internal partial class DeclarationBinder {
     private func PushStaticMemberScope(lexicalOwner TypeSymbol) StaticMemberScope {
         let previous = binderCtx.RootScope
         let staticScope = BoundScope(previous)
+        let seenMembers = HashSet[string](StringComparer.Ordinal)
+        var resolvedMethodOwners Dictionary[string, TypeSymbol?]? = nil
+        let IsVisibleOuterMethod = (owner TypeSymbol, methodName string) -> {
+            if seenMembers.Contains(methodName) {
+                return false
+            }
+            resolvedMethodOwners ??= Dictionary[string, TypeSymbol?](StringComparer.Ordinal)
+            if !resolvedMethodOwners!!.TryGetValue(methodName, out var methodOwner) {
+                methodOwner = conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, methodName)
+                resolvedMethodOwners!![methodName] = methodOwner
+            }
+            return object.ReferenceEquals(methodOwner, owner)
+        }
         for var owner TypeSymbol? = lexicalOwner; owner != nil; owner = owner!!.ContainingType {
             let isOuterOwner = !object.ReferenceEquals(owner, lexicalOwner)
             if owner is InterfaceSymbol ownerInterface {
                 for fld in ownerInterface.StaticFields.Concat(ownerInterface.ConstFields) {
-                    if isOuterOwner && !object.ReferenceEquals(
-                        conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, fld.Name),
-                        ownerInterface
+                    if !seenMembers.Add(fld.Name) ||
+                        (
+                        isOuterOwner && !object.ReferenceEquals(
+                            conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, fld.Name),
+                            ownerInterface
+                        )
                     ) {
                         continue
                     }
                     staticScope.TryDeclareVariable(ImplicitStaticFieldVariableSymbol(ownerInterface, fld))
                 }
                 for method in ownerInterface.StaticMethods {
-                    if isOuterOwner && !object.ReferenceEquals(
-                        conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, method.Name),
-                        ownerInterface
-                    ) {
+                    if isOuterOwner && !IsVisibleOuterMethod(ownerInterface, method.Name) {
                         continue
                     }
                     staticScope.TryDeclareFunction(method)
+                }
+                for method in ownerInterface.StaticMethods {
+                    seenMembers.Add(method.Name)
                 }
                 continue
             }
@@ -3957,9 +3973,12 @@ internal partial class DeclarationBinder {
             }
             if !ownerStruct.StaticFields.IsDefaultOrEmpty {
                 for fld in ownerStruct.StaticFields {
-                    if isOuterOwner && !object.ReferenceEquals(
-                        conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, fld.Name),
-                        ownerStruct
+                    if !seenMembers.Add(fld.Name) ||
+                        (
+                        isOuterOwner && !object.ReferenceEquals(
+                            conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, fld.Name),
+                            ownerStruct
+                        )
                     ) {
                         continue
                     }
@@ -3968,9 +3987,12 @@ internal partial class DeclarationBinder {
             }
             if !ownerStruct.ConstFields.IsDefaultOrEmpty {
                 for fld in ownerStruct.ConstFields {
-                    if isOuterOwner && !object.ReferenceEquals(
-                        conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, fld.Name),
-                        ownerStruct
+                    if !seenMembers.Add(fld.Name) ||
+                        (
+                        isOuterOwner && !object.ReferenceEquals(
+                            conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, fld.Name),
+                            ownerStruct
+                        )
                     ) {
                         continue
                     }
@@ -3979,9 +4001,12 @@ internal partial class DeclarationBinder {
             }
             if !ownerStruct.StaticProperties.IsDefaultOrEmpty {
                 for prop in ownerStruct.StaticProperties {
-                    if isOuterOwner && !object.ReferenceEquals(
-                        conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, prop.Name),
-                        ownerStruct
+                    if !seenMembers.Add(prop.Name) ||
+                        (
+                        isOuterOwner && !object.ReferenceEquals(
+                            conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, prop.Name),
+                            ownerStruct
+                        )
                     ) {
                         continue
                     }
@@ -3996,13 +4021,13 @@ internal partial class DeclarationBinder {
             // emits a static call on the owning method.
             if !ownerStruct.StaticMethods.IsDefaultOrEmpty {
                 for method in ownerStruct.StaticMethods {
-                    if isOuterOwner && !object.ReferenceEquals(
-                        conversions.MemberLookup.FindLexicalMemberOwner(lexicalOwner, method.Name),
-                        ownerStruct
-                    ) {
+                    if isOuterOwner && !IsVisibleOuterMethod(ownerStruct, method.Name) {
                         continue
                     }
                     staticScope.TryDeclareFunction(method)
+                }
+                for method in ownerStruct.StaticMethods {
+                    seenMembers.Add(method.Name)
                 }
             }
         }
