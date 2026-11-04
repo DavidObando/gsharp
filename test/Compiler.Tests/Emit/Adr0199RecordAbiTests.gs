@@ -641,9 +641,20 @@ data class Item(Id int32) {
 class Outer {
     data class DerivedBeforeBase(Name string, Value int32) : BaseAfterDerived(Name)
     data class QualifiedDerivedBeforeBase(Name string, Value int32) : Bases.NestedBase(Name)
+    data class Message[T](Name string, Data T) : Message(Name)
+    open data class Message(Name string)
+    data class EscapedDerived(Name string, Value int32) : $event(Name)
+    open data class $event(Name string)
     open data class BaseAfterDerived(Name string)
     class Bases {
         open data class NestedBase(Name string)
+    }
+
+    shared {
+        func EnclosingUnpack(item DerivedFromProtectedGetter) string {
+            let (v, e) = item
+            return "${v}:${e}"
+        }
     }
 }
 
@@ -660,7 +671,13 @@ open class BaseWithProtectedGetter {
     }
 }
 
-data class DerivedFromProtectedGetter(Value int32, Extra int32) : BaseWithProtectedGetter(Value)
+data class DerivedFromProtectedGetter(Value int32, Extra int32) : BaseWithProtectedGetter(Value) {
+    init(seed DerivedFromProtectedGetter) : base(0) {
+        let (sv, se) = seed
+        Value = sv + 1
+        Extra = se + 1
+    }
+}
 
 open data class TupleBase(Pair (X int32, Y int32))
 data class TupleDerived(Pair (Left int32, Right int32), Extra int32) : TupleBase(Pair)
@@ -670,13 +687,19 @@ func Run() string {
     let (n, v) = d
     let q = Outer.QualifiedDerivedBeforeBase("qual", 8)
     let (qn, qv) = q
+    let msg = Outer.Message[int32]("msg", 99)
+    let (mn, md) = msg
+    let esc = Outer.EscapedDerived("ev", 3)
+    let (en, ev) = esc
     let p = DerivedFromPrivateGetter(99, 5)
     let (h, e) = p
-    let prot = DerivedFromProtectedGetter(15, 25)
-    let (pv, pe) = prot
+    let prot = DerivedFromProtectedGetter{Value: 15, Extra: 25}
+    let protNext = DerivedFromProtectedGetter(prot)
+    let (pv, pe) = protNext
+    let unpacked = Outer.EnclosingUnpack(prot)
     let td = TupleDerived((3, 4), 10)
     let (pair, te) = td
-    return "${d}|${n}:${v}|${q}|${qn}:${qv}|${p}|${h}:${e}|${pv}:${pe}|${pair.Left}:${pair.Right}:${te}"
+    return "${d}|${n}:${v}|${q}|${qn}:${qv}|${msg}|${mn}:${md}|${esc}|${en}:${ev}|${p}|${h}:${e}|${unpacked}|${pv}:${pe}|${pair.Left}:${pair.Right}:${te}"
 }`
         let assembly = Adr0199RecordAbiWitness.CompileGSharp(source)
         let declared = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
@@ -684,12 +707,16 @@ func Run() string {
         Assert.DoesNotContain(nestedDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
         let qualifiedDerived = assembly.GetType("W.Outer+QualifiedDerivedBeforeBase", throwOnError: true)!!
         Assert.DoesNotContain(qualifiedDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let genericMessageDerived = assembly.GetType("W.Outer+Message`1", throwOnError: true)!!
+        Assert.DoesNotContain(genericMessageDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let escapedDerived = assembly.GetType("W.Outer+EscapedDerived", throwOnError: true)!!
+        Assert.DoesNotContain(escapedDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
         let privateGetterDerived = assembly.GetType("W.DerivedFromPrivateGetter", throwOnError: true)!!
         Assert.Contains(privateGetterDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Hidden")
         let protectedGetterDerived = assembly.GetType("W.DerivedFromProtectedGetter", throwOnError: true)!!
         Assert.DoesNotContain(protectedGetterDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
         Assert.Equal(
-            "DerivedBeforeBase { Name = ok, Value = 7 }|ok:7|QualifiedDerivedBeforeBase { Name = qual, Value = 8 }|qual:8|DerivedFromPrivateGetter { Hidden = 99, Extra = 5 }|99:5|15:25|3:4:10",
+            "DerivedBeforeBase { Name = ok, Value = 7 }|ok:7|QualifiedDerivedBeforeBase { Name = qual, Value = 8 }|qual:8|Message { Name = msg, Data = 99 }|msg:99|EscapedDerived { Name = ev, Value = 3 }|ev:3|DerivedFromPrivateGetter { Hidden = 99, Extra = 5 }|99:5|15:25|16:26|3:4:10",
             Adr0199RecordAbiWitness.Invoke(assembly, "Run")
         )
     }

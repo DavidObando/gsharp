@@ -2362,7 +2362,7 @@ internal partial class ExpressionBinder {
                 Invariant.Required(field, "a resolved field has a symbol", expression: "field").Accessibility
             } else {
                 (
-                    if usesGetter || ((callsDataConstructor || callsPrimary) && consumesPrimaryArgument) {
+                    if usesGetter {
                         Invariant.Required(property, "a resolved property has a symbol", expression: "property")
                             .GetterAccessibility
                     } else {
@@ -2389,7 +2389,9 @@ internal partial class ExpressionBinder {
             } else {
                 memberType
             }
-            if !AccessibilityChecker.IsAccessible(
+            if (!((callsDataConstructor || callsPrimary) && consumesPrimaryArgument) || usesGetter) &&
+                !AccessibilityChecker
+                .IsAccessible(
                 memberAccessibility,
                 Invariant.Required(
                     memberDeclaringType,

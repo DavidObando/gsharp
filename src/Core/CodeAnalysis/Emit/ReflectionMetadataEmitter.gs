@@ -2015,6 +2015,11 @@ internal class ReflectionMetadataEmitter {
                         0
                     }
                 )
+                if !DataStructSynthesizer.HasZeroDeconstructionMembers(c) {
+                    this.cache.MethodHandles[c.DataDeconstruct] = MetadataTokens.MethodDefinitionHandle(
+                        methodRow + synthesizedRows - 1
+                    )
+                }
                 // ADR-0199: the synthesized C#-record PrintMembers is the last
                 // synthesized row (a hand-written one is an ordinary method).
                 if c.DataPrintMembers is {} printMembers {
@@ -2221,6 +2226,11 @@ internal class ReflectionMetadataEmitter {
                         0
                     }
                 )
+                if !DataStructSynthesizer.HasZeroDeconstructionMembers(s) {
+                    this.cache.MethodHandles[s.DataDeconstruct] = MetadataTokens.MethodDefinitionHandle(
+                        methodRow + structSynthesizedRows - 1
+                    )
+                }
                 // ADR-0199: PrintMembers is the last synthesized row, before the
                 // primary constructor; an anonymous literal has none.
                 if s.DataPrintMembers is {} structPrintMembers {
@@ -5011,6 +5021,7 @@ internal class ReflectionMetadataEmitter {
                     let _ = symbol.DataEqualsSelf
                     let _ = symbol.DataEqualsBase
                     let _ = symbol.DataEqualsObject
+                    let _ = symbol.DataDeconstruct
                     let _ = symbol.DataPrintMembers
                 }
             }

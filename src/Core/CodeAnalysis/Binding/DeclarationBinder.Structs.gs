@@ -4095,7 +4095,7 @@ internal partial class DeclarationBinder {
             return
         }
         let nestedStructs = List[StructDeclarationSyntax]()
-        let nestedStructsByName = Dictionary[string, int32](StringComparer.Ordinal)
+        let nestedStructsByKey = Dictionary[(Name string, Arity int32), int32]()
         for nested in containerSyntax.NestedTypes {
             // Issue #950: a `protected` nested type is only meaningful when the
             // container is an inheritable `open class`. Otherwise nothing can
@@ -4107,8 +4107,9 @@ internal partial class DeclarationBinder {
                 case nestedStruct is StructDeclarationSyntax {
                     let index = nestedStructs.Count
                     nestedStructs.Add(nestedStruct)
-                    if !nestedStructsByName.ContainsKey(nestedStruct.Identifier.ValueText) {
-                        nestedStructsByName[nestedStruct.Identifier.ValueText] = index
+                    let key = (nestedStruct.Identifier.ValueText, nestedStruct.TypeParameterList?.Parameters.Count ?? 0)
+                    if !nestedStructsByKey.ContainsKey(key) {
+                        nestedStructsByKey[key] = index
                     }
                 }
                 case EnumDeclarationSyntax { }
@@ -4125,7 +4126,7 @@ internal partial class DeclarationBinder {
         let bindingState = [nestedStructs.Count]uint8
         let bindingOrder = List[int32](nestedStructs.Count)
         for var i = 0; i < nestedStructs.Count; i++ {
-            VisitNestedBaseFirst(i, containerSyntax, nestedStructs, nestedStructsByName, bindingState, bindingOrder)
+            VisitNestedBaseFirst(i, containerSyntax, nestedStructs, nestedStructsByKey, bindingState, bindingOrder)
         }
         for index in bindingOrder {
             let nestedStruct = nestedStructs[index]
@@ -4139,8 +4140,8 @@ internal partial class DeclarationBinder {
         syntax StructDeclarationSyntax,
         containerSyntax StructDeclarationSyntax,
         nestedStructs List[StructDeclarationSyntax],
-        nestedStructsByName Dictionary[string, int32],
-        shadowedNestedNames HashSet[string]?
+        nestedStructsByKey Dictionary[(Name string, Arity int32), int32],
+        shadowedNestedKeys HashSet[(Name string, Arity int32)]?
     ) int32 {
         if !syntax.IsClass {
             return -1
@@ -4156,22 +4157,30 @@ internal partial class DeclarationBinder {
             return -1
         }
         var candidateName string? = nil
-        let leadingSegment = baseClause.Identifier?.Text
+        var candidateArity = 0
+        let leadingSegment = baseClause.Identifier?.ValueText
+        let leadingArity = baseClause.GetSegmentTypeArguments(0)?.Count ?? 0
         if !baseClause.HasQualifier {
-            if leadingSegment != nil && (shadowedNestedNames == nil || !shadowedNestedNames.Contains(leadingSegment)) {
+            if leadingSegment != nil &&
+                (shadowedNestedKeys == nil || !shadowedNestedKeys.Contains((leadingSegment, leadingArity))) {
                 candidateName = leadingSegment
+                candidateArity = leadingArity
             }
         } else if leadingSegment != nil {
-            if leadingSegment == containerSyntax.Identifier.ValueText {
-                let nextSegment = baseClause.QualifierIdentifierTokens[0].Text
-                if shadowedNestedNames == nil || !shadowedNestedNames.Contains(nextSegment) {
+            let containerArity = containerSyntax.TypeParameterList?.Parameters.Count ?? 0
+            if leadingSegment == containerSyntax.Identifier.ValueText && leadingArity == containerArity {
+                let nextSegment = baseClause.QualifierIdentifierTokens[0].ValueText
+                let nextArity = baseClause.GetSegmentTypeArguments(1)?.Count ?? 0
+                if shadowedNestedKeys == nil || !shadowedNestedKeys.Contains((nextSegment, nextArity)) {
                     candidateName = nextSegment
+                    candidateArity = nextArity
                 }
-            } else if shadowedNestedNames == nil || !shadowedNestedNames.Contains(leadingSegment) {
+            } else if shadowedNestedKeys == nil || !shadowedNestedKeys.Contains((leadingSegment, leadingArity)) {
                 candidateName = leadingSegment
+                candidateArity = leadingArity
             }
         }
-        if candidateName != nil && nestedStructsByName.TryGetValue(candidateName, out var baseIndex) &&
+        if candidateName != nil && nestedStructsByKey.TryGetValue((candidateName, candidateArity), out var baseIndex) &&
             nestedStructs[baseIndex].IsClass {
             return baseIndex
         }
@@ -4182,32 +4191,32 @@ internal partial class DeclarationBinder {
         currentContainer StructDeclarationSyntax,
         containerSyntax StructDeclarationSyntax,
         nestedStructs List[StructDeclarationSyntax],
-        nestedStructsByName Dictionary[string, int32],
+        nestedStructsByKey Dictionary[(Name string, Arity int32), int32],
         bindingState[]uint8,
         bindingOrder List[int32],
-        inheritedShadowedNames HashSet[string]
+        inheritedShadowedKeys HashSet[(Name string, Arity int32)]
     ) {
         if currentContainer.NestedTypes.IsDefaultOrEmpty {
             return
         }
-        let shadowedNames = HashSet[string](inheritedShadowedNames, StringComparer.Ordinal)
+        let shadowedKeys = HashSet[(Name string, Arity int32)](inheritedShadowedKeys)
         for child in currentContainer.NestedTypes.OfType[StructDeclarationSyntax]() {
-            shadowedNames.Add(child.Identifier.ValueText)
+            shadowedKeys.Add((child.Identifier.ValueText, child.TypeParameterList?.Parameters.Count ?? 0))
         }
         for child in currentContainer.NestedTypes.OfType[StructDeclarationSyntax]() {
             let baseIndex = FindNestedSiblingBaseIndex(
                 child,
                 containerSyntax,
                 nestedStructs,
-                nestedStructsByName,
-                shadowedNames
+                nestedStructsByKey,
+                shadowedKeys
             )
             if baseIndex >= 0 {
                 VisitNestedBaseFirst(
                     baseIndex,
                     containerSyntax,
                     nestedStructs,
-                    nestedStructsByName,
+                    nestedStructsByKey,
                     bindingState,
                     bindingOrder
                 )
@@ -4216,10 +4225,10 @@ internal partial class DeclarationBinder {
                 child,
                 containerSyntax,
                 nestedStructs,
-                nestedStructsByName,
+                nestedStructsByKey,
                 bindingState,
                 bindingOrder,
-                shadowedNames
+                shadowedKeys
             )
         }
     }
@@ -4228,7 +4237,7 @@ internal partial class DeclarationBinder {
         index int32,
         containerSyntax StructDeclarationSyntax,
         nestedStructs List[StructDeclarationSyntax],
-        nestedStructsByName Dictionary[string, int32],
+        nestedStructsByKey Dictionary[(Name string, Arity int32), int32],
         bindingState[]uint8,
         bindingOrder List[int32]
     ) {
@@ -4241,7 +4250,7 @@ internal partial class DeclarationBinder {
             nestedStruct,
             containerSyntax,
             nestedStructs,
-            nestedStructsByName,
+            nestedStructsByKey,
             nil
         )
         if baseIndex >= 0 {
@@ -4249,7 +4258,7 @@ internal partial class DeclarationBinder {
                 baseIndex,
                 containerSyntax,
                 nestedStructs,
-                nestedStructsByName,
+                nestedStructsByKey,
                 bindingState,
                 bindingOrder
             )
@@ -4258,10 +4267,10 @@ internal partial class DeclarationBinder {
             nestedStruct,
             containerSyntax,
             nestedStructs,
-            nestedStructsByName,
+            nestedStructsByKey,
             bindingState,
             bindingOrder,
-            HashSet[string](StringComparer.Ordinal)
+            HashSet[(Name string, Arity int32)]()
         )
         bindingState[index] = uint8(2)
         bindingOrder.Add(index)
