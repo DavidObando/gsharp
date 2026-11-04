@@ -200,6 +200,7 @@ internal partial class StatementBinder {
             ApplyLoopEntryLowerBound(body, iterationRunsUserCode)
         }
         let loopEntryState = binderCtx.Narrowing
+        let loopEntryAliases = externalCallableAliases.ToImmutableArray()
         binderCtx.LabelCounter++
         let breakLabelValue = BoundLabel("break${binderCtx.LabelCounter}")
         let continueLabelValue = BoundLabel("continue${binderCtx.LabelCounter}")
@@ -244,6 +245,7 @@ internal partial class StatementBinder {
             continueLabelValue,
             boundBody,
             loopEntryState,
+            loopEntryAliases,
             loopPost?()
         )
         return boundBody
@@ -617,6 +619,7 @@ internal partial class StatementBinder {
         loopBody SyntaxNode,
         boundBody BoundStatement,
         condition BoundExpression?,
+        loopEntryAliases ImmutableArray[VariableSymbol],
         boundPost BoundStatement? = nil
     ) {
         if snapshot.BreakNode is not{} breakNode {
@@ -645,8 +648,14 @@ internal partial class StatementBinder {
             }
             childMinFrames[i] = minFrame
         }
-        var currentAliases = if boundStatementEntries.TryGetValue(boundBody, out var rootEntry) {
+        let rootNode = path[0]
+        var currentAliases = if rootNode is BoundStatement rootStmt && boundStatementEntries.TryGetValue(
+            rootStmt,
+            out var rootEntry
+        ) {
             HashSet[VariableSymbol](rootEntry.Aliases)
+        } else if !loopEntryAliases.IsDefault {
+            HashSet[VariableSymbol](loopEntryAliases)
         } else {
             HashSet[VariableSymbol](snapshot.ExternalCallableAliases)
         }

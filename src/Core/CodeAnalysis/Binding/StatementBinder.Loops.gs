@@ -678,10 +678,15 @@ internal partial class StatementBinder {
                         bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool)
                     }
                     ApplyHeaderCallableEffects(boundCondition)
+                    let postFrameIndex = binderCtx.NarrowedVariables.Count
+                    let postAliasesAtEntry = externalCallableAliases.ToImmutableArray()
                     boundPost = if postSyntax == nil {
                         default(BoundStatement?)
                     } else {
                         BindStatement(postSyntax)
+                    }
+                    if boundPost != nil {
+                        boundStatementEntries[boundPost] = (postFrameIndex, postAliasesAtEntry)
                     }
                     let (patternWhenTrue, _) = PatternVariables.Classify(boundCondition)
                     let boundBody = PatternVariables.BindInScope(

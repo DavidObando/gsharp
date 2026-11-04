@@ -782,6 +782,19 @@ func RunForPostBreak() int32 {
     })) { }
     return g.Length
 }
+func RunForPostCallableReassigned(cb () -> int32) int32 {
+    var s string? = "ok"
+    var f () -> int32 = () -> {
+        s = nil
+        return 1
+    }
+    for ; true; Consume(s != nil && (f() + {
+        f = cb
+        break
+        0
+    }) > 0) { }
+    return s.Length
+}
 func RunCustomHandlerFirstHole() int32 {
     var s string? = "ok"
     cleaner = func() {
@@ -800,7 +813,7 @@ func RunCustomHandlerFirstHole() int32 {
 }
 var g string? = "ok"
 var cleaner () -> void = func() { }
-Console.WriteLine(RunDeferredReturnLambda() + RunForPostBreak() + RunCustomHandlerFirstHole())`, "GS0158@27:18 GS0158@35:14 GS0158@51:14", "reject", ""}
+Console.WriteLine(RunDeferredReturnLambda() + RunForPostBreak() + RunForPostCallableReassigned(() -> 1) + RunCustomHandlerFirstHole())`, "GS0158@27:18 GS0158@35:14 GS0158@48:14 GS0158@64:14", "reject", ""}
             yield[]object{"control7_killed_branch_and_loop_condition_facts_not_replayed_on_break", `import System
 func Get() string? { return "ok" }
 func RunShortCircuitKilled() int32 {
