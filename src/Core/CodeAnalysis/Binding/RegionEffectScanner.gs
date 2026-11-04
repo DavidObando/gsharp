@@ -388,7 +388,6 @@ internal sealed class RegionEffectScanner {
                 let relational = cast[RelationalPatternSyntax](node)
                 // The binder converts the operand to the subject's type, which a conversion operator can do (W4).
                 if Active() && relational.Expression !is LiteralExpressionSyntax {
-                    current.ContainsConversionCandidate = true
                     current.Conversions.Add(RegionConversion(nil, nil, false))
                 }
                 // Issue #5688: `== value` and `!= value` bind as the binary operation `subject op value`.
@@ -704,7 +703,6 @@ internal sealed class RegionEffectScanner {
                 if Active() && binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken {
                     // The two operands meet in one type, which a structural projection or a user conversion
                     // may reach (rule W4).
-                    current.ContainsConversionCandidate = true
                     current.Conversions.Add(RegionConversion(nil, nil, false))
                 }
                 if Active() && IsOperatorCandidate(binary) {
@@ -1105,11 +1103,8 @@ internal sealed class RegionEffectScanner {
         for binding in bindings {
             NodesVisited++
             Visit(binding.Initializer)
-            if Active() {
-                current.ContainsConversionCandidate = true
-                if binding.TypeClause != nil {
-                    RecordConversion(binding.Initializer, TypeOrigin(binding.TypeClause))
-                }
+            if Active() && binding.TypeClause != nil {
+                RecordConversion(binding.Initializer, TypeOrigin(binding.TypeClause))
             }
             if !declareAfterAll {
                 Declare(binding.Identifier, "binding")
@@ -1131,11 +1126,8 @@ internal sealed class RegionEffectScanner {
         } else {
             BuildPath(declaration.Initializer)
         }
-        if Active() && declaration.Initializer is {} initialized {
-            current.ContainsConversionCandidate = true
-            if declaration.TypeClause != nil {
-                RecordConversion(initialized, TypeOrigin(declaration.TypeClause))
-            }
+        if Active() && declaration.Initializer is {} initialized && declaration.TypeClause != nil {
+            RecordConversion(initialized, TypeOrigin(declaration.TypeClause))
         }
         let name = declaration.Identifier.ValueText
         // The storage that a `ref` local names is fixed where it is declared, before a later declaration
@@ -1242,11 +1234,6 @@ internal sealed class RegionEffectScanner {
             for name in record.OperatorOperandNames {
                 if IsDeclared(name) {
                     current.OperatorHasUnresolvedOperand = true
-                }
-            }
-            for name in record.ReturnedNames {
-                if IsDeclared(name) {
-                    current.ContainsConversionCandidate = true
                 }
             }
         }
@@ -1430,46 +1417,14 @@ internal sealed class RegionEffectScanner {
     // A deconstruction calls `Deconstruct`, reads data members or converts the parts to declared types (rule W4).
     private func RecordDeconstruction() {
         if Active() {
-            current.ContainsConversionCandidate = true
             current.Conversions.Add(RegionConversion(nil, nil, false))
         }
     }
 
-    // A returned value is converted to the return type, which may select a user conversion (rule W4). The consumer
-    // decides a plain name and a constant with their types. A member or element read is an unknown getter already
-    // (W5), which removes what a conversion can.
+    // A returned value is converted to the return type, which may select a user conversion (rule W4).
     private func RecordReturnedValue(value ExpressionSyntax?) {
         if value != nil {
-            // The value converts to the return type of the enclosing function.
             RecordConversion(value, RootPath(ReturnTypeRoot))
-        }
-        var inner = value
-        while inner is ParenthesizedExpressionSyntax parenthesized {
-            inner = parenthesized.Expression
-        }
-        switch inner {
-            case nil { }
-            case name is NameExpressionSyntax {
-                let text = name.IdentifierToken.ValueText
-                if IsDeclared(text) {
-                    // A name of the region may have any type.
-                    current.ContainsConversionCandidate = true
-                } else if !current.ReturnedNames.Contains(text) {
-                    current.ReturnedNames.Add(text)
-                }
-            }
-            case literal is LiteralExpressionSyntax {
-                if literal.LiteralToken.Kind != SyntaxKind.NilKeyword {
-                    current.ReturnsConstant = true
-                }
-            }
-            case NameOfExpressionSyntax {
-                current.ReturnsConstant = true
-            }
-            case AccessorExpressionSyntax, IndexExpressionSyntax { }
-            default {
-                current.ContainsConversionCandidate = true
-            }
         }
     }
 
@@ -1477,7 +1432,6 @@ internal sealed class RegionEffectScanner {
     // conversion (a name, a member read, an element, a block value, a conditional).
     private func VisitCondition(condition ExpressionSyntax?) {
         if condition != nil && Active() && !IsBooleanByForm(condition) {
-            current.ContainsConversionCandidate = true
             RecordConversion(condition, RootPath("bool"))
         }
         Visit(condition)
@@ -1730,6 +1684,7 @@ internal sealed class RegionEffectScanner {
         } else {
             if Active() {
                 current.ContainsMemberWrite = true
+                RecordConversion(assignment.Value, BuildPath(target))
             }
             Visit(target)
         }
@@ -1737,7 +1692,6 @@ internal sealed class RegionEffectScanner {
 
     private func VisitMultiAssignment(statement MultiAssignmentStatementSyntax) {
         if Active() {
-            current.ContainsConversionCandidate = true
             current.Conversions.Add(RegionConversion(nil, nil, false))
         }
         for value in statement.Values {
@@ -1770,7 +1724,6 @@ internal sealed class RegionEffectScanner {
         var typeName string? = nil
         var rightName string? = nil
         if Active() && value != nil {
-            current.ContainsConversionCandidate = true
             RecordConversion(value, OriginOf(name))
         }
         if value != nil {
@@ -2098,7 +2051,7 @@ internal sealed class RegionEffectScanner {
     // of the region.
     private func IsPureStringForm(expression ExpressionSyntax?) bool {
         let inner = UnwrapParentheses(expression)
-        if inner is InterpolatedStringExpressionSyntax {
+        if inner is InterpolatedStringExpressionSyntax or NameOfExpressionSyntax {
             return true
         }
         if inner is LiteralExpressionSyntax literal {

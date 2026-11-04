@@ -139,6 +139,12 @@ internal partial class StatementBinder {
             get;
             set;
         }
+
+        /// Whether a conversion site of the region can run a conversion operator or a structural projection.
+        prop ConversionsRunUserCode bool {
+            get;
+            set;
+        }
     }
 
     private func SameRoot(first VariableSymbol, second VariableSymbol) bool {
@@ -153,34 +159,72 @@ internal partial class StatementBinder {
         return firstImplicit && first.GetType() == second.GetType() && first.Name == second.Name
     }
 
+    // Resolves a bare name that is not a variable of the entry scope through the binder's default-interface and
+    // inherited-CLR instance member fallbacks (#5470).
+    private func TryResolveBareFallbackMember(
+        name string,
+        out type TypeSymbol?,
+        out isProperty bool,
+        out getterRunsUserCode bool
+    ) bool {
+        type = nil
+        isProperty = false
+        getterRunsUserCode = false
+        if ExpressionBinder.TryResolveInheritedClrInstanceMemberByBareName(
+            binderCtx,
+            function,
+            name,
+            out var thisParameter,
+            out var clrMember
+        ) {
+            type = ExpressionBinder.GetInheritedClrMemberType(thisParameter.Type, clrMember)
+            if clrMember is PropertyInfo clrProperty {
+                isProperty = true
+                getterRunsUserCode = !IsStableClrGetter(clrProperty)
+            }
+            return true
+        }
+        if ExpressionBinder.TryResolveInterfaceInstancePropertyByBareName(
+            binderCtx,
+            function,
+            name,
+            out _,
+            out var thisInterface
+        ) {
+            isProperty = true
+            getterRunsUserCode = true
+            if TypeMemberModel.TryGetPropertyWithOwner(thisInterface, name, out var property, out var owner) &&
+                !property!!.IsIndexer {
+                type = (owner as InterfaceSymbol)?.SubstituteMemberType(property!!.Type) ?? property!!.Type
+            } else if MemberLookup.GetInterfaceImportedBaseInstanceProperty(
+                thisInterface,
+                name,
+                out var importedReceiver
+            ) is {} importedProperty &&
+                importedReceiver != nil {
+                type = ExpressionBinder.GetInheritedClrMemberType(importedReceiver, importedProperty)
+            }
+            return true
+        }
+        return false
+    }
+
+    private func TryLookupRegionVariableType(name string) TypeSymbol? {
+        if $scope.TryLookupSymbol(name) is VariableSymbol variable {
+            return variable.Type
+        }
+        return if TryResolveBareFallbackMember(name, out var type, out _, out _) {
+            type
+        } else {
+            default(TypeSymbol?)
+        }
+    }
+
     private func ResolveRegionWrites(effects RegionEffects) ResolvedRegionWrites {
         let resolved = ResolvedRegionWrites()
-        if effects.ContainsConversionCandidate {
+        if ConversionsRunUserCode(effects) {
+            resolved.ConversionsRunUserCode = true
             resolved.RunsUserCodeOnWrite = true
-        }
-        // A returned name or constant runs no conversion operator when its type keeps its representation in the
-        // return type, or when the return type is built in (a user conversion needs a type of the package).
-        let enclosing = function
-        let returnType = if enclosing == nil || enclosing.IsReturnTypeInferred {
-            default(TypeSymbol?)
-        } else {
-            StripAllNullability(enclosing.Type)
-        }
-        if effects.ReturnsConstant && (returnType == nil || !MetadataTypeKeys.IsBuiltIn(returnType)) {
-            resolved.RunsUserCodeOnWrite = true
-        }
-        for name in effects.ReturnedNames {
-            let returned = if $scope.TryLookupSymbol(name) is VariableSymbol variable {
-                StripAllNullability(variable.Type)
-            } else {
-                default(TypeSymbol?)
-            }
-            if returned == nil || returnType == nil || !Conversion.IsRepresentationPreservingImplicit(
-                returned,
-                returnType
-            ) {
-                resolved.RunsUserCodeOnWrite = true
-            }
         }
         if effects.ContainsOperatorCandidate {
             // A unary operator that is not predefined for a literal or a built-in operand calls a user-defined or
@@ -188,8 +232,8 @@ internal partial class StatementBinder {
             resolved.RunsUserOperator = effects.OperatorHasUnresolvedOperand || OperatorsRunUserCode(effects, false)
             for name in effects.OperatorOperandNames {
                 // A declaration of the region is not found here, and its type is unknown: it counts.
-                if $scope.TryLookupSymbol(name) is VariableSymbol operand {
-                    let operandType = StripAllNullability(operand.Type)
+                if TryLookupRegionVariableType(name) is {} rawOperandType {
+                    let operandType = StripAllNullability(rawOperandType)
                     // `object` can hold a value of a type with operators.
                     if operandType == nil || !MetadataTypeKeys.IsBuiltIn(operandType) || object.Equals(
                         operandType,
@@ -209,14 +253,10 @@ internal partial class StatementBinder {
             }
         }
         for name in effects.NilCompareOperandNames {
-            if $scope.TryLookupSymbol(name) is VariableSymbol compared {
-                let comparedType = compared.Type
+            if TryLookupRegionVariableType(name) is {} comparedType {
                 // A non-nullable value type compared with `nil` may select a user-defined `==`.
-                if comparedType != nil &&
-                    (
-                    object.Equals(StripAllNullability(comparedType), TypeSymbol.Object) ||
-                        (comparedType !is NullableTypeSymbol && !IsReferenceLikeType(comparedType))
-                ) {
+                if object.Equals(StripAllNullability(comparedType), TypeSymbol.Object) ||
+                    (comparedType !is NullableTypeSymbol && !IsReferenceLikeType(comparedType)) {
                     resolved.RunsUserOperator = true
                     resolved.NilCompareRunsUserOperator = true
                 }
@@ -230,13 +270,24 @@ internal partial class StatementBinder {
             // ADR-0208 R14 (#5599): the one accessor decision; an implicit instance read is through `this`.
             if (
                 symbol is ImplicitPropertyVariableSymbol instanceProperty &&
-                    SourcePropertyRunsUserCode(instanceProperty.Property, function?.ThisParameter?.Type)
+                    SourcePropertyRunsUserCode(
+                    instanceProperty.Property,
+                    ExpressionBinder.GetEffectiveThisParameter(binderCtx, function)?.Type
+                )
             ) ||
                 (
                 symbol is ImplicitStaticPropertyVariableSymbol staticProperty &&
                     SourcePropertyRunsUserCode(staticProperty.Property, nil)
             ) {
                 resolved.ReadsUserCodeProperty = true
+            }
+            if symbol is not VariableSymbol &&
+                TryResolveBareFallbackMember(name, out _, out var isProperty, out var getterRunsUserCode) &&
+                isProperty {
+                resolved.ReadsProperty = true
+                if getterRunsUserCode {
+                    resolved.ReadsUserCodeProperty = true
+                }
             }
             if BareStaticOwnerInitializes(symbol) {
                 resolved.TouchesInitializingType = true
@@ -249,6 +300,12 @@ internal partial class StatementBinder {
             }
             let symbol = $scope.TryLookupSymbol(write.Name)
             if symbol is not VariableSymbol variable {
+                if TryResolveBareFallbackMember(write.Name, out _, out var isProperty, out _) {
+                    resolved.ImplicitMemberWrite = true
+                    if isProperty {
+                        resolved.RunsUserCodeOnWrite = true
+                    }
+                }
                 continue
             }
             if variable is ImplicitPropertyVariableSymbol or ImplicitStaticPropertyVariableSymbol {
@@ -377,6 +434,9 @@ internal partial class StatementBinder {
                     shape = shape | TestedMemberShape(test, member)
                 }
             }
+        } else if TryResolveBareFallbackMember(receiverName, out var fallbackType, out _, out _) {
+            declaredType = StripAllNullability(fallbackType)
+            shape = MemberShape(declaredType, member) | MemberShape(ResolveTypeName(receiverName), member)
         } else {
             shape = MemberShape(ResolveTypeName(receiverName), member)
         }
@@ -560,7 +620,7 @@ internal partial class StatementBinder {
             }
             types.Add(
                 ReceiverType(
-                    if nullable != nil && NullableLifting.IsValueTypeNullable(nullable) {
+                    if nullable != nil && NullableLifting.IsAnyValueTypeNullable(nullable) {
                         nullable
                     } else {
                         declared
@@ -663,7 +723,10 @@ internal partial class StatementBinder {
     private func AddRootTypes(root string, isCall bool, effects RegionEffects, types List[ReceiverType]) bool {
         if root == RegionEffectScanner.ReturnTypeRoot {
             let enclosing = function
-            return enclosing != nil && !enclosing.IsReturnTypeInferred && AddSymbolType(enclosing.Type, types)
+            return enclosing != nil &&
+                !enclosing.IsReturnTypeInferred &&
+                !enclosing.DefersReturnConversion &&
+                AddSymbolType(enclosing.Type, types)
         }
         if isCall {
             if ResolveTypeName(root) is {} constructed {
@@ -708,11 +771,18 @@ internal partial class StatementBinder {
             }
             return true
         }
+        var found = false
+        if TryResolveBareFallbackMember(root, out var fallbackType, out _, out _) {
+            if !AddSymbolType(fallbackType, types) {
+                return false
+            }
+            found = true
+        }
         if ResolveTypeName(root) is {} named {
             types.Add(ReceiverType(named, nil))
-            return true
+            found = true
         }
-        return false
+        return found
     }
 
     private func NarrowingSurvivesRegion(variable VariableSymbol, effects RegionEffects) bool {
@@ -1324,9 +1394,10 @@ internal partial class StatementBinder {
         for access in effects.PatternIndexAccesses {
             if access.Receiver is {} target &&
                 (
-                target.RootIsCall || target.RootType != nil || target.RootName is {} root && $scope.TryLookupSymbol(
-                    root
-                ) is VariableSymbol
+                target.RootIsCall ||
+                    target.RootType != nil ||
+                    target.RootName is {} root &&
+                    TryLookupRegionVariableType(root) != nil
             ) &&
                 CallArgumentsRunUserConversion(access, effects, operatorResultsKnown) {
                 return true
@@ -1514,13 +1585,44 @@ internal partial class StatementBinder {
     // conversion). Every check without the `?` of a nullable value type is kept, so no operator is missed.
     private func ConversionOperatorReaches(source TypeSymbol, target TypeSymbol) bool {
         let sourceValue = StripNullableValue(source)
+        let targetValue = StripNullableValue(target)
+        if TypeSymbol.ContainsTypeParameter(sourceValue) || TypeSymbol.ContainsTypeParameter(targetValue) ||
+            sourceValue
+            .ClrType
+            ?.ContainsGenericParameters == true ||
+            targetValue
+            .ClrType
+            ?.ContainsGenericParameters == true {
+            return true
+        }
+        if sourceValue is TupleTypeSymbol sourceTuple &&
+            targetValue is TupleTypeSymbol targetTuple &&
+            sourceTuple
+            .ElementTypes
+            .Length == targetTuple
+            .ElementTypes
+            .Length {
+            for var index = 0; index < sourceTuple.ElementTypes.Length; index++ {
+                let sourceElement = StripReferenceNullability(sourceTuple.ElementTypes[index]) ??
+                    sourceTuple.ElementTypes[index]
+                let targetElement = StripReferenceNullability(targetTuple.ElementTypes[index]) ??
+                    targetTuple.ElementTypes[index]
+                if ConversionOperatorReaches(sourceElement, targetElement) {
+                    return true
+                }
+            }
+        }
         return conversions.HasUserDefinedImplicitConversion(source, target) ||
             conversions.HasUserDefinedImplicitConversion(sourceValue, target) ||
-            conversions.HasUserDefinedImplicitConversion(sourceValue, StripNullableValue(target))
+            conversions.HasUserDefinedImplicitConversion(sourceValue, targetValue) || Conversion.Classify(
+            sourceValue,
+            targetValue
+        )
+            .IsStructuralProjection
     }
 
     private func StripNullableValue(type TypeSymbol) TypeSymbol -> if type is NullableTypeSymbol nullable &&
-        NullableLifting.IsValueTypeNullable(nullable) {
+        NullableLifting.IsAnyValueTypeNullable(nullable) {
         nullable.UnderlyingType
     } else {
         type
@@ -1546,12 +1648,13 @@ internal partial class StatementBinder {
             } else if target.RootName == RegionEffectScanner.ReturnTypeRoot {
                 if function is {} enclosing &&
                     !enclosing.IsReturnTypeInferred &&
+                    !enclosing.DefersReturnConversion &&
                     enclosing.Type is {} returnType &&
                     AcceptsNilWithoutOperator(returnType) {
                     return true
                 }
-            } else if target.RootName is {} name && $scope.TryLookupSymbol(name) is VariableSymbol variable {
-                if variable.Type is {} variableType && AcceptsNilWithoutOperator(variableType) {
+            } else if target.RootName is {} name && TryLookupRegionVariableType(name) is {} variableType {
+                if AcceptsNilWithoutOperator(variableType) {
                     return true
                 }
             }
@@ -1652,7 +1755,7 @@ internal partial class StatementBinder {
                 default(string?)
             }
         )
-        if root == nil || $scope.TryLookupSymbol(root) is VariableSymbol {
+        if root == nil || TryLookupRegionVariableType(root) != nil {
             return false
         }
         return ResolveTypeName(root) != nil
@@ -1915,9 +2018,7 @@ internal partial class StatementBinder {
     private func PatternTestRunsUserCode(test RegionPatternTest, effects RegionEffects) bool {
         // A switch case resolves a value before a type, so a name that is a variable of the entry scope is a value.
         if test.Candidate is {} candidate &&
-            !(
-            candidate.TypeName is {} typeName && $scope.TryLookupSymbol(FirstNameSegment(typeName)) is VariableSymbol
-        ) &&
+            !(candidate.TypeName is {} typeName && TryLookupRegionVariableType(FirstNameSegment(typeName)) != nil) &&
             TestedType(candidate, out _) != nil {
             return false
         }
@@ -2024,7 +2125,7 @@ internal partial class StatementBinder {
             path.RootType != nil ||
             path.RootLiteralType != nil ||
             path.RootName is {} root &&
-            $scope.TryLookupSymbol(root) is VariableSymbol {
+            TryLookupRegionVariableType(root) != nil {
             return ReadRunsUserCode(read, effects)
         }
         guard let segments = PatternNameSegments(path, read.Member) else {
@@ -2441,7 +2542,7 @@ internal partial class StatementBinder {
         var current = type
         while current is NullableTypeSymbol or PlatformTypeSymbol {
             if current is NullableTypeSymbol nullable {
-                if NullableLifting.IsValueTypeNullable(nullable) {
+                if NullableLifting.IsAnyValueTypeNullable(nullable) {
                     return current
                 }
                 current = nullable.UnderlyingType
@@ -2453,7 +2554,7 @@ internal partial class StatementBinder {
     }
 
     private func IsNullableValueType(type TypeSymbol) bool -> type is NullableTypeSymbol nullable &&
-        NullableLifting.IsValueTypeNullable(nullable)
+        NullableLifting.IsAnyValueTypeNullable(nullable)
 
     /// Whether the fact at [`path`](paramref) is a type-test fact: the narrowed type differs from
     /// the declared type with one nullable layer removed. A member path is never one here.
@@ -2540,8 +2641,8 @@ internal partial class StatementBinder {
                     why = "null-assertion-of-an-unknown-value"
                     return false
                 }
-                if $scope.TryLookupSymbol(write.RightSideName) is VariableSymbol asserted {
-                    let assertedType = StripAllNullability(asserted.Type)
+                if TryLookupRegionVariableType(write.RightSideName) is {} rawAssertedType {
+                    let assertedType = StripAllNullability(rawAssertedType)
                     if assertedType == nil || declared == nil || !Conversion.IsRepresentationPreservingImplicit(
                         assertedType,
                         declared
@@ -2707,9 +2808,9 @@ internal partial class StatementBinder {
                 resolved.ReadsRunUserCode = resolved.ReadsUserCodeProperty ||
                     resolved.TouchesInitializingType ||
                     resolved.NilCompareRunsUserOperator ||
+                    resolved.ConversionsRunUserCode ||
                     ReadsRunUserCode(effects) ||
                     OperatorsRunUserCode(effects, true) ||
-                    ConversionsRunUserCode(effects) ||
                     ArgumentsRunUserConversion(effects)
             }
             indirectCall = resolved.ReadsRunUserCode == true

@@ -3502,6 +3502,107 @@ func Run(ref text string?, n int32, threshold Threshold) int32 {
     return k
 }
 func Main() { }`, "GS0158@12:16")
+            Add("default-interface-bare-property-read-and-write-are-calls (#5470)", `package T
+import System
+class C { }
+interface IAccess {
+    prop P int32 { get; set; }
+    func ReadInLoop(ref item C?) int32 {
+        if item == nil { return 0 }
+        var n = 0
+        while n < 2 {
+            let b C = item
+            let v = P
+            n = n + 1
+        }
+        return n
+    }
+    func WriteInLoop(ref item C?) int32 {
+        if item == nil { return 0 }
+        var n = 0
+        while n < 2 {
+            let b C = item
+            P = 1
+            n = n + 1
+        }
+        return n
+    }
+}
+func Main() { }`, "GS0155@10:23 GS0155@20:23")
+            Add("inherited-clr-bare-property-read-and-write-are-calls (#5470)", `package T
+import System
+class C { }
+var g C? = C()
+class MyError : Exception {
+    func ReadInLoop(ref item C?) int32 {
+        if g == nil || item == nil { return 0 }
+        var n = 0
+        while n < 2 {
+            let a C = g
+            let b C = item
+            let m = Message
+            n = n + 1
+        }
+        return n
+    }
+    func WriteInLoop(ref item C?) int32 {
+        if g == nil || item == nil { return 0 }
+        var n = 0
+        while n < 2 {
+            let a C = g
+            let b C = item
+            HelpLink = "x"
+            n = n + 1
+        }
+        return n
+    }
+}
+func Main() { }`, "GS0155@10:23 GS0155@11:23 GS0155@21:23 GS0155@22:23")
+            Add("inherited-stable-clr-bare-getter-keeps-a-by-reference-fact (#5470, R16)", `package T
+import System
+import System.Collections.Generic
+class MyList : List[int32] {
+    func Run(ref text string?) int32 {
+        if text == nil { return 0 }
+        var n = 0
+        while text.Length > 0 && n < 2 {
+            n = n + Count + 1
+        }
+        return n
+    }
+}
+func Main() { }`, "")
+            Add("conversion-free-declarations-and-assignments-keep-every-fact (#5657)", `package T
+import System
+class C { var Value int32 }
+class Box {
+    let Item C?
+    init(item C?) { Item = item }
+}
+var g C? = C()
+func RunGlobal() C {
+    if g == nil { return C() }
+    while true {
+        let n = 1
+        return g
+    }
+    return C()
+}
+func RunCapturedAndMember(box Box) int32 {
+    var local C? = C()
+    let clear = func() { local = nil }
+    if local == nil || box.Item == nil { return 0 }
+    var k = 0
+    while k < 2 {
+        let step = 1
+        let typedStep int32 = step
+        var copy int32 = 0
+        copy = typedStep
+        k = k + 1
+    }
+    return local.Value + box.Item.Value + k
+}
+func Main() { }`, "")
             return rows
         }
     }
