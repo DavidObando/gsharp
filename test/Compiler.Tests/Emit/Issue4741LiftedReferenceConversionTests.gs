@@ -523,6 +523,20 @@ static Box? Convert(bool present) => OpenConvert(Probe.Read<RefWrapper<Box>>(pre
         "101,111"
     )
     @InlineData(
+        "int32?",
+        "OpenUnwrapNullable[int32](GenericValueUnwrapper[int32?]{Value: Probe.Read[int32](present)})",
+        "int?",
+        "new GenericValueUnwrapper<int?> { Value = Probe.Read<int>(present) }",
+        "111,110"
+    )
+    @InlineData(
+        "int32?",
+        "OpenUnwrapNullableTree[int32](GenericValueUnwrapper[int32?]{Value: Probe.Read[int32](present)})",
+        "int?",
+        "EvalTree<GenericValueUnwrapper<int?>, int?>(v => v, new GenericValueUnwrapper<int?> { Value = Probe.Read<int>(present) })",
+        "111,110"
+    )
+    @InlineData(
         "int32",
         "Probe.AcceptSpan(Span[uint8]([]uint8{1, 2, 3})) + (if present { 0 } else { 0 }) + 10 * (Probe.Calls + 1) + 100 * Probe.Reads",
         "int",
@@ -552,6 +566,8 @@ func operator implicit(value LocalImplicitOpaque) int32? {
 func EvalTree[T, TResult](expr Expression[Func[T, TResult]], value T) TResult -> expr.Compile()(value)
 func OpenNullAware[T](value GenericNullAwareValueToken[T]?) int32 -> int32(value)
 func OpenOpaque[T](value GenericOpaqueValueToken[T]) int32? -> int32?(value)
+func OpenUnwrapNullable[T struct](x GenericValueUnwrapper[T?]) T? -> x
+func OpenUnwrapNullableTree[T struct](x GenericValueUnwrapper[T?]) T? -> EvalTree[GenericValueUnwrapper[T?], T?]((v GenericValueUnwrapper[T?]) -> v, x)
 func Raw(present bool) ` + "$gsharpResult" + ` -> ` + "$gsharpBody" + `
 func Convert(present bool) int32? -> Raw(present)`), (`static TResult EvalTree<T, TResult>(System.Linq.Expressions.Expression<System.Func<T, TResult>> expr, T value) => expr.Compile()(value);
 static ` + "$csharpResult" + ` Raw(bool present) => ` + "$csharpBody" + `;
@@ -565,8 +581,11 @@ static int? Convert(bool present) => Raw(present);`), expectedOutput)
     @InlineData("Probe.Read[NullAwareImplicitOpaqueValueToken](present)")
     @InlineData("int32(Probe.Read[NumericToken](present))")
     @InlineData("([]uint8(Span[uint8]([]uint8{1}))).Length")
+    @InlineData("RejectNullabilityMismatch(GenericSource[LocalClass?]()).Tag")
     func ImportedNullableValueSignature_RejectsNonNullableValueTarget(gsharpBody string) {
-        RunValuePair((`func Raw(present bool) int32 -> ` + "$gsharpBody" + `
+        RunValuePair((`class LocalClass {}
+func RejectNullabilityMismatch(x GenericSource[LocalClass?]) GenericTarget[LocalClass] -> x
+func Raw(present bool) int32 -> ` + "$gsharpBody" + `
 func Convert(present bool) int32? -> Raw(present)`), `static int? Convert(bool present) => null;`, expectedOutput: "1,1", expectedDiagnostic: "GS0155")
     }
 
@@ -1030,6 +1049,19 @@ public struct GenericChainValueToken<T> {
     public static explicit operator GenericChainValueToken<System.Collections.Generic.List<T>>?(GenericChainValueToken<T> value) {
         Probe.Calls++;
         return null;
+    }
+}
+public struct GenericSource<T> {
+    public static implicit operator GenericTarget<T>(GenericSource<T> value) => default;
+}
+public struct GenericTarget<T> {
+    public int Tag;
+}
+public struct GenericValueUnwrapper<U> {
+    public U Value;
+    public static implicit operator U(GenericValueUnwrapper<U> value) {
+        Probe.Calls++;
+        return value.Value;
     }
 }
 #nullable disable

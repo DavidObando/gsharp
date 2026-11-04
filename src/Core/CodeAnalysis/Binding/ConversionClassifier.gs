@@ -934,7 +934,7 @@ internal class ConversionClassifier {
             // Issue #4350: a conversion between symbolic generics (`Span[T]` ->
             // `ReadOnlySpan[T]`) resolves on the open definition first; the
             // CLR branch below would pick the erased `<object>` operator.
-            if TryResolveSymbolicImportedConversion(expression.Type, type, out var symbolicConvMethod) &&
+            if TryResolveSymbolicImportedConversion(expression.Type, type, out var symbolicConvMethod, allowExplicit) &&
                 (
                 allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
                     expression.Type,
@@ -1085,7 +1085,12 @@ internal class ConversionClassifier {
                     allowExplicit
                 )
             }
-            if TryResolveSymbolicImportedConversion(expression.Type, type, out var projectionSymbolicConvMethod) &&
+            if TryResolveSymbolicImportedConversion(
+                expression.Type,
+                type,
+                out var projectionSymbolicConvMethod,
+                allowExplicit
+            ) &&
                 (
                 allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
                     expression.Type,
@@ -4265,6 +4270,14 @@ internal class ConversionClassifier {
             if TryResolveUserDefinedSymbolConversion(sourceType, targetType, allowExplicit: false, out _) {
                 return true
             }
+            if TryResolveSymbolicImportedConversion(sourceType, targetType, out var symbolicMethod) &&
+                BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
+                sourceType,
+                targetType,
+                symbolicMethod!!
+            ) {
+                return true
+            }
             return sourceType?.ClrType != nil &&
                 targetType?.ClrType != nil &&
                 ClrOperatorResolution.TryResolveConversionForTypes(
@@ -4487,29 +4500,33 @@ internal class ConversionClassifier {
         func TryResolveSymbolicImportedConversion(
             source TypeSymbol?,
             target TypeSymbol?,
-            @NotNullWhen(true) out conversion MethodInfo?
+            @NotNullWhen(true) out conversion MethodInfo?,
+            allowExplicit bool = false
         ) bool {
             conversion = nil
             if source == nil || target == nil {
                 return false
             }
+            let bareSource = source.StripToBareShape()
+            let bareTarget = target.StripToBareShape()
             // Only the symbolic/open case is in scope: a fully CLR-backed pair
             // already resolves through ClrOperatorResolution, and re-resolving it
             // here would change which operator a concrete call site picks.
-            if !NeedsSymbolicConversion(target) && !NeedsSymbolicConversion(source) {
+            if !NeedsSymbolicConversion(bareTarget) && !NeedsSymbolicConversion(bareSource) {
                 return false
             }
             // Issue #3932: the operator declared on the TARGET's open definition
             // (`Memory`1::op_Implicit(!0[])`).
-            if target is ImportedTypeSymbol{OpenDefinition: {} targetOpen} importedTarget &&
+            if bareTarget is ImportedTypeSymbol{OpenDefinition: {} targetOpen} importedTarget &&
                 !importedTarget
                 .TypeArguments
                 .IsDefaultOrEmpty &&
-                TryFindSymbolicImplicitOperator(
+                TryFindSymbolicOperator(
                 targetOpen,
                 importedTarget.TypeArguments,
-                source,
-                target,
+                bareSource,
+                bareTarget,
+                "op_Implicit",
                 out conversion
             ) {
                 return true
@@ -4518,15 +4535,47 @@ internal class ConversionClassifier {
             // (`Span`1::op_Implicit(Span<!0>) : ReadOnlySpan<!0>`). The erased CLR
             // branch would otherwise bind `Span<object>`'s operator inside a
             // generic body and emit unverifiable IL.
-            return source is ImportedTypeSymbol{OpenDefinition: {} sourceOpen} importedSource &&
+            if bareSource is ImportedTypeSymbol{OpenDefinition: {} sourceOpen} importedSource &&
                 !importedSource
                 .TypeArguments
                 .IsDefaultOrEmpty &&
-                TryFindSymbolicImplicitOperator(
+                TryFindSymbolicOperator(
                 sourceOpen,
                 importedSource.TypeArguments,
-                source,
-                target,
+                bareSource,
+                bareTarget,
+                "op_Implicit",
+                out conversion
+            ) {
+                return true
+            }
+            if !allowExplicit {
+                return false
+            }
+            if bareTarget is ImportedTypeSymbol{OpenDefinition: {} explicitTargetOpen} explicitImportedTarget &&
+                !explicitImportedTarget
+                .TypeArguments
+                .IsDefaultOrEmpty &&
+                TryFindSymbolicOperator(
+                explicitTargetOpen,
+                explicitImportedTarget.TypeArguments,
+                bareSource,
+                bareTarget,
+                "op_Explicit",
+                out conversion
+            ) {
+                return true
+            }
+            return bareSource is ImportedTypeSymbol{OpenDefinition: {} explicitSourceOpen} explicitImportedSource &&
+                !explicitImportedSource
+                .TypeArguments
+                .IsDefaultOrEmpty &&
+                TryFindSymbolicOperator(
+                explicitSourceOpen,
+                explicitImportedSource.TypeArguments,
+                bareSource,
+                bareTarget,
+                "op_Explicit",
                 out conversion
             )
         }
@@ -5944,11 +5993,12 @@ internal class ConversionClassifier {
             return false
         }
 
-        private func TryFindSymbolicImplicitOperator(
+        private func TryFindSymbolicOperator(
             openDefinition Type,
             ownerTypeArguments ImmutableArray[TypeSymbol],
             source TypeSymbol,
             target TypeSymbol,
+            operatorName string,
             @NotNullWhen(true) out conversion MethodInfo?
         ) bool {
             conversion = nil
@@ -5959,7 +6009,7 @@ internal class ConversionClassifier {
                 return false
             }
             for candidate in candidates {
-                if !string.Equals(candidate.Name, "op_Implicit", StringComparison.Ordinal) {
+                if !string.Equals(candidate.Name, operatorName, StringComparison.Ordinal) {
                     continue
                 }
                 let parameters = candidate.GetParameters()
@@ -6000,8 +6050,6 @@ internal class ConversionClassifier {
             if mapped == nil || mapped == TypeSymbol.Error {
                 return false
             }
-            let mapped = mapped.StripToBareShape()
-            let expected = expected.StripToBareShape()
             if mapped.Equals(expected) {
                 return true
             }

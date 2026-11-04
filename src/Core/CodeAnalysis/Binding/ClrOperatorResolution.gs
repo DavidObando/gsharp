@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis.Binding.OverloadResolution
+import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import System
@@ -209,36 +210,55 @@ internal shared class ClrOperatorResolution {
     ) bool {
         let effectiveSource = NullableLifting.GetEffectiveClrType(sourceType)
         let effectiveTarget = NullableLifting.GetEffectiveClrType(targetType)
-        if TryResolveConversion(effectiveSource, effectiveTarget, allowExplicit, out method, out isExplicit) ||
+        let resolved = if TryResolveConversion(
+            effectiveSource,
+            effectiveTarget,
+            allowExplicit,
+            out method,
+            out isExplicit
+        ) ||
             TryResolveConversion(effectiveSource, targetType?.ClrType, allowExplicit, out method, out isExplicit) {
-            return true
-        }
-        if sourceType is not NullableTypeSymbol && !TypeSymbol.IsByRefLike(sourceType) &&
+            true
+        } else if sourceType is not NullableTypeSymbol && !TypeSymbol.IsByRefLike(sourceType) &&
             NullableLifting.TryMakeNullableClrType(sourceType?.ClrType) is {} nullableSource {
-            return TryResolveConversion(nullableSource, effectiveTarget, allowExplicit, out method, out isExplicit) ||
+            TryResolveConversion(nullableSource, effectiveTarget, allowExplicit, out method, out isExplicit) ||
                 TryResolveConversion(nullableSource, targetType?.ClrType, allowExplicit, out method, out isExplicit)
-        }
-        return sourceType is NullableTypeSymbol source && NullableLifting.IsAnyValueTypeNullable(source) &&
-            targetType != nil &&
-            BoundClrConversionCallExpression.CanLiftTo(targetType) &&
-            (allowExplicit || BoundClrConversionCallExpression.CanLiftImplicitlyTo(targetType)) &&
-            !TypeSymbol.IsByRefLike(sourceType) && !TypeSymbol.IsByRefLike(targetType) &&
-            (
-            TryResolveConversion(
-                source.UnderlyingType.ClrType,
-                effectiveTarget,
-                allowExplicit,
-                out method,
-                out isExplicit
-            ) ||
+        } else {
+            sourceType is NullableTypeSymbol source && NullableLifting.IsAnyValueTypeNullable(source) &&
+                targetType != nil &&
+                BoundClrConversionCallExpression.CanLiftTo(targetType) &&
+                (allowExplicit || BoundClrConversionCallExpression.CanLiftImplicitlyTo(targetType)) &&
+                !TypeSymbol.IsByRefLike(sourceType) && !TypeSymbol.IsByRefLike(targetType) &&
+                (
                 TryResolveConversion(
-                source.UnderlyingType.ClrType,
-                targetType.ClrType,
-                allowExplicit,
-                out method,
-                out isExplicit
+                    source.UnderlyingType.ClrType,
+                    effectiveTarget,
+                    allowExplicit,
+                    out method,
+                    out isExplicit
+                ) ||
+                    TryResolveConversion(
+                    source.UnderlyingType.ClrType,
+                    targetType.ClrType,
+                    allowExplicit,
+                    out method,
+                    out isExplicit
+                )
             )
-        )
+        }
+        if !resolved ||
+            (
+            sourceType != nil && targetType != nil && !MethodBodyEmitter.HasMatchingSymbolicConversionOwner(
+                method!!,
+                sourceType,
+                targetType
+            )
+        ) {
+            method = nil
+            isExplicit = false
+            return false
+        }
+        return true
     }
 
     func HasImplicitConversion(sourceType Type?, targetType Type?) bool {

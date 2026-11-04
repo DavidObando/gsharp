@@ -14,6 +14,7 @@ import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Immutable
 import System.Diagnostics
+import System.Diagnostics.CodeAnalysis
 import System.Linq
 import System.Reflection
 import System.Reflection.Metadata
@@ -1343,7 +1344,9 @@ internal partial class MethodBodyEmitter {
         )
         this.EmitExpression(conv.Source)
         this.EmitCallResolvedConversion(conv)
-        this.EmitErasedObjectReturnWidening(method.ReturnType, conv.Type)
+        if !TryGetSymbolicConversionReturnType(conv, out _) {
+            this.EmitErasedObjectReturnWidening(method.ReturnType, conv.Type)
+        }
         // Issue #663: when the operator returns a non-nullable value type T but the
         // target type is Nullable<T> (e.g. op_Explicit(JsonNode) → int, target int32?),
         // lift the result into Nullable<T> via newobj.
@@ -1607,13 +1610,88 @@ internal partial class MethodBodyEmitter {
             }
         }
 
-        private func ReturnsValueTypeNullable(conversion BoundClrConversionCallExpression) bool {
+        internal func HasMatchingSymbolicConversionOwner(method MethodInfo, source TypeSymbol, target TypeSymbol) bool {
+            if method.DeclaringType is not{IsGenericType: true} genericDeclaring {
+                return true
+            }
+            let unwrappedSource = UnwrapNullable(source)
+            let unwrappedTarget = UnwrapNullable(target)
+            let declaring = if genericDeclaring.IsGenericTypeDefinition {
+                genericDeclaring
+            } else {
+                genericDeclaring.GetGenericTypeDefinition()
+            }
+            let sourceNeedsSymbolic = unwrappedSource is ImportedTypeSymbol{OpenDefinition: {} sourceOpen} &&
+                ClrTypeUtilities.AreSame(sourceOpen, declaring) && ConversionClassifier.NeedsSymbolicConversion(
+                unwrappedSource
+            )
+            let targetNeedsSymbolic = unwrappedTarget is ImportedTypeSymbol{OpenDefinition: {} targetOpen} &&
+                ClrTypeUtilities.AreSame(targetOpen, declaring) && ConversionClassifier.NeedsSymbolicConversion(
+                unwrappedTarget
+            )
+            if !sourceNeedsSymbolic && !targetNeedsSymbolic {
+                return true
+            }
+            if sourceNeedsSymbolic &&
+                SymbolicOperatorMatchesOwner(
+                method,
+                cast[ImportedTypeSymbol](unwrappedSource),
+                unwrappedSource,
+                unwrappedTarget
+            ) {
+                return true
+            }
+            return targetNeedsSymbolic &&
+                SymbolicOperatorMatchesOwner(
+                method,
+                cast[ImportedTypeSymbol](unwrappedTarget),
+                unwrappedSource,
+                unwrappedTarget
+            )
+        }
+
+        private func TryGetSymbolicConversionReturnType(
+            conversion BoundClrConversionCallExpression,
+            @NotNullWhen(true) out returnType TypeSymbol?
+        ) bool {
+            returnType = nil
+            if conversion.Method is not{} method {
+                return false
+            }
+            let owner = SymbolicConversionOwner(method, conversion.Source.Type, conversion.Type)
+            if owner is not ImportedTypeSymbol importedOwner ||
+                importedOwner.OpenDefinition is not{} openDefinition ||
+                importedOwner
+                .TypeArguments
+                .IsDefaultOrEmpty ||
+                (
+                method.DeclaringType is not{IsGenericTypeDefinition: true} &&
+                    !ConversionClassifier.NeedsSymbolicConversion(importedOwner)
+            ) {
+                return false
+            }
+            if ImportedMemberRefFactory.ResolveMethodOnOpenDefinition(openDefinition, method) is not{} openMethod {
+                return false
+            }
+            returnType = MemberLookup.GetClrOpenMethodReturnTypeSymbol(
+                openMethod,
+                openDefinition,
+                importedOwner.TypeArguments
+            )
+            return true
+        }
+
+        internal func ReturnsValueTypeNullable(conversion BoundClrConversionCallExpression) bool {
             if conversion.Function != nil {
                 let resultType = conversion.FunctionOwnerType?.SubstituteMemberType(conversion.Function.Type) ??
                     conversion
                     .Function
                     .Type
                 return resultType is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable)
+            }
+            if TryGetSymbolicConversionReturnType(conversion, out var symbolicReturn) {
+                return symbolicReturn.StripToBareShape() is NullableTypeSymbol nullable &&
+                    NullableLifting.IsAnyValueTypeNullable(nullable)
             }
             return conversion.Method != nil && NullableLifting.IsValueTypeNullableClr(conversion.Method.ReturnType)
         }

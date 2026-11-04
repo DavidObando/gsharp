@@ -10,6 +10,7 @@ import System.Collections.Immutable
 import System.Diagnostics.CodeAnalysis
 import System.Reflection
 import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import ReflectionBinder = System.Reflection.Binder
@@ -2253,16 +2254,9 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             }
         }
 
-        private func ReturnsValueTypeNullable(conversion BoundClrConversionCallExpression) bool {
-            if conversion.Function != nil {
-                let resultType = conversion.FunctionOwnerType?.SubstituteMemberType(conversion.Function.Type) ??
-                    conversion
-                    .Function
-                    .Type
-                return resultType is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable)
-            }
-            return conversion.Method != nil && NullableLifting.IsValueTypeNullableClr(conversion.Method.ReturnType)
-        }
+        private func ReturnsValueTypeNullable(
+            conversion BoundClrConversionCallExpression
+        ) bool -> MethodBodyEmitter.ReturnsValueTypeNullable(conversion)
 
         private func BuildUserOperatorMethodInfoLookup(expression BoundClrBinaryOperatorExpression) BoundExpression {
             let function = expression.Function ??
