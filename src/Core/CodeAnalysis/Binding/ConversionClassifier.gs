@@ -1097,22 +1097,18 @@ internal class ConversionClassifier {
             if type is TupleTypeSymbol targetTuple && sourceTuple.Arity == targetTuple.Arity {
                 return BindTupleConversion(diagnosticLocation, expression, sourceTuple, targetTuple, allowExplicit)
             }
-            if type is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol innerTarget} &&
-                innerTarget.Arity == sourceTuple.Arity {
+            if sourceTuple.HasNilElement {
+                let targetTuple = if type is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol innerTarget} &&
+                    innerTarget.Arity == sourceTuple.Arity {
+                    innerTarget
+                } else {
+                    cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(sourceTuple))
+                }
                 expression = BindTupleConversion(
                     diagnosticLocation,
                     expression,
                     sourceTuple,
-                    innerTarget,
-                    allowExplicit
-                )
-            } else if sourceTuple.HasNilElement {
-                let resolvedTuple = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(sourceTuple))
-                expression = BindTupleConversion(
-                    diagnosticLocation,
-                    expression,
-                    sourceTuple,
-                    resolvedTuple,
+                    targetTuple,
                     allowExplicit
                 )
             }

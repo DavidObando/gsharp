@@ -30,8 +30,8 @@ class Ctr {
 
 class AlwaysEqualBox {
     shared {
-        public operator ==(a AlwaysEqualBox?, b AlwaysEqualBox?) bool -> true
-        public operator !=(a AlwaysEqualBox?, b AlwaysEqualBox?) bool -> false
+        public func operator ==(a AlwaysEqualBox?, b AlwaysEqualBox?) bool -> true
+        public func operator !=(a AlwaysEqualBox?, b AlwaysEqualBox?) bool -> false
     }
 }
 
@@ -41,7 +41,7 @@ class Token {
         this.v = v
     }
     shared {
-        public implicit operator Token(s string?) Token -> Token(s ?? "<nil>")
+        public func operator implicit(s string?) Token -> Token(s ?? "<nil>")
     }
 }
 

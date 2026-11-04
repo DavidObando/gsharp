@@ -304,18 +304,27 @@ namespace Demo
 
     public static class ChannelOpsLike
     {
-        public static (string Value, bool Ok) Receive2() => (null, false);
+        public static (string Value, bool Ok) Receive2() => ("ok", false);
+#nullable enable
         public static (string? Value, bool Ok) Receive2Nullable() => (null, false);
 
         public static void F()
         {
+            AssertLike.Equal<(string? Value, bool Ok)>((null, false), Receive2Nullable());
+        }
+#nullable disable
+        public static void ObliviousF()
+        {
             AssertLike.Equal((null, false), Receive2());
-            AssertLike.Equal((null, false), Receive2Nullable());
         }
     }
 }`)
         Assert.Contains("AssertLike.Equal((default(string), false), Receive2())", printed, StringComparison.Ordinal)
-        Assert.Contains("AssertLike.Equal((nil, false), Receive2Nullable())", printed, StringComparison.Ordinal)
+        Assert.Contains(
+            "AssertLike.Equal[(Value string?, Ok bool)]((nil, false), Receive2Nullable())",
+            printed,
+            StringComparison.Ordinal
+        )
     }
 
     shared {

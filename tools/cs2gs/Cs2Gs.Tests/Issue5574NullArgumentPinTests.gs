@@ -842,6 +842,7 @@ namespace Demo
             SyntaxNode? declaration = type switch
             {
                 DelegateTypeSymbol d => d.Declaration,
+                PinnedSymbol => new SyntaxNode(),
                 _ => null,
             };
             return declaration != null && declaration.Implicit;

@@ -423,6 +423,19 @@ class H {
     var b Box
     var s S
 }`, "")
+            yield Row("ok-nullable-element-tuple-to-nullable-named-tuple", `func FindNupkg() string? -> nil
+func ResolveLocal()(NupkgPath string, Version string)? -> nil
+func Run(c bool, v string) string {
+    let sdk = if c {
+        (FindNupkg(), v)
+    } else {
+        ResolveLocal()
+    }
+    if sdk == nil {
+        return ""
+    }
+    return sdk.Version
+}`, "")
             yield Row("ok-default-of-class", `func F() Box -> default(Box)`, "")
             // A default argument of `nil` for a bare class was already refused (GS0265).
             yield Row("default-argument-bare-class", `func D(b Box = nil) int32 -> 0`, "GS0265")

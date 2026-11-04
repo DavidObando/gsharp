@@ -65,11 +65,11 @@ func F(c bool, i int32) int32 {
         "joined.Item1 ?? \"d\""
     )
     @InlineData(
-        "(() -> { if i == 0 { return (nil, 1) }; if c { return (\"x\", 2) }; return (Ob.Field, 3) })()",
+        "(() -> {\n if i == 0 { return (nil, 1) }\n if c { return (\"x\", 2) }\n return (Ob.Field, 3)\n})()",
         "joined.Item1"
     )
     @InlineData(
-        "(() -> { if i == 0 { return (Ob.Field, 1) }; if c { return (nil, 2) }; return (\"x\", 3) })()",
+        "(() -> {\n if i == 0 { return (Ob.Field, 1) }\n if c { return (nil, 2) }\n return (\"x\", 3)\n})()",
         "joined.Item1"
     )
     func ATupleJoinWithNilElements_KeepsPlatformElementsAndEmits(joinExpression string, use string) {
