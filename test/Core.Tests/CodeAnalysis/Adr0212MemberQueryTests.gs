@@ -285,6 +285,21 @@ open class Adr0212MemberQueryTests {
     }
 
     @Fact
+    func LookupMembers_TypeParameterWithConstraint_ListsConstraintMembersThenObjectMembers() {
+        let access = cast[AccessorExpressionSyntax](CallAt("PConstraint").Parent!!)
+        let model = ModelOf(access)
+        let typeParam = model.GetReceiverTypeInfo(access.LeftPart).Type!!
+        let members = model.LookupMembers(Position("PConstraint"), typeParam)
+        let own = members.OfType[FunctionSymbol]().Select(Describe).ToArray()
+        Assert.Equal([]string{"Read(int32)", "Read(string)"}, own)
+        Assert.Contains(members.Skip(own.Length), (s Symbol) -> s.Name == "ToString")
+        Assert.All(
+            members.Skip(own.Length),
+            (s Symbol) -> Assert.Equal("Object", cast[ImportedFunctionSymbol](s).Method.DeclaringType!!.Name)
+        )
+    }
+
+    @Fact
     func LookupMembers_Enum_ListsTheEnumMembers() {
         let names = Members("PLookup", "Color").Select((s Symbol) -> s.Name).ToList()
         Assert.Equal([]string{"Red", "Green"}, names)
@@ -561,14 +576,14 @@ partial class Parts {
             return ModelOf(call).GetMemberGroup(call)
         }
 
-        private func TypeNamed(name string) TypeSymbol {
+        private func TypeNamed(name string, marker string = "PLookup") TypeSymbol {
             return Assert.IsAssignableFrom[TypeSymbol](
-                ModelOf(Trees[0].Root).LookupSymbols(Position("PLookup"), name).Single()
+                ModelOf(Trees[0].Root).LookupSymbols(Position(marker), name).Single()
             )
         }
 
         private func Members(marker string, typeName string) ImmutableArray[Symbol] {
-            return ModelOf(Trees[0].Root).LookupMembers(Position(marker), TypeNamed(typeName))
+            return ModelOf(Trees[0].Root).LookupMembers(Position(marker), TypeNamed(typeName, marker))
         }
     }
 }
