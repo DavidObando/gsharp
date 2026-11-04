@@ -263,6 +263,11 @@ class Outer[T] {
         private var Seed int32 = 5
         public func Read() int32 -> Seed + Value
     }
+    public class Middle[U] {
+        public struct Leaf(Value int32) {
+            public func Read() int32 -> Value
+        }
+    }
     public interface IPlain {
         prop Tag T { get; }
         func ReadPlain(seed T) T;
@@ -275,6 +280,10 @@ class Outer[T] {
         func ReadGeneric(seed T, suffix U) string;
     }
     public func EchoIface(x IPlain) Outer[T].IPlain -> x
+    public func UseMiddleLeaf(leaf Middle[string].Leaf) int32 {
+        let localLeaf = Middle[string].Leaf{Value: 3}
+        return leaf.Read() + localLeaf.Read()
+    }
     public func ReadScoped() int32 {
         let scopedItem = Inner{Value: 4}
         return scopedItem.Read()
@@ -309,6 +318,7 @@ func UseMarkerInt(m Outer[int32].IMarker) int32 -> m.Code()
 func Main() {
     let item = Outer[string].Inner{Value: 7}
     let owner = Outer[string]{}
+    let leaf = Outer[string].Middle[string].Leaf{Value: 4}
     let impl = PlainImpl{}
     let selfOwner = UseSelfEnclosingPlain(SelfOwnerImpl{})
     let tag = cast[TypeTagAttribute](typeof(PlainImpl).GetCustomAttributes(typeof(TypeTagAttribute), false)[0])
@@ -316,7 +326,7 @@ func Main() {
     let strMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[string].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
     let intMarkerMethod = typeof(PlainImpl).GetMethod("QualifiedNested4774.Outer[int32].IMarker.Code", BindingFlags.Instance | BindingFlags.NonPublic)
     Console.WriteLine(item.Read())
-    Console.WriteLine(owner.ReadScoped())
+    Console.WriteLine(owner.ReadScoped() + owner.UseMiddleLeaf(leaf))
     Console.WriteLine(UsePlain(owner.EchoIface(impl), item))
     Console.WriteLine(UseGeneric(impl) + ":" + UseSelfRef(impl) + ":" + UseSelfEnclosing(selfOwner))
     Console.WriteLine(tag.First == typeof(Outer[string].IPlain) && tag.Second == typeof(Outer[string].IGeneric[int32]))
@@ -325,7 +335,7 @@ func Main() {
 }`
         let output = CompileAndRun(validSource)
         Assert.Equal(
-            "12${Environment.NewLine}9${Environment.NewLine}p:tag:21:12${Environment.NewLine}g:8:self:tag:self-enclosing${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}101:202:True${Environment.NewLine}",
+            "12${Environment.NewLine}16${Environment.NewLine}p:tag:21:12${Environment.NewLine}g:8:self:tag:self-enclosing${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}101:202:True${Environment.NewLine}",
             output
         )
 
@@ -333,10 +343,15 @@ func Main() {
         try {
             let libSrc = Path.Combine(nullableDir, "lib.gs")
             let libDll = Path.Combine(nullableDir, "lib.dll")
+            let libRefDll = Path.Combine(nullableDir, "lib.ref.dll")
             File.WriteAllText(libSrc, `package NullableNestedIface4774
 public class Outer[T] {
     public interface IPlain {
         func Get() T;
+        func Format(prefix string) string {
+            let fn = (value T) -> prefix + ":" + (value?.ToString() ?? "nil")
+            return fn(Get())
+        }
     }
 }
 public class Api {
@@ -345,10 +360,17 @@ public class Api {
     }
 }`)
             let libExit = Program.Main(
-                []string{"/out:" + libDll, "/target:library", "/targetframework:net10.0", libSrc}
+                []string{
+                    "/out:" + libDll,
+                    "/refout:" + libRefDll,
+                    "/target:library",
+                    "/targetframework:net10.0",
+                    libSrc
+                }
             )
             Assert.Equal(0, libExit)
             IlVerifier.Verify(libDll)
+            IlVerifier.Verify(libRefDll)
 
             let consumerSrc = Path.Combine(nullableDir, "consumer.gs")
             let consumerDll = Path.Combine(nullableDir, "consumer.dll")

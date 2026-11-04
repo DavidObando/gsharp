@@ -220,6 +220,7 @@ func BadInheritedLiteral() {
 class InterfaceOwner[T] {
     public interface IPlain { }
     public interface I[U] { }
+    public interface IDep[U T] { }
 }
 @Attribute
 class TypeTagAttribute(Value System.Type) { }
@@ -237,11 +238,13 @@ func BadNestedInterfaceOwnerMismatch(x InterfaceOwner[string].I[int32]) Interfac
 func BadNestedInterfaceNullabilityMismatch(x InterfaceOwner[string?].IPlain) InterfaceOwner[string].IPlain -> x
 func BadNestedInterfaceNestedNullabilityMismatch(
     x InterfaceOwner[InterfaceOwner[string?].IPlain].IPlain
-) InterfaceOwner[InterfaceOwner[string].IPlain].IPlain -> x`)
+) InterfaceOwner[InterfaceOwner[string].IPlain].IPlain -> x
+func BadNestedInterfaceDependentConstraint(x InterfaceOwner[string].IDep[int32]) { }`)
         let unclosedErrors = unclosedOutsideOwnerDiagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
-        Assert.Equal(12, unclosedErrors.Length)
+        Assert.Equal(13, unclosedErrors.Length)
         Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0157"))
         Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0113"))
+        Assert.Equal(1, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0152"))
         Assert.Equal(2, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0155"))
         Assert.Equal(1, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0156"))
         Assert.Equal(1, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0187"))
@@ -253,6 +256,11 @@ class Outer[T] {
         private var Seed int32 = 5
         public func Read() int32 -> Seed + Value
     }
+    public class Middle[U] {
+        public struct Leaf(Value int32) {
+            public func Read() int32 -> Value
+        }
+    }
     public interface IPlain {
         prop Tag T { get; }
         func Echo(v T) T;
@@ -261,7 +269,14 @@ class Outer[T] {
     public interface IGeneric[U] {
         func Combine(a T, b U) string;
     }
+    public interface IDep[U T] {
+        func ReadDep(v U) T;
+    }
     public func EchoIface(x IPlain) Outer[T].IPlain -> x
+    public func UseMiddleLeaf(leaf Middle[string].Leaf) int32 {
+        let localLeaf = Middle[string].Leaf{Value: 3}
+        return leaf.Read() + localLeaf.Read()
+    }
     public func Inside() int32 {
         let item = Inner{Value: 7}
         return item.Read()
@@ -295,14 +310,22 @@ class Derived[U] : Base[U] {
 }
 func Overload(x Outer[string].IPlain) int32 -> 1
 func Overload(x Outer[int32].IPlain) int32 -> 2
-func Outside(plain Outer[string].IPlain, generic Outer[int32].IGeneric[string], inherited Derived[int32].InheritedInner) string {
+func Outside(
+    plain Outer[string].IPlain,
+    generic Outer[int32].IGeneric[string],
+    dep Outer[object].IDep[string],
+    inherited Derived[int32].InheritedInner
+) string {
     let item = Outer[string].Inner{Value: 7}
+    let owner = Outer[string]{}
+    let leaf = Outer[string].Middle[string].Leaf{Value: 4}
     let selfImpl = GoodPlainImpl{}
     let selfOwner = SelfOwnerImpl{}
     let _ = UseSelfEnclosingPlain(selfOwner)
+    let _ = dep.ReadDep("dep")
     let impl Outer[string].IPlain = selfImpl
     let echoed = impl.EchoInner(item)
-    return plain.Echo(impl.Tag) + ":" + Overload(plain).ToString() + ":" + UseSelfRef(selfImpl) + ":" + UseSelfEnclosing(selfOwner) + ":" + generic.Combine(echoed.Read(), "x") + ":" + inherited.Read().ToString()
+    return plain.Echo(impl.Tag) + ":" + Overload(plain).ToString() + ":" + owner.UseMiddleLeaf(leaf).ToString() + ":" + UseSelfRef(selfImpl) + ":" + UseSelfEnclosing(selfOwner) + ":" + generic.Combine(echoed.Read(), "x") + ":" + inherited.Read().ToString()
 }`)
         Assert.Empty(validScopedAndConstructedDiagnostics)
 

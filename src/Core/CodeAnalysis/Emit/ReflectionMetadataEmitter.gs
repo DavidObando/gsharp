@@ -5024,6 +5024,10 @@ internal class ReflectionMetadataEmitter {
                 .Enums
                 .Select((e EnumSymbol) -> (Symbol: e, Parameters: e.TypeParameters))
                 .ToArray()
+            let interfaceParameters = program
+                .Interfaces
+                .Select((i InterfaceSymbol) -> (Symbol: i, Parameters: i.TypeParameters))
+                .ToArray()
             try {
                 emitter.EmitCore(peStream, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult)
             } finally {
@@ -5031,6 +5035,9 @@ internal class ReflectionMetadataEmitter {
                     symbol.SetTypeParameters(parameters)
                 }
                 for (symbol, parameters) in enumParameters {
+                    symbol.SetTypeParameters(parameters)
+                }
+                for (symbol, parameters) in interfaceParameters {
                     symbol.SetTypeParameters(parameters)
                 }
             }

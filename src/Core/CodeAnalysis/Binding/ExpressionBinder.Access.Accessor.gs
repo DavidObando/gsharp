@@ -999,6 +999,7 @@ internal partial class ExpressionBinder {
         // so the whole chain stays open (mirrors the type-clause path's
         // CollectConstructedEnclosingArguments).
         var enclosingBuilder ImmutableArray[TypeSymbol].Builder? = ImmutableArray.CreateBuilder[TypeSymbol]()
+        var hasConstructedSegment = false
         for var i = 0; i < segments.Count - 1; i++ {
             if definitions[i] is StructSymbol nestedConstruction &&
                 !nestedConstruction
@@ -1006,6 +1007,12 @@ internal partial class ExpressionBinder {
                 .IsDefaultOrEmpty {
                 enclosingBuilder!!.Clear()
                 enclosingBuilder!!.AddRange(nestedConstruction.EnclosingTypeArguments)
+                hasConstructedSegment = true
+            } else if i == 0 {
+                let headEnclosingParams = StructSymbol.CollectEnclosingTypeParameters(definitions[0])
+                for tp in headEnclosingParams {
+                    enclosingBuilder!!.Add(tp)
+                }
             }
             let ownParams = switch definitions[i] {
                 case s is StructSymbol: (s.Definition ?? s).DeclaredTypeParameters
@@ -1058,6 +1065,7 @@ internal partial class ExpressionBinder {
                 enclosingBuilder!!.Clear()
                 if !projectedOwner.EnclosingTypeArguments.IsDefaultOrEmpty {
                     enclosingBuilder!!.AddRange(projectedOwner.EnclosingTypeArguments)
+                    hasConstructedSegment = true
                 }
                 let projectedOwnParams = (projectedOwner.Definition ?? projectedOwner).DeclaredTypeParameters
                 if !projectedOwnParams.IsDefaultOrEmpty {
@@ -1071,14 +1079,16 @@ internal partial class ExpressionBinder {
                         break
                     }
                     enclosingBuilder!!.AddRange(projectedOwner.TypeArguments)
+                    hasConstructedSegment = true
                 }
                 continue
             }
             if !constructionArgs.IsDefaultOrEmpty {
                 enclosingBuilder!!.AddRange(constructionArgs)
+                hasConstructedSegment = true
             }
         }
-        let enclosingArgs = if enclosingBuilder != nil && enclosingBuilder.Count > 0 {
+        let enclosingArgs = if hasConstructedSegment && enclosingBuilder != nil && enclosingBuilder.Count > 0 {
             enclosingBuilder.ToImmutable()
         } else {
             default(ImmutableArray[TypeSymbol])
@@ -4561,6 +4571,11 @@ internal partial class ExpressionBinder {
             let builder = ImmutableArray.CreateBuilder[TypeSymbol]()
             if !enclosing.IsDefaultOrEmpty {
                 builder.AddRange(enclosing)
+            } else {
+                let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(outerConstructed)
+                for tp in enclosingParams {
+                    builder.Add(tp)
+                }
             }
             if !own.IsDefaultOrEmpty {
                 builder.AddRange(own)

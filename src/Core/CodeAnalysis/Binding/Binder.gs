@@ -5054,6 +5054,11 @@ partial class Binder {
         let constructedSegments = [segmentTexts.Length]TypeSymbol
         for var i = 0; i < segmentTexts.Length; i++ {
             constructedSegments[i] = ResolvedDefinition(i)
+            let precedingEnclosingArgs = if i > 0 {
+                CollectConstructedEnclosingArguments(constructedSegments, inheritedDeclaringContainers, 0, i)
+            } else {
+                default(ImmutableArray[TypeSymbol])
+            }
             if syntax.SegmentHasTypeArguments(i) {
                 let segmentName = if i == 0 {
                     headIdentifier.ValueText
@@ -5070,7 +5075,8 @@ partial class Binder {
                     ResolvedDefinition(i),
                     SegmentTypeArguments(i),
                     segmentLocation,
-                    segmentName
+                    segmentName,
+                    precedingEnclosingArgs
                 )
                 if constructed == nil {
                     return nil
@@ -5083,29 +5089,21 @@ partial class Binder {
             if inheritedDeclaringContainers[i] is {} declaredOwner &&
                 constructedSegments[i] is StructSymbol constructedContainer {
                 var resolvedContainer = constructedContainer
-                if i > 0 {
-                    let precedingEnclosingArgs = CollectConstructedEnclosingArguments(
-                        constructedSegments,
-                        inheritedDeclaringContainers,
-                        0,
-                        i
-                    )
-                    if !precedingEnclosingArgs.IsDefaultOrEmpty {
-                        let ownArgs = resolvedContainer.TypeArguments
-                        resolvedContainer = if ownArgs.IsDefaultOrEmpty {
-                            StructSymbol.ConstructNested(
-                                resolvedContainer.Definition ?? resolvedContainer,
-                                precedingEnclosingArgs,
-                                $scope.References!!.MapClrTypeToReferences
-                            )!!
-                        } else {
-                            StructSymbol.ConstructNestedGeneric(
-                                resolvedContainer.Definition ?? resolvedContainer,
-                                precedingEnclosingArgs,
-                                ownArgs,
-                                $scope.References!!.MapClrTypeToReferences
-                            )!!
-                        }
+                if !precedingEnclosingArgs.IsDefaultOrEmpty {
+                    let ownArgs = resolvedContainer.TypeArguments
+                    resolvedContainer = if ownArgs.IsDefaultOrEmpty {
+                        StructSymbol.ConstructNested(
+                            resolvedContainer.Definition ?? resolvedContainer,
+                            precedingEnclosingArgs,
+                            $scope.References!!.MapClrTypeToReferences
+                        )!!
+                    } else {
+                        StructSymbol.ConstructNestedGeneric(
+                            resolvedContainer.Definition ?? resolvedContainer,
+                            precedingEnclosingArgs,
+                            ownArgs,
+                            $scope.References!!.MapClrTypeToReferences
+                        )!!
                     }
                 }
                 constructedSegments[i] = TypeMemberModel.ResolveStaticMemberOwner(resolvedContainer, declaredOwner)
@@ -5184,7 +5182,8 @@ partial class Binder {
         definition TypeSymbol,
         argumentList GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[TypeClauseSyntax],
         location TextLocation,
-        displayName string
+        displayName string,
+        enclosingArgs ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
     ) TypeSymbol? {
         let typeArgsBuilder = ImmutableArray.CreateBuilder[TypeSymbol](argumentList.Count)
         for taSyntax in argumentList {
@@ -5209,13 +5208,23 @@ partial class Binder {
                 .TypeParameters
                 .Length == typeArgs
                 .Length {
+                let def = genericStruct.Definition ?? genericStruct
+                let ownParams = def.DeclaredTypeParameters
+                let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(def)
+                let effectiveEnclosingArgs = if !enclosingArgs.IsDefaultOrEmpty {
+                    enclosingArgs
+                } else {
+                    enclosingParams.CastArray[TypeSymbol]()
+                }
+                let (checkParams, checkArgs) = if !enclosingParams.IsDefaultOrEmpty &&
+                    effectiveEnclosingArgs.Length == enclosingParams.Length {
+                    (enclosingParams.AddRange(ownParams), effectiveEnclosingArgs.AddRange(typeArgs))
+                } else {
+                    (ownParams, typeArgs)
+                }
                 // Issue #4067: the qualified spelling of the same construction.
                 // Issues #4089/#4090: queued, and the CLOSED question asked too.
-                CheckUserGenericTypeClauseConstraints(
-                    (genericStruct.Definition ?? genericStruct).TypeParameters,
-                    typeArgs,
-                    location
-                )
+                CheckUserGenericTypeClauseConstraints(checkParams, checkArgs, location)
                 return StructSymbol.Construct(genericStruct, typeArgs, $scope.References!!.MapClrTypeToReferences)!!
             }
             case genericIface is InterfaceSymbol when genericIface.IsGenericDefinition &&
@@ -5223,13 +5232,23 @@ partial class Binder {
                 .TypeParameters
                 .Length == typeArgs
                 .Length {
+                let def = genericIface.Definition ?? genericIface
+                let ownParams = def.DeclaredTypeParameters
+                let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(def)
+                let effectiveEnclosingArgs = if !enclosingArgs.IsDefaultOrEmpty {
+                    enclosingArgs
+                } else {
+                    enclosingParams.CastArray[TypeSymbol]()
+                }
+                let (checkParams, checkArgs) = if !enclosingParams.IsDefaultOrEmpty &&
+                    effectiveEnclosingArgs.Length == enclosingParams.Length {
+                    (enclosingParams.AddRange(ownParams), effectiveEnclosingArgs.AddRange(typeArgs))
+                } else {
+                    (ownParams, typeArgs)
+                }
                 // Issues #4089/#4090: the qualified spelling of the interface
                 // construction, which asked nothing at all before.
-                CheckUserGenericTypeClauseConstraints(
-                    (genericIface.Definition ?? genericIface).TypeParameters,
-                    typeArgs,
-                    location
-                )
+                CheckUserGenericTypeClauseConstraints(checkParams, checkArgs, location)
                 return InterfaceSymbol.Construct(genericIface, typeArgs, $scope.References!!.MapClrTypeToReferences)!!
             }
             case genericDelegate is DelegateTypeSymbol when genericDelegate.IsGenericDefinition &&
@@ -11818,6 +11837,7 @@ partial class Binder {
             deepestIndex int32
         ) ImmutableArray[TypeSymbol] {
             var builder ImmutableArray[TypeSymbol].Builder? = nil
+            var hasConstructedSegment = false
             for var i = startIndex; i < deepestIndex; i++ {
                 let seg = constructedSegments[i]
                 if seg is StructSymbol nestedConstruction &&
@@ -11831,6 +11851,15 @@ partial class Binder {
                     if !nestedConstruction.EnclosingTypeArguments.IsDefaultOrEmpty {
                         builder ??= ImmutableArray.CreateBuilder[TypeSymbol]()
                         builder!!.AddRange(nestedConstruction.EnclosingTypeArguments)
+                        hasConstructedSegment = true
+                    }
+                } else if i == startIndex {
+                    let headEnclosingParams = StructSymbol.CollectEnclosingTypeParameters(seg)
+                    if !headEnclosingParams.IsDefaultOrEmpty {
+                        builder ??= ImmutableArray.CreateBuilder[TypeSymbol]()
+                        for tp in headEnclosingParams {
+                            builder!!.Add(tp)
+                        }
                     }
                 }
                 let ownParams = switch seg {
@@ -11854,8 +11883,9 @@ partial class Binder {
                 }
                 builder ??= ImmutableArray.CreateBuilder[TypeSymbol]()
                 builder!!.AddRange(ownArgs)
+                hasConstructedSegment = true
             }
-            return if builder != nil && builder.Count > 0 {
+            return if hasConstructedSegment && builder != nil && builder.Count > 0 {
                 builder.ToImmutable()
             } else {
                 default(ImmutableArray[TypeSymbol])
