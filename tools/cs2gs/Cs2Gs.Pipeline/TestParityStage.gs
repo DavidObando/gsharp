@@ -767,7 +767,11 @@ stderr:
             cancellationToken CancellationToken
         ) TranslatedProject {
             let project = (
-                await CSharpProjectLoader.LoadProjectAsync(projectPath, cancellationToken, configuration: config)
+                await CSharpProjectLoader.LoadProjectAsync(
+                    projectPath,
+                    cancellationToken,
+                    configuration: DeclaredProjectItems.WorkspaceConfiguration(projectPath, config)
+                )
                     .ConfigureAwait(false)
             )
             // Issue #1742: same load-failure gate as TranslateStage, scoped to the

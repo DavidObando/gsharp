@@ -110,6 +110,40 @@ internal shared class DeclaredProjectItems {
         configuration
     )
 
+    internal func WorkspaceConfiguration(projectPath string?, config string?) string? {
+        return if !string.IsNullOrEmpty(projectPath) && HasConditionedProjectReference(projectPath) {
+            config
+        } else {
+            default(string?)
+        }
+    }
+
+    internal func HasConditionedProjectReference(projectPath string?) bool {
+        if string.IsNullOrEmpty(projectPath) {
+            return false
+        }
+        let visited = HashSet[string](StringComparer.OrdinalIgnoreCase)
+        let queue = Queue[string]()
+        queue.Enqueue(Path.GetFullPath(projectPath))
+        while queue.Count > 0 {
+            let current = queue.Dequeue()
+            if !visited.Add(current) || !File.Exists(current) {
+                continue
+            }
+            for item in Read(current, "ProjectReference") {
+                if !string.IsNullOrWhiteSpace(item.ItemGroupCondition) || !string.IsNullOrWhiteSpace(
+                    item.Element.Attribute(XName?("Condition")!!)?.Value
+                ) {
+                    return true
+                }
+                if !string.IsNullOrEmpty(item.SourceInclude) {
+                    queue.Enqueue(Path.GetFullPath(item.SourceInclude))
+                }
+            }
+        }
+        return false
+    }
+
     /// Collects the absolute project paths that any of the given projects
     /// declares a compile `ProjectReference` to (issue #3645). A
     /// `ReferenceOutputAssembly="false"` reference contributes no
