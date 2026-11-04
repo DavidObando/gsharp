@@ -367,6 +367,18 @@ class H {
     }
     let s string? = t.Item1
 }`, "")
+            yield Row("ok-partially-unresolved-nested-tuple-join", `func F(c bool, d bool, i int32) {
+    let t = c ? (Box(), "x") : (d ? (nil, "y") : (nil, nil))
+    let b Box? = t.Item1
+    let s string? = t.Item2
+    let u = c ? (Box(), "x") : (switch i {
+        case 0: (nil, "y")
+        case 1: (nil, nil)
+        default: (nil, "z")
+    })
+    let b2 Box? = u.Item1
+    let s2 string? = u.Item2
+}`, "")
             yield Row("ok-coalesce-nil-in-field-initializer", `class H(value Box?) {
     public var f Box? = value ?? nil
 }`, "")

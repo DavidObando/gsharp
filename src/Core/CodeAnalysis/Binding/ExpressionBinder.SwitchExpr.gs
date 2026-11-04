@@ -473,13 +473,16 @@ internal partial class ExpressionBinder {
                         name = nil
                     }
                 }
-                // Two arms join as a conditional does; more join as a switch does.
-                let element = if column.Count == 2 {
+                // Two arms join as a conditional does; more join as a switch does. An all-`nil`
+                // column stays `TypeSymbol.Null` so an outer arm or target can still resolve it.
+                let element TypeSymbol? = if column.All((t TypeSymbol) -> t == TypeSymbol.Null) {
+                    TypeSymbol.Null
+                } else if column.Count == 2 {
                     ComputeConditionalResultType(column[0], column[1], nil)
                 } else {
                     ComputeBestCommonType(column)
                 }
-                if element == nil || element == TypeSymbol.Null {
+                if element == nil {
                     return nil
                 }
                 elements.Add(element)

@@ -99,6 +99,16 @@ func CoalesceEffects(ctr Ctr, c bool, i int32, j int32) (int32?, int32) {
     return t
 }
 
+func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
+    let a = c ? ("a", "b") : (d ? (nil, "c") : (nil, nil))
+    let b = c ? ("a", "b") : (switch i {
+        case 0: (nil, "c")
+        case 1: (nil, nil)
+        default: (nil, "d")
+    })
+    return (a.Item2, b.Item2)
+}
+
 func Main() {
     let ctr = Ctr()
     let a = Nested(ctr, false, 0)
@@ -124,6 +134,9 @@ func Main() {
     ctr.n = 0
     let q = CoalesceEffects(ctr, false, 4, 7)
     Console.WriteLine("coalesce-effects ${q.Item1 == nil} ${q.Item2} ticks=${ctr.n}")
+    let r = PartiallyUnresolved(false, true, 0)
+    let s = PartiallyUnresolved(false, false, 1)
+    Console.WriteLine("partial ${r.Item1} ${r.Item2} ${s.Item1 == nil} ${s.Item2 == nil}")
 }
 `)
         Assert.Contains("nested True 2 x 1 3 ticks=5", output)
@@ -133,6 +146,7 @@ func Main() {
         Assert.Contains("switch True 2 ticks=1", output)
         Assert.Contains("coalesce True 2 ticks=1", output)
         Assert.Contains("coalesce-effects True 2 ticks=2", output)
+        Assert.Contains("partial c c True True", output)
     }
 
     shared {
