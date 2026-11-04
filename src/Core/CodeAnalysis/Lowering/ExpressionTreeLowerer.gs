@@ -842,7 +842,6 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             !literal
             .StructType
             .IsClass &&
-            markerCount == 0 &&
             !literal
             .StructType
             .UsesOwningZeroInitializerConstructor {

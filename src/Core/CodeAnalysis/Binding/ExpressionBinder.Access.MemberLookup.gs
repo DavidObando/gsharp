@@ -1970,11 +1970,7 @@ internal partial class ExpressionBinder {
                     Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type)
                     return BoundErrorExpression(nil)
                 }
-                let elementType = if target.Type is ImportedTypeSymbol imported {
-                    MapErasedIndexerElementType(imported, idxProp!!)
-                } else {
-                    ClrNullability.GetPropertyTypeSymbol(idxProp!!)
-                }
+                let elementType = ResolveIndexerElementType(target.Type, idxProp!!)
                 let convertedIdxArgs = BindClrIndexerArguments(
                     target.Type,
                     idxProp!!,
@@ -3079,11 +3075,7 @@ internal partial class ExpressionBinder {
                 // real element type (`T`), so the `T` value binds without a
                 // spurious boxing conversion — the WRITE-path counterpart to the
                 // READ-path element-type recovery (issues #313 / #671 / #957).
-                let valueType = if targetType is ImportedTypeSymbol imported {
-                    MapErasedIndexerElementType(imported, idxProp!!)
-                } else {
-                    ClrNullability.GetPropertyTypeSymbol(idxProp!!)
-                }
+                let valueType = ResolveIndexerElementType(targetType, idxProp!!)
                 let boundValue = BindValue(valueType)
                 return MakeClrIndexAssignment(
                     idxProp!!,

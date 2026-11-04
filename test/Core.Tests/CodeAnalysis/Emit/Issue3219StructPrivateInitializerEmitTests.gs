@@ -258,4 +258,55 @@ run()
         Assert.Empty(result.Diagnostics)
         Assert.Equal(51, result.Value)
     }
+
+    @Fact
+    func ZeroInitInExpressionTree_WithPublicLetAndAuthoredInit_MatchesOrdinaryConstruction() {
+        // When `S` has a public `let` initializer, a magic-collection field, and
+        // an authored parameterless `init()`, `LiteralInitializerMarkerCount` is
+        // non-zero for explicit `S{}` literals, but zero-initialization (`Box{}`
+        // omitting `Value S`) must still use zero storage in both ordinary code
+        // and expression trees without invoking the hidden marker constructor.
+        let result = EmittedOracle.Evaluate(`
+import System
+import System.Linq.Expressions
+
+class Counter {
+    shared {
+        public var Hits int32
+        public func Next() int32 {
+            Hits += 1
+            return 5
+        }
+    }
+}
+
+struct S {
+    public let Count int32 = Counter.Next()
+    public var Items []int32
+    public init() {
+        Count = 9
+        Items = []int32{1, 2}
+    }
+}
+
+data struct Box(Value S)
+
+func run() int32 {
+    let ordinary = Box{}
+    let tree Expression[Func[Box]] = () -> Box{}
+    let compiled = tree.Compile()()
+    let explicitLiteral = S{}
+    return ordinary.Value.Count * 10000 +
+        ordinary.Value.Items.Length * 1000 +
+        compiled.Value.Count * 100 +
+        compiled.Value.Items.Length * 10 +
+        explicitLiteral.Count +
+        Counter.Hits * 100000
+}
+
+run()
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(100005, result.Value)
+    }
 }
