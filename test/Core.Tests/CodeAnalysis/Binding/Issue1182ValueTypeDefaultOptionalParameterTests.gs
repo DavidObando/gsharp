@@ -127,9 +127,10 @@ class C { init(s string? = nil) {} }
 
     @Fact
     func NonConstantValueTypeExpressionDefault_StillDiagnosesGS0265() {
-        // A real parameterless construction with side effects is not a constant.
+        // A real call expression is not a compile-time constant.
         let source = `
-func F(x int32 = 1 + 2) int32 { return x }
+func Make() int32 { return 3 }
+func F(x int32 = Make()) int32 { return x }
 `
         let result = Evaluate(source)
         AssertHasDiagnosticId(result.Diagnostics, "GS0265")

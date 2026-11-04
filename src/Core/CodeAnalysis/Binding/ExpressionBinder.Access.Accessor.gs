@@ -3374,6 +3374,12 @@ internal partial class ExpressionBinder {
                 break
             }
         }
+        if ambiguous || match != nil {
+            if (this.function?.StaticOwnerType ?? this.function?.ReceiverType) is {} lexicalOwner &&
+                memberLookup.FindLexicalMemberOwner(lexicalOwner, name) != nil {
+                return false
+            }
+        }
         if ambiguous {
             Diagnostics.ReportAmbiguousImportedStaticMember(syntax.IdentifierToken.Location, name)
             result = BoundErrorExpression(nil)
@@ -3397,6 +3403,12 @@ internal partial class ExpressionBinder {
             } else if !clrMatch.IsSameAs(clrType) {
                 clrAmbiguous = true
                 break
+            }
+        }
+        if clrAmbiguous || clrMatch != nil {
+            if (this.function?.StaticOwnerType ?? this.function?.ReceiverType) is {} lexicalOwner &&
+                memberLookup.FindLexicalMemberOwner(lexicalOwner, name) != nil {
+                return false
             }
         }
         if clrAmbiguous {
