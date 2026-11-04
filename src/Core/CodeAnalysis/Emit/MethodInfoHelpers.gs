@@ -185,6 +185,20 @@ internal shared class MethodInfoHelpers {
                 return true
             }
         }
+        for ev in receiverStruct.Events {
+            if (
+                object.ReferenceEquals(ev.AddMethodSymbol, function) || object.ReferenceEquals(
+                    ev.RemoveMethodSymbol,
+                    function
+                ) ||
+                    object.ReferenceEquals(ev.RaiseMethodSymbol, function)
+            ) &&
+                (
+                ev.HasExplicitInterfaceClause || MemberDefEmitter.EventImplicitlyImplementsInterface(receiverStruct, ev)
+            ) {
+                return true
+            }
+        }
         // Issue #4157: the property loop above checks a PROPERTY accessor's
         // explicit-interface clause, but an ordinary METHOD's own explicit
         // binding to an interface slot was never checked here — the code fell
@@ -228,25 +242,6 @@ internal shared class MethodInfoHelpers {
     func MethodImplicitlyImplementsInterface(structSym StructSymbol, method FunctionSymbol) bool {
         if !structSym.Interfaces.IsDefaultOrEmpty {
             for iface in structSym.Interfaces {
-                let defIface = iface.Definition ?? iface
-                for interfaceEvent in defIface.Events {
-                    var implementationEvent EventSymbol? = nil
-                    for candidate in structSym.Events {
-                        if object.ReferenceEquals(candidate.AddMethodSymbol, method) || object.ReferenceEquals(
-                            candidate.RemoveMethodSymbol,
-                            method
-                        ) ||
-                            object.ReferenceEquals(candidate.RaiseMethodSymbol, method) {
-                            implementationEvent = candidate
-                            break
-                        }
-                    }
-                    if implementationEvent != nil &&
-                        interfaceEvent.Name == implementationEvent.Name &&
-                        DeclarationBinder.InterfaceEventTypesEquivalent(iface, interfaceEvent, implementationEvent) {
-                        return true
-                    }
-                }
                 if iface.Methods.IsDefaultOrEmpty {
                     continue
                 }
