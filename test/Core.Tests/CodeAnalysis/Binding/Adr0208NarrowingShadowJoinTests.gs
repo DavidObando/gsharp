@@ -19,9 +19,9 @@ import Xunit
 /// binder computes the section 9 join beside the current passes and reports
 /// each disagreement with its row of section 16. Each test compiles a probe
 /// of the ADR table as a library and checks the report.
-/// @remarks PR 2, slice 2a consumes the joins of rows R1, R3 and R5, so the
-/// frames hold those facts and the report is empty for them. Rows R2, R4 and
-/// R6 are still reported.
+/// @remarks PR 2, slice 2a and #5301 consume the joins of rows R1, R3, R5 and
+/// R6, so the frames hold those facts and the report is empty for them. Rows R2
+/// and R4 are still reported.
 open class Adr0208NarrowingShadowJoinTests {
     @Fact
     func ElseExit_IsConsumedByTheFrames_Row1() {
@@ -108,7 +108,7 @@ func Run(c bool) int32 {
     done:
     return s.Length
 }`)
-        Assert.Equal([]string{"5|s|nil|string|R6"}, report)
+        Assert.Empty(report)
     }
 
     @Fact

@@ -132,7 +132,7 @@ partial class Binder {
             syntax ExpressionSyntax,
             targetType TypeSymbol?
         ) BoundExpression {
-            return Statements.OutsideExceptionHandlers(
+            return Statements.BindNestedFunctionBody(
                 () -> {
                     if syntax !is BlockExpressionSyntax {
                         Statements.EnterBackwardJumpSpanIfFirstStatement(syntax)

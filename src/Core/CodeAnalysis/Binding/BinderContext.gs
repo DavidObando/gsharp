@@ -270,20 +270,15 @@ internal class BinderContext {
         get;
     }
 
-    /// Gets or sets a value indicating whether the CURRENT function/lambda/
-    /// local-function body contains any user-written `goto` statement or non-loop
-    /// `label:` declaration (issue #4285), computed syntactically,
-    /// once, before that body is bound — see
-    /// (cref:StatementBinder.ContainsUserGotoOrLabel). Consulted by
-    /// (cref:StatementBinder.ApplyEarlyExitNarrowings) to
-    /// conservatively suppress the early-exit / post-switch narrowing lift
-    /// for the whole body whenever it holds: a `goto` anywhere in the
-    /// function can jump directly into a region a nil-guard's implicit exit
-    /// was assumed to dominate, bypassing the guard and invalidating the
-    /// narrowing's soundness proof. Fresh per function/lambda/local-function,
-    /// matching (cref:UserLabels)'s scoping — reset and recomputed by
-    /// `LambdaBinder.EnterNestedFrame` for a nested function-literal or
-    /// arrow-lambda body, and restored by `LambdaBinder.RestoreNestedFrame`.
+    /// Gets or sets a value indicating whether the current function, lambda, or
+    /// local-function body contains a user `goto` statement or non-loop `label:`
+    /// declaration, computed syntactically once before that body binds (see
+    /// (cref:StatementBinder.ContainsUserGotoOrLabel)). Consulted by
+    /// (cref:StatementBinder.ApplyEarlyExitPatternVariables) (ADR-0166, ADR-0213
+    /// §23 Q4), (cref:StatementBinder.EnterBackwardJumpSpanIfFirstStatement)
+    /// (ADR-0213 §15), and (cref:StatementBinder.RecordLoopExitFacts) (ADR-0213
+    /// §20b). Recomputed by `LambdaBinder.EnterNestedFrame` and restored by
+    /// `LambdaBinder.RestoreNestedFrame`.
     prop FunctionContainsUserGotoOrLabel bool
 
     /// Gets the stack of per-scope variable-narrowing tables used by pattern
