@@ -66,6 +66,9 @@ internal class LambdaEnclosingTypeParameterCollector : BoundTreeWalker {
             case BoundLiteralExpression{Value: BoundClrPropertyAccessExpression member} {
                 this.VisitExpression(member)
             }
+            case BoundLiteralExpression{Value: BoundClrConversionCallExpression conversion} {
+                this.VisitExpression(conversion)
+            }
             case literal is BoundFunctionLiteralExpression {
                 if this.getPromotedExtras != nil && literal.Function != nil {
                     for extra in this.getPromotedExtras(literal.Function) {

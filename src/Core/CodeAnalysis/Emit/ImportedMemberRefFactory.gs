@@ -385,7 +385,10 @@ internal class ImportedMemberRefFactory {
         // value type must surface as `System.Nullable<T>` to match C# semantics
         // (binder/evaluator collapse the wrapper to its underlying type for
         // every other purpose — ADR-0001).
-        if type is NullableTypeSymbol nullable && nullable.UnderlyingType.ClrType is {IsValueType: true} valueClr {
+        if type is NullableTypeSymbol nullable && !NullableLifting.RequiresSymbolicNullableGetValue(nullable) &&
+            nullable
+            .UnderlyingType
+            .ClrType is {IsValueType: true} valueClr {
             // Issue #571: see GetElementTypeToken for rationale.
             if !NullableLifting.TryConstructNullable(this.emitCtx.References, valueClr, out var nullableType) {
                 throw InvalidOperationException(

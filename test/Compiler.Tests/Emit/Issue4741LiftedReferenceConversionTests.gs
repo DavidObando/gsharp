@@ -248,6 +248,354 @@ static T? OpenConvert<T>(RefWrapper<T>? value) where T : class => (T?)value;
 static Box? Convert(bool present) => OpenConvert(Probe.Read<RefWrapper<Box>>(present));`)
     }
 
+    @Theory
+    @InlineData(
+        "int32",
+        "int32(Probe.Read[NullAwareValueToken](present))",
+        "int",
+        "(int)Probe.Read<NullAwareValueToken>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32",
+        "cast[int32](Probe.Read[NullAwareValueToken](present))",
+        "int",
+        "(int)Probe.Read<NullAwareValueToken>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "int32?(Probe.Read[NullAwareValueToken](present))",
+        "int?",
+        "(int?)Probe.Read<NullAwareValueToken>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "cast[int32?](Probe.Read[NullAwareValueToken](present))",
+        "int?",
+        "(int?)Probe.Read<NullAwareValueToken>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32",
+        "int32(Probe.ReadValue[NullAwareValueToken]())",
+        "int",
+        "(int)Probe.ReadValue<NullAwareValueToken>()",
+        "119,119"
+    )
+    @InlineData(
+        "int32",
+        "Probe.Read[NullAwareImplicitValueToken](present)",
+        "int",
+        "Probe.Read<NullAwareImplicitValueToken>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "Probe.Read[NullAwareImplicitValueToken](present)",
+        "int?",
+        "Probe.Read<NullAwareImplicitValueToken>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "int32?(Probe.ReadValue[OpaqueValueToken]())",
+        "int?",
+        "(int?)Probe.ReadValue<OpaqueValueToken>()",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "cast[int32?](Probe.ReadValue[OpaqueValueToken]())",
+        "int?",
+        "(int?)Probe.ReadValue<OpaqueValueToken>()",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "Probe.ReadValue[OpaqueImplicitValueToken]()",
+        "int?",
+        "Probe.ReadValue<OpaqueImplicitValueToken>()",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "int32?(Probe.Read[OpaqueValueToken](present))",
+        "int?",
+        "(int?)Probe.Read<OpaqueValueToken>(present)",
+        "101,111"
+    )
+    @InlineData(
+        "int32?",
+        "Probe.Read[OpaqueImplicitValueToken](present)",
+        "int?",
+        "Probe.Read<OpaqueImplicitValueToken>(present)",
+        "101,111"
+    )
+    @InlineData(
+        "int32?",
+        "int32?(Probe.Read[NullAwareOpaqueValueToken](present))",
+        "int?",
+        "(int?)Probe.Read<NullAwareOpaqueValueToken>(present)",
+        "111,119"
+    )
+    @InlineData(
+        "int32?",
+        "cast[int32?](Probe.Read[NullAwareOpaqueValueToken](present))",
+        "int?",
+        "(int?)Probe.Read<NullAwareOpaqueValueToken>(present)",
+        "111,119"
+    )
+    @InlineData(
+        "int32?",
+        "Probe.Read[NullAwareImplicitOpaqueValueToken](present)",
+        "int?",
+        "Probe.Read<NullAwareImplicitOpaqueValueToken>(present)",
+        "111,119"
+    )
+    @InlineData(
+        "int32",
+        "Probe.Read[DualNullableValueToken](present)",
+        "int",
+        "Probe.Read<DualNullableValueToken>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "Probe.Read[DualNullableValueToken](present)",
+        "int?",
+        "Probe.Read<DualNullableValueToken>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32",
+        "int32(Probe.ReadValue[DualReturnValueToken]())",
+        "int",
+        "(int)Probe.ReadValue<DualReturnValueToken>()",
+        "117,117"
+    )
+    @InlineData(
+        "int32?",
+        "int32?(Probe.ReadValue[DualReturnValueToken]())",
+        "int?",
+        "(int?)Probe.ReadValue<DualReturnValueToken>()",
+        "119,119"
+    )
+    @InlineData(
+        "int32",
+        "OpenNullAware[LocalItem](Probe.Read[GenericNullAwareValueToken[LocalItem]](present))",
+        "int",
+        "(int)Probe.Read<GenericNullAwareValueToken<int>>(present)",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "OpenOpaque[LocalItem](Probe.ReadValue[GenericOpaqueValueToken[LocalItem]]())",
+        "int?",
+        "(int?)Probe.ReadValue<GenericOpaqueValueToken<int>>()",
+        "111,111"
+    )
+    @InlineData(
+        "int32",
+        "EvalTree[NullAwareValueToken, int32]((v NullAwareValueToken) -> int32(v), Probe.ReadValue[NullAwareValueToken]())",
+        "int",
+        "EvalTree<NullAwareValueToken, int>(v => (int)v, Probe.ReadValue<NullAwareValueToken>())",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[NullAwareValueToken, int32?]((v NullAwareValueToken) -> int32?(v), Probe.ReadValue[NullAwareValueToken]())",
+        "int?",
+        "EvalTree<NullAwareValueToken, int?>(v => (int?)v, Probe.ReadValue<NullAwareValueToken>())",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[NullAwareValueToken?, int32?]((v NullAwareValueToken?) -> int32?(v), Probe.Read[NullAwareValueToken](present))",
+        "int?",
+        "EvalTree<NullAwareValueToken?, int?>(v => (int?)v, Probe.Read<NullAwareValueToken>(present))",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[OpaqueValueToken, int32?]((v OpaqueValueToken) -> int32?(v), Probe.ReadValue[OpaqueValueToken]())",
+        "int?",
+        "EvalTree<OpaqueValueToken, int?>(v => (int?)v, Probe.ReadValue<OpaqueValueToken>())",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[GenericOpaqueValueToken[LocalItem], int32?]((v GenericOpaqueValueToken[LocalItem]) -> int32?(v), Probe.ReadValue[GenericOpaqueValueToken[LocalItem]]())",
+        "int?",
+        "EvalTree<GenericOpaqueValueToken<int>, int?>(v => (int?)v, Probe.ReadValue<GenericOpaqueValueToken<int>>())",
+        "111,111"
+    )
+    @InlineData(
+        "int32",
+        "EvalTree[GenericNullAwareValueToken[LocalItem]?, int32]((v GenericNullAwareValueToken[LocalItem]?) -> int32(v), Probe.Read[GenericNullAwareValueToken[LocalItem]](present))",
+        "int",
+        "EvalTree<GenericNullAwareValueToken<int>?, int>(v => (int)v, Probe.Read<GenericNullAwareValueToken<int>>(present))",
+        "119,119"
+    )
+    @InlineData(
+        "int32",
+        "EvalTree[GenericNullAwareValueToken[LocalItem], int32]((v GenericNullAwareValueToken[LocalItem]) -> int32(v), Probe.ReadValue[GenericNullAwareValueToken[LocalItem]]())",
+        "int",
+        "EvalTree<GenericNullAwareValueToken<int>, int>(v => (int)v, Probe.ReadValue<GenericNullAwareValueToken<int>>())",
+        "119,119"
+    )
+    @InlineData(
+        "int32?",
+        "if GenericChainValueToken[List[LocalItem]]?(Probe.ReadValue[GenericChainValueToken[LocalItem]]()) == nil { default(int32?) } else { 5 }",
+        "int?",
+        "(GenericChainValueToken<System.Collections.Generic.List<int>>?)Probe.ReadValue<GenericChainValueToken<int>>() == null ? (int?)null : 5",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "if EvalTree[GenericChainValueToken[LocalItem], GenericChainValueToken[List[LocalItem]]?]((v GenericChainValueToken[LocalItem]) -> GenericChainValueToken[List[LocalItem]]?(v), Probe.ReadValue[GenericChainValueToken[LocalItem]]()) == nil { default(int32?) } else { 5 }",
+        "int?",
+        "EvalTree<GenericChainValueToken<int>, GenericChainValueToken<System.Collections.Generic.List<int>>?>(v => (GenericChainValueToken<System.Collections.Generic.List<int>>?)v, Probe.ReadValue<GenericChainValueToken<int>>()) == null ? (int?)null : 5",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "int32?(Probe.Read[LocalOpaque](present))",
+        "int?",
+        "(int?)Probe.Read<OpaqueValueToken>(present)",
+        "101,111"
+    )
+    @InlineData(
+        "int32?",
+        "Probe.Read[LocalImplicitOpaque](present)",
+        "int?",
+        "Probe.Read<OpaqueImplicitValueToken>(present)",
+        "101,111"
+    )
+    @InlineData(
+        "int32?",
+        "int32?(ObliviousGenericWrapper[LocalItem]().Self())",
+        "int?",
+        "(int?)new ObliviousGenericWrapper<int>().Self()",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[ObliviousGenericWrapper[LocalItem], int32?]((v ObliviousGenericWrapper[LocalItem]) -> int32?(v.Self()), ObliviousGenericWrapper[LocalItem]())",
+        "int?",
+        "EvalTree<ObliviousGenericWrapper<int>, int?>(v => (int?)v.Self(), new ObliviousGenericWrapper<int>())",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "if EvalTree[OpaqueValueToken, object?]((v OpaqueValueToken) -> object?(int32?(v)), Probe.ReadValue[OpaqueValueToken]()) == nil { default(int32?) } else { 5 }",
+        "int?",
+        "EvalTree<OpaqueValueToken, object?>(v => (object?)(int?)v, Probe.ReadValue<OpaqueValueToken>()) == null ? (int?)null : 5",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[OpaqueValueToken?, int32?]((v OpaqueValueToken?) -> int32?(v), Probe.Read[OpaqueValueToken](present))",
+        "int?",
+        "(int?)Probe.Read<OpaqueValueToken>(present)",
+        "101,111"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[bool, int32?]((flag bool) -> int32?(Probe.Read[OpaqueValueToken](flag)), present)",
+        "int?",
+        "(int?)Probe.Read<OpaqueValueToken>(present)",
+        "101,111"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[LocalOpaque?, int32?]((v LocalOpaque?) -> int32?(v), Probe.Read[LocalOpaque](present))",
+        "int?",
+        "(int?)Probe.Read<OpaqueValueToken>(present)",
+        "101,111"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[LocalImplicitOpaque?, int32?]((v LocalImplicitOpaque?) -> v, Probe.Read[LocalImplicitOpaque](present))",
+        "int?",
+        "Probe.Read<OpaqueImplicitValueToken>(present)",
+        "101,111"
+    )
+    @InlineData(
+        "int32?",
+        "OpenUnwrapNullable[int32](GenericValueUnwrapper[int32?]{Value: Probe.Read[int32](present)})",
+        "int?",
+        "new GenericValueUnwrapper<int?> { Value = Probe.Read<int>(present) }",
+        "111,110"
+    )
+    @InlineData(
+        "int32?",
+        "OpenUnwrapNullableTree[int32](GenericValueUnwrapper[int32?]{Value: Probe.Read[int32](present)})",
+        "int?",
+        "EvalTree<GenericValueUnwrapper<int?>, int?>(v => v, new GenericValueUnwrapper<int?> { Value = Probe.Read<int>(present) })",
+        "111,110"
+    )
+    @InlineData(
+        "int32",
+        "Probe.AcceptSpan(Span[uint8]([]uint8{1, 2, 3})) + (if present { 0 } else { 0 }) + 10 * (Probe.Calls + 1) + 100 * Probe.Reads",
+        "int",
+        "Probe.AcceptSpan(new System.Span<byte>(new byte[] { 1, 2, 3 })) + (present ? 0 : 0) + 10 * (Probe.Calls + 1) + 100 * Probe.Reads",
+        "13,13"
+    )
+    func ImportedNullableValueSignature_MatchesRoslynAndVerifies(
+        gsharpResult string,
+        gsharpBody string,
+        csharpResult string,
+        csharpBody string,
+        expectedOutput string
+    ) {
+        RunValuePair((`import System.Collections.Generic
+import System.Linq.Expressions
+struct LocalItem {}
+struct LocalOpaque {}
+func operator explicit(value LocalOpaque) int32? {
+    Probe.Calls += 1
+    return nil
+}
+struct LocalImplicitOpaque {}
+func operator implicit(value LocalImplicitOpaque) int32? {
+    Probe.Calls += 1
+    return nil
+}
+func EvalTree[T, TResult](expr Expression[Func[T, TResult]], value T) TResult -> expr.Compile()(value)
+func OpenNullAware[T](value GenericNullAwareValueToken[T]?) int32 -> int32(value)
+func OpenOpaque[T](value GenericOpaqueValueToken[T]) int32? -> int32?(value)
+func OpenUnwrapNullable[T struct](x GenericValueUnwrapper[T?]) T? -> x
+func OpenUnwrapNullableTree[T struct](x GenericValueUnwrapper[T?]) T? -> EvalTree[GenericValueUnwrapper[T?], T?]((v GenericValueUnwrapper[T?]) -> v, x)
+func Raw(present bool) ` + "$gsharpResult" + ` -> ` + "$gsharpBody" + `
+func Convert(present bool) int32? -> Raw(present)`), (`static TResult EvalTree<T, TResult>(System.Linq.Expressions.Expression<System.Func<T, TResult>> expr, T value) => expr.Compile()(value);
+static ` + "$csharpResult" + ` Raw(bool present) => ` + "$csharpBody" + `;
+static int? Convert(bool present) => Raw(present);`), expectedOutput)
+    }
+
+    @Theory
+    @InlineData("int32(Probe.ReadValue[OpaqueValueToken]())")
+    @InlineData("Probe.ReadValue[OpaqueImplicitValueToken]()")
+    @InlineData("int32(Probe.Read[NullAwareOpaqueValueToken](present))")
+    @InlineData("Probe.Read[NullAwareImplicitOpaqueValueToken](present)")
+    @InlineData("int32(Probe.Read[NumericToken](present))")
+    @InlineData("([]uint8(Span[uint8]([]uint8{1}))).Length")
+    @InlineData("cast[GenericTarget[LocalClass]](GenericSource[LocalClass?]()).Tag")
+    @InlineData(
+        "RejectNullabilityMismatch(GenericSource[LocalClass?]()).Tag",
+        "func RejectNullabilityMismatch(x GenericSource[LocalClass?]) GenericTarget[LocalClass] -> x"
+    )
+    func ImportedNullableValueSignature_RejectsNonNullableValueTarget(
+        gsharpBody string,
+        gsharpDeclaration string = ""
+    ) {
+        RunValuePair((`class LocalClass {}
+` + "$gsharpDeclaration" + `
+func Raw(present bool) int32 -> ` + "$gsharpBody" + `
+func Convert(present bool) int32? -> Raw(present)`), `static int? Convert(bool present) => null;`, expectedOutput: "1,1", expectedDiagnostic: "GS0155")
+    }
+
     @Fact
     func UnconstrainedNullableResult_IsNotMisclassifiedAsAReferenceLift() {
         const result = "T?"
@@ -487,12 +835,54 @@ public struct NullableReturningImplicitInputToken {
         return value.HasValue ? new Box() : null;
     }
 }
+public struct NullAwareValueToken {
+    public static explicit operator int(NullAwareValueToken? value) { Probe.Calls++; return 9; }
+}
+public struct NullAwareImplicitValueToken {
+    public static implicit operator int(NullAwareImplicitValueToken? value) { Probe.Calls++; return 9; }
+}
+public struct OpaqueValueToken {
+    public static explicit operator int?(OpaqueValueToken value) { Probe.Calls++; return null; }
+}
+public struct OpaqueImplicitValueToken {
+    public static implicit operator int?(OpaqueImplicitValueToken value) { Probe.Calls++; return null; }
+}
+public struct NullAwareOpaqueValueToken {
+    public static explicit operator int?(NullAwareOpaqueValueToken? value) {
+        Probe.Calls++;
+        return value.HasValue ? 9 : null;
+    }
+}
+public struct NullAwareImplicitOpaqueValueToken {
+    public static implicit operator int?(NullAwareImplicitOpaqueValueToken? value) {
+        Probe.Calls++;
+        return value.HasValue ? 9 : null;
+    }
+}
+public struct DualNullableValueToken {
+    public static implicit operator int(DualNullableValueToken value) { Probe.Calls++; return 7; }
+    public static implicit operator int(DualNullableValueToken? value) { Probe.Calls++; return 9; }
+}
+public struct DualReturnValueToken {
+    public static explicit operator int(DualReturnValueToken value) { Probe.Calls++; return 7; }
+    public static explicit operator int?(DualReturnValueToken value) { Probe.Calls++; return 9; }
+}
+public struct GenericNullAwareValueToken<T> {
+    public static explicit operator int(GenericNullAwareValueToken<T>? value) { Probe.Calls++; return 9; }
+}
+public struct GenericOpaqueValueToken<T> {
+    public static explicit operator int?(GenericOpaqueValueToken<T> value) { Probe.Calls++; return null; }
+}
 public static class Probe {
     public static int Calls;
     public static int Reads;
     public static T? Read<T>(bool present) where T : struct {
         Reads++;
         return present ? new T() : null;
+    }
+    public static T ReadValue<T>() where T : struct {
+        Reads++;
+        return new T();
     }
     public static void Reset() { Calls = 0; Reads = 0; }
 }
@@ -580,6 +970,166 @@ func Run() string {
     let aware = AwareBox(emptyAware)
     let f = (if aware == nil { 1 } else { 0 }) + 10 * Probe.Calls
     return a.ToString() + "," + b.ToString() + "," + c.ToString() + "," + d.ToString() + "," + e.ToString() + "," + f.ToString()
+}`)
+                let sourcePath = Path.Combine(directory, "App.gs")
+                let assemblyPath = Path.Combine(directory, "App.dll")
+                File.WriteAllText(sourcePath, source)
+                let compilation = CompileGSharp(sourcePath, assemblyPath, fixturePath)
+                if expectedDiagnostic != nil {
+                    Assert.NotEqual(0, compilation.Exit)
+                    Assert.True(
+                        compilation.Diagnostics.Contains(expectedDiagnostic, StringComparison.Ordinal),
+                        compilation.Diagnostics
+                    )
+                    return
+                }
+                Assert.True(compilation.Exit == 0, compilation.Diagnostics)
+                let assembly = EmittedFixture.Load(assemblyPath)
+                let program = assembly.GetTypes().Single(
+                    (type Type) -> type.GetMethod("Run", BindingFlags.Public | BindingFlags.Static) != nil
+                )
+                let actual object? = program.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)?.Invoke(
+                    nil,
+                    nil
+                )
+                Assert.Equal(expected, actual)
+                IlVerifier.Verify(assemblyPath, []string{fixturePath})
+            } finally {
+                Directory.Delete(directory, recursive: true)
+            }
+        }
+
+        private func RunValuePair(
+            gsharpConversion string,
+            csharpConversion string,
+            expectedOutput string,
+            expectedDiagnostic string? = nil
+        ) {
+            let directory = Path.Combine(AppContext.BaseDirectory, "issue4741-fixtures", Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(directory)
+            try {
+                let fixturePath = Path.Combine(directory, "Fixture4737.dll")
+                let fixtureSource = (`#nullable enable
+namespace Fixture4741;
+public struct NumericToken {
+    public static explicit operator int(NumericToken value) { Probe.Calls++; return 7; }
+}
+public struct NullAwareValueToken {
+    public static explicit operator int(NullAwareValueToken? value) { Probe.Calls++; return 9; }
+}
+public struct NullAwareImplicitValueToken {
+    public static implicit operator int(NullAwareImplicitValueToken? value) { Probe.Calls++; return 9; }
+}
+public struct OpaqueValueToken {
+    public static explicit operator int?(OpaqueValueToken value) { Probe.Calls++; return null; }
+}
+public struct OpaqueImplicitValueToken {
+    public static implicit operator int?(OpaqueImplicitValueToken value) { Probe.Calls++; return null; }
+}
+public struct NullAwareOpaqueValueToken {
+    public static explicit operator int?(NullAwareOpaqueValueToken? value) {
+        Probe.Calls++;
+        return value.HasValue ? 9 : null;
+    }
+}
+public struct NullAwareImplicitOpaqueValueToken {
+    public static implicit operator int?(NullAwareImplicitOpaqueValueToken? value) {
+        Probe.Calls++;
+        return value.HasValue ? 9 : null;
+    }
+}
+public struct DualNullableValueToken {
+    public static implicit operator int(DualNullableValueToken value) { Probe.Calls++; return 7; }
+    public static implicit operator int(DualNullableValueToken? value) { Probe.Calls++; return 9; }
+}
+public struct DualReturnValueToken {
+    public static explicit operator int(DualReturnValueToken value) { Probe.Calls++; return 7; }
+    public static explicit operator int?(DualReturnValueToken value) { Probe.Calls++; return 9; }
+}
+public struct GenericNullAwareValueToken<T> {
+    public static explicit operator int(GenericNullAwareValueToken<T>? value) { Probe.Calls++; return 9; }
+}
+public struct GenericOpaqueValueToken<T> {
+    public static explicit operator int?(GenericOpaqueValueToken<T> value) { Probe.Calls++; return null; }
+}
+public struct GenericChainValueToken<T> {
+    public static explicit operator GenericChainValueToken<System.Collections.Generic.List<T>>?(GenericChainValueToken<T> value) {
+        Probe.Calls++;
+        return null;
+    }
+}
+public struct GenericSource<T> {
+    public static implicit operator GenericTarget<T>(GenericSource<T> value) => default;
+}
+public struct GenericTarget<T> {
+    public int Tag;
+}
+public struct GenericValueUnwrapper<U> {
+    public U Value;
+    public static implicit operator U(GenericValueUnwrapper<U> value) {
+        Probe.Calls++;
+        return value.Value;
+    }
+}
+#nullable disable
+public sealed class ObliviousGenericWrapper<T> {
+    public ObliviousGenericWrapper<T> Self() {
+        Probe.Reads++;
+        return this;
+    }
+    public static explicit operator int?(ObliviousGenericWrapper<T> value) {
+        Probe.Calls++;
+        return null;
+    }
+}
+#nullable restore
+public static class Probe {
+    public static int Calls;
+    public static int Reads;
+    public static T? Read<T>(bool present) where T : struct {
+        Reads++;
+        return present ? new T() : null;
+    }
+    public static T ReadValue<T>() where T : struct {
+        Reads++;
+        return new T();
+    }
+    public static int AcceptSpan(byte[] values) => values.Length + 100;
+    public static int AcceptSpan(System.ReadOnlySpan<byte> values) => values.Length;
+    public static void Reset() { Calls = 0; Reads = 0; }
+}
+public static class Oracle {
+    ` + "$csharpConversion" + `
+    public static string Run() {
+        Probe.Reset();
+        var missing = Convert(false);
+        var a = (missing == null ? 1 : missing.Value) + 10 * Probe.Calls + 100 * Probe.Reads;
+        Probe.Reset();
+        var present = Convert(true);
+        var b = (present == null ? 1 : present.Value) + 10 * Probe.Calls + 100 * Probe.Reads;
+        return $"{a},{b}";
+    }
+}`)
+                EmitCSharp(fixtureSource, fixturePath)
+                let oracle = EmittedFixture.Load(fixturePath).GetType("Fixture4741.Oracle", throwOnError: true) ??
+                    throw InvalidOperationException("Roslyn oracle type missing.")
+                let expected object? = oracle.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)?.Invoke(
+                    nil,
+                    nil
+                )
+                Assert.Equal(expectedOutput, expected)
+                let source = (`package Test4737
+import System
+import Fixture4741
+` + "$gsharpConversion" + `
+func Run() string {
+    Probe.Reset()
+    let missing = Convert(false)
+    let a = (missing ?? 1) + 10 * Probe.Calls + 100 * Probe.Reads
+    Probe.Reset()
+    let present = Convert(true)
+    let b = (present ?? 1) + 10 * Probe.Calls + 100 * Probe.Reads
+    return a.ToString() + "," + b.ToString()
 }`)
                 let sourcePath = Path.Combine(directory, "App.gs")
                 let assemblyPath = Path.Combine(directory, "App.dll")
