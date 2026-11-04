@@ -4302,7 +4302,7 @@ internal class LambdaBinder {
                 return if neverBlockTail {
                     TypeSymbol.Void
                 } else {
-                    trailingType
+                    TupleTypeSymbol.ResolveNilElements(trailingType)
                 }
             }
             // Issue #891: a block-body arrow lambda whose body never completes
@@ -4398,7 +4398,7 @@ internal class LambdaBinder {
             if result == TypeSymbol.Never && syntax.Body is BlockExpressionSyntax {
                 return TypeSymbol.Void
             }
-            return result ?? TypeSymbol.Error
+            return TupleTypeSymbol.ResolveNilElements(result ?? TypeSymbol.Error)
         }
 
         // Issue #2152: recognizes every bound-node shape the binder uses to

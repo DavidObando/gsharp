@@ -1320,14 +1320,16 @@ internal partial class StatementBinder {
         if tupleValue.Type == TypeSymbol.Error {
             return BoundExpressionStatement(syntax, tupleValue)
         }
-        if tupleValue.Type is not TupleTypeSymbol tupleType {
+        if tupleValue.Type is not TupleTypeSymbol rawTupleType {
             Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, 1)
             return BoundExpressionStatement(syntax, tupleValue)
         }
-        if targets.Length != tupleType.Arity {
-            Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, tupleType.Arity)
+        if targets.Length != rawTupleType.Arity {
+            Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, rawTupleType.Arity)
             return BoundExpressionStatement(syntax, tupleValue)
         }
+        let tupleType = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(rawTupleType))
+        tupleValue = conversions.BindConversion(valueSyntax.Location, tupleValue, tupleType)
         let (tupleTemp, tupleElements) = CreateTupleDeconstructionPlan(valueSyntax, tupleType)
         let captures = ImmutableArray.CreateBuilder[BoundStatement]()
         let plans = ImmutableArray.CreateBuilder[MultiAssignmentTargetPlan](targets.Length)
