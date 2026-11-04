@@ -1009,7 +1009,7 @@ internal partial class ExpressionBinder {
             }
             let ownParams = switch definitions[i] {
                 case s is StructSymbol: (s.Definition ?? s).DeclaredTypeParameters
-                case iface is InterfaceSymbol: (iface.Definition ?? iface).TypeParameters
+                case iface is InterfaceSymbol: (iface.Definition ?? iface).DeclaredTypeParameters
                 default: ImmutableArray[TypeParameterSymbol].Empty
             }
             var constructionArgs = default(ImmutableArray[TypeSymbol])

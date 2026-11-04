@@ -261,10 +261,10 @@ class Outer[T] {
         public func Read() int32 -> Seed + Value
     }
     public interface IPlain {
-        func ReadPlain() int32;
+        func ReadPlain(seed T) T;
     }
     public interface IGeneric[U] {
-        func ReadGeneric(suffix U) string;
+        func ReadGeneric(seed T, suffix U) string;
     }
     public func ReadScoped() int32 {
         let scopedItem = Inner{Value: 4}
@@ -272,11 +272,11 @@ class Outer[T] {
     }
 }
 class PlainImpl : Outer[string].IPlain, Outer[string].IGeneric[int32] {
-    public func ReadPlain() int32 -> 21
-    public func ReadGeneric(suffix int32) string -> "g:" + suffix.ToString()
+    public func ReadPlain(seed string) string -> seed + ":21"
+    public func ReadGeneric(seed string, suffix int32) string -> seed + ":" + suffix.ToString()
 }
-func UsePlain(p Outer[string].IPlain) int32 -> p.ReadPlain()
-func UseGeneric(g Outer[string].IGeneric[int32]) string -> g.ReadGeneric(8)
+func UsePlain(p Outer[string].IPlain) string -> p.ReadPlain("p")
+func UseGeneric(g Outer[string].IGeneric[int32]) string -> g.ReadGeneric("g", 8)
 func Main() {
     let item = Outer[string].Inner{Value: 7}
     let owner = Outer[string]{}
@@ -288,7 +288,7 @@ func Main() {
 }`
         let output = CompileAndRun(validSource)
         Assert.Equal(
-            "12${Environment.NewLine}9${Environment.NewLine}21${Environment.NewLine}g:8${Environment.NewLine}",
+            "12${Environment.NewLine}9${Environment.NewLine}p:21${Environment.NewLine}g:8${Environment.NewLine}",
             output
         )
     }

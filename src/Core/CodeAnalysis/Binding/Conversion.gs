@@ -2048,7 +2048,29 @@ class Conversion {
             if from == nil || to == nil || from.Definition != to.Definition {
                 return false
             }
-            let typeParameters = from.Definition!!.TypeParameters
+            let def = from.Definition!!
+            let enclosingParameters = StructSymbol.CollectEnclosingTypeParameters(def)
+            if !enclosingParameters.IsDefaultOrEmpty {
+                let fromEnclosing = if !from.EnclosingTypeArguments.IsDefaultOrEmpty {
+                    from.EnclosingTypeArguments
+                } else {
+                    enclosingParameters.CastArray[TypeSymbol]()
+                }
+                let toEnclosing = if !to.EnclosingTypeArguments.IsDefaultOrEmpty {
+                    to.EnclosingTypeArguments
+                } else {
+                    enclosingParameters.CastArray[TypeSymbol]()
+                }
+                if fromEnclosing.Length != toEnclosing.Length {
+                    return false
+                }
+                for var i = 0; i < fromEnclosing.Length; i++ {
+                    if !AreTypeArgumentsEquivalent(fromEnclosing[i], toEnclosing[i]) {
+                        return false
+                    }
+                }
+            }
+            let typeParameters = def.DeclaredTypeParameters
             let fromArgs = from.TypeArguments
             let toArgs = to.TypeArguments
             if typeParameters.IsDefaultOrEmpty ||
@@ -3019,6 +3041,33 @@ class Conversion {
             }
             let ownArgs = if !s.TypeArguments.IsDefaultOrEmpty {
                 s.TypeArguments
+            } else {
+                ownParams.CastArray[TypeSymbol]()
+            }
+            return enclosingArgs.AddRange(ownArgs)
+        }
+
+        internal func GetEffectiveInterfaceTypeArguments(i InterfaceSymbol) ImmutableArray[TypeSymbol] {
+            let def = i.Definition ?? i
+            let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(def)
+            let ownParams = def.DeclaredTypeParameters
+            if enclosingParams.IsDefaultOrEmpty {
+                return if !i.TypeArguments.IsDefaultOrEmpty {
+                    i.TypeArguments
+                } else {
+                    ownParams.CastArray[TypeSymbol]()
+                }
+            }
+            let enclosingArgs = if !i.EnclosingTypeArguments.IsDefaultOrEmpty {
+                i.EnclosingTypeArguments
+            } else {
+                enclosingParams.CastArray[TypeSymbol]()
+            }
+            if ownParams.IsDefaultOrEmpty {
+                return enclosingArgs
+            }
+            let ownArgs = if !i.TypeArguments.IsDefaultOrEmpty {
+                i.TypeArguments
             } else {
                 ownParams.CastArray[TypeSymbol]()
             }

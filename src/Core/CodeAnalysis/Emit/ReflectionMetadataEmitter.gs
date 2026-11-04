@@ -664,6 +664,39 @@ internal class ReflectionMetadataEmitter {
                 e.SetTypeParameters(SynthesizedClosureReifier.CloneWithRemappedConstraints(enclosing))
             }
         }
+        for i in this.emitCtx.Program.Interfaces {
+            if !(i.ContainingType is StructSymbol) {
+                continue
+            }
+            let enclosing = CollectOriginalEnclosingTypeParameters(i, originalOwnParams)
+            if enclosing.IsDefaultOrEmpty {
+                continue
+            }
+            let def = i.Definition ?? i
+            let own = def.DeclaredTypeParameters
+            let combined = ImmutableArray.CreateBuilder[TypeParameterSymbol](
+                enclosing.Length +
+                    (
+                    if own.IsDefaultOrEmpty {
+                        0
+                    } else {
+                        own.Length
+                    }
+                )
+            )
+            combined.AddRange(enclosing)
+            if !own.IsDefaultOrEmpty {
+                combined.AddRange(own)
+            }
+            let combinedList = combined.ToImmutable()
+            i.SetReifiedTypeParameters(SynthesizedClosureReifier.CloneWithRemappedConstraints(combinedList))
+            this.remaps.SetNestedTypeEnclosingArity(def, enclosing.Length)
+            let remap = Dictionary[TypeParameterSymbol, int32](combinedList.Length)
+            for var idx = 0; idx < combinedList.Length; idx++ {
+                remap[combinedList[idx]] = idx
+            }
+            this.remaps.RegisterClassRemap(i, remap)
+        }
     }
 
     // Issue #1477: builds the outer-TP → own-TP-ordinal remap for every
@@ -2765,7 +2798,16 @@ internal class ReflectionMetadataEmitter {
         for nested in nestedOrdered {
             switch nested {
                 case ni is InterfaceSymbol {
-                    this.typeDefEmitter.EmitInterfaceTypeDef(ni, interfaceFirstMethodRow[ni], nestedFieldListRow[ni])
+                    {
+                        using let _ = this.remaps.PushSmRemap(ni)
+                        let gpRowStart = this.emitCtx.PendingGenericParameters.Count
+                        this.typeDefEmitter.EmitInterfaceTypeDef(
+                            ni,
+                            interfaceFirstMethodRow[ni],
+                            nestedFieldListRow[ni]
+                        )
+                        this.PreResolveReifiedGenericConstraints(gpRowStart)
+                    }
                     EmitInterfaceBaseImplRows(ni)
                 }
                 case ns is StructSymbol when ns.IsClass {
@@ -3618,6 +3660,7 @@ internal class ReflectionMetadataEmitter {
         for nested in nestedOrdered {
             switch nested {
                 case ni is InterfaceSymbol {
+                    using let _ = this.remaps.PushSmRemap(ni)
                     EmitInterfaceMethodBodies(ni)
                 }
                 case ns is StructSymbol when ns.IsClass {
@@ -4874,6 +4917,7 @@ internal class ReflectionMetadataEmitter {
             let containingType = switch nested {
                 case s is StructSymbol: s.ContainingType
                 case e is EnumSymbol: e.ContainingType
+                case i is InterfaceSymbol: i.ContainingType
                 default: default(TypeSymbol?)
             }
             for var c StructSymbol? = containingType as StructSymbol; c != nil; c = c!!.ContainingType as StructSymbol {
@@ -5214,7 +5258,7 @@ internal class ReflectionMetadataEmitter {
             if ifaceSym == nil {
                 return false
             }
-            if !ifaceSym.TypeArguments.IsDefaultOrEmpty {
+            if !ifaceSym.TypeArguments.IsDefaultOrEmpty || !ifaceSym.EnclosingTypeArguments.IsDefaultOrEmpty {
                 return true
             }
             let def = ifaceSym.Definition ?? ifaceSym

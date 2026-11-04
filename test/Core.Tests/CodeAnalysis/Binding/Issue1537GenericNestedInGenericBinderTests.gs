@@ -216,11 +216,16 @@ class Derived[U] : Base[U] { }
 func BadInheritedTypeClause(item Derived.InheritedInner) { }
 func BadInheritedLiteral() {
     let item = Derived.InheritedInner{}
-}`)
+}
+class InterfaceOwner[T] {
+    public interface I[U] { }
+}
+func BadNestedInterfaceOwnerMismatch(x InterfaceOwner[string].I[int32]) InterfaceOwner[int32].I[int32] -> x`)
         let unclosedErrors = unclosedOutsideOwnerDiagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
-        Assert.Equal(6, unclosedErrors.Length)
+        Assert.Equal(7, unclosedErrors.Length)
         Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0157"))
         Assert.Equal(3, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0113"))
+        Assert.Equal(1, unclosedErrors.Count((d Diagnostic) -> d.Id == "GS0156"))
 
         let validScopedAndConstructedDiagnostics = GetDiagnostics(`package Issue4774BinderValid
 class Outer[T] {

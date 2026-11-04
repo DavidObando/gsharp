@@ -2659,7 +2659,7 @@ internal class CustomAttributeEncoder {
                 case interfaceType is InterfaceSymbol {
                     packageName = interfaceType.PackageName
                     containingType = interfaceType.ContainingType
-                    arity = interfaceType.TypeParameters.Length
+                    arity = (interfaceType.Definition ?? interfaceType).DeclaredTypeParameters.Length
                 }
                 case enumType is EnumSymbol {
                     packageName = enumType.PackageName

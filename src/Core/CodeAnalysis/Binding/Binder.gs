@@ -11767,7 +11767,7 @@ partial class Binder {
                 }
                 let ownParams = switch seg {
                     case s is StructSymbol: (s.Definition ?? s).DeclaredTypeParameters
-                    case iface is InterfaceSymbol: (iface.Definition ?? iface).TypeParameters
+                    case iface is InterfaceSymbol: (iface.Definition ?? iface).DeclaredTypeParameters
                     default: ImmutableArray[TypeParameterSymbol].Empty
                 }
                 if ownParams.IsDefaultOrEmpty {
@@ -13038,7 +13038,9 @@ partial class Binder {
                             structure.DeclaredTypeParameters
                         )
                         case enumSym is EnumSymbol: StructSymbol.CollectEnclosingTypeParameters(enumSym)
-                        case iface is InterfaceSymbol: iface.TypeParameters
+                        case iface is InterfaceSymbol: StructSymbol.CollectEnclosingTypeParameters(iface).AddRange(
+                            iface.DeclaredTypeParameters
+                        )
                         default: ImmutableArray[TypeParameterSymbol].Empty
                     }
                     for var i = 0; i < userParamArgs.Length; i++ {
@@ -13260,10 +13262,15 @@ partial class Binder {
                     typeArguments = e.EnclosingTypeArguments
                     return true
                 }
-                case i is InterfaceSymbol when !i.TypeArguments.IsDefaultOrEmpty {
-                    definition = i.Definition
-                    typeArguments = i.TypeArguments
-                    return true
+                case i is InterfaceSymbol when !i
+                    .EnclosingTypeArguments
+                    .IsDefaultOrEmpty ||
+                    !i
+                    .TypeArguments
+                    .IsDefaultOrEmpty {
+                    definition = i.Definition ?? i
+                    typeArguments = Conversion.GetEffectiveInterfaceTypeArguments(i)
+                    return !typeArguments.IsDefaultOrEmpty
                 }
                 default {
                     definition = nil
@@ -14320,22 +14327,14 @@ partial class Binder {
             if !object.ReferenceEquals(defA, defB) {
                 return false
             }
-            if a
-                .TypeArguments
-                .IsDefaultOrEmpty ||
-                b
-                .TypeArguments
-                .IsDefaultOrEmpty ||
-                a
-                .TypeArguments
-                .Length != b
-                .TypeArguments
-                .Length {
+            let argsA = Conversion.GetEffectiveInterfaceTypeArguments(a)
+            let argsB = Conversion.GetEffectiveInterfaceTypeArguments(b)
+            if argsA.IsDefaultOrEmpty || argsB.IsDefaultOrEmpty || argsA.Length != argsB.Length {
                 return false
             }
-            for var k = 0; k < a.TypeArguments.Length; k++ {
-                let ta = a.TypeArguments[k]
-                let tb = b.TypeArguments[k]
+            for var k = 0; k < argsA.Length; k++ {
+                let ta = argsA[k]
+                let tb = argsB[k]
                 if ta == tb || object.ReferenceEquals(ta, tb) {
                     continue
                 }

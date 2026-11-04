@@ -2700,7 +2700,7 @@ class StructSymbol : TypeSymbol {
 
         private func EnclosingTypeParametersOf(type TypeSymbol) ImmutableArray[TypeParameterSymbol] -> switch type {
             case s is StructSymbol: (s.Definition ?? s).DeclaredTypeParameters
-            case i is InterfaceSymbol: (i.Definition ?? i).TypeParameters
+            case i is InterfaceSymbol: (i.Definition ?? i).DeclaredTypeParameters
             default: ImmutableArray[TypeParameterSymbol].Empty
         }
 

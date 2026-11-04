@@ -283,6 +283,10 @@ class InterfaceSymbol : TypeSymbol {
     /// Gets the type parameters when this is a generic definition (Phase 4.3c / ADR-0020).
     private var _typeParameters ImmutableArray[TypeParameterSymbol] = ImmutableArray[TypeParameterSymbol].Empty
 
+    private var _declaredTypeParameters ImmutableArray[TypeParameterSymbol] = ImmutableArray[TypeParameterSymbol].Empty
+
+    private var _hasReifiedTypeParameters bool
+
     prop TypeParameters ImmutableArray[TypeParameterSymbol] {
         get {
             return _typeParameters
@@ -290,6 +294,13 @@ class InterfaceSymbol : TypeSymbol {
         private set {
             _typeParameters = value
         }
+    }
+
+    /// Gets the declared own type parameters of this interface.
+    internal prop DeclaredTypeParameters ImmutableArray[TypeParameterSymbol] -> if _hasReifiedTypeParameters {
+        _declaredTypeParameters
+    } else {
+        _typeParameters
     }
 
     /// Gets the type arguments when this is a constructed instance (Phase 4.3c / ADR-0020).
@@ -528,6 +539,19 @@ class InterfaceSymbol : TypeSymbol {
     /// @param typeParameters The bound type parameters in declared order.
     func SetTypeParameters(typeParameters ImmutableArray[TypeParameterSymbol]) {
         TypeParameters = typeParameters
+        _declaredTypeParameters = typeParameters
+        _hasReifiedTypeParameters = false
+    }
+
+    /// Sets the reified type parameters for a nested interface inside a generic enclosing type
+    /// and keeps (cref:DeclaredTypeParameters).
+    /// @param typeParameters The reified enclosing-plus-own type parameters.
+    internal func SetReifiedTypeParameters(typeParameters ImmutableArray[TypeParameterSymbol]) {
+        if !_hasReifiedTypeParameters {
+            _declaredTypeParameters = _typeParameters
+            _hasReifiedTypeParameters = true
+        }
+        TypeParameters = typeParameters
     }
 
     /// Tries to look up an interface method by name.
@@ -634,9 +658,8 @@ class InterfaceSymbol : TypeSymbol {
 
     private func GetTypeSubstitution() Dictionary[TypeParameterSymbol, TypeSymbol] {
         let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(Definition!!)
-        let subst = Dictionary[TypeParameterSymbol, TypeSymbol](
-            enclosingParams.Length + Definition!!.TypeParameters.Length
-        )
+        let ownParams = Definition!!.DeclaredTypeParameters
+        let subst = Dictionary[TypeParameterSymbol, TypeSymbol](enclosingParams.Length + ownParams.Length)
         if !EnclosingTypeArguments.IsDefaultOrEmpty {
             let enclosingCount = Math.Min(enclosingParams.Length, EnclosingTypeArguments.Length)
             for var i = 0; i < enclosingCount; i++ {
@@ -644,9 +667,9 @@ class InterfaceSymbol : TypeSymbol {
             }
         }
         if !TypeArguments.IsDefaultOrEmpty {
-            let ownCount = Math.Min(Definition!!.TypeParameters.Length, TypeArguments.Length)
+            let ownCount = Math.Min(ownParams.Length, TypeArguments.Length)
             for var i = 0; i < ownCount; i++ {
-                subst[Definition!!.TypeParameters[i]] = TypeArguments[i]
+                subst[ownParams[i]] = TypeArguments[i]
             }
         }
         return subst

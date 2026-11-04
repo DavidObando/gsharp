@@ -1096,9 +1096,9 @@ open partial class TypeSymbol : Symbol {
             if left is InterfaceSymbol leftInterface && right is InterfaceSymbol rightInterface {
                 return AreSameConstructedUserTypeCore(
                     leftInterface.Definition ?? leftInterface,
-                    leftInterface.TypeArguments,
+                    Conversion.GetEffectiveInterfaceTypeArguments(leftInterface),
                     rightInterface.Definition ?? rightInterface,
-                    rightInterface.TypeArguments
+                    Conversion.GetEffectiveInterfaceTypeArguments(rightInterface)
                 )
             }
             if left is DelegateTypeSymbol leftDelegate && right is DelegateTypeSymbol rightDelegate {

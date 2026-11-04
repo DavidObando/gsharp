@@ -156,7 +156,13 @@ internal partial class ExpressionBinder {
             !typeClause
             .IsNullable {
             if !typeClause.HasQualifier && !typeClause.HasTypeArguments {
-                TryResolveOpenGenericImportedType(typeClauseIdentifier.ValueText, out typeSymbol)
+                if !TryResolveOpenGenericImportedType(typeClauseIdentifier.ValueText, out typeSymbol) {
+                    TryResolveBareOpenGenericDeclaredType(
+                        typeClauseIdentifier.ValueText,
+                        typeClauseIdentifier.Location,
+                        out typeSymbol
+                    )
+                }
             } else if TryGetNestedUnboundGenericReflectionSegments(
                 typeClause,
                 out var reflectionSegments,
@@ -342,6 +348,29 @@ internal partial class ExpressionBinder {
             DeclaredGenericDefinitionArity(candidate!!) != arity {
             return false
         }
+        type = candidate
+        return true
+    }
+
+    private func TryResolveBareOpenGenericDeclaredType(name string, location TextLocation, out type TypeSymbol?) bool {
+        type = nil
+        if string.IsNullOrEmpty(name) || lookupType(name) != nil {
+            return false
+        }
+        if !binderCtx.TryLookupSourceType(
+            $scope,
+            name,
+            preferredArity: -1,
+            getCurrentFunction(),
+            out var candidate,
+            out var ambiguousAcrossImportedPackages,
+            allowUnclosedEnclosingTypeParameters: true
+        ) ||
+            ambiguousAcrossImportedPackages ||
+            DeclaredGenericDefinitionArity(candidate!!) <= 0 {
+            return false
+        }
+        reportObsoleteUseIfApplicable(location, candidate!!, candidate!!.Name)
         type = candidate
         return true
     }
@@ -4138,8 +4167,10 @@ internal partial class ExpressionBinder {
         /// @param type The candidate type.
         /// @returns The definition's arity, or `-1`.
         private func DeclaredGenericDefinitionArity(type TypeSymbol) int32 -> switch type {
-            case StructSymbol{IsGenericDefinition: true} structSymbol: structSymbol.TypeParameters.Length
-            case InterfaceSymbol{IsGenericDefinition: true} interfaceSymbol: interfaceSymbol.TypeParameters.Length
+            case StructSymbol{IsGenericDefinition: true} structSymbol: structSymbol.DeclaredTypeParameters.Length
+            case InterfaceSymbol{IsGenericDefinition: true} interfaceSymbol: interfaceSymbol
+                .DeclaredTypeParameters
+                .Length
             case DelegateTypeSymbol{IsGenericDefinition: true} delegateSymbol: delegateSymbol.TypeParameters.Length
             default: -1
         }
