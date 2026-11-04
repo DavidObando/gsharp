@@ -506,6 +506,59 @@ func Main() {
 }`
         let output = CompileAndRun(source)
         Assert.Equal("6|0|0|9|0${Environment.NewLine}", output)
+
+        let part1 = `package Demo
+import System
+
+interface IRunner {
+    func Run() int32;
+}
+
+public unsafe partial class SplitUnsafe {
+    private let first []*int32 = [0]*int32
+}
+
+public partial class OuterSplit {
+    public unsafe partial class NestedSplit {
+    }
+}`
+        let part2 = `package Demo
+import System
+
+public partial class SplitUnsafe {
+    private let second []*int32 = [0]*int32
+    private let runner IRunner = object : IRunner {
+        func Run() int32 {
+            let localItems []*int32 = [0]*int32
+            return localItems.Length + 7
+        }
+    }
+
+    shared {
+        public func Run() int32 {
+            let s = SplitUnsafe()
+            return s.first.Length + s.second.Length + s.runner.Run()
+        }
+    }
+}
+
+public partial class OuterSplit {
+    public partial class NestedSplit {
+        private let runner IRunner = object : IRunner {
+            func Run() int32 {
+                let localItems []*int32 = [0]*int32
+                return localItems.Length + 5
+            }
+        }
+        public func Run() int32 -> runner.Run()
+    }
+}
+
+func Main() {
+    Console.WriteLine(SplitUnsafe.Run().ToString() + "|" + OuterSplit.NestedSplit().Run().ToString())
+}`
+        let splitOutput = CompileAndRun(part1, part2)
+        Assert.Equal("7|5${Environment.NewLine}", splitOutput)
     }
 
     @Fact
@@ -555,8 +608,8 @@ Console.WriteLine(Foo.len.ToString())`
 
     shared {
         // Test infrastructure — mirrors Issue640FieldInitializerEmitTests pattern.
-        private func CompileAndRun(source string) string {
-            let (exit, stdout, stderr, _) = CompileAndRunRaw(source)
+        private func CompileAndRun(sources ...string) string {
+            let (exit, stdout, stderr, _) = CompileAndRunRaw(sources)
             Assert.True(exit == 0, (`exited ` + "$exit" + `
 stdout:
 ` + "$stdout" + `
@@ -604,12 +657,15 @@ stderr:
             }
         }
 
-        private func CompileAndRunRaw(source string)(ExitCode int32, Stdout string, Stderr string, CompileOut string) {
+        private func CompileAndRunRaw(sources ...string)(
+            ExitCode int32,
+            Stdout string,
+            Stderr string,
+            CompileOut string
+        ) {
             let tempDir = Directory.CreateTempSubdirectory("gs_issue948_").FullName
             try {
-                let srcPath = Path.Combine(tempDir, "test.gs")
                 let outPath = Path.Combine(tempDir, "test.dll")
-                File.WriteAllText(srcPath, source)
                 let valuesAssemblyPath = typeof(Gsharp.Values.ReadOnlyManagedRef[_]).Assembly.Location
                 File.Copy(
                     valuesAssemblyPath,
@@ -621,7 +677,11 @@ stderr:
                     args.Add("/r:" + bcl)
                 }
                 args.Add("/r:" + valuesAssemblyPath)
-                args.Add(srcPath)
+                for var i = 0; i < sources.Length; i++ {
+                    let srcPath = Path.Combine(tempDir, "test$i.gs")
+                    File.WriteAllText(srcPath, sources[i])
+                    args.Add(srcPath)
+                }
                 using let compileOut = StringWriter()
                 using let compileErr = StringWriter()
                 let prevOut = Console.Out
