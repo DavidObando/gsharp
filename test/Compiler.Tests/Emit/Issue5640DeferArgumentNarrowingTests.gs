@@ -306,6 +306,31 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "", "run", "7"}
+            yield[]object{"d14_5640_defer_invoked_function_literal_with_try_filter_removes_external_callable_alias", `import System
+class C {
+    var Value int32 = 1
+}
+func Consume(n int32) { }
+func Run(callback () -> void, ex Exception) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    var action = callback
+    let flip = func() {
+        action = clear
+    }
+    defer Consume((func() int32 {
+        try {
+            throw ex
+        } catch (Exception) when true {
+            flip()
+            return 1
+        }
+    })())
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+Console.WriteLine(Run(func() { }, Exception("x")))`, "GS0158@23:14", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

@@ -563,26 +563,6 @@ internal partial class StatementBinder {
         }
     }
 
-    /// ADR-0208 R10 (#5168): the `when` filters of every `try` at or below [`node`](paramref),
-    /// outside nested function bodies.
-    private func CollectCatchFiltersWithin(node SyntaxNode) List[ExpressionSyntax] {
-        let filters = List[ExpressionSyntax]()
-        if IsScopeOwner(node) {
-            return filters
-        }
-        if node is TryStatementSyntax tryStatement {
-            for clause in tryStatement.CatchClauses {
-                if clause.Filter != nil {
-                    filters.Add(clause.Filter)
-                }
-            }
-        }
-        for child in node.GetChildren() {
-            filters.AddRange(CollectCatchFiltersWithin(child))
-        }
-        return filters
-    }
-
     /// ADR-0208 R10 (#5168): adds the storage that the `ref` or `out` operand [`operand`](paramref)
     /// writes: the variable itself, or the receiver of an index. An index input is only read.
     private func CollectWriteTargetNames(operand SyntaxNode, names HashSet[string]) {

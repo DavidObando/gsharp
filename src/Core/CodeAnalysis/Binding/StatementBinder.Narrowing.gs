@@ -532,9 +532,7 @@ internal partial class StatementBinder {
             } else {
                 List[ExpressionSyntax]()
             }
-            if collector.ContainsTry {
-                filters.AddRange(CollectCatchFiltersWithin(syntax))
-            }
+            filters.AddRange(collector.VisitedCatchFilters)
             if filters.Count > 0 {
                 RemoveFilterAffectedAliases(externalCallableAliases, filters)
             }
@@ -664,7 +662,7 @@ internal partial class StatementBinder {
             RemoveAssignedAliases(aliases, collector)
         }
         // ADR-0208 R15: a call can run an escaped closure that replaces a callable alias which a closure assigns.
-        if collector.MayRunEscapedClosure {
+        if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
             aliases.RemoveWhere(NamesClosureAssignedStorage)
         }
         if assignsExternalCallable {
@@ -2240,6 +2238,7 @@ internal partial class StatementBinder {
             this.mayShareStorage = mayShareStorage
             Roots = HashSet[VariableSymbol]()
             WritableReferenceRoots = HashSet[VariableSymbol]()
+            VisitedCatchFilters = List[ExpressionSyntax]()
             this.assignmentPreservesNarrowing = assignmentPreservesNarrowing
             if externalFunctionValues != nil {
                 this.normalCallableState.External.UnionWith(externalFunctionValues)
@@ -2273,6 +2272,10 @@ internal partial class StatementBinder {
         prop ContainsTry bool {
             get;
             private set;
+        }
+
+        prop VisitedCatchFilters List[ExpressionSyntax] {
+            get;
         }
 
         prop MayMutateAnyRoot bool {
@@ -2939,6 +2942,13 @@ internal partial class StatementBinder {
 
         protected open override func VisitTryStatement(node BoundTryStatement) {
             ContainsTry = true
+            if node.Syntax is TryStatementSyntax trySyntax {
+                for clause in trySyntax.CatchClauses {
+                    if clause.Filter != nil {
+                        VisitedCatchFilters.Add(clause.Filter)
+                    }
+                }
+            }
             let branchStart = CaptureCallableState()
             let outerTryAssignments = tryAssignedVariables
             let assignedInTry = HashSet[VariableSymbol]()
