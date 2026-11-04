@@ -476,7 +476,6 @@ class CompileStage : IMigrationStage {
             } else {
                 Path.GetDirectoryName(Path.GetFullPath(context.App.ProjectPath))
             }
-            let hasOwnConsumerFiles = context.EmittedFiles.Any((f EmittedGsFile) -> !f.IsFromReferencedProject)
             for referencedProjectPath in activeReferences {
                 let fullReferencedPath = Path.GetFullPath(referencedProjectPath)
                 var generatedProjectPath string? = nil
@@ -487,24 +486,12 @@ class CompileStage : IMigrationStage {
                     return true
                 }
                 let referencedSourceDir string? = Path.GetDirectoryName(fullReferencedPath)
-                if IsOwnedByReferencedDirectory(
-                    diagnosticPath,
-                    referencedSourceDir,
-                    ownOutputDir,
-                    ownSourceDir,
-                    hasOwnConsumerFiles
-                ) {
+                if IsOwnedByReferencedDirectory(diagnosticPath, referencedSourceDir, ownOutputDir, ownSourceDir) {
                     return true
                 }
                 if !string.IsNullOrEmpty(generatedProjectPath) {
                     let generatedDir string? = Path.GetDirectoryName(Path.GetFullPath(generatedProjectPath))
-                    if IsOwnedByReferencedDirectory(
-                        diagnosticPath,
-                        generatedDir,
-                        ownOutputDir,
-                        ownSourceDir,
-                        hasOwnConsumerFiles
-                    ) {
+                    if IsOwnedByReferencedDirectory(diagnosticPath, generatedDir, ownOutputDir, ownSourceDir) {
                         return true
                     }
                 }
@@ -671,8 +658,7 @@ class CompileStage : IMigrationStage {
             diagnosticPath string,
             referencedDir string?,
             ownOutputDir string,
-            ownSourceDir string?,
-            hasOwnConsumerFiles bool
+            ownSourceDir string?
         ) bool {
             if string.IsNullOrEmpty(referencedDir) {
                 return false
@@ -682,24 +668,17 @@ class CompileStage : IMigrationStage {
                 return false
             }
             if IsUnderDirectory(diagnosticPath, ownOutputDir) &&
-                !IsStrictlyUnderDirectory(fullReferencedDir, ownOutputDir) &&
-                !(hasOwnConsumerFiles && PathsEqual(fullReferencedDir, ownOutputDir)) {
+                !IsStrictlyUnderDirectory(fullReferencedDir, ownOutputDir) {
                 return false
             }
             if !string.IsNullOrEmpty(ownSourceDir) {
                 let fullOwnSourceDir = Path.GetFullPath(ownSourceDir)
                 if IsUnderDirectory(diagnosticPath, fullOwnSourceDir) &&
-                    !IsStrictlyUnderDirectory(fullReferencedDir, fullOwnSourceDir) &&
-                    !(hasOwnConsumerFiles && PathsEqual(fullReferencedDir, fullOwnSourceDir)) {
+                    !IsStrictlyUnderDirectory(fullReferencedDir, fullOwnSourceDir) {
                     return false
                 }
             }
             return true
-        }
-
-        private func PathsEqual(left string, right string) bool {
-            let relative = Path.GetRelativePath(left, right)
-            return relative.Equals(".", StringComparison.Ordinal)
         }
 
         private func IsUnderDirectory(path string, directory string) bool {

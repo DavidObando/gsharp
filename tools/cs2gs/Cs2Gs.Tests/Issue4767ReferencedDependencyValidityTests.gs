@@ -899,6 +899,29 @@ public static class Consumer
             let ownArtifact = Assert.Single(colocatedOwnOutcome.Artifacts)
             Assert.Equal("compile-error", ownArtifact.Category)
             Assert.Equal("Colocated/Consumer.gs", ownArtifact.SourceLocation.GsFile)
+
+            // Negative control (`PRRT_kwDOCzQNb86zyO1-`): an unmatched consumer-only
+            // SDK-generated `.gs` file under the shared co-located directory (absent
+            // from `EmittedFiles` and not owned by the producer's compile inputs or
+            // manifest) must remain consumer-owned (`compile-error`), not
+            // `dependency-blocked`.
+            let consumerGeneratedDiag = GscDiagnostic(
+                "GS0386",
+                "consumer generated error",
+                "error",
+                Path.Combine("obj", "Release", "net10.0", "Consumer.Generated.g.gs"),
+                1,
+                1
+            )
+            Assert.False(CompileStage.IsReferencedProjectDiagnostic(colocatedContext, consumerGeneratedDiag))
+            let consumerGeneratedOutcome = CompileStage.BuildFailureOutcome(
+                colocatedContext,
+                []GscDiagnostic{consumerGeneratedDiag},
+                "synthetic"
+            )
+            Assert.Equal(StageStatus.Failed, consumerGeneratedOutcome.Status)
+            let generatedArtifact = Assert.Single(consumerGeneratedOutcome.Artifacts)
+            Assert.Equal("compile-error", generatedArtifact.Category)
         } finally {
             Directory.Delete(mirrorRoot, recursive: true)
         }
