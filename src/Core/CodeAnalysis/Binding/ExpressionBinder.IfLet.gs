@@ -86,7 +86,8 @@ internal partial class ExpressionBinder {
                 captureValue: (read NarrowedBranchValue) -> {
                     whenTrueRead = read
                 }
-            )
+            ),
+            syntax.ThenBlock
         )
         var whenTrue = whenTrueBound
         var anyInvalid = false

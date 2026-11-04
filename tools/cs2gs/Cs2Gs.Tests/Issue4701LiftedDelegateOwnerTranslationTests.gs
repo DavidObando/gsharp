@@ -101,9 +101,449 @@ class Issue4701LiftedDelegateOwnerTranslationTests {
         attributeType string,
         signatureType string
     ) {
-        // Policy-only controls (#4757/#4758/#4759): typeof and private constraints
-        // have independent naming, compiler-recursion and CLR-accessibility gaps.
-        AssertPrivateExposure(declaration, attributeType, signatureType)
+        let (unit, nativeImage) = AssertPrivateExposure(declaration, attributeType, signatureType)
+        AssertCompiled(
+            unit,
+            nativeImage,
+            (assembly Assembly) -> {
+                let emittedOwner Type? = assembly.GetType("Issue4701.Owner")
+                Assert.NotNull(emittedOwner)
+                let signature MethodInfo? = emittedOwner!!.GetMethod(
+                    "Signature",
+                    BindingFlags.NonPublic | BindingFlags.Static
+                )
+                Assert.NotNull(signature)
+                Assert.True(signature!!.IsPrivate)
+                let tagged MethodInfo? = emittedOwner!!.GetMethod("Tagged")
+                Assert.NotNull(tagged)
+                Assert.NotNull(MarkerType(tagged!!.GetCustomAttributesData()))
+                let program = Assert.Single(assembly.GetExportedTypes(), (type Type) -> type.Name == "<Program>")
+                let forwarded MethodInfo? = program.GetMethod("Tagged")
+                Assert.NotNull(forwarded)
+                Assert.True(forwarded!!.IsDefined(typeof(ExtensionAttribute), inherit: false))
+                Assert.DoesNotContain(
+                    forwarded!!.GetCustomAttributesData(),
+                    (attribute CustomAttributeData) -> attribute.AttributeType.Name == "MarkerAttribute"
+                )
+                Assert.True(forwarded!!.IsDefined(typeof(ObsoleteAttribute), inherit: false))
+                Assert.Equal(3, assembly.GetType("Issue4701.Probe")!!.GetMethod("Run")!!.Invoke(nil, nil))
+            }
+        )
+    }
+
+    @Fact
+    func Issue4758_UnboundNestedDelegateTypeOf_RoutesThroughAllocatedLiftedNameAndPreservesImportedNestedDelegates() {
+        const importedContractsSource = `using System;
+namespace Issue4758.Imported
+{
+    public class ImportedOuter<T>
+    {
+        public delegate U Callback<U>(T first, U second);
+        public delegate T Plain(T value);
+    }
+
+    public static class ImportedStatic
+    {
+        public delegate T Callback<T>(T value);
+    }
+}`
+        const source = `using System;
+using Issue4758.Imported;
+
+namespace Issue4758
+{
+    public static class Owner
+    {
+        private delegate T Callback<T>(T value);
+        private delegate TResult PairCallback<TInput, TResult>(TInput value);
+
+        public static class Inner
+        {
+            internal delegate T Deep<T>(T value);
+        }
+
+        public static Type GetUnqualified() => typeof(Callback<>);
+        public static Type GetQualified() => typeof(Owner.Callback<>);
+        public static Type GetGlobalQualified() => typeof(global::Issue4758.Owner.Callback<>);
+        public static Type GetClosed() => typeof(Callback<int>);
+        public static Type GetMultiArity() => typeof(PairCallback<,>);
+        public static Type GetMultiArityQualified() => typeof(Owner.PairCallback<,>);
+        public static Type GetDeep() => typeof(Inner.Deep<>);
+        public static Type GetImportedGenericNestedDelegate() => typeof(ImportedOuter<>.Callback<>);
+        public static Type GetImportedGenericPlainDelegate() => typeof(ImportedOuter<>.Plain);
+    }
+}`
+        const aliasedNamespaceSource = `using System;
+using Collections = System.Collections.Generic;
+
+namespace Issue4758
+{
+    public static class AliasedProbe
+    {
+        public static Type Get() => typeof(Collections.List<>);
+    }
+}`
+        let aliasedPrinted = GSharpPrinter.Print(Translate(Load(aliasedNamespaceSource)))
+        Assert.Contains("typeof(Collections.List[_])", aliasedPrinted, StringComparison.Ordinal)
+        Assert.DoesNotContain("typeof(Generic.List[_])", aliasedPrinted, StringComparison.Ordinal)
+        const unsupportedGenericOwnerSource = `using System;
+
+namespace Issue4758
+{
+    public class Outer<T>
+    {
+        public delegate U Callback<U>(U value);
+        public delegate int Plain(int value);
+        public static Type GetGeneric() => typeof(Outer<>.Callback<>);
+        public static Type GetPlain() => typeof(Outer<>.Plain);
+    }
+}`
+        let unsupportedProject = Load(unsupportedGenericOwnerSource)
+        let unsupportedDoc = Assert.Single(unsupportedProject.Documents)
+        let unsupportedContext = TranslationContext(
+            unsupportedProject.Compilation,
+            unsupportedDoc.SemanticModel,
+            unsupportedDoc.FilePath
+        )
+        let _ = CSharpToGSharpTranslator().TranslateDocument(unsupportedDoc, unsupportedContext)
+        Assert.Equal(
+            2,
+            unsupportedContext.Diagnostics.Count(
+                (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+            )
+        )
+        let directory = Directory.CreateTempSubdirectory("gs_issue4758_unbound_delegate_").FullName
+        try {
+            let contractsPath = Path.Combine(directory, "Issue4758.Imported.dll")
+            let contractsCompilation = CSharpCompilation.Create(
+                "Issue4758.Imported",
+                []SyntaxTree{CSharpSyntaxTree.ParseText(importedContractsSource, path: "Imported.cs")},
+                CSharpProjectLoader.RuntimeReferences(),
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithDeterministic(true)
+            )
+            using let contractsImage = MemoryStream()
+            let contractsEmit = contractsCompilation.Emit(contractsImage)
+            Assert.True(contractsEmit.Success, string.Join(Environment.NewLine, contractsEmit.Diagnostics))
+            File.WriteAllBytes(contractsPath, contractsImage.ToArray())
+            AssertStrictIl(contractsPath, contractsPath)
+            let references = CSharpProjectLoader
+                .RuntimeReferences()
+                .Append(MetadataReference.CreateFromFile(contractsPath))
+                .ToArray()
+            let project = CSharpProjectLoader.LoadInMemory(
+                [](string, source string){("Issue4758.cs", source)},
+                references,
+                "Issue4758.Native"
+            )
+            Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+            let nativePath = Path.Combine(directory, "Issue4758.Native.dll")
+            using let nativeImage = MemoryStream()
+            let nativeEmit = project.Compilation.Emit(nativeImage)
+            Assert.True(nativeEmit.Success, string.Join(Environment.NewLine, nativeEmit.Diagnostics))
+            File.WriteAllBytes(nativePath, nativeImage.ToArray())
+            AssertStrictIl(nativePath, contractsPath)
+            let unit = Translate(project)
+            let printed = GSharpPrinter.Print(unit)
+            Assert.Contains("typeof(Owner_Callback[_])", printed, StringComparison.Ordinal)
+            Assert.Contains("typeof(Owner_PairCallback[_, _])", printed, StringComparison.Ordinal)
+            Assert.Contains("typeof(Owner_Inner_Deep[_])", printed, StringComparison.Ordinal)
+            Assert.Contains("typeof(ImportedOuter[_].Callback[_])", printed, StringComparison.Ordinal)
+            Assert.Contains("typeof(ImportedOuter[_].Plain)", printed, StringComparison.Ordinal)
+            Assert.DoesNotContain("typeof(Callback[_])", printed, StringComparison.Ordinal)
+            Assert.DoesNotContain("typeof(Owner.Callback[_])", printed, StringComparison.Ordinal)
+            let compiler string? = GscInvoker.Resolve(nil, "Release", AppContext.BaseDirectory)
+            Assert.NotNull(compiler)
+            let gsPath = Path.Combine(directory, "Issue4758.gs")
+            let dllPath = Path.Combine(directory, "Issue4758.dll")
+            File.WriteAllText(gsPath, printed)
+            let compiled = GscInvoker(compiler!!).Compile(
+                []string{gsPath},
+                dllPath,
+                TargetKind.Library,
+                []string{contractsPath}
+            )
+            Assert.True(compiled.ExitCode == 0, compiled.Output + Environment.NewLine + printed)
+            AssertStrictIl(dllPath, contractsPath)
+            let _ = EmittedFixture.Load(contractsPath)
+            let nativeAssembly = EmittedFixture.Load(nativePath)
+            let nativeOwner = Assert.Single(
+                nativeAssembly.GetTypes(),
+                (type Type) -> type.FullName == "Issue4758.Owner"
+            )
+            let assembly = EmittedFixture.Load(dllPath)
+            let owner = Assert.Single(assembly.GetTypes(), (type Type) -> type.FullName == "Issue4758.Owner")
+            let unqualified = Assert.IsAssignableFrom[Type](owner.GetMethod("GetUnqualified")!!.Invoke(nil, nil))
+            let nativeUnqualified = Assert.IsAssignableFrom[Type](
+                nativeOwner.GetMethod("GetUnqualified")!!.Invoke(nil, nil)
+            )
+            let qualified = Assert.IsAssignableFrom[Type](owner.GetMethod("GetQualified")!!.Invoke(nil, nil))
+            let globalQualified = Assert.IsAssignableFrom[Type](
+                owner.GetMethod("GetGlobalQualified")!!.Invoke(nil, nil)
+            )
+            let closed = Assert.IsAssignableFrom[Type](owner.GetMethod("GetClosed")!!.Invoke(nil, nil))
+            let multiArity = Assert.IsAssignableFrom[Type](owner.GetMethod("GetMultiArity")!!.Invoke(nil, nil))
+            let nativeMultiArity = Assert.IsAssignableFrom[Type](
+                nativeOwner.GetMethod("GetMultiArity")!!.Invoke(nil, nil)
+            )
+            let multiArityQualified = Assert.IsAssignableFrom[Type](
+                owner.GetMethod("GetMultiArityQualified")!!.Invoke(nil, nil)
+            )
+            let deep = Assert.IsAssignableFrom[Type](owner.GetMethod("GetDeep")!!.Invoke(nil, nil))
+            let nativeDeep = Assert.IsAssignableFrom[Type](nativeOwner.GetMethod("GetDeep")!!.Invoke(nil, nil))
+            let importedGeneric = Assert.IsAssignableFrom[Type](
+                owner.GetMethod("GetImportedGenericNestedDelegate")!!.Invoke(nil, nil)
+            )
+            let nativeImportedGeneric = Assert.IsAssignableFrom[Type](
+                nativeOwner.GetMethod("GetImportedGenericNestedDelegate")!!.Invoke(nil, nil)
+            )
+            let importedPlain = Assert.IsAssignableFrom[Type](
+                owner.GetMethod("GetImportedGenericPlainDelegate")!!.Invoke(nil, nil)
+            )
+            let nativeImportedPlain = Assert.IsAssignableFrom[Type](
+                nativeOwner.GetMethod("GetImportedGenericPlainDelegate")!!.Invoke(nil, nil)
+            )
+            Assert.Equal("Issue4758.Owner_Callback`1", unqualified.FullName)
+            Assert.True(unqualified.IsGenericTypeDefinition)
+            Assert.Equal(nativeUnqualified.GetGenericArguments().Length, unqualified.GetGenericArguments().Length)
+            Assert.Equal(closed, unqualified.MakeGenericType(typeof(int32)))
+            Assert.Equal(unqualified, qualified)
+            Assert.Equal(unqualified, globalQualified)
+            Assert.Equal(unqualified, closed.GetGenericTypeDefinition())
+            Assert.Equal("Issue4758.Owner_PairCallback`2", multiArity.FullName)
+            Assert.Equal(nativeMultiArity.GetGenericArguments().Length, multiArity.GetGenericArguments().Length)
+            Assert.NotNull(multiArity.MakeGenericType(typeof(int32), typeof(string)))
+            Assert.Equal(multiArity, multiArityQualified)
+            Assert.Equal("Issue4758.Owner_Inner_Deep`1", deep.FullName)
+            Assert.Equal(nativeDeep.GetGenericArguments().Length, deep.GetGenericArguments().Length)
+            Assert.NotNull(deep.MakeGenericType(typeof(int32)))
+            Assert.Equal("Issue4758.Imported.ImportedOuter`1+Callback`1", importedGeneric.FullName)
+            Assert.True(importedGeneric.IsGenericTypeDefinition)
+            Assert.Equal(
+                nativeImportedGeneric.GetGenericArguments().Length,
+                importedGeneric.GetGenericArguments().Length
+            )
+            Assert.Equal("Issue4758.Imported.ImportedOuter`1+Plain", importedPlain.FullName)
+            Assert.True(importedPlain.IsGenericTypeDefinition)
+            Assert.Equal(nativeImportedPlain.GetGenericArguments().Length, importedPlain.GetGenericArguments().Length)
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
+    func Issue4759_LiftedDelegateReferencingOwnerPrivateNestedTypes_LoadsVerifiesAndExecutesAtRuntime() {
+        const source = `using System;
+
+namespace Issue4759
+{
+    [AttributeUsage(AttributeTargets.Method | AttributeTargets.Delegate | AttributeTargets.ReturnValue | AttributeTargets.Parameter)]
+    public sealed class MarkerAttribute : Attribute
+    {
+        public MarkerAttribute(Type type) { Type = type; }
+        public Type Type { get; }
+    }
+
+    public class OpenOwner
+    {
+        protected class ProtectedBox
+        {
+            public int Value;
+            public ProtectedBox(int value) => Value = value;
+        }
+
+        protected delegate T ProtectedCallback<T>(T value) where T : ProtectedBox;
+
+        public static Type GetProtectedClosed() => typeof(ProtectedCallback<ProtectedBox>);
+        public static Type GetProtectedOpen() => typeof(ProtectedCallback<>);
+        public static int InvokeProtected(int seed)
+        {
+            ProtectedCallback<ProtectedBox> callback = box => new ProtectedBox(box.Value + 5);
+            return callback(new ProtectedBox(seed)).Value;
+        }
+    }
+
+    internal class InternalOpenOwner
+    {
+        protected class InternalProtectedBox
+        {
+            public int Value;
+            public InternalProtectedBox(int value) => Value = value;
+        }
+
+        protected delegate T InternalProtectedCallback<T>(T value) where T : InternalProtectedBox;
+
+        public static Type GetProtectedClosed() => typeof(InternalProtectedCallback<InternalProtectedBox>);
+    }
+
+    public static class Owner
+    {
+        private sealed class UnreferencedSecret { }
+
+        private interface IBox
+        {
+            int Read();
+        }
+
+        private class BaseBox
+        {
+            public readonly int Seed;
+            public BaseBox(int seed) => Seed = seed;
+        }
+
+        private class Box : BaseBox, IBox
+        {
+            public Box(int seed) : base(seed) { }
+            public int Read() => Seed;
+        }
+
+        private static class SecretContainer
+        {
+            public class NestedBox
+            {
+                public int Value;
+                public NestedBox(int value) => Value = value;
+            }
+        }
+
+        [Marker(typeof(Box))]
+        private delegate T Callback<T>(T value) where T : Box, IBox;
+
+        private delegate T ContainerCallback<T>(T value) where T : SecretContainer.NestedBox;
+
+        private delegate Box DirectSignature(Box value);
+
+        [Marker(typeof(Callback<Box>))]
+        public static Type GetClosed() => typeof(Callback<Box>);
+
+        [Marker(typeof(Callback<>))]
+        public static Type GetOpen() => typeof(Callback<>);
+
+        public static Type GetContainerClosed() => typeof(ContainerCallback<SecretContainer.NestedBox>);
+
+        public static Type GetDirect() => typeof(DirectSignature);
+
+        public static int Run(int seed)
+        {
+            int offset = 3;
+            Callback<Box> generic = box => new Box(box.Read() + offset);
+            ContainerCallback<SecretContainer.NestedBox> nested = item => new SecretContainer.NestedBox(item.Value + 4);
+            DirectSignature direct = box => new Box(box.Read() + 2);
+            return generic(new Box(seed)).Read()
+                + nested(new SecretContainer.NestedBox(seed)).Value
+                + direct(new Box(seed)).Read()
+                + OpenOwner.InvokeProtected(seed);
+        }
+    }
+}`
+        const externalConsumerSource = `using Issue4759;
+
+namespace Issue4759.External
+{
+    public sealed class ExternalDerived : OpenOwner
+    {
+        private sealed class DerivedBox : ProtectedBox
+        {
+            public DerivedBox(int value) : base(value + 6) { }
+        }
+
+        public static int ReadFromDerived(int seed) => new DerivedBox(seed).Value + new ProtectedBox(seed).Value;
+    }
+}`
+        let project = Load(source)
+        using let native = MemoryStream()
+        let emitted = project.Compilation.Emit(native)
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+        let original = EmittedFixture.Load(native.ToArray())
+        let originalOwner = original.GetType("Issue4759.Owner")!!
+        Assert.Equal(42, originalOwner.GetMethod("Run")!!.Invoke(nil, []object{7}))
+        let unit = Translate(project)
+        AssertCompiled(
+            unit,
+            native.ToArray(),
+            (assembly Assembly, assemblyPath string) -> {
+                let owner = Assert.Single(assembly.GetTypes(), (type Type) -> type.FullName == "Issue4759.Owner")
+                let openOwner = Assert.Single(
+                    assembly.GetTypes(),
+                    (type Type) -> type.FullName == "Issue4759.OpenOwner"
+                )
+                let internalOpenOwner = Assert.Single(
+                    assembly.GetTypes(),
+                    (type Type) -> type.FullName == "Issue4759.InternalOpenOwner"
+                )
+                let unreferenced = owner.GetNestedType("UnreferencedSecret", BindingFlags.NonPublic)
+                Assert.NotNull(unreferenced)
+                Assert.True(unreferenced!!.IsNestedPrivate)
+                let box = owner.GetNestedType("Box", BindingFlags.NonPublic)
+                Assert.NotNull(box)
+                Assert.True(box!!.IsNestedAssembly)
+                Assert.False(box!!.IsVisible)
+                let baseBox = owner.GetNestedType("BaseBox", BindingFlags.NonPublic)
+                Assert.NotNull(baseBox)
+                Assert.True(baseBox!!.IsNestedAssembly)
+                let ibox = owner.GetNestedType("IBox", BindingFlags.NonPublic)
+                Assert.NotNull(ibox)
+                Assert.True(ibox!!.IsNestedAssembly)
+                let secretContainer = owner.GetNestedType("SecretContainer", BindingFlags.NonPublic)
+                Assert.NotNull(secretContainer)
+                Assert.True(secretContainer!!.IsNestedAssembly)
+                let protectedBox = openOwner.GetNestedType("ProtectedBox", BindingFlags.Public | BindingFlags.NonPublic)
+                Assert.NotNull(protectedBox)
+                Assert.True(protectedBox!!.IsNestedPublic)
+                let internalProtectedBox = internalOpenOwner.GetNestedType(
+                    "InternalProtectedBox",
+                    BindingFlags.NonPublic
+                )
+                Assert.NotNull(internalProtectedBox)
+                Assert.True(internalProtectedBox!!.IsNestedAssembly)
+                Assert.False(internalProtectedBox!!.IsVisible)
+                let closedType = Assert.IsAssignableFrom[Type](owner.GetMethod("GetClosed")!!.Invoke(nil, nil))
+                let openType = Assert.IsAssignableFrom[Type](owner.GetMethod("GetOpen")!!.Invoke(nil, nil))
+                let containerClosed = Assert.IsAssignableFrom[Type](
+                    owner.GetMethod("GetContainerClosed")!!.Invoke(nil, nil)
+                )
+                let directType = Assert.IsAssignableFrom[Type](owner.GetMethod("GetDirect")!!.Invoke(nil, nil))
+                let protectedClosed = Assert.IsAssignableFrom[Type](
+                    openOwner.GetMethod("GetProtectedClosed")!!.Invoke(nil, nil)
+                )
+                let protectedOpen = Assert.IsAssignableFrom[Type](
+                    openOwner.GetMethod("GetProtectedOpen")!!.Invoke(nil, nil)
+                )
+                let internalProtectedClosed = Assert.IsAssignableFrom[Type](
+                    internalOpenOwner.GetMethod("GetProtectedClosed")!!.Invoke(nil, nil)
+                )
+                Assert.Equal(openType, closedType.GetGenericTypeDefinition())
+                Assert.Equal(box, Assert.Single(closedType.GetGenericArguments()))
+                Assert.Equal(box, MarkerType(openType.GetCustomAttributesData()))
+                Assert.Equal(closedType, MarkerType(owner.GetMethod("GetClosed")!!.GetCustomAttributesData()))
+                Assert.Equal(openType, MarkerType(owner.GetMethod("GetOpen")!!.GetCustomAttributesData()))
+                Assert.Equal("Issue4759.Owner_ContainerCallback`1", containerClosed.GetGenericTypeDefinition().FullName)
+                Assert.Equal("Issue4759.Owner_DirectSignature", directType.FullName)
+                Assert.Equal(protectedOpen, protectedClosed.GetGenericTypeDefinition())
+                Assert.Equal(protectedBox, Assert.Single(protectedClosed.GetGenericArguments()))
+                Assert.Equal(internalProtectedBox, Assert.Single(internalProtectedClosed.GetGenericArguments()))
+                Assert.Equal(42, owner.GetMethod("Run")!!.Invoke(nil, []object{7}))
+                let namedAssemblyPath = Path.Combine(Path.GetDirectoryName(assemblyPath)!!, "Issue4759.dll")
+                File.Copy(assemblyPath, namedAssemblyPath, overwrite: true)
+                let consumerCompilation = CSharpCompilation.Create(
+                    "Issue4759.External",
+                    []SyntaxTree{CSharpSyntaxTree.ParseText(externalConsumerSource, path: "ExternalDerived.cs")},
+                    CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(namedAssemblyPath)),
+                    CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithDeterministic(true)
+                )
+                using let consumerImage = MemoryStream()
+                let consumerEmit = consumerCompilation.Emit(consumerImage)
+                Assert.True(consumerEmit.Success, string.Join(Environment.NewLine, consumerEmit.Diagnostics))
+                let consumerPath = Path.Combine(Path.GetDirectoryName(assemblyPath)!!, "Issue4759.External.dll")
+                File.WriteAllBytes(consumerPath, consumerImage.ToArray())
+                AssertStrictIl(consumerPath, namedAssemblyPath)
+                let loadedAssemblies = EmittedFixture.LoadTogether(namedAssemblyPath, consumerPath)
+                let externalDerived = Assert.Single(
+                    loadedAssemblies[1].GetTypes(),
+                    (type Type) -> type.FullName == "Issue4759.External.ExternalDerived"
+                )
+                Assert.Equal(20, externalDerived.GetMethod("ReadFromDerived")!!.Invoke(nil, []object{7}))
+            }
+        )
     }
 
     @Fact
@@ -516,12 +956,13 @@ namespace Issue4701
             return Assert.IsAssignableFrom[Type](Assert.Single(marker.ConstructorArguments).Value)
         }
 
-        private func AssertStrictIl(assembly string) {
+        private func AssertStrictIl(assembly string, extraReferences ...string) {
             let arguments = List[string]{"tool", "run", "ilverify", assembly, "-s", "System.Private.CoreLib"}
             for reference in Directory.EnumerateFiles(
                 Path.GetDirectoryName(typeof(object).Assembly.Location)!!,
                 "*.dll"
-            ) {
+            )
+                .Concat(extraReferences) {
                 arguments.Add("-r")
                 arguments.Add(reference)
             }
@@ -531,6 +972,10 @@ namespace Issue4701
         }
 
         private func AssertCompiled(unit CompilationUnit, nativeImage[]uint8, assert(Assembly) -> void) {
+            AssertCompiled(unit, nativeImage, (assembly Assembly, _ string) -> assert(assembly))
+        }
+
+        private func AssertCompiled(unit CompilationUnit, nativeImage[]uint8, assert(Assembly, string) -> void) {
             let printed = GSharpPrinter.Print(unit)
             let compiler string? = GscInvoker.Resolve(nil, "Release", AppContext.BaseDirectory)
             Assert.NotNull(compiler)
@@ -551,7 +996,7 @@ namespace Issue4701
                 Assert.True(compiled.ExitCode == 0, compiled.Output + Environment.NewLine + printed)
                 Assert.True(File.Exists(assembly), compiled.Output + Environment.NewLine + printed)
                 AssertStrictIl(assembly)
-                assert(EmittedFixture.Load(assembly))
+                assert(EmittedFixture.Load(assembly), assembly)
             } finally {
                 Directory.Delete(directory, recursive: true)
             }
