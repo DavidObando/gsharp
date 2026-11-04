@@ -4360,7 +4360,7 @@ internal partial class ExpressionBinder {
 
         /// Issue #658: checks whether a user-defined G# class (or any of its base
         /// classes) declares implementation of the specified CLR interface.
-        private func UserClassImplementsInterface(ss StructSymbol, target Type) bool {
+        internal func UserClassImplementsInterface(ss StructSymbol, target Type) bool {
             for current in ss.GetHierarchy() {
                 for iface in current.ImplementedClrInterfaces {
                     if iface.ClrType == nil {
@@ -4373,6 +4373,19 @@ internal partial class ExpressionBinder {
                     // The implemented interface itself inherits from the target.
                     if ClrTypeUtilities.ImplementsInterfaceByName(iface.ClrType, target) {
                         return true
+                    }
+                }
+                for sourceIface in current.Interfaces {
+                    for baseIface in sourceIface.SelfAndAllBaseInterfaces() {
+                        for clrIface in baseIface.BaseClrInterfaces {
+                            if clrIface.ClrType == nil {
+                                continue
+                            }
+                            if ClrTypeUtilities.AreSame(clrIface.ClrType, target) ||
+                                ClrTypeUtilities.ImplementsInterfaceByName(clrIface.ClrType, target) {
+                                return true
+                            }
+                        }
                     }
                 }
             }
