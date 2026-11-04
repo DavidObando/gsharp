@@ -1529,6 +1529,8 @@ internal partial class MethodBodyEmitter {
         // `Memory`1::op_Implicit(!0[])` (#3932), the source for
         // `Span`1::op_Implicit(Span<!0>) : ReadOnlySpan<!0>`.
         private func SymbolicConversionOwner(method MethodInfo, source TypeSymbol, target TypeSymbol) TypeSymbol {
+            let source = UnwrapNullable(source)
+            let target = UnwrapNullable(target)
             let declaring = if method.DeclaringType is {IsGenericType: true} genericDeclaring {
                 genericDeclaring.GetGenericTypeDefinition()
             } else {
@@ -1596,10 +1598,13 @@ internal partial class MethodBodyEmitter {
                 ConversionClassifier.IsSameSymbolicType(mappedReturn, target)
         }
 
-        private func UnwrapNullable(type TypeSymbol) TypeSymbol -> if type is NullableTypeSymbol nullable {
-            nullable.UnderlyingType
-        } else {
-            type
+        private func UnwrapNullable(type TypeSymbol) TypeSymbol {
+            let bare = type.StripToBareShape()
+            return if bare is NullableTypeSymbol nullable {
+                nullable.UnderlyingType.StripToBareShape()
+            } else {
+                bare
+            }
         }
 
         private func ReturnsValueTypeNullable(conversion BoundClrConversionCallExpression) bool {

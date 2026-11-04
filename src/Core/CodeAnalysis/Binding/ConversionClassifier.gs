@@ -5928,7 +5928,7 @@ internal class ConversionClassifier {
         }
 
         internal func NeedsSymbolicConversion(type TypeSymbol) bool {
-            if type is not ImportedTypeSymbol{OpenDefinition: not nil} imported ||
+            if type.StripToBareShape() is not ImportedTypeSymbol{OpenDefinition: not nil} imported ||
                 imported
                 .TypeArguments
                 .IsDefaultOrEmpty {
@@ -6000,6 +6000,8 @@ internal class ConversionClassifier {
             if mapped == nil || mapped == TypeSymbol.Error {
                 return false
             }
+            let mapped = mapped.StripToBareShape()
+            let expected = expected.StripToBareShape()
             if mapped.Equals(expected) {
                 return true
             }

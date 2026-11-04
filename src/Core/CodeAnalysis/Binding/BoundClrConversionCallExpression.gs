@@ -115,7 +115,7 @@ class BoundClrConversionCallExpression : BoundExpression {
             Length: 1
         } parameters &&
             NullableLifting.IsValueTypeNullableClr(parameters[0].ParameterType) {
-            NullableTypeSymbol.Get(source)
+            NullableTypeSymbol.Get(source.StripToBareShape())
         } else {
             source
         }
@@ -152,12 +152,13 @@ class BoundClrConversionCallExpression : BoundExpression {
                 return false
             }
             if method.DeclaringType is {IsGenericTypeDefinition: true} openDeclaring {
-                let targetUnderlying = if target is NullableTypeSymbol nullableTarget {
-                    nullableTarget.UnderlyingType
+                let sourceUnderlying = source.UnderlyingType.StripToBareShape()
+                let targetUnderlying = if target.StripToBareShape() is NullableTypeSymbol nullableTarget {
+                    nullableTarget.UnderlyingType.StripToBareShape()
                 } else {
-                    target
+                    target.StripToBareShape()
                 }
-                let symbolicOwner ImportedTypeSymbol? = if source.UnderlyingType is ImportedTypeSymbol{
+                let symbolicOwner ImportedTypeSymbol? = if sourceUnderlying is ImportedTypeSymbol{
                     OpenDefinition: {} sourceOpen
                 } importedSource &&
                     !importedSource

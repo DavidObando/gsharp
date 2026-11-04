@@ -474,6 +474,55 @@ static Box? Convert(bool present) => OpenConvert(Probe.Read<RefWrapper<Box>>(pre
         "101,111"
     )
     @InlineData(
+        "int32?",
+        "int32?(ObliviousGenericWrapper[LocalItem]().Self())",
+        "int?",
+        "(int?)new ObliviousGenericWrapper<int>().Self()",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[ObliviousGenericWrapper[LocalItem], int32?]((v ObliviousGenericWrapper[LocalItem]) -> int32?(v.Self()), ObliviousGenericWrapper[LocalItem]())",
+        "int?",
+        "EvalTree<ObliviousGenericWrapper<int>, int?>(v => (int?)v.Self(), new ObliviousGenericWrapper<int>())",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "if EvalTree[OpaqueValueToken, object?]((v OpaqueValueToken) -> object?(int32?(v)), Probe.ReadValue[OpaqueValueToken]()) == nil { default(int32?) } else { 5 }",
+        "int?",
+        "EvalTree<OpaqueValueToken, object?>(v => (object?)(int?)v, Probe.ReadValue<OpaqueValueToken>()) == null ? (int?)null : 5",
+        "111,111"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[OpaqueValueToken?, int32?]((v OpaqueValueToken?) -> int32?(v), Probe.Read[OpaqueValueToken](present))",
+        "int?",
+        "(int?)Probe.Read<OpaqueValueToken>(present)",
+        "101,111"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[bool, int32?]((flag bool) -> int32?(Probe.Read[OpaqueValueToken](flag)), present)",
+        "int?",
+        "(int?)Probe.Read<OpaqueValueToken>(present)",
+        "101,111"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[LocalOpaque?, int32?]((v LocalOpaque?) -> int32?(v), Probe.Read[LocalOpaque](present))",
+        "int?",
+        "(int?)Probe.Read<OpaqueValueToken>(present)",
+        "101,111"
+    )
+    @InlineData(
+        "int32?",
+        "EvalTree[LocalImplicitOpaque?, int32?]((v LocalImplicitOpaque?) -> v, Probe.Read[LocalImplicitOpaque](present))",
+        "int?",
+        "Probe.Read<OpaqueImplicitValueToken>(present)",
+        "101,111"
+    )
+    @InlineData(
         "int32",
         "Probe.AcceptSpan(Span[uint8]([]uint8{1, 2, 3})) + (if present { 0 } else { 0 }) + 10 * (Probe.Calls + 1) + 100 * Probe.Reads",
         "int",
@@ -983,6 +1032,18 @@ public struct GenericChainValueToken<T> {
         return null;
     }
 }
+#nullable disable
+public sealed class ObliviousGenericWrapper<T> {
+    public ObliviousGenericWrapper<T> Self() {
+        Probe.Reads++;
+        return this;
+    }
+    public static explicit operator int?(ObliviousGenericWrapper<T> value) {
+        Probe.Calls++;
+        return null;
+    }
+}
+#nullable restore
 public static class Probe {
     public static int Calls;
     public static int Reads;
