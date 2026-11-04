@@ -524,12 +524,26 @@ partial class CSharpToGSharpTranslator {
         // verbatim into the emitted file (a round-trip GS0005). #3589 binds
         // the nested spelling by composing its segment-wise reflection name.
         private func MapTypeOfOperand(type TypeSyntax) GTypeReference? {
-            if type is NameSyntax nameSyntax &&
-                HasOmittedTypeArgument(nameSyntax) &&
-                RenderUnboundGenericName(nameSyntax) is {} unboundName {
-                return NamedTypeReference(unboundName)
-            }
             let symbol ITypeSymbol? = this.context.GetTypeInfo(type).Type
+            if type is NameSyntax nameSyntax && HasOmittedTypeArgument(nameSyntax) {
+                if symbol is INamedTypeSymbol unboundNamed && CSharpTypeMapper.IsLiftedNestedDelegate(unboundNamed) {
+                    if CSharpTypeMapper.HasGenericContainingType(unboundNamed) {
+                        this.context.ReportUnsupported(
+                            type,
+                            "unbound typeof over nested delegate '${unboundNamed.ToDisplayString()}' inside a generic containing type cannot preserve its enclosing generic arity when lifted to top level."
+                        )
+                        return NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType)
+                    }
+                    let liftedName = this.typeMapper.LiftedNestedDelegateName(unboundNamed, this.context)
+                    return NamedTypeReference(
+                        liftedName,
+                        Enumerable.Repeat(cast[GTypeReference](NamedTypeReference("_")), unboundNamed.Arity).ToList()
+                    )
+                }
+                if this.RenderUnboundGenericName(nameSyntax) is {} unboundName {
+                    return NamedTypeReference(unboundName)
+                }
+            }
             return if symbol != nil {
                 this.typeMapper.MapTypeOf(symbol, this.context, type.GetLocation())
             } else {
@@ -3634,6 +3648,51 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
+        // Renders a (possibly nested) unbound-generic name with `_` placeholder
+        // bracket arguments per generic segment: `IEnumerable<>` → `IEnumerable[_]`,
+        // `Dictionary<,>.Enumerator` → `Dictionary[_, _].Enumerator`,
+        // `Outer<>.Inner<>` → `Outer[_].Inner[_]`. Null for shapes with no
+        // canonical spelling.
+        private func RenderUnboundGenericName(name NameSyntax) string? {
+            switch name {
+                case identifier is IdentifierNameSyntax {
+                    return this.RenderUnboundTypeSimpleName(identifier)
+                }
+                case generic is GenericNameSyntax {
+                    let emitted = this.RenderUnboundTypeSimpleName(generic)
+                    return "$emitted[" + string.Join(
+                        ", ",
+                        Enumerable.Repeat("_", generic.TypeArgumentList.Arguments.Count)
+                    ) +
+                        "]"
+                }
+                case qualified is QualifiedNameSyntax {
+                    let left string? = this.RenderUnboundGenericName(qualified.Left)
+                    let right string? = this.RenderUnboundGenericName(qualified.Right)
+                    return if left == nil || right == nil {
+                        default(string?)
+                    } else {
+                        left + "." + right
+                    }
+                }
+                case alias is AliasQualifiedNameSyntax {
+                    // `global::` (or another extern alias) has no G# spelling;
+                    // the aliased segment renders bare.
+                    return this.RenderUnboundGenericName(alias.Name)
+                }
+                default {
+                    return nil
+                }
+            }
+        }
+
+        private func RenderUnboundTypeSimpleName(syntax SimpleNameSyntax) string? {
+            if this.context.SemanticModel.GetAliasInfo(syntax) is IAliasSymbol alias {
+                return this.EmittedName(alias, syntax.Identifier.ValueText, GSharpIdentifierNameContext.Type)
+            }
+            return this.EmittedName(syntax, syntax.Identifier, GSharpIdentifierNameContext.Type)
+        }
+
         shared {
             private func HasOmittedTypeArgument(name NameSyntax) bool -> switch name {
                 case generic is GenericNameSyntax: generic
@@ -3644,43 +3703,6 @@ partial class CSharpToGSharpTranslator {
                     HasOmittedTypeArgument(qualified.Right)
                 case alias is AliasQualifiedNameSyntax: HasOmittedTypeArgument(alias.Name)
                 default: false
-            }
-
-            // Renders a (possibly nested) unbound-generic name with `_` placeholder
-            // bracket arguments per generic segment: `IEnumerable<>` → `IEnumerable[_]`,
-            // `Dictionary<,>.Enumerator` → `Dictionary[_, _].Enumerator`,
-            // `Outer<>.Inner<>` → `Outer[_].Inner[_]`. Null for shapes with no
-            // canonical spelling.
-            private func RenderUnboundGenericName(name NameSyntax) string? {
-                switch name {
-                    case identifier is IdentifierNameSyntax {
-                        return identifier.Identifier.ValueText
-                    }
-                    case generic is GenericNameSyntax {
-                        return generic.Identifier.ValueText + "[" + string.Join(
-                            ", ",
-                            Enumerable.Repeat("_", generic.TypeArgumentList.Arguments.Count)
-                        ) +
-                            "]"
-                    }
-                    case qualified is QualifiedNameSyntax {
-                        let left string? = RenderUnboundGenericName(qualified.Left)
-                        let right string? = RenderUnboundGenericName(qualified.Right)
-                        return if left == nil || right == nil {
-                            default(string?)
-                        } else {
-                            left + "." + right
-                        }
-                    }
-                    case alias is AliasQualifiedNameSyntax {
-                        // `global::` (or another extern alias) has no G# spelling;
-                        // the aliased segment renders bare.
-                        return RenderUnboundGenericName(alias.Name)
-                    }
-                    default {
-                        return nil
-                    }
-                }
             }
 
             private func IsTotalPattern(

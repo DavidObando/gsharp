@@ -577,6 +577,14 @@ Console.WriteLine(first[SelfNullableList](SelfNullableList()))`, "GS0152", "GS05
 func first[T List[T]](x T) int32 -> x.Count
 
 Console.WriteLine(first[SelfNullableList](SelfNullableList()))`, "GS0152", "GS0580"}
+            yield[]object{
+                "a-slice-element-list-does-not-satisfy-a-substituted-fixed-array-imported-interface-constraint",
+                `func readFixed[V, T IList[[3]V]](xs T) [3]V -> xs[0]
+
+Console.WriteLine(readFixed[string, List[[]string]](List[[]string]{[]string{"a"}})[0])`,
+                "GS0152",
+                "GS0580"
+            }
         }
 
         /// Every shape the two rules must NOT reject. A false GS0152 or GS0580 is a
@@ -737,6 +745,23 @@ func readImportedClass[V, T List[V]](x T) int32 -> x.Count
 func acceptCovariantSeq[T IEnumerable[string?]](x T) string -> "cov"
 func acceptContravariantCmp[T IComparer[string]](c T) int32 -> c.Compare("a", "b")
 
+class RectBox4744[T IEnumerable[[,]object]] {
+}
+
+class RectNullableBox4744[T IEnumerable[[,]string?]] {
+}
+
+class DependentRectBox4744[V, T IEnumerable[[,]V]] {
+}
+
+class RectHolder4744 {
+    public var A RectBox4744[List[[,]string]]
+    public var B RectNullableBox4744[List[[,]string]]
+    public var C DependentRectBox4744[object, List[[,]string]]
+    public var D DependentRectBox4744[string?, List[[,]string]]
+    public var Tag string = "ro:rn"
+}
+
 class NullableStrComparer4744 : IComparer[string?] {
     public func Compare(x string?, y string?) int32 -> 0
 }
@@ -777,6 +802,7 @@ Console.WriteLine(cmp9((1, 2, 3, 4, 5, 6, 7, 8, 9)))
 Console.WriteLine(readImportedClass[int32, List[int32]](List[int32]{9}))
 Console.WriteLine(Outer4744[int32].Use[NestedIntDerived4744](NestedIntDerived4744()))
 Console.WriteLine(acceptCovariantSeq[List[string]](List[string]{"a"}) + ":" + acceptCovariantSeq[[]string]([]string{"b"}))
+Console.WriteLine(RectHolder4744().Tag)
 Console.WriteLine(acceptContravariantCmp[NullableStrComparer4744](NullableStrComparer4744()))`, []string{
                     "7",
                     "7",
@@ -791,6 +817,7 @@ Console.WriteLine(acceptContravariantCmp[NullableStrComparer4744](NullableStrCom
                     "1",
                     "nb",
                     "cov:cov",
+                    "ro:rn",
                     "0"
                 }}
             // #4762: satisfied closed and forwarded open generic named-delegate

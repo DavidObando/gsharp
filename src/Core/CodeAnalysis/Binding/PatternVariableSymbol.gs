@@ -6,6 +6,8 @@ package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
+import System
+import System.Collections.Generic
 
 /// ADR-0166: a read-only local introduced by a designation in a boolean
 /// `is` pattern (`value is string text`, `value is { } item`,
@@ -14,6 +16,10 @@ import GSharp.Core.CodeAnalysis.Syntax
 /// observes the assigned value. Closure lowering relies on that invariant to
 /// capture the variable by value instead of hoisting it into a heap cell.
 internal class PatternVariableSymbol : LocalVariableSymbol {
+    internal data class ScopeRegion(Owner SyntaxNode, Start int32, End int32) : IEquatable[ScopeRegion] { }
+
+    private var regions List[ScopeRegion]?
+
     /// Initializes a new instance of the (cref:PatternVariableSymbol) class.
     /// @param name The designation name.
     /// @param type The matched value's type.
@@ -26,5 +32,24 @@ internal class PatternVariableSymbol : LocalVariableSymbol {
         // smart-cast narrowing across a loop back-edge, exactly like assigning
         // a `let` local proven non-null by its initializer.
         HasDefinitelyNonNullValue = !(type is NullableTypeSymbol)
+    }
+
+    /// Gets the syntax regions in which the binder declared this pattern variable in scope.
+    internal prop Regions IReadOnlyList[ScopeRegion] -> regions ?? EmptyRegions
+
+    /// Records a syntax region in which the binder declared this pattern variable in scope.
+    internal func AddRegion(owner SyntaxNode, start int32, end int32) {
+        let region = ScopeRegion(owner, start, end)
+        if regions == nil {
+            regions = List[ScopeRegion]{region}
+            return
+        }
+        if !regions!!.Contains(region) {
+            regions!!.Add(region)
+        }
+    }
+
+    shared {
+        private let EmptyRegions IReadOnlyList[ScopeRegion] = Array.Empty[ScopeRegion]()
     }
 }

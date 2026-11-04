@@ -13560,7 +13560,8 @@ partial class Binder {
                     let clrArgs = [substitutedArgs.Length]Type
                     var allClr = true
                     for var i = 0; i < substitutedArgs.Length; i++ {
-                        if TypeSymbol.RequiresSymbolicProjection(substitutedArgs[i]) {
+                        if TypeSymbol.RequiresSymbolicProjection(substitutedArgs[i]) ||
+                            TypeSymbol.ContainsSourceArrayShape(substitutedArgs[i]) {
                             allClr = false
                             break
                         }
@@ -14458,8 +14459,7 @@ partial class Binder {
             }
             let l = PlatformTypeSymbol.StripTopLevel(actualArg)
             let r = PlatformTypeSymbol.StripTopLevel(expectedArg)
-            if (l is SliceTypeSymbol || l is ArrayTypeSymbol || l is RectangularArrayTypeSymbol) &&
-                (r is SliceTypeSymbol || r is ArrayTypeSymbol || r is RectangularArrayTypeSymbol) {
+            if (l is SliceTypeSymbol || l is ArrayTypeSymbol) && (r is SliceTypeSymbol || r is ArrayTypeSymbol) {
                 return false
             }
             return switch variance & GenericParameterAttributes.VarianceMask {
