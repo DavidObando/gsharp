@@ -927,6 +927,415 @@ public static class Consumer
         }
     }
 
+    /// Review finding (`PRRT_kwDOCzQNb86z0nXQ`): during `ValidateAsync`, ordinary
+    /// unconditional literal project references must be evaluated and restored onto
+    /// `context.ProjectReferences` / `context.EvaluatedProjectReferencePaths` by
+    /// `ValidationManifest.Hydrate` so producer-only compile errors return
+    /// artifact-free `dependency-blocked` on the consumer instead of consumer-owned
+    /// `compile-error` artifacts.
+    @Fact
+    async func ValidateAsync_UnconditionalLiteralProjectReference_ToCompileFailingProducer_BlocksConsumerWithoutArtifacts() {
+        let compiler string? = FindCompiler()
+        if compiler == nil {
+            return
+        }
+        let corpusRoot = Path.Combine(
+            Path.GetTempPath(),
+            "cs2gs-4767-validate-unconditional-ref-" + Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(corpusRoot)
+        try {
+            let sourceDir = Path.Combine(corpusRoot, "src")
+            Directory.CreateDirectory(sourceDir)
+            File.WriteAllText(Path.Combine(sourceDir, "Directory.Build.props"), "<Project></Project>")
+            let modelsDir = Path.Combine(sourceDir, "Models")
+            let consumerDir = Path.Combine(sourceDir, "Consumer")
+            Directory.CreateDirectory(modelsDir)
+            Directory.CreateDirectory(consumerDir)
+            File.WriteAllText(
+                Path.Combine(modelsDir, "Models.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "</Project>\n"
+            )
+            File.WriteAllText(Path.Combine(modelsDir, "Contracts.cs"), CompileFailingModelsSource)
+            File.WriteAllText(
+                Path.Combine(consumerDir, "Consumer.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <ItemGroup>\n" +
+                    "    <ProjectReference Include=\"../Models/Models.csproj\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            File.WriteAllText(Path.Combine(consumerDir, "Consumer.cs"), ConsumerSource)
+            let mirrorRoot = Path.Combine(corpusRoot, "migrated")
+            let migrateArtifacts = Path.Combine(corpusRoot, "migrate-artifacts")
+            let apps = RepositoryDiscovery.Discover(sourceDir)
+            Assert.Equal(2, apps.Count)
+            let modelsApp = apps.Single((a CorpusApp) -> a.Id.Contains("Models", StringComparison.Ordinal))
+            let consumerApp = apps.Single((a CorpusApp) -> a.Id.Contains("Consumer", StringComparison.Ordinal))
+
+            let migrateOptions = PipelineOptions{
+                SourceRoot: sourceDir,
+                OutputRoot: mirrorRoot,
+                ArtifactRoot: migrateArtifacts,
+                OutputLayout: MigrationOutputLayout.Repository,
+                GscPath: compiler,
+                Config: "Release",
+                CompileViaSdk: true
+            }
+            let migrateResult = await MigrationPipeline(migrateOptions, []IMigrationStage{TranslateStage()}).RunAsync(
+                apps
+            )
+            Assert.True(migrateResult.Succeeded)
+            let manifestRunDir = Path.Combine(migrateArtifacts, migrateResult.RunId)
+
+            // Verify ValidationManifest.Hydrate restores ProjectReferences directly.
+            let consumerManifest = ValidationManifest.Read(
+                Path.Combine(
+                    manifestRunDir,
+                    MigrationPipeline.ArtifactDirectoryName(consumerApp.Id, MigrationOutputLayout.Repository)
+                )
+            )!!
+            Assert.NotNull(consumerManifest)
+            let hydratedContext = StageExecutionContext(
+                consumerApp,
+                PipelineOptions{SourceRoot: sourceDir, OutputRoot: mirrorRoot},
+                GscInvoker(compiler),
+                Path.Combine(mirrorRoot, "Models"),
+                TriageBuilder("hydrate_check", "2026-10-05T00:00:00Z", "0.5.0", consumerApp.Id)
+            )
+            consumerManifest.Hydrate(hydratedContext, mirrorRoot)
+            Assert.Single(hydratedContext.ProjectReferences)
+            Assert.Equal(
+                Path.GetFullPath(modelsApp.ProjectPath),
+                Path.GetFullPath(hydratedContext.ProjectReferences[0].SourceInclude!!)
+            )
+
+            // Consumer-only validation shard: producer-only compile error in Models.gs
+            // must mark Consumer dependency-blocked with 0 consumer-owned artifacts.
+            let consumerOnlyValidateOptions = PipelineOptions{
+                SourceRoot: sourceDir,
+                OutputRoot: mirrorRoot,
+                ArtifactRoot: Path.Combine(corpusRoot, "validate-consumer-only"),
+                GscPath: compiler,
+                Config: "Release",
+                CompileViaSdk: true
+            }
+            let consumerOnlyResult = await MigrationPipeline(
+                consumerOnlyValidateOptions,
+                []IMigrationStage{CompileStage(), IlVerifyStage()}
+            ).ValidateAsync(apps, []CorpusApp{consumerApp}, manifestRunDir)
+            Assert.False(consumerOnlyResult.Succeeded)
+            let consumerValidated = Assert.Single(consumerOnlyResult.Apps)
+            Assert.False(consumerValidated.Succeeded)
+            Assert.Equal("dependency-blocked", consumerValidated.FailureCategory)
+            Assert.Empty(consumerValidated.Fingerprints)
+            let consumerCompileStage = consumerValidated.Stages.Single((s StageResult) -> s.Stage == "compile")
+            Assert.Equal("failed", consumerCompileStage.Status)
+            Assert.Equal(0, consumerCompileStage.ArtifactCount)
+
+            // Combined validation shard (Consumer listed before Models): Models gets
+            // the 1 compile-error artifact and Consumer is dependency-blocked with 0.
+            let combinedValidateOptions = PipelineOptions{
+                SourceRoot: sourceDir,
+                OutputRoot: mirrorRoot,
+                ArtifactRoot: Path.Combine(corpusRoot, "validate-combined"),
+                GscPath: compiler,
+                Config: "Release",
+                CompileViaSdk: true
+            }
+            let combinedResult = await MigrationPipeline(
+                combinedValidateOptions,
+                []IMigrationStage{CompileStage(), IlVerifyStage()}
+            ).ValidateAsync(apps, []CorpusApp{consumerApp, modelsApp}, manifestRunDir)
+            Assert.False(combinedResult.Succeeded)
+            Assert.Equal(2, combinedResult.Apps.Count)
+            let modelsInCombined = combinedResult.Apps.Single((a AppResult) -> a.AppId == modelsApp.Id)
+            let consumerInCombined = combinedResult.Apps.Single((a AppResult) -> a.AppId == consumerApp.Id)
+            Assert.False(modelsInCombined.Succeeded)
+            Assert.Equal("compile-error", modelsInCombined.FailureCategory)
+            Assert.Single(modelsInCombined.Fingerprints)
+            Assert.False(consumerInCombined.Succeeded)
+            Assert.Equal("dependency-blocked", consumerInCombined.FailureCategory)
+            Assert.Empty(consumerInCombined.Fingerprints)
+        } finally {
+            Directory.Delete(corpusRoot, recursive: true)
+        }
+    }
+
+    /// Review finding (`PRRT_kwDOCzQNb86z0nXu`): configuration must be passed
+    /// unconditionally when loading projects and evaluating reference graphs so a
+    /// Release consumer is not blocked by (a) a Debug-only unsupported `<Compile>`
+    /// file in an unconditionally referenced producer, (b) a property-based
+    /// `$(TargetModels)` `ProjectReference` conditioned via `PropertyGroup`, or
+    /// (c) an `<Import>`ed `ProjectReference` conditioned on `Debug`.
+    @Fact
+    async func ReleaseConfig_DebugOnlyProducerCompileItem_PropertyReference_AndImportedReference_DoNotBlockReleaseConsumer() {
+        let compiler string? = FindCompiler()
+        if compiler == nil {
+            return
+        }
+        let corpusRoot = WriteTwoProjectFixture("release-config-unconditional", SupportedNonRefModelsSource)
+        try {
+            let modelsDir = Path.Combine(corpusRoot, "Models")
+            let modelsProject = Path.Combine(modelsDir, "Models.csproj")
+            let consumerDir = Path.Combine(corpusRoot, "Consumer")
+            let consumerProject = Path.Combine(consumerDir, "Consumer.csproj")
+            let badModelsDir = Path.Combine(corpusRoot, "BadModels")
+            Directory.CreateDirectory(badModelsDir)
+            let badModelsProject = Path.Combine(badModelsDir, "BadModels.csproj")
+            File.WriteAllText(
+                badModelsProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "</Project>\n"
+            )
+            File.WriteAllText(
+                Path.Combine(badModelsDir, "BadModels.cs"),
+                "namespace BadContracts;\npublic abstract class BadR { public abstract ref int Value { get; } }\n"
+            )
+
+            // Case 1: Models.csproj is referenced unconditionally by Consumer.csproj,
+            // and Models.csproj includes DebugBad.cs only when Configuration == Debug.
+            File.WriteAllText(
+                Path.Combine(modelsDir, "DebugBad.cs"),
+                "namespace Contracts;\npublic abstract class DebugOnlyBad { public abstract ref int Bad { get; } }\n"
+            )
+            File.WriteAllText(
+                modelsProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <ItemGroup Condition=\"'$$(Configuration)' != 'Debug'\">\n" +
+                    "    <Compile Remove=\"DebugBad.cs\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            Assert.Equal("Release", DeclaredProjectItems.WorkspaceConfiguration(consumerProject, "Release"))
+            let case1OutRoot = Path.Combine(corpusRoot, "runs-case1")
+            let case1Options = PipelineOptions{
+                GscPath: compiler,
+                Config: "Release",
+                OutputRoot: case1OutRoot,
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true,
+                ValidatedReferencedProjects: Dictionary[string, bool](StringComparer.OrdinalIgnoreCase)
+            }
+            let app = CorpusApp("corpus/Consumer", consumerProject, TargetKind.Library)
+            let case1Context = StageExecutionContext(
+                app,
+                case1Options,
+                GscInvoker(compiler),
+                case1OutRoot,
+                TriageBuilder("run_case1", "2026-10-05T00:00:00Z", "0.5.0", app.Id)
+            )
+            let case1Outcome = await TranslateStage().ExecuteAsync(case1Context)
+            Assert.Equal(StageStatus.Passed, case1Outcome.Status)
+
+            // Restore Models.csproj to clean supported contract for Cases 2 and 3.
+            File.Delete(Path.Combine(modelsDir, "DebugBad.cs"))
+            File.WriteAllText(
+                modelsProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "</Project>\n"
+            )
+
+            // Case 2: Property-based ProjectReference without a Condition on ProjectReference.
+            File.WriteAllText(
+                consumerProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <PropertyGroup Condition=\"'$$(Configuration)' == 'Debug'\">\n" +
+                    "    <TargetModels>../BadModels/BadModels.csproj</TargetModels>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <PropertyGroup Condition=\"'$$(Configuration)' != 'Debug'\">\n" +
+                    "    <TargetModels>../Models/Models.csproj</TargetModels>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <ItemGroup>\n" +
+                    "    <ProjectReference Include=\"$$(TargetModels)\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            let case2OutRoot = Path.Combine(corpusRoot, "runs-case2")
+            let case2Options = PipelineOptions{
+                GscPath: compiler,
+                Config: "Release",
+                OutputRoot: case2OutRoot,
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true
+            }
+            let case2Result = await MigrationPipeline(case2Options, []IMigrationStage{TranslateStage()}).RunAsync(
+                []CorpusApp{app}
+            )
+            Assert.True(case2Result.Succeeded)
+            Assert.Single(
+                case2Options.EvaluatedProjectReferences!![Path.GetFullPath(consumerProject)],
+                Path.GetFullPath(modelsProject)
+            )
+
+            // Case 3a: Imported ProjectReference conditioned on Debug without a
+            // Condition on the ProjectReference item itself (`PRRT_kwDOCzQNb86z0x4Z`).
+            let debugPropsPath = Path.Combine(consumerDir, "DebugRefs.props")
+            File.WriteAllText(
+                debugPropsPath,
+                "<Project>\n" +
+                    "  <ItemGroup>\n" +
+                    "    <ProjectReference Include=\"../BadModels/BadModels.csproj\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            File.WriteAllText(
+                consumerProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <Import Project=\"DebugRefs.props\" Condition=\"'$$(Configuration)' == 'Debug'\" />\n" +
+                    "  <ItemGroup>\n" +
+                    "    <ProjectReference Include=\"../Models/Models.csproj\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            let case3aOptions = PipelineOptions{
+                GscPath: compiler,
+                Config: "Release",
+                OutputRoot: Path.Combine(corpusRoot, "runs-case3a-release"),
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true
+            }
+            let case3aResult = await MigrationPipeline(case3aOptions, []IMigrationStage{TranslateStage()}).RunAsync(
+                []CorpusApp{app}
+            )
+            Assert.True(case3aResult.Succeeded)
+            Assert.Single(
+                case3aOptions.EvaluatedProjectReferences!![Path.GetFullPath(consumerProject)],
+                Path.GetFullPath(modelsProject)
+            )
+            let case3aDebugOptions = PipelineOptions{
+                GscPath: compiler,
+                Config: "Debug",
+                OutputRoot: Path.Combine(corpusRoot, "runs-case3a-debug"),
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true
+            }
+            let case3aDebugResult = await MigrationPipeline(
+                case3aDebugOptions,
+                []IMigrationStage{TranslateStage()}
+            ).RunAsync([]CorpusApp{app})
+            Assert.False(case3aDebugResult.Succeeded)
+            let case3aDebugApp = Assert.Single(case3aDebugResult.Apps)
+            Assert.Equal("dependency-blocked", case3aDebugApp.FailureCategory)
+            Assert.Empty(case3aDebugApp.Fingerprints)
+
+            // Case 3b: Item-expression @(DebugDependencies) ProjectReference
+            // conditioned via ItemGroup (`PRRT_kwDOCzQNb86z0x4Z`).
+            File.WriteAllText(
+                consumerProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <ItemGroup Condition=\"'$$(Configuration)' == 'Debug'\">\n" +
+                    "    <DebugDependencies Include=\"../BadModels/BadModels.csproj\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "  <ItemGroup>\n" +
+                    "    <ProjectReference Include=\"../Models/Models.csproj\" />\n" +
+                    "    <ProjectReference Include=\"@(DebugDependencies)\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            let case3bOptions = PipelineOptions{
+                GscPath: compiler,
+                Config: "Release",
+                OutputRoot: Path.Combine(corpusRoot, "runs-case3b-release"),
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true
+            }
+            let case3bResult = await MigrationPipeline(case3bOptions, []IMigrationStage{TranslateStage()}).RunAsync(
+                []CorpusApp{app}
+            )
+            Assert.True(case3bResult.Succeeded)
+            Assert.Single(
+                case3bOptions.EvaluatedProjectReferences!![Path.GetFullPath(consumerProject)],
+                Path.GetFullPath(modelsProject)
+            )
+            let case3bDebugOptions = PipelineOptions{
+                GscPath: compiler,
+                Config: "Debug",
+                OutputRoot: Path.Combine(corpusRoot, "runs-case3b-debug"),
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true
+            }
+            let case3bDebugResult = await MigrationPipeline(
+                case3bDebugOptions,
+                []IMigrationStage{TranslateStage()}
+            ).RunAsync([]CorpusApp{app})
+            Assert.False(case3bDebugResult.Succeeded)
+            let case3bDebugApp = Assert.Single(case3bDebugResult.Apps)
+            Assert.Equal("dependency-blocked", case3bDebugApp.FailureCategory)
+            Assert.Empty(case3bDebugApp.Fingerprints)
+
+            // Case 4 (`PRRT_kwDOCzQNb86z0x4E`): when a consumer references a
+            // producer project with malformed XML, MigrationPipeline.RunAsync must
+            // not abort with XmlException during reference discovery before
+            // recording dependency-blocked on the consumer.
+            File.WriteAllText(
+                badModelsProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>net10.0\n"
+            )
+            File.WriteAllText(
+                consumerProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <ItemGroup>\n" +
+                    "    <ProjectReference Include=\"../BadModels/BadModels.csproj\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            let case4Options = PipelineOptions{
+                GscPath: compiler,
+                Config: "Release",
+                OutputRoot: Path.Combine(corpusRoot, "runs-case4"),
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true
+            }
+            let case4Result = await MigrationPipeline(case4Options, []IMigrationStage{TranslateStage()}).RunAsync(
+                []CorpusApp{app}
+            )
+            Assert.False(case4Result.Succeeded)
+            let case4App = Assert.Single(case4Result.Apps)
+            Assert.Equal("dependency-blocked", case4App.FailureCategory)
+            Assert.Empty(case4App.Fingerprints)
+        } finally {
+            Directory.Delete(corpusRoot, recursive: true)
+        }
+    }
+
     private data class CliRunOutcome(ExitCode int32, RunDir string, Run RunResult, Summary ReportModel) : IEquatable[
         Issue4767ReferencedDependencyValidityTests.CliRunOutcome
     ] { }

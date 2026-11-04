@@ -252,9 +252,21 @@ shared class CSharpProjectLoader {
             if includedReferencedPaths.Contains(referencedPath) {
                 continue
             }
-            if !diagnosticsByProject.TryGetValue(referencedPath, out var unreachedDiagnostics) ||
+            var unreachedDiagnostics List[Diagnostic]? = nil
+            if !diagnosticsByProject.TryGetValue(referencedPath, out unreachedDiagnostics) ||
+                unreachedDiagnostics == nil ||
                 unreachedDiagnostics.Count == 0 {
-                continue
+                if !IsWellFormedProjectXml(referencedPath, out var xmlError) {
+                    unreachedDiagnostics = List[Diagnostic]{
+                        Diagnostic.Create(
+                            MSBuildWorkspaceLoadFailureDescriptor,
+                            Location.None,
+                            "Referenced project '$referencedPath' failed to load: $xmlError"
+                        )
+                    }
+                } else {
+                    continue
+                }
             }
             let assemblyName = Path.GetFileNameWithoutExtension(referencedPath)
             let emptyCompilation = CSharpCompilation.Create(
@@ -351,7 +363,11 @@ shared class CSharpProjectLoader {
                 )
             )
             if existing == nil {
-                await workspace.OpenProjectAsync(fullPath, cancellationToken: cancellationToken).ConfigureAwait(false)
+                try {
+                    await workspace.OpenProjectAsync(fullPath, cancellationToken: cancellationToken).ConfigureAwait(
+                        false
+                    )
+                } catch (ex Exception) when ex is not OperationCanceledException { }
             }
         }
         for fullPath in normalizedPaths {
@@ -523,7 +539,14 @@ shared class CSharpProjectLoader {
         if diagnostic is ProjectDiagnostic projectDiagnostic {
             let ownerFilePath = workspace.CurrentSolution.GetProject(projectDiagnostic.ProjectId)?.FilePath
             if !string.IsNullOrEmpty(ownerFilePath) {
-                return Path.GetFullPath(ownerFilePath)
+                let fullOwnerPath = Path.GetFullPath(ownerFilePath)
+                if !string.Equals(
+                    fullOwnerPath,
+                    Path.GetFullPath(rootProjectPath),
+                    StringComparison.OrdinalIgnoreCase
+                ) {
+                    return fullOwnerPath
+                }
             }
         }
         let message = diagnostic.Message ?? string.Empty
@@ -531,9 +554,6 @@ shared class CSharpProjectLoader {
             if MessageMentionsPath(message, referencedPath) {
                 return referencedPath
             }
-        }
-        if MessageMentionsPath(message, rootProjectPath) {
-            return rootProjectPath
         }
         let rootDeclaredTargets = ReadDeclaredTargetPaths(rootProjectPath)
         for referencedPath in referencedPaths {
@@ -543,7 +563,29 @@ shared class CSharpProjectLoader {
                 }
             }
         }
+        if IsWellFormedProjectXml(rootProjectPath, out _) {
+            for referencedPath in referencedPaths {
+                if !IsWellFormedProjectXml(referencedPath, out _) {
+                    return referencedPath
+                }
+            }
+        }
         return rootProjectPath
+    }
+
+    private func IsWellFormedProjectXml(projectPath string, out errorMessage string?) bool {
+        errorMessage = nil
+        if string.IsNullOrEmpty(projectPath) || !File.Exists(projectPath) {
+            errorMessage = "Project file not found."
+            return false
+        }
+        try {
+            XDocument.Load(projectPath)
+            return true
+        } catch (ex Exception) when ex is XmlException || ex is IOException || ex is UnauthorizedAccessException {
+            errorMessage = ex.Message
+            return false
+        }
     }
 
     private func MessageMentionsPath(message string, candidatePath string) bool {
@@ -553,11 +595,26 @@ shared class CSharpProjectLoader {
         let full = Path.GetFullPath(candidatePath)
         let slash = full.Replace('\\', '/')
         let backslash = full.Replace('/', '\\')
-        return message.Contains(full, StringComparison.OrdinalIgnoreCase) || message.Contains(
+        if message.Contains(full, StringComparison.OrdinalIgnoreCase) || message.Contains(
             slash,
             StringComparison.OrdinalIgnoreCase
         ) ||
-            message.Contains(backslash, StringComparison.OrdinalIgnoreCase)
+            message.Contains(backslash, StringComparison.OrdinalIgnoreCase) {
+            return true
+        }
+        let fileName = Path.GetFileName(full)
+        let parentDir = Path.GetFileName(Path.GetDirectoryName(full))
+        if !string.IsNullOrEmpty(parentDir) && !string.IsNullOrEmpty(fileName) {
+            let shortSlash = parentDir + "/" + fileName
+            let shortBackslash = parentDir + "\\" + fileName
+            if message.Contains(shortSlash, StringComparison.OrdinalIgnoreCase) || message.Contains(
+                shortBackslash,
+                StringComparison.OrdinalIgnoreCase
+            ) {
+                return true
+            }
+        }
+        return false
     }
 
     private func CollectExistingReferencedProjectPaths(

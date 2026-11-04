@@ -10,6 +10,7 @@ import System.IO
 import System.Linq
 import System.Threading
 import System.Threading.Tasks
+import System.Xml
 import System.Xml.Linq
 import Cs2Gs.Translator.Loading
 
@@ -55,7 +56,12 @@ internal shared class DeclaredProjectItems {
         if string.IsNullOrEmpty(projectPath) || !File.Exists(projectPath) {
             return Array.Empty[DeclaredProjectItem]()
         }
-        let document = XDocument.Load(projectPath, LoadOptions.PreserveWhitespace)
+        var document XDocument
+        try {
+            document = XDocument.Load(projectPath, LoadOptions.PreserveWhitespace)
+        } catch (ex Exception) when ex is XmlException || ex is IOException || ex is UnauthorizedAccessException {
+            return Array.Empty[DeclaredProjectItem]()
+        }
         let projectDirectory = Path.GetDirectoryName(Path.GetFullPath(projectPath))
         let items = List[DeclaredProjectItem]()
         for itemGroup in document.Descendants().Where(
@@ -111,37 +117,11 @@ internal shared class DeclaredProjectItems {
     )
 
     internal func WorkspaceConfiguration(projectPath string?, config string?) string? {
-        return if !string.IsNullOrEmpty(projectPath) && HasConditionedProjectReference(projectPath) {
+        return if !string.IsNullOrEmpty(projectPath) && !string.IsNullOrWhiteSpace(config) {
             config
         } else {
             default(string?)
         }
-    }
-
-    internal func HasConditionedProjectReference(projectPath string?) bool {
-        if string.IsNullOrEmpty(projectPath) {
-            return false
-        }
-        let visited = HashSet[string](StringComparer.OrdinalIgnoreCase)
-        let queue = Queue[string]()
-        queue.Enqueue(Path.GetFullPath(projectPath))
-        while queue.Count > 0 {
-            let current = queue.Dequeue()
-            if !visited.Add(current) || !File.Exists(current) {
-                continue
-            }
-            for item in Read(current, "ProjectReference") {
-                if !string.IsNullOrWhiteSpace(item.ItemGroupCondition) || !string.IsNullOrWhiteSpace(
-                    item.Element.Attribute(XName?("Condition")!!)?.Value
-                ) {
-                    return true
-                }
-                if !string.IsNullOrEmpty(item.SourceInclude) {
-                    queue.Enqueue(Path.GetFullPath(item.SourceInclude))
-                }
-            }
-        }
-        return false
     }
 
     /// Collects the absolute project paths that any of the given projects

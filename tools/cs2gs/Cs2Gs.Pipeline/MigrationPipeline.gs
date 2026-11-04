@@ -493,7 +493,7 @@ class MigrationPipeline {
         this.ResolveValidationSdkPin(migratedRoot)
         let evaluatedProjectReferences = await this.LoadEvaluatedProjectReferencesAsync(
             allApps,
-            includeBuildOrdering: false,
+            includeBuildOrdering: true,
             cancellationToken
         )
             .ConfigureAwait(false)
@@ -543,7 +543,9 @@ class MigrationPipeline {
             GscPath: gscPath,
             Succeeded: true
         }
-        for app in selectedApps {
+        let appResults = Dictionary[string, AppResult](StringComparer.OrdinalIgnoreCase)
+        let orderedApps = this.OrderForSdkBuild(selectedApps, evaluatedProjectReferences)
+        for app in orderedApps {
             cancellationToken.ThrowIfCancellationRequested()
             let context = this.CreateAppContext(app, gsc, gscVersion, runId, timestamp, runDir, out var artifactDir)
             let manifest ValidationManifest? = ValidationManifest.Read(
@@ -578,7 +580,7 @@ class MigrationPipeline {
                 cancellationToken
             )
                 .ConfigureAwait(false)
-            runResult.Apps.Add(appResult)
+            appResults[app.Id] = appResult
             if !appResult.Succeeded {
                 runResult.Succeeded = false
                 if appResult.Stages.Any(
@@ -587,6 +589,11 @@ class MigrationPipeline {
                 ) {
                     this.options.InvalidCompiledProjectPaths!!.Add(Path.GetFullPath(app.ProjectPath))
                 }
+            }
+        }
+        for app in selectedApps {
+            if appResults.TryGetValue(app.Id, out var appResult) {
+                runResult.Apps.Add(appResult)
             }
         }
         if runResult.Succeeded && runResult.Apps.Any((a AppResult) -> a.Unverified) {
@@ -713,39 +720,19 @@ class MigrationPipeline {
         includeBuildOrdering bool,
         cancellationToken CancellationToken
     ) IReadOnlyDictionary[string, IReadOnlyList[string]] {
-        let loadAllForBuildOrdering = includeBuildOrdering &&
-            (
-            (this.options.CompileViaSdk && apps.Count > 1) ||
-                this
-                .options
-                .OutputLayout == MigrationOutputLayout.Repository
-        )
-        let pathsToEvaluate = List[string]()
-        var anyConditionedReference = false
+        let pathsToEvaluate = List[string](apps.Count)
         for app in apps {
             let path = Path.GetFullPath(app.ProjectPath)
             let declaredReferences = DeclaredProjectItems.Read(path, "ProjectReference")
-            let hasCondition = DeclaredProjectItems.HasConditionedProjectReference(path)
-            if hasCondition {
-                anyConditionedReference = true
-            }
-            let needsEvaluation = hasCondition || declaredReferences.Any(
-                DeclaredProjectItems.HasMsbuildExpressionInclude
-            )
-            if !loadAllForBuildOrdering && !needsEvaluation {
+            if !includeBuildOrdering && declaredReferences.Count == 0 {
                 continue
             }
             pathsToEvaluate.Add(path)
         }
-        let evaluationConfig string? = if anyConditionedReference {
-            this.options.Config
-        } else {
-            default(string?)
-        }
         return await CSharpProjectLoader.EvaluateCompileProjectReferencePathsAsync(
             pathsToEvaluate,
             cancellationToken,
-            evaluationConfig
+            this.options.Config
         )
             .ConfigureAwait(false)
     }

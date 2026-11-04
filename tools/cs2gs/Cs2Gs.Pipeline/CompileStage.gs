@@ -347,7 +347,9 @@ class CompileStage : IMigrationStage {
                     diagnostic.File,
                     context.ProjectOutputDir
                 )
-                if exactFile != nil && !exactFile.IsFromReferencedProject {
+                if exactFile != nil &&
+                    !exactFile.IsFromReferencedProject &&
+                    !IsDiagnosticFromReferencedProjectSuffix(context, diagnostic) {
                     artifacts.Add(context.Triage.CompileError(diagnostic, exactFile))
                     continue
                 }
@@ -461,11 +463,18 @@ class CompileStage : IMigrationStage {
             if !Path.GetExtension(diagnostic.File).Equals(".gs", StringComparison.OrdinalIgnoreCase) {
                 return false
             }
+            if IsDiagnosticFromReferencedProjectSuffix(context, diagnostic) {
+                return true
+            }
+            if IsDiagnosticFromOwnProjectSuffix(context, diagnostic) {
+                return false
+            }
             let exactFile = MatchExactEmittedFile(context.EmittedFiles, diagnostic.File, context.ProjectOutputDir)
             if exactFile != nil {
                 return exactFile.IsFromReferencedProject
             }
-            let diagnosticPath = if Path.IsPathRooted(diagnostic.File) {
+            let isRelativeDiagnostic = !Path.IsPathRooted(diagnostic.File)
+            let diagnosticPath = if !isRelativeDiagnostic {
                 Path.GetFullPath(diagnostic.File)
             } else {
                 Path.GetFullPath(Path.Combine(context.ProjectOutputDir, diagnostic.File))
@@ -486,17 +495,120 @@ class CompileStage : IMigrationStage {
                     return true
                 }
                 let referencedSourceDir string? = Path.GetDirectoryName(fullReferencedPath)
+                if isRelativeDiagnostic && !string.IsNullOrEmpty(referencedSourceDir) {
+                    let candidateInSourceDir = Path.GetFullPath(Path.Combine(referencedSourceDir, diagnostic.File))
+                    if IsOwnedByReferencedCompileInputs(
+                        context,
+                        candidateInSourceDir,
+                        fullReferencedPath,
+                        generatedProjectPath
+                    ) {
+                        return true
+                    }
+                }
                 if IsOwnedByReferencedDirectory(diagnosticPath, referencedSourceDir, ownOutputDir, ownSourceDir) {
                     return true
                 }
                 if !string.IsNullOrEmpty(generatedProjectPath) {
                     let generatedDir string? = Path.GetDirectoryName(Path.GetFullPath(generatedProjectPath))
+                    if isRelativeDiagnostic && !string.IsNullOrEmpty(generatedDir) {
+                        let candidateInGeneratedDir = Path.GetFullPath(Path.Combine(generatedDir, diagnostic.File))
+                        if IsOwnedByReferencedCompileInputs(
+                            context,
+                            candidateInGeneratedDir,
+                            fullReferencedPath,
+                            generatedProjectPath
+                        ) {
+                            return true
+                        }
+                    }
                     if IsOwnedByReferencedDirectory(diagnosticPath, generatedDir, ownOutputDir, ownSourceDir) {
                         return true
                     }
                 }
             }
             return false
+        }
+
+        private func IsDiagnosticFromReferencedProjectSuffix(
+            context StageExecutionContext,
+            diagnostic GscDiagnostic
+        ) bool {
+            let suffixProjectPath string? = TryExtractDiagnosticProjectPath(diagnostic.Message)
+            if string.IsNullOrEmpty(suffixProjectPath) {
+                return false
+            }
+            for referencedProjectPath in ActiveCompileReferencePaths(context) {
+                let fullReferencedPath = Path.GetFullPath(referencedProjectPath)
+                if string.Equals(suffixProjectPath, fullReferencedPath, StringComparison.OrdinalIgnoreCase) {
+                    return true
+                }
+                if context.Options.GeneratedProjectPaths != nil && context.Options.GeneratedProjectPaths!!.TryGetValue(
+                    fullReferencedPath,
+                    out var generatedProjectPath
+                ) &&
+                    !string.IsNullOrEmpty(generatedProjectPath) && string.Equals(
+                    suffixProjectPath,
+                    Path.GetFullPath(generatedProjectPath),
+                    StringComparison.OrdinalIgnoreCase
+                ) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func IsDiagnosticFromOwnProjectSuffix(context StageExecutionContext, diagnostic GscDiagnostic) bool {
+            let suffixProjectPath string? = TryExtractDiagnosticProjectPath(diagnostic.Message)
+            if string.IsNullOrEmpty(suffixProjectPath) || string.IsNullOrEmpty(context.App.ProjectPath) {
+                return false
+            }
+            let fullOwnPath = Path.GetFullPath(context.App.ProjectPath)
+            if string.Equals(suffixProjectPath, fullOwnPath, StringComparison.OrdinalIgnoreCase) {
+                return true
+            }
+            if context.Options.GeneratedProjectPaths != nil && context.Options.GeneratedProjectPaths!!.TryGetValue(
+                fullOwnPath,
+                out var generatedOwnPath
+            ) &&
+                !string.IsNullOrEmpty(generatedOwnPath) && string.Equals(
+                suffixProjectPath,
+                Path.GetFullPath(generatedOwnPath),
+                StringComparison.OrdinalIgnoreCase
+            ) {
+                return true
+            }
+            return false
+        }
+
+        private func TryExtractDiagnosticProjectPath(message string?) string? {
+            if string.IsNullOrWhiteSpace(message) {
+                return nil
+            }
+            let trimmed = message.TrimEnd()
+            if !trimmed.EndsWith("]", StringComparison.Ordinal) {
+                return nil
+            }
+            let openIndex = trimmed.LastIndexOf('[')
+            if openIndex < 0 {
+                return nil
+            }
+            let candidate = trimmed.Substring(openIndex + 1, trimmed.Length - openIndex - 2).Trim()
+            if string.IsNullOrEmpty(candidate) || !Path.IsPathRooted(candidate) {
+                return nil
+            }
+            let ext = Path.GetExtension(candidate)
+            if !ext.Equals(".gsproj", StringComparison.OrdinalIgnoreCase) && !ext.Equals(
+                ".csproj",
+                StringComparison.OrdinalIgnoreCase
+            ) {
+                return nil
+            }
+            try {
+                return Path.GetFullPath(candidate)
+            } catch (Exception) {
+                return nil
+            }
         }
 
         private func IsOwnedByReferencedCompileInputs(
