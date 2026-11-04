@@ -194,23 +194,28 @@ partial class SemanticModel {
         return candidates
     }
 
-    /// Collects the local functions in scope at [`position`](paramref), including all overloads in the
-    /// current and enclosing blocks that are not shadowed by a nearer variable or parameter.
-    private func ScopedLocalFunctions(position int32) List[FunctionSymbol] {
-        let functions = List[FunctionSymbol]()
+    /// Collects the local functions in scope at [`position`](paramref), grouped by lexical scope depth from
+    /// outermost to innermost and ordered by declaration position within each scope, excluding any function
+    /// shadowed by a nearer variable or parameter.
+    private func ScopedLocalFunctionScopes(position int32) List[ImmutableArray[FunctionSymbol]] {
+        let visible = List[ScopedLocal]()
         let shadowedByVariable = HashSet[string](StringComparer.Ordinal)
-        for candidate in ScopedLocalCandidates(position, nil).OrderByDescending((c ScopedLocal) -> c.Depth).ThenBy(
-            (c ScopedLocal) -> c.Start
-        ) {
+        for candidate in ScopedLocalCandidates(position, nil).OrderByDescending((c ScopedLocal) -> c.Depth)
+            .ThenByDescending((c ScopedLocal) -> c.Start) {
             if candidate.Local is VariableSymbol {
                 shadowedByVariable.Add(candidate.Local.Name)
-            } else if candidate.Local is FunctionSymbol localFunction && !shadowedByVariable.Contains(
-                localFunction.Name
-            ) {
-                functions.Add(localFunction)
+            } else if candidate.Local is FunctionSymbol && !shadowedByVariable.Contains(candidate.Local.Name) {
+                visible.Add(candidate)
             }
         }
-        return functions
+        let scopes = List[ImmutableArray[FunctionSymbol]]()
+        for group in visible
+            .OrderBy((c ScopedLocal) -> c.Depth)
+            .ThenBy((c ScopedLocal) -> c.Start)
+            .GroupBy((c ScopedLocal) -> c.Depth) {
+            scopes.Add(group.Select((c ScopedLocal) -> cast[FunctionSymbol](c.Local)).ToImmutableArray())
+        }
+        return scopes
     }
 
     /// Gets the start of the consecutive local-function group that contains [`anchor`](paramref),

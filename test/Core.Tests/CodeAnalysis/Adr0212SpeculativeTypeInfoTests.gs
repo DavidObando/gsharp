@@ -107,10 +107,20 @@ open class Adr0212SpeculativeTypeInfoTests {
         let (model, tree) = Create(Program)
         let innerCall = Expression(tree, "Scoped(3)", "InInnerBlock")
         let innerTwoArgCall = Expression(tree, "Scoped(3, 1)", "InInnerBlock")
+        let innerDefaultedOuterCall = Expression(tree, "DefaultedOuter(3)", "InInnerBlock")
+        let innerConstrainedOuterCall = Expression(tree, "ConstrainedOuter(3)", "InInnerBlock")
         let siblingCall = Expression(tree, "SiblingOnly(3)", "InSiblingBlock")
         let outerCall = Expression(tree, "Scoped(3)", "AfterBlocks")
         Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(innerCall.Span.Start, innerCall).Type)
         Assert.Same(TypeSymbol.String, model.GetSpeculativeTypeInfo(innerTwoArgCall.Span.Start, innerTwoArgCall).Type)
+        Assert.Same(
+            TypeSymbol.String,
+            model.GetSpeculativeTypeInfo(innerDefaultedOuterCall.Span.Start, innerDefaultedOuterCall).Type
+        )
+        Assert.Same(
+            TypeSymbol.String,
+            model.GetSpeculativeTypeInfo(innerConstrainedOuterCall.Span.Start, innerConstrainedOuterCall).Type
+        )
         Assert.Same(TypeSymbol.Int32, model.GetSpeculativeTypeInfo(siblingCall.Span.Start, siblingCall).Type)
         Assert.Same(TypeSymbol.String, model.GetSpeculativeTypeInfo(outerCall.Span.Start, outerCall).Type)
         Assert.Null(model.GetSpeculativeTypeInfo(outerCall.Span.Start, siblingCall).Type)
@@ -341,11 +351,17 @@ func Probe(p Point?, n int32) {
     ForwardFirst(3)
     ShadowedGlobal(3)
     let Scoped[T] = func(x T, extra int32 = 0) string { return "outer" }
+    let DefaultedOuter[T] = func(x T, extra int32 = 0) string { return "outer-default" }
+    let ConstrainedOuter[T] = func(x T) string { return "outer-unconstrained" }
     if true {
         let Scoped[T] = func(x T) T { return x }
+        let DefaultedOuter[U] = func(x U, extra int32) int32 { return extra }
+        let ConstrainedOuter[U IDisposable] = func(x U) int32 { return 1 }
         // InInnerBlock
         Scoped(3)
         Scoped(3, 1)
+        DefaultedOuter(3)
+        ConstrainedOuter(3)
     }
     if true {
         let SiblingOnly[T] = func(x T) T { return x }

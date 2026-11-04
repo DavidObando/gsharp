@@ -42,7 +42,7 @@ partial class SemanticModel {
         var function FunctionSymbol? = nil
         var inConstructorInitializer = false
         let locals = List[VariableSymbol](LookupSymbols(position, nil, cancellationToken).OfType[VariableSymbol]())
-        let localFunctions = ScopedLocalFunctions(position)
+        let localFunctionScopes = ScopedLocalFunctionScopes(position)
         if GetEnclosingSymbol(position, cancellationToken) is FunctionSymbol enclosing {
             function = enclosing
             // The scope query leaves `this` out where the receiver does not exist yet, as in the
@@ -56,7 +56,7 @@ partial class SemanticModel {
             compilation.References ?? ReferenceResolver.Default(),
             function,
             locals,
-            localFunctions,
+            localFunctionScopes,
             expression,
             syntaxTree,
             inConstructorInitializer
