@@ -159,6 +159,12 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
         }
         return (nil, 2)
     }
+    let nullableTupleRet = (aFlag bool, bFlag bool) -> {
+        if aFlag {
+            return bFlag ? (nil, "x") : (nil, nil)
+        }
+        return nil
+    }
     return if standalone.Item1 == nil &&
         da == nil &&
         (db != nil || !d) &&
@@ -177,7 +183,9 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
         multiN == 0 &&
         swExpr == 1 &&
         swStmt == 1 &&
-        multiRet(false).Item1 == nil {
+        multiRet(false).Item1 == nil &&
+        nullableTupleRet(false, true) == nil &&
+        nullableTupleRet(true, true) != nil {
         (a.Item2, b.Item2)
     } else {
         ("bad", "bad")

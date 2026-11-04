@@ -1932,7 +1932,7 @@ internal partial class StatementBinder {
                 return nil
             }
             case clrConv is BoundClrConversionCallExpression {
-                return FindMultiAssignmentSourceConversionType(clrConv.Operand, source)
+                return FindMultiAssignmentSourceConversionType(clrConv.Source, source)
             }
             default {
                 return nil

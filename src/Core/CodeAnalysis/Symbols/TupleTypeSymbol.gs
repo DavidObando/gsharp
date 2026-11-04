@@ -219,6 +219,14 @@ class TupleTypeSymbol : TypeSymbol {
                     cast[TypeSymbol](NullableTypeSymbol.Get(TypeSymbol.Object))
                 }
             }
+            if type is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol innerTuple} && innerTuple.HasNilElement {
+                let innerTarget = if targetType is NullableTypeSymbol targetNullable {
+                    targetNullable.UnderlyingType
+                } else {
+                    targetType
+                }
+                return NullableTypeSymbol.Get(ResolveNilElements(innerTuple, innerTarget))
+            }
             if type is not TupleTypeSymbol tuple || !tuple.HasNilElement {
                 return type
             }

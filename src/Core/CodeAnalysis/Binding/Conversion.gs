@@ -1055,6 +1055,12 @@ class Conversion {
                 ).IsIdentity {
                     return Conversion.Implicit
                 }
+                if from is TupleTypeSymbol{HasNilElement: true} fromNilTuple &&
+                    toNullable.UnderlyingType is TupleTypeSymbol toUnderlyingTuple &&
+                    fromNilTuple.Arity == toUnderlyingTuple.Arity &&
+                    ClassifyNonStructural(fromNilTuple, toUnderlyingTuple).IsImplicit {
+                    return Conversion.Implicit
+                }
                 // Issue #1121: a non-nullable T is implicitly convertible to U?
                 // whenever T is implicitly convertible to its underlying U. This
                 // combines a reference upcast (to a base class or an implemented
