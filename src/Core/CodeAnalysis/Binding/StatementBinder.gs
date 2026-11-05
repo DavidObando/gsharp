@@ -761,7 +761,11 @@ internal partial class StatementBinder {
                 // narrowing from the current frame so subsequent reads in this
                 // block see the variable at its declared (nullable) type again.
                 InvalidateNarrowingsForAssignedVariables(statementSyntax, statement)
-                RestoreEarlyExitLiftsWrittenOnlyByCondition(statement, memberNotNullFrame)
+                RestoreEarlyExitLiftsWrittenOnlyByCondition(
+                    statement,
+                    memberNotNullFrame,
+                    externalCallableAliasesAtEntry
+                )
                 // Issue #1123: assignment-based smart cast. After invalidation
                 // (which clears any stale narrowing on the assigned variable),
                 // re-narrow a nullable `var` local that was just assigned a

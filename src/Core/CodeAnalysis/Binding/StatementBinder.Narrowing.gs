@@ -201,9 +201,11 @@ internal partial class StatementBinder {
     // writable reference and that no branch or plain assignment touches.
     private func RestoreEarlyExitLiftsWrittenOnlyByCondition(
         statement BoundStatement?,
-        persistentFrame NarrowingFrame
+        persistentFrame NarrowingFrame,
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol]? = nil
     ) {
         var statement = statement
+        var aliasesAtEntry = aliasesAtEntry
         if lastEarlyExitLifts.Count == 0 {
             return
         }
@@ -214,11 +216,13 @@ internal partial class StatementBinder {
             .Length == 2 &&
             labeledBlock.Statements[0] is BoundLabelStatement {
             statement = labeledBlock.Statements[1]
+            aliasesAtEntry = Array.Empty[VariableSymbol]()
         }
         if statement is not BoundIfStatement ifStatement {
             return
         }
-        let condition = NewCollector(nil, externalCallableAliases)
+        let initialAliases = aliasesAtEntry ?? externalCallableAliases
+        let condition = NewCollector(nil, initialAliases)
         condition.VisitExpression(ifStatement.Condition)
         if condition
             .WritableReferenceRoots
@@ -227,83 +231,36 @@ internal partial class StatementBinder {
             condition.MayMutateWritableReferenceRoots {
             return
         }
-        let branches = NewCollector(nil, externalCallableAliases)
+        let branches = NewCollector(nil, initialAliases)
         branches.VisitStatement(ifStatement.ThenStatement)
         if ifStatement.ElseStatement != nil {
             branches.VisitStatement(ifStatement.ElseStatement)
         }
         let plainTargets = PlainAssignmentTargetCollector()
         plainTargets.VisitExpression(ifStatement.Condition)
+        var inOrderElse Dictionary[AccessPath, TypeSymbol]? = nil
+        var computedInOrderElse = false
         for (path, narrowedType) in lastEarlyExitLifts {
-            // ADR-0208 R15: a condition that runs source code after the test of a closure-assigned root can run a
-            // closure that clears it, so the lift stays removed.
-            if condition.MayRunEscapedClosure &&
-                MayBeMutatedByEscapedClosure(path.Root) &&
-                RunsEscapedClosureAfterTest(ifStatement.Condition, path.Root) {
+            if path.HasMembers || !condition.WritableReferenceRoots.Contains(path.Root) ||
+                plainTargets
+                .Targets
+                .Contains(path.Root) || branches.AssignsRoot(path.Root) {
                 continue
             }
-            if !path.HasMembers && condition.WritableReferenceRoots.Contains(path.Root) &&
-                !plainTargets
-                .Targets
-                .Contains(path.Root) && !branches.AssignsRoot(path.Root) {
-                SetPersistentNarrowing(persistentFrame, path, narrowedType)
+            // ADR-0208 R15 (#5498): a condition that runs source code or writes the root after the test can clear
+            // it, so the lift is restored only when the evaluation-order else state still holds the fact.
+            if !computedInOrderElse {
+                inOrderElse = ComputeConditionNarrowingInOrder(
+                    ifStatement.Condition,
+                    HashSet[VariableSymbol](initialAliases),
+                    conditionRemovedFacts
+                ).Else
+                computedInOrderElse = true
             }
-        }
-    }
-
-    // ADR-0208 R15: whether an operand of the `||` chain [`condition`](paramref) that follows the last test of
-    // [`root`](paramref) runs source code. A fact that the chain establishes holds only until that code runs.
-    private func RunsEscapedClosureAfterTest(condition BoundExpression, root VariableSymbol) bool {
-        let operands = List[BoundExpression]()
-        FlattenLogicalOr(condition, operands)
-        let runsCode = List[bool]()
-        var lastTest = -1
-        for var i = 0; i < operands.Count; i++ {
-            let collector = NewCollector(nil, externalCallableAliases)
-            collector.VisitExpression(operands[i])
-            runsCode.Add(collector.MayRunEscapedClosure)
-            let walker = RootMentionWalker(root)
-            walker.VisitExpression(operands[i])
-            // An operand is a test of the root when it only reads it, or when its code is the call that writes
-            // the root through `out`/`ref`. An operand that runs other code after reading the root is not.
-            if walker.Found && (!collector.MayRunEscapedClosure || collector.WritableReferenceRoots.Contains(root)) {
-                lastTest = i
+            if inOrderElse == nil || !inOrderElse.ContainsKey(path) {
+                continue
             }
-        }
-        for var i = lastTest + 1; i < operands.Count; i++ {
-            if runsCode[i] {
-                return true
-            }
-        }
-        return false
-    }
-
-    private func FlattenLogicalOr(expression BoundExpression, operands List[BoundExpression]) {
-        if expression is BoundBinaryExpression binary && binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
-            FlattenLogicalOr(binary.Left, operands)
-            FlattenLogicalOr(binary.Right, operands)
-        } else {
-            operands.Add(expression)
-        }
-    }
-
-    private class RootMentionWalker : BoundTreeWalker {
-        private let root VariableSymbol
-
-        init(root VariableSymbol) {
-            this.root = root
-        }
-
-        prop Found bool {
-            get;
-            private set;
-        }
-
-        open override func VisitExpression(node BoundExpression?) {
-            if node is BoundVariableExpression variable && object.ReferenceEquals(variable.Variable, root) {
-                Found = true
-            }
-            base.VisitExpression(node)
+            SetPersistentNarrowing(persistentFrame, path, narrowedType)
         }
     }
 
@@ -651,13 +608,11 @@ internal partial class StatementBinder {
             aliases.UnionWith(collector.DefinitelyExternalFunctionValues)
         } else {
             RemoveAssignedAliases(aliases, collector)
-            if collector.MayMutateAnyRoot {
+            // ADR-0208 R15 (#5502): a call can run an escaped closure that replaces a callable alias which a closure
+            // assigns; the collector updates the alias state in evaluation order so a later assignment restores it.
+            if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
                 aliases.IntersectWith(collector.DefinitelyExternalFunctionValues)
             }
-        }
-        // ADR-0208 R15: a call can run an escaped closure that replaces a callable alias which a closure assigns.
-        if collector.MayRunEscapedClosure {
-            aliases.RemoveWhere(NamesClosureAssignedStorage)
         }
         if assignsExternalCallable {
             aliases.Add(
@@ -1686,7 +1641,11 @@ internal partial class StatementBinder {
         return (thenNarrow, elseNarrow)
     }
 
-    private func ComputeConditionNarrowingInOrder(condition BoundExpression, beforeAliases HashSet[VariableSymbol])(
+    private func ComputeConditionNarrowingInOrder(
+        condition BoundExpression,
+        beforeAliases HashSet[VariableSymbol],
+        removedFacts Dictionary[AccessPath, TypeSymbol]? = nil
+    )(
         Then Dictionary[AccessPath, TypeSymbol]?,
         Else Dictionary[AccessPath, TypeSymbol]?,
         WhenTrueAliases HashSet[VariableSymbol],
@@ -1699,14 +1658,16 @@ internal partial class StatementBinder {
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
                 let (inThen, inElse, trueAliases, falseAliases) = ComputeConditionNarrowingInOrder(
                     unary.Operand,
-                    beforeAliases
+                    beforeAliases,
+                    removedFacts
                 )
                 return (inElse, inThen, falseAliases, trueAliases)
             }
             case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
                 var (leftThen, _, leftTrueAliases, leftFalseAliases) = ComputeConditionNarrowingInOrder(
                     bin.Left,
-                    beforeAliases
+                    beforeAliases,
+                    removedFacts
                 )
                 if leftThen != nil && leftThen.Count > 0 {
                     leftThen = Dictionary[AccessPath, TypeSymbol](leftThen)
@@ -1717,7 +1678,8 @@ internal partial class StatementBinder {
                 }
                 let (rightThen, _, rightTrueAliases, rightFalseAliases) = ComputeConditionNarrowingInOrder(
                     bin.Right,
-                    leftTrueAliases
+                    leftTrueAliases,
+                    removedFacts
                 )
                 let combinedThen = MergeNarrowingFrames(leftThen, rightThen)
                 return (combinedThen, nil, rightTrueAliases, JoinAliases(leftFalseAliases, rightFalseAliases))
@@ -1725,7 +1687,8 @@ internal partial class StatementBinder {
             case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
                 var (leftThen, leftElse, leftTrueAliases, leftFalseAliases) = ComputeConditionNarrowingInOrder(
                     bin.Left,
-                    beforeAliases
+                    beforeAliases,
+                    removedFacts
                 )
                 if leftElse != nil && leftElse.Count > 0 {
                     leftElse = Dictionary[AccessPath, TypeSymbol](leftElse)
@@ -1736,7 +1699,8 @@ internal partial class StatementBinder {
                 }
                 let (rightThen, rightElse, rightTrueAliases, rightFalseAliases) = ComputeConditionNarrowingInOrder(
                     bin.Right,
-                    leftFalseAliases
+                    leftFalseAliases,
+                    removedFacts
                 )
                 let combinedThen = IntersectNarrowingFrames(leftThen, rightThen)
                 let combinedElse = MergeNarrowingFrames(leftElse, rightElse)
@@ -1746,12 +1710,57 @@ internal partial class StatementBinder {
         var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition)
         if thenNarrow == nil && elseNarrow == nil {
             thenNarrow, elseNarrow = TryClassifyBoolCallNarrowing(condition)
+            if thenNarrow != nil || elseNarrow != nil {
+                FilterBoolCallNarrowingAfterEffects(condition, beforeAliases, ref thenNarrow, ref elseNarrow)
+            }
         }
-        let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition, removedFacts: nil, beforeAliases)
+        let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition, removedFacts, beforeAliases)
         thenNarrow = MergeNarrowingFrames(thenNarrow, typeThen)
         elseNarrow = MergeNarrowingFrames(elseNarrow, typeElse)
         let afterAliases = AliasesAfter(condition, beforeAliases)
         return (thenNarrow, elseNarrow, afterAliases, afterAliases)
+    }
+
+    private func FilterBoolCallNarrowingAfterEffects(
+        condition BoundExpression,
+        beforeAliases HashSet[VariableSymbol],
+        ref thenNarrow Dictionary[AccessPath, TypeSymbol]?,
+        ref elseNarrow Dictionary[AccessPath, TypeSymbol]?
+    ) {
+        let collector = NewCollector(nil, beforeAliases)
+        collector.VisitExpression(condition)
+        if thenNarrow != nil {
+            for entry in thenNarrow.ToArray() {
+                if !collector.WritableReferenceRoots.Contains(entry.Key.Root) &&
+                    (
+                    MayBeMutatedByUnknownWrite(collector, entry.Key) || collector.MayMutateGlobalRoot(
+                        entry.Key.Root,
+                        entry.Value
+                    )
+                ) {
+                    thenNarrow.Remove(entry.Key)
+                }
+            }
+            if thenNarrow.Count == 0 {
+                thenNarrow = nil
+            }
+        }
+        if elseNarrow != nil {
+            for entry in elseNarrow.ToArray() {
+                if !collector.WritableReferenceRoots.Contains(entry.Key.Root) &&
+                    (
+                    MayBeMutatedByUnknownWrite(collector, entry.Key) || collector.MayMutateGlobalRoot(
+                        entry.Key.Root,
+                        entry.Value
+                    )
+                ) {
+                    elseNarrow.Remove(entry.Key)
+                }
+            }
+            if elseNarrow.Count == 0 {
+                elseNarrow = nil
+            }
+        }
     }
 
     // An unknown callable can reach a member path, a global or an implicit
@@ -1841,7 +1850,7 @@ internal partial class StatementBinder {
         }
         RemoveAssignedAliases(aliases, collector)
         if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
-            aliases.RemoveWhere(NamesClosureAssignedStorage)
+            aliases.IntersectWith(collector.DefinitelyExternalFunctionValues)
         }
     }
 
@@ -2432,10 +2441,12 @@ internal partial class StatementBinder {
             if sourcePropertyRunsUserCode && node is BoundPropertyAccessExpression {
                 MayMutateMemberPaths = true
             }
+            var runsEscapedClosureHere = false
             // ADR-0208 R16 and R17 (#5231, #5532): an imported accessor that is not on the stable list is a call,
             // like a source accessor.
             if StatementBinder.ClrAccessRunsUserCode(node) {
                 MarkMayMutateGlobalRoots()
+                runsEscapedClosureHere = true
             }
             let sourceConstructionRunsUserCode = (
                 node is BoundConstructorCallExpression construction &&
@@ -2460,6 +2471,9 @@ internal partial class StatementBinder {
                 sourceConstructionRunsUserCode ||
                 StatementBinder.StaticMemberAccessRunsUserCode(node) || node is BoundClrConversionCallExpression {
                 MarkMayMutateGlobalRoots()
+                if node is not BoundStructLiteralExpression {
+                    runsEscapedClosureHere = true
+                }
             }
             // ADR-0208 R15 (#5237): a call of any kind can run a closure that escaped, except a call through a
             // callable value, which keeps its own classification (AnalyzeCallableInvocation).
@@ -2472,6 +2486,7 @@ internal partial class StatementBinder {
                 BoundClrEventSubscriptionExpression or
                 BoundTypeParameterConstructionExpression {
                 MarkRunsEscapedClosure()
+                runsEscapedClosureHere = true
             }
             // A hole of a type other than a built-in value or a string calls its `ToString`.
             if node is BoundInterpolatedStringExpression interpolation {
@@ -2480,6 +2495,7 @@ internal partial class StatementBinder {
                         hole.Type
                     ) {
                         MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                        runsEscapedClosureHere = true
                         break
                     }
                 }
@@ -2492,6 +2508,7 @@ internal partial class StatementBinder {
             }
             if node is BoundCallOperationExpression && !IsCallableValueInvocation(node) {
                 MarkRunsEscapedClosure()
+                runsEscapedClosureHere = true
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function} {
                 // ADR-0208 R12 (#5292, #5663, #5665, amendment A3): a plain function call does not write by-reference storage.
@@ -2500,6 +2517,7 @@ internal partial class StatementBinder {
                     writesReferenceStorage: (function.MethodKind is MethodKind.PropertyGet or MethodKind.PropertySet) ||
                         StatementBinder.IsConversionOperator(function)
                 )
+                runsEscapedClosureHere = true
                 if function.HasCaptures {
                     MayMutateAnyRoot = true
                 }
@@ -2508,6 +2526,10 @@ internal partial class StatementBinder {
                 RecordCallSiteAliasing(call)
             }
             base.VisitExpression(node)
+            if runsEscapedClosureHere {
+                normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+            }
             if node is BoundCallOperationExpression{
                 CalledFunction: FunctionSymbol calledFunction,
                 Arguments: var arguments
@@ -2855,6 +2877,8 @@ internal partial class StatementBinder {
             VisitCallableArguments(node.Arguments)
             if node.Method is {} method {
                 InvalidateParameterRefArguments(node.Arguments, method.Parameters)
+                normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
             }
         }
 
@@ -2899,6 +2923,22 @@ internal partial class StatementBinder {
             let parameters = node.SelectedConstructor?.Parameters ?? node.StructType.PrimaryConstructorParameters
             if !parameters.IsDefaultOrEmpty {
                 InvalidateParameterRefArguments(node.Arguments, parameters)
+            }
+        }
+
+        protected open override func VisitStructLiteralExpression(node BoundStructLiteralExpression) {
+            if node.CopySource != nil {
+                VisitExpression(node.CopySource)
+            }
+            for initializer in node.Initializers {
+                VisitExpression(initializer.Value)
+                if initializer.Property is {} property && StatementBinder.SourcePropertyRunsUserCode(
+                    property,
+                    receiverType: nil
+                ) {
+                    normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                    allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                }
             }
         }
 
@@ -3524,6 +3564,8 @@ internal partial class StatementBinder {
 
         private func MarkRunsEscapedClosure() {
             MayRunEscapedClosure = true
+            normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+            allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
             if enclosingAssignments.Count == 0 {
                 if escapedClosureProtectedRoots == nil {
                     escapedClosureProtectedRoots = HashSet[VariableSymbol]()

@@ -1,0 +1,363 @@
+// <copyright file="Issue5498And5502NarrowingTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+package GSharp.Compiler.Tests.Emit
+
+import GSharp.Compiler
+import System
+import System.Collections.Generic
+import System.Diagnostics
+import System.IO
+import System.Linq
+import System.Text.RegularExpressions
+import Xunit
+
+/// Regression coverage for issues #5498 and #5502 (ADR-0208 R15):
+/// - #5498: `RestoreEarlyExitLiftsWrittenOnlyByCondition` evaluates compound condition operands in evaluation order,
+///   rejecting roots when a call can run an escaped closure after the non-null proof while preserving roots tested
+///   after the call.
+/// - #5502: cleanup blocks and bare blocks apply call and assignment effects in evaluation order, preserving facts and
+///   external callable aliases established after a call while removing those followed by a call.
+open class Issue5498And5502NarrowingTests {
+    @Theory
+    @MemberData("Rows")
+    func EveryProbe_MatchesExpectedResult(
+        name string,
+        source string,
+        expectedDiagnostics string,
+        kind string,
+        expectedOutput string
+    ) {
+        let tempDir = Path.Combine(AppContext.BaseDirectory, "issue5498-5502-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(tempDir)
+        try {
+            let srcPath = Path.Combine(tempDir, name + ".gs")
+            let outPath = Path.Combine(tempDir, name + ".dll")
+            File.WriteAllText(srcPath, source)
+            let args = List[string]{"/out:" + outPath, "/target:exe", "/targetframework:net10.0", "/nowarn:GS9100"}
+            for reference in TrustedPlatformAssemblies() {
+                args.Add("/reference:" + reference)
+            }
+            args.Add(srcPath)
+            using let compileOut = StringWriter()
+            using let compileErr = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(compileOut)
+            Console.SetError(compileErr)
+            try {
+                Program.Main(args.ToArray())
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            let log = compileOut.ToString() + compileErr.ToString()
+            let actualDiagnostics = string.Join(
+                " ",
+                Regex
+                    .Matches(log, `\((\d+),(\d+),\d+,\d+\): (?:error|warning) (GS\d+)`)
+                    .Select((m Match) -> m.Groups[3].Value + "@" + m.Groups[1].Value + ":" + m.Groups[2].Value)
+                    .Where((d string) -> !d.StartsWith("GS9100", StringComparison.Ordinal))
+            )
+            Assert.True(
+                expectedDiagnostics == actualDiagnostics,
+                "${name}: expected [${expectedDiagnostics}] but found [${actualDiagnostics}]. Log:\n${log}"
+            )
+            if kind == "reject" {
+                Assert.False(File.Exists(outPath), "${name} must not compile. Log:\n${log}")
+                return
+            }
+            Assert.True(File.Exists(outPath), "${name} must compile. Log:\n${log}")
+            IlVerifier.Verify(outPath)
+            let (exit, stdout, stderr) = RunDotnet(outPath)
+            Assert.True(exit == 0, "${name} must run to completion. Exit ${exit}:\n${stderr}")
+            let lines = stdout
+                .Split('\n')
+                .Select((line string) -> line.TrimEnd('\r'))
+                .Where((line string) -> line.Length > 0)
+                .ToArray()
+            Assert.NotEmpty(lines)
+            Assert.Equal(expectedOutput, string.Join("|", lines))
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
+    @Fact
+    func Rows_AreNonEmptyAndDistinct() {
+        let names = Rows().Select((row[]object) -> cast[string](row[0])).ToArray()
+        Assert.NotEmpty(names)
+        Assert.Equal(names.Length, names.Distinct(StringComparer.Ordinal).Count())
+    }
+
+    shared {
+        private const RunTimeout int32 = 30000
+
+        public func Rows() IEnumerable[[]object] {
+            yield[]object{"repro_5498_or_chain_trailing_and_operand_does_not_restore_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) bool {
+    h.Callback()
+    return false
+}
+func TryGet(out x C?) bool {
+    x = C{}
+    return true
+}
+func Run(stop bool) int32 {
+    var x C? = nil
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if !TryGet(out x) || x == nil || Wrapper(h) || (x == nil && stop) { return 0 }
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(false)) }`, "GS0158@22:14", "reject", ""}
+            yield[]object{"repro_5498_negated_and_chain_call_after_test_does_not_restore_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) bool {
+    h.Callback()
+    return false
+}
+func TryGet(out x C?) bool {
+    x = C{}
+    return true
+}
+func Run() int32 {
+    var x C? = nil
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if !(TryGet(out x) && x != nil && !Wrapper(h)) { return 0 }
+    return x.Value
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@22:14", "reject", ""}
+            yield[]object{"control_5498_or_chain_test_after_call_restores_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) bool {
+    h.Callback()
+    return false
+}
+func TryGet(out x C?) bool {
+    x = C{}
+    return true
+}
+func Run() int32 {
+    var x C? = nil
+    let h = Holder{}
+    h.Callback = func() { x = C{} }
+    if !TryGet(out x) || Wrapper(h) || x == nil { return 0 }
+    return x.Value
+}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "1"}
+            yield[]object{"control_5498_negated_and_chain_test_after_call_restores_fact", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) bool {
+    h.Callback()
+    return false
+}
+func TryGet(out x C?) bool {
+    x = C{}
+    return true
+}
+func Run() int32 {
+    var x C? = nil
+    let h = Holder{}
+    h.Callback = func() { x = C{} }
+    if !(TryGet(out x) && !Wrapper(h) && x != nil) { return 0 }
+    return x.Value
+}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "1"}
+            yield[]object{"repro_5502_cleanup_nested_block_assignment_after_call_restores_fact", `import System
+
+func Touch() { }
+func Run() int32 {
+    var x string? = nil
+    let clear = func() { x = nil }
+    try {
+    } finally {
+        {
+            Touch()
+            x = "abc"
+        }
+    }
+    return x.Length
+}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "3"}
+            yield[]object{"control_5502_cleanup_nested_block_call_after_assignment_removes_fact", `import System
+
+func Touch() { }
+func Run() int32 {
+    var x string? = nil
+    let clear = func() { x = nil }
+    try {
+    } finally {
+        {
+            x = "abc"
+            Touch()
+        }
+    }
+    return x.Length
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@14:14", "reject", ""}
+            yield[]object{"repro_5502_bare_block_assignment_after_call_restores_callable_alias", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    {
+        Wrapper(h)
+        action = callback
+    }
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "", "run", "1"}
+            yield[]object{"control_5502_bare_block_call_after_assignment_removes_callable_alias", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    {
+        action = callback
+        Wrapper(h)
+    }
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@23:14", "reject", ""}
+            yield[]object{"repro_5502_cleanup_goto_assignment_after_call_restores_callable_alias", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    try {
+        goto After
+    } finally {
+        Wrapper(h)
+        action = callback
+    }
+After:
+    let dummy = 0
+    if x == nil { return dummy }
+    action()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "", "run", "1"}
+            yield[]object{"control_5502_cleanup_goto_call_after_assignment_removes_callable_alias", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) {
+    h.Callback()
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    try {
+        goto After
+    } finally {
+        action = callback
+        Wrapper(h)
+    }
+After:
+    let dummy = 0
+    if x == nil { return dummy }
+    action()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@27:14", "reject", ""}
+        }
+
+        private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
+            let psi = ProcessStartInfo("dotnet", "\"$assemblyPath\""){
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                WorkingDirectory = Path.GetDirectoryName(assemblyPath) ?? "."
+            }
+            using let process = Process.Start(psi) ?? throw InvalidOperationException("could not start dotnet")
+            let stdout = process.StandardOutput.ReadToEndAsync()
+            let stderr = process.StandardError.ReadToEndAsync()
+            if !process.WaitForExit(RunTimeout) {
+                try {
+                    process.Kill(entireProcessTree: true)
+                } catch (InvalidOperationException) { }
+                return (-1, "", "timed out after ${RunTimeout / 1000}s.")
+            }
+            return (process.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult())
+        }
+
+        private func TrustedPlatformAssemblies() IEnumerable[string] {
+            let tpa string? = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string
+            if string.IsNullOrEmpty(tpa) {
+                return Enumerable.Empty[string]()
+            }
+            return tpa.Split(Path.PathSeparator).Where(File.Exists)
+        }
+    }
+}

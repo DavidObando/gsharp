@@ -965,9 +965,6 @@ internal partial class StatementBinder {
         if collector.MayMutateAnyRootViaPointer {
             after.Clear()
         }
-        if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
-            after.RemoveWhere(NamesClosureAssignedStorage)
-        }
         return after
     }
 
