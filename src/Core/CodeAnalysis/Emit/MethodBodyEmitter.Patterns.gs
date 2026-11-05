@@ -610,16 +610,7 @@ internal partial class MethodBodyEmitter {
         )
         if fieldContainer != nil {
             fieldHandle = this.outer.userTokens.ResolveFieldToken(fieldContainer, patternField)
-        } else if this
-            .outer
-            .cache
-            .StructFieldDefs
-            .TryGetValue(patternField, out var fieldDefinition) ||
-            this
-            .outer
-            .cache
-            .DeclaredFieldDefs
-            .TryGetValue(patternField, out fieldDefinition) {
+        } else if this.TryGetEmittedFieldDefHandle(patternField, out var fieldDefinition) {
             fieldHandle = fieldDefinition
         } else {
             throw InvalidOperationException("Property pattern field '${patternField.Name}' has no emitted field token.")

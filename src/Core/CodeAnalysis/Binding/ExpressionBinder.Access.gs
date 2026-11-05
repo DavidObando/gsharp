@@ -540,12 +540,12 @@ internal partial class ExpressionBinder {
             case accessor is AccessorExpressionSyntax {
                 return TryResolveQualifiedSourceTypeHead(accessor.LeftPart, packageSegments, out sourceType)
             }
-            case CallExpressionSyntax{Callee: {} callee} {
-                return TryResolveQualifiedSourceTypeHead(callee, packageSegments, out sourceType)
-            }
-            case call is CallExpressionSyntax when !call.Identifier.IsMissing {
+            case call is CallExpressionSyntax when call.Callee == nil && !call.Identifier.IsMissing {
                 simpleName = call.Identifier.ValueText
                 arity = call.TypeArgumentList?.Arguments.Count ?? -1
+            }
+            case CallExpressionSyntax{Callee: {} callee} {
+                return TryResolveQualifiedSourceTypeHead(callee, packageSegments, out sourceType)
             }
             case literal is StructLiteralExpressionSyntax when !literal.TypeIdentifier.IsMissing {
                 simpleName = literal.TypeIdentifier.ValueText
@@ -603,7 +603,7 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(remainder)
         }
         switch remainder {
-            case CallExpressionSyntax{Callee: {} callee} call {
+            case CallExpressionSyntax{Callee: {} callee} call when call.Identifier.IsMissing {
                 let target = BindQualifiedSourceTypeRemainder(callee, sourceType)
                 if target is BoundErrorExpression {
                     return target

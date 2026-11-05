@@ -48,7 +48,7 @@ partial class BoundScope {
     // interface/delegate declarations leave their key unregistered here since
     // their stored value already carries accurate package identity
     // intrinsically (see TypePackageName).
-    private var aliasDeclaringPackages ImmutableDictionary[string, string].Builder?
+    private var aliasDeclaringPackages ImmutableDictionary[string, string?].Builder?
 
     // Issue #2224: lazily created only on the root scope of whatever chain
     // this scope belongs to. Every Binder in a single BindGlobalScope/
@@ -2190,10 +2190,15 @@ partial class BoundScope {
     /// (the caller is declaring a real symbol, not a plain alias).
     private func RegisterAliasDeclaringPackage(key string, declaringPackageName string?) {
         if declaringPackageName == nil {
-            aliasDeclaringPackages?.Remove(key)
+            if Parent != nil && Parent!!.TryGetAliasDeclaringPackageInChain(key, out _) {
+                aliasDeclaringPackages ??= ImmutableDictionary.CreateBuilder[string, string?]()
+                aliasDeclaringPackages!![key] = nil
+            } else {
+                aliasDeclaringPackages?.Remove(key)
+            }
             return
         }
-        aliasDeclaringPackages ??= ImmutableDictionary.CreateBuilder[string, string]()
+        aliasDeclaringPackages ??= ImmutableDictionary.CreateBuilder[string, string?]()
         aliasDeclaringPackages!![key] = declaringPackageName
     }
 
@@ -2201,7 +2206,11 @@ partial class BoundScope {
         var result = Parent?.GetAliasDeclaringPackages() ?? ImmutableDictionary[string, string].Empty
         if aliasDeclaringPackages != nil {
             for pair in aliasDeclaringPackages!! {
-                result = result.SetItem(pair.Key, pair.Value)
+                result = if pair.Value == nil {
+                    result.Remove(pair.Key)
+                } else {
+                    result.SetItem(pair.Key, pair.Value!!)
+                }
             }
         }
         return result
@@ -2225,7 +2234,7 @@ partial class BoundScope {
                 out var foundPackage
             ) {
                 declaringPackageName = foundPackage
-                return true
+                return foundPackage != nil
             }
             scope_ = scope_.Parent
         }

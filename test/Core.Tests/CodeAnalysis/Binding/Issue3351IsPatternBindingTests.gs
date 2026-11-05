@@ -232,6 +232,7 @@ class Box[T](Value T) {
         get -> Value
     }
 }
+func Factory(seed int32) (int32) -> int32 -> (delta int32) -> seed + delta
 
 func Main() {
     let a = QualifiedCalls5267.Sub.Stamp(8).Value
