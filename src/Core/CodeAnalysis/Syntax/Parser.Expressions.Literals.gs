@@ -1460,6 +1460,7 @@ open partial class Parser {
             // No separator character means the expression necessarily fills the hole.
             if fragment.Text.IndexOf(',') >= 0 || fragment.Text.IndexOf(':') >= 0 {
                 let probeParser = Parser(syntaxTree, fragment.Position, fragment.Position + fragment.Text.Length)
+                probeParser.unsafeDepth = this.unsafeDepth
                 let _ = probeParser.ParseExpression()
                 expressionLength = if probeParser
                     .Current
@@ -1506,6 +1507,7 @@ open partial class Parser {
             // lexed as code, so filtering its diagnostics would change malformed-hole
             // recovery. Reparse only the bounded expression instead.
             let innerParser = Parser(syntaxTree, fragment.Position, fragment.Position + exprText.Length)
+            innerParser.unsafeDepth = this.unsafeDepth
             // A hole is a value position: statement parsing makes `ordinal++`
             // yield its updated value instead of the original one.
             var innerExpression ExpressionSyntax? = if innerParser.Current.Kind == SyntaxKind.EndOfFileToken {
