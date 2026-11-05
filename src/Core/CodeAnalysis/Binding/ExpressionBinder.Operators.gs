@@ -964,7 +964,8 @@ internal partial class ExpressionBinder {
                 discarded,
                 materialized
             )
-        } else if TypeSymbol.ContainsNeverType(discarded.Type) {
+        }
+        if TypeSymbol.ContainsNeverType(discarded.Type) {
             if discarded.Syntax is {} syntax {
                 Diagnostics.ReportExpressionMustHaveValue(syntax.Location)
             }
@@ -1090,14 +1091,9 @@ internal partial class ExpressionBinder {
             if value.Type == TypeSymbol.Error && ReportUnresolvedBareDefaults(value) {
                 value = BoundErrorExpression(nil)
             }
-            let materializedValueType = TypeSymbol.MaterializeNeverFunctionReturns(value.Type)
-            if !object.ReferenceEquals(materializedValueType, value.Type) {
-                value = conversions.BindConversion(
-                    valueSyntax?.Location ?? value.Syntax?.Location ?? default(TextLocation),
-                    value,
-                    materializedValueType
-                )
-            } else if value.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(value.Type) {
+            if value.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(
+                TypeSymbol.MaterializeNeverFunctionReturns(value.Type)
+            ) {
                 if (valueSyntax ?? value.Syntax) is {} syntax {
                     Diagnostics.ReportExpressionMustHaveValue(syntax.Location)
                 }

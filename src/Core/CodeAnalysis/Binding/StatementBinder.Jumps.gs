@@ -1087,7 +1087,8 @@ internal partial class StatementBinder {
         let materializedType = TypeSymbol.MaterializeNeverFunctionReturns(expression.Type)
         if !object.ReferenceEquals(materializedType, expression.Type) {
             expression = conversions.BindConversion(syntax.Expression.Location, expression, materializedType)
-        } else if expression.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(expression.Type) {
+        }
+        if expression.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(expression.Type) {
             Diagnostics.ReportExpressionMustHaveValue(syntax.Expression.Location)
             expression = BoundErrorExpression(nil)
         }

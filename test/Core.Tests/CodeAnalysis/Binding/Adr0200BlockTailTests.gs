@@ -850,6 +850,7 @@ let anon = object { let F = () -> throw Exception("anon") let N = 3 }
 let asyncFn = async () -> throw Exception("async")
 let typedFunc Func[int32] = () -> throw Exception("func")
 let typedAction Action = () -> throw Exception("action")
+let voidAdaptedNested Action = (() -> (() -> throw Exception("void-adapted-nested")))
 let swFirst = switch 2 { case 1: () -> throw Exception("sw-first") default: () -> 42 }
 try { f() } catch (e Exception) { Console.WriteLine(e.Message) }
 f = () -> Console.WriteLine("reassigned")
@@ -867,6 +868,7 @@ try { ((n int32) -> throw Exception("direct:${n}"))(4) } catch (e Exception) { C
 try { asyncFn().GetAwaiter().GetResult() } catch (e Exception) { Console.WriteLine(e.Message) }
 try { Console.WriteLine(typedFunc()) } catch (e Exception) { Console.WriteLine(e.Message) }
 try { typedAction() } catch (e Exception) { Console.WriteLine(e.Message) }
+voidAdaptedNested()
 Console.WriteLine(swFirst())`, "zero\nreassigned\narg:7\nif-f\nsw-1\nnested\ncond-t\ntup:9\ndecon:5\nanon:3\ndirect\ndirect:4\nasync\nfunc\naction\n42\n")
     }
 
@@ -886,6 +888,11 @@ try { Console.WriteLine(Choose((1, 2), (1, throw Exception("tup-r"))).Item1) } c
 try { Console.WriteLine(Choose((1, throw Exception("tup-l")), (1, 2)).Item1) } catch (e Exception) { Console.WriteLine(e.Message) }
 let pickFn = Choose(() -> 11, () -> throw Exception("lam-r"))
 Console.WriteLine(pickFn())
+let cleanupChosen = Choose({
+    defer Console.WriteLine("cleanup-choose")
+    () -> throw Exception("cleanup-lam")
+}, () -> 42)
+try { Console.WriteLine(cleanupChosen()) } catch (e Exception) { Console.WriteLine(e.Message) }
 let xs = []int32{10, 20}
 try { Console.WriteLine(Array.IndexOf(xs, throw Exception("clr-idx"))) } catch (e Exception) { Console.WriteLine(e.Message) }
 try { Console.WriteLine(Sink(b: throw Exception("named"), a: 1)) } catch (e Exception) { Console.WriteLine(e.Message) }
@@ -899,7 +906,7 @@ try {
     Console.WriteLine(p.X)
 } catch (e Exception) {
     Console.WriteLine(e.Message)
-}`, "1\nchoose-r\nchoose-l\ntup-r\ntup-l\n11\nclr-idx\nnamed\ndefer-arg\nstruct-lit\n")
+}`, "1\nchoose-r\nchoose-l\ntup-r\ntup-l\n11\ncleanup-choose\ncleanup-lam\nclr-idx\nnamed\ndefer-arg\nstruct-lit\n")
 
         AssertDiagnostic(`import System
 func Id[T](x T) T -> x
@@ -960,6 +967,22 @@ func f() int32 {
 func f() {
     (1, throw Exception("x"))
 }`, "GS0124", 3, 5)
+        AssertDiagnostic(`import System
+func f() {
+    (() -> throw Exception("a"), throw Exception("b"))
+}`, "GS0124", 3, 5)
+        AssertDiagnostic(`import System
+func f() int32 {
+    return (() -> throw Exception("a"), throw Exception("b")).Item2
+}`, "GS0124", 3, 12)
+        AssertDiagnostic(`import System
+func f() {
+    let a Action = () -> (() -> throw Exception("a"), throw Exception("b"))
+}`, "GS0124", 3, 26)
+        AssertDiagnostic(`import System
+func f() {
+    let a Action = (() -> (() -> throw Exception("a"), throw Exception("b")))
+}`, "GS0124", 3, 27)
         AssertDiagnostic(`import System
 func f() {
     let o object = (1, throw Exception("x"))

@@ -1600,6 +1600,12 @@ internal class LambdaBinder {
         // `bodyStatements` is the single list every body-statement,
         // including this prelude, is collected into below.
         bodyStatements.AddRange(destructuringPrelude)
+        if (returnType == TypeSymbol.Void || returnType == TypeSymbol.Error) && boundBody is BoundBlockExpression {
+            let materializedBodyType = TypeSymbol.MaterializeNeverFunctionReturns(boundBody.Type)
+            if !object.ReferenceEquals(materializedBodyType, boundBody.Type) {
+                boundBody = conversions.BindConversion(syntax.Body.Location, boundBody, materializedBodyType)
+            }
+        }
         if boundBody is BoundBlockExpression blockExpr && syntax.Body is BlockExpressionSyntax {
             // Block body — emit the prefix statements, then either a return-
             // statement on the trailing expression (when the lambda returns a
@@ -1827,6 +1833,7 @@ internal class LambdaBinder {
                 nestedSubstitution,
                 adapterResultType,
                 conversions,
+                Diagnostics,
                 literal.Syntax?.Location ?? default(TextLocation)
             ).RewriteStatement(literal.Body)
         )
@@ -2514,9 +2521,8 @@ internal class LambdaBinder {
                     discardedTrailing,
                     materializedTrailingType
                 )
-            } else if discardedTrailing.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(
-                discardedTrailing.Type
-            ) {
+            }
+            if discardedTrailing.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(discardedTrailing.Type) {
                 Diagnostics.ReportExpressionMustHaveValue(syntax.Body.Location)
                 discardedTrailing = BoundErrorExpression(syntax.Body)
             }
@@ -3337,6 +3343,7 @@ internal class LambdaBinder {
         private let nestedSubstitution Dictionary[VariableSymbol, VariableSymbol]
         private let adapterReturnType TypeSymbol
         private let conversions ConversionClassifier
+        private let diagnostics DiagnosticBag
         private let defaultLocation TextLocation
 
         init(
@@ -3344,13 +3351,49 @@ internal class LambdaBinder {
             nestedSubstitution Dictionary[VariableSymbol, VariableSymbol],
             adapterReturnType TypeSymbol,
             conversions ConversionClassifier,
+            diagnostics DiagnosticBag,
             defaultLocation TextLocation
         ) {
             this.replacementMap = replacementMap
             this.nestedSubstitution = nestedSubstitution
             this.adapterReturnType = adapterReturnType
             this.conversions = conversions
+            this.diagnostics = diagnostics
             this.defaultLocation = defaultLocation
+        }
+
+        protected override func RewriteVariableDeclaration(node BoundVariableDeclaration) BoundStatement {
+            let rewritten = cast[BoundVariableDeclaration](base.RewriteVariableDeclaration(node))
+            if rewritten.Variable is LocalVariableSymbol local &&
+                rewritten.Initializer is {} initializer &&
+                local
+                .Name
+                .StartsWith("<blockResult", StringComparison.Ordinal) && TypeSymbol.ContainsNeverType(local.Type) {
+                let targetLocalType = if this.adapterReturnType == TypeSymbol.Void {
+                    TypeSymbol.MaterializeNeverFunctionReturns(local.Type)
+                } else {
+                    this.adapterReturnType
+                }
+                let convertedInitializer = this.conversions.BindConversion(
+                    rewritten.Syntax?.Location ?? this.defaultLocation,
+                    initializer,
+                    targetLocalType
+                )
+                let replacedLocal = LocalVariableSymbol(
+                    local.Name,
+                    local.IsReadOnly,
+                    convertedInitializer.Type,
+                    local.DeclaringSyntax
+                )
+                this.replacementMap[local] = BoundVariableExpression(nil, replacedLocal)
+                return BoundVariableDeclaration(
+                    rewritten.Syntax,
+                    replacedLocal,
+                    convertedInitializer,
+                    rewritten.ConstantValue
+                )
+            }
+            return rewritten
         }
 
         protected override func RewriteVariableExpression(node BoundVariableExpression) BoundExpression {
@@ -3426,10 +3469,25 @@ internal class LambdaBinder {
             // evaluate the expression for its side effects, then `return;`. A
             // bare `return <value>;` against a void method is invalid IL.
             if this.adapterReturnType == TypeSymbol.Void {
+                var discardedExpression = expression
+                let materializedType = TypeSymbol.MaterializeNeverFunctionReturns(discardedExpression.Type)
+                if !object.ReferenceEquals(materializedType, discardedExpression.Type) {
+                    discardedExpression = this.conversions.BindConversion(
+                        rewritten.Syntax?.Location ?? this.defaultLocation,
+                        discardedExpression,
+                        materializedType
+                    )
+                }
+                if discardedExpression.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(
+                    discardedExpression.Type
+                ) {
+                    this.diagnostics.ReportExpressionMustHaveValue(rewritten.Syntax?.Location ?? this.defaultLocation)
+                    discardedExpression = BoundErrorExpression(rewritten.Syntax)
+                }
                 return BoundBlockStatement(
                     rewritten.Syntax,
                     ImmutableArray.Create[BoundStatement](
-                        BoundExpressionStatement(rewritten.Syntax, expression),
+                        BoundExpressionStatement(rewritten.Syntax, discardedExpression),
                         BoundReturnStatement(rewritten.Syntax, expression: nil)
                     )
                 )

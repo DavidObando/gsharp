@@ -220,8 +220,19 @@ func Choose[T](a T, b T) T -> a
 let f = () -> throw Exception("zero")
 let g = (x int32) -> throw Exception("arg:${x}")
 let nested = () -> (() -> throw Exception("nested"))
+let voidAdapted Action = (() -> (() -> throw Exception("void-adapted")))
 let tup = (() -> throw Exception("tup"), 7)
+let cleanupChosen = Choose({
+    defer Console.WriteLine("cleanup-choose")
+    () -> throw Exception("cleanup-lam")
+}, () -> 42)
 
+voidAdapted()
+try {
+    Console.WriteLine(cleanupChosen())
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
 try {
     f()
 } catch (e Exception) {
@@ -254,7 +265,7 @@ try {
 }`
         let output = CompileAndRun(source)
         Assert.Equal(
-            "zero${Environment.NewLine}arg:42${Environment.NewLine}nested${Environment.NewLine}tup:7${Environment.NewLine}choose-r${Environment.NewLine}choose-l${Environment.NewLine}",
+            "cleanup-choose${Environment.NewLine}cleanup-lam${Environment.NewLine}zero${Environment.NewLine}arg:42${Environment.NewLine}nested${Environment.NewLine}tup:7${Environment.NewLine}choose-r${Environment.NewLine}choose-l${Environment.NewLine}",
             output
         )
     }
@@ -263,6 +274,7 @@ try {
     @InlineData("Id(throw Exception(\"x\"))", "GS0151")
     @InlineData("Id((1, throw Exception(\"x\")))", "GS0151")
     @InlineData("let t = (1, throw Exception(\"x\"))", "GS0124")
+    @InlineData("(() -> throw Exception(\"a\"), throw Exception(\"b\"))", "GS0124")
     func ThrowExpression_UninferrableType_ReportsDiagnosticWithoutCrash(statement string, expectedId string) {
         let source = `package P
 
