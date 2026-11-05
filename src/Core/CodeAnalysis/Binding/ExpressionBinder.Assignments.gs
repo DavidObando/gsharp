@@ -5306,8 +5306,13 @@ internal partial class ExpressionBinder {
         prefix = ImmutableArray[BoundStatement].Empty
         if !syntax.IsIncrementDecrement ||
             receiver is BoundVariableExpression ||
-            receiver is BoundDereferenceExpression &&
-            (receiver.Operand is BoundVariableExpression || receiver.Operand is BoundConditionalAddressExpression) {
+            (receiver is BoundDereferenceExpression && receiver.Operand is BoundVariableExpression) ||
+            GSharp
+            .Core
+            .CodeAnalysis
+            .Lowering
+            .SideEffectSpiller
+            .IsCapturedRuntimeGenericStorageReceiver(receiver) {
             return false
         }
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()

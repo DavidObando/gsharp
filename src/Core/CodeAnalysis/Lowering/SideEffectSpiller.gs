@@ -722,6 +722,26 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             return BoundVariableExpression(storage.Syntax, local)
         }
 
+        internal func IsCapturedRuntimeGenericStorageReceiver(
+            expression BoundExpression
+        ) bool -> expression is BoundDereferenceExpression{
+            Operand: BoundConditionalAddressExpression{
+                WhenFalseOperand: BoundVariableExpression{Variable: LocalVariableSymbol snapshot}
+            }
+        } &&
+            (
+            snapshot.Name.StartsWith("<>spillGeneric", StringComparison.Ordinal) || snapshot.Name.StartsWith(
+                "<ncaGeneric",
+                StringComparison.Ordinal
+            ) ||
+                snapshot
+                .Name
+                .StartsWith("$$go$$Generic$$", StringComparison.Ordinal) || snapshot.Name.StartsWith(
+                "$$postfix$$Generic$$",
+                StringComparison.Ordinal
+            )
+        )
+
         internal func CaptureRuntimeGenericStorageReceiver(
             storage BoundExpression,
             anchor SyntaxNode?,
@@ -731,11 +751,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             if storage.Type is not TypeParameterSymbol parameter ||
                 parameter.HasValueTypeConstraint ||
                 BindingBinder.IsReferenceTypeForConstraint(parameter) ||
-                (
-                storage is BoundDereferenceExpression derefStorage &&
-                    derefStorage.Operand is BoundConditionalAddressExpression condAddr &&
-                    condAddr.WhenFalseOperand is BoundVariableExpression
-            ) {
+                IsCapturedRuntimeGenericStorageReceiver(storage) {
                 return storage
             }
             // Snapshot reference instantiations, but reconstruct value-type storage after the RHS.

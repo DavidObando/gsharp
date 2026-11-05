@@ -844,6 +844,31 @@ func IncrementSlot[T RefCell](cell T) {
     GetRefCell(cell).Slot++
 }
 func PostfixByInterface[T ICell[object?]](items [](T, int32)) int32 -> items[0].Item1.Count++
+func SetConditionalByInterface[T ICell[object?]](first T, second T, replacement T) {
+    var pick = false
+    var a = first
+    var b = second
+    (*&(pick ? a : b)).Value = {
+        pick = true
+        b = replacement
+        "cond"
+    }
+}
+func PostfixConditionalByInterface[T ICell[object?]](
+    first T,
+    second T,
+    replacement T,
+    armSwapHook (Action) -> void
+) int32 {
+    var pick = false
+    var a = first
+    var b = second
+    armSwapHook(() -> {
+        pick = true
+        b = replacement
+    })
+    return (*&(pick ? a : b)).Count++
+}
 async func SetByInterface[T ICell[object?]](items [](T, int32), replacement T) {
     items[0].Item1.Value = {
         SUSPEND
@@ -877,7 +902,17 @@ let postReplacement = RefCell{Total: 99}
 let postRefs = [](RefCell, int32){(postTarget, 0)}
 postTarget.OnGet = () -> { postRefs[0] = (postReplacement, 0) }
 let postOld = PostfixByInterface(postRefs)
-Console.WriteLine("${oldRef.Stored ?? "nil"} ${newRef.Stored ?? "nil"} ${newRef.Total} ${getCalls} ${postOld} ${postTarget.Total} ${postReplacement.Total}")
+let condFirst = RefCell{Total: 1}
+let condSecond = RefCell{Total: 20}
+let condReplacement = RefCell{Total: 80}
+SetConditionalByInterface(condFirst, condSecond, condReplacement)
+let condPostOld = PostfixConditionalByInterface(
+    condFirst,
+    condSecond,
+    condReplacement,
+    (swap Action) -> { condSecond.OnGet = swap }
+)
+Console.WriteLine("${oldRef.Stored ?? "nil"} ${newRef.Stored ?? "nil"} ${newRef.Total} ${getCalls} ${postOld} ${postTarget.Total} ${postReplacement.Total} ${condSecond.Stored ?? "nil"} ${condReplacement.Stored ?? "nil"} ${condPostOld} ${condSecond.Total} ${condReplacement.Total}")
 let values = [](ValueCell, int32){(ValueCell{}, 0)}
 SetByInterface(values, ValueCell{Stored: "r", Total: 10}).GetAwaiter().GetResult()
 let postValOld = PostfixByInterface(values)
@@ -898,7 +933,7 @@ Console.WriteLine("${oldClass.Stored ?? "nil"} ${newClass.Stored ?? "nil"} ${new
                 ""
             }
         )
-        Assert.Equal("v nil 4 2 10 11 99\nv 12 13\nc nil 70 42\n", CompileAndRun(source))
+        Assert.Equal("v nil 4 2 10 11 99 cond nil 20 21 80\nv 12 13\nc nil 70 42\n", CompileAndRun(source))
     }
 
     @Theory
