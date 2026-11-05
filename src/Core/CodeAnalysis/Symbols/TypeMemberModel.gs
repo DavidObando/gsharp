@@ -720,10 +720,14 @@ shared class TypeMemberModel {
     }
 
     internal func ResolveInheritedPropertyOwner(owner StructSymbol, property PropertySymbol) StructSymbol {
-        if property.ImportedMember != nil {
-            return owner
+        var importedBase TypeSymbol? = nil
+        for current in GetHierarchy(owner) {
+            if current.ImportedBaseType is {} candidateBase {
+                importedBase = candidateBase
+                break
+            }
         }
-        if owner.ImportedBaseType is StructSymbol importedStruct {
+        if importedBase is StructSymbol importedStruct {
             for ancestor in GetHierarchy(importedStruct) {
                 if ancestor.Properties.Any(
                     (candidate PropertySymbol) -> !candidate.HasExplicitInterfaceClause &&
@@ -732,7 +736,40 @@ shared class TypeMemberModel {
                     return ancestor
                 }
             }
-            return importedStruct
+            if property.ImportedMember is not System.Reflection.PropertyInfo {
+                return importedStruct
+            }
+        }
+        if property.ImportedMember is System
+            .Reflection
+            .PropertyInfo importedProp &&
+            importedProp.DeclaringType is Type declaringClrType {
+            if owner.ClrType != nil && ClrTypeUtilities.AreSame(owner.ClrType, declaringClrType) {
+                return owner
+            }
+            if importedBase is StructSymbol importedBaseStruct &&
+                importedBaseStruct.ClrType != nil &&
+                ClrTypeUtilities.AreSame(importedBaseStruct.ClrType, declaringClrType) {
+                return importedBaseStruct
+            }
+            let declaringOwner = StructSymbol(
+                name: declaringClrType.Name,
+                fields: ImmutableArray[FieldSymbol].Empty,
+                accessibility: Accessibility.Public,
+                declaration: nil,
+                packageName: declaringClrType.Namespace ?? string.Empty,
+                isData: false,
+                isInline: false,
+                isClass: !declaringClrType.IsValueType,
+                primaryConstructorParameters: ImmutableArray[ParameterSymbol].Empty,
+                isOpen: !declaringClrType.IsSealed,
+                baseClass: nil,
+                clrType: declaringClrType
+            )
+            if importedBase != nil {
+                declaringOwner.SetImportedBaseType(importedBase)
+            }
+            return declaringOwner
         }
         return owner
     }
@@ -892,7 +929,7 @@ shared class TypeMemberModel {
         accessor System.Reflection.MethodInfo
     ) Accessibility -> if accessor.IsPublic {
         Accessibility.Public
-    } else if accessor.IsFamily || accessor.IsFamilyOrAssembly {
+    } else if accessor.IsFamily || accessor.IsFamilyOrAssembly || accessor.IsFamilyAndAssembly {
         Accessibility.Protected
     } else {
         Accessibility.Internal

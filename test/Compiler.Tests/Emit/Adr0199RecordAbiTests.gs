@@ -902,8 +902,36 @@ public record ClrMiddleWithField : ClrBase
             Assert.True(csharpCompilation.Emit(extStream).Success)
             let extBytes = extStream.ToArray()
             File.WriteAllBytes(extPath, extBytes)
+            const friendCSharpLib = `[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("test")]
+namespace FriendLib;
+public record FriendPrivProtSetBase
+{
+    public FriendPrivProtSetBase(int value) { Value = value; }
+    public int Value { get; private protected set; }
+}`
+            let friendPath = Path.Combine(tempDir, "FriendLib.dll")
+            let friendCompilation = Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpCompilation
+                .Create(
+                "FriendLib",
+                []Microsoft
+                    .CodeAnalysis
+                    .SyntaxTree{Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(friendCSharpLib)},
+                references,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary)
+            )
+            using let friendStream = MemoryStream()
+            Assert.True(friendCompilation.Emit(friendStream).Success)
+            let friendBytes = friendStream.ToArray()
+            File.WriteAllBytes(friendPath, friendBytes)
             let gsSource = `package W
 import ExtLib
+import FriendLib
 
 data class ReusesValue(Value int32, Extra int32) : ClrBase(Value) {
     init() : base(11) {
@@ -915,6 +943,15 @@ data class GenericReusesValue[T](Value T) : ClrGenericBase[T](Value)
 data class ReusesProtGet(Value int32, Extra int32) : ClrProtGetBase(Value)
 data class ReusesProtSet(Value int32, Extra int32) : ClrProtSetBase(Value) {
     func WithUpdated(v int32) ReusesProtSet -> this.copy(Value: v)
+}
+open data class ProtSetMiddle : ClrProtSetBase {
+    init() : base(0) {}
+    init(v int32) : base(v) {}
+    func UpdateChild(d ReusesProtSetViaMiddle, v int32) ReusesProtSetViaMiddle -> d.copy(Value: v)
+}
+data class ReusesProtSetViaMiddle(Value int32, Extra int32) : ProtSetMiddle(Value)
+data class ReusesPrivProtSet(Value int32, Extra int32) : FriendPrivProtSetBase(Value) {
+    func WithUpdated(v int32) ReusesPrivProtSet -> this.copy(Value: v)
 }
 interface IClrValue {
     prop Value int32 { get; }
@@ -941,11 +978,15 @@ func Run() string {
     let spread = SpreadTarget{...b}
     let refSource = ReusesRefVal(55, 66)
     let spreadRef = SpreadRefTarget{...refSource}
+    let refMatched = (refSource is { RefVal: 55, Extra: 66 }) && !(refSource is { RefVal: 0 })
     let pg = ReusesProtGet(12, 34)
     let (pgv, pge) = pg
     let ps = ReusesProtSet(70, 80).WithUpdated(90)
+    let psm = ProtSetMiddle(0).UpdateChild(ReusesProtSetViaMiddle(10, 20), 30)
+    let pps = ReusesPrivProtSet(50, 60).WithUpdated(95)
     let rve = ReusesValueWithExplicit{Value: 2, Extra: 3}.copy(Value: 4)
     let rveIface IClrValue = rve
+    let rveMatched = (rve is { Value: 4, Extra: 3 }) && !(rve is { Value: 104 })
     let bf = BehindClrField(81, 82)
     let (bfv, bfe) = bf
     let ctorDefault = ReusesValue()
@@ -954,7 +995,7 @@ func Run() string {
     let (ci, ce) = c
     let d = InaccessibleGetters(1, 2)
     let (di, dp) = d
-    return "${a.Value}:${a.Extra}|${bv}:${be}|${spread.Value}:${spread.Extra}|${spreadRef.RefVal}:${spreadRef.Extra}|${pgv}:${pge}|${ps.Value}:${ps.Extra}|${rve.Value}:${rve.Extra}:${rveIface.Value}|${bf.Value}:${bfv}:${bfe}|${ctorDefault.Value}:${ctorDefault.Extra}|${gen.Value}|${ci}:${ce}|${di}:${dp}"
+    return "${a.Value}:${a.Extra}|${bv}:${be}|${spread.Value}:${spread.Extra}|${spreadRef.RefVal}:${spreadRef.Extra}:${refMatched}|${pgv}:${pge}|${ps.Value}:${ps.Extra}|${psm.Value}:${psm.Extra}|${pps.Value}:${pps.Extra}|${rve.Value}:${rve.Extra}:${rveIface.Value}:${rveMatched}|${bf.Value}:${bfv}:${bfe}|${ctorDefault.Value}:${ctorDefault.Extra}|${gen.Value}|${ci}:${ce}|${di}:${dp}"
 }`
             let srcPath = Path.Combine(tempDir, "test.gs")
             let outPath = Path.Combine(tempDir, "test.dll")
@@ -962,14 +1003,57 @@ func Run() string {
             let exit = Program.Main(
                 []string{
                     "/out:" + outPath,
+                    "/assemblyname:test",
                     "/target:library",
                     "/targetframework:net10.0",
                     "/reference:" + extPath,
+                    "/reference:" + friendPath,
                     srcPath
                 }
             )
             Assert.Equal(0, exit)
-            IlVerifier.Verify(outPath, []string{extPath})
+            IlVerifier.Verify(outPath, []string{extPath, friendPath})
+            let badFriendSrcPath = Path.Combine(tempDir, "bad_friend.gs")
+            let badFriendOutPath = Path.Combine(tempDir, "bad_dir", "test.dll")
+            Directory.CreateDirectory(Path.GetDirectoryName(badFriendOutPath)!!)
+            File.WriteAllText(badFriendSrcPath, `package W
+import FriendLib
+data class ReusesPrivProtSet(Value int32, Extra int32) : FriendPrivProtSetBase(Value)
+func Bad() ReusesPrivProtSet -> ReusesPrivProtSet(1, 2).copy(Value: 3)`)
+            let badFriendExit = Program.Main(
+                []string{
+                    "/out:" + badFriendOutPath,
+                    "/assemblyname:test",
+                    "/target:library",
+                    "/targetframework:net10.0",
+                    "/reference:" + friendPath,
+                    badFriendSrcPath
+                }
+            )
+            Assert.NotEqual(0, badFriendExit)
+            let badReceiverSrcPath = Path.Combine(tempDir, "bad_receiver.gs")
+            let badReceiverOutPath = Path.Combine(tempDir, "bad_receiver.dll")
+            File.WriteAllText(badReceiverSrcPath, `package W
+import ExtLib
+open data class ProtSetMiddle : ClrProtSetBase {
+    init() : base(0) {}
+    init(v int32) : base(v) {}
+}
+data class ReusesProtSetViaMiddle(Value int32, Extra int32) : ProtSetMiddle(Value)
+class ProtSetSibling : ClrProtSetBase {
+    init(v int32) : base(v) {}
+    func Bad(d ReusesProtSetViaMiddle) ReusesProtSetViaMiddle -> d.copy(Value: 2)
+}`)
+            let badReceiverExit = Program.Main(
+                []string{
+                    "/out:" + badReceiverOutPath,
+                    "/target:library",
+                    "/targetframework:net10.0",
+                    "/reference:" + extPath,
+                    badReceiverSrcPath
+                }
+            )
+            Assert.NotEqual(0, badReceiverExit)
             let outBytes = File.ReadAllBytes(outPath)
             let declared = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
             let alc = System
@@ -979,6 +1063,8 @@ func Run() string {
             try {
                 using let extLoadStream = MemoryStream(extBytes)
                 alc.LoadFromStream(extLoadStream)
+                using let friendLoadStream = MemoryStream(friendBytes)
+                alc.LoadFromStream(friendLoadStream)
                 using let outLoadStream = MemoryStream(outBytes)
                 let asm = alc.LoadFromStream(outLoadStream)
                 let reusesType = asm.GetType("W.ReusesValue", throwOnError: true)!!
@@ -995,7 +1081,10 @@ func Run() string {
                 Assert.Contains(inaccType.GetProperties(declared), (p PropertyInfo) -> p.Name == "InternalProp")
                 Assert.Contains(inaccType.GetProperties(declared), (p PropertyInfo) -> p.Name == "PrivateProtectedProp")
                 let result = asm.GetType("W.<Program>", throwOnError: true)!!.GetMethod("Run")!!.Invoke(nil, nil)
-                Assert.Equal("0:0|42:7|42:7|55:66|12:34|90:80|4:3:104|81:81:82|11:22|77|hello:9|1:2", result)
+                Assert.Equal(
+                    "0:0|42:7|42:7|55:66:True|12:34|90:80|30:20|95:60|4:3:104:True|81:81:82|11:22|77|hello:9|1:2",
+                    result
+                )
             } finally {
                 alc.Unload()
             }
