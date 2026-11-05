@@ -9381,12 +9381,56 @@ internal shared class ClrOverloadResolution {
         return IsExtensionReceiverBoundPromotion(upper, candidate)
     }
 
+    internal func CandidateMaySatisfyParameterConstraints(parameterType Type?, candidate Type?) bool {
+        if parameterType == nil || candidate == nil || !parameterType.IsGenericParameter {
+            return true
+        }
+        try {
+            let attributes = parameterType.GenericParameterAttributes
+            if (attributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 &&
+                (!candidate.IsValueType || NullableLifting.IsValueTypeNullableClr(candidate)) {
+                return false
+            }
+            if (attributes & GenericParameterAttributes.ReferenceTypeConstraint) != 0 &&
+                !ClrTypeUtilities.IsReferenceTypeForVariance(candidate) {
+                return false
+            }
+            if (attributes & GenericParameterAttributes.DefaultConstructorConstraint) != 0 &&
+                !candidate.IsValueType &&
+                (candidate.IsAbstract || candidate.GetConstructor(Type.EmptyTypes) is not{IsPublic: true}) {
+                return false
+            }
+            for constraint in parameterType.GetGenericParameterConstraints() {
+                if constraint.IsGenericParameter {
+                    continue
+                }
+                if constraint.ContainsGenericParameters {
+                    if !OpenExtensionReceiverStandardShapeMayApply(
+                        candidate,
+                        constraint,
+                        tupleElementConversions: false
+                    ) {
+                        return false
+                    }
+                    continue
+                }
+                if !IsExtensionReceiverBoundPromotion(constraint, candidate) {
+                    return false
+                }
+            }
+        } catch (ex Exception) when ClrTypeUtilities.IsMetadataLoadFailure(ex) {
+            return true
+        }
+        return true
+    }
+
     private func TryFixClrInferenceBound(
-        name string,
+        parameterType Type,
         collectedBounds ClrInferenceBounds,
         @NotNullWhen(true) out fixedType Type?
     ) bool {
         fixedType = nil
+        let name = parameterType.Name
         collectedBounds.Exact.TryGetValue(name, out var exact)
         collectedBounds.Lower.TryGetValue(name, out var lower)
         collectedBounds.Upper.TryGetValue(name, out var upper)
@@ -9439,6 +9483,15 @@ internal shared class ClrOverloadResolution {
                 if ClrTypeUtilities.AreSame(currentBest, candidate) {
                     continue
                 }
+                let bestSatisfies = CandidateMaySatisfyParameterConstraints(parameterType, currentBest)
+                let candidateSatisfies = CandidateMaySatisfyParameterConstraints(parameterType, candidate)
+                if bestSatisfies && !candidateSatisfies {
+                    continue
+                }
+                if candidateSatisfies && !bestSatisfies {
+                    best = candidate
+                    continue
+                }
                 let bestToCandidate = CanPromoteLowerBound(candidate, currentBest) ||
                     CanRefineUpperBound(candidate, currentBest)
                 let candidateToBest = CanPromoteLowerBound(currentBest, candidate) ||
@@ -9485,7 +9538,7 @@ internal shared class ClrOverloadResolution {
                 boundKind
             }
             effectiveBounds.Add(parameterType.Name, argumentType, effectiveKind)
-            if !TryFixClrInferenceBound(parameterType.Name, effectiveBounds, out var fixedBound) {
+            if !TryFixClrInferenceBound(parameterType, effectiveBounds, out var fixedBound) {
                 return false
             }
             bounds[parameterType.Name] = fixedBound

@@ -8310,7 +8310,7 @@ internal class MemberLookup {
                     )
                 }
             }
-            return FixSymbolicMethodTypeArguments(bounds, out requiresRecoveredInference)
+            return FixSymbolicMethodTypeArguments(openMethod, bounds, out requiresRecoveredInference)
         }
 
         /// The argument a top-level parameter contributes to method type-argument
@@ -8339,10 +8339,12 @@ internal class MemberLookup {
         }
 
         private func FixSymbolicMethodTypeArguments(
+            openMethod MethodInfo,
             bounds SymbolicInferenceBounds,
             out requiresRecoveredInference bool
         )[]TypeSymbol? {
             requiresRecoveredInference = false
+            let openTypeParameters = openMethod.GetGenericArguments()
             let result = [bounds.Arity]TypeSymbol?
             for var slot = 0; slot < bounds.Arity; slot++ {
                 let exact = bounds.Exact[slot]
@@ -8377,7 +8379,12 @@ internal class MemberLookup {
                     // candidate that could WIN — so the upper bound could
                     // validate a narrower answer without ever being allowed to
                     // replace it.
-                    fixedType = FindSymbolicInferenceCandidate(lower, upper)
+                    let openTypeParameter = if slot < openTypeParameters.Length {
+                        openTypeParameters[slot]
+                    } else {
+                        default(Type?)
+                    }
+                    fixedType = FindSymbolicInferenceCandidate(lower, upper, openTypeParameter)
                 } else {
                     if (bounds.AmbiguousProjection[slot]) {
                         result[slot] = SymbolicInferenceConflict
@@ -8440,7 +8447,8 @@ internal class MemberLookup {
         /// could confirm a narrower answer without ever being allowed to win.
         private func FindSymbolicInferenceCandidate(
             lower IReadOnlyList[TypeSymbol]?,
-            upper IReadOnlyList[TypeSymbol]?
+            upper IReadOnlyList[TypeSymbol]?,
+            openTypeParameter Type? = nil
         ) TypeSymbol? {
             // Issue #4133 (review finding): every bound is a candidate, including
             // a signature-equivalent duplicate — the merge branch just below
@@ -8540,6 +8548,25 @@ internal class MemberLookup {
                 // `best -> candidate` holds, so `candidate` (the upper bound)
                 // must replace `best` (the lower bound) — the direction the
                 // pre-fix code never took.
+                if openTypeParameter != nil &&
+                    currentBest.ClrType is {} bestClr &&
+                    candidate.ClrType is {} candidateClr {
+                    let bestSatisfies = ClrOverloadResolution.CandidateMaySatisfyParameterConstraints(
+                        openTypeParameter,
+                        bestClr
+                    )
+                    let candidateSatisfies = ClrOverloadResolution.CandidateMaySatisfyParameterConstraints(
+                        openTypeParameter,
+                        candidateClr
+                    )
+                    if bestSatisfies && !candidateSatisfies {
+                        continue
+                    }
+                    if candidateSatisfies && !bestSatisfies {
+                        best = candidate
+                        continue
+                    }
+                }
                 let candidateToBest = CanPromoteSymbolicInferenceBound(candidate, currentBest)
                 let bestToCandidate = CanPromoteSymbolicInferenceBound(currentBest, candidate)
                 if bestToCandidate && !candidateToBest {
