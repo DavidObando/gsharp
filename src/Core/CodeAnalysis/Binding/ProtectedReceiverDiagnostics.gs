@@ -105,7 +105,15 @@ internal shared class ProtectedReceiverDiagnostics {
             // type (C# reports CS1540 for `new Source { f = 1 }` in a
             // derived class). The initializers carry no syntax of their own,
             // so each reports at its member name in the literal.
+            let usesPrimaryCtor = node.CallsDataConstructor || node.CallsPrimaryConstructor
             for init in node.Initializers {
+                if usesPrimaryCtor && BoundStructLiteralExpression.GetPrimaryMember(
+                    node.StructType,
+                    init.MemberName
+                ) is {} primaryMember &&
+                    (init.Field == primaryMember || init.Property == primaryMember) {
+                    continue
+                }
                 if init.Field is {IsStatic: false} field {
                     let declaring = init.FieldDeclaringType ?? ProtectedReceiverDiagnostics.FindDeclaringClass(
                         node.StructType,
@@ -113,10 +121,7 @@ internal shared class ProtectedReceiverDiagnostics {
                     )
                     CheckLiteralMember(node, field.Name, field.Accessibility, declaring)
                 } else if init.Property is {IsStatic: false} property {
-                    let declaring = ProtectedReceiverDiagnostics.FindDeclaringClass(
-                        node.StructType,
-                        (level StructSymbol) -> level.Properties.Contains(property)
-                    )
+                    let declaring = ProtectedReceiverDiagnostics.FindPropertyDeclaringClass(node.StructType, property)
                     CheckLiteralMember(node, property.Name, property.SetterAccessibility, declaring)
                 }
             }
@@ -129,24 +134,23 @@ internal shared class ProtectedReceiverDiagnostics {
             for member in node.Fields {
                 var name string
                 var accessibility Accessibility
-                var declares(StructSymbol) -> bool
+                var declaring StructSymbol? = member.DeclaringType as StructSymbol
                 if member.Field is {IsStatic: false} field {
                     name, accessibility = field.Name, field.Accessibility
-                    declares = (level StructSymbol) -> level.Fields.Contains(field)
+                    if declaring == nil && node.Type is StructSymbol owner {
+                        declaring = ProtectedReceiverDiagnostics.FindDeclaringClass(
+                            owner,
+                            (level StructSymbol) -> level.Fields.Contains(field)
+                        )
+                    }
                 } else if member.Property is {IsStatic: false} property {
                     name, accessibility = property.Name, property.GetterAccessibility
-                    declares = (level StructSymbol) -> level.Properties.Contains(property)
+                    if declaring == nil && node.Type is StructSymbol owner {
+                        declaring = ProtectedReceiverDiagnostics.FindPropertyDeclaringClass(owner, property)
+                    }
                 } else {
                     continue
                 }
-                let declaring StructSymbol? = member.DeclaringType as StructSymbol ??
-                    (
-                    if node.Type as StructSymbol is {} owner {
-                        ProtectedReceiverDiagnostics.FindDeclaringClass(owner, declares)
-                    } else {
-                        default(StructSymbol?)
-                    }
-                )
                 // The pattern binder resolves members without the class-level
                 // check every other access path makes, so this is the one
                 // place a pattern's private or protected member read is
@@ -175,10 +179,7 @@ internal shared class ProtectedReceiverDiagnostics {
 
         protected override func VisitPropertyAccessExpression(node BoundPropertyAccessExpression) {
             if node.Receiver != nil && !node.Property.IsStatic && node.StructType != nil {
-                let declaring = ProtectedReceiverDiagnostics.FindDeclaringClass(
-                    node.StructType,
-                    (level StructSymbol) -> level.Properties.Contains(node.Property)
-                )
+                let declaring = ProtectedReceiverDiagnostics.FindPropertyDeclaringClass(node.StructType, node.Property)
                 Check(node, node.Receiver!!.Type, node.Property.Name, node.Property.GetterAccessibility, declaring)
             }
             base.VisitPropertyAccessExpression(node)
@@ -186,10 +187,7 @@ internal shared class ProtectedReceiverDiagnostics {
 
         protected override func VisitPropertyAssignmentExpression(node BoundPropertyAssignmentExpression) {
             if node.Receiver != nil && !node.Property.IsStatic && node.StructType != nil {
-                let declaring = ProtectedReceiverDiagnostics.FindDeclaringClass(
-                    node.StructType,
-                    (level StructSymbol) -> level.Properties.Contains(node.Property)
-                )
+                let declaring = ProtectedReceiverDiagnostics.FindPropertyDeclaringClass(node.StructType, node.Property)
                 Check(node, node.Receiver!!.Type, node.Property.Name, node.Property.SetterAccessibility, declaring)
             }
             base.VisitPropertyAssignmentExpression(node)
@@ -339,6 +337,18 @@ internal shared class ProtectedReceiverDiagnostics {
         return start
     }
 
+    private func FindPropertyDeclaringClass(start StructSymbol, property PropertySymbol) StructSymbol {
+        for level in start.GetHierarchy() {
+            if level.Properties.Contains(property) {
+                return level
+            }
+            if level.InheritedPositionalProperties.Contains(property) {
+                return TypeMemberModel.ResolveInheritedPropertyOwner(level, property)
+            }
+        }
+        return start
+    }
+
     /// The location of the accessed member's name within [`syntax`](paramref).
     private func GetMemberNameLocation(syntax SyntaxNode?) TextLocation? {
         var current SyntaxNode? = syntax
@@ -370,6 +380,9 @@ internal shared class ProtectedReceiverDiagnostics {
                 }
                 case fieldAssignment is FieldAssignmentExpressionSyntax {
                     return fieldAssignment.FieldIdentifier.Location
+                }
+                case fieldInitializer is FieldInitializerSyntax {
+                    return fieldInitializer.FieldIdentifier.Location
                 }
                 default {
                     return current!!.Location

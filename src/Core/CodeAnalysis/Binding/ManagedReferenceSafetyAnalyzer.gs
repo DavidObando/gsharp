@@ -635,7 +635,7 @@ internal class ManagedReferenceSafetyAnalyzer : BoundTreeWalker {
             for parameter in type.PrimaryConstructorParameters {
                 let field FieldSymbol? = switch BoundStructLiteralExpression.GetPrimaryMember(type, parameter.Name) {
                     case primaryField is FieldSymbol: primaryField
-                    case property is PropertySymbol: property.BackingField
+                    case property is PropertySymbol when type.Properties.Contains(property): property.BackingField
                     default: default(FieldSymbol?)
                 }
                 if field != nil {

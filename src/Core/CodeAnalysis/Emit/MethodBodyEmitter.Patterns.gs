@@ -527,7 +527,13 @@ internal partial class MethodBodyEmitter {
                         }
                     )
                     this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(getter, receiverType))
-                    if !this.outer.userTokens.TryGetSymbolicSubstitutedPropertyReturn(receiverType, property, out _) {
+                    let returnRefKind = RefCapabilities.GetReturnRefKind(property)
+                    if returnRefKind != RefKind.None {
+                        this.EmitRefReturnDereferenceIfNeeded(returnRefKind, field.Type)
+                    } else if !this
+                        .outer
+                        .userTokens
+                        .TryGetSymbolicSubstitutedPropertyReturn(receiverType, property, out _) {
                         this.EmitErasedObjectReturnWidening(getter.ReturnType, field.Type)
                     }
                     return
@@ -585,6 +591,7 @@ internal partial class MethodBodyEmitter {
                 }
             )
             this.il.Token(getterHandle)
+            this.EmitRefReturnDereferenceIfNeeded(field.Property!!.ReturnRefKind, field.Type)
             return
         }
         // Neither the CLR-member nor the property form matched, so this is the

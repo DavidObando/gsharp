@@ -597,6 +597,116 @@ public sealed class Child : Parent
             baseline.GetType("Corpus.Issue4828.Child", throwOnError: true)!!.GetMethod("Render")!!.IsFinal,
             migrated.GetType("Corpus.Issue4828.Child", throwOnError: true)!!.GetMethod("Render")!!.IsFinal
         )
+        // Issue #4874: Leaf(int Value) : Base(Value) reuses Base.Value instead of declaring its own field/property.
+        let declaredInstance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
+        Assert.Empty(baselineLeaf!!.GetFields(declaredInstance))
+        Assert.Empty(migratedLeaf!!.GetFields(declaredInstance))
+        Assert.Equal(
+            baselineLeaf!!
+                .GetProperties(declaredInstance)
+                .Select((p PropertyInfo) -> p.Name)
+                .OrderBy((n string) -> n, StringComparer.Ordinal),
+            migratedLeaf!!
+                .GetProperties(declaredInstance)
+                .Select((p PropertyInfo) -> p.Name)
+                .OrderBy((n string) -> n, StringComparer.Ordinal)
+        )
+        Assert.Equal(
+            Activator.CreateInstance(baselineLeaf!!, []object{7})!!.ToString(),
+            Activator.CreateInstance(migratedLeaf!!, []object{7})!!.ToString()
+        )
+    }
+
+    @Fact
+    func DerivedPositionalRecordRepeatingBaseParameters_SharesInheritedStorageAndAbi() {
+        const source = `namespace Corpus.Issue4874;
+public record Base(string Name);
+public record Derived(string Name, int Value) : Base(Name);
+public record GrandDerived(string Name, int Value, string Tag) : Derived(Name, Value);
+public record InteractionMessage(string Type, string Message);
+public record InteractionMessage<T>(string Type, string Message, T Data) : InteractionMessage(Type, Message);
+
+public static class Probe
+{
+    public static string Run()
+    {
+        var d = new Derived("n", 5);
+        var (dn, dv) = d;
+        var dCopy = d with { Name = "m", Value = 6 };
+        var g = new GrandDerived("gn", 9, "gt");
+        var (gn, gv, gt) = g;
+        var im = new InteractionMessage<int>("info", "hello", 99);
+        var (it, imsg, idata) = im;
+        bool matched = d is Derived("n", 5) && im is InteractionMessage<int>("info", "hello", 99);
+        return $"{d}|{dn}:{dv}|{dCopy}|{g}|{gn}:{gv}:{gt}|{im}|{it}:{imsg}:{idata}|{matched}";
+    }
+}`
+        let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Issue4874.cs", source)})
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let translated = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        TranslationTestValidation.AssertBinds(translated)
+        using let csharpImage = MemoryStream()
+        Assert.True(project.Compilation.Emit(csharpImage).Success)
+        using let gsharpImage = MemoryStream()
+        let compilation = GSharpCompilation(GSharpSyntaxTree.Parse(SourceText.From(translated))){IsLibrary = true}
+        let emit = compilation.Emit(gsharpImage, nil, nil, "Issue4874Translated")
+        Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics))
+        let baseline = Assembly.Load(csharpImage.ToArray())
+        let migrated = Assembly.Load(gsharpImage.ToArray())
+        let declaredInstance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
+        for typeName in[]string{
+            "Corpus.Issue4874.Base",
+            "Corpus.Issue4874.Derived",
+            "Corpus.Issue4874.GrandDerived",
+            "Corpus.Issue4874.InteractionMessage",
+            "Corpus.Issue4874.InteractionMessage`1"
+        } {
+            let expectedType = baseline.GetType(typeName, throwOnError: true)!!
+            let actualType = migrated.GetType(typeName, throwOnError: true)!!
+            Assert.Equal(
+                expectedType
+                    .GetFields(declaredInstance)
+                    .Select((f FieldInfo) -> f.Name)
+                    .OrderBy((n string) -> n, StringComparer.Ordinal),
+                actualType
+                    .GetFields(declaredInstance)
+                    .Select((f FieldInfo) -> f.Name)
+                    .OrderBy((n string) -> n, StringComparer.Ordinal)
+            )
+            Assert.Equal(
+                expectedType
+                    .GetProperties(declaredInstance)
+                    .Select((p PropertyInfo) -> p.Name)
+                    .OrderBy((n string) -> n, StringComparer.Ordinal),
+                actualType
+                    .GetProperties(declaredInstance)
+                    .Select((p PropertyInfo) -> p.Name)
+                    .OrderBy((n string) -> n, StringComparer.Ordinal)
+            )
+            let expectedDeconstruct = expectedType.GetMethod("Deconstruct", declaredInstance)
+            let actualDeconstruct = actualType.GetMethod("Deconstruct", declaredInstance)
+            Assert.NotNull(expectedDeconstruct)
+            Assert.NotNull(actualDeconstruct)
+            Assert.Equal(
+                expectedDeconstruct!!.GetParameters().Select((p ParameterInfo) -> p.Name + ":" + p.ParameterType.Name),
+                actualDeconstruct!!.GetParameters().Select((p ParameterInfo) -> p.Name + ":" + p.ParameterType.Name)
+            )
+        }
+        let expectedOutput = baseline.GetType("Corpus.Issue4874.Probe", throwOnError: true)!!.GetMethod("Run")!!.Invoke(
+            nil,
+            nil
+        )
+        let actualOutput = migrated.GetType("Corpus.Issue4874.Probe", throwOnError: true)!!.GetMethod("Run")!!.Invoke(
+            nil,
+            nil
+        )
+        Assert.Equal(expectedOutput, actualOutput)
+        Assert.Equal(
+            "Derived { Name = n, Value = 5 }|n:5|Derived { Name = m, Value = 6 }|GrandDerived { Name = gn, Value = 9, Tag = gt }|gn:9:gt|InteractionMessage { Type = info, Message = hello, Data = 99 }|info:hello:99|True",
+            actualOutput
+        )
     }
 
     @Fact

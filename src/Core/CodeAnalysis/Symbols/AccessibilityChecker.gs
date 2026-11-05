@@ -160,6 +160,41 @@ internal shared class AccessibilityChecker {
             if SameDeclaringType(t, declaringType) {
                 return true
             }
+            if declaringType.ClrType is Type declaringClrType &&
+                t
+                .ImportedBaseType
+                ?.ClrType is Type importedBaseClrType &&
+                IsClrTypeInHierarchy(importedBaseClrType, declaringClrType) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func IsClrTypeInHierarchy(start Type, target Type) bool {
+        let targetDefinition = if target.IsGenericType {
+            target.GetGenericTypeDefinition()
+        } else {
+            target
+        }
+        var current Type? = start
+        while current != nil {
+            let currentDefinition = if current.IsGenericType {
+                current.GetGenericTypeDefinition()
+            } else {
+                current
+            }
+            if ClrTypeUtilities.AreSame(current, target) || ClrTypeUtilities.AreSame(
+                currentDefinition,
+                targetDefinition
+            ) {
+                return true
+            }
+            try {
+                current = current.BaseType
+            } catch (ex Exception) when ClrTypeUtilities.IsMetadataLoadFailure(ex) {
+                return false
+            }
         }
         return false
     }
