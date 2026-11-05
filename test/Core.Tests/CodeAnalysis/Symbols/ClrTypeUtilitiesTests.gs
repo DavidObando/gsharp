@@ -371,6 +371,35 @@ open class ClrTypeUtilitiesTests {
         Assert.False(ClrTypeInspector.IsSameAs(hostMethodParams[0].MakeArrayType(), mlcMethodParams[1].MakeArrayType()))
         Assert.True(ClrTypeInspector.IsSameAs(hostMethodParams[0].MakeByRefType(), mlcMethodParams[0].MakeByRefType()))
         Assert.False(ClrTypeInspector.IsSameAs(hostMethodParams[0].MakeByRefType(), mlcMethodParams[1].MakeByRefType()))
+        // Function-pointer types have FullName == nil and IsPointer == false; verify structural identity across contexts.
+        let hostIntToIntPtr = typeof(OpenGenericIdentityFixture).GetMethod("AcceptFnPtrInt")!!
+            .GetParameters()[0]
+            .ParameterType
+        let hostIntToLongPtr = typeof(OpenGenericIdentityFixture).GetMethod("AcceptFnPtrLong")!!
+            .GetParameters()[0]
+            .ParameterType
+        let mlcIntToIntPtr = mlcFixture.GetMethod("AcceptFnPtrInt")!!.GetParameters()[0].ParameterType
+        let mlcIntToLongPtr = mlcFixture.GetMethod("AcceptFnPtrLong")!!.GetParameters()[0].ParameterType
+        Assert.True(hostIntToIntPtr.IsFunctionPointer)
+        Assert.Null(hostIntToIntPtr.FullName)
+        Assert.True(ClrTypeInspector.IsSameAs(hostIntToIntPtr, mlcIntToIntPtr))
+        Assert.False(ClrTypeInspector.IsSameAs(hostIntToIntPtr, hostIntToLongPtr))
+        Assert.False(ClrTypeInspector.IsSameAs(hostIntToIntPtr, mlcIntToLongPtr))
+        Assert.False(ClrTypeInspector.IsSameAs(hostIntToIntPtr, hostMethodParams[0]))
+        // ModuleVersionId + MetadataToken match across runtime and incomplete MetadataLoadContext without loading missing parameter types.
+        let incompleteFixture = LoadFixtureUnderIncompleteContext()!!
+        let hostBadGenericParam = typeof(Fixture338).GetMethod("BadGenericMethod")!!.GetGenericArguments()[0]
+        let mlcBadGenericParam = incompleteFixture.GetMethod("BadGenericMethod")!!.GetGenericArguments()[0]
+        let mlcOtherBadGenericParam = incompleteFixture.GetMethod("OtherBadGenericMethod")!!.GetGenericArguments()[0]
+        Assert.True(ClrTypeInspector.IsSameAs(hostBadGenericParam, mlcBadGenericParam))
+        Assert.False(ClrTypeInspector.IsSameAs(hostBadGenericParam, mlcOtherBadGenericParam))
+        // SafeGetMethodsIncludingInterfaces hides a base generic interface method when a derived interface redeclares it with a renamed method type parameter.
+        let derivedInterfaceMethods = ClrTypeUtilities
+            .SafeGetMethodsIncludingInterfaces(typeof(IDerivedGenericMethodFixture), InstanceFlags)
+            .Where((m MethodInfo) -> m.Name == "Echo")
+            .ToArray()
+        let singleEcho = Assert.Single(derivedInterfaceMethods)
+        Assert.Equal(typeof(IDerivedGenericMethodFixture), singleEcho.DeclaringType)
     }
 
     shared {
@@ -439,6 +468,14 @@ internal class Fixture338 {
     func BadParameterMethod(pattern Regex) { }
 
     func BadReturnMethod() Regex? -> nil
+
+    func BadGenericMethod[T](pattern Regex) {
+        let _ = pattern
+    }
+
+    func OtherBadGenericMethod[T](pattern Regex) {
+        let _ = pattern
+    }
 }
 
 internal class TypeBuilderMethodFixture[T] {
@@ -481,7 +518,7 @@ internal open class TypeBuilderBaseMethodFixture[T] {
 
 internal class TypeBuilderDerivedMethodFixture[T] : TypeBuilderBaseMethodFixture[T] { }
 
-internal class OpenGenericIdentityFixture {
+internal unsafe class OpenGenericIdentityFixture {
     shared {
         func Generic[T, U]() { }
 
@@ -496,5 +533,21 @@ internal class OpenGenericIdentityFixture {
             let _ = first
             let _ = second
         }
+
+        func AcceptFnPtrInt(callback unmanaged[Cdecl](int32) -> int32) {
+            let _ = callback
+        }
+
+        func AcceptFnPtrLong(callback unmanaged[Cdecl](int32) -> int64) {
+            let _ = callback
+        }
     }
+}
+
+internal interface IBaseGenericMethodFixture {
+    func Echo[T](value T) T;
+}
+
+internal interface IDerivedGenericMethodFixture : IBaseGenericMethodFixture {
+    func Echo[U](value U) U;
 }

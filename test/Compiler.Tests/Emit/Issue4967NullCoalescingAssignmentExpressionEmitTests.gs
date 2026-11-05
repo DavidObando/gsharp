@@ -1153,6 +1153,32 @@ func replaceBox(ref target Box, next Box) string {
     target = next
     return "ref"
 }
+var globalKey = "a"
+func mutateGlobalKey() string {
+    globalKey = "b"
+    return "global"
+}
+func fillViaInAndRefAlias(d Dictionary[string, string?], in key string, ref alias string) {
+    d[key] ??= {
+        alias = "b"
+        "inAlias"
+    }
+}
+func fillViaRefAndGlobalCall(d Dictionary[string, string?], ref key string) {
+    d[key] ??= mutateGlobalKey()
+}
+func fillViaReassignedCallable(d Dictionary[string, string?], noop () -> string) {
+    var key = "a"
+    var change () -> string = func () string {
+        key = "b"
+        return "callable"
+    }
+    d[key] ??= {
+        let v = change()
+        change = noop
+        v
+    }
+}
 
 func main() {
     let first = Box{}
@@ -1216,6 +1242,26 @@ func main() {
         "struct"
     }
     Console.WriteLine("sTag=${s.Tag} sF=${s.F ?? "nil"}")
+
+    let dIn = Dictionary[string, string?]()
+    dIn["a"] = nil
+    dIn["b"] = nil
+    var sharedKey = "a"
+    fillViaInAndRefAlias(dIn, in sharedKey, ref sharedKey)
+    Console.WriteLine("inA=${dIn["a"] ?? "nil"} inB=${dIn["b"] ?? "nil"}")
+
+    let dGlobal = Dictionary[string, string?]()
+    dGlobal["a"] = nil
+    dGlobal["b"] = nil
+    globalKey = "a"
+    fillViaRefAndGlobalCall(dGlobal, ref globalKey)
+    Console.WriteLine("globA=${dGlobal["a"] ?? "nil"} globB=${dGlobal["b"] ?? "nil"}")
+
+    let dCall = Dictionary[string, string?]()
+    dCall["a"] = nil
+    dCall["b"] = nil
+    fillViaReassignedCallable(dCall, () -> "noop")
+    Console.WriteLine("callA=${dCall["a"] ?? "nil"} callB=${dCall["b"] ?? "nil"}")
 }
 
 main()`
@@ -1226,7 +1272,10 @@ main()`
                 "a=w b=nil${Environment.NewLine}" +
                 "d2a=helper db=nil${Environment.NewLine}" +
                 "refFirst=ref refOther=nil${Environment.NewLine}" +
-                "sTag=2 sF=struct${Environment.NewLine}",
+                "sTag=2 sF=struct${Environment.NewLine}" +
+                "inA=inAlias inB=nil${Environment.NewLine}" +
+                "globA=global globB=nil${Environment.NewLine}" +
+                "callA=callable callB=nil${Environment.NewLine}",
             CompileAndRun(source)
         )
     }
@@ -1234,7 +1283,9 @@ main()`
     /// Issue #5018: imported dependent generic bounds that mention a non-zero
     /// generic parameter position (`where TThird : IList<TSecond>`) resolve
     /// the referenced parameter slot instead of equating every open generic
-    /// parameter with slot 0 via a nil `FullName`.
+    /// parameter with slot 0 via a nil `FullName`, and derived interfaces that
+    /// redeclare a generic method with a renamed method type parameter hide the
+    /// base interface declaration instead of reporting an ambiguity.
     @Fact
     func ImportedDependentGenericBound_ResolvesNonInitialTypeParameterPosition() {
         using let fixture = NativeSliceLanguageTests.Fixture()
@@ -1244,6 +1295,12 @@ public class Coupled<TFirst, TSecond, TThird>
     where TThird : IList<TSecond>
 {
     public string Tag { get; set; } = "ok";
+}
+public interface IBaseEcho {
+    T Echo<T>(T value);
+}
+public interface IDerivedEcho : IBaseEcho {
+    new U Echo<U>(U value);
 }`, "DependentBound5018")
         let validSource = `package Consumer
 import System
@@ -1251,12 +1308,16 @@ import System.Collections.Generic
 import DependentBound5018
 class First {}
 class Second {}
+class EchoImpl : IDerivedEcho {
+    func Echo[T](value T) T -> value
+}
 let c = Coupled[First, Second, List[Second]]()
-Console.WriteLine(c.Tag)`
+let d IDerivedEcho = EchoImpl()
+Console.WriteLine("${c.Tag} ${d.Echo("hi")}")`
         let executable = fixture.Compile(validSource, "DependentBoundValid5018", true, "/r:" + contract)
         IlVerifier.Verify(contract)
         IlVerifier.Verify(executable, []string{contract})
-        Assert.Equal("ok\n", fixture.Run(executable))
+        Assert.Equal("ok hi\n", fixture.Run(executable))
         let invalidSource = `package Consumer
 import System.Collections.Generic
 import DependentBound5018

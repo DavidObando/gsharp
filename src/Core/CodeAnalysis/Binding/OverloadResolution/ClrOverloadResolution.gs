@@ -6995,7 +6995,7 @@ internal shared class ClrOverloadResolution {
             return false
         }
         for var i = 0; i < aParameters.Length; i++ {
-            if !ClrTypeUtilities.AreSame(aParameters[i].ParameterType, bParameters[i].ParameterType) {
+            if !ClrTypeUtilities.IsSameAsCore(aParameters[i].ParameterType, bParameters[i].ParameterType, a, b) {
                 return false
             }
         }

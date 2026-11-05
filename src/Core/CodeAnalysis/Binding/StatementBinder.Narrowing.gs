@@ -493,18 +493,13 @@ internal partial class StatementBinder {
         var dropAllMemberPaths = false
         var filterWrites List[(TryBlock SyntaxNode?, Names HashSet[string])]? = nil
         return func (variable VariableSymbol) bool {
-            if variable.IsReadOnly && !IsByReferenceRoot(variable) {
+            if variable.IsReadOnly && !IsByReferenceRoot(variable) && !IsExternalStorageAlias(variable) {
                 return false
             }
             var effects = collector
             if effects == nil {
                 EnsureClosureAssignedNames(anchor)
-                let aliases IEnumerable[VariableSymbol]? = if ContainsUserLabel(expression) {
-                    default(IEnumerable[VariableSymbol]?)
-                } else {
-                    externalCallableAliases
-                }
-                effects = NewCollector(nil, aliases)
+                effects = NewCollector(nil, nil)
                 effects.VisitExpression(expression)
                 collector = effects
                 dropAllMemberPaths = (expression.Syntax is {} exprSyntax && SyntaxMayMutateMemberPaths(exprSyntax)) ||
@@ -515,6 +510,10 @@ internal partial class StatementBinder {
             return (
                 filterWrites != nil &&
                     (FilterWritesVariable(filterWrites, variable) || MayBeMutatedByUnknownCallable(path))
+            ) ||
+                (
+                (IsExternalStorageAlias(variable) || IsByReferenceRoot(variable)) &&
+                    (dropAllMemberPaths || effects.MayMutateGlobalRoots)
             ) ||
                 StatementKillsPath(effects, path, dropAllMemberPaths, effects.MayMutateReferenceStorage)
         }

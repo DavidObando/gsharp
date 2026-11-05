@@ -1478,6 +1478,12 @@ shared class ClrTypeUtilities {
                 other.IsPointer &&
                 IsSameAsCore(self.GetElementType(), other.GetElementType(), selfMethod, otherMethod)
         }
+        // Issue #5018: function-pointer types also have FullName == nil and IsPointer == false.
+        if self.IsFunctionPointer || other.IsFunctionPointer {
+            return self.IsFunctionPointer &&
+                other.IsFunctionPointer &&
+                AreSameFunctionPointers(self, other, selfMethod, otherMethod)
+        }
         // Issue #5018: open generic parameters have FullName == nil, so compare
         // position and declaring method or type rather than falling through to FullName.
         if self.IsGenericParameter || other.IsGenericParameter {
@@ -1521,6 +1527,83 @@ shared class ClrTypeUtilities {
         return selfFullName != nil && string.Equals(selfFullName, otherFullName, StringComparison.Ordinal)
     }
 
+    private func AreSameFunctionPointers(self Type, other Type, selfMethod MethodBase?, otherMethod MethodBase?) bool {
+        try {
+            let selfModified = !object.ReferenceEquals(self, self.UnderlyingSystemType)
+            let otherModified = !object.ReferenceEquals(other, other.UnderlyingSystemType)
+            if selfModified && otherModified {
+                if self.IsUnmanagedFunctionPointer != other.IsUnmanagedFunctionPointer {
+                    return false
+                }
+                let selfConventions = SafeGetFunctionPointerCallingConventions(self)
+                let otherConventions = SafeGetFunctionPointerCallingConventions(other)
+                let bothHaveConventionMetadata = (
+                    !IsMetadataLoadContextMember(self) && !IsMetadataLoadContextMember(other)
+                ) ||
+                    (selfConventions.Length > 0 && otherConventions.Length > 0)
+                if bothHaveConventionMetadata {
+                    if selfConventions.Length != otherConventions.Length {
+                        return false
+                    }
+                    for var i = 0; i < selfConventions.Length; i++ {
+                        if !IsSameAsCore(selfConventions[i], otherConventions[i], selfMethod, otherMethod) {
+                            return false
+                        }
+                    }
+                }
+            }
+            if !IsSameAsCore(
+                self.GetFunctionPointerReturnType(),
+                other.GetFunctionPointerReturnType(),
+                selfMethod,
+                otherMethod
+            ) {
+                return false
+            }
+            let selfParameters = self.GetFunctionPointerParameterTypes()
+            let otherParameters = other.GetFunctionPointerParameterTypes()
+            if selfParameters.Length != otherParameters.Length {
+                return false
+            }
+            for var i = 0; i < selfParameters.Length; i++ {
+                if !IsSameAsCore(selfParameters[i], otherParameters[i], selfMethod, otherMethod) {
+                    return false
+                }
+            }
+            return true
+        } catch (ex Exception) when IsMetadataLoadFailure(ex) || ex is InvalidOperationException {
+            return false
+        }
+    }
+
+    private func SafeGetFunctionPointerCallingConventions(type Type)[]Type {
+        try {
+            return type.GetFunctionPointerCallingConventions()
+        } catch (ex Exception) when IsMetadataLoadFailure(ex) || ex is InvalidOperationException {
+            return Array.Empty[Type]()
+        }
+    }
+
+    private func IsMethodGenericParameterOf(declaringMethod MethodBase, method MethodBase) bool {
+        if object.Equals(declaringMethod, method) {
+            return true
+        }
+        if method is MethodInfo methodInfo {
+            if TryGetMappedOpenMethod(methodInfo, out var mappedOpen) && object.Equals(declaringMethod, mappedOpen) {
+                return true
+            }
+            try {
+                if methodInfo.IsGenericMethod && !methodInfo.IsGenericMethodDefinition && object.Equals(
+                    declaringMethod,
+                    methodInfo.GetGenericMethodDefinition()
+                ) {
+                    return true
+                }
+            } catch (ex Exception) when IsMetadataLoadFailure(ex) || ex is InvalidOperationException { }
+        }
+        return false
+    }
+
     private func AreSameGenericParameters(self Type, other Type, selfMethod MethodBase?, otherMethod MethodBase?) bool {
         if self.GenericParameterPosition != other.GenericParameterPosition {
             return false
@@ -1534,15 +1617,11 @@ shared class ClrTypeUtilities {
             if selfMethod != nil &&
                 otherMethod != nil &&
                 (
-                object.ReferenceEquals(selfDeclaringMethod, selfMethod) || object.ReferenceEquals(
-                    otherDeclaringMethod,
-                    otherMethod
-                )
+                IsMethodGenericParameterOf(selfDeclaringMethod, selfMethod) ||
+                    IsMethodGenericParameterOf(otherDeclaringMethod, otherMethod)
             ) {
-                return object.ReferenceEquals(selfDeclaringMethod, selfMethod) && object.ReferenceEquals(
-                    otherDeclaringMethod,
-                    otherMethod
-                )
+                return IsMethodGenericParameterOf(selfDeclaringMethod, selfMethod) &&
+                    IsMethodGenericParameterOf(otherDeclaringMethod, otherMethod)
             }
             return AreSameDeclaringMethod(selfDeclaringMethod, otherDeclaringMethod)
         }
@@ -1552,7 +1631,7 @@ shared class ClrTypeUtilities {
     }
 
     private func AreSameDeclaringMethod(selfMethod MethodBase, otherMethod MethodBase) bool {
-        if object.ReferenceEquals(selfMethod, otherMethod) {
+        if object.Equals(selfMethod, otherMethod) {
             return true
         }
         if !string.Equals(selfMethod.Name, otherMethod.Name, StringComparison.Ordinal) {
@@ -1564,7 +1643,8 @@ shared class ClrTypeUtilities {
             return false
         }
         try {
-            if object.ReferenceEquals(selfMethod.Module, otherMethod.Module) {
+            if object.ReferenceEquals(selfMethod.Module, otherMethod.Module) ||
+                SafeModuleVersionIdsMatch(selfMethod.Module, otherMethod.Module) {
                 return selfMethod.MetadataToken == otherMethod.MetadataToken
             }
         } catch (ex Exception) when IsMetadataLoadFailure(ex) || ex is InvalidOperationException { }
@@ -1591,6 +1671,18 @@ shared class ClrTypeUtilities {
                 return IsSameAsCore(selfMethodInfo.ReturnType, otherMethodInfo.ReturnType, selfMethod, otherMethod)
             }
             return true
+        } catch (ex Exception) when IsMetadataLoadFailure(ex) || ex is InvalidOperationException {
+            return false
+        }
+    }
+
+    private func SafeModuleVersionIdsMatch(left Module?, right Module?) bool {
+        if left == nil || right == nil {
+            return false
+        }
+        try {
+            let leftMvid = left.ModuleVersionId
+            return leftMvid != Guid.Empty && leftMvid == right.ModuleVersionId
         } catch (ex Exception) when IsMetadataLoadFailure(ex) || ex is InvalidOperationException {
             return false
         }
@@ -1745,6 +1837,9 @@ shared class ClrTypeUtilities {
             if !string.Equals(m.Name, candidate.Name, StringComparison.Ordinal) {
                 continue
             }
+            if m.GetGenericArguments().Length != candidate.GetGenericArguments().Length {
+                continue
+            }
             let existingParams = m.GetParameters()
             let candidateParams = candidate.GetParameters()
             if existingParams.Length != candidateParams.Length {
@@ -1752,7 +1847,7 @@ shared class ClrTypeUtilities {
             }
             var match = true
             for var i = 0; i < existingParams.Length; i++ {
-                if !AreSame(existingParams[i].ParameterType, candidateParams[i].ParameterType) {
+                if !IsSameAsCore(existingParams[i].ParameterType, candidateParams[i].ParameterType, m, candidate) {
                     match = false
                     break
                 }
