@@ -70,6 +70,18 @@ internal shared class BodyFacts {
         }
     }
 
+    /// Preserves iterator classification across a lowering rewrite that may prune
+    /// dead constant-switch arms containing `yield` statements (#5044).
+    func PreserveContainsYield(source BoundStatement, target BoundStatement) {
+        if object.ReferenceEquals(source, target) || !ContainsYield(source) {
+            return
+        }
+        let slots = Entries.GetValue(target, CreateSlots)
+        lock slots {
+            slots.ContainsYield = true
+        }
+    }
+
     /// Returns the lowered form of a function-literal body for the flow
     /// analyses that run before emit. Lowering reads only the tree, so the
     /// definite-assignment and ref-struct liveness analyses of one body share a

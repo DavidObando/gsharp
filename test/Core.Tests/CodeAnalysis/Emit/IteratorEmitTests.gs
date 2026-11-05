@@ -139,6 +139,17 @@ if stop {
 yield break
 }
 
+func emptyConstantSwitch() sequence[int32] {
+switch 0 {
+    case 0 {
+        return
+    }
+    default {
+        yield 1
+    }
+}
+}
+
 for x in stopFirst([]int32{4, 5, 6}) {
 Console.Write(x)
 Console.Write(" ")
@@ -156,6 +167,10 @@ Console.Write(x)
 Console.Write(" ")
 }
 for x in emptyYieldBreak(false) {
+Console.Write(x)
+Console.Write(" ")
+}
+for x in emptyConstantSwitch() {
 Console.Write(x)
 Console.Write(" ")
 }

@@ -233,6 +233,39 @@ class Tagged {
         Assert.Empty(data.ConstructorArguments)
     }
 
+    @Fact
+    func ValueAndNullableValueOverloads_PreferNonNullableCandidate() {
+        using let contracts = Issue4503ImportedAttributeContracts()
+        let result = Emit(`import System
+import Issue4503.Contracts
+
+@ImportedValueOrNullableValue(DayOfWeek.Monday)
+class EnumTagged {
+}
+
+@ImportedValueOrNullableValue(5)
+class IntTagged {
+}`, contracts.Path)
+        Assert.True(result.Success, FormatDiagnostics(result))
+        let (_, assembly) = contracts.LoadWith(result.Image)
+        let enumData = assembly
+            .GetTypes()
+            .Single((type Type) -> type.Name == "EnumTagged")
+            .GetCustomAttributesData()
+            .Single(
+            (attribute CustomAttributeData) -> attribute.AttributeType.Name == "ImportedValueOrNullableValueAttribute"
+        )
+        let intData = assembly
+            .GetTypes()
+            .Single((type Type) -> type.Name == "IntTagged")
+            .GetCustomAttributesData()
+            .Single(
+            (attribute CustomAttributeData) -> attribute.AttributeType.Name == "ImportedValueOrNullableValueAttribute"
+        )
+        Assert.Equal(typeof(DayOfWeek), Assert.Single(enumData.Constructor.GetParameters()).ParameterType)
+        Assert.Equal(typeof(int32), Assert.Single(intData.Constructor.GetParameters()).ParameterType)
+    }
+
     @Theory
     @InlineData("@ImportedNamedConstructor(\"a\", first: \"b\")", "GS0247")
     @InlineData("@ImportedNamedConstructor(\"a\", second: 2, second: 3)", "GS0245")
@@ -249,6 +282,9 @@ class Tagged {
     @InlineData("@ImportedNullableConstructor(value: 5)", "GS0585")
     @InlineData("@ImportedNullableOrObject(nil)", "GS0585")
     @InlineData("@ImportedNullableOrObject(5)", "GS0585")
+    @InlineData("@ImportedComparableOrObject(5)", "GS0585")
+    @InlineData("@ImportedDayOfWeekOrNullable(nil)", "GS0585")
+    @InlineData("@ImportedIntOrNullable(nil)", "GS0585")
     @InlineData("@ImportedNamedConstructor(third: 3, 2)", "GS0583")
     @InlineData("@ImportedNamedConstructor(Label = \"ok\", \"a\")", "GS0616")
     func InvalidNamedAttributeArguments_ReportClearDiagnostics(annotation string, expectedId string) {

@@ -86,6 +86,7 @@ internal class CustomAttributeEncoder {
     private enum AttributeArgumentConversionKind {
         NotApplicable,
         Exact,
+        NullableLift,
         UntypedNullToReferenceArray,
         UntypedNullToObjectArray,
         UntypedNullToOtherReference,
@@ -2317,28 +2318,51 @@ internal class CustomAttributeEncoder {
             declaredParamType TypeSymbol? = nil
         ) AttributeArgumentConversionKind {
             var paramType = paramType
+            let unwrappedSupplied = UnwrapAttributeReferenceNullability(suppliedType)
+            let unwrappedDeclared = UnwrapAttributeReferenceNullability(declaredParamType)
             if NullableLifting.GetValueTypeNullableUnderlyingClr(paramType) is {} nullableUnderlying {
+                if unwrappedSupplied is NullableTypeSymbol suppliedNullable {
+                    return if supplied == nil {
+                        ClassifyTypedNullAttributeArgumentConversion(
+                            NormalizeWellKnownType(nullableUnderlying)!!,
+                            suppliedNullable.UnderlyingType,
+                            unwrappedDeclared
+                        )
+                    } else if ClassifyAttributeArgumentConversion(
+                        supplied,
+                        nullableUnderlying,
+                        suppliedNullable.UnderlyingType,
+                        declaredParamType
+                    ) !=
+                    AttributeArgumentConversionKind.NotApplicable {
+                        AttributeArgumentConversionKind.Exact
+                    } else {
+                        AttributeArgumentConversionKind.NotApplicable
+                    }
+                }
                 if supplied == nil {
-                    let unwrappedNullSupplied = UnwrapAttributeReferenceNullability(suppliedType)
-                    if unwrappedNullSupplied != nil && unwrappedNullSupplied != TypeSymbol.Null {
+                    if unwrappedSupplied != nil && unwrappedSupplied != TypeSymbol.Null {
                         return AttributeArgumentConversionKind.NotApplicable
                     }
                     return AttributeArgumentConversionKind.UntypedNullToOtherReference
                 }
-                return ClassifyAttributeArgumentConversion(
+                let underlyingConversion = ClassifyAttributeArgumentConversion(
                     supplied,
                     nullableUnderlying,
                     suppliedType,
                     declaredParamType
                 )
+                return if underlyingConversion == AttributeArgumentConversionKind.NotApplicable {
+                    AttributeArgumentConversionKind.NotApplicable
+                } else {
+                    AttributeArgumentConversionKind.NullableLift
+                }
             }
             // Third-party attributes are commonly resolved through a
             // MetadataLoadContext. Normalize framework types before using CLR
             // assignability so, for example, its System.String matches a runtime
             // string constant.
             paramType = NormalizeWellKnownType(paramType)!!
-            let unwrappedSupplied = UnwrapAttributeReferenceNullability(suppliedType)
-            let unwrappedDeclared = UnwrapAttributeReferenceNullability(declaredParamType)
             let suppliedIsObject = unwrappedSupplied != nil &&
                 unwrappedSupplied != TypeSymbol.Null &&
                 unwrappedSupplied
@@ -2353,7 +2377,7 @@ internal class CustomAttributeEncoder {
                     AttributeArgumentConversionKind.ObjectFallback
                 }
             }
-            if suppliedIsObject {
+            if suppliedIsObject || (unwrappedSupplied is NullableTypeSymbol && paramType.IsValueType) {
                 return AttributeArgumentConversionKind.NotApplicable
             }
             if supplied == nil {
@@ -2364,9 +2388,6 @@ internal class CustomAttributeEncoder {
                     return ClassifyTypedNullAttributeArgumentConversion(paramType, unwrappedSupplied, unwrappedDeclared)
                 }
                 return ClassifyUntypedNullAttributeArgumentConversion(paramType, unwrappedDeclared)
-            }
-            if !IsValidAttributeMemberType(paramType) {
-                return AttributeArgumentConversionKind.NotApplicable
             }
             if unwrappedDeclared is EnumSymbol declaredEnum {
                 return if unwrappedSupplied is EnumSymbol suppliedEnum && suppliedEnum == declaredEnum {

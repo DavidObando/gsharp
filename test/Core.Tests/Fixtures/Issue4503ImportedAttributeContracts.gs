@@ -109,6 +109,45 @@ public sealed class ImportedNullableOrObjectAttribute : Attribute
     }
 
     public object? Value { get; }
+}
+
+[AttributeUsage(AttributeTargets.All)]
+public sealed class ImportedComparableOrObjectAttribute : Attribute
+{
+    public ImportedComparableOrObjectAttribute(IComparable value)
+    {
+        Value = value;
+    }
+
+    public ImportedComparableOrObjectAttribute(object? value)
+    {
+        Value = value;
+    }
+
+    public object? Value { get; }
+}
+
+[AttributeUsage(AttributeTargets.All)]
+public sealed class ImportedDayOfWeekOrNullableAttribute : Attribute
+{
+    public ImportedDayOfWeekOrNullableAttribute(DayOfWeek value) { }
+    public ImportedDayOfWeekOrNullableAttribute(DayOfWeek? value) { }
+}
+
+[AttributeUsage(AttributeTargets.All)]
+public sealed class ImportedIntOrNullableAttribute : Attribute
+{
+    public ImportedIntOrNullableAttribute(int value) { }
+    public ImportedIntOrNullableAttribute(int? value) { }
+}
+
+[AttributeUsage(AttributeTargets.All)]
+public sealed class ImportedValueOrNullableValueAttribute : Attribute
+{
+    public ImportedValueOrNullableValueAttribute(DayOfWeek value) { }
+    public ImportedValueOrNullableValueAttribute(DayOfWeek? value) { }
+    public ImportedValueOrNullableValueAttribute(int value) { }
+    public ImportedValueOrNullableValueAttribute(int? value) { }
 }`
     }
 }

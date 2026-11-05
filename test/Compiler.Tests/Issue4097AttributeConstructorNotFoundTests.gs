@@ -367,6 +367,9 @@ Log:
     @InlineData("@Opt(5)")
     @InlineData("@OptOrObject(nil)")
     @InlineData("@OptOrObject(5)")
+    @InlineData("@ComparableOrObject(5)")
+    @InlineData("@DayOfWeekOrNullable(nil)")
+    @InlineData("@IntOrNullable(nil)")
     func AnImportedAttributeWithNullableValueTypeParameter_ReportsGS0585(annotation string) {
         let tempDir = Directory.CreateTempSubdirectory("gs_5771_opt_").FullName
         try {
@@ -625,6 +628,14 @@ class ImportedBoxedNestedNullElementsOwner {
 class ImportedExpandedTieOwner {
 }
 
+@ValueOrNullableValue(DayOfWeek.Monday)
+class ImportedDayOfWeekOwner {
+}
+
+@ValueOrNullableValue(5)
+class ImportedIntOwner {
+}
+
 Console.WriteLine("ok")
 `
         const LocalSource = `package P
@@ -830,6 +841,11 @@ Console.WriteLine("ok")
                 NestedBoxedArrayElementArgumentTypes(importedAppPath, libPath, "ImportedBoxedNestedNullElementsOwner")
             )
             Assert.Equal(2, SelectedConstructorParameterCount(importedAppPath, libPath, "ImportedExpandedTieOwner"))
+            Assert.Equal(
+                "System.DayOfWeek",
+                SelectedConstructorParameterType(importedAppPath, libPath, "ImportedDayOfWeekOwner")
+            )
+            Assert.Equal("System.Int32", SelectedConstructorParameterType(importedAppPath, libPath, "ImportedIntOwner"))
 
             let localAppPath = Path.Combine(tempDir, "Local.dll")
             let localLog = Compile(
@@ -1117,6 +1133,44 @@ public sealed class OptOrObjectAttribute : Attribute
     public OptOrObjectAttribute(object? value) { Value = value; }
 
     public object? Value { get; }
+}
+
+[AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+public sealed class ComparableOrObjectAttribute : Attribute
+{
+    public ComparableOrObjectAttribute(IComparable value) { Value = value; }
+
+    public ComparableOrObjectAttribute(object? value) { Value = value; }
+
+    public object? Value { get; }
+}
+
+[AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+public sealed class DayOfWeekOrNullableAttribute : Attribute
+{
+    public DayOfWeekOrNullableAttribute(DayOfWeek value) { }
+
+    public DayOfWeekOrNullableAttribute(DayOfWeek? value) { }
+}
+
+[AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+public sealed class IntOrNullableAttribute : Attribute
+{
+    public IntOrNullableAttribute(int value) { }
+
+    public IntOrNullableAttribute(int? value) { }
+}
+
+[AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+public sealed class ValueOrNullableValueAttribute : Attribute
+{
+    public ValueOrNullableValueAttribute(DayOfWeek value) { }
+
+    public ValueOrNullableValueAttribute(DayOfWeek? value) { }
+
+    public ValueOrNullableValueAttribute(int value) { }
+
+    public ValueOrNullableValueAttribute(int? value) { }
 }`)
 
         private const Preamble string = `package P
@@ -1174,6 +1228,16 @@ class NoteAttribute(Text string) : Attribute {
             yield[]object{"ScalarType", "@Marker(typeof(Status))", []string{"MarkerAttribute"}}
             yield[]object{"UserAttributeMatched", "@Note(\"hello\")", []string{"NoteAttribute"}}
             yield[]object{"OptOrObjectStringMatched", "@OptOrObject(\"ok\")", []string{"OptOrObjectAttribute"}}
+            yield[]object{
+                "ValueOrNullableValueIntMatched",
+                "@ValueOrNullableValue(5)",
+                []string{"ValueOrNullableValueAttribute"}
+            }
+            yield[]object{
+                "ValueOrNullableValueEnumMatched",
+                "@ValueOrNullableValue(DayOfWeek.Monday)",
+                []string{"ValueOrNullableValueAttribute"}
+            }
             // Issue #4097, found in the Oahu corpus rather than by reasoning: a
             // constructor reached through its trailing OPTIONAL parameter. Legal
             // C#, legal G#, and matched by NO pass of the resolver before this
