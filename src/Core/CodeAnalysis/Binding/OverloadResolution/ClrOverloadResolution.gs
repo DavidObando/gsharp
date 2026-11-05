@@ -184,6 +184,11 @@ internal shared class ClrOverloadResolution {
     /// argument over a same-compilation user reference type. Never instantiated.
     private class SymbolicByRefArgumentMarker { }
 
+    /// Issue #5003: private marker type whose (cref:Type) identity is used
+    /// as the (cref:NeverArgumentType) sentinel for a `never`-typed argument
+    /// during overload resolution. Never instantiated.
+    private class NeverArgumentMarker { }
+
     /// Issue #4037: the depth bound on a walk of forwarded class constraints
     /// (`[T U]` whose `U` is itself constrained). No real declaration
     /// nests bounds this deep; the bound exists so a cyclic chain terminates.
@@ -278,6 +283,11 @@ internal shared class ClrOverloadResolution {
     /// `object`.
     let SymbolicByRefArgumentType Type = typeof(SymbolicByRefArgumentMarker)
 
+    /// Issue #5003: sentinel argument type representing a `never`-typed argument
+    /// (such as a `throw` expression). It is implicitly convertible to any value
+    /// parameter, while contributing no generic type-argument bound of its own.
+    let NeverArgumentType Type = typeof(NeverArgumentMarker)
+
     /// Issue #2126: reports whether [`argType`](paramref) is a resolution
     /// sentinel — the inline `out var` placeholder
     /// ((cref:InlineOutVarArgumentType)) or the untyped `default`
@@ -295,7 +305,8 @@ internal shared class ClrOverloadResolution {
         object.ReferenceEquals(argType, DefaultLiteralArgumentType) || object.ReferenceEquals(
         argType,
         SymbolicByRefArgumentType
-    )
+    ) ||
+        object.ReferenceEquals(argType, NeverArgumentType)
 
     // Issue #658 / #1311 / #1634: the supplementary-interface and constant-
     // narrowing checks used to live here as mutable (later [ThreadStatic])
@@ -351,7 +362,10 @@ internal shared class ClrOverloadResolution {
         // default is materialized against the resolved parameter after selection.
         // Issue #4400: an `in` slot accepts it too, but only the candidate loops
         // can tell `in` from `ref`/`out` (ClassifyArgumentAtParameter).
-        if object.ReferenceEquals(source, DefaultLiteralArgumentType) {
+        if object.ReferenceEquals(source, DefaultLiteralArgumentType) || object.ReferenceEquals(
+            source,
+            NeverArgumentType
+        ) {
             return if target.IsByRef {
                 ImplicitConversionKind.None
             } else {
@@ -4358,7 +4372,9 @@ internal shared class ClrOverloadResolution {
         target Type,
         source Type?,
         supplementaryInterfaceCheck((Type, Type) -> bool)?
-    ) ImplicitConversionKind -> if object.ReferenceEquals(source, DefaultLiteralArgumentType) &&
+    ) ImplicitConversionKind -> if (
+        object.ReferenceEquals(source, DefaultLiteralArgumentType) || object.ReferenceEquals(source, NeverArgumentType)
+    ) &&
         target.IsByRef &&
         parameter.IsIn &&
         !parameter.IsOut {
@@ -9191,7 +9207,7 @@ internal shared class ClrOverloadResolution {
     }
 
     private func UnifyForInference(parameterType Type?, argumentType Type?, bounds Dictionary[string, Type]) bool {
-        if parameterType == nil || argumentType == nil {
+        if parameterType == nil || argumentType == nil || object.ReferenceEquals(argumentType, NeverArgumentType) {
             return true
         }
         if !parameterType.IsByRef && argumentType.IsByRef {

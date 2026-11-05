@@ -2473,16 +2473,33 @@ internal partial class StatementBinder {
                 BoundTypeParameterConstructionExpression {
                 MarkRunsEscapedClosure()
             }
-            // A hole of a type other than a built-in value or a string calls its `ToString`.
+            // A custom interpolated-string handler constructs the handler and calls its AppendLiteral /
+            // AppendFormatted methods; the default handler calls `ToString` on a hole of a type other than a
+            // built-in value or a string.
             if node is BoundInterpolatedStringExpression interpolation {
-                for part in interpolation.Parts {
-                    if part.Value is {} hole && hole.Type != TypeSymbol.String && !TypeSymbol.IsLegalPointeeType(
-                        hole.Type
-                    ) {
-                        MarkMayMutateGlobalRoots(writesReferenceStorage: false)
-                        break
+                if interpolation.Handler != nil {
+                    MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                } else {
+                    for part in interpolation.Parts {
+                        if part.Value is {} hole && hole.Type != TypeSymbol.String && !TypeSymbol.IsLegalPointeeType(
+                            hole.Type
+                        ) {
+                            MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                            break
+                        }
                     }
                 }
+            }
+            if node is BoundMapLiteralExpression mapLiteral &&
+                !mapLiteral
+                .Entries
+                .IsDefaultOrEmpty &&
+                mapLiteral
+                .MapType
+                .KeyType != TypeSymbol.String &&
+                !TypeSymbol.IsLegalPointeeType(mapLiteral.MapType.KeyType) {
+                MayMutateMemberPaths = true
+                MarkMayMutateGlobalRoots()
             }
             if node is BoundFunctionLiteralExpression nestedLiteral {
                 for captured in nestedLiteral.CapturedVariables {
@@ -4520,7 +4537,9 @@ internal partial class StatementBinder {
                 } else {
                     initializer = bindExpression(syntax.Initializer!!, false)
                 }
-                variableType = type ?? preDeclaredSelf?.Type ?? initializer.Type
+                variableType = type ?? preDeclaredSelf?.Type ?? TypeSymbol.MaterializeNeverFunctionReturns(
+                    initializer.Type
+                )
                 if syntax.TypeClause != nil && (type == nil || type == TypeSymbol.Error) {
                     convertedInitializer = BoundErrorExpression(initializer.Syntax)
                     variableType = TypeSymbol.Error
@@ -4531,7 +4550,7 @@ internal partial class StatementBinder {
                         syntax.Initializer!!.Location
                     )
                     variableType = TypeSymbol.Error
-                } else if syntax.TypeClause == nil && ContainsNever(variableType) {
+                } else if syntax.TypeClause == nil && TypeSymbol.ContainsNeverType(variableType) {
                     // Issue #4965 (ADR-0202): an initializer that never produces
                     // a value (`let a = throw e`, or a block/if/switch every
                     // path of which exits) gives the local no type to infer.
@@ -4543,6 +4562,7 @@ internal partial class StatementBinder {
                     convertedInitializer = BoundErrorExpression(initializer.Syntax)
                     variableType = TypeSymbol.Error
                 } else {
+                    variableType = TupleTypeSymbol.ResolveNilElements(variableType)
                     convertedInitializer = conversions.BindConversion(
                         syntax.Initializer!!.Location,
                         initializer,
@@ -4950,6 +4970,19 @@ internal partial class StatementBinder {
         if initializer.Type == TypeSymbol.Error {
             return BoundExpressionStatement(syntax, initializer)
         }
+        let materializedInitializerType = TypeSymbol.MaterializeNeverFunctionReturns(initializer.Type)
+        if !object.ReferenceEquals(materializedInitializerType, initializer.Type) {
+            initializer = conversions.BindConversion(
+                syntax.Initializer.Location,
+                initializer,
+                materializedInitializerType
+            )
+        }
+        if TypeSymbol.ContainsNeverType(initializer.Type) {
+            Diagnostics.ReportExpressionMustHaveValue(syntax.Initializer.Location)
+            DeclareErrorTypedLocals(syntax.Identifiers)
+            return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+        }
         // ADR-0186 §4/§5, issue #4325: deconstruction reads members out of
         // the source, so the source is a receiver and gets the same check and
         // unwrap every other receiver position gets. The unwrap is the half
@@ -4958,15 +4991,17 @@ internal partial class StatementBinder {
         // probes for an imported `Deconstruct`, none of which a platform
         // wrapper matches.
         initializer = binderCtx.InsertPlatformCheck(initializer, syntax.Initializer.Location, "a deconstruction source")
-        if initializer.Type is TupleTypeSymbol tupleType {
-            if syntax.Identifiers.Count != tupleType.Arity {
+        if initializer.Type is TupleTypeSymbol rawTupleType {
+            if syntax.Identifiers.Count != rawTupleType.Arity {
                 Diagnostics.ReportDeconstructionFieldCountMismatch(
                     syntax.CloseParenToken.Location,
-                    tupleType.Arity,
+                    rawTupleType.Arity,
                     syntax.Identifiers.Count
                 )
                 return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
             }
+            let tupleType = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(rawTupleType))
+            initializer = conversions.BindConversion(syntax.Initializer.Location, initializer, tupleType)
             let (tempVar, elements) = CreateTupleDeconstructionPlan(syntax, tupleType)
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
             statements.Add(BoundVariableDeclaration(syntax, tempVar, initializer))
@@ -5000,6 +5035,21 @@ internal partial class StatementBinder {
             let tempName = "<data${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
             let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, receiverType)
             $scope.TryDeclareVariable(tempVar)
+            if RequiresSynthesizedDeconstructCall(aggregate, members) {
+                return BoundBlockStatement(
+                    syntax,
+                    BindDataDeconstructCallStatements(
+                        syntax,
+                        BoundVariableExpression(nil, tempVar),
+                        receiverType,
+                        aggregate,
+                        members,
+                        syntax.Identifiers,
+                        isReadOnly,
+                        BoundVariableDeclaration(syntax, tempVar, initializer)
+                    )
+                )
+            }
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
             statements.Add(BoundVariableDeclaration(syntax, tempVar, initializer))
             for var i = 0; i < syntax.Identifiers.Count; i++ {
@@ -5008,7 +5058,7 @@ internal partial class StatementBinder {
                     continue
                 }
                 let member = members[i]
-                let memberType = GetDeconstructionMemberType(receiverType, member, $scope.References)
+                let memberType = GetDeconstructionMemberType(receiverType, aggregate, i, member, $scope.References)
                 let elemVar = bindLocalVariable(idTok, isReadOnly, memberType)
                 let access = BindDeconstructionMemberAccess(
                     BoundVariableExpression(nil, tempVar),
@@ -5142,13 +5192,24 @@ internal partial class StatementBinder {
                 DeclareErrorTypedLocals(identifiers)
                 return ImmutableArray[BoundStatement].Empty
             }
+            if RequiresSynthesizedDeconstructCall(aggregate, members) {
+                return BindDataDeconstructCallStatements(
+                    nil,
+                    elementAccessBase,
+                    elementType,
+                    aggregate,
+                    members,
+                    identifiers,
+                    isReadOnly: true
+                )
+            }
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
             for var i = 0; i < identifiers.Count; i++ {
                 if IsDiscard(identifiers[i]) {
                     continue
                 }
                 let member = members[i]
-                let memberType = GetDeconstructionMemberType(elementType, member, $scope.References)
+                let memberType = GetDeconstructionMemberType(elementType, aggregate, i, member, $scope.References)
                 let elemVar = bindLocalVariable(identifiers[i], true, memberType)
                 let access = BindDeconstructionMemberAccess(elementAccessBase, aggregate, member, memberType)
                 // LanguageServer fix: see the matching comment in the tuple
@@ -5382,6 +5443,15 @@ internal partial class StatementBinder {
         if initializer.Type == TypeSymbol.Error {
             return BoundExpressionStatement(syntax, initializer)
         }
+        if TypeSymbol.ContainsNeverType(TypeSymbol.MaterializeNeverFunctionReturns(initializer.Type)) {
+            Diagnostics.ReportExpressionMustHaveValue(syntax.Initializer.Location)
+            for fieldSyntax in syntax.Fields {
+                if !IsDiscard(fieldSyntax.LocalIdentifier) {
+                    bindLocalVariable(fieldSyntax.LocalIdentifier, true, TypeSymbol.Error)
+                }
+            }
+            return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+        }
         // ADR-0186 §4/§5: named deconstruction reads each field off the
         // initializer, so a platform `DPt!` is used as non-null here, exactly
         // like the positional form's source (see the check in
@@ -5454,6 +5524,73 @@ internal partial class StatementBinder {
             structType = importedAggregate
         }
         return structType != nil && (structType.IsData || structType.IsInline)
+    }
+
+    private func RequiresSynthesizedDeconstructCall(aggregate StructSymbol, members ImmutableArray[Symbol]) bool {
+        if !aggregate.IsData {
+            return false
+        }
+        for member in members {
+            if member is PropertySymbol prop && !aggregate.Properties.Contains(prop) &&
+                prop.GetterAccessibility != Accessibility.Public {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func BindDataDeconstructCallStatements(
+        syntax SyntaxNode?,
+        receiver BoundExpression,
+        receiverType TypeSymbol,
+        aggregate StructSymbol,
+        members ImmutableArray[Symbol],
+        identifiers GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[SyntaxToken],
+        isReadOnly bool,
+        prefixStatement BoundStatement? = nil
+    ) ImmutableArray[BoundStatement] {
+        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+        if prefixStatement != nil {
+            statements.Add(prefixStatement)
+        }
+        if aggregate.ClrType != nil &&
+            TryBindImportedDeconstruct(
+            receiver,
+            identifiers,
+            syntax?.Location ?? default(TextLocation),
+            isReadOnly,
+            out var importedStatements
+        ) {
+            statements.AddRange(importedStatements)
+            return statements.ToImmutable()
+        }
+        let arguments = ImmutableArray.CreateBuilder[BoundExpression](members.Length)
+        let declarations = ImmutableArray.CreateBuilder[BoundStatement](members.Length)
+        for var i = 0; i < identifiers.Count; i++ {
+            let memberType = GetDeconstructionMemberType(receiverType, aggregate, i, members[i], $scope.References)
+            let temp = LocalVariableSymbol(
+                "<deconstruct${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
+                isReadOnly: false,
+                memberType
+            )
+            $scope.TryDeclareVariable(temp)
+            arguments.Add(BoundAddressOfExpression(nil, BoundVariableExpression(nil, temp)))
+            if !IsDiscard(identifiers[i]) {
+                let elemVar = bindLocalVariable(identifiers[i], isReadOnly, memberType)
+                declarations.Add(
+                    BoundVariableDeclaration(syntax ?? identifiers[i], elemVar, BoundVariableExpression(nil, temp))
+                )
+            }
+        }
+        let call = BoundUserInstanceCallExpression(
+            nil,
+            receiver,
+            aggregate.DataDeconstruct,
+            arguments.MoveToImmutable()
+        )
+        statements.Add(BoundExpressionStatement(nil, call))
+        statements.AddRange(declarations)
+        return statements.ToImmutable()
     }
 
     shared {
@@ -6477,27 +6614,6 @@ internal partial class StatementBinder {
         /// @returns `true` when [`type`](paramref) is reference-like.
         private func IsReferenceLikeType(type TypeSymbol?) bool -> type != nil && Conversion.IsReferenceLikeTarget(type)
 
-        /// Issue #4965 (ADR-0202): whether [`type`](paramref) is, or is a tuple
-        /// with an element that is, the bottom type — the inferred type of an
-        /// initializer that never produces a value (`throw e`,
-        /// `(if c { return 1 } else { return 2 }, 0)`). Such a type cannot be
-        /// a local's type: `never` has no CLR form.
-        /// @param type The inferred type.
-        /// @returns `true` when the type contains `never`.
-        internal func ContainsNever(type TypeSymbol?) bool {
-            if type == TypeSymbol.Never {
-                return true
-            }
-            if type is TupleTypeSymbol tuple {
-                for element in tuple.ElementTypes {
-                    if ContainsNever(element) {
-                        return true
-                    }
-                }
-            }
-            return false
-        }
-
         /// Issue #4965 (ADR-0202): whether the end of a block whose bound
         /// statements are [`statements`](paramref) is unreachable, so that a
         /// value block ending this way has the bottom (`never`) type instead
@@ -6710,6 +6826,61 @@ internal partial class StatementBinder {
 
         private func GetDeconstructionMemberType(
             receiverType TypeSymbol,
+            aggregate StructSymbol,
+            index int32,
+            member Symbol,
+            references ReferenceResolver?
+        ) TypeSymbol {
+            let memberType = GetDeconstructionMemberType(receiverType, member, references)
+            if aggregate.IsData &&
+                aggregate.HasPrimaryConstructor &&
+                index >= 0 &&
+                index < aggregate
+                .PrimaryConstructorParameters
+                .Length {
+                if aggregate.ClrType is not{} aggregateClrType {
+                    let positionalType = aggregate.PrimaryConstructorParameters[index].Type
+                    return if TypeMemberModel.PositionalTypeSatisfiedByInheritedGetter(memberType, positionalType) {
+                        positionalType
+                    } else {
+                        memberType
+                    }
+                }
+                if member is PropertySymbol{ImportedMember: PropertyInfo importedProperty} && !ClrTypeUtilities.AreSame(
+                    importedProperty.DeclaringType,
+                    aggregateClrType
+                ) {
+                    let positionalType = if receiverType is ImportedTypeSymbol{
+                        TypeArguments: {IsDefaultOrEmpty: false}
+                    } &&
+                        ImportedTypeSymbol.FindPrimaryConstructor(
+                        aggregateClrType,
+                        aggregate.PrimaryConstructorParameters
+                    ) is {} primaryCtor {
+                        ImportedTypeSymbol.NormalizeSemanticAggregate(
+                            MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, primaryCtor, index),
+                            importedProperty.PropertyType,
+                            references
+                        )
+                    } else {
+                        ImportedTypeSymbol.NormalizeSemanticAggregate(
+                            aggregate.PrimaryConstructorParameters[index].Type,
+                            importedProperty.PropertyType,
+                            references
+                        )
+                    }
+                    return if TypeMemberModel.PositionalTypeSatisfiedByInheritedGetter(memberType, positionalType) {
+                        positionalType
+                    } else {
+                        memberType
+                    }
+                }
+            }
+            return memberType
+        }
+
+        private func GetDeconstructionMemberType(
+            receiverType TypeSymbol,
             member Symbol,
             references ReferenceResolver?
         ) TypeSymbol -> switch member {
@@ -6722,7 +6893,8 @@ internal partial class StatementBinder {
             } else {
                 field.Type
             }
-            case property is PropertySymbol: if property.ImportedMember is PropertyInfo importedProperty {
+            case property is PropertySymbol: if receiverType is not StructSymbol{ClrType: nil} &&
+                property.ImportedMember is PropertyInfo importedProperty {
                 let projected = MemberLookup.GetClrPropertyTypeSymbol(receiverType, importedProperty)
                 let pointee = if projected is ByRefTypeSymbol byRefProperty {
                     byRefProperty.PointeeType

@@ -48,6 +48,7 @@ class StructSymbol : TypeSymbol {
     private var constFields ImmutableArray[FieldSymbol] = ImmutableArray[FieldSymbol].Empty
     private var fieldsStore ImmutableArray[FieldSymbol] = ImmutableArray[FieldSymbol].Empty
     private var propertiesStore ImmutableArray[PropertySymbol] = ImmutableArray[PropertySymbol].Empty
+    private var inheritedPositionalPropertiesStore ImmutableArray[PropertySymbol] = ImmutableArray[PropertySymbol].Empty
     private var staticPropertiesStore ImmutableArray[PropertySymbol] = ImmutableArray[PropertySymbol].Empty
     private var staticEventsStore ImmutableArray[EventSymbol] = ImmutableArray[EventSymbol].Empty
 
@@ -85,6 +86,10 @@ class StructSymbol : TypeSymbol {
     private var substitutedPropertiesSource ImmutableArray[PropertySymbol]
     private var substitutedPropertiesVersion int32 = -1
     private var substitutedPropertiesComputed bool
+    private var substitutedInheritedPositionalProperties ImmutableArray[PropertySymbol]
+    private var substitutedInheritedPositionalPropertiesSource ImmutableArray[PropertySymbol]
+    private var substitutedInheritedPositionalPropertiesVersion int32 = -1
+    private var substitutedInheritedPositionalPropertiesComputed bool
     private var substitutedStaticProperties ImmutableArray[PropertySymbol]
     private var substitutedStaticPropertiesSource ImmutableArray[PropertySymbol]
     private var substitutedStaticPropertiesVersion int32 = -1
@@ -106,6 +111,7 @@ class StructSymbol : TypeSymbol {
     private var dataClassCloneMethod FunctionSymbol?
     private var dataEqualsSelf FunctionSymbol?
     private var dataEqualsObject FunctionSymbol?
+    private var dataDeconstruct FunctionSymbol?
     private var dataPrintMembers FunctionSymbol?
     private var dataPrintMembersMethods ImmutableArray[FunctionSymbol]
     private var dataPrintMembersBase StructSymbol?
@@ -1022,6 +1028,42 @@ class StructSymbol : TypeSymbol {
         }
     )!!
 
+    /// Gets the compiler-owned `Deconstruct` signature on this exact construction.
+    internal prop DataDeconstruct FunctionSymbol {
+        get {
+            if dataDeconstruct != nil {
+                return dataDeconstruct!!
+            }
+            let members = TypeMemberModel.GetDataDeconstructionMembers(this)
+            let parameters = ImmutableArray.CreateBuilder[ParameterSymbol](members.Length)
+            for var i = 0; i < members.Length; i++ {
+                let member = members[i]
+                let memberType = if HasPrimaryConstructor && i < PrimaryConstructorParameters.Length {
+                    PrimaryConstructorParameters[i].Type
+                } else {
+                    switch member {
+                        case f is FieldSymbol: f.Type
+                        case p is PropertySymbol: p.Type
+                        default: TypeSymbol.Error
+                    }
+                }
+                parameters.Add(ParameterSymbol(member.Name, memberType, refKind: RefKind.Out))
+            }
+            let created = FunctionSymbol(
+                "Deconstruct",
+                parameters.MoveToImmutable(),
+                TypeSymbol.Void,
+                declaration: nil,
+                $package: nil,
+                accessibility: Accessibility.Public,
+                receiverType: this,
+                isOpen: false,
+                isOverride: false
+            )
+            return Interlocked.CompareExchange(&dataDeconstruct, created, nil) ?? created
+        }
+    }
+
     /// Gets or sets a value indicating whether this type is the synthesized backing type of an
     /// anonymous literal (`data object { ... }` or `object { ... }`, ADR-0146).
     /// Such a type keeps G#'s equality surface and prints as a C# anonymous type
@@ -1355,6 +1397,22 @@ class StructSymbol : TypeSymbol {
     /// @param properties The bound property symbols owned by this type.
     func SetProperties(properties ImmutableArray[PropertySymbol]) {
         Properties = properties
+    }
+
+    internal prop InheritedPositionalProperties ImmutableArray[PropertySymbol] {
+        get -> if Definition != nil && !object.ReferenceEquals(Definition, this) {
+            GetSubstitutedInheritedPositionalProperties()
+        } else {
+            inheritedPositionalPropertiesStore
+        }
+    }
+
+    internal func SetInheritedPositionalProperties(properties ImmutableArray[PropertySymbol]) {
+        inheritedPositionalPropertiesStore = if properties.IsDefault {
+            ImmutableArray[PropertySymbol].Empty
+        } else {
+            properties
+        }
     }
 
     /// Sets (cref:Events) after binding event declarations (ADR-0052).
@@ -2248,6 +2306,23 @@ class StructSymbol : TypeSymbol {
         substitutedPropertiesSource = source
         substitutedPropertiesVersion = version
         substitutedPropertiesComputed = true
+        return result
+    }
+
+    private func GetSubstitutedInheritedPositionalProperties() ImmutableArray[PropertySymbol] {
+        let source = Definition!!.InheritedPositionalProperties
+        let version = Definition!!.memberDefaultVersion
+        if substitutedInheritedPositionalPropertiesComputed && substitutedInheritedPositionalPropertiesSource.Equals(
+            source
+        ) &&
+            substitutedInheritedPositionalPropertiesVersion == version {
+            return substitutedInheritedPositionalProperties
+        }
+        let result = SubstituteProperties(source, GetSubstitutionMap(), mapClrType)
+        substitutedInheritedPositionalProperties = result
+        substitutedInheritedPositionalPropertiesSource = source
+        substitutedInheritedPositionalPropertiesVersion = version
+        substitutedInheritedPositionalPropertiesComputed = true
         return result
     }
 

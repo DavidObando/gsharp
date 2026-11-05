@@ -645,6 +645,10 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         if !shouldSpill {
             return expression
         }
+        if expression.Type == TypeSymbol.Never {
+            statements.Add(BoundExpressionStatement(expression.Syntax, expression))
+            return BoundThrowExpression(expression.Syntax, BoundLiteralExpression(expression.Syntax, value: nil))
+        }
         let local = LocalVariableSymbol(
             "${this.tempPrefix}$role${this.counter++}",
             isReadOnly: true,

@@ -655,7 +655,7 @@ partial class Binder {
                                 // ADR-0118 / issue #944: an indexer member has the
                                 // CLR name `Item` but is not accessible by bare name —
                                 // it is reached only through `this[i]` index access.
-                                if prop.IsIndexer {
+                                if prop.IsIndexer || prop.HasExplicitInterfaceClause {
                                     continue
                                 }
                                 // Issue #1240: a parameter named like an instance
@@ -925,12 +925,28 @@ partial class Binder {
             } else {
                 BindTypeClause(member.TypeClause)
             }
-            let value = if declaredType == nil {
+            var value = if declaredType == nil {
                 Expressions.BindExpression(member.Value)
             } else {
                 Expressions.BindExpression(member.Value, declaredType)
             }
-            if value is BoundErrorExpression || value.Type == TypeSymbol.Null || value.Type == TypeSymbol.Void {
+            if declaredType == nil {
+                if value is not BoundErrorExpression && value.Type is TupleTypeSymbol{HasNilElement: true} {
+                    value = Conversions.BindConversion(
+                        member.Value.Location,
+                        value,
+                        TupleTypeSymbol.ResolveNilElements(value.Type)
+                    )
+                }
+                let materializedFieldType = TypeSymbol.MaterializeNeverFunctionReturns(value.Type)
+                if !object.ReferenceEquals(materializedFieldType, value.Type) {
+                    value = Conversions.BindConversion(member.Value.Location, value, materializedFieldType)
+                }
+            }
+            if value is BoundErrorExpression ||
+                value.Type == TypeSymbol.Null ||
+                value.Type == TypeSymbol.Void ||
+                (declaredType == nil && TypeSymbol.ContainsNeverType(value.Type)) {
                 if declaredType == nil {
                     Diagnostics.ReportRichAnonymousFieldInference(
                         member.Identifier.Location,

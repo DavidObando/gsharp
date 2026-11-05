@@ -67,14 +67,22 @@ shared class TypeMemberModel {
         let members = ImmutableArray.CreateBuilder[Symbol]()
         if type.HasPrimaryConstructor || type.Declaration?.HasPrimaryConstructor == true {
             for parameter in type.PrimaryConstructorParameters {
+                var matched PropertySymbol? = nil
                 for property in type.Properties {
                     if property.Name == parameter.Name &&
                         property.HasGetter &&
                         !property.IsStatic &&
-                        !property.IsIndexer {
-                        members.Add(property)
+                        !property.IsIndexer &&
+                        !property.HasExplicitInterfaceClause {
+                        matched = property
                         break
                     }
+                }
+                if matched == nil {
+                    TryGetInheritedDataPositionalProperty(type, parameter, out matched, out _)
+                }
+                if matched != nil {
+                    members.Add(matched)
                 }
             }
             return members.ToImmutable()
@@ -355,6 +363,8 @@ shared class TypeMemberModel {
         out declaringType TypeSymbol?
     ) bool {
         if type is StructSymbol structSymbol {
+            var explicitFallback PropertySymbol? = nil
+            var explicitFallbackOwner TypeSymbol? = nil
             for c in GetHierarchy(structSymbol) {
                 for p in c.Properties {
                     // ADR-0118 / issue #944: an indexer ('Item') is not reachable
@@ -363,11 +373,33 @@ shared class TypeMemberModel {
                         continue
                     }
                     if p.Name == name {
+                        if p.HasExplicitInterfaceClause {
+                            if explicitFallback == nil {
+                                explicitFallback = p
+                                explicitFallbackOwner = c
+                            }
+                            continue
+                        }
                         property = p
                         declaringType = c
                         return true
                     }
                 }
+            }
+            if TryGetInheritedDataPositionalProperty(
+                structSymbol,
+                name,
+                out var inheritedPositional,
+                out var inheritedPositionalOwner
+            ) {
+                property = inheritedPositional
+                declaringType = inheritedPositionalOwner ?? structSymbol
+                return true
+            }
+            if explicitFallback != nil {
+                property = explicitFallback
+                declaringType = explicitFallbackOwner
+                return true
             }
         } else if type is InterfaceSymbol interfaceSymbol {
             // Issue #1006: walk base interfaces too.
@@ -451,10 +483,488 @@ shared class TypeMemberModel {
                     return true
                 }
             }
+            if !boundProperty.IsStatic && owner is StructSymbol inheritedOwner {
+                for candidate in inheritedOwner.InheritedPositionalProperties {
+                    if object.ReferenceEquals(candidate, boundProperty) ||
+                        (
+                        boundProperty.ImportedMember != nil && candidate.ImportedMember == boundProperty.ImportedMember
+                    ) {
+                        property = candidate
+                        if candidate.ImportedMember is System
+                            .Reflection
+                            .PropertyInfo importedProp &&
+                            importedProp.DeclaringType is Type declaringClr &&
+                            GetNearestImportedBase(inheritedOwner) is {} importedBase &&
+                            importedBase.ClrType is Type baseClr &&
+                            ClrTypeUtilities.AreSame(baseClr, declaringClr) {
+                            declaringType = importedBase
+                        } else {
+                            declaringType = ResolveInheritedPropertyOwner(inheritedOwner, candidate)
+                        }
+                        return true
+                    }
+                }
+            }
+        }
+        if boundProperty.ImportedMember is System
+            .Reflection
+            .PropertyInfo boundClrProp &&
+            boundClrProp.DeclaringType is Type boundDeclaringClr {
+            if type is StructSymbol typeStruct &&
+                typeStruct.ImportedBaseType is {} typeImportedBase &&
+                typeImportedBase.ClrType is Type typeBaseClr &&
+                ClrTypeUtilities.AreSame(typeBaseClr, boundDeclaringClr) {
+                property = boundProperty
+                declaringType = typeImportedBase
+                return true
+            }
+            if type.ClrType is Type typeClr && ClrTypeUtilities.AreSame(typeClr, boundDeclaringClr) {
+                property = boundProperty
+                declaringType = type
+                return true
+            }
         }
         property = nil
         declaringType = nil
         return false
+    }
+
+    /// Issue #4874: resolves an accessible inherited instance property that a derived
+    /// `data class` positional parameter reuses instead of synthesizing a duplicate property.
+    internal func TryGetInheritedDataPositionalProperty(
+        type StructSymbol,
+        name string,
+        @NotNullWhen(true) out property PropertySymbol?,
+        out declaringType StructSymbol?
+    ) bool {
+        property = nil
+        declaringType = nil
+        if !type.IsData || !type.IsClass {
+            return false
+        }
+        for parameter in type.PrimaryConstructorParameters {
+            if parameter.Name == name {
+                return TryGetInheritedDataPositionalProperty(type, parameter, out property, out declaringType)
+            }
+        }
+        return false
+    }
+
+    internal func ArePositionalRuntimeTypesEquivalent(left TypeSymbol?, right TypeSymbol?) bool {
+        if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(left, right) {
+            return true
+        }
+        if left == nil || right == nil {
+            return false
+        }
+        let bareLeft = left.StripToBareShape()
+        let bareRight = right.StripToBareShape()
+        if bareLeft is ImportedTypeSymbol leftImported && bareRight is ImportedTypeSymbol rightImported {
+            let leftOpen = leftImported.OpenDefinition ??
+                (
+                if leftImported.ClrType is {IsGenericType: true} leftClr && !leftClr.IsGenericTypeDefinition {
+                    leftClr.GetGenericTypeDefinition()
+                } else {
+                    default(Type?)
+                }
+            )
+            let rightOpen = rightImported.OpenDefinition ??
+                (
+                if rightImported.ClrType is {IsGenericType: true} rightClr && !rightClr.IsGenericTypeDefinition {
+                    rightClr.GetGenericTypeDefinition()
+                } else {
+                    default(Type?)
+                }
+            )
+            if leftOpen != nil && rightOpen != nil && ClrTypeUtilities.AreSame(leftOpen, rightOpen) {
+                let leftPositions = left.GetElementPositions()
+                let rightPositions = right.GetElementPositions()
+                if leftPositions.Length == rightPositions.Length && leftPositions.Length > 0 {
+                    for var i = 0; i < leftPositions.Length; i++ {
+                        if !ArePositionalRuntimeTypesEquivalent(leftPositions[i], rightPositions[i]) {
+                            return false
+                        }
+                    }
+                    return true
+                }
+            }
+        }
+        if bareLeft is ChannelTypeSymbol leftChannel &&
+            bareRight is ChannelTypeSymbol rightChannel &&
+            leftChannel.Direction != rightChannel.Direction {
+            return false
+        }
+        if bareLeft is ArrayTypeSymbol leftArray &&
+            bareRight is ArrayTypeSymbol rightArray &&
+            leftArray.Length != rightArray.Length {
+            return false
+        }
+        if bareLeft is RectangularArrayTypeSymbol leftRectangular &&
+            bareRight is RectangularArrayTypeSymbol rightRectangular &&
+            leftRectangular.Rank != rightRectangular.Rank {
+            return false
+        }
+        if bareLeft is FunctionTypeSymbol leftFunction &&
+            bareRight is FunctionTypeSymbol rightFunction &&
+            !leftFunction
+            .IsVariadic
+            .SequenceEqual(rightFunction.IsVariadic) {
+            return false
+        }
+        let leftElemPositions = left.GetElementPositions()
+        let rightElemPositions = right.GetElementPositions()
+        if bareLeft.GetType() == bareRight.GetType() &&
+            leftElemPositions.Length == rightElemPositions.Length &&
+            leftElemPositions.Length > 0 &&
+            bareLeft.ClrType != nil &&
+            bareRight.ClrType != nil &&
+            ClrTypeUtilities
+            .AreSame(bareLeft.ClrType, bareRight.ClrType) {
+            for var i = 0; i < leftElemPositions.Length; i++ {
+                if !ArePositionalRuntimeTypesEquivalent(leftElemPositions[i], rightElemPositions[i]) {
+                    return false
+                }
+            }
+            return true
+        }
+        return false
+    }
+
+    internal func PositionalTypeSatisfiedByInheritedGetter(
+        source TypeSymbol,
+        target TypeSymbol,
+        allowTopLevelWidening bool = true
+    ) bool {
+        if !ArePositionalRuntimeTypesEquivalent(source, target) {
+            return false
+        }
+        let sourceRef = source.ReferenceNullability
+        let targetRef = target.ReferenceNullability
+        if sourceRef != targetRef {
+            let isSafeWidening = allowTopLevelWidening &&
+                targetRef == ReferenceNullabilityKind.Nullable &&
+                (sourceRef == ReferenceNullabilityKind.NotNull || sourceRef == ReferenceNullabilityKind.Platform)
+            if !isSafeWidening {
+                return false
+            }
+        }
+        let bareSource = source.StripToBareShape()
+        let bareTarget = target.StripToBareShape()
+        if bareSource is FunctionTypeSymbol sourceFn && bareTarget is FunctionTypeSymbol targetFn {
+            if sourceFn.ParameterTypes.Length != targetFn.ParameterTypes.Length {
+                return false
+            }
+            for var i = 0; i < sourceFn.ParameterTypes.Length; i++ {
+                if !PositionalTypeSatisfiedByInheritedGetter(
+                    targetFn.ParameterTypes[i],
+                    sourceFn.ParameterTypes[i],
+                    allowTopLevelWidening: allowTopLevelWidening
+                ) {
+                    return false
+                }
+            }
+            return object.ReferenceEquals(sourceFn.ReturnType, TypeSymbol.Void) ||
+                PositionalTypeSatisfiedByInheritedGetter(
+                sourceFn.ReturnType,
+                targetFn.ReturnType,
+                allowTopLevelWidening: allowTopLevelWidening
+            )
+        }
+        let isTuplePair = bareSource is TupleTypeSymbol && bareTarget is TupleTypeSymbol
+        let sourcePositions = source.GetElementPositions()
+        let targetPositions = target.GetElementPositions()
+        if sourcePositions.Length != targetPositions.Length {
+            return false
+        }
+        for var i = 0; i < sourcePositions.Length; i++ {
+            if !PositionalTypeSatisfiedByInheritedGetter(
+                sourcePositions[i],
+                targetPositions[i],
+                allowTopLevelWidening: allowTopLevelWidening && isTuplePair
+            ) {
+                return false
+            }
+        }
+        return true
+    }
+
+    internal func TryGetInheritedDataPositionalProperty(
+        type StructSymbol,
+        parameter ParameterSymbol,
+        @NotNullWhen(true) out property PropertySymbol?,
+        out declaringType StructSymbol?
+    ) bool {
+        property = nil
+        declaringType = nil
+        if !type.IsData || !type.IsClass {
+            return false
+        }
+        if type.BaseClass is {} baseClass {
+            for ancestor in GetHierarchy(baseClass) {
+                for field in ancestor.Fields {
+                    if !field.IsStatic && field.Name == parameter.Name {
+                        return false
+                    }
+                }
+                for candidate in ancestor.Properties {
+                    if candidate.IsStatic ||
+                        candidate.IsIndexer ||
+                        candidate.HasExplicitInterfaceClause ||
+                        candidate.Name != parameter.Name {
+                        continue
+                    }
+                    if IsSourcePropertyVisibleFromDerived(candidate, ancestor, type) &&
+                        ArePositionalRuntimeTypesEquivalent(candidate.Type, parameter.Type) {
+                        property = candidate
+                        declaringType = ancestor
+                        return true
+                    }
+                    return false
+                }
+                for candidate in ancestor.InheritedPositionalProperties {
+                    if candidate.Name != parameter.Name {
+                        continue
+                    }
+                    if ArePositionalRuntimeTypesEquivalent(candidate.Type, parameter.Type) {
+                        property = candidate
+                        declaringType = ResolveInheritedPropertyOwner(ancestor, candidate)
+                        return true
+                    }
+                    return false
+                }
+            }
+        }
+        for candidate in type.InheritedPositionalProperties {
+            if candidate.Name != parameter.Name {
+                continue
+            }
+            if ArePositionalRuntimeTypesEquivalent(candidate.Type, parameter.Type) {
+                property = candidate
+                declaringType = ResolveInheritedPropertyOwner(type, candidate)
+                return true
+            }
+            return false
+        }
+        return false
+    }
+
+    internal func ResolveInheritedPropertyOwner(owner StructSymbol, property PropertySymbol) StructSymbol {
+        var importedBase TypeSymbol? = nil
+        for current in GetHierarchy(owner) {
+            if current.ImportedBaseType is {} candidateBase {
+                importedBase = candidateBase
+                break
+            }
+        }
+        if importedBase is StructSymbol importedStruct {
+            for ancestor in GetHierarchy(importedStruct) {
+                if ancestor.Properties.Any(
+                    (candidate PropertySymbol) -> !candidate.HasExplicitInterfaceClause &&
+                        candidate.Name == property.Name
+                ) {
+                    return ancestor
+                }
+            }
+            if property.ImportedMember is not System.Reflection.PropertyInfo {
+                return importedStruct
+            }
+        }
+        if property.ImportedMember is System
+            .Reflection
+            .PropertyInfo importedProp &&
+            importedProp.DeclaringType is Type declaringClrType {
+            if owner.ClrType != nil && ClrTypeUtilities.AreSame(owner.ClrType, declaringClrType) {
+                return owner
+            }
+            if importedBase is StructSymbol importedBaseStruct &&
+                importedBaseStruct.ClrType != nil &&
+                ClrTypeUtilities.AreSame(importedBaseStruct.ClrType, declaringClrType) {
+                return importedBaseStruct
+            }
+            let declaringOwner = StructSymbol(
+                name: declaringClrType.Name,
+                fields: ImmutableArray[FieldSymbol].Empty,
+                accessibility: Accessibility.Public,
+                declaration: nil,
+                packageName: declaringClrType.Namespace ?? string.Empty,
+                isData: false,
+                isInline: false,
+                isClass: !declaringClrType.IsValueType,
+                primaryConstructorParameters: ImmutableArray[ParameterSymbol].Empty,
+                isOpen: !declaringClrType.IsSealed,
+                baseClass: nil,
+                clrType: declaringClrType
+            )
+            if importedBase != nil {
+                declaringOwner.SetImportedBaseType(importedBase)
+            }
+            return declaringOwner
+        }
+        return owner
+    }
+
+    internal func ResolveInheritedDataPositionalProperty(
+        type StructSymbol,
+        parameter ParameterSymbol,
+        references ReferenceResolver?,
+        @NotNullWhen(true) out property PropertySymbol?,
+        out declaringType StructSymbol?
+    ) bool {
+        property = nil
+        declaringType = nil
+        if !type.IsData || !type.IsClass {
+            return false
+        }
+        if type.BaseClass is {} baseClass {
+            for ancestor in GetHierarchy(baseClass) {
+                for field in ancestor.Fields {
+                    if !field.IsStatic && field.Name == parameter.Name {
+                        return false
+                    }
+                }
+                for candidate in ancestor.Properties {
+                    if candidate.IsStatic ||
+                        candidate.IsIndexer ||
+                        candidate.HasExplicitInterfaceClause ||
+                        candidate.Name != parameter.Name {
+                        continue
+                    }
+                    if IsSourcePropertyVisibleFromDerived(candidate, ancestor, type) &&
+                        ArePositionalRuntimeTypesEquivalent(candidate.Type, parameter.Type) {
+                        property = candidate
+                        declaringType = ancestor
+                        return true
+                    }
+                    return false
+                }
+                for candidate in ancestor.InheritedPositionalProperties {
+                    if candidate.Name != parameter.Name {
+                        continue
+                    }
+                    if ArePositionalRuntimeTypesEquivalent(candidate.Type, parameter.Type) {
+                        property = candidate
+                        declaringType = ResolveInheritedPropertyOwner(ancestor, candidate)
+                        return true
+                    }
+                    return false
+                }
+            }
+        }
+        for current in GetHierarchy(type) {
+            if current.ImportedBaseType is not{} importedBase {
+                continue
+            }
+            var clrCurrent Type? = importedBase.ClrType
+            while clrCurrent != nil {
+                let includeInternal = references != nil && references.CanAccessInternalMembers(clrCurrent.Assembly)
+                let declaredFlags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.Public |
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.DeclaredOnly
+                for clrField in ClrTypeUtilities.SafeGetFields(clrCurrent, declaredFlags) {
+                    if clrField.Name == parameter.Name {
+                        return false
+                    }
+                }
+                for clrProp in ClrTypeUtilities.SafeGetProperties(clrCurrent, declaredFlags) {
+                    if clrProp.Name != parameter.Name || clrProp.GetIndexParameters().Length != 0 {
+                        continue
+                    }
+                    let getter = clrProp.GetGetMethod(nonPublic: true)
+                    if getter == nil || getter.IsStatic || !IsClrAccessorVisibleFromDerived(getter, includeInternal) {
+                        return false
+                    }
+                    let clrPropertyType = MemberLookup.GetClrPropertyTypeSymbol(importedBase, clrProp)
+                    let effectiveClrPropertyType = if clrPropertyType is ByRefTypeSymbol byRefProp {
+                        byRefProp.PointeeType
+                    } else {
+                        clrPropertyType
+                    }
+                    if !ArePositionalRuntimeTypesEquivalent(effectiveClrPropertyType, parameter.Type) {
+                        return false
+                    }
+                    let getterAcc = MapClrAccessorAccessibility(getter, includeInternal)
+                    let rawSetter = clrProp.GetSetMethod(nonPublic: true)
+                    let visibleSetter = if rawSetter != nil &&
+                        !rawSetter.IsStatic &&
+                        IsClrAccessorVisibleFromDerived(rawSetter, includeInternal) {
+                        rawSetter
+                    } else {
+                        default(System.Reflection.MethodInfo?)
+                    }
+                    let setterAcc = if visibleSetter == nil {
+                        getterAcc
+                    } else {
+                        MapClrAccessorAccessibility(visibleSetter, includeInternal)
+                    }
+                    let propAcc = if getterAcc == Accessibility.Public || setterAcc == Accessibility.Public {
+                        Accessibility.Public
+                    } else if getterAcc == Accessibility.Protected || setterAcc == Accessibility.Protected {
+                        Accessibility.Protected
+                    } else {
+                        Accessibility.Internal
+                    }
+                    let synthesized = PropertySymbol(
+                        parameter.Name,
+                        effectiveClrPropertyType,
+                        propAcc,
+                        hasGetter: true,
+                        hasSetter: visibleSetter != nil,
+                        isAutoProperty: false,
+                        isVirtual: getter.IsVirtual,
+                        isOverride: ClrTypeUtilities.SafeIsOverride(getter),
+                        isInitOnly: visibleSetter != nil && ImportedTypeSymbol.IsInitOnlySetter(visibleSetter),
+                        getterAccessibility: getterAcc,
+                        setterAccessibility: setterAcc,
+                        metadataIsAbstract: getter.IsAbstract
+                    ){ReturnRefKind = RefCapabilities.GetReturnRefKind(clrProp)}
+                    synthesized.ImportedMember = clrProp
+                    property = synthesized
+                    declaringType = nil
+                    return true
+                }
+                clrCurrent = clrCurrent.BaseType
+            }
+        }
+        return false
+    }
+
+    private func IsSourcePropertyVisibleFromDerived(
+        property PropertySymbol,
+        declaringType StructSymbol,
+        derivedType StructSymbol
+    ) bool -> property.HasGetter &&
+        property.Accessibility != Accessibility.Private &&
+        property.GetterAccessibility != Accessibility.Private &&
+        AccessibilityChecker.IsAccessibleFromType(property.Accessibility, declaringType, derivedType) &&
+        AccessibilityChecker.IsAccessibleFromType(property.GetterAccessibility, declaringType, derivedType)
+
+    private func IsImportedAccessibilityVisibleFromDerived(
+        accessibility Accessibility,
+        includeInternal bool
+    ) bool -> accessibility == Accessibility.Public ||
+        accessibility == Accessibility.Protected ||
+        (includeInternal && accessibility == Accessibility.Internal)
+
+    private func IsClrAccessorVisibleFromDerived(
+        accessor System.Reflection.MethodInfo,
+        includeInternal bool
+    ) bool -> accessor.IsPublic ||
+        accessor.IsFamily ||
+        accessor.IsFamilyOrAssembly ||
+        (includeInternal && (accessor.IsAssembly || accessor.IsFamilyAndAssembly))
+
+    private func MapClrAccessorAccessibility(
+        accessor System.Reflection.MethodInfo,
+        includeInternal bool
+    ) Accessibility -> if accessor.IsPublic {
+        Accessibility.Public
+    } else if accessor.IsFamilyOrAssembly && includeInternal {
+        Accessibility.Internal
+    } else if accessor.IsFamily || accessor.IsFamilyOrAssembly || accessor.IsFamilyAndAssembly {
+        Accessibility.Protected
+    } else {
+        Accessibility.Internal
     }
 
     /// Issue #2150: tries to find a data-class positional (primary-constructor)
@@ -1024,6 +1534,9 @@ shared class TypeMemberModel {
     ) bool {
         if !instance.IsDefaultOrEmpty {
             for s in instance {
+                if s is PropertySymbol{IsIndexer: true} || s is PropertySymbol{HasExplicitInterfaceClause: true} {
+                    continue
+                }
                 if s.Name == name {
                     result = s
                     return true
@@ -1032,6 +1545,9 @@ shared class TypeMemberModel {
         }
         if !static.IsDefaultOrEmpty {
             for s in static {
+                if s is PropertySymbol{IsIndexer: true} || s is PropertySymbol{HasExplicitInterfaceClause: true} {
+                    continue
+                }
                 if s.Name == name {
                     result = s
                     return true

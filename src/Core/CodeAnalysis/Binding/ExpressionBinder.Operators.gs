@@ -946,6 +946,7 @@ internal partial class ExpressionBinder {
     /// void switch-expression arm). A void or never-typed value is returned as
     /// is; any other value is evaluated as an expression statement.
     private func DiscardValue(value BoundExpression) BoundExpression {
+        var value = value
         // A bare `default` takes its type from a target, and a discarded
         // position has none: report it rather than leave the untyped
         // placeholder to the emitter (GS0362, as for any targetless `default`),
@@ -956,9 +957,31 @@ internal partial class ExpressionBinder {
         if value.Type == TypeSymbol.Void || value.Type == TypeSymbol.Never || value.Type == TypeSymbol.Error {
             return value
         }
+        var discarded = value
+        if discarded.Type == TypeSymbol.Null || discarded.Type is TupleTypeSymbol{HasNilElement: true} {
+            discarded = conversions.BindConversion(
+                discarded.Syntax?.Location ?? default(TextLocation),
+                discarded,
+                TupleTypeSymbol.ResolveNilElements(discarded.Type)
+            )
+        }
+        let materialized = TypeSymbol.MaterializeNeverFunctionReturns(discarded.Type)
+        if !object.ReferenceEquals(materialized, discarded.Type) {
+            discarded = conversions.BindConversion(
+                discarded.Syntax?.Location ?? default(TextLocation),
+                discarded,
+                materialized
+            )
+        }
+        if TypeSymbol.ContainsNeverType(discarded.Type) {
+            if discarded.Syntax is {} syntax {
+                Diagnostics.ReportExpressionMustHaveValue(syntax.Location)
+            }
+            return BoundErrorExpression(nil)
+        }
         return BoundBlockExpression(
             nil,
-            ImmutableArray.Create[BoundStatement](BoundExpressionStatement(nil, value)),
+            ImmutableArray.Create[BoundStatement](BoundExpressionStatement(nil, discarded)),
             BoundLiteralExpression(nil, value: 0, TypeSymbol.Void)
         )
     }
@@ -1074,6 +1097,14 @@ internal partial class ExpressionBinder {
             // Cleanup replaces a tail with a result-local read. Diagnose an
             // unresolved value before that replacement hides its defaults.
             if value.Type == TypeSymbol.Error && ReportUnresolvedBareDefaults(value) {
+                value = BoundErrorExpression(nil)
+            }
+            if value.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(
+                TypeSymbol.MaterializeNeverFunctionReturns(value.Type)
+            ) {
+                if (valueSyntax ?? value.Syntax) is {} syntax {
+                    Diagnostics.ReportExpressionMustHaveValue(syntax.Location)
+                }
                 value = BoundErrorExpression(nil)
             }
             boundExpression = value
@@ -3089,17 +3120,26 @@ internal partial class ExpressionBinder {
             return ConversionClassifier.HasUserDefinedImplicitConversionForTypes(source, target)
         }
 
-        /// Issue #1151: lifts a non-nullable value type to its nullable form when it
-        /// is unified with a `nil` arm in an if/switch-expression. A value type
-        /// `T` becomes `T?` so the value arm can be lifted and the nil arm
-        /// can become the null `T?`. Reference types already legally hold
-        /// `nil`, and already-nullable types are idempotent, so both are
-        /// returned unchanged.
+        /// Issues #1151 and #4316: the join of a `nil` arm and a non-nullable arm `T` is `T?`, so a
+        /// value type lifts to `Nullable<T>` and a reference type takes the nullable annotation. The
+        /// join carries the `nil`, so no context has to supply a target for it. A `T!`, a `T?` and a
+        /// type that cannot hold `nil` (an unconstrained type parameter) stay as they are.
         /// @param type The non-nil arm's type.
-        /// @returns `T?` for a non-nullable value type `T`; otherwise [`type`](paramref).
+        /// @returns The nullable form of [`type`](paramref) when `nil` can join it; otherwise [`type`](paramref).
         private func LiftForNilArm(type TypeSymbol?) TypeSymbol? {
-            if !(type is NullableTypeSymbol) && type?.ClrType is {IsValueType: true} {
-                return NullableTypeSymbol.Get(type!!)
+            if type == nil || type is NullableTypeSymbol || type is PlatformTypeSymbol {
+                return type
+            }
+            if type is TupleTypeSymbol tuple {
+                return NullableTypeSymbol.Get(TupleTypeSymbol.ResolveNilElements(tuple))
+            }
+            if !TypeSymbol.IsByRefLike(type) &&
+                (
+                type.IsValueType ||
+                    type is TypeParameterSymbol{HasValueTypeConstraint: true} ||
+                    Conversion.IsReferenceLikeTarget(type)
+            ) {
+                return NullableTypeSymbol.Get(type)
             }
             return type
         }

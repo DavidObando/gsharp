@@ -485,27 +485,47 @@ internal partial class ExpressionBinder {
         rightPart ExpressionSyntax,
         receiverSyntax ExpressionSyntax? = nil,
         receiverStart int32? = nil
-    ) BoundExpression -> if receiver != nil &&
-        ((receiver is BoundMethodGroupExpression or BoundClrMethodGroupExpression)) &&
-        !MethodGroupDiagnostics
-        .HasDelegateTarget(receiver) {
-        cast[BoundExpression](
-            MethodGroupDiagnostics.ReportRequiresTarget(
-                Diagnostics,
-                receiver,
-                receiverSyntax?.Location ?? rightPart.Location
-            )
-        )
-    } else {
-        (
-            if receiver != nil && receiver.Type == TypeSymbol.Error {
-                Diagnostics.SuppressMemberLookupCascadeIn(
-                    () -> BindAccessorStepCore(receiver, classSymbol, rightPart, receiverSyntax, receiverStart)
+    ) BoundExpression {
+        var receiver = receiver
+        if receiver is {} currentReceiver {
+            let materializedReceiverType = TypeSymbol.MaterializeNeverFunctionReturns(currentReceiver.Type)
+            if !object.ReferenceEquals(materializedReceiverType, currentReceiver.Type) {
+                receiver = conversions.BindConversion(
+                    receiverSyntax?.Location ?? rightPart.Location,
+                    currentReceiver,
+                    materializedReceiverType
                 )
-            } else {
-                BindAccessorStepCore(receiver, classSymbol, rightPart, receiverSyntax, receiverStart)
             }
-        )
+            if receiver is {} checkedReceiver &&
+                checkedReceiver.Type != TypeSymbol.Never &&
+                TypeSymbol
+                .ContainsNeverType(checkedReceiver.Type) {
+                Diagnostics.ReportExpressionMustHaveValue(receiverSyntax?.Location ?? rightPart.Location)
+                return BoundErrorExpression(nil)
+            }
+        }
+        return if receiver != nil &&
+            ((receiver is BoundMethodGroupExpression or BoundClrMethodGroupExpression)) &&
+            !MethodGroupDiagnostics
+            .HasDelegateTarget(receiver) {
+            cast[BoundExpression](
+                MethodGroupDiagnostics.ReportRequiresTarget(
+                    Diagnostics,
+                    receiver,
+                    receiverSyntax?.Location ?? rightPart.Location
+                )
+            )
+        } else {
+            (
+                if receiver != nil && receiver.Type == TypeSymbol.Error {
+                    Diagnostics.SuppressMemberLookupCascadeIn(
+                        () -> BindAccessorStepCore(receiver, classSymbol, rightPart, receiverSyntax, receiverStart)
+                    )
+                } else {
+                    BindAccessorStepCore(receiver, classSymbol, rightPart, receiverSyntax, receiverStart)
+                }
+            )
+        }
     }
 
     private func BindAccessorStepCore(
@@ -596,7 +616,18 @@ internal partial class ExpressionBinder {
                     RequiresSymbolicTupleElementInvocation(tupleType, tupleIndex) ||
                         RequiresDeclaredNameTupleElementInvocation(ce.Identifier.ValueText, tupleType, tupleIndex)
                 ) {
-                    let tupleElement = BoundTupleElementAccessExpression(nil, receiver!!, tupleType, tupleIndex)
+                    let resolvedTuple = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(tupleType))
+                    let resolvedReceiver = if object.ReferenceEquals(resolvedTuple, tupleType) {
+                        receiver!!
+                    } else {
+                        conversions.BindConversion(ce.Location, receiver!!, resolvedTuple)
+                    }
+                    let tupleElement = BoundTupleElementAccessExpression(
+                        nil,
+                        resolvedReceiver,
+                        resolvedTuple,
+                        tupleIndex
+                    )
                     return overloads.BindIndirectCallExpression(
                         ce,
                         tupleElement,
@@ -1074,7 +1105,13 @@ internal partial class ExpressionBinder {
                     // one-based Item1..ItemN or zero-based .0...N selectors.
                     let memberName = ne.IdentifierToken.ValueText
                     if TryGetTupleElementIndex(memberName, tupleSym, out var zeroBased) {
-                        return BoundTupleElementAccessExpression(nil, receiver, tupleSym, zeroBased)
+                        let resolvedTuple = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(tupleSym))
+                        let resolvedReceiver = if object.ReferenceEquals(resolvedTuple, tupleSym) {
+                            receiver
+                        } else {
+                            conversions.BindConversion(ne.Location, receiver, resolvedTuple)
+                        }
+                        return BoundTupleElementAccessExpression(nil, resolvedReceiver, resolvedTuple, zeroBased)
                     }
                     return BindExtensionMethodGroupOrError(receiver, ne)
                 } else if receiver != nil && TryBindNullableInstanceMember(receiver, ne, out var nullableMember) {

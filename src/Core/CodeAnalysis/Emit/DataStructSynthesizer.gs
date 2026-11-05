@@ -586,7 +586,7 @@ internal class DataStructSynthesizer {
         // (ReflectionMetadataEmitter) reserves one fewer MethodDef row for
         // such types to match.
         if !HasZeroDeconstructionMembers(structSym) {
-            this.EmitDataStructDeconstruct(structSym)
+            this.cache.MethodHandles[structSym.DataDeconstruct] = this.EmitDataStructDeconstruct(structSym)
         }
         // ADR-0199: the C#-record `PrintMembers(StringBuilder)` slot. It is the
         // LAST synthesized row (after Deconstruct) in both the class and the
@@ -1850,20 +1850,58 @@ internal class DataStructSynthesizer {
         return synthesizedMethod
     }
 
-    private func EmitDataStructDeconstruct(structSym StructSymbol) {
+    private func EmitDataStructDeconstruct(structSym StructSymbol) MethodDefinitionHandle {
         let members = TypeMemberModel.GetDataDeconstructionMembers(structSym)
         let il = InstructionEncoder(BlobBuilder())
         if !this.emitCtx.MetadataOnly {
             for var i = 0; i < members.Length; i++ {
-                let memberType = GetDeconstructionMemberType(members[i])
+                let memberType = GetDeconstructionMemberType(structSym, i, members[i])
                 let field FieldSymbol? = GetDeconstructionBackingField(members[i])
                 il.LoadArgument(i + 1)
                 il.LoadArgument(0)
                 if field != nil &&
+                    OwnsDeconstructionBackingField(structSym, members[i], field) &&
                     members[i] is not(PropertySymbol and {IsVirtual: true}) &&
                     members[i] is not(PropertySymbol and {IsOverride: true}) {
                     il.OpCode(ILOpCode.Ldfld)
                     il.Token(this.resolveUserFieldToken(structSym, field))
+                } else if members[i] is PropertySymbol{ImportedMember: PropertyInfo importedProperty} &&
+                    importedProperty.GetGetMethod(nonPublic: true) is {} importedGetter &&
+                    FindImportedBaseOwner(structSym) is {} importedBase {
+                    il.OpCode(
+                        if structSym.IsClass {
+                            ILOpCode.Callvirt
+                        } else {
+                            ILOpCode.Call
+                        }
+                    )
+                    il.Token(this.resolveImportedMethodRef(importedGetter, importedBase))
+                    if (members[i] is PropertySymbol and {ReturnRefKind: not RefKind.None}) {
+                        il.OpCode(ILOpCode.Ldobj)
+                        il.Token(this.getElementTypeToken(memberType))
+                    }
+                } else if members[i] is PropertySymbol inheritedProperty && !structSym.Properties.Contains(
+                    inheritedProperty
+                ) &&
+                    TypeMemberModel.TryGetProperty(
+                    structSym,
+                    inheritedProperty.Name,
+                    out var resolvedProperty,
+                    out var declaringStruct
+                ) &&
+                    declaringStruct != nil {
+                    il.OpCode(
+                        if structSym.IsClass {
+                            ILOpCode.Callvirt
+                        } else {
+                            ILOpCode.Call
+                        }
+                    )
+                    il.Token(this.resolveUserPropertyAccessorToken(declaringStruct, resolvedProperty!!, false))
+                    if (members[i] is PropertySymbol and {ReturnRefKind: not RefKind.None}) {
+                        il.OpCode(ILOpCode.Ldobj)
+                        il.Token(this.getElementTypeToken(memberType))
+                    }
                 } else {
                     let signature = BlobBuilder()
                     BlobEncoder(signature).MethodSignature(isInstanceMethod: true).Parameters(
@@ -1925,15 +1963,19 @@ internal class DataStructSynthesizer {
             members.Length,
             (r ReturnTypeEncoder) -> r.Void(),
             (ps ParametersEncoder) -> {
-                for member in members {
-                    this.encodeTypeSymbol(ps.AddParameter().Type(isByRef: true), GetDeconstructionMemberType(member))
+                for var i = 0; i < members.Length; i++ {
+                    this.encodeTypeSymbol(
+                        ps.AddParameter().Type(isByRef: true),
+                        GetDeconstructionMemberType(structSym, i, members[i])
+                    )
                 }
             }
         )
         let deconstructParameters = ImmutableArray.CreateBuilder[ParameterSymbol](members.Length)
-        for member in members {
+        for var i = 0; i < members.Length; i++ {
+            let member = members[i]
             deconstructParameters.Add(
-                ParameterSymbol(member.Name, GetDeconstructionMemberType(member), refKind: RefKind.Out)
+                ParameterSymbol(member.Name, GetDeconstructionMemberType(structSym, i, member), refKind: RefKind.Out)
             )
         }
         let synthesizedRows = this.AddSynthesizedRows(TypeSymbol.Void, deconstructParameters.MoveToImmutable())
@@ -1949,6 +1991,7 @@ internal class DataStructSynthesizer {
             parameterList: synthesizedRows.First
         )
         this.StampSynthesized(synthesizedMethod, synthesizedRows)
+        return synthesizedMethod
     }
 
     /// ADR-0087 §3 R3: resolves the right token for the call to
@@ -2168,6 +2211,17 @@ internal class DataStructSynthesizer {
             expression: "structSym.DataPrintMembers"
         )
 
+        private func GetDeconstructionMemberType(structSym StructSymbol, index int32, member Symbol) TypeSymbol {
+            let memberType = GetDeconstructionMemberType(member)
+            if structSym.HasPrimaryConstructor && index >= 0 && index < structSym.PrimaryConstructorParameters.Length {
+                let positionalType = structSym.PrimaryConstructorParameters[index].Type
+                if TypeMemberModel.PositionalTypeSatisfiedByInheritedGetter(memberType, positionalType) {
+                    return positionalType
+                }
+            }
+            return memberType
+        }
+
         private func GetDeconstructionMemberType(member Symbol) TypeSymbol -> switch member {
             case field is FieldSymbol: field.Type
             case property is PropertySymbol: property.Type
@@ -2178,6 +2232,27 @@ internal class DataStructSynthesizer {
             case field is FieldSymbol: field
             case property is PropertySymbol: property.BackingField
             default: default(FieldSymbol?)
+        }
+
+        private func OwnsDeconstructionBackingField(
+            structSym StructSymbol,
+            member Symbol,
+            field FieldSymbol
+        ) bool -> switch member {
+            case FieldSymbol: structSym.Fields.Contains(field)
+            case property is PropertySymbol: structSym.Properties.Contains(property) && property.OwnsBackingField(
+                structSym
+            )
+            default: false
+        }
+
+        private func FindImportedBaseOwner(structSym StructSymbol) TypeSymbol? {
+            for current in structSym.GetHierarchy() {
+                if current.ImportedBaseType is {} importedBase {
+                    return importedBase
+                }
+            }
+            return nil
         }
 
         /// Issue #2363: a deterministic (build-reproducible, not process-

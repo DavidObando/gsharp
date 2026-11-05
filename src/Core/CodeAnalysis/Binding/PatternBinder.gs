@@ -746,7 +746,7 @@ internal class PatternBinder {
                     }
                 }
                 for property in current.Properties {
-                    if property.Name != name {
+                    if property.HasExplicitInterfaceClause || property.Name != name {
                         continue
                     }
                     if property.IsIndexer || property.IsStatic || !property.HasGetter {
@@ -777,7 +777,7 @@ internal class PatternBinder {
             for current in interfaceType.SelfAndAllBaseInterfaces() {
                 current.EnsureMembersResolved()
                 for property in current.Properties {
-                    if property.Name != name {
+                    if property.HasExplicitInterfaceClause || property.Name != name {
                         continue
                     }
                     if property.IsIndexer || property.IsStatic || !property.HasGetter {
@@ -855,7 +855,12 @@ internal class PatternBinder {
                 boundField = nil
                 return false
             }
-            let propertyType = MemberLookup.GetClrPropertyTypeSymbol(receiverType, property)
+            let rawPropertyType = MemberLookup.GetClrPropertyTypeSymbol(receiverType, property)
+            let propertyType = if rawPropertyType is ByRefTypeSymbol byRefProperty {
+                byRefProperty.PointeeType
+            } else {
+                rawPropertyType
+            }
             boundField = BoundPropertyPatternField(
                 syntax,
                 property,

@@ -1152,6 +1152,8 @@ internal class UserTokenResolver {
                     "a constructed print-members slot has a definition",
                     expression: "definition.DataPrintMembers"
                 )
+            } else if method.Name == "Deconstruct" && object.ReferenceEquals(method, containingType.DataDeconstruct) {
+                method = definition.DataDeconstruct
             }
         }
         if !this.cache.MethodHandles.TryGetValue(method, out var openDef) && containingType.ClrType != nil {
@@ -1404,6 +1406,27 @@ internal class UserTokenResolver {
             )
         }
         if !this.cache.PropertyAccessorHandles.TryGetValue(defProp, out var handles) {
+            if defProp.ImportedMember is PropertyInfo importedPositionalProp {
+                let importedAccessor MethodInfo? = if wantSetter {
+                    importedPositionalProp.GetSetMethod(nonPublic: true)
+                } else {
+                    importedPositionalProp.GetGetMethod(nonPublic: true)
+                }
+                if importedAccessor != nil {
+                    var importedOwner TypeSymbol? = nil
+                    for ancestor in containingType.GetHierarchy() {
+                        if ancestor.ImportedBaseType is {} baseType {
+                            importedOwner = baseType
+                            break
+                        }
+                    }
+                    return if importedOwner != nil {
+                        this.memberRefs.GetMethodEntityHandle(importedAccessor, importedOwner)
+                    } else {
+                        this.memberRefs.GetMethodReference(importedAccessor)
+                    }
+                }
+            }
             if containingType.ClrType != nil {
                 let bindingFlags = (
                     if property.IsStatic {

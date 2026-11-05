@@ -573,10 +573,10 @@ partial class CSharpToGSharpTranslator {
             out result IReadOnlyList[GStatement]?
         ) bool {
             result = nil
-            if this
-                .context
-                .GetTypeInfo(right)
-                .Type is not INamedTypeSymbol{IsTupleType: true} rightType ||
+            let rightTypeInfo = this.context.GetTypeInfo(right)
+            let rightTypeSymbol = rightTypeInfo.Type ?? rightTypeInfo.ConvertedType
+            if rightTypeSymbol is not INamedTypeSymbol rightType ||
+                !rightType.IsTupleType ||
                 rightType
                 .TupleElements
                 .Length != leftTuple

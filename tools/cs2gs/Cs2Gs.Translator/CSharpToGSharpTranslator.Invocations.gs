@@ -742,14 +742,16 @@ partial class CSharpToGSharpTranslator {
             if DependsOnEnclosingConditionalReceiver(conditionalAccess.Expression) {
                 this.ReportUnsupportedNestedConditionalStaticHelperChain(conditionalAccess)
                 result = ExpressionStatement(
-                    this.PreserveNullConditionalStaticExtensionInvocation(conditionalAccess, invocation, helperName)
+                    this.PreserveNullConditionalStaticExtensionInvocation(conditionalAccess, invocation, helperName),
+                    isVoid: true
                 )
                 return true
             }
             if chainedReceiver != nil && !IsSupportedConditionalStaticHelperReceiver(chainedReceiver) {
                 this.ReportUnsupportedConditionalStaticHelperChain(conditionalAccess)
                 result = ExpressionStatement(
-                    this.PreserveNullConditionalStaticExtensionInvocation(conditionalAccess, invocation, helperName)
+                    this.PreserveNullConditionalStaticExtensionInvocation(conditionalAccess, invocation, helperName),
+                    isVoid: true
                 )
                 return true
             }
@@ -778,7 +780,7 @@ partial class CSharpToGSharpTranslator {
             } finally {
                 this.ReleaseHoistedAssignments(embedded, replacements)
             }
-            localStatements.Add(ExpressionStatement(call))
+            localStatements.Add(ExpressionStatement(call, isVoid: true))
             result = IfStatement(guard_, BlockStatement(localStatements))
             return true
         }
@@ -6216,16 +6218,26 @@ partial class CSharpToGSharpTranslator {
                 path.Add(0)
             }
             for var i = tupleIndices.Count - 1; i >= 0; i-- {
-                if sinkType is not INamedTypeSymbol{IsTupleType: true} tupleType ||
-                    tupleIndices[i] < 0 ||
-                    tupleIndices[i] >= tupleType
-                    .TupleElements
-                    .Length {
+                while sinkType is INamedTypeSymbol nullableNamed &&
+                    nullableNamed
+                    .OriginalDefinition
+                    .SpecialType == SpecialType.System_Nullable_T &&
+                    nullableNamed
+                    .TypeArguments
+                    .Length == 1 {
+                    sinkType = nullableNamed.TypeArguments[0]
+                    path.Add(0)
+                }
+                if sinkType is not INamedTypeSymbol tupleType || !tupleType.IsTupleType {
                     return nil
                 }
-                let tupleElement = tupleType.TupleElements[tupleIndices[i]]
+                let index = tupleIndices[i]
+                if index < 0 || index >= tupleType.TupleElements.Length {
+                    return nil
+                }
+                let tupleElement = tupleType.TupleElements[index]
                 sinkType = tupleElement.Type
-                path.Add(tupleIndices[i])
+                path.Add(index)
             }
             if tupleIndices.Count != 0 {
                 return if ObliviousNullabilityAnalyzer.IsTupleElementTainted(

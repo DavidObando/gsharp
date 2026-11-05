@@ -175,8 +175,8 @@ class Holder[T] {
         for enumSymbol in scope_.Enums {
             Assert.Same(edited, enumSymbol.Declaration.SyntaxTree)
         }
-        Assert.Same(edited, scope_.Delegates.Single().Declaration.SyntaxTree)
-        Assert.Same(edited, constructed.Declaration.SyntaxTree)
+        Assert.Same(edited, scope_.Delegates.Single().Declaration!!.SyntaxTree)
+        Assert.Same(edited, constructed.Declaration!!.SyntaxTree)
         Assert.Same(edited, constructedEnum.Declaration.SyntaxTree)
     }
 
