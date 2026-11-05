@@ -1598,6 +1598,11 @@ public sealed class SelectBox
 {
     public string[] Select() => new[] { "g" };
 }
+public sealed class Holder
+{
+    public object? Tag = "t";
+    public Box Child = new Box();
+}
 public sealed class Unrelated { }
 public sealed class DisposableBox : System.IDisposable
 {
@@ -1759,13 +1764,49 @@ public class Demo
         foreach (var part in dbox.ConstrainedParts()) total += part.Length;
         return s.Length + total + 13;
     }
-    public static int ConstrainedReceiverControl<T>(ref string? s, T constrainedBox) where T : class, IBox
+    public static int ExplicitGenericLocalReceiverCall(
+        ref string? s,
+        System.Collections.Generic.Stack<Box> stack
+    )
+    {
+        if (s == null) return 0;
+        var i = 0;
+        while (i < 1)
+        {
+            System.Collections.Generic.Stack<Box>? copy = stack;
+            copy.Peek().Ping();
+            i++;
+        }
+        return s.Length + 17;
+    }
+    public static int MemberTypeTestInvalidatesMemberReceiverCall(ref string? s, Holder holder)
+    {
+        if (s == null) return 0;
+        var i = 0;
+        while (i < 1)
+        {
+            if (holder.Tag is string) holder.Child.Ping();
+            i++;
+        }
+        return s.Length + 18;
+    }
+    public static int ForHeaderConditionalInitializerControl(ref string? s, Box a, Box b, bool flag)
+    {
+        if (s == null) return 0;
+        var i = 0;
+        for (var copy = flag ? a : b; i < 1; i++, i++)
+        {
+            copy.Ping();
+        }
+        return s.Length + 19;
+    }
+    public static int ConstrainedReceiverControl<T>(ref string? s, T constrainedBox, Holder holder) where T : class, IBox
     {
         if (s == null) return 0;
         var run = true;
         while (run)
         {
-            constrainedBox.Ping();
+            if (holder.Tag is string) constrainedBox.Ping();
             run = false;
         }
         return s.Length + 15;
@@ -1774,6 +1815,7 @@ public class Demo
         ref string? s,
         T[] newableItems,
         System.Collections.Generic.List<T> newableList,
+        System.Collections.Generic.List<T>[] lists,
         string word
     ) where T : new()
     {
@@ -1785,6 +1827,7 @@ public class Demo
             run = false;
         }
         var total = 0;
+        foreach (var list in lists) list.Clear();
         foreach (var part in newableList.NewableParts()) total += part.Length;
         foreach (var part in WordExtensions.WordParts(word)) total += part.Length;
         return s.Length + total + 16;
@@ -1849,6 +1892,8 @@ public class Demo
         OtherNs.StaticHolder.Seed = new[] { "q" };
         OtherNs.StaticHolder.Instance = new Box();
         var genericIntBox = new GenericBox<int> { StoredList = new System.Collections.Generic.List<int>() };
+        var stack = new System.Collections.Generic.Stack<Box>();
+        stack.Push(new Box());
         string? text = "abc";
         return AfterCallCollection(ref text) + "," + InsideCallCollection(ref text) + "," +
             OverUnqualifiedStaticCall(ref text) + "," +
@@ -1862,11 +1907,15 @@ public class Demo
             OverMixedReturnOverloads(ref text, new MixedBox()) + "," +
             OverMixedChainedReceiverOverloads(ref text, new MixedBox()) + "," +
             OverConstrainedExtensionConflict(ref text, new DisposableBox()) + "," +
-            ConstrainedReceiverControl(ref text, new Box()) + "," +
+            ExplicitGenericLocalReceiverCall(ref text, stack) + "," +
+            MemberTypeTestInvalidatesMemberReceiverCall(ref text, new Holder()) + "," +
+            ForHeaderConditionalInitializerControl(ref text, new Box(), new Box(), true) + "," +
+            ConstrainedReceiverControl(ref text, new Box(), new Holder()) + "," +
             NewableAndStaticExtensionControl(
                 ref text,
                 new[] { new Box() },
                 new System.Collections.Generic.List<Box> { new Box() },
+                new[] { new System.Collections.Generic.List<Box>() },
                 "hi"
             ) + "," +
             OverParameterArray(ref text, new[] { "a", "b" }) + "," +
@@ -1904,12 +1953,15 @@ namespace OtherNs
         Assert.Contains("return s!!.Length + total + 11", printed)
         Assert.Contains("return s!!.Length + total + 12", printed)
         Assert.Contains("return s!!.Length + total + 13", printed)
+        Assert.Contains("return s!!.Length + 17", printed)
+        Assert.Contains("return s!!.Length + 18", printed)
+        Assert.Contains("return s.Length + 19", printed)
         Assert.Contains("return s.Length + 15", printed)
         Assert.Contains("return s.Length + total + 16", printed)
         Assert.Contains("return s.Length + total + 1", printed)
         Assert.Contains("return s.Length + total + 2", printed)
         Assert.Contains("return s.Length + total + 4", printed)
-        Assert.Equal(13, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(15, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null
@@ -1927,6 +1979,11 @@ public sealed class Box
 {
     public int F;
     public bool Again() => false;
+}
+public sealed class Holder
+{
+    public object? Tag = "t";
+    public Box Child = new Box();
 }
 public partial class Demo
 {
@@ -2151,6 +2208,24 @@ public partial class Demo
         }
         return s.Length + 18;
     }
+    public static int WhileConditionWithMemberTypeTestAndMemberCall(ref string? s, Holder holder)
+    {
+        s = null;
+        while ((holder.Tag is string && holder.Child.Again()) || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 19;
+    }
+    public static int WhileConditionWithNullConditionalReceiver(ref string? s, Box? a, Box? b, bool flag)
+    {
+        s = null;
+        while ((flag ? a : b)?.Again() == true || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 20;
+    }
     public static string Run()
     {
         string? text = "abc";
@@ -2169,7 +2244,9 @@ public partial class Demo
             WhileConditionWithConditionalReceiver(ref text, new Box(), new Box(), true) + "," +
             WhileLoopAfterPatternGuardEndLabel(ref text, new Box(), 1) + "," +
             WhileConditionCoalesceAssignNumeric(ref text) + "," +
-            WhileConditionRelationalPatternConversion(ref text, 3);
+            WhileConditionRelationalPatternConversion(ref text, 3) + "," +
+            WhileConditionWithMemberTypeTestAndMemberCall(ref text, new Holder()) + "," +
+            WhileConditionWithNullConditionalReceiver(ref text, new Box(), new Box(), true);
     }
 }`)
         Assert.Contains("return s.Length + 1\n", printed.Replace("\r\n", "\n"))
@@ -2190,7 +2267,9 @@ public partial class Demo
         Assert.Contains("return s!!.Length + 16", printed)
         Assert.Contains("return s!!.Length + 17", printed)
         Assert.Contains("return s!!.Length + 18", printed)
-        Assert.Equal(10, Regex.Matches(printed, `s!!`).Count)
+        Assert.Contains("return s!!.Length + 19", printed)
+        Assert.Contains("return s!!.Length + 20", printed)
+        Assert.Equal(12, Regex.Matches(printed, `s!!`).Count)
     }
 
     shared {

@@ -6980,11 +6980,30 @@ partial class CSharpToGSharpTranslator {
                         allowEntryTypeParameter && !requireElementStep
                     )
                 }
+                case conditionalAccess is ConditionalAccessExpressionSyntax {
+                    return this.ResolveExpressionRegionReceiverTypes(
+                        conditionalAccess.WhenNotNull,
+                        regionScope,
+                        requireElementStep,
+                        visitedLocals,
+                        allowEntryTypeParameter
+                    )
+                }
                 case member is MemberAccessExpressionSyntax {
                     baseTypes = this.ResolveMemberAccessRegionReceiverTypes(member, regionScope, visitedLocals)
                 }
+                case memberBinding is MemberBindingExpressionSyntax {
+                    baseTypes = this.ResolveMemberBindingRegionReceiverTypes(memberBinding, regionScope, visitedLocals)
+                }
                 case element is Microsoft.CodeAnalysis.CSharp.Syntax.ElementAccessExpressionSyntax {
                     baseTypes = this.ResolveElementAccessRegionReceiverTypes(element, regionScope, visitedLocals)
+                }
+                case elementBinding is ElementBindingExpressionSyntax {
+                    baseTypes = this.ResolveElementBindingRegionReceiverTypes(
+                        elementBinding,
+                        regionScope,
+                        visitedLocals
+                    )
                 }
                 case invocation is InvocationExpressionSyntax {
                     baseTypes = if this.IsPureStringFormInRegion(invocation) {
@@ -7006,6 +7025,9 @@ partial class CSharpToGSharpTranslator {
             if !requireElementStep {
                 return baseTypes
             }
+            if this.RegionContainsMemberTypeTest(regionScope) {
+                return nil
+            }
             let elementTypes = List[ITypeSymbol]()
             for candidate in baseTypes {
                 if !this.TryAddRegionElementStepType(candidate, elementTypes) {
@@ -7026,9 +7048,7 @@ partial class CSharpToGSharpTranslator {
             allowEntryTypeParameter bool = false
         ) List[ITypeSymbol]? {
             let symbol = this.context.GetSymbolInfo(identifier).Symbol
-            if symbol is ILocalSymbol local && local.DeclaringSyntaxReferences.Any(
-                (reference SyntaxReference) -> regionScope.Span.Contains(reference.Span)
-            ) {
+            if symbol is ILocalSymbol local && this.IsDeclaredInRegion(local, regionScope) {
                 if local.IsRef || this.RegionLocalOriginClearedByTypeTest(local, identifier, regionScope) {
                     return nil
                 }
@@ -7049,8 +7069,8 @@ partial class CSharpToGSharpTranslator {
                     .Syntax
                     .VariableDeclarationSyntax declaration {
                     if this.LocalDeclaratorEmitsExplicitType(declaration, declarator, local) {
-                        return if this.LocalTypeResolvesAsTypeClauseOrigin(local.Type) {
-                            List[ITypeSymbol]{local.Type}
+                        return if this.ResolveExplicitTypeClauseOrigin(local.Type) is {} clauseOrigin {
+                            List[ITypeSymbol]{clauseOrigin}
                         } else {
                             default(List[ITypeSymbol]?)
                         }
@@ -7067,8 +7087,8 @@ partial class CSharpToGSharpTranslator {
                 }
                 if declaringSyntax is ForEachStatementSyntax innerForEach {
                     if this.ForEachHasTypeClause(innerForEach) {
-                        return if this.LocalTypeResolvesAsTypeClauseOrigin(local.Type) {
-                            List[ITypeSymbol]{local.Type}
+                        return if this.ResolveExplicitTypeClauseOrigin(local.Type) is {} clauseOrigin {
+                            List[ITypeSymbol]{clauseOrigin}
                         } else {
                             default(List[ITypeSymbol]?)
                         }
@@ -7089,6 +7109,18 @@ partial class CSharpToGSharpTranslator {
                 return nil
             }
             return List[ITypeSymbol]{type}
+        }
+
+        private func IsDeclaredInRegion(local ILocalSymbol, regionScope Microsoft.CodeAnalysis.SyntaxNode) bool {
+            let topForDeclarationSpan = if regionScope is ForStatementSyntax topFor && topFor.Declaration != nil {
+                topFor.Declaration!!.FullSpan
+            } else {
+                default(Microsoft.CodeAnalysis.Text.TextSpan?)
+            }
+            return local.DeclaringSyntaxReferences.Any(
+                (reference SyntaxReference) -> regionScope.Span.Contains(reference.Span) &&
+                    (topForDeclarationSpan == nil || !topForDeclarationSpan!!.Contains(reference.Span))
+            )
         }
 
         private func RegionLocalOriginClearedByTypeTest(
@@ -7208,7 +7240,84 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        private func LocalTypeResolvesAsTypeClauseOrigin(type ITypeSymbol?) bool {
+        private func RegionContainsMemberTypeTest(regionScope Microsoft.CodeAnalysis.SyntaxNode) bool {
+            let OutsideNested = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
+                return !(
+                    node is LocalFunctionStatementSyntax ||
+                        node is AnonymousFunctionExpressionSyntax ||
+                        this.IsDroppedStatementOrLoopClause(node)
+                )
+            }
+            for node in regionScope.DescendantNodesAndSelf(OutsideNested) {
+                switch node {
+                    case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when binary.IsKind(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression
+                    ) {
+                        if !IsPlainIdentifierSubject(binary.Left) {
+                            return true
+                        }
+                    }
+                    case isPattern is IsPatternExpressionSyntax {
+                        if this.PatternHasNestedMemberTypeTestInRegion(isPattern.Pattern) ||
+                            (
+                            this.PatternClearsSubjectOriginInRegion(isPattern.Pattern) &&
+                                !IsPlainIdentifierSubject(isPattern.Expression)
+                        ) {
+                            return true
+                        }
+                    }
+                    case switchStmt is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax {
+                        let plainSubject = IsPlainIdentifierSubject(switchStmt.Expression)
+                        for label in switchStmt.Sections.SelectMany((section SwitchSectionSyntax) -> section.Labels) {
+                            if label is CasePatternSwitchLabelSyntax patternLabel &&
+                                this.PatternHasNestedMemberTypeTestInRegion(patternLabel.Pattern) {
+                                return true
+                            }
+                            if !plainSubject && this.SwitchLabelClearsSubjectOriginInRegion(label) {
+                                return true
+                            }
+                        }
+                    }
+                    case switchExpr is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax {
+                        let plainSubject = IsPlainIdentifierSubject(switchExpr.GoverningExpression)
+                        for arm in switchExpr.Arms {
+                            if this.PatternHasNestedMemberTypeTestInRegion(arm.Pattern) ||
+                                (!plainSubject && this.PatternClearsSubjectOriginInRegion(arm.Pattern)) {
+                                return true
+                            }
+                        }
+                    }
+                }
+            }
+            return false
+        }
+
+        private func IsPlainIdentifierSubject(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
+            var unwrapped = StripParentheses(expression)
+            while unwrapped is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .PostfixUnaryExpressionSyntax suppression &&
+                suppression
+                .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression) {
+                unwrapped = StripParentheses(suppression.Operand)
+            }
+            return unwrapped is IdentifierNameSyntax
+        }
+
+        private func PatternHasNestedMemberTypeTestInRegion(
+            pattern Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax
+        ) bool {
+            for node in pattern.DescendantNodes() {
+                if node is SubpatternSyntax subpattern && this.PatternClearsSubjectOriginInRegion(subpattern.Pattern) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func ResolveExplicitTypeClauseOrigin(type ITypeSymbol?) ITypeSymbol? {
             var unwrapped = type
             if unwrapped is INamedTypeSymbol{
                 OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T}
@@ -7216,12 +7325,17 @@ partial class CSharpToGSharpTranslator {
                 unwrapped = nullable.TypeArguments[0]
             }
             if unwrapped is not INamedTypeSymbol named || named.IsTupleType {
-                return false
+                return nil
             }
-            return !(
-                named.TypeKind == TypeKind.Delegate && named.ContainingNamespace?.ToDisplayString() == "System" &&
-                    (named.Name == "Action" || named.Name == "Func")
-            )
+            if named.TypeKind == TypeKind.Delegate && named.ContainingNamespace?.ToDisplayString() == "System" &&
+                (named.Name == "Action" || named.Name == "Func") {
+                return nil
+            }
+            return if named.IsGenericType {
+                named.OriginalDefinition
+            } else {
+                named
+            }
         }
 
         private func ResolveMemberAccessRegionReceiverTypes(
@@ -7236,6 +7350,9 @@ partial class CSharpToGSharpTranslator {
                 }
                 receiverTypes = List[ITypeSymbol]{staticReceiver}
             } else {
+                if this.RegionContainsMemberTypeTest(regionScope) {
+                    return nil
+                }
                 receiverTypes = this.ResolveExpressionRegionReceiverTypes(
                     member.Expression,
                     regionScope,
@@ -7247,6 +7364,37 @@ partial class CSharpToGSharpTranslator {
                 return nil
             }
             let memberName = member.Name.Identifier.ValueText
+            let next = List[ITypeSymbol]()
+            for receiverType in receiverTypes {
+                if !this.TryAddMemberStepTypes(receiverType, memberName, next) {
+                    return nil
+                }
+            }
+            return if next.Count > 0 && next.Count <= MaxRegionReceiverTypes {
+                next
+            } else {
+                default(List[ITypeSymbol]?)
+            }
+        }
+
+        private func ResolveMemberBindingRegionReceiverTypes(
+            memberBinding MemberBindingExpressionSyntax,
+            regionScope Microsoft.CodeAnalysis.SyntaxNode,
+            visitedLocals HashSet[ILocalSymbol]?
+        ) List[ITypeSymbol]? {
+            if this.RegionContainsMemberTypeTest(regionScope) {
+                return nil
+            }
+            let receiverTypes = this.ResolveExpressionRegionReceiverTypes(
+                this.GetConditionalBindingReceiver(memberBinding),
+                regionScope,
+                requireElementStep: false,
+                visitedLocals
+            )
+            if receiverTypes == nil {
+                return nil
+            }
+            let memberName = memberBinding.Name.Identifier.ValueText
             let next = List[ITypeSymbol]()
             for receiverType in receiverTypes {
                 if !this.TryAddMemberStepTypes(receiverType, memberName, next) {
@@ -7321,8 +7469,41 @@ partial class CSharpToGSharpTranslator {
             regionScope Microsoft.CodeAnalysis.SyntaxNode,
             visitedLocals HashSet[ILocalSymbol]?
         ) List[ITypeSymbol]? {
+            if this.RegionContainsMemberTypeTest(regionScope) {
+                return nil
+            }
             let receiverTypes = this.ResolveExpressionRegionReceiverTypes(
                 element.Expression,
+                regionScope,
+                requireElementStep: false,
+                visitedLocals
+            )
+            if receiverTypes == nil {
+                return nil
+            }
+            let next = List[ITypeSymbol]()
+            for receiverType in receiverTypes {
+                if !this.TryAddIndexStepTypes(receiverType, next) {
+                    return nil
+                }
+            }
+            return if next.Count > 0 && next.Count <= MaxRegionReceiverTypes {
+                next
+            } else {
+                default(List[ITypeSymbol]?)
+            }
+        }
+
+        private func ResolveElementBindingRegionReceiverTypes(
+            elementBinding ElementBindingExpressionSyntax,
+            regionScope Microsoft.CodeAnalysis.SyntaxNode,
+            visitedLocals HashSet[ILocalSymbol]?
+        ) List[ITypeSymbol]? {
+            if this.RegionContainsMemberTypeTest(regionScope) {
+                return nil
+            }
+            let receiverTypes = this.ResolveExpressionRegionReceiverTypes(
+                this.GetConditionalBindingReceiver(elementBinding),
                 regionScope,
                 requireElementStep: false,
                 visitedLocals
@@ -7376,8 +7557,7 @@ partial class CSharpToGSharpTranslator {
                     array
                     .ElementType
                     .SpecialType == SpecialType.System_Void ||
-                    array.ElementType is ITypeParameterSymbol ||
-                    (!this.IsSourceSymbol(array.ElementType) && ContainsTypeParameter(array.ElementType)) {
+                    array.ElementType is ITypeParameterSymbol {
                     return false
                 }
                 AddDistinctRegionType(next, array.ElementType)
@@ -7563,12 +7743,17 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             }
+            if this.RegionContainsMemberTypeTest(regionScope) {
+                return nil
+            }
             var receiverTypes List[ITypeSymbol]? = nil
             if method.ReducedFrom != nil || hasRewrittenExtReceiver {
                 let extReceiverExpr = if hasRewrittenExtReceiver {
                     rewrittenExtReceiver
                 } else if invocation.Expression is MemberAccessExpressionSyntax extAccess {
                     extAccess.Expression
+                } else if invocation.Expression is MemberBindingExpressionSyntax extBinding {
+                    this.GetConditionalBindingReceiver(extBinding)
                 } else {
                     default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
                 }
@@ -7597,6 +7782,13 @@ partial class CSharpToGSharpTranslator {
                         visitedLocals
                     )
                 }
+            } else if invocation.Expression is MemberBindingExpressionSyntax memberBinding {
+                receiverTypes = this.ResolveExpressionRegionReceiverTypes(
+                    this.GetConditionalBindingReceiver(memberBinding),
+                    regionScope,
+                    requireElementStep: false,
+                    visitedLocals
+                )
             } else if method.ContainingType != nil {
                 receiverTypes = List[ITypeSymbol]{method.ContainingType}
             }
@@ -8546,6 +8738,19 @@ partial class CSharpToGSharpTranslator {
                     !this.ReceiverTypesSupportMemberCall(
                     receiverTypes,
                     memberCall.Name.Identifier.ValueText,
+                    invocation.SyntaxTree
+                )
+            }
+            if invocation.Expression is MemberBindingExpressionSyntax memberBindingCall {
+                return this.ResolveExpressionRegionReceiverTypes(
+                    this.GetConditionalBindingReceiver(memberBindingCall),
+                    regionScope,
+                    allowEntryTypeParameter: invocation.ArgumentList.Arguments.Count == 0
+                ) is not{} bindingReceiverTypes ||
+                    !this
+                    .ReceiverTypesSupportMemberCall(
+                    bindingReceiverTypes,
+                    memberBindingCall.Name.Identifier.ValueText,
                     invocation.SyntaxTree
                 )
             }
