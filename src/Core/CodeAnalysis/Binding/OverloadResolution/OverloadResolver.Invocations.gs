@@ -1303,6 +1303,9 @@ internal partial class OverloadResolver {
                     )
                 }
                 for var i = 0; i < permutedArguments.Length; i++ {
+                    if i >= permutedSyntax.Length || permutedSyntax[i] == nil {
+                        continue
+                    }
                     if permutedArguments[i].Type != nil {
                         inferTypeArguments(
                             extension.Parameters[i + 1].Type,
@@ -1360,6 +1363,17 @@ internal partial class OverloadResolver {
                 substituteType(paramType, substitution)
             } else {
                 paramType
+            }
+            if (i >= permutedSyntax.Length || permutedSyntax[i] == nil) &&
+                !extension
+                .Parameters[i + 1]
+                .IsVariadic &&
+                expectedType != nil &&
+                expectedType != paramType {
+                permutedArguments = permutedArguments.SetItem(
+                    i,
+                    CreateOptionalUserDefaultArgument(extension.Parameters[i + 1], expectedType)
+                )
             }
             if substitution != nil && TypeSymbol.ContainsTypeParameter(paramType) {
                 if paramType is FunctionTypeSymbol openFunctionParameter &&
@@ -1693,6 +1707,9 @@ internal partial class OverloadResolver {
                 }
             } else {
                 for var i = 0; i < permutedArguments.Length; i++ {
+                    if i >= permutedSyntax.Length || permutedSyntax[i] == nil {
+                        continue
+                    }
                     // ADR-0101 follow-up / issue #812: when the call lands
                     // on the trailing variadic parameter (whose type is
                     // `[]T`), each trailing argument contributes to `T`'s
@@ -1854,6 +1871,15 @@ internal partial class OverloadResolver {
                 substituteType(paramType, substitution)
             } else {
                 paramType
+            }
+            if (i >= permutedSyntax.Length || permutedSyntax[i] == nil) &&
+                !parameter.IsVariadic &&
+                expectedType != nil &&
+                expectedType != paramType {
+                permutedArguments = permutedArguments.SetItem(
+                    i,
+                    CreateOptionalUserDefaultArgument(parameter, expectedType)
+                )
             }
             // ADR-0060 / issue #1133: an inline-decl `out var n` / `out let n` /
             // `out _` was bound with TypeSymbol.Error in the first pass (from

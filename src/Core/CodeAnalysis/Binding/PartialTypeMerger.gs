@@ -411,7 +411,10 @@ internal shared class PartialTypeMerger {
                     .ToImmutableArray()
             } else {
                 ImmutableArray[TypeParameterListSyntax].Empty
-            }
+            },
+            DocumentationSource = parts.Select((p StructDeclarationSyntax) -> p.DocumentationSource ?? p)
+                .FirstOrDefault((p StructDeclarationSyntax) -> p.SyntaxTree?.GetDocumentation(p) != nil) ??
+                (primary.DocumentationSource ?? primary)
         }
         merged.WithAnnotations(UnionAnnotations(parts))
         return merged
@@ -598,7 +601,10 @@ internal shared class PartialTypeMerger {
                     .ToImmutableArray()
             } else {
                 ImmutableArray[TypeParameterListSyntax].Empty
-            }
+            },
+            DocumentationSource = parts.Select((p InterfaceDeclarationSyntax) -> p.DocumentationSource ?? p)
+                .FirstOrDefault((p InterfaceDeclarationSyntax) -> p.SyntaxTree?.GetDocumentation(p) != nil) ??
+                (primary.DocumentationSource ?? primary)
         }
         ApplyAnnotations(merged, UnionAnnotations(parts))
         return merged

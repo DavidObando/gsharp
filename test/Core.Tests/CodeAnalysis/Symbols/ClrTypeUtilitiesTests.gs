@@ -245,6 +245,194 @@ open class ClrTypeUtilitiesTests {
         Assert.NotNull(ClrTypeInspector.GetMethodSafe(constructed, "Accept", []Type{argument}))
     }
 
+    @Fact
+    func IsSameAs_OpenGenericParameters_DistinguishesPositionsOwnersAndConstructedShapes() {
+        let methodParams = typeof(OpenGenericIdentityFixture).GetMethod("Generic")!!.GetGenericArguments()
+        let otherMethodParams = typeof(OpenGenericIdentityFixture).GetMethod("Other")!!.GetGenericArguments()
+        let overloadedMethods = typeof(OpenGenericIdentityFixture)
+            .GetMethods()
+            .Where((m MethodInfo) -> m.Name == "Overloaded")
+            .OrderBy((m MethodInfo) -> m.GetParameters()[0].ParameterType.Name, StringComparer.Ordinal)
+            .ToArray()
+        let overloadedIntParam = overloadedMethods[0].GetGenericArguments()[0]
+        let overloadedStringParam = overloadedMethods[1].GetGenericArguments()[0]
+        let typeParams = typeof(TypeBuilderPairMethodFixture[_, _]).GetGenericArguments()
+        let singleTypeParam = typeof(TypeBuilderMethodFixture[_]).GetGenericArguments()[0]
+        let otherSingleTypeParam = typeof(TypeBuilderBaseMethodFixture[_]).GetGenericArguments()[0]
+        Assert.Equal(2, methodParams.Length)
+        Assert.Null(methodParams[0].FullName)
+        Assert.Null(methodParams[1].FullName)
+        // Issue #5018 repro: distinct method generic parameters must not compare equal.
+        Assert.False(ClrTypeInspector.IsSameAs(methodParams[0], methodParams[1]))
+        Assert.False(ClrTypeInspector.IsSameAs(methodParams[1], methodParams[0]))
+        Assert.True(ClrTypeInspector.IsSameAs(methodParams[0], methodParams[0]))
+        Assert.True(ClrTypeInspector.IsSameAs(methodParams[1], methodParams[1]))
+        // Distinct type generic parameters on the same generic type definition.
+        Assert.False(ClrTypeInspector.IsSameAs(typeParams[0], typeParams[1]))
+        Assert.True(ClrTypeInspector.IsSameAs(typeParams[0], typeParams[0]))
+        // Method vs type generic parameter at position 0 with the same name ("T").
+        Assert.False(ClrTypeInspector.IsSameAs(methodParams[0], singleTypeParam))
+        Assert.False(ClrTypeInspector.IsSameAs(singleTypeParam, methodParams[0]))
+        // Type generic parameters at position 0 from different types.
+        Assert.False(ClrTypeInspector.IsSameAs(singleTypeParam, otherSingleTypeParam))
+        // Method generic parameters at position 0 from different methods or overloads.
+        Assert.False(ClrTypeInspector.IsSameAs(methodParams[0], otherMethodParams[0]))
+        Assert.False(ClrTypeInspector.IsSameAs(overloadedIntParam, overloadedStringParam))
+        // Constructed open generic, array, by-ref, and pointer shapes over T vs U.
+        let listT = typeof(List[_]).MakeGenericType(methodParams[0])
+        let listU = typeof(List[_]).MakeGenericType(methodParams[1])
+        let arrayT = methodParams[0].MakeArrayType()
+        let arrayU = methodParams[1].MakeArrayType()
+        let byRefT = methodParams[0].MakeByRefType()
+        let byRefU = methodParams[1].MakeByRefType()
+        let pointerT = methodParams[0].MakePointerType()
+        let pointerU = methodParams[1].MakePointerType()
+        Assert.Null(listT.FullName)
+        Assert.Null(arrayT.FullName)
+        Assert.False(ClrTypeInspector.IsSameAs(listT, listU))
+        Assert.True(ClrTypeInspector.IsSameAs(listT, typeof(List[_]).MakeGenericType(methodParams[0])))
+        Assert.False(ClrTypeInspector.IsSameAs(arrayT, arrayU))
+        Assert.True(ClrTypeInspector.IsSameAs(arrayT, methodParams[0].MakeArrayType()))
+        Assert.False(ClrTypeInspector.IsSameAs(byRefT, byRefU))
+        Assert.True(ClrTypeInspector.IsSameAs(byRefT, methodParams[0].MakeByRefType()))
+        Assert.False(ClrTypeInspector.IsSameAs(pointerT, pointerU))
+        Assert.True(ClrTypeInspector.IsSameAs(pointerT, methodParams[0].MakePointerType()))
+        Assert.False(ClrTypeInspector.IsSameAs(arrayT, methodParams[0]))
+        Assert.False(ClrTypeInspector.IsSameAs(arrayT, byRefT))
+        Assert.False(ClrTypeInspector.IsSameAs(listT, methodParams[0]))
+    }
+
+    @Fact
+    func IsSameAs_OpenGenericParameters_MatchesSameParameterAcrossMetadataLoadContext() {
+        let paths = (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string ?? string.Empty)
+            .Split(Path.PathSeparator)
+            .Where((p string) -> !string.IsNullOrEmpty(p))
+            .Append(typeof(ClrTypeUtilitiesTests).Assembly.Location)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray()
+        using let mlc = MetadataLoadContext(PathAssemblyResolver(paths), coreAssemblyName: "System.Private.CoreLib")
+        let mlcAssembly = mlc.LoadFromAssemblyPath(typeof(ClrTypeUtilitiesTests).Assembly.Location)
+        let mlcCoreAssembly = mlc.CoreAssembly!!
+        let mlcFixture = mlcAssembly.GetType(typeof(OpenGenericIdentityFixture).FullName!!, throwOnError: true)!!
+        let mlcPairFixture = mlcAssembly.GetType(
+            typeof(TypeBuilderPairMethodFixture[_, _]).FullName!!,
+            throwOnError: true
+        )!!
+        let mlcListDef = mlcCoreAssembly.GetType("System.Collections.Generic.List`1", throwOnError: true)!!
+        let hostMethodParams = typeof(OpenGenericIdentityFixture).GetMethod("Generic")!!.GetGenericArguments()
+        let mlcMethodParams = mlcFixture.GetMethod("Generic")!!.GetGenericArguments()
+        let mlcOtherParams = mlcFixture.GetMethod("Other")!!.GetGenericArguments()
+        let hostOverloads = typeof(OpenGenericIdentityFixture)
+            .GetMethods()
+            .Where((m MethodInfo) -> m.Name == "Overloaded")
+            .OrderBy((m MethodInfo) -> m.GetParameters()[0].ParameterType.Name, StringComparer.Ordinal)
+            .ToArray()
+        let mlcOverloads = mlcFixture
+            .GetMethods()
+            .Where((m MethodInfo) -> m.Name == "Overloaded")
+            .OrderBy((m MethodInfo) -> m.GetParameters()[0].ParameterType.Name, StringComparer.Ordinal)
+            .ToArray()
+        let hostTypeParams = typeof(TypeBuilderPairMethodFixture[_, _]).GetGenericArguments()
+        let mlcTypeParams = mlcPairFixture.GetGenericArguments()
+        Assert.False(object.ReferenceEquals(hostMethodParams[0], mlcMethodParams[0]))
+        Assert.True(ClrTypeInspector.IsSameAs(hostMethodParams[0], mlcMethodParams[0]))
+        Assert.True(ClrTypeInspector.IsSameAs(hostMethodParams[1], mlcMethodParams[1]))
+        Assert.False(ClrTypeInspector.IsSameAs(hostMethodParams[0], mlcMethodParams[1]))
+        Assert.False(ClrTypeInspector.IsSameAs(hostMethodParams[0], mlcOtherParams[0]))
+        Assert.True(ClrTypeInspector.IsSameAs(hostTypeParams[0], mlcTypeParams[0]))
+        Assert.True(ClrTypeInspector.IsSameAs(hostTypeParams[1], mlcTypeParams[1]))
+        Assert.False(ClrTypeInspector.IsSameAs(hostTypeParams[0], mlcTypeParams[1]))
+        Assert.False(ClrTypeInspector.IsSameAs(hostTypeParams[0], mlcMethodParams[0]))
+        Assert.True(
+            ClrTypeInspector.IsSameAs(
+                hostOverloads[0].GetGenericArguments()[0],
+                mlcOverloads[0].GetGenericArguments()[0]
+            )
+        )
+        Assert.False(
+            ClrTypeInspector.IsSameAs(
+                hostOverloads[0].GetGenericArguments()[0],
+                mlcOverloads[1].GetGenericArguments()[0]
+            )
+        )
+        Assert.True(
+            ClrTypeInspector.IsSameAs(
+                typeof(List[_]).MakeGenericType(hostMethodParams[0]),
+                mlcListDef.MakeGenericType(mlcMethodParams[0])
+            )
+        )
+        Assert.False(
+            ClrTypeInspector.IsSameAs(
+                typeof(List[_]).MakeGenericType(hostMethodParams[0]),
+                mlcListDef.MakeGenericType(mlcMethodParams[1])
+            )
+        )
+        Assert.True(ClrTypeInspector.IsSameAs(hostMethodParams[0].MakeArrayType(), mlcMethodParams[0].MakeArrayType()))
+        Assert.False(ClrTypeInspector.IsSameAs(hostMethodParams[0].MakeArrayType(), mlcMethodParams[1].MakeArrayType()))
+        Assert.True(ClrTypeInspector.IsSameAs(hostMethodParams[0].MakeByRefType(), mlcMethodParams[0].MakeByRefType()))
+        Assert.False(ClrTypeInspector.IsSameAs(hostMethodParams[0].MakeByRefType(), mlcMethodParams[1].MakeByRefType()))
+        // Function-pointer types have FullName == nil and IsPointer == false; verify structural identity across contexts.
+        let hostIntToIntPtr = typeof(OpenGenericIdentityFixture).GetMethod("AcceptFnPtrInt")!!
+            .GetParameters()[0]
+            .ParameterType
+        let hostManagedIntToIntPtr = typeof(OpenGenericIdentityFixture).GetMethod("AcceptManagedFnPtrInt")!!
+            .GetParameters()[0]
+            .ParameterType
+        let hostIntToLongPtr = typeof(OpenGenericIdentityFixture).GetMethod("AcceptFnPtrLong")!!
+            .GetParameters()[0]
+            .ParameterType
+        let mlcIntToIntPtr = mlcFixture.GetMethod("AcceptFnPtrInt")!!.GetParameters()[0].ParameterType
+        let mlcManagedIntToIntPtr = mlcFixture.GetMethod("AcceptManagedFnPtrInt")!!.GetParameters()[0].ParameterType
+        let mlcIntToLongPtr = mlcFixture.GetMethod("AcceptFnPtrLong")!!.GetParameters()[0].ParameterType
+        Assert.True(hostIntToIntPtr.IsFunctionPointer)
+        Assert.Null(hostIntToIntPtr.FullName)
+        Assert.True(ClrTypeInspector.IsSameAs(hostIntToIntPtr, mlcIntToIntPtr))
+        Assert.True(ClrTypeInspector.IsSameAs(hostManagedIntToIntPtr, mlcManagedIntToIntPtr))
+        Assert.False(ClrTypeInspector.IsSameAs(hostIntToIntPtr, hostManagedIntToIntPtr))
+        Assert.False(ClrTypeInspector.IsSameAs(hostIntToIntPtr, mlcManagedIntToIntPtr))
+        Assert.False(ClrTypeInspector.IsSameAs(hostIntToIntPtr, hostIntToLongPtr))
+        Assert.False(ClrTypeInspector.IsSameAs(hostIntToIntPtr, mlcIntToLongPtr))
+        Assert.False(ClrTypeInspector.IsSameAs(hostIntToIntPtr, hostMethodParams[0]))
+        // ModuleVersionId + MetadataToken match across runtime and incomplete MetadataLoadContext without loading missing parameter types.
+        let incompleteFixture = LoadFixtureUnderIncompleteContext()!!
+        let hostBadGenericParam = typeof(Fixture338).GetMethod("BadGenericMethod")!!.GetGenericArguments()[0]
+        let mlcBadGenericParam = incompleteFixture.GetMethod("BadGenericMethod")!!.GetGenericArguments()[0]
+        let mlcOtherBadGenericParam = incompleteFixture.GetMethod("OtherBadGenericMethod")!!.GetGenericArguments()[0]
+        Assert.True(ClrTypeInspector.IsSameAs(hostBadGenericParam, mlcBadGenericParam))
+        Assert.False(ClrTypeInspector.IsSameAs(hostBadGenericParam, mlcOtherBadGenericParam))
+        // SafeGetMethodsIncludingInterfaces hides a base generic interface method when a derived interface redeclares it with a renamed method type parameter, across inherited class implementations, and on constructed generic interfaces.
+        let derivedInterfaceMethods = ClrTypeUtilities
+            .SafeGetMethodsIncludingInterfaces(typeof(IDerivedGenericMethodFixture), InstanceFlags)
+            .Where((m MethodInfo) -> m.Name == "Echo")
+            .ToArray()
+        let singleEcho = Assert.Single(derivedInterfaceMethods)
+        Assert.Equal(typeof(IDerivedGenericMethodFixture), singleEcho.DeclaringType)
+        let inheritedClassMethods = ClrTypeUtilities
+            .SafeGetMethodsIncludingInterfaces(typeof(DerivedGenericMethodImplFixture), InstanceFlags)
+            .Where((m MethodInfo) -> m.Name == "Echo")
+            .ToArray()
+        let singleInheritedEcho = Assert.Single(inheritedClassMethods)
+        Assert.Equal(typeof(BaseGenericMethodImplFixture), singleInheritedEcho.DeclaringType)
+        let constructedDerivedInterface = typeof(IDerivedConstructedGenericMethodFixture[_]).MakeGenericType(
+            typeof(int32)
+        )
+        let constructedInterfaceMethods = ClrTypeUtilities
+            .SafeGetMethodsIncludingInterfaces(constructedDerivedInterface, InstanceFlags)
+            .Where((m MethodInfo) -> m.Name == "Echo")
+            .ToArray()
+        let singleConstructedEcho = Assert.Single(constructedInterfaceMethods)
+        Assert.Equal(constructedDerivedInterface, singleConstructedEcho.DeclaringType)
+        let mlcConstructedDerivedInterface = mlcAssembly.GetType(
+            typeof(IDerivedConstructedGenericMethodFixture[_]).FullName!!,
+            throwOnError: true
+        )!!.MakeGenericType(mlcCoreAssembly.GetType("System.Int32", throwOnError: true)!!)
+        let mlcConstructedMethods = ClrTypeUtilities
+            .SafeGetMethodsIncludingInterfaces(mlcConstructedDerivedInterface, InstanceFlags)
+            .Where((m MethodInfo) -> m.Name == "Echo")
+            .ToArray()
+        Assert.Single(mlcConstructedMethods)
+    }
+
     shared {
         private const InstanceFlags BindingFlags = BindingFlags.Public | BindingFlags.Instance
 
@@ -311,6 +499,14 @@ internal class Fixture338 {
     func BadParameterMethod(pattern Regex) { }
 
     func BadReturnMethod() Regex? -> nil
+
+    func BadGenericMethod[T](pattern Regex) {
+        let _ = pattern
+    }
+
+    func OtherBadGenericMethod[T](pattern Regex) {
+        let _ = pattern
+    }
 }
 
 internal class TypeBuilderMethodFixture[T] {
@@ -352,3 +548,55 @@ internal open class TypeBuilderBaseMethodFixture[T] {
 }
 
 internal class TypeBuilderDerivedMethodFixture[T] : TypeBuilderBaseMethodFixture[T] { }
+
+internal unsafe class OpenGenericIdentityFixture {
+    shared {
+        func Generic[T, U]() { }
+
+        func Other[T, U]() { }
+
+        func Overloaded[T](first int32, second T) {
+            let _ = first
+            let _ = second
+        }
+
+        func Overloaded[T](first string, second T) {
+            let _ = first
+            let _ = second
+        }
+
+        func AcceptFnPtrInt(callback unmanaged[Cdecl](int32) -> int32) {
+            let _ = callback
+        }
+
+        func AcceptManagedFnPtrInt(callback *func (int32) int32) {
+            let _ = callback
+        }
+
+        func AcceptFnPtrLong(callback unmanaged[Cdecl](int32) -> int64) {
+            let _ = callback
+        }
+    }
+}
+
+internal interface IBaseGenericMethodFixture {
+    func Echo[T](value T) T;
+}
+
+internal interface IDerivedGenericMethodFixture : IBaseGenericMethodFixture {
+    func Echo[U](value U) U;
+}
+
+internal open class BaseGenericMethodImplFixture {
+    func Echo[T](value T) T -> value
+}
+
+internal class DerivedGenericMethodImplFixture : BaseGenericMethodImplFixture, IBaseGenericMethodFixture { }
+
+internal interface IBaseConstructedGenericMethodFixture[TOuter] {
+    func Echo[T](outer TOuter, value T) T;
+}
+
+internal interface IDerivedConstructedGenericMethodFixture[TOuter] : IBaseConstructedGenericMethodFixture[TOuter] {
+    func Echo[U](outer TOuter, value U) U;
+}
