@@ -2544,7 +2544,30 @@ internal partial class ExpressionBinder {
             ) {
                 return false
             }
-            return !requireExactNullability || (!storageNullable && !parameterNullable && !nestedMismatch)
+            return !requireExactNullability ||
+                (
+                !storageNullable &&
+                    !parameterNullable &&
+                    !nestedMismatch &&
+                    !HasNestedReferenceNullabilityDifference(left, right)
+            )
+        }
+
+        private func HasNestedReferenceNullabilityDifference(left TypeSymbol, right TypeSymbol) bool {
+            let leftPositions = left.GetElementPositions()
+            let rightPositions = right.GetElementPositions()
+            if leftPositions.Length != rightPositions.Length {
+                return false
+            }
+            for var i = 0; i < leftPositions.Length; i++ {
+                let leftPos = leftPositions[i]
+                let rightPos = rightPositions[i]
+                if leftPos.ReferenceNullability != rightPos.ReferenceNullability ||
+                    HasNestedReferenceNullabilityDifference(leftPos, rightPos) {
+                    return true
+                }
+            }
+            return false
         }
 
         internal func MergeConditionalStorageType(left TypeSymbol?, right TypeSymbol?) TypeSymbol? {

@@ -696,7 +696,7 @@ internal partial class StatementBinder {
                             aliasesBeforeCondition,
                             forShortCircuitOperand: false,
                             allowBoolCall: true,
-                            keepBoolCallInLogicalOps: false,
+                            keepBoolCallInLogicalOps: true,
                             shortCircuitInComposedOps: false,
                             header: conditionSyntax
                         )

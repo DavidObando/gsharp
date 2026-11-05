@@ -1005,6 +1005,37 @@ func Run2(flag bool, callback () -> bool) int32 {
     return 0
 }
 Console.WriteLine(Run1(true, () -> true) + Run2(true, () -> true))`, "", "run", "15"}
+            yield[]object{"r21_standalone_conditional_address_mismatched_nested_platform_nullability_rejected", `import System
+import System.Collections.Generic
+
+@Oblivious
+class Legacy {
+    public var Text string
+    init() { }
+}
+func MakeList[T](ref x T) List[T] {
+    let list = List[T]()
+    list.Add(x)
+    return list
+}
+func Run(flag bool) int32 {
+    let leg = Legacy()
+    var raw = leg.Text
+    var a = List[string]{"ok"}
+    var b = MakeList(ref raw)
+    let p = &(flag ? a : b)
+    return a[0].Length
+}
+Console.WriteLine(Run(false))`, "GS0260@19:15", "reject", ""}
+            yield[]object{"r22_while_composed_condition_keeps_bool_call_postcondition", `import System
+
+func Run(s string?, flag bool) int32 {
+    while !string.IsNullOrEmpty(s) && flag {
+        return s.Length
+    }
+    return 0
+}
+Console.WriteLine(Run("hello", true))`, "", "run", "5"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
