@@ -236,4 +236,55 @@ Console.Write("${eq}|${neq}|${gt}|${gtn}|${Trace.Events}")
             "5696"
         )
     }
+
+    @Fact
+    func MutatingValueTypePropertyPatternAndMutatedListPattern_PreserveSingleCaptureAndShapeCheck() {
+        const source = `import System
+import System.Collections.Generic
+import System.Threading.Tasks
+struct Counter {
+    var N int32
+    prop Next int32 {
+        get {
+            N += 1
+            return N
+        }
+    }
+}
+async func One() Task[int32] {
+    await Task.Yield()
+    return 1
+}
+async func Two() Task[int32] {
+    await Task.Yield()
+    return 2
+}
+async func GrowAndReturnOne(items List[int32]) Task[int32] {
+    await Task.Yield()
+    items.Add(99)
+    return 1
+}
+async func CheckStruct(c Counter) Task[bool] -> c is { Next: == await One(), N: 1 }
+async func CheckStructOr(c Counter) Task[bool] -> c is { Next: == await Two(), N: 1 } or { N: 0 }
+async func CheckListExact() Task[bool] {
+    let items = List[int32]()
+    items.Add(1)
+    items.Add(2)
+    return items is [== await GrowAndReturnOne(items), 2]
+}
+async func CheckListSlice() Task[bool] {
+    let items = List[int32]()
+    items.Add(1)
+    items.Add(2)
+    return items is [== await GrowAndReturnOne(items), .., 2]
+}
+func Bit(b bool) string -> if b { "1" } else { "0" }
+let s1 = Bit(CheckStruct(Counter{N: 0}).Result)
+let s2 = Bit(CheckStructOr(Counter{N: 0}).Result)
+let l1 = Bit(CheckListExact().Result)
+let l2 = Bit(CheckListSlice().Result)
+Console.Write("${s1}${s2}|${l1}${l2}")
+`
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(source, "11|11", "5696")
+    }
 }
