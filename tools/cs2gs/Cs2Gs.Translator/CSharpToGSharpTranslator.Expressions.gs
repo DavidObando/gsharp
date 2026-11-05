@@ -7222,18 +7222,27 @@ partial class CSharpToGSharpTranslator {
                 regionScope
             }
             for node in scanRoot.DescendantNodesAndSelf(OutsideNested) {
-                if !regionScope.Span.Contains(node.Span) &&
-                    (!includeEnclosingScope || node.SpanStart >= regionScope.SpanStart) {
+                let insideRegion = regionScope.Span.Contains(node.Span)
+                if !insideRegion && (!includeEnclosingScope || node.SpanStart >= regionScope.SpanStart) {
                     continue
                 }
-                if this.IsInForInitializer(regionScope, node) && !includeEnclosingScope {
+                if insideRegion && this.IsInForInitializer(regionScope, node) {
                     continue
                 }
                 switch node {
                     case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when binary.IsKind(
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression
                     ) {
-                        if this.ExpressionNamesSymbol(binary.Left, symbol) {
+                        if this.ExpressionNamesSymbol(binary.Left, symbol) &&
+                            (
+                            insideRegion || this.OuterTypeTestReachesRegionEntry(
+                                symbol,
+                                binary,
+                                whenTrue: true,
+                                regionScope,
+                                scanRoot
+                            )
+                        ) {
                             let testedType = this.context.GetTypeInfo(binary.Right).Type
                             if testedType == nil ||
                                 testedType.SpecialType == SpecialType.System_Void ||
@@ -7245,25 +7254,63 @@ partial class CSharpToGSharpTranslator {
                     }
                     case isPattern is IsPatternExpressionSyntax {
                         if this.ExpressionNamesSymbol(isPattern.Expression, symbol) &&
+                            (
+                            insideRegion ||
+                                (
+                                TryGetPatternNonNullPolarity(isPattern.Pattern, out var whenTrue) &&
+                                    this.OuterTypeTestReachesRegionEntry(
+                                    symbol,
+                                    isPattern,
+                                    whenTrue,
+                                    regionScope,
+                                    scanRoot
+                                )
+                            )
+                        ) &&
                             !this.TryCollectSubjectTestedPatternTypes(isPattern.Pattern, result) {
                             return false
                         }
                     }
                     case switchStmt is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax {
-                        if this.ExpressionNamesSymbol(switchStmt.Expression, symbol) {
-                            for label in switchStmt.Sections.SelectMany(
-                                (section SwitchSectionSyntax) -> section.Labels
-                            ) {
-                                if label is CasePatternSwitchLabelSyntax patternLabel &&
-                                    !this.TryCollectSubjectTestedPatternTypes(patternLabel.Pattern, result) {
-                                    return false
+                        if this.ExpressionNamesSymbol(switchStmt.Expression, symbol) &&
+                            (
+                            insideRegion ||
+                                (
+                                !HasGotoIntoSwitchSection(switchStmt) && !this.SymbolIsWrittenBetween(
+                                    symbol,
+                                    switchStmt.Expression,
+                                    regionScope,
+                                    scanRoot
+                                )
+                            )
+                        ) {
+                            for section in switchStmt.Sections {
+                                if !insideRegion && !section.Span.Contains(regionScope.Span) {
+                                    continue
+                                }
+                                for label in section.Labels {
+                                    if label is CasePatternSwitchLabelSyntax patternLabel &&
+                                        !this.TryCollectSubjectTestedPatternTypes(patternLabel.Pattern, result) {
+                                        return false
+                                    }
                                 }
                             }
                         }
                     }
                     case switchExpr is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax {
-                        if this.ExpressionNamesSymbol(switchExpr.GoverningExpression, symbol) {
+                        if this.ExpressionNamesSymbol(switchExpr.GoverningExpression, symbol) &&
+                            (
+                            insideRegion || !this.SymbolIsWrittenBetween(
+                                symbol,
+                                switchExpr.GoverningExpression,
+                                regionScope,
+                                scanRoot
+                            )
+                        ) {
                             for arm in switchExpr.Arms {
+                                if !insideRegion && !arm.Span.Contains(regionScope.Span) {
+                                    continue
+                                }
                                 if !this.TryCollectSubjectTestedPatternTypes(arm.Pattern, result) {
                                     return false
                                 }
@@ -7273,6 +7320,46 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             return true
+        }
+
+        private func OuterTypeTestReachesRegionEntry(
+            symbol ISymbol,
+            testNode Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            whenTrue bool,
+            regionScope Microsoft.CodeAnalysis.SyntaxNode,
+            scanRoot Microsoft.CodeAnalysis.SyntaxNode
+        ) bool {
+            if !this.ComputeBooleanFlowRegions(testNode, whenTrue, includeWhenClauseRegion: false).Any(
+                (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(regionScope.Span)
+            ) ||
+                this.SymbolIsWrittenBetween(symbol, testNode, regionScope, scanRoot) {
+                return false
+            }
+            let byRef = this.IsByReferenceVariable(symbol)
+            let closureAssigned = this.IsClosureAssignedVariable(symbol)
+            if !byRef && !closureAssigned {
+                return true
+            }
+            let OutsideNested = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
+                return !(
+                    node is LocalFunctionStatementSyntax ||
+                        node is AnonymousFunctionExpressionSyntax ||
+                        this.IsDroppedStatementOrLoopClause(node)
+                )
+            }
+            return !scanRoot.DescendantNodes(OutsideNested).Any(
+                (node Microsoft.CodeAnalysis.SyntaxNode) -> node.SpanStart >= testNode
+                    .Span
+                    .End &&
+                    node
+                    .Span
+                    .End <= regionScope.SpanStart &&
+                    !this.IsInThenBranchOfElseRead(node, regionScope, scanRoot) &&
+                    (
+                    (closureAssigned && this.NodeMayRunEscapedClosure(node)) ||
+                        (byRef && (this.NodeRunsStaticTypeInitializer(node) || this.NodeMayWriteReferenceStorage(node)))
+                )
+            )
         }
 
         private func FindEnclosingCallableScope(node Microsoft.CodeAnalysis.SyntaxNode) Microsoft

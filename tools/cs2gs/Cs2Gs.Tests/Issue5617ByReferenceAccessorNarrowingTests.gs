@@ -2352,6 +2352,18 @@ public partial class Demo
         }
         return 0;
     }
+    public static int WhileConditionAfterExpiredHidingFieldTypeTestControl(ref string? s, object o)
+    {
+        if (o is HidingHolder)
+        {
+        }
+        s = null;
+        while (o.GetHashCode() < 0 || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 29;
+    }
     public static int WhileConditionWithOverloadedReadCandidate(ref string? s, Box box)
     {
         s = null;
@@ -2398,6 +2410,7 @@ public partial class Demo
             WhileConditionWithObjectNilComparison(ref text, null) + "," +
             WhileConditionWithNamedArgumentCall(ref text) + "," +
             WhileConditionWithDominatingHidingFieldReceiver(ref text, new HidingHolder()) + "," +
+            WhileConditionAfterExpiredHidingFieldTypeTestControl(ref text, new HidingHolder()) + "," +
             WhileConditionWithOverloadedReadCandidate(ref text, new Box()) + "," +
             WhileRefObjectExitCondition(ref obj);
     }
@@ -2428,6 +2441,7 @@ public partial class Demo
         Assert.Contains("return s!!.Length + 24", printed)
         Assert.Contains("return s!!.Length + 25", printed)
         Assert.Contains("return s!!.Length + 26", printed)
+        Assert.Contains("return s.Length + 29", printed)
         Assert.Contains("return s!!.Length + 27", printed)
         Assert.Contains("obj!!.GetHashCode()", printed)
         Assert.Equal(19, Regex.Matches(printed, `s!!`).Count)
