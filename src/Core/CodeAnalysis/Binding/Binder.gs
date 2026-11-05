@@ -1114,9 +1114,11 @@ partial class Binder {
             child.statements.FinalizeUserLabels()
             var lowered = Lowerer.Lower(body, classSymbol)
             if bindingParameterMap.Count > 0 {
-                lowered = cast[BoundBlockStatement](
+                let rebound = cast[BoundBlockStatement](
                     RichBindingParameterRewriter(bindingParameterMap).RewriteStatement(lowered)
                 )
+                BodyFacts.PreserveContainsYield(lowered, rebound)
+                lowered = rebound
             }
             if method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(
                 lowered
@@ -1218,9 +1220,11 @@ partial class Binder {
         }
         if captureMap.Count > 0 {
             for pair in methodBodies.ToArray() {
-                methodBodies[pair.Key] = cast[BoundBlockStatement](
+                let rewritten = cast[BoundBlockStatement](
                     RichAnonymousCaptureRewriter(classSymbol, pair.Key, captureMap).RewriteStatement(pair.Value)
                 )
+                BodyFacts.PreserveContainsYield(pair.Value, rewritten)
+                methodBodies[pair.Key] = rewritten
             }
         }
         let fields = captureFields.Concat(baseFields).Concat(snapshotFields).ToImmutableArray()

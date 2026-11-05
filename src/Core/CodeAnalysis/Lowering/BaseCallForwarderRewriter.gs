@@ -826,6 +826,7 @@ shared class BaseCallForwarderRewriter {
             )
             let newBody = cast[BoundBlockStatement](rewriter.RewriteStatement(body))
             if !object.ReferenceEquals(newBody, body) {
+                BodyFacts.PreserveContainsYield(body, newBody)
                 rewrittenBodies[function] = newBody
             }
         }

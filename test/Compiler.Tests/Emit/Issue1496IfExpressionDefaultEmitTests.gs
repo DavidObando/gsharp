@@ -158,6 +158,31 @@ func Main() {
     }
 
     @Fact
+    func EndToEnd_BareDefaultInBooleanAndEqualityBinaryExpressions_Runs() {
+        let source = `package P5019BoolDefault
+import System
+func RunAndLeft(b bool) bool -> default && b
+func RunAndRight(b bool) bool -> b && default
+func RunOrLeft(b bool) bool -> default || b
+func RunOrRight(b bool) bool -> b || default
+func RunEq(n int32) bool -> default == n && n == default
+func Main() {
+    Console.WriteLine(RunAndLeft(false))
+    Console.WriteLine(RunAndLeft(true))
+    Console.WriteLine(RunAndRight(true))
+    Console.WriteLine(RunOrLeft(true))
+    Console.WriteLine(RunOrRight(false))
+    Console.WriteLine(RunEq(0))
+    Console.WriteLine(RunEq(1))
+}`
+        let output = CompileAndRun(source)
+        Assert.Equal(
+            "False${Environment.NewLine}False${Environment.NewLine}False${Environment.NewLine}True${Environment.NewLine}False${Environment.NewLine}True${Environment.NewLine}False${Environment.NewLine}",
+            output
+        )
+    }
+
+    @Fact
     func EndToEnd_BothArmsBareDefaultWithTargetType_DefaultIsNull_Runs() {
         let source = `package P1496BothDefault
 import System
