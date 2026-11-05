@@ -1325,6 +1325,31 @@ public partial class Demo
         }
         return s.Length + total + 8;
     }
+    public static int RelationalPatternConversionInLoop(ref string? s, byte b)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        var i = 0;
+        while (i < 1)
+        {
+            if (b is > 1) total++;
+            if (b is 2) total++;
+            i++;
+        }
+        return s.Length + total + 9;
+    }
+    public static int CoalesceAssignNumericInLoop(ref string? s)
+    {
+        if (s == null) return 0;
+        long? n = null;
+        var i = 0;
+        while (i < 1)
+        {
+            n ??= 1;
+            i++;
+        }
+        return n == null ? 0 : s.Length + 10;
+    }
     public static uint UnsignedReturnControl(ref string? s, bool exitEarly)
     {
         if (s == null) return 0;
@@ -1336,7 +1361,7 @@ public partial class Demo
         }
         return (uint)s.Length;
     }
-    public static int ElidedPartialAndUnsignedLiteralControls(ref string? s)
+    public static int ElidedPartialAndUnsignedLiteralControls(ref string? s, byte b)
     {
         if (s == null) return 0;
         var i = 0;
@@ -1344,6 +1369,11 @@ public partial class Demo
         {
             ElidedTrace((long)i);
             Demo.TakeUint(5);
+            switch (b)
+            {
+                case > 1:
+                    break;
+            }
             i++;
         }
         return s.Length + 7;
@@ -1375,8 +1405,10 @@ public partial class Demo
             ConditionalReferenceUpcastInLoop(ref text, new Derived(), new Base(), true) + "," +
             SwitchReferenceUpcastInLoop(ref text, new Derived(), new Base(), 0) + "," +
             CollectionElementConversionInLoop(ref text) + "," +
+            RelationalPatternConversionInLoop(ref text, 3) + "," +
+            CoalesceAssignNumericInLoop(ref text) + "," +
             UnsignedReturnControl(ref text, false) + "," +
-            ElidedPartialAndUnsignedLiteralControls(ref text) + "," +
+            ElidedPartialAndUnsignedLiteralControls(ref text, 3) + "," +
             GuardInsideLoop(ref text, "z") + "," + OutsideLoop(ref text, 4);
     }
 }`)
@@ -1391,6 +1423,8 @@ public partial class Demo
         Assert.Contains("return s!!.Length + total + 5", printed)
         Assert.Contains("return s!!.Length + total + 6", printed)
         Assert.Contains("return s!!.Length + total + 8", printed)
+        Assert.Contains("return s!!.Length + total + 9", printed)
+        Assert.Contains("s!!.Length + 10", printed)
         Assert.Contains("return uint32(s.Length)", printed)
         Assert.Contains("return s.Length + 7", printed)
         Assert.Contains("total += s.Length + 1", printed)
@@ -1398,9 +1432,9 @@ public partial class Demo
     }
 
     /// Issue #5692 (2): gsc's region scanner gives no origin to the variables of a deconstructing `for (a, b) in items`
-    /// loop, so using a deconstructed variable (or an inferred copy of it) in the body removes a by-reference fact at
-    /// loop entry and after it. Unused deconstructed variables, an unused `var` or same-typed copy, and a pure type
-    /// test keep the fact.
+    /// loop, so using a deconstructed variable (or an inferred copy or pattern-bound alias of it) in the body removes
+    /// a by-reference fact at loop entry and after it. Unused deconstructed variables, an unused `var` or same-typed
+    /// copy, a dropped `_ = a` discard statement, and a pure type test keep the fact.
     @Fact
     func RefParameter_ReadAroundAForEachThatUsesADeconstructedLoopVariable_IsAsserted() {
         let printed = AssertRunsLikeCSharp(`
@@ -1431,6 +1465,16 @@ public class Demo
         }
         return s.Length + total + 2;
     }
+    public static int UsedThroughPatternAlias(ref string? s, (int, int)[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (a, b) in items)
+        {
+            if (a is var copy) total += copy;
+        }
+        return s.Length + total + 5;
+    }
     public static int UnusedVariables(ref string? s, (int, int)[] items)
     {
         if (s == null) return 0;
@@ -1443,8 +1487,14 @@ public class Demo
         if (s == null) return 0;
         foreach (var (a, b) in items)
         {
+            _ = a;
             var copy = a;
+            _ = copy;
             int typedCopy = b;
+            if (b is var unusedAlias)
+            {
+                _ = unusedAlias;
+            }
         }
         return s.Length + 3;
     }
@@ -1463,28 +1513,30 @@ public class Demo
         string? text = "abc";
         var items = new[] { (1, 2) };
         return AfterLoop(ref text, items) + "," + InsideLoop(ref text, items) + "," +
-            UsedThroughCopy(ref text, items) + "," + UnusedVariables(ref text, items) + "," +
-            UnusedCopyOnly(ref text, items) + "," +
+            UsedThroughCopy(ref text, items) + "," + UsedThroughPatternAlias(ref text, items) + "," +
+            UnusedVariables(ref text, items) + "," + UnusedCopyOnly(ref text, items) + "," +
             PureTypeTestOnly(ref text, new (object, int)[] { ("x", 1) });
     }
 }`)
         Assert.Contains("return s!!.Length + total\n", printed.Replace("\r\n", "\n"))
         Assert.Contains("total += a + s!!.Length", printed)
         Assert.Contains("return s!!.Length + total + 2", printed)
+        Assert.Contains("return s!!.Length + total + 5", printed)
         Assert.Contains("total += s.Length + 1", printed)
         Assert.Contains("return s.Length + 3", printed)
         Assert.Contains("return s.Length + total + 4", printed)
-        Assert.Equal(3, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(4, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5692 (3): gsc's region scanner cannot resolve the element origin of an untyped `for x in call()` loop
     /// when an extension method of that name can bind (`"a,b".Split(',')` or a source extension on `ShadowedBox`),
-    /// when a source generic type's method returns `T[]` (`GenericBox<int>.GetItems()`), or when the call is an
-    /// unqualified static class method (`Parts()`), so reading a member of `x` in the body counts as a read on an
-    /// untyped receiver (W5) and removes a by-reference fact. Over a parameter slice `parts`, a qualified static call
-    /// `Box.Parts()`, an instance member call `box.InstanceParts()` (even with a generic overload returning concrete
-    /// `string[]`), a source extension `word.WordParts()` or `values.Entries()`, or a pure string concatenation, the
-    /// fact stays.
+    /// when a source generic type's method returns `T[]` (`GenericBox<int>.GetItems()`), when type arguments are
+    /// emitted on the call (`box.Collide(new Unrelated())`), or when the call is an unqualified static class method
+    /// (`Parts()`), so reading a member of `x` in the body counts as a read on an untyped receiver (W5) and removes a
+    /// by-reference fact. Over a parameter slice `parts`, a qualified static call `Box.Parts()` or
+    /// `QualifiedNs.StaticHolder.MakeSeed()`, an instance member call `box.InstanceParts()` or inferred generic
+    /// `box.InstanceParts(1)` or chained `box.Self().InstanceParts(1)`, a source extension `word.WordParts()` or
+    /// `values.Entries()`, or a pure string concatenation, the fact stays.
     @Fact
     func RefParameter_ReadAroundAForEachOverACallWhoseLoopVariableIsRead_IsAsserted() {
         let printed = AssertRunsLikeCSharp(`
@@ -1494,6 +1546,14 @@ namespace OtherNs
     {
         public static void ShadowedParts(this ShadowedBox box, int n) { }
     }
+#pragma warning disable CS8618
+    public static class StaticHolder
+    {
+        public static string[] Seed;
+        public static Box Instance;
+        public static string[] MakeSeed(string[] seed) => seed;
+    }
+#pragma warning restore CS8618
 }
 public interface IParent
 {
@@ -1528,8 +1588,12 @@ public static class WordExtensions
 public sealed class Box
 {
     public static string[] Parts() => new[] { "a", "b" };
+    public Box Self() => this;
+    public void Ping() { }
     public string[] InstanceParts() => new[] { "c" };
     public string[] InstanceParts<T>(T tag) => new[] { "c" };
+    public string[] Collide(System.Collections.Generic.List<object> tags) => new[] { "k" };
+    public string[] Collide<T>(System.Collections.Generic.List<T> tags) => new[] { "k" };
 }
 public sealed class ShadowedBox
 {
@@ -1595,6 +1659,17 @@ public class Demo
         foreach (var part in selectBox.Select()) total += part.Length;
         return s.Length + total + 8;
     }
+    public static int OverSynthesizedGenericCollisionCall(
+        ref string? s,
+        Box box,
+        System.Collections.Generic.List<Unrelated> tags
+    )
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in box.Collide(tags)) total += part.Length;
+        return s.Length + total + 9;
+    }
     public static int OverParameterArray(ref string? s, string[] parts)
     {
         if (s == null) return 0;
@@ -1602,16 +1677,26 @@ public class Demo
         foreach (var part in parts) total += part.Length;
         return s.Length + total + 1;
     }
-    public static int OverResolvableMemberCalls(ref string? s, Box box, string word, int[] values)
+    public static int OverResolvableMemberCalls(ref string? s, Box box, string word, int[] values, string[] parts)
     {
         if (s == null) return 0;
         var total = 0;
         foreach (var part in Box.Parts()) total += part.Length;
         foreach (var part in box.InstanceParts()) total += part.Length;
+        foreach (var part in box.InstanceParts(1)) total += part.Length;
+        foreach (var part in box.Self().InstanceParts(1)) total += part.Length;
         foreach (var part in word.WordParts()) total += part.Length;
         foreach (var entry in values.Entries()) total += entry;
+        foreach (var part in OtherNs.StaticHolder.Seed) total += part.Length;
+        foreach (var part in OtherNs.StaticHolder.MakeSeed(parts)) total += part.Length;
         foreach (var c in string.Empty) { if (c == 'a') total += 1; }
-        foreach (var c in string.Intern("x")) { if (c == 'x') total += 1; }
+        foreach (var c in string.Intern("x"))
+        {
+            System.String.Intern("x");
+            box.Self().Ping();
+            OtherNs.StaticHolder.Instance.Ping();
+            if (c == 'x') total += 1;
+        }
         return s.Length + total + 2;
     }
     public static int OverPureStringConcatenation(ref string? s)
@@ -1626,6 +1711,8 @@ public class Demo
     }
     public static string Run()
     {
+        OtherNs.StaticHolder.Seed = new[] { "q" };
+        OtherNs.StaticHolder.Instance = new Box();
         string? text = "abc";
         return AfterCallCollection(ref text) + "," + InsideCallCollection(ref text) + "," +
             OverUnqualifiedStaticCall(ref text) + "," +
@@ -1633,8 +1720,9 @@ public class Demo
             OverInheritedInterfaceGenericOverload(ref text, new ChildImpl()) + "," +
             OverConstructedSourceGenericReturn(ref text, new GenericBox<string>()) + "," +
             OverSynthesizedLinqImportConflict(ref text, new SelectBox()) + "," +
+            OverSynthesizedGenericCollisionCall(ref text, new Box(), new System.Collections.Generic.List<Unrelated>()) + "," +
             OverParameterArray(ref text, new[] { "a", "b" }) + "," +
-            OverResolvableMemberCalls(ref text, new Box(), "hi", new[] { 1 }) + "," +
+            OverResolvableMemberCalls(ref text, new Box(), "hi", new[] { 1 }, new[] { "q" }) + "," +
             OverPureStringConcatenation(ref text);
     }
 }`)
@@ -1645,10 +1733,11 @@ public class Demo
         Assert.Contains("return s!!.Length + total + 6", printed)
         Assert.Contains("return s!!.Length + total + 7", printed)
         Assert.Contains("return s!!.Length + total + 8", printed)
+        Assert.Contains("return s!!.Length + total + 9", printed)
         Assert.Contains("return s.Length + total + 1", printed)
         Assert.Contains("return s.Length + total + 2", printed)
         Assert.Contains("return s.Length + total + 4", printed)
-        Assert.Equal(7, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(8, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null
@@ -1871,6 +1960,25 @@ public partial class Demo
         }
         return s.Length + 16;
     }
+    public static int WhileConditionCoalesceAssignNumeric(ref string? s)
+    {
+        long? n = null;
+        s = null;
+        while ((n ??= 1) < 0L || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 17;
+    }
+    public static int WhileConditionRelationalPatternConversion(ref string? s, byte b)
+    {
+        s = null;
+        while (b is > 250 || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 18;
+    }
     public static string Run()
     {
         string? text = "abc";
@@ -1887,7 +1995,9 @@ public partial class Demo
             WhileLoopWithGotoCaseToEmptyArm(ref text, new Box(), 0) + "," +
             WhileLoopInTryWithEnclosingFilterWrite(ref text, new Box()) + "," +
             WhileConditionWithConditionalReceiver(ref text, new Box(), new Box(), true) + "," +
-            WhileLoopAfterPatternGuardEndLabel(ref text, new Box(), 1);
+            WhileLoopAfterPatternGuardEndLabel(ref text, new Box(), 1) + "," +
+            WhileConditionCoalesceAssignNumeric(ref text) + "," +
+            WhileConditionRelationalPatternConversion(ref text, 3);
     }
 }`)
         Assert.Contains("return s.Length + 1\n", printed.Replace("\r\n", "\n"))
@@ -1906,7 +2016,9 @@ public partial class Demo
         Assert.Contains("return s!!.Length + 14", printed)
         Assert.Contains("return s!!.Length + 15", printed)
         Assert.Contains("return s!!.Length + 16", printed)
-        Assert.Equal(12, Regex.Matches(printed, `s!!`).Count)
+        Assert.Contains("return s!!.Length + 17", printed)
+        Assert.Contains("return s!!.Length + 18", printed)
+        Assert.Equal(14, Regex.Matches(printed, `s!!`).Count)
     }
 
     shared {

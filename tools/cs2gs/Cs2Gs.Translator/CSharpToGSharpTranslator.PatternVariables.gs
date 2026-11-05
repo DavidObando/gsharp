@@ -1573,11 +1573,7 @@ partial class CSharpToGSharpTranslator {
                             localFunction
                         )
                     ) ||
-                        (
-                        child is ExpressionStatementSyntax exprStmt && this.IsElidedPartialMethodInvocation(
-                            exprStmt.Expression
-                        )
-                    )
+                        (child is ExpressionStatementSyntax exprStmt && this.IsDroppedExpressionStatement(exprStmt))
                 )
             ) {
                 if node is BreakStatementSyntax breakStatement {
