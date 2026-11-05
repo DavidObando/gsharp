@@ -2719,6 +2719,12 @@ partial class BoundScope {
             if TryGetAliasDeclaringPackageInChain(pair.Key, out _) {
                 continue
             }
+            if pair.Value is StructSymbol{ClrType: not nil} || !object.ReferenceEquals(
+                TypeDefinition(pair.Value),
+                pair.Value
+            ) {
+                continue
+            }
             if pair.Value is TSymbol typed && seen.Add(typed) {
                 builder.Add(typed)
             }
