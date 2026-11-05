@@ -5,7 +5,6 @@
 package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis.Symbols
-import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
@@ -21,8 +20,6 @@ internal sealed class NarrowingJumpState {
         narrowedVariables IReadOnlyDictionary[AccessPath, TypeSymbol],
         narrowingFrameIndices IReadOnlyDictionary[AccessPath, int32],
         externalCallableAliases IReadOnlyCollection[VariableSymbol],
-        activeFinallyClauses ImmutableArray[FinallyClauseSyntax],
-        activeCleanupStatements ImmutableArray[BoundStatement],
         activeCleanupRegions ImmutableArray[GotoCleanupRegion]
     ) {
         this.narrowedVariables = Dictionary[AccessPath, TypeSymbol](narrowedVariables)
@@ -30,8 +27,6 @@ internal sealed class NarrowingJumpState {
         NarrowedVariables = ReadOnlyDictionary[AccessPath, TypeSymbol](this.narrowedVariables)
         NarrowingFrameIndices = ReadOnlyDictionary[AccessPath, int32](this.narrowingFrameIndices)
         this.externalCallableAliases = externalCallableAliases.ToImmutableHashSet()
-        ActiveFinallyClauses = activeFinallyClauses
-        ActiveCleanupStatements = activeCleanupStatements
         ActiveCleanupRegions = activeCleanupRegions
     }
 
@@ -45,14 +40,6 @@ internal sealed class NarrowingJumpState {
 
     prop ExternalCallableAliases ImmutableHashSet[VariableSymbol] -> externalCallableAliases
 
-    prop ActiveFinallyClauses ImmutableArray[FinallyClauseSyntax] {
-        get;
-    }
-
-    prop ActiveCleanupStatements ImmutableArray[BoundStatement] {
-        get;
-    }
-
     prop ActiveCleanupRegions ImmutableArray[GotoCleanupRegion] {
         get;
     }
@@ -61,8 +48,6 @@ internal sealed class NarrowingJumpState {
         narrowedVariables,
         NarrowingFrameIndices,
         ExternalCallableAliases,
-        ActiveFinallyClauses,
-        ActiveCleanupStatements,
         ActiveCleanupRegions
     )
 

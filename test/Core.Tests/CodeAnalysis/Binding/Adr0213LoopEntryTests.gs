@@ -58,7 +58,8 @@ func Run(n int32) int32 {
     }
     return total
 }`}, EmittedOracleOptions{IsLibrary: true})
-        Assert.Equal(0L, measurements.GetCounter("narrowing.loop-rebinds"))
+        Assert.Equal(1L, measurements.GetCounter("narrowing.region-walks"))
+        Assert.Equal(1L, measurements.GetCounter("narrowing.region-facts-killed"))
     }
 
     @Fact
