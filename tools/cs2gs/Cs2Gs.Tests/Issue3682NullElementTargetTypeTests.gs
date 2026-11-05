@@ -292,6 +292,50 @@ namespace Demo
         Assert.Contains("[]object?{program, nil}", printed)
     }
 
+    @Fact
+    func GenericTupleCallTarget_NullElementUsesTypedDefault() {
+        let printed = TranslateUnit(`
+namespace Demo
+{
+    public static class AssertLike
+    {
+        public static void Equal<T>(T expected, T actual) { }
+    }
+
+    public static class ChannelOpsLike
+    {
+        public static (string Value, bool Ok) Receive2() => ("ok", false);
+#nullable enable
+        public static (string? Value, bool Ok) Receive2Nullable() => (null, false);
+
+        public static void F(bool c, int k)
+        {
+            AssertLike.Equal<(string? Value, bool Ok)>((null, false), Receive2Nullable());
+            AssertLike.Equal<(string, bool)?>((null!, false), default);
+            AssertLike.Equal<(string, bool)>((c ? "ok" : null!, false), ("ok", false));
+            AssertLike.Equal<(string, bool)>((k switch { 0 => "ok", _ => null! }, false), ("ok", false));
+        }
+#nullable disable
+        public static void ObliviousF()
+        {
+            AssertLike.Equal((null, false), Receive2());
+        }
+    }
+}`)
+        Assert.Contains("AssertLike.Equal((default(string), false), Receive2())", printed, StringComparison.Ordinal)
+        Assert.Contains(
+            "AssertLike.Equal[(Value string?, Ok bool)]((nil, false), Receive2Nullable())",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "AssertLike.Equal[(string, bool)?]((default(string), false), default((string, bool)?))",
+            printed,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("default(string)", printed, StringComparison.Ordinal)
+    }
+
     shared {
         private func TranslateUnit(source string) string {
             let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})

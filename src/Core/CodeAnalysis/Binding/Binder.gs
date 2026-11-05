@@ -979,6 +979,13 @@ partial class Binder {
                 Expressions.BindExpression(member.Value, declaredType)
             }
             if declaredType == nil {
+                if value is not BoundErrorExpression && value.Type is TupleTypeSymbol{HasNilElement: true} {
+                    value = Conversions.BindConversion(
+                        member.Value.Location,
+                        value,
+                        TupleTypeSymbol.ResolveNilElements(value.Type)
+                    )
+                }
                 let materializedFieldType = TypeSymbol.MaterializeNeverFunctionReturns(value.Type)
                 if !object.ReferenceEquals(materializedFieldType, value.Type) {
                     value = Conversions.BindConversion(member.Value.Location, value, materializedFieldType)

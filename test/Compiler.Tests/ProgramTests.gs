@@ -19,6 +19,7 @@ import System.Reflection.Metadata
 import System.Reflection.PortableExecutable
 import System.Runtime.Versioning
 import System.Text
+import System.Text.Json
 import System.Text.RegularExpressions
 import Xunit
 
@@ -204,6 +205,56 @@ Console.WriteLine("hi from gsc")
             let assembly = EmittedFixture.Load(outPath)
             let targetFramework TargetFrameworkAttribute? = assembly.GetCustomAttribute[TargetFrameworkAttribute]()
             Assert.Equal(".NETCoreApp,Version=v10.0", targetFramework?.FrameworkName)
+        } finally {
+            Console.SetOut(prevOut)
+            Console.SetError(prevErr)
+            try {
+                Directory.Delete(tempDir, recursive: true)
+            } catch { }
+            try {
+                File.Delete(sample)
+            } catch { }
+        }
+    }
+
+    /// The runtimeconfig.json framework version must come from the target framework (#5765).
+    /// A missing version must not load an older shared framework.
+    @Theory
+    @InlineData("net8.0", "8.0.0")
+    @InlineData("net10.0", "10.0.0")
+    @InlineData("net11.0", "11.0.0")
+    @InlineData("net11.0-windows", "11.0.0")
+    @InlineData("net12.0", "12.0.0")
+    @InlineData("netcoreapp3.1", "3.1.0")
+    func Main_ExeTarget_RuntimeConfigFrameworkVersionMatchesTargetFramework(
+        targetFramework string,
+        expectedVersion string
+    ) {
+        let sample = Path.Combine(Path.GetTempPath(), "gs_test_${Guid.NewGuid():N}.gs")
+        File.WriteAllText(sample, `package HelloWorld
+import System
+Console.WriteLine("hi from gsc")
+`)
+        let tempDir = Directory.CreateTempSubdirectory("gsc_rtconfig_").FullName
+        let outPath = Path.Combine(tempDir, "HelloWorld.dll")
+        using let outWriter = StringWriter()
+        using let errWriter = StringWriter()
+        let prevOut = Console.Out
+        let prevErr = Console.Error
+        Console.SetOut(outWriter)
+        Console.SetError(errWriter)
+        try {
+            let exit = Program.Main(
+                []string{"/out:" + outPath, "/target:exe", "/targetframework:" + targetFramework, sample}
+            )
+            Assert.True(exit == 0, errWriter.ToString())
+            let runtimeConfig = Path.ChangeExtension(outPath, ".runtimeconfig.json")
+            using let document = JsonDocument.Parse(File.ReadAllText(runtimeConfig))
+            let options = document.RootElement.GetProperty("runtimeOptions")
+            let framework = options.GetProperty("framework")
+            Assert.Equal(targetFramework, options.GetProperty("tfm").GetString())
+            Assert.Equal("Microsoft.NETCore.App", framework.GetProperty("name").GetString())
+            Assert.Equal(expectedVersion, framework.GetProperty("version").GetString())
         } finally {
             Console.SetOut(prevOut)
             Console.SetError(prevErr)

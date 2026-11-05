@@ -5169,6 +5169,7 @@ internal partial class StatementBinder {
                     convertedInitializer = BoundErrorExpression(initializer.Syntax)
                     variableType = TypeSymbol.Error
                 } else {
+                    variableType = TupleTypeSymbol.ResolveNilElements(variableType)
                     convertedInitializer = conversions.BindConversion(
                         syntax.Initializer!!.Location,
                         initializer,
@@ -5597,15 +5598,17 @@ internal partial class StatementBinder {
         // probes for an imported `Deconstruct`, none of which a platform
         // wrapper matches.
         initializer = binderCtx.InsertPlatformCheck(initializer, syntax.Initializer.Location, "a deconstruction source")
-        if initializer.Type is TupleTypeSymbol tupleType {
-            if syntax.Identifiers.Count != tupleType.Arity {
+        if initializer.Type is TupleTypeSymbol rawTupleType {
+            if syntax.Identifiers.Count != rawTupleType.Arity {
                 Diagnostics.ReportDeconstructionFieldCountMismatch(
                     syntax.CloseParenToken.Location,
-                    tupleType.Arity,
+                    rawTupleType.Arity,
                     syntax.Identifiers.Count
                 )
                 return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
             }
+            let tupleType = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(rawTupleType))
+            initializer = conversions.BindConversion(syntax.Initializer.Location, initializer, tupleType)
             let (tempVar, elements) = CreateTupleDeconstructionPlan(syntax, tupleType)
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
             statements.Add(BoundVariableDeclaration(syntax, tempVar, initializer))
