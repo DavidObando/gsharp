@@ -457,7 +457,11 @@ partial class Binder {
                 statement ExpressionStatementSyntax,
                 syntax NullCoalescingAssignmentExpressionSyntax
             ) -> {
-                return Expressions.BindNullCoalescingAssignmentStatement(statement, syntax)
+                return Expressions.BindNullCoalescingAssignmentStatement(
+                    statement,
+                    syntax,
+                    (rhs BoundExpression) -> Statements.CreateExpressionVariableMutationChecker(statement, rhs)
+                )
             }
         )
         let BindTypeOfExpressionForDeclarations = func (syntax TypeOfExpressionSyntax) BoundExpression {
@@ -14931,6 +14935,8 @@ partial class Binder {
             // its declaration, which the tree's doc table never indexed.
             if syntax is StructDeclarationSyntax{DocumentationSource: {} documentationSource} {
                 syntax = documentationSource
+            } else if syntax is InterfaceDeclarationSyntax{DocumentationSource: {} interfaceDocumentationSource} {
+                syntax = interfaceDocumentationSource
             }
             // ADR-0192 / Copilot review round 7: a merged partial method's own
             // node is a NEW SyntaxNode PartialMethodMerger builds — never

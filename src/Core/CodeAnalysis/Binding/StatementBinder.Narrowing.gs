@@ -446,6 +446,46 @@ internal partial class StatementBinder {
         }
     }
 
+    /// Issue #5000: returns a predicate that decides whether [`expression`](paramref)
+    /// can reassign a variable or mutate its value-type contents.
+    internal func CreateExpressionVariableMutationChecker(anchor SyntaxNode, expression BoundExpression)(
+        VariableSymbol
+    ) -> bool {
+        var collector AssignedRootsCollector? = nil
+        var dropAllMemberPaths = false
+        var filterWrites List[(TryBlock SyntaxNode?, Names HashSet[string])]? = nil
+        return func (variable VariableSymbol) bool {
+            let strippedType = StripNullability(variable.Type) ?? variable.Type
+            let isValueType = !Binder.IsReferenceTypeForConstraint(strippedType)
+            if variable.IsReadOnly &&
+                !isValueType &&
+                !IsByReferenceRoot(variable) &&
+                !IsExternalStorageAlias(variable) {
+                return false
+            }
+            var effects = collector
+            if effects == nil {
+                EnsureClosureAssignedNames(anchor)
+                effects = NewCollector(nil, nil)
+                effects.VisitExpression(expression)
+                collector = effects
+                dropAllMemberPaths = (expression.Syntax is {} exprSyntax && SyntaxMayMutateMemberPaths(exprSyntax)) ||
+                    effects.MayMutateMemberPaths
+                filterWrites = EnclosingFilterWrites(anchor, effects)
+            }
+            let path = AccessPath.ForVariable(variable)
+            return (
+                filterWrites != nil &&
+                    (FilterWritesVariable(filterWrites, variable) || MayBeMutatedByUnknownCallable(path))
+            ) ||
+                (
+                (isValueType || IsExternalStorageAlias(variable) || IsByReferenceRoot(variable)) &&
+                    (dropAllMemberPaths || effects.MayMutateReferenceStorage || effects.MayMutateGlobalRoots)
+            ) ||
+                StatementKillsPath(effects, path, dropAllMemberPaths, effects.MayMutateReferenceStorage)
+        }
+    }
+
     // The one rule for the facts that a statement kills: a root it assigns, a root
     // an unknown write reaches, a mutable global when it can write one, and every
     // member path when it can mutate one (ADR-0069 #1180, #2943).
@@ -479,16 +519,25 @@ internal partial class StatementBinder {
         ApplyCallableAliasExitState(externalCallableAliases, statement, aliasesAtEntry, collector)
         // A filter of an enclosing try can run between any two statements of its protected block,
         // when a nested handler catches a replacement exception.
-        if externalCallableAliases.Count > 0 && statement.Syntax is {} syntax {
-            let filters = if collector.MayMutateMemberPaths || collector.ContainsTry {
-                CollectCatchFiltersAbove(syntax)
-            } else {
-                List[ExpressionSyntax]()
-            }
-            filters.AddRange(collector.VisitedCatchFilters)
-            if filters.Count > 0 {
-                RemoveFilterAffectedAliases(externalCallableAliases, filters)
-            }
+        RemoveCollectorFilterAffectedAliases(externalCallableAliases, statement.Syntax, collector)
+    }
+
+    private func RemoveCollectorFilterAffectedAliases(
+        aliases HashSet[VariableSymbol],
+        syntax SyntaxNode?,
+        collector AssignedRootsCollector
+    ) {
+        if aliases.Count == 0 || syntax == nil {
+            return
+        }
+        let filters = if collector.MayMutateMemberPaths || collector.ContainsTry {
+            CollectCatchFiltersAbove(syntax)
+        } else {
+            List[ExpressionSyntax]()
+        }
+        filters.AddRange(collector.VisitedCatchFilters)
+        if filters.Count > 0 {
+            RemoveFilterAffectedAliases(aliases, filters)
         }
     }
 
@@ -1861,6 +1910,7 @@ internal partial class StatementBinder {
         if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
             aliases.IntersectWith(collector.DefinitelyExternalFunctionValues)
         }
+        RemoveCollectorFilterAffectedAliases(aliases, header.Syntax, collector)
     }
 
     /// ADR-0208 section 9 and row R18 (#5534): the else-branch of an `if` statement is bound under the state after
@@ -2441,7 +2491,8 @@ internal partial class StatementBinder {
             if StatementBinder.IsMemberStorageWriteExpression(node.Kind) ||
                 (
                 StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) &&
-                    node is not BoundCallOperationExpression
+                    node is not BoundCallOperationExpression &&
+                    node is not BoundConstructorCallExpression
             ) {
                 MayMutateReferenceStorage = true
             }
@@ -2557,8 +2608,7 @@ internal partial class StatementBinder {
             }
             base.VisitExpression(node)
             if runsEscapedClosureHere {
-                normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                InvalidateCallableStateForUnknownClosure()
             }
             if node is BoundCallOperationExpression{
                 CalledFunction: FunctionSymbol calledFunction,
@@ -2569,10 +2619,6 @@ internal partial class StatementBinder {
                     if (calledFunction.Parameters[i].RefKind is RefKind.Ref or RefKind.Out) {
                         RecordWritableReference(arguments[i], invalidateCallableState: true)
                     }
-                }
-                if calledFunction.HasCaptures {
-                    normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-                    allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
                 }
             }
             if node is BoundCallOperationExpression{
@@ -2796,13 +2842,46 @@ internal partial class StatementBinder {
             RestoreCallableState(JoinCallableStates(thenState, CaptureCallableState()))
         }
 
+        private func VisitCondition(expression BoundExpression)(
+            WhenTrue(Normal CallableAliasState, AllEntry CallableAliasState),
+            WhenFalse(Normal CallableAliasState, AllEntry CallableAliasState)
+        ) {
+            switch expression {
+                case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
+                    let (leftTrue, leftFalse) = VisitCondition(binary.Left)
+                    RestoreCallableState(leftTrue)
+                    let (rightTrue, rightFalse) = VisitCondition(binary.Right)
+                    let whenFalse = JoinCallableStates(leftFalse, rightFalse)
+                    RestoreCallableState(JoinCallableStates(rightTrue, whenFalse))
+                    return (rightTrue, whenFalse)
+                }
+                case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
+                    let (leftTrue, leftFalse) = VisitCondition(binary.Left)
+                    RestoreCallableState(leftFalse)
+                    let (rightTrue, rightFalse) = VisitCondition(binary.Right)
+                    let whenTrue = JoinCallableStates(leftTrue, rightTrue)
+                    RestoreCallableState(JoinCallableStates(whenTrue, rightFalse))
+                    return (whenTrue, rightFalse)
+                }
+                case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
+                    let (operandTrue, operandFalse) = VisitCondition(unary.Operand)
+                    return (operandFalse, operandTrue)
+                }
+                default {
+                    VisitExpression(expression)
+                    let after = CaptureCallableState()
+                    return (after, CloneCallableState(after))
+                }
+            }
+        }
+
         protected open override func VisitBinaryExpression(node BoundBinaryExpression) {
+            if node.Op.Kind is BoundBinaryOperatorKind.LogicalAnd or BoundBinaryOperatorKind.LogicalOr {
+                VisitCondition(node)
+                return
+            }
             VisitExpression(node.Left)
-            if node
-                .Op
-                .Kind is BoundBinaryOperatorKind.LogicalAnd or
-                BoundBinaryOperatorKind.LogicalOr or
-                BoundBinaryOperatorKind.NullCoalesce {
+            if node.Op.Kind == BoundBinaryOperatorKind.NullCoalesce {
                 VisitPossiblySkipped(() -> VisitExpression(node.Right))
             } else {
                 VisitExpression(node.Right)
@@ -2811,6 +2890,7 @@ internal partial class StatementBinder {
                 // ADR-0208 R19 (#5710): structural equality calls `Equals`, which can be user code. It is a plain
                 // method call, so it does not write by-reference storage (R12, amendment A3).
                 MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                InvalidateCallableStateForUnknownClosure()
             }
         }
 
@@ -2822,16 +2902,23 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitConditionalExpression(node BoundConditionalExpression) {
-            VisitExpression(node.Condition)
-            VisitAlternativePaths(() -> VisitExpression(node.WhenTrue), () -> VisitExpression(node.WhenFalse))
+            let (whenTrue, whenFalse) = VisitCondition(node.Condition)
+            RestoreCallableState(whenTrue)
+            VisitExpression(node.WhenTrue)
+            let thenState = CaptureCallableState()
+            RestoreCallableState(whenFalse)
+            VisitExpression(node.WhenFalse)
+            RestoreCallableState(JoinCallableStates(thenState, CaptureCallableState()))
         }
 
         protected open override func VisitConditionalAddressExpression(node BoundConditionalAddressExpression) {
-            VisitExpression(node.Condition)
-            VisitAlternativePaths(
-                () -> VisitExpression(node.WhenTrueOperand),
-                () -> VisitExpression(node.WhenFalseOperand)
-            )
+            let (whenTrue, whenFalse) = VisitCondition(node.Condition)
+            RestoreCallableState(whenTrue)
+            VisitExpression(node.WhenTrueOperand)
+            let thenState = CaptureCallableState()
+            RestoreCallableState(whenFalse)
+            VisitExpression(node.WhenFalseOperand)
+            RestoreCallableState(JoinCallableStates(thenState, CaptureCallableState()))
         }
 
         protected open override func VisitBinaryPattern(node BoundBinaryPattern) {
@@ -2844,10 +2931,12 @@ internal partial class StatementBinder {
                 // A computed property of a pattern runs its getter.
                 if field.Property is {} property && StatementBinder.SourcePropertyRunsUserCode(property, node.Type) {
                     MarkMayMutateGlobalRoots()
+                    InvalidateCallableStateForUnknownClosure()
                 }
                 // ADR-0208 R16 (#5231): so does an imported property that is not on the stable list.
                 if StatementBinder.ClrMemberReadRunsUserCode(field.ClrMember) {
                     MarkMayMutateGlobalRoots()
+                    InvalidateCallableStateForUnknownClosure()
                 }
                 VisitPossiblySkipped(() -> VisitPattern(field.Pattern))
             }
@@ -2859,6 +2948,7 @@ internal partial class StatementBinder {
             // method call, so it does not write by-reference storage (R12, amendment A3).
             if StatementBinder.ConstantPatternRunsUserCode(node) {
                 MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                InvalidateCallableStateForUnknownClosure()
             }
         }
 
@@ -2866,6 +2956,7 @@ internal partial class StatementBinder {
             // ADR-0208 R19 (#5593): the `Length`/`Count` getter and the indexer of an indexable input (R16, R17).
             if StatementBinder.ListPatternRunsUserCode(node) {
                 MarkMayMutateGlobalRoots()
+                InvalidateCallableStateForUnknownClosure()
             }
             for element in node.Elements {
                 VisitPossiblySkipped(() -> VisitPattern(element))
@@ -2907,8 +2998,7 @@ internal partial class StatementBinder {
             VisitCallableArguments(node.Arguments)
             if node.Method is {} method {
                 InvalidateParameterRefArguments(node.Arguments, method.Parameters)
-                normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                InvalidateCallableStateForUnknownClosure()
             }
         }
 
@@ -3185,12 +3275,58 @@ internal partial class StatementBinder {
             allEntryCallableState.ApplyVariableDeclaration(node, inFunctionLiteral)
         }
 
+        protected open override func VisitBlockStatement(node BoundBlockStatement) {
+            let statements = node.Statements
+            let count = statements.Length
+            if node.Syntax is IfLetStatementSyntax &&
+                count >= 5 &&
+                statements[count - 4] is BoundGotoStatement endGoto &&
+                statements[count - 3] is BoundLabelStatement elseLabel &&
+                statements[count - 1] is BoundLabelStatement endLabel &&
+                endGoto.Label == endLabel
+                .Label {
+                var elseEntry(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
+                for var i = 0; i < count - 5; i++ {
+                    let current = statements[i]
+                    if current is BoundConditionalGotoStatement condGoto &&
+                        condGoto.Label == elseLabel.Label &&
+                        !condGoto
+                        .JumpIfTrue {
+                        let (whenTrue, whenFalse) = VisitCondition(condGoto.Condition)
+                        elseEntry = JoinCallableStates(elseEntry, whenFalse)
+                        RestoreCallableState(whenTrue)
+                    } else {
+                        VisitStatement(current)
+                    }
+                }
+                let afterHeader = CaptureCallableState()
+                let thenStatement = statements[count - 5]
+                let elseStatement = statements[count - 2]
+                VisitStatement(thenStatement)
+                let thenState = CaptureCallableState()
+                RestoreCallableState(elseEntry ?? afterHeader)
+                VisitStatement(elseStatement)
+                let elseState = CaptureCallableState()
+                var joined(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
+                if !StatementBinder.EndsInUnconditionalExit(thenStatement, gotoExits: false) {
+                    joined = JoinCallableStates(joined, thenState)
+                }
+                if !StatementBinder.EndsInUnconditionalExit(elseStatement, gotoExits: false) {
+                    joined = JoinCallableStates(joined, elseState)
+                }
+                RestoreCallableState(joined ?? afterHeader)
+                return
+            }
+            base.VisitBlockStatement(node)
+        }
+
         protected open override func VisitIfStatement(node BoundIfStatement) {
-            VisitExpression(node.Condition)
-            let branchStart = CaptureCallableState()
+            let (whenTrue, whenFalse) = VisitCondition(node.Condition)
+            let afterCondition = CaptureCallableState()
+            RestoreCallableState(whenTrue)
             VisitStatement(node.ThenStatement)
             let thenState = CaptureCallableState()
-            RestoreCallableState(branchStart)
+            RestoreCallableState(whenFalse)
             VisitStatement(node.ElseStatement)
             let elseState = CaptureCallableState()
             var joined(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
@@ -3203,7 +3339,7 @@ internal partial class StatementBinder {
             ) {
                 joined = JoinCallableStates(joined, elseState)
             }
-            RestoreCallableState(joined ?? branchStart)
+            RestoreCallableState(joined ?? afterCondition)
         }
 
         protected open override func VisitConditionalGotoStatement(node BoundConditionalGotoStatement) {
@@ -3626,6 +3762,11 @@ internal partial class StatementBinder {
             }
             normalCallableState.RestoreFrom(joinedNormal ?? entryState.Normal)
             allEntryCallableState.RestoreFrom(joinedAllEntry ?? entryState.AllEntry)
+        }
+
+        private func InvalidateCallableStateForUnknownClosure() {
+            normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+            allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
         }
 
         // [`runsSourceCode`](paramref) is false for a call through a callable value: it keeps its own classification
@@ -6618,7 +6759,7 @@ internal partial class StatementBinder {
             return owner != nil && TypeInitializationRunsUserCode(owner, atStaticMemberAccess: true)
         }
 
-        /// ADR-0208 R11 (#5170), R15 (#5237) and #5483: the one definition of whether constructing
+        /// ADR-0208 R11 (#5170), R15 (#5237), #5483 and #5562: the one definition of whether constructing
         /// [`type`](paramref) can run user code. The type, the generic definition of a constructed type, and
         /// every base class are checked for
         ///
@@ -6627,25 +6768,28 @@ internal partial class StatementBinder {
         /// | instance field initializer                          | yes                  |
         /// | primary constructor                                 | yes                  |
         /// | explicit constructor                                | yes                  |
+        /// | imported base class                                 | yes                  |
         /// | the type initializer (see (cref:TypeInitializationRunsUserCode)) | per that table |
         /// | none of the above                                   | no                   |
         internal func ConstructionRunsUserCode(type StructSymbol) bool {
             var current StructSymbol? = type
             for var depth = 0; current != nil && depth < 64; depth++ {
                 let definition = current.Definition ?? current
-                if !definition
+                if definition.DeclaresInstanceFieldInitializer ||
+                    !definition
                     .InstanceFieldInitializers
                     .IsEmpty ||
                     definition.HasPrimaryConstructor ||
                     !definition
                     .EffectiveExplicitConstructors
                     .IsDefaultOrEmpty ||
+                    definition.ImportedBaseType != nil ||
                     TypeInitializationRunsUserCode(definition, atStaticMemberAccess: false) {
                     return true
                 }
                 current = definition.BaseClass
             }
-            return false
+            return current != nil
         }
 
         /// ADR-0208 R12 (#5171, #5292, amendment A3): whether the effects of a node invalidate the narrowing of
