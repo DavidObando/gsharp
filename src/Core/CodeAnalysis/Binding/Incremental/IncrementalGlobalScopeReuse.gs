@@ -517,6 +517,10 @@ internal shared class IncrementalGlobalScopeReuse {
         structMap Dictionary[StructDeclarationSyntax, StructDeclarationSyntax],
         out updated StructDeclarationSyntax
     ) bool {
+        if declaration.PartialPartLocations.Length > 1 {
+            updated = declaration
+            return false
+        }
         let source = declaration.DocumentationSource ?? declaration
         if !structMap.TryGetValue(source, out var updatedSource) {
             updated = declaration
