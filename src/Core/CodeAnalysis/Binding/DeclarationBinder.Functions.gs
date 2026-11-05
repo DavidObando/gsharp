@@ -3327,25 +3327,25 @@ internal partial class DeclarationBinder {
                         TypeSignaturesEquivalent(aKeyType, bKeyType, typeParamMap) &&
                         TypeSignaturesEquivalent(aValueType, bValueType, typeParamMap)
                 }
-            }
-            let aIsFunction = TryGetNaturalFunctionShape(
-                a,
-                out var aParameterTypes,
-                out var aHasVariadic,
-                out var aReturnType
-            )
-            let bIsFunction = TryGetNaturalFunctionShape(
-                b,
-                out var bParameterTypes,
-                out var bHasVariadic,
-                out var bReturnType
-            )
-            if aIsFunction || bIsFunction {
-                return aIsFunction &&
-                    bIsFunction &&
-                    (conformanceMatchingDepth == 0 || aHasVariadic == bHasVariadic) &&
-                    TypeArgumentsEquivalent(aParameterTypes, bParameterTypes, typeParamMap) &&
-                    TypeSignaturesEquivalent(aReturnType, bReturnType, typeParamMap)
+                let aIsFunction = TryGetNaturalFunctionShape(
+                    a,
+                    out var aParameterTypes,
+                    out var aHasVariadic,
+                    out var aReturnType
+                )
+                let bIsFunction = TryGetNaturalFunctionShape(
+                    b,
+                    out var bParameterTypes,
+                    out var bHasVariadic,
+                    out var bReturnType
+                )
+                if aIsFunction || bIsFunction {
+                    return aIsFunction &&
+                        bIsFunction &&
+                        aHasVariadic == bHasVariadic &&
+                        TypeArgumentsEquivalent(aParameterTypes, bParameterTypes, typeParamMap) &&
+                        TypeSignaturesEquivalent(aReturnType, bReturnType, typeParamMap)
+                }
             }
             if a is StructSymbol sa && b is StructSymbol sb {
                 return object.ReferenceEquals(sa.Definition ?? sa, sb.Definition ?? sb) &&

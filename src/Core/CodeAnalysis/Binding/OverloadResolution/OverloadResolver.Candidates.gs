@@ -965,7 +965,12 @@ internal partial class OverloadResolver {
         // reference equality misses the identity case and the argument ranked
         // as a mere reference conversion — making a same-typed normal-form
         // slot tie with a params-expanded sibling (spurious GS0266).
-        if argType == paramType || DeclarationBinder.TypeSignaturesEquivalent(argType, paramType) {
+        if argType == paramType || DeclarationBinder.TypeSignaturesEquivalent(argType, paramType) ||
+            (
+            argType is ImportedTypeSymbol &&
+                paramType is FunctionTypeSymbol &&
+                TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(argType, paramType)
+        ) {
             return ClrOverloadResolution.ImplicitConversionKind.Identity
         }
         if Conversion.Classify(argType, paramType).IsStructuralProjection {

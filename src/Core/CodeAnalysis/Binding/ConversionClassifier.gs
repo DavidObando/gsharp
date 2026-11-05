@@ -983,15 +983,14 @@ internal class ConversionClassifier {
         }
         var conversion = Conversion.Classify(expression.Type, type!!)
         conversion = ClassifyConvertedDelegate(expression, type!!, conversion)
-        if isUserMethodGroupSource && !conversion.IsImplicit {
+        if isUserMethodGroupSource &&
+            !conversion.IsImplicit &&
+            !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(expression.Type, type) {
             conversion = Conversion.None
         }
         if !conversion.Exists &&
             allowExplicit &&
             !isUserMethodGroupSource &&
-            !(
-            expression is BoundFunctionLiteralExpression or BoundMethodGroupExpression or BoundClrMethodGroupExpression
-        ) &&
             (
             (
                 Conversion.HasCheckedReferenceConversion(expression.Type, type) &&
@@ -2095,9 +2094,6 @@ internal class ConversionClassifier {
                         // cannot fire on an interop slot.
                         let allowExplicitArgument = !parameterConversion.IsStructuralProjection &&
                             !(targetType is ArrayTypeSymbol) &&
-                            !(
-                            parameterConversion.IsExplicit && argument.Type.StripToBareShape() is FunctionTypeSymbol
-                        ) &&
                             !requiresRuntimeContract
                         rebound = BindConversion(location, argument, targetType, allowExplicit: allowExplicitArgument)
                     } else if argument.Type != targetType &&
@@ -6102,16 +6098,13 @@ internal class ConversionClassifier {
             target TypeSymbol,
             conversion Conversion
         ) Conversion {
-            if !conversion.Exists ||
-                conversion.IsIdentity ||
-                !(expression.Type.StripToBareShape() is FunctionTypeSymbol) ||
-                (conversion.IsImplicit && KeepsConvertedDelegate(expression, target)) {
-                return conversion
-            }
-            if expression is BoundFunctionLiteralExpression or
-                BoundMethodGroupExpression or
-                BoundClrMethodGroupExpression {
+            if (expression is BoundMethodGroupExpression or BoundClrMethodGroupExpression) &&
+                !conversion.IsImplicit &&
+                !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(expression.Type, target) {
                 return Conversion.None
+            }
+            if !conversion.Exists || conversion.IsIdentity || KeepsConvertedDelegate(expression, target) {
+                return conversion
             }
             return if Conversion.HasCheckedReferenceConversion(expression.Type, target) &&
                 Conversion.ChecksFunctionValueDelegate(expression.Type, target) {
