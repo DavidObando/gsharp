@@ -1731,7 +1731,8 @@ internal partial class StatementBinder {
         allowBoolCall bool = true,
         keepBoolCallInLogicalOps bool = true,
         shortCircuitInComposedOps bool = false,
-        header SyntaxNode? = nil
+        header SyntaxNode? = nil,
+        filterBoolCallAfterEffects bool = true
     )(
         Then Dictionary[AccessPath, TypeSymbol]?,
         Else Dictionary[AccessPath, TypeSymbol]?,
@@ -1752,7 +1753,8 @@ internal partial class StatementBinder {
                     allowBoolCall,
                     keepBoolCallInLogicalOps,
                     shortCircuitInComposedOps,
-                    header
+                    header,
+                    filterBoolCallAfterEffects
                 )
                 return (inElse, inThen, falseAliases, trueAliases)
             }
@@ -1765,7 +1767,8 @@ internal partial class StatementBinder {
                     keepBoolCallInLogicalOps,
                     keepBoolCallInLogicalOps,
                     shortCircuitInComposedOps,
-                    header
+                    header,
+                    filterBoolCallAfterEffects
                 )
                 if leftThen != nil && leftThen.Count > 0 {
                     leftThen = Dictionary[AccessPath, TypeSymbol](leftThen)
@@ -1782,7 +1785,8 @@ internal partial class StatementBinder {
                     keepBoolCallInLogicalOps,
                     keepBoolCallInLogicalOps,
                     shortCircuitInComposedOps,
-                    header
+                    header,
+                    filterBoolCallAfterEffects
                 )
                 let combinedThen = MergeNarrowingFrames(leftThen, rightThen)
                 return (combinedThen, nil, rightTrueAliases, JoinAliases(leftFalseAliases, rightFalseAliases))
@@ -1796,7 +1800,8 @@ internal partial class StatementBinder {
                     keepBoolCallInLogicalOps,
                     keepBoolCallInLogicalOps,
                     shortCircuitInComposedOps,
-                    header
+                    header,
+                    filterBoolCallAfterEffects
                 )
                 if leftElse != nil && leftElse.Count > 0 {
                     leftElse = Dictionary[AccessPath, TypeSymbol](leftElse)
@@ -1813,7 +1818,8 @@ internal partial class StatementBinder {
                     keepBoolCallInLogicalOps,
                     keepBoolCallInLogicalOps,
                     shortCircuitInComposedOps,
-                    header
+                    header,
+                    filterBoolCallAfterEffects
                 )
                 let combinedThen = IntersectNarrowingFrames(leftThen, rightThen)
                 let combinedElse = MergeNarrowingFrames(leftElse, rightElse)
@@ -1823,7 +1829,7 @@ internal partial class StatementBinder {
         var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition, forShortCircuitOperand)
         if !forShortCircuitOperand && allowBoolCall && thenNarrow == nil && elseNarrow == nil {
             thenNarrow, elseNarrow = TryClassifyBoolCallNarrowing(condition)
-            if thenNarrow != nil || elseNarrow != nil {
+            if filterBoolCallAfterEffects && (thenNarrow != nil || elseNarrow != nil) {
                 FilterBoolCallNarrowingAfterEffects(condition, beforeAliases, ref thenNarrow, ref elseNarrow)
             }
         }
@@ -2191,7 +2197,8 @@ internal partial class StatementBinder {
             allowBoolCall: allowBoolCall,
             keepBoolCallInLogicalOps: false,
             shortCircuitInComposedOps: !allowBoolCall,
-            header: conditionSyntax
+            header: conditionSyntax,
+            filterBoolCallAfterEffects: false
         )
         lastConditionWhenTrueAliases = whenTrueAliases
         lastConditionWhenFalseAliases = whenFalseAliases
