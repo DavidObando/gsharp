@@ -2514,7 +2514,8 @@ internal partial class StatementBinder {
                 mapLiteral
                 .MapType
                 .KeyType != TypeSymbol.String &&
-                !TypeSymbol.IsLegalPointeeType(mapLiteral.MapType.KeyType) {
+                !TypeSymbol
+                .IsLegalPointeeType(mapLiteral.MapType.KeyType) {
                 MayMutateMemberPaths = true
                 MarkMayMutateGlobalRoots()
                 runsEscapedClosureHere = true
