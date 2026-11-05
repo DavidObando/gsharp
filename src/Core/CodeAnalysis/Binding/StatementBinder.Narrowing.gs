@@ -2993,7 +2993,8 @@ internal partial class StatementBinder {
                 }
             }
             if (
-                node.CallsPrimaryConstructor ||
+                node.CallsDataConstructor ||
+                    node.CallsPrimaryConstructor ||
                     spillsPrimaryInLexicalOrder ||
                     type.IsClass ||
                     definition.NeedsSynthesizedValueStructDefaultCtor

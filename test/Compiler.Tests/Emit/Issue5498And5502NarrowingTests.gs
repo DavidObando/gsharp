@@ -571,6 +571,32 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run(func() { })) }`, "", "run", "1"}
+            yield[]object{"review_5502_data_struct_parameterless_ctor_literal_invalidates_alias", `import System
+
+class C {
+    var Value int32 = 1
+}
+data struct Box {
+    var Tag int32
+    init() {
+        Tag = 1
+        cleaner()
+    }
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    cleaner = func() { action = func() { x = nil } }
+    {
+        let b = Box{}
+        if b.Tag == 0 { return 0 }
+    }
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+var cleaner () -> void = func() { }
+Console.WriteLine(Run(func() { }))`, "GS0158@23:14", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
