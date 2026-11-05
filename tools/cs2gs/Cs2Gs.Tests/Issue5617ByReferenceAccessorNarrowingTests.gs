@@ -1475,6 +1475,17 @@ public class Demo
         }
         return s.Length + total + 5;
     }
+    public static int UsedThroughTupleCopy(ref string? s, (int, int)[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (a, b) in items)
+        {
+            var pair = (a, b);
+            total += pair.a;
+        }
+        return s.Length + total + 6;
+    }
     public static int UnusedVariables(ref string? s, (int, int)[] items)
     {
         if (s == null) return 0;
@@ -1490,6 +1501,8 @@ public class Demo
             _ = a;
             var copy = a;
             _ = copy;
+            var unusedPair = (a, b);
+            _ = unusedPair;
             int typedCopy = b;
             if (b is var unusedAlias)
             {
@@ -1517,6 +1530,7 @@ public class Demo
         var items = new[] { (1, 2) };
         return AfterLoop(ref text, items) + "," + InsideLoop(ref text, items) + "," +
             UsedThroughCopy(ref text, items) + "," + UsedThroughPatternAlias(ref text, items) + "," +
+            UsedThroughTupleCopy(ref text, items) + "," +
             UnusedVariables(ref text, items) + "," + UnusedCopyOnly(ref text, items) + "," +
             PureTypeTestOnly(ref text, new (object, int)[] { ("x", 1) });
     }
@@ -1525,10 +1539,11 @@ public class Demo
         Assert.Contains("total += a + s!!.Length", printed)
         Assert.Contains("return s!!.Length + total + 2", printed)
         Assert.Contains("return s!!.Length + total + 5", printed)
+        Assert.Contains("return s!!.Length + total + 6", printed)
         Assert.Contains("total += s.Length + 1", printed)
         Assert.Contains("return s.Length + 3", printed)
         Assert.Contains("return s.Length + total + 4", printed)
-        Assert.Equal(4, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(5, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5692 (3): gsc's region scanner cannot resolve the element origin of an untyped `for x in call()` loop
@@ -1596,6 +1611,10 @@ public sealed class MixedBox
     public Box MixedSelf() => new Box();
     public Unrelated MixedSelf(int n) => new Unrelated();
 }
+public interface IBox
+{
+    void Ping();
+}
 public static class WordExtensions
 {
     public static string[] WordParts(this string text) => new[] { text };
@@ -1606,9 +1625,11 @@ public static class WordExtensions
     public static void ConstrainedParts<T>(this T value) where T : System.IDisposable { }
     public static int[] Entries(this int[] values) => values;
     public static string[] GenericArrayParts<T>(this T[] values) => new[] { "p" };
+    public static string[] NewableParts<T>(this System.Collections.Generic.List<T> values) where T : new() => new[] { "r" };
+    public static void NewablePing<T>(this T[] values) where T : new() { }
     public static string[] LibExtParts(this OtherNs.LibBox box) => new[] { "n" };
 }
-public sealed class Box
+public sealed class Box : IBox
 {
     public static string[] Parts() => new[] { "a", "b" };
     public Box Self() => this;
@@ -1705,6 +1726,18 @@ public class Demo
         }
         return s.Length + 10;
     }
+    public static int TypeTestedCopyReceiverCall(ref string? s, Box box)
+    {
+        if (s == null) return 0;
+        var i = 0;
+        while (i < 1)
+        {
+            var copy = box;
+            if (copy is Box) copy.Ping();
+            i++;
+        }
+        return s.Length + 14;
+    }
     public static int OverMixedReturnOverloads(ref string? s, MixedBox mixed)
     {
         if (s == null) return 0;
@@ -1725,6 +1758,36 @@ public class Demo
         var total = 0;
         foreach (var part in dbox.ConstrainedParts()) total += part.Length;
         return s.Length + total + 13;
+    }
+    public static int ConstrainedReceiverControl<T>(ref string? s, T constrainedBox) where T : class, IBox
+    {
+        if (s == null) return 0;
+        var run = true;
+        while (run)
+        {
+            constrainedBox.Ping();
+            run = false;
+        }
+        return s.Length + 15;
+    }
+    public static int NewableAndStaticExtensionControl<T>(
+        ref string? s,
+        T[] newableItems,
+        System.Collections.Generic.List<T> newableList,
+        string word
+    ) where T : new()
+    {
+        if (s == null) return 0;
+        var run = true;
+        while (run)
+        {
+            newableItems.NewablePing();
+            run = false;
+        }
+        var total = 0;
+        foreach (var part in newableList.NewableParts()) total += part.Length;
+        foreach (var part in WordExtensions.WordParts(word)) total += part.Length;
+        return s.Length + total + 16;
     }
     public static int OverParameterArray(ref string? s, string[] parts)
     {
@@ -1795,9 +1858,17 @@ public class Demo
             OverSynthesizedLinqImportConflict(ref text, new SelectBox()) + "," +
             OverSynthesizedGenericCollisionCall(ref text, new Box(), new System.Collections.Generic.List<Unrelated>()) + "," +
             ConditionalCopyReceiverCall(ref text, new Box(), new Box(), true) + "," +
+            TypeTestedCopyReceiverCall(ref text, new Box()) + "," +
             OverMixedReturnOverloads(ref text, new MixedBox()) + "," +
             OverMixedChainedReceiverOverloads(ref text, new MixedBox()) + "," +
             OverConstrainedExtensionConflict(ref text, new DisposableBox()) + "," +
+            ConstrainedReceiverControl(ref text, new Box()) + "," +
+            NewableAndStaticExtensionControl(
+                ref text,
+                new[] { new Box() },
+                new System.Collections.Generic.List<Box> { new Box() },
+                "hi"
+            ) + "," +
             OverParameterArray(ref text, new[] { "a", "b" }) + "," +
             OverResolvableMemberCalls(
                 ref text,
@@ -1829,13 +1900,16 @@ namespace OtherNs
         Assert.Contains("return s!!.Length + total + 8", printed)
         Assert.Contains("return s!!.Length + total + 9", printed)
         Assert.Contains("return s!!.Length + 10", printed)
+        Assert.Contains("return s!!.Length + 14", printed)
         Assert.Contains("return s!!.Length + total + 11", printed)
         Assert.Contains("return s!!.Length + total + 12", printed)
         Assert.Contains("return s!!.Length + total + 13", printed)
+        Assert.Contains("return s.Length + 15", printed)
+        Assert.Contains("return s.Length + total + 16", printed)
         Assert.Contains("return s.Length + total + 1", printed)
         Assert.Contains("return s.Length + total + 2", printed)
         Assert.Contains("return s.Length + total + 4", printed)
-        Assert.Equal(12, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(13, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null
