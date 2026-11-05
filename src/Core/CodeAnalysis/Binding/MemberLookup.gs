@@ -8452,12 +8452,12 @@ internal class MemberLookup {
                 if !SatisfiesSymbolicInferenceBounds(candidate, lower, upper) {
                     continue
                 }
-                if best == nil {
+                if best is not{} currentBest {
                     best = candidate
                     continue
                 }
-                if DeclarationBinder.TypeSignaturesEquivalent(best, candidate) {
-                    best = MergeRecoveredTypeArgument(best, candidate, allowBaseWidening: false)
+                if DeclarationBinder.TypeSignaturesEquivalent(currentBest, candidate) {
+                    best = MergeRecoveredTypeArgument(currentBest, candidate, allowBaseWidening: false)
                     continue
                 }
                 // Issue #4133 (review finding, hot-core translation guard):
@@ -8506,10 +8506,13 @@ internal class MemberLookup {
                 // non-nullable shape here because it is deterministic without
                 // needing flow-sensitive nullable warnings on the inferred type
                 // argument itself.
-                let strippedBest = StripReferenceNullableAnnotations(best!!)
+                let strippedBest = StripReferenceNullableAnnotations(currentBest)
                 let strippedCandidate = StripReferenceNullableAnnotations(candidate)
                 if (
-                    !object.ReferenceEquals(strippedBest, best) || !object.ReferenceEquals(strippedCandidate, candidate)
+                    !object.ReferenceEquals(strippedBest, currentBest) || !object.ReferenceEquals(
+                        strippedCandidate,
+                        candidate
+                    )
                 ) &&
                     DeclarationBinder.TypeSignaturesEquivalent(strippedBest, strippedCandidate) {
                     best = strippedBest
@@ -8527,8 +8530,8 @@ internal class MemberLookup {
                 // `best -> candidate` holds, so `candidate` (the upper bound)
                 // must replace `best` (the lower bound) — the direction the
                 // pre-fix code never took.
-                let candidateToBest = HasImplicitSymbolicConversion(candidate, best!!)
-                let bestToCandidate = HasImplicitSymbolicConversion(best!!, candidate)
+                let candidateToBest = CanPromoteSymbolicInferenceBound(candidate, currentBest)
+                let bestToCandidate = CanPromoteSymbolicInferenceBound(currentBest, candidate)
                 if bestToCandidate && !candidateToBest {
                     best = candidate
                 } else if candidateToBest && !bestToCandidate {
@@ -8591,17 +8594,16 @@ internal class MemberLookup {
             candidate TypeSymbol,
             lower IReadOnlyList[TypeSymbol]?,
             upper IReadOnlyList[TypeSymbol]?
-        ) bool -> (lower == nil || lower.All((bound TypeSymbol) -> HasImplicitSymbolicConversion(bound, candidate))) &&
-            (
-            upper == nil || upper.All(
-                (bound TypeSymbol) -> HasImplicitSymbolicConversion(candidate, bound) ||
-                    Conversion
-                    .IsVarianceArgumentCompatible(
-                    candidate.StripToBareShape(),
-                    bound.StripToBareShape(),
-                    allowPlatformNilCheck: true
-                )
-            )
+        ) bool -> (
+            lower == nil || lower.All((bound TypeSymbol) -> CanPromoteSymbolicInferenceBound(bound, candidate))
+        ) &&
+            (upper == nil || upper.All((bound TypeSymbol) -> CanPromoteSymbolicInferenceBound(candidate, bound)))
+
+        private func CanPromoteSymbolicInferenceBound(source TypeSymbol, target TypeSymbol) bool ->
+        HasImplicitSymbolicConversion(source, target) || Conversion.IsVarianceArgumentCompatible(
+            source.StripToBareShape(),
+            target.StripToBareShape(),
+            allowPlatformNilCheck: true
         )
 
         /// Issue #4133 (review finding): only the STANDARD implicit conversions

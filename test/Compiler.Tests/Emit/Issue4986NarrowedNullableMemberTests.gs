@@ -2781,6 +2781,9 @@ Console.WriteLine("${ternary(Probe())} ${expression(Probe())} ${statement(Probe(
             System.Collections.Generic.IList<T> items,
             System.Collections.Generic.IComparer<T> comparer,
             System.Func<T, R> selector) => selector(items[0]);
+        public static string JoinCovariantArrayLowerBounds<T>(
+            System.Collections.Generic.IEnumerable<T> left,
+            System.Collections.Generic.IEnumerable<T> right) => typeof(T).FullName ?? "";
     }
 }`)
         let result = CompileAndRun(`import System
@@ -2791,6 +2794,10 @@ Console.WriteLine(Probes.DoubleContravariantSecond("x", Probes.Nested))
 Console.WriteLine(Probes.UpperAndLowerWithConstructorConstraint(Comparer[object].Default, "x"))
 let items = List[string](){"hello"}
 Console.WriteLine(Probes.SelectAfterExactAndUpper(items, Comparer[object].Default, x -> x.Length))
+let left IEnumerable[[]string] = List[[]string]()
+let right IEnumerable[[]object] = List[[]object]()
+Console.WriteLine(Probes.JoinCovariantArrayLowerBounds(left, right))
+Console.WriteLine(Probes.JoinCovariantArrayLowerBounds(right, left))
 `, fixture.AssemblyPath)
         Assert.Equal(
             "System.Object" +
@@ -2800,6 +2807,10 @@ Console.WriteLine(Probes.SelectAfterExactAndUpper(items, Comparer[object].Defaul
                 "System.Object" +
                 Environment.NewLine +
                 "5" +
+                Environment.NewLine +
+                "System.Object[]" +
+                Environment.NewLine +
+                "System.Object[]" +
                 Environment.NewLine,
             result.Output
         )

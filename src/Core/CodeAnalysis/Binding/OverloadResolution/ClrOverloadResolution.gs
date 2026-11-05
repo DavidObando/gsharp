@@ -9313,7 +9313,6 @@ internal shared class ClrOverloadResolution {
                 source
             ) &&
                 target.IsAssignableFrom(source) &&
-                !(source.IsArray && target.IsArray) &&
                 !(
                 source.IsArray &&
                     target.IsInterface &&
@@ -9324,7 +9323,7 @@ internal shared class ClrOverloadResolution {
                 return true
             }
         } catch (InvalidOperationException) { }
-        return IsInferenceBoundPromotion(target, source)
+        return IsExtensionReceiverBoundPromotion(target, source)
     }
 
     private func CanRefineUpperBound(upper Type, candidate Type) bool {
