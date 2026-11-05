@@ -6828,7 +6828,8 @@ partial class CSharpToGSharpTranslator {
             return stepTypes.All(
                 (stepType ITypeSymbol) -> IsPrimitiveNumeric(stepType) ||
                     stepType.SpecialType == SpecialType.System_Boolean ||
-                    stepType.SpecialType == SpecialType.System_Char
+                    stepType.SpecialType == SpecialType.System_Char ||
+                    stepType.SpecialType == SpecialType.System_String
             )
         }
 
@@ -7187,7 +7188,12 @@ partial class CSharpToGSharpTranslator {
                 return nil
             }
             let result = List[ITypeSymbol]{type}
-            if symbol != nil && !this.TryAddRegionTestedTypesForSymbol(symbol, regionScope, result) {
+            if symbol != nil && !this.TryAddRegionTestedTypesForSymbol(
+                symbol,
+                regionScope,
+                result,
+                includeEnclosingScope: true
+            ) {
                 return nil
             }
             return if result.Count <= MaxRegionReceiverTypes {
@@ -7200,7 +7206,8 @@ partial class CSharpToGSharpTranslator {
         private func TryAddRegionTestedTypesForSymbol(
             symbol ISymbol,
             regionScope Microsoft.CodeAnalysis.SyntaxNode,
-            result List[ITypeSymbol]
+            result List[ITypeSymbol],
+            includeEnclosingScope bool = false
         ) bool {
             let OutsideNested = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
                 return !(
@@ -7209,7 +7216,19 @@ partial class CSharpToGSharpTranslator {
                         this.IsDroppedStatementOrLoopClause(node)
                 )
             }
-            for node in regionScope.DescendantNodesAndSelf(OutsideNested) {
+            let scanRoot = if includeEnclosingScope {
+                FindEnclosingCallableScope(regionScope)
+            } else {
+                regionScope
+            }
+            for node in scanRoot.DescendantNodesAndSelf(OutsideNested) {
+                if !regionScope.Span.Contains(node.Span) &&
+                    (!includeEnclosingScope || node.SpanStart >= regionScope.SpanStart) {
+                    continue
+                }
+                if this.IsInForInitializer(regionScope, node) && !includeEnclosingScope {
+                    continue
+                }
                 switch node {
                     case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when binary.IsKind(
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression
@@ -7254,6 +7273,20 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             return true
+        }
+
+        private func FindEnclosingCallableScope(node Microsoft.CodeAnalysis.SyntaxNode) Microsoft
+            .CodeAnalysis
+            .SyntaxNode {
+            for var current Microsoft.CodeAnalysis.SyntaxNode? = node; current != nil; current = current!!.Parent {
+                if current is LocalFunctionStatementSyntax ||
+                    current is AnonymousFunctionExpressionSyntax ||
+                    current is BaseMethodDeclarationSyntax ||
+                    current is AccessorDeclarationSyntax {
+                    return current
+                }
+            }
+            return node
         }
 
         private func TryCollectSubjectTestedPatternTypes(
@@ -7474,6 +7507,9 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             for node in regionScope.DescendantNodesAndSelf(OutsideNested) {
+                if this.IsInForInitializer(regionScope, node) {
+                    continue
+                }
                 switch node {
                     case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when binary.IsKind(
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression
@@ -8501,18 +8537,12 @@ partial class CSharpToGSharpTranslator {
 
         private func CollectRegionImportedNamespaces(tree Microsoft.CodeAnalysis.SyntaxTree) HashSet[INamespaceSymbol] {
             let namespaces = HashSet[INamespaceSymbol](SymbolEqualityComparer.Default)
-            if this.LookupGlobalNamespace("System") is {} systemNs {
-                namespaces.Add(systemNs)
-            }
+            this.AddImportedConstituentNamespaces(this.LookupGlobalNamespace("System"), namespaces)
             for reservedNs in this.typeMapper.ReservedImportedNamespaces {
-                if !this.IsSourceSymbol(reservedNs) {
-                    namespaces.Add(reservedNs)
-                }
+                this.AddImportedConstituentNamespaces(reservedNs, namespaces)
             }
             for shortened in this.typeMapper.ShortenedNamespaces {
-                if this.LookupGlobalNamespace(shortened) is {} shortenedNs && !this.IsSourceSymbol(shortenedNs) {
-                    namespaces.Add(shortenedNs)
-                }
+                this.AddImportedConstituentNamespaces(this.LookupGlobalNamespace(shortened), namespaces)
             }
             for directive in tree
                 .GetRoot()
@@ -8522,12 +8552,22 @@ partial class CSharpToGSharpTranslator {
                     this
                     .context
                     .GetSymbolInfo(directive.Name!!)
-                    .Symbol is INamespaceSymbol importedNs &&
-                    !this.IsSourceSymbol(importedNs) {
-                    namespaces.Add(importedNs)
+                    .Symbol is INamespaceSymbol importedNs {
+                    this.AddImportedConstituentNamespaces(importedNs, namespaces)
                 }
             }
             return namespaces
+        }
+
+        private func AddImportedConstituentNamespaces(ns INamespaceSymbol?, namespaces HashSet[INamespaceSymbol]) {
+            if ns == nil {
+                return
+            }
+            for constituent in ns.ConstituentNamespaces {
+                if !this.IsSourceSymbol(constituent) && !constituent.Locations.Any((loc Location) -> loc.IsInSource) {
+                    namespaces.Add(constituent)
+                }
+            }
         }
 
         private func LookupGlobalNamespace(name string) INamespaceSymbol? {
@@ -9064,10 +9104,24 @@ partial class CSharpToGSharpTranslator {
                         return false
                     }
                     if this.context.GetSymbolInfo(memberRead.Expression).Symbol is INamedTypeSymbol staticOwner {
-                        return !this.StaticTypeReceiverMapsToSimpleName(memberRead.Expression, staticOwner)
+                        return !this.StaticTypeReceiverMapsToSimpleName(memberRead.Expression, staticOwner) ||
+                            !this.CandidateTypeSupportsStableMemberRead(
+                            staticOwner,
+                            memberRead.Name.Identifier.ValueText
+                        )
                     }
                     return this.ReceiverRootHasSubjectTypeTestInRegion(memberRead.Expression, regionScope) ||
-                        this.ResolveExpressionRegionReceiverTypes(memberRead.Expression, regionScope) == nil
+                        this.ResolveExpressionRegionReceiverTypes(
+                        memberRead.Expression,
+                        regionScope
+                    ) is not{} receiverTypes ||
+                        !receiverTypes
+                        .All(
+                        (candidateType ITypeSymbol) -> this.CandidateTypeSupportsStableMemberRead(
+                            candidateType,
+                            memberRead.Name.Identifier.ValueText
+                        )
+                    )
                 }
                 case bindingRead is MemberBindingExpressionSyntax {
                     if bindingRead.Parent is InvocationExpressionSyntax inv && object.ReferenceEquals(
@@ -9078,7 +9132,14 @@ partial class CSharpToGSharpTranslator {
                     }
                     let recv = this.GetConditionalBindingReceiver(bindingRead)
                     return this.ReceiverRootHasSubjectTypeTestInRegion(recv, regionScope) ||
-                        this.ResolveExpressionRegionReceiverTypes(recv, regionScope) == nil
+                        this.ResolveExpressionRegionReceiverTypes(recv, regionScope) is not{} receiverTypes ||
+                        !receiverTypes
+                        .All(
+                        (candidateType ITypeSymbol) -> this.CandidateTypeSupportsStableMemberRead(
+                            candidateType,
+                            bindingRead.Name.Identifier.ValueText
+                        )
+                    )
                 }
                 case elemRead is Microsoft.CodeAnalysis.CSharp.Syntax.ElementAccessExpressionSyntax {
                     if elemRead.Parent is Microsoft
@@ -9091,12 +9152,17 @@ partial class CSharpToGSharpTranslator {
                         return false
                     }
                     return this.ReceiverRootHasSubjectTypeTestInRegion(elemRead.Expression, regionScope) ||
-                        this.ResolveExpressionRegionReceiverTypes(elemRead.Expression, regionScope) == nil
+                        this.ResolveExpressionRegionReceiverTypes(
+                        elemRead.Expression,
+                        regionScope
+                    ) is not{} receiverTypes ||
+                        !receiverTypes.All(this.CandidateTypeSupportsStableIndexRead)
                 }
                 case elemBinding is ElementBindingExpressionSyntax {
                     let recv = this.GetConditionalBindingReceiver(elemBinding)
                     return this.ReceiverRootHasSubjectTypeTestInRegion(recv, regionScope) ||
-                        this.ResolveExpressionRegionReceiverTypes(recv, regionScope) == nil
+                        this.ResolveExpressionRegionReceiverTypes(recv, regionScope) is not{} receiverTypes ||
+                        !receiverTypes.All(this.CandidateTypeSupportsStableIndexRead)
                 }
                 case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when binary.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression
@@ -9125,6 +9191,25 @@ partial class CSharpToGSharpTranslator {
                     return false
                 }
             }
+        }
+
+        private func CandidateTypeSupportsStableIndexRead(candidateType ITypeSymbol) bool {
+            if candidateType is IArrayTypeSymbol || candidateType.SpecialType == SpecialType.System_String {
+                return true
+            }
+            var found = false
+            for owner in this.EnumerateReceiverMemberOwners(candidateType) {
+                for property in owner.GetMembers().OfType[IPropertySymbol]() {
+                    if !property.IsIndexer || !this.IsVisibleMemberOnRegionOwner(owner, property) {
+                        continue
+                    }
+                    if this.AccessorRunsUserCode(property, candidateType) {
+                        return false
+                    }
+                    found = true
+                }
+            }
+            return found
         }
 
         private func IsPureNullOrNotNullPattern(pattern Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax) bool {
@@ -9604,10 +9689,11 @@ partial class CSharpToGSharpTranslator {
                     if exitedLoop != nil {
                         (
                             exitedCondition != nil && exitedCondition.Span.Contains(node.Span) &&
-                                !object.ReferenceEquals(node, narrowingGuard) &&
                                 (
-                                RunsSourceCode(node) ||
-                                    WritesReferenceStorage(node) ||
+                                (
+                                    !object.ReferenceEquals(node, narrowingGuard) &&
+                                        (RunsSourceCode(node) || WritesReferenceStorage(node))
+                                ) ||
                                     (
                                     byReference &&
                                         (

@@ -1560,6 +1560,13 @@ public class Demo
     @Fact
     func RefParameter_ReadAroundAForEachOverACallWhoseLoopVariableIsRead_IsAsserted() {
         let printed = AssertRunsLikeCSharp(`
+namespace System
+{
+    public static class MergedSystemExtensions
+    {
+        public static void InstanceParts(this int value) { }
+    }
+}
 namespace OtherNs
 {
     public static class ShadowExtensions
@@ -1776,6 +1783,26 @@ public class Demo
         foreach (var part in mixed.MixedChildren()) total += part.Child.Length;
         return s.Length + total + 20;
     }
+    public static int OverMixedReturnEqualityControl(ref string? s, MixedBox mixed)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in mixed.MixedParts())
+        {
+            if (part == "x") total += 1;
+        }
+        return s.Length + total + 21;
+    }
+    public static int ForInitializerMemberTypeTestControl(ref string? s, Holder holder)
+    {
+        if (s == null) return 0;
+        var i = 0;
+        for (var unused = holder.Tag is string; i < 1; i++, i++)
+        {
+            holder.Child.Ping();
+        }
+        return s.Length + 22;
+    }
     public static int OverConstrainedExtensionConflict(ref string? s, DisposableBox dbox)
     {
         if (s == null) return 0;
@@ -1926,6 +1953,8 @@ public class Demo
             OverMixedReturnOverloads(ref text, new MixedBox()) + "," +
             OverMixedChainedReceiverOverloads(ref text, new MixedBox()) + "," +
             OverMixedChainedFieldOverloads(ref text, new MixedBox()) + "," +
+            OverMixedReturnEqualityControl(ref text, new MixedBox()) + "," +
+            ForInitializerMemberTypeTestControl(ref text, new Holder()) + "," +
             OverConstrainedExtensionConflict(ref text, new DisposableBox()) + "," +
             ExplicitGenericLocalReceiverCall(ref text, stack) + "," +
             MemberTypeTestInvalidatesMemberReceiverCall(ref text, new Holder()) + "," +
@@ -1973,6 +2002,8 @@ namespace OtherNs
         Assert.Contains("return s!!.Length + total + 11", printed)
         Assert.Contains("return s!!.Length + total + 12", printed)
         Assert.Contains("return s!!.Length + total + 20", printed)
+        Assert.Contains("return s.Length + total + 21", printed)
+        Assert.Contains("return s.Length + 22", printed)
         Assert.Contains("return s!!.Length + total + 13", printed)
         Assert.Contains("return s!!.Length + 17", printed)
         Assert.Contains("return s!!.Length + 18", printed)
@@ -1996,11 +2027,21 @@ namespace OtherNs
     func RefParameter_ReadAfterALoopWhoseExitConditionProvesNonNull_StaysBare() {
         let printed = AssertRunsLikeCSharp(`
 using System;
+public sealed class FieldValue
+{
+    public int Value = 1;
+}
+public sealed class ComputedValue
+{
+    public int Value => 1;
+}
 public sealed class Box
 {
     public int F;
     public bool Again() => false;
     public static bool AgainNamed(bool repeat) => repeat;
+    public FieldValue Pick() => new FieldValue();
+    public ComputedValue Pick(int n) => new ComputedValue();
 }
 public sealed class Holder
 {
@@ -2298,9 +2339,41 @@ public partial class Demo
         }
         return s.Length + 25;
     }
+    public static int WhileConditionWithDominatingHidingFieldReceiver(ref string? s, object o)
+    {
+        if (o is HidingHolder)
+        {
+            s = null;
+            while (o.GetHashCode() < 0 || s == null)
+            {
+                s = "abc";
+            }
+            return s.Length + 26;
+        }
+        return 0;
+    }
+    public static int WhileConditionWithOverloadedReadCandidate(ref string? s, Box box)
+    {
+        s = null;
+        while (box.Pick().Value < 0 || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 27;
+    }
+    public static int WhileRefObjectExitCondition(ref object? obj)
+    {
+        obj = null;
+        while (obj == null)
+        {
+            obj = "abc";
+        }
+        return obj.GetHashCode() > int.MinValue ? 28 : 0;
+    }
     public static string Run()
     {
         string? text = "abc";
+        object? obj = "abc";
         return DoLoop(ref text, new Box()) + "," + DoLoopWithGuardAndForEach(ref text, new Box(), new[] { 1 }) + "," +
             WhileLoop(ref text, new Box()) + "," + ForLoop(ref text, new Box()) + "," +
             WhileLoopWithBreak(ref text, new Box(), new Lazy<int>(() => 1)) + "," +
@@ -2323,7 +2396,10 @@ public partial class Demo
             WhileConditionWithTestedHidingFieldReceiver(ref text, new HidingHolder()) + "," +
             WhileConditionWithConditionalFieldRead(ref text, new Box(), new Box(), true) + "," +
             WhileConditionWithObjectNilComparison(ref text, null) + "," +
-            WhileConditionWithNamedArgumentCall(ref text);
+            WhileConditionWithNamedArgumentCall(ref text) + "," +
+            WhileConditionWithDominatingHidingFieldReceiver(ref text, new HidingHolder()) + "," +
+            WhileConditionWithOverloadedReadCandidate(ref text, new Box()) + "," +
+            WhileRefObjectExitCondition(ref obj);
     }
 }`)
         Assert.Contains("return s.Length + 1\n", printed.Replace("\r\n", "\n"))
@@ -2351,7 +2427,10 @@ public partial class Demo
         Assert.Contains("return s!!.Length + 23", printed)
         Assert.Contains("return s!!.Length + 24", printed)
         Assert.Contains("return s!!.Length + 25", printed)
-        Assert.Equal(17, Regex.Matches(printed, `s!!`).Count)
+        Assert.Contains("return s!!.Length + 26", printed)
+        Assert.Contains("return s!!.Length + 27", printed)
+        Assert.Contains("obj!!.GetHashCode()", printed)
+        Assert.Equal(19, Regex.Matches(printed, `s!!`).Count)
     }
 
     shared {
