@@ -10071,122 +10071,201 @@ partial class CSharpToGSharpTranslator {
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .ArgumentListSyntax ||
-                node is Microsoft
+                .ArgumentListSyntax or
+                Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .ArgumentSyntax ||
-                node is Microsoft
+                .ArgumentSyntax {
+                return true
+            }
+            if node is Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .TupleExpressionSyntax ||
-                node is Microsoft
+                .TupleExpressionSyntax or
+                Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .DefaultExpressionSyntax ||
-                node is Microsoft
+                .DefaultExpressionSyntax or
+                Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .TypeOfExpressionSyntax ||
-                node is Microsoft
+                .TypeOfExpressionSyntax {
+                return true
+            }
+            if node is Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .IsPatternExpressionSyntax ||
-                node is Microsoft
+                .IsPatternExpressionSyntax or
+                Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .UnaryPatternSyntax ||
-                node is Microsoft
+                .UnaryPatternSyntax or
+                Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .BinaryPatternSyntax ||
-                node is Microsoft
+                .BinaryPatternSyntax {
+                return true
+            }
+            if node is Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .ParenthesizedPatternSyntax ||
-                node is Microsoft
+                .ParenthesizedPatternSyntax or
+                Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .DiscardPatternSyntax ||
-                node is Microsoft
+                .DiscardPatternSyntax or
+                Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .VarPatternSyntax ||
-                node is Microsoft
+                .VarPatternSyntax {
+                return true
+            }
+            if node is Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .DeclarationPatternSyntax ||
-                node is Microsoft
+                .DeclarationPatternSyntax or
+                Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .TypePatternSyntax ||
-                node is Microsoft
+                .TypePatternSyntax {
+                return true
+            }
+            if node is Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .SingleVariableDesignationSyntax ||
-                node is Microsoft
+                .SingleVariableDesignationSyntax or
+                Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .DiscardDesignationSyntax ||
-                node is Microsoft
+                .DiscardDesignationSyntax or
+                Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .ParenthesizedVariableDesignationSyntax ||
-                node is Microsoft
+                .ParenthesizedVariableDesignationSyntax {
+                return true
+            }
+            if node is Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .ConditionalExpressionSyntax ||
-                node is Microsoft
+                .ConditionalExpressionSyntax or
+                Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .SwitchExpressionSyntax ||
-                node is Microsoft
+                .SwitchExpressionSyntax or
+                Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .SwitchExpressionArmSyntax ||
-                node is Microsoft
+                .SwitchExpressionArmSyntax {
+                return true
+            }
+            if node is Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .WhenClauseSyntax ||
-                node is Microsoft
+                .WhenClauseSyntax or
+                Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .SwitchStatementSyntax ||
-                node is Microsoft
+                .SwitchStatementSyntax or
+                Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .SwitchSectionSyntax ||
-                node is Microsoft
+                .SwitchSectionSyntax {
+                return true
+            }
+            if node is Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .CasePatternSwitchLabelSyntax ||
-                node is Microsoft
+                .CasePatternSwitchLabelSyntax or
+                Microsoft
                 .CodeAnalysis
                 .CSharp
                 .Syntax
                 .DefaultSwitchLabelSyntax {
+                return true
+            }
+            if node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .TypeArgumentListSyntax or
+                Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .NullableTypeSyntax or
+                Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ArrayTypeSyntax {
+                return true
+            }
+            if node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ArrayRankSpecifierSyntax or
+                Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .OmittedArraySizeExpressionSyntax or
+                Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .PointerTypeSyntax {
+                return true
+            }
+            if node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .TupleTypeSyntax or
+                Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .TupleElementSyntax or
+                Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .RefTypeSyntax {
+                return true
+            }
+            if node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .OmittedTypeArgumentSyntax or
+                Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .NameColonSyntax {
                 return true
             }
             if node is Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax memberAccess {
@@ -10282,7 +10361,10 @@ partial class CSharpToGSharpTranslator {
             if node is Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax {
                 return true
             }
-            if node is Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax {
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.NameSyntax {
+                if node.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.NameColonSyntax {
+                    return true
+                }
                 let symbol ISymbol? = this.context.GetSymbolInfo(node).Symbol
                 return symbol is ILocalSymbol or
                     IParameterSymbol or

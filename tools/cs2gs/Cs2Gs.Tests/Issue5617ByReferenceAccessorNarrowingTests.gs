@@ -2609,6 +2609,20 @@ public class Demo
             return -1;
         }
     }
+    static T Id<T>(T value) => value;
+    public static int FilterControlGenericFirstArgument(string? seed)
+    {
+        var s = seed;
+        if (s == null) return 0;
+        try
+        {
+            return Id<int>(value: s.Length);
+        }
+        catch (FormatException) when (Touch(ref s))
+        {
+            return -1;
+        }
+    }
     public static int ClosureAssignedAfterObjectCaseLabel(string? seed, object o)
     {
         var s = seed;
@@ -2635,7 +2649,7 @@ public class Demo
             FilterControlUninvokedLocalFunction("abc") + "," + FilterControlTernaryBranch("abc", false) + "," +
             AfterSwitchArmGetter(ref text, b, 0) + "," + FilterCollectionAddBeforeRead("abc") + "," +
             FilterFirstCollectionElementAfterCtor("abc") + "," + FilterControlCallFreeSwitchExpression("abc", 0) + "," +
-            ClosureAssignedAfterObjectCaseLabel("abc", 1);
+            ClosureAssignedAfterObjectCaseLabel("abc", 1) + "," + FilterControlGenericFirstArgument("abc");
     }
 }`)
         Assert.Contains("return b.P + s!!.Length", printed)
@@ -2650,6 +2664,7 @@ public class Demo
         Assert.Contains("{ 1, s!!.Length }", printed)
         Assert.Contains("Bag(){ s!!.Length }", printed)
         Assert.Contains("return v + s.Length", printed)
+        Assert.Contains("Id[int32](value: s.Length)", printed)
         Assert.Equal(2, Regex.Matches(printed, `return v \+ s!!\.Length`).Count)
     }
 
