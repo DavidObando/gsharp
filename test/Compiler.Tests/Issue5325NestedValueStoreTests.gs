@@ -234,6 +234,76 @@ import System.Threading.Tasks
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
     }
 
+    @Fact
+    func Issue5012_ChannelSuspendedNativeSliceNestedValueStores_VerifyAndExecute() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package ChannelParameterStore
+import System
+struct Cell {
+    var Item int32
+    var Other int32
+}
+struct Pair {
+    var Left Cell
+    var Right Cell
+}
+var owners = 0
+var indices = 0
+var index = 0
+let storage = []Pair{Pair{Left: Cell{Item: 3, Other: 50}, Right: Cell{Item: 80}}}
+var frames = slice[Pair].FromArray(storage)
+func Owner() slice[Pair] {
+    owners++
+    return frames
+}
+func Index() int32 {
+    indices++
+    return index
+}
+async func RunAdd(s slice[Pair], ch chan[int32]) {
+    s[0].Left.Item += <-ch
+}
+async func RunSet(ch chan[int32]) {
+    Owner()[Index()].Left.Item = <-ch
+}
+let ready = chan[int32](1)
+ready <- 7
+RunAdd(frames, ready).GetAwaiter().GetResult()
+Console.WriteLine(storage[0].Left.Item)
+storage[0].Left.Item = 3
+let parked = chan[int32](0)
+let pending = RunAdd(frames, parked)
+Console.WriteLine(pending.IsCompleted)
+frames = slice[Pair]{Pair{}}
+storage[0] = Pair{Left: Cell{Item: 40, Other: 55}, Right: Cell{Item: 88}}
+parked <- 7
+pending.GetAwaiter().GetResult()
+Console.WriteLine("${storage[0].Left.Item}:${storage[0].Left.Other}:${storage[0].Right.Item}:${frames[0].Left.Item}")
+frames = slice[Pair].FromArray(storage)
+let setCh = chan[int32](0)
+let pendingSet = RunSet(setCh)
+Console.WriteLine("${pendingSet.IsCompleted}:${owners}:${indices}")
+frames = slice[Pair]{Pair{}}
+index = 99
+setCh <- 25
+pendingSet.GetAwaiter().GetResult()
+Console.WriteLine("${storage[0].Left.Item}:${owners}:${indices}")
+frames = slice[Pair].FromArray(storage)
+index = 5
+let neverRead = chan[int32](0)
+try {
+    RunSet(neverRead).GetAwaiter().GetResult()
+} catch (error IndexOutOfRangeException) {
+    Console.WriteLine("bounds:${owners}:${indices}")
+}`
+        let dll = fixture.Compile(source, "channel_parameter_store", true)
+        VerifyStrict(dll)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("10\nFalse\n10:55:88:0\nFalse:1:1\n25:1:1\nbounds:2:2\n"),
+            Encoding.UTF8.GetBytes(fixture.Run(dll))
+        )
+    }
+
     shared {
         private func VerifyStrict(path string, references ...string) {
             var report = string.Empty

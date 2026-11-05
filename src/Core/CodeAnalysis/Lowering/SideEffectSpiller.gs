@@ -471,9 +471,55 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
     }
 
     internal func ProbeStorageReceiver(receiver BoundExpression?, statements ImmutableArray[BoundStatement].Builder) {
-        if receiver != nil && receiver is not BoundVariableExpression && IsInPlaceStorageWriteReceiver(receiver) {
+        if receiver != nil &&
+            receiver is not BoundVariableExpression &&
+            receiver is not BoundDereferenceExpression{Operand: BoundVariableExpression} &&
+            IsInPlaceStorageWriteReceiver(receiver) {
             statements.Add(BoundExpressionStatement(nil, BoundAddressOfExpression(nil, receiver)))
         }
+    }
+
+    private func SpillNativeSliceElementOperand(
+        operand BoundExpression,
+        statements ImmutableArray[BoundStatement].Builder,
+        captureComponents bool
+    ) BoundExpression {
+        var current = operand
+        while current is BoundBlockExpression block {
+            for statement in block.Statements {
+                statements.Add(statement)
+            }
+            current = block.Expression
+        }
+        let clrIndex = cast[BoundClrIndexExpression](current)
+        let target = this.MaybeSpill(
+            clrIndex.Target,
+            !IsStableLocalRead(clrIndex.Target) &&
+                (captureComponents || SideEffectAnalyzer.HasObservableSideEffect(clrIndex.Target)),
+            "coll",
+            statements
+        )
+        let arguments = ImmutableArray.CreateBuilder[BoundExpression](clrIndex.Arguments.Length)
+        for argument in clrIndex.Arguments {
+            let spilled = this.MaybeSpill(
+                argument,
+                captureComponents ||
+                    (!IsStableLocalRead(argument) && argument is not BoundLiteralExpression) ||
+                    SideEffectAnalyzer.HasObservableSideEffect(argument),
+                "idx",
+                statements
+            )
+            arguments.Add(spilled)
+        }
+        return BoundClrIndexExpression(
+            clrIndex.Syntax,
+            target,
+            clrIndex.Indexer,
+            arguments.MoveToImmutable(),
+            clrIndex.Type,
+            clrIndex.ConstrainedReceiverTypeParameter,
+            clrIndex.ConstrainedInterfaceType
+        )
     }
 
     /// Rewrites an addressable receiver chain (see
@@ -504,6 +550,12 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         switch receiver {
             case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
                 return this.SpillStorageReceiverParts(address.Operand, statements, captureComponents: true)
+            }
+            case dereference is BoundDereferenceExpression when IsNativeSliceElementOperand(dereference.Operand) {
+                return BoundDereferenceExpression(
+                    dereference.Syntax,
+                    this.SpillNativeSliceElementOperand(dereference.Operand, statements, captureComponents)
+                )
             }
             case tuple is BoundTupleElementAccessExpression {
                 // Capture owners and indices before the RHS, without copying tuple storage.
@@ -821,9 +873,21 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             Variable: LocalVariableSymbol{IsReadOnly: true, RefKind: RefKind.None}
         }
 
+        internal func IsNativeSliceElementOperand(expression BoundExpression?) bool -> switch expression {
+            case block is BoundBlockExpression: IsNativeSliceElementOperand(block.Expression)
+            case index is BoundClrIndexExpression: NativeSliceTypes.TryGetElement(index.Target.Type, out _, out _)
+            default: false
+        }
+
         internal func IsOpaqueStorageReceiver(expression BoundExpression?) bool -> switch expression {
             case block is BoundBlockExpression: IsOpaqueStorageReceiver(block.Expression)
-            case dereference is BoundDereferenceExpression: IsOpaqueStorageReceiver(dereference.Operand)
+            case dereference is BoundDereferenceExpression: !IsNativeSliceElementOperand(dereference.Operand) &&
+                IsOpaqueStorageReceiver(dereference.Operand)
+            case index is BoundClrIndexExpression when NativeSliceTypes.TryGetElement(
+                index.Target.Type,
+                out _,
+                out _
+            ): false
             case {} expression: RefCapabilities.IsRefReturningAccess(expression)
             default: false
         }
@@ -850,6 +914,11 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
                         receiver = address.Operand
                         continue
+                    }
+                    case dereference is BoundDereferenceExpression when IsNativeSliceElementOperand(
+                        dereference.Operand
+                    ) {
+                        return true
                     }
                     case tuple is BoundTupleElementAccessExpression {
                         receiver = tuple.Receiver

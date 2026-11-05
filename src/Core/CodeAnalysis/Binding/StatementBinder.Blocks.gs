@@ -303,11 +303,12 @@ internal partial class StatementBinder {
             this.binderCtx.CurrentFallthroughTarget = savedFallthroughTarget
             this.binderCtx.CurrentFallthroughAnchor = savedFallthroughAnchor
         }
-        if !hasDefault {
+        let boundArms = arms.ToImmutable()
+        let hasCatchAll = hasDefault || boundArms.Any((arm BoundPatternSwitchArm) -> arm.IsCatchAll)
+        if !hasCatchAll {
             callableExits = JoinExternalCallableAliases(callableExits, callableEntry)
         }
         RestoreExternalCallableAliases(callableExits ?? callableEntry)
-        let boundArms = arms.ToImmutable()
         let isExhaustive = ExhaustivenessAnalyzer.AnalyzeSwitchStatement(
             syntax.SwitchKeyword.Location,
             switchType,
@@ -346,7 +347,7 @@ internal partial class StatementBinder {
                 "switch",
                 syntax.SwitchKeyword.Location,
                 []BoundStatement{result, wrapped},
-                !(hasDefault || isExhaustive),
+                !(hasCatchAll || isExhaustive),
                 true
             )
             return wrapped
@@ -356,7 +357,7 @@ internal partial class StatementBinder {
             "switch",
             syntax.SwitchKeyword.Location,
             []BoundStatement{result},
-            !(hasDefault || isExhaustive),
+            !(hasCatchAll || isExhaustive),
             shadowApproximate
         )
         return result
@@ -2978,7 +2979,7 @@ internal partial class StatementBinder {
             discriminantType TypeSymbol
         ) bool {
             for arm in arms {
-                if (arm.Pattern == nil || arm.Pattern is BoundDiscardPattern) && arm.Guard == nil {
+                if arm.IsCatchAll {
                     return true
                 }
             }

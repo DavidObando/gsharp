@@ -115,11 +115,8 @@ shared class AsyncIteratorRewriter {
             awaitCollector.Visit(refHoisted)
             // Reuse the ordinary async capture analysis so assignment-only
             // loop variables and nested-lambda captures are both hoisted.
-            let hoistedLocals = AsyncCaptureWalker
-                .Analyze(refHoisted, function.Parameters)
-                .Locals
-                .Cast[VariableSymbol]()
-                .ToImmutableArray()
+            let hoist = AsyncCaptureWalker.Analyze(refHoisted, function.Parameters)
+            let hoistedLocals = hoist.Locals.Concat(hoist.SpillLocals).Cast[VariableSymbol]().ToImmutableArray()
             // Collect awaiter types for pooled awaiter fields.
             let awaiterTypes = CollectAwaiterTypes(refHoisted)
             let plan = AsyncIteratorPlan(

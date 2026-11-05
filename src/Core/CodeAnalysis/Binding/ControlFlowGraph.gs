@@ -607,7 +607,7 @@ class ControlFlowGraph {
         internal func SwitchAlwaysReturns(switchStatement BoundPatternSwitchStatement) bool {
             var hasDefault = false
             for arm in switchStatement.Arms {
-                if arm.IsDefault {
+                if arm.IsCatchAll {
                     hasDefault = true
                 }
                 if !StatementDefinitelyReturns(arm.Body) {
@@ -757,7 +757,7 @@ class ControlFlowGraph {
                     }
                     let armLabel = NewLabel!!("switchArm")
                     arms.Add((arm, armLabel))
-                    if arm.Pattern is BoundDiscardPattern && arm.Guard == nil {
+                    if arm.IsCatchAll {
                         builder.Add(BoundGotoStatement(nil, armLabel))
                         dispatchComplete = true
                         break

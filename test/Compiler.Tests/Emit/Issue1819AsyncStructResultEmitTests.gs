@@ -232,6 +232,105 @@ func Main() {
         Assert.Equal(expected, output)
     }
 
+    @Fact
+    func Issue5012_AsyncStructElementAndClassFieldWrites_VerifyAndRun() {
+        const source = `package Issue5012Repro
+import System
+import System.Threading.Tasks
+
+struct S5012 {
+    var F string?
+}
+
+struct Inner5012 {
+    var F int32
+    var Keep int32
+}
+
+struct Outer5012 {
+    var Inner Inner5012
+}
+
+class Holder5012 {
+    var Value int32
+}
+
+class Runner5012 {
+    var holder Holder5012 = Holder5012{Value: 10}
+    var arr []Outer5012 = []Outer5012{Outer5012{Inner: Inner5012{F: 3, Keep: 77}}}
+    var ownerCalls int32
+    var indexCalls int32
+    var idx int32
+
+    func GetArray() []Outer5012 {
+        ownerCalls++
+        return arr
+    }
+
+    func GetIndex() int32 {
+        indexCalls++
+        return idx
+    }
+
+    async func ProduceString() string {
+        await Task.Yield()
+        return "v"
+    }
+
+    async func ReplaceAndProduce(v int32) int32 {
+        await Task.Yield()
+        arr = []Outer5012{Outer5012{}}
+        return v
+    }
+
+    async func RunArrayElementSimple() string {
+        var a = []S5012{S5012{}}
+        a[0].F = await ProduceString()
+        return a[0].F ?? "nil"
+    }
+
+    async func RunNestedElementAndClassField() string {
+        let backing = arr
+        GetArray()[GetIndex()].Inner.F += await ReplaceAndProduce(7)
+        let afterCompound = backing[0].Inner.F
+        let keepAfterCompound = backing[0].Inner.Keep
+        arr = backing
+        GetArray()[GetIndex()].Inner.F = await ReplaceAndProduce(42)
+        let afterSimple = backing[0].Inner.F
+        holder.Value = await Task.FromResult[int32](1)
+        var localHolder = Holder5012{Value: 5}
+        let originalLocal = localHolder
+        localHolder.Value = {
+            await Task.Yield()
+            localHolder = Holder5012{Value: 99}
+            12
+        }
+        arr = backing
+        idx = 5
+        var boundsBeforeAwait = false
+        try {
+            GetArray()[GetIndex()].Inner.F = {
+                ownerCalls = 999
+                await Task.Yield()
+                1
+            }
+        } catch (e IndexOutOfRangeException) {
+            boundsBeforeAwait = ownerCalls == 3 && indexCalls == 3
+        }
+        return "${afterCompound}:${keepAfterCompound}:${afterSimple}:${holder.Value}:${originalLocal.Value}:${localHolder.Value}:${boundsBeforeAwait}"
+    }
+}
+
+func Main() {
+    let r = Runner5012()
+    Console.WriteLine(r.RunArrayElementSimple().GetAwaiter().GetResult())
+    Console.WriteLine(r.RunNestedElementAndClassField().GetAwaiter().GetResult())
+}`
+        let output = CompileAndRun(source)
+        let expected = string.Join(Environment.NewLine, []string{"v", "10:77:42:1:12:99:True", ""})
+        Assert.Equal(expected, output)
+    }
+
     shared {
         private func CompileAndRun(source string) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_1819_exe_").FullName
