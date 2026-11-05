@@ -561,6 +561,55 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@17:33", "reject", ""}
+            yield[]object{"r01_conditional_address_mismatched_narrowed_storage_rejected", `import System
+
+open class Pet {}
+class Dog : Pet {}
+func Run() int32 {
+    var pet Pet = Dog()
+    var dog Dog = Dog()
+    let p = &((pet is Dog) ? pet : dog)
+    return 1
+}
+Console.WriteLine(Run())`, "GS0260@8:15", "reject", ""}
+            yield[]object{"r02_deferred_argument_kills_fact_for_second_argument", `import System
+
+class C { var Value int32 = 1 }
+class Holder { var Callback () -> void = func() { } }
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Sink(s string?, n int32) int32 -> n
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    return Sink(if Check(h) { nil } else { "ok" }, x.Value)
+}
+Console.WriteLine(Run())`, "GS0158@15:54", "reject", ""}
+            yield[]object{"r03_contextual_rebind_preserves_entry_fact", `import System
+
+class C { var Value int32 = 1 }
+class Holder { var Callback () -> void = func() { } }
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+interface IAnimal { func Speak() int32; }
+open class Pet {}
+class Dog : Pet, IAnimal { func Speak() int32 -> 1 }
+class Cat : Pet, IAnimal { func Speak() int32 -> 2 }
+func Consume(a IAnimal) int32 -> a.Speak()
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    return Consume(if x.Value > 0 && Check(h) { Dog() } else { Cat() })
+}
+Console.WriteLine(Run())`, "", "run", "1"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

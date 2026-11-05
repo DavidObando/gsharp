@@ -645,6 +645,7 @@ internal partial class ExpressionBinder {
         let deferOnFailure = targetType == nil && binderCtx.DeferTargetlessConditional
         this.binderCtx.DeferTargetlessConditional = false
         return bindDeferrableConditional(
+            syntax,
             deferOnFailure,
             () -> BindConditionalExpressionCore(syntax, targetType, deferOnFailure)
         )
@@ -800,6 +801,7 @@ internal partial class ExpressionBinder {
         }
         if syntax.Initializer is not StatementSyntax initializer {
             return bindDeferrableConditional(
+                syntax,
                 deferOnFailure,
                 () -> BindIfExpressionBranches(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
             )
@@ -811,6 +813,7 @@ internal partial class ExpressionBinder {
         // the condition:
         //   { init; cond ? then : else }
         return bindDeferrableConditional(
+            syntax,
             deferOnFailure,
             () -> BindInBlockExpressionScope(
                 () -> {
@@ -1178,11 +1181,18 @@ internal partial class ExpressionBinder {
         canBeVoid bool = false,
         targetType TypeSymbol? = nil,
         preserveEmptyBlock bool = false
-    ) BoundExpression -> BindInBlockExpressionScope(
-        () -> {
-            return BindBlockExpressionValueCore(syntax, canBeVoid, targetType, preserveEmptyBlock)
-        }
-    )
+    ) BoundExpression {
+        let deferBlock = targetType == nil && binderCtx.DeferTargetlessConditional
+        return bindDeferrableConditional(
+            syntax,
+            deferBlock,
+            () -> BindInBlockExpressionScope(
+                () -> {
+                    return BindBlockExpressionValueCore(syntax, canBeVoid, targetType, preserveEmptyBlock)
+                }
+            )
+        )
+    }
 
     private func BindBlockExpressionValueCore(
         syntax BlockExpressionSyntax,
@@ -1459,7 +1469,20 @@ internal partial class ExpressionBinder {
             binderCtx.DeferTargetlessConditional
         if syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken {
             this.binderCtx.DeferTargetlessConditional = false
+            return bindDeferrableConditional(
+                syntax,
+                deferTargetlessCoalesce,
+                () -> BindBinaryExpressionCore(syntax, coalesceTargetType, deferTargetlessCoalesce)
+            )
         }
+        return BindBinaryExpressionCore(syntax, coalesceTargetType, deferTargetlessCoalesce: false)
+    }
+
+    private func BindBinaryExpressionCore(
+        syntax BinaryExpressionSyntax,
+        coalesceTargetType TypeSymbol?,
+        deferTargetlessCoalesce bool
+    ) BoundExpression {
         let coalesceDiagMark = Diagnostics.Count
         var boundLeft BoundExpression
         var boundRight BoundExpression

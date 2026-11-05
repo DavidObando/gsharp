@@ -2233,7 +2233,7 @@ func Run(sb StringBuilder, n int32) int32 {
     clear()
     return total
 }
-func Main() { Console.WriteLine(Run(StringBuilder(), 2)) }`, "GS0158@13:27", "reject", "", "ADR-0213 R7 (e) (L1)"}
+func Main() { Console.WriteLine(Run(StringBuilder(), 2)) }`, "", "run", "2", "ADR-0213 W5 (#5549)"}
             yield[]object{"q5d_hidden_field_getter", `import System
 class C {
     var Value int32 = 1
@@ -5023,7 +5023,7 @@ func Run(s string) int32 {
     }
     return total
 }
-Console.WriteLine(Run("abc"))`, "GS0158@20:27", "reject", "", "ADR-0213 R7 (e) (L1): R16 is stricter in loops"}
+Console.WriteLine(Run("abc"))`, "", "run", "8", "ADR-0213 W5 (#5549)"}
             yield[]object{"t10_5231_interface_count_kills_R16", `import System
 import System.Collections.Generic
 import System.Text
@@ -7994,7 +7994,7 @@ func Run() int32 {
     return k
 }
 var g C? = C{}
-Console.WriteLine(Run())`, "GS0158@25:19", "reject", "", "ADR-0213 R7 (e) (L1): the member read counts as a call for a mutable global (W5); b07 is the L1 form"}
+Console.WriteLine(Run())`, "", "run", "2", "ADR-0213 W5 (#5549)"}
             yield[]object{"a10_5629_switch_case_property_pattern_getter_removes_the_fact_R14", `import System
 
 class C {

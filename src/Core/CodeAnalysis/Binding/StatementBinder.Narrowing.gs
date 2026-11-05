@@ -38,6 +38,10 @@ internal partial class StatementBinder {
     // ADR-0208 R18 (#5534, #5654): the facts that the conditions and statements in the then-branch being bound
     // removed, so the sibling else-branch can be bound without them. `nil` outside such a branch.
     private var conditionKillJournal List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?
+    private let branchyArgumentEntries Dictionary[
+        SyntaxNode,
+        (Frames[]Dictionary[AccessPath, TypeSymbol], Aliases HashSet[VariableSymbol])
+    ] = Dictionary[SyntaxNode, (Frames[]Dictionary[AccessPath, TypeSymbol], Aliases HashSet[VariableSymbol])]()
 
     internal func IsolateExternalCallableAliases() HashSet[VariableSymbol] {
         let saved = HashSet[VariableSymbol](externalCallableAliases)
@@ -2187,33 +2191,67 @@ internal partial class StatementBinder {
         return (whenTrue, whenFalse)
     }
 
-    /// Rolls back narrowing kills and callable-alias updates when a targetless branchy argument defers to be re-bound
-    /// with a parameter target type (issue #1238).
-    internal func BindDeferrableConditional(deferOnFailure bool, bind() -> BoundExpression) BoundExpression {
-        if !deferOnFailure {
+    /// ADR-0208 R18 (#5545): records the entry narrowing and callable-alias state of a target-typeable branchy call
+    /// argument on its first (targetless) pass while keeping its effects for subsequent arguments, and restores that
+    /// entry state when `FinalizeBranchyArgument` or `BindConversion` re-binds the argument with its parameter target
+    /// type.
+    internal func BindDeferrableConditional(
+        syntax SyntaxNode,
+        deferOnFailure bool,
+        bind() -> BoundExpression
+    ) BoundExpression {
+        if deferOnFailure {
+            branchyArgumentEntries[syntax] = (
+                binderCtx
+                    .NarrowedVariables
+                    .Select((frame NarrowingFrame) -> Dictionary[AccessPath, TypeSymbol](frame))
+                    .ToArray(),
+                CaptureExternalCallableAliases()
+            )
             return bind()
         }
-        let outer = BeginThenBranchConditionKills()
-        let entry = binderCtx.Narrowing
-        let entryAliases = CaptureExternalCallableAliases()
-        let result = bind()
-        let kills = conditionKillJournal!!
-        conditionKillJournal = outer
-        if result is BoundErrorExpression{Syntax: not nil} {
-            for var i = kills.Count - 1; i >= 0; i-- {
-                let kill = kills[i]
-                if !kill.Frame.ContainsKey(kill.Path) && IsOnNarrowingStack(kill.Frame) && object.Equals(
-                    entry.NarrowedType(kill.Path),
-                    kill.Type
-                ) {
-                    kill.Frame[kill.Path] = kill.Type
+        if !branchyArgumentEntries.TryGetValue(syntax, out var savedEntry) {
+            return bind()
+        }
+        branchyArgumentEntries.Remove(syntax)
+        let postFrames = binderCtx
+            .NarrowedVariables
+            .Select((frame NarrowingFrame) -> Dictionary[AccessPath, TypeSymbol](frame))
+            .ToArray()
+        let postAliases = CaptureExternalCallableAliases()
+        RestoreNarrowingFramesSnapshot(savedEntry.Frames)
+        RestoreExternalCallableAliases(savedEntry.Aliases)
+        let outerJournal = BeginThenBranchConditionKills()
+        var result BoundExpression
+        try {
+            result = bind()
+        } finally {
+            let rebindKills = conditionKillJournal!!
+            conditionKillJournal = outerJournal
+            let rebindRemovedAliases = HashSet[VariableSymbol](savedEntry.Aliases)
+            rebindRemovedAliases.ExceptWith(externalCallableAliases)
+            RestoreNarrowingFramesSnapshot(postFrames)
+            for kill in rebindKills {
+                if IsOnNarrowingStack(kill.Frame) {
+                    kill.Frame.Remove(kill.Path)
                 }
             }
-            RestoreExternalCallableAliases(entryAliases)
-            return result
+            outerJournal?.AddRange(rebindKills)
+            postAliases.ExceptWith(rebindRemovedAliases)
+            RestoreExternalCallableAliases(postAliases)
         }
-        outer?.AddRange(kills)
         return result
+    }
+
+    private func RestoreNarrowingFramesSnapshot(snapshot[]Dictionary[AccessPath, TypeSymbol]) {
+        let count = Math.Min(snapshot.Length, binderCtx.NarrowedVariables.Count)
+        for var i = 0; i < count; i++ {
+            let frame = binderCtx.NarrowedVariables[i]
+            frame.Clear()
+            for entry in snapshot[i] {
+                frame[entry.Key] = entry.Value
+            }
+        }
     }
 
     /// ADR-0208 section 9 and row R18 (#5534): the effects of a branching condition apply to the narrowing facts

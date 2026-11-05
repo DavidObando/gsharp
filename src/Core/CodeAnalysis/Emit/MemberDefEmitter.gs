@@ -275,6 +275,17 @@ internal class MemberDefEmitter {
         this.emitCtx.Metadata.AddCustomAttribute(handle, ctorRef, this.emitCtx.Metadata.GetOrAddBlob(value))
     }
 
+    private func EmitCompilerGeneratedAttribute(handle EntityHandle) {
+        let ctorRef = this.wellKnown.GetCompilerGeneratedAttributeCtorRef()
+        if ctorRef.IsNil {
+            return
+        }
+        let value = BlobBuilder()
+        value.WriteUInt16(1)
+        value.WriteUInt16(0)
+        this.emitCtx.Metadata.AddCustomAttribute(handle, ctorRef, this.emitCtx.Metadata.GetOrAddBlob(value))
+    }
+
     /// Issue #4988: mints an accessor MethodDef's `Param` rows — the
     /// sequence-0 return row when the signature needs one, then one row per
     /// parameter — and plans the signature's nullability. Every accessor that
@@ -309,7 +320,15 @@ internal class MemberDefEmitter {
     /// nullability, and tuple element names.
     /// @param handle The accessor's MethodDef.
     /// @param rows The rows minted for it.
-    private func StampAccessor(handle MethodDefinitionHandle, rows SignatureRows, owner FunctionSymbol?) {
+    private func StampAccessor(
+        handle MethodDefinitionHandle,
+        rows SignatureRows,
+        owner FunctionSymbol?,
+        emitCompilerGenerated bool = false
+    ) {
+        if emitCompilerGenerated {
+            this.EmitCompilerGeneratedAttribute(handle)
+        }
         for var i = 0; i < rows.Rows.Length; i++ {
             if rows.Parameters[i].RefKind == RefKind.In {
                 this.EmitIsReadOnlyAttribute(rows.Rows[i])
@@ -590,7 +609,7 @@ internal class MemberDefEmitter {
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First
         )
-        this.StampAccessor(accessor, accessorRows, prop.GetterSymbol)
+        this.StampAccessor(accessor, accessorRows, prop.GetterSymbol, emitCompilerGenerated: prop.IsAutoProperty)
         return accessor
     }
 
@@ -712,7 +731,7 @@ internal class MemberDefEmitter {
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First
         )
-        this.StampAccessor(accessor, accessorRows, prop.SetterSymbol)
+        this.StampAccessor(accessor, accessorRows, prop.SetterSymbol, emitCompilerGenerated: prop.IsAutoProperty)
         return accessor
     }
 
@@ -912,7 +931,7 @@ internal class MemberDefEmitter {
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First
         )
-        this.StampAccessor(accessor, accessorRows, prop.GetterSymbol)
+        this.StampAccessor(accessor, accessorRows, prop.GetterSymbol, emitCompilerGenerated: prop.IsAutoProperty)
         return accessor
     }
 
@@ -943,7 +962,7 @@ internal class MemberDefEmitter {
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First
         )
-        this.StampAccessor(accessor, accessorRows, prop.SetterSymbol)
+        this.StampAccessor(accessor, accessorRows, prop.SetterSymbol, emitCompilerGenerated: prop.IsAutoProperty)
         return accessor
     }
 

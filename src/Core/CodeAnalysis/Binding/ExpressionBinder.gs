@@ -111,7 +111,7 @@ internal partial class ExpressionBinder {
         Then BoundExpression,
         Else BoundExpression
     )
-    private let bindDeferrableConditional(bool, () -> BoundExpression) -> BoundExpression
+    private let bindDeferrableConditional(SyntaxNode, bool, () -> BoundExpression) -> BoundExpression
 
     // Issue #5569: the diagnostics of each discarded literal target bind in the calls that are binding now.
     private let literalTargetDiagnostics List[ImmutableArray[Diagnostic]] = List[ImmutableArray[Diagnostic]]()
@@ -182,7 +182,7 @@ internal partial class ExpressionBinder {
             Then BoundExpression,
             Else BoundExpression
         ),
-        bindDeferrableConditional(bool, () -> BoundExpression) -> BoundExpression
+        bindDeferrableConditional(SyntaxNode, bool, () -> BoundExpression) -> BoundExpression
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.memberLookup = memberLookup ?? throw ArgumentNullException("memberLookup")

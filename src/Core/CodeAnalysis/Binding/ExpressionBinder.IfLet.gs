@@ -61,6 +61,7 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         return bindDeferrableConditional(
+            syntax,
             deferOnFailure,
             () -> BindIfLetExpressionCore(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
         )

@@ -10,6 +10,7 @@ import System.Collections.Immutable
 import System.Linq
 import System.Reflection
 import System.Text
+import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Lowering
 import GSharp.Core.CodeAnalysis.Lowering.Async
 import GSharp.Core.CodeAnalysis.Symbols
@@ -1177,17 +1178,19 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenFalse.Location, syntax.WhenFalse.ToString())
             return BoundErrorExpression(nil)
         }
-        // Branch types must match exactly — no implicit widening, since the
+        // Branch storage types must match — no implicit widening, since the
         // resulting byref selects between slots whose physical type must agree.
-        if !object.ReferenceEquals(whenTrue.Type, whenFalse.Type) && !string.Equals(
-            whenTrue.Type?.Name,
-            whenFalse.Type?.Name,
+        let trueStorageType = AddressedStorageType(whenTrue)
+        let falseStorageType = AddressedStorageType(whenFalse)
+        if !object.ReferenceEquals(trueStorageType, falseStorageType) && !string.Equals(
+            trueStorageType?.Name,
+            falseStorageType?.Name,
             StringComparison.Ordinal
         ) {
             Diagnostics.ReportConditionalRefArgumentBranchTypeMismatch(
                 syntax.Location,
-                whenTrue.Type?.Name ?? "?",
-                whenFalse.Type?.Name ?? "?"
+                trueStorageType?.Name ?? "?",
+                falseStorageType?.Name ?? "?"
             )
             return BoundErrorExpression(nil)
         }
@@ -1208,8 +1211,44 @@ internal partial class ExpressionBinder {
             condition,
             whenTrue,
             whenFalse,
-            Invariant.Required(whenTrue.Type, "a bound lvalue has a type", expression: "whenTrue.Type")
+            Invariant.Required(trueStorageType, "a bound lvalue has a storage type", expression: "trueStorageType")
         )
+    }
+
+    private func AddressedStorageType(expression BoundExpression) TypeSymbol {
+        var current = expression
+        while current is BoundBlockExpression block {
+            current = block.Expression
+        }
+        switch current {
+            case bve is BoundVariableExpression {
+                let declaredType = bve.Variable.Type
+                let effectiveType = bve.Type
+                let unboxesToValueType = bve.NarrowedType != nil && !ReflectionMetadataEmitter.IsValueTypeSymbol(
+                    declaredType
+                ) &&
+                    declaredType
+                    ?.ClrType
+                    ?.IsValueType != true &&
+                    (
+                    ReflectionMetadataEmitter.IsValueTypeSymbol(effectiveType) ||
+                        effectiveType
+                        ?.ClrType
+                        ?.IsValueType == true
+                )
+                return if unboxesToValueType {
+                    effectiveType
+                } else {
+                    declaredType
+                }
+            }
+            case fa is BoundFieldAccessExpression {
+                return fa.SubstitutedType ?? fa.Field.Type
+            }
+            default {
+                return current.Type
+            }
+        }
     }
 
     private func BindAwaitExpression(syntax AwaitExpressionSyntax) BoundExpression {

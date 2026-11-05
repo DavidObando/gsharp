@@ -1076,15 +1076,22 @@ open class Program {
             return "dotnet"
         }
 
+        /// Maps a target framework to the shared framework in runtimeconfig.json.
+        /// The framework version is the minimum shared framework version that the host loads.
+        /// @param tfm The target framework, for example `net11.0` or `net11.0-windows`.
+        /// @returns The shared framework name and version.
         private func ResolveFrameworkMoniker(tfm string)(Name string, Version string) {
-            // Crude TFM → runtime framework mapping good enough for net8/9/10.
-            // The "framework.version" is the minimum shared framework version to load.
-            return switch tfm {
-                case "net8.0": ("Microsoft.NETCore.App", "8.0.0")
-                case "net9.0": ("Microsoft.NETCore.App", "9.0.0")
-                case "net10.0": ("Microsoft.NETCore.App", "10.0.0")
-                default: ("Microsoft.NETCore.App", "10.0.0")
+            // A .NETCoreApp target framework gives the version. Do not list versions, because a
+            // missing version loads an older runtime (#5765). Other target frameworks use .NET 10.
+            let prefix = ".NETCoreApp,Version=v"
+            let moniker = GetTargetFrameworkMoniker(tfm)
+            if moniker != nil && moniker.StartsWith(prefix, StringComparison.Ordinal) && System.Version.TryParse(
+                moniker.Substring(prefix.Length),
+                out var version
+            ) {
+                return ("Microsoft.NETCore.App", "${version.Major}.${version.Minor}.0")
             }
+            return ("Microsoft.NETCore.App", "10.0.0")
         }
 
         /// Prints usage/help text for the gsc command-line switches to stdout.

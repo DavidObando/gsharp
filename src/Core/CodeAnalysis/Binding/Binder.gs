@@ -590,8 +590,8 @@ partial class Binder {
                 bindThen,
                 bindElse
             ),
-            bindDeferrableConditional: (deferOnFailure bool, bind() -> BoundExpression) ->
-            Statements.BindDeferrableConditional(deferOnFailure, bind)
+            bindDeferrableConditional: (syntax SyntaxNode, deferOnFailure bool, bind() -> BoundExpression) ->
+            Statements.BindDeferrableConditional(syntax, deferOnFailure, bind)
         )
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor
@@ -14958,6 +14958,8 @@ partial class Binder {
             // its declaration, which the tree's doc table never indexed.
             if syntax is StructDeclarationSyntax{DocumentationSource: {} documentationSource} {
                 syntax = documentationSource
+            } else if syntax is InterfaceDeclarationSyntax{DocumentationSource: {} interfaceDocumentationSource} {
+                syntax = interfaceDocumentationSource
             }
             // ADR-0192 / Copilot review round 7: a merged partial method's own
             // node is a NEW SyntaxNode PartialMethodMerger builds — never
