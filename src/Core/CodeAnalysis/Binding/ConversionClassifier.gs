@@ -6104,6 +6104,7 @@ internal class ConversionClassifier {
         ) Conversion {
             if !conversion.Exists ||
                 conversion.IsIdentity ||
+                !(expression.Type.StripToBareShape() is FunctionTypeSymbol) ||
                 (conversion.IsImplicit && KeepsConvertedDelegate(expression, target)) {
                 return conversion
             }

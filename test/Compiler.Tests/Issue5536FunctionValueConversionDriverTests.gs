@@ -2326,6 +2326,7 @@ func Pick(x () -> Dog) string -> "D"
 func Pick(x () -> Animal) string -> "A"
 func Tie(x () -> Dog, y int32) string -> "D"
 func Tie(x Func[Dog], y int64) string -> "F"
+func Narrow(x int64) int32 -> cast[int32](x)
 func Main() {
     let dog = Dog()
     let f Func[Dog] = () -> dog
@@ -2343,6 +2344,7 @@ func Main() {
     Console.Write(seen)
     Console.Write(Pick(f))
     Console.Write(Tie(f, 1))
+    Console.Write(Narrow(7))
 }
 `, `using System;
 using FunctionControl;
@@ -2355,6 +2357,7 @@ class Program {
     static string Pick(Func<Dog> x) => "D";
     static string Pick(Func<Animal> x) => "A";
     static string Tie(Func<Dog> x, int y) => "D";
+    static int Narrow(long x) => (int)x;
     static void Main() {
         var dog = new Dog();
         Func<Dog> f = () => dog;
@@ -2372,9 +2375,10 @@ class Program {
         Console.Write(seen);
         Console.Write(Pick(f));
         Console.Write(Tie(f, 1));
+        Console.Write(Narrow(7));
     }
 }
-`, "TrueTrueTrueDDDDD")
+`, "TrueTrueTrueDDDDD7")
         Reject(fixture, `import System
 open class Animal {}
 class Dog : Animal {}
