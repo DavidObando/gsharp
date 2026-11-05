@@ -4117,8 +4117,10 @@ internal class LambdaBinder {
             if targetFunctionType == nil && !hasExplicitReturn && !trailingIsAssignment {
                 return if neverBlockTail {
                     TypeSymbol.Void
-                } else {
+                } else if trailingType != TypeSymbol.Null {
                     TupleTypeSymbol.ResolveNilElements(trailingType)
+                } else {
+                    trailingType
                 }
             }
             // Issue #891: a block-body arrow lambda whose body never completes
@@ -4229,7 +4231,12 @@ internal class LambdaBinder {
             if result == TypeSymbol.Never && syntax.Body is BlockExpressionSyntax {
                 return TypeSymbol.Void
             }
-            return TupleTypeSymbol.ResolveNilElements(result ?? TypeSymbol.Error)
+            let resolvedResult = result ?? TypeSymbol.Error
+            return if resolvedResult != TypeSymbol.Null {
+                TupleTypeSymbol.ResolveNilElements(resolvedResult)
+            } else {
+                resolvedResult
+            }
         }
 
         // Issue #2152: recognizes every bound-node shape the binder uses to
