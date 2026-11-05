@@ -1729,8 +1729,8 @@ internal partial class StatementBinder {
     ) {
         let collector = NewCollector(nil, beforeAliases)
         collector.VisitExpression(condition)
-        if thenNarrow != nil {
-            for entry in thenNarrow.ToArray() {
+        if thenNarrow is {} thenFrame {
+            for entry in thenFrame.ToArray() {
                 if !collector.WritableReferenceRoots.Contains(entry.Key.Root) &&
                     (
                     MayBeMutatedByUnknownWrite(collector, entry.Key) || collector.MayMutateGlobalRoot(
@@ -1738,15 +1738,15 @@ internal partial class StatementBinder {
                         entry.Value
                     )
                 ) {
-                    thenNarrow.Remove(entry.Key)
+                    thenFrame.Remove(entry.Key)
                 }
             }
-            if thenNarrow.Count == 0 {
+            if thenFrame.Count == 0 {
                 thenNarrow = nil
             }
         }
-        if elseNarrow != nil {
-            for entry in elseNarrow.ToArray() {
+        if elseNarrow is {} elseFrame {
+            for entry in elseFrame.ToArray() {
                 if !collector.WritableReferenceRoots.Contains(entry.Key.Root) &&
                     (
                     MayBeMutatedByUnknownWrite(collector, entry.Key) || collector.MayMutateGlobalRoot(
@@ -1754,10 +1754,10 @@ internal partial class StatementBinder {
                         entry.Value
                     )
                 ) {
-                    elseNarrow.Remove(entry.Key)
+                    elseFrame.Remove(entry.Key)
                 }
             }
-            if elseNarrow.Count == 0 {
+            if elseFrame.Count == 0 {
                 elseNarrow = nil
             }
         }
