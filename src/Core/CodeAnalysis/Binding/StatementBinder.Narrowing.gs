@@ -697,11 +697,7 @@ internal partial class StatementBinder {
     /// shallow (bounded by nesting depth), so this scan is cheap relative to a
     /// syntax subtree walk.
     private func HasAnyActiveNarrowings() bool {
-        return HasActiveNarrowings(binderCtx.NarrowedVariables.Count)
-    }
-
-    private func HasActiveNarrowings(frameCount int32) bool {
-        for var i = Math.Min(frameCount, binderCtx.NarrowedVariables.Count) - 1; i >= 0; i-- {
+        for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {
             if binderCtx.NarrowedVariables[i].Count > 0 {
                 return true
             }
@@ -5631,10 +5627,6 @@ internal partial class StatementBinder {
             return NarrowingState.JoinTypes(path, sourceTypes)
         }
 
-        private func IsRepresentationPreservingJoin(source TypeSymbol, target TypeSymbol) bool {
-            return Conversion.IsRepresentationPreservingImplicit(source, target)
-        }
-
         /// Whether a value of static type [`assignedType`](paramref) proves a
         /// target non-nil whose non-nullable type is [`narrowedType`](paramref):
         /// it is not nullable and converts implicitly. Shared by assignment
@@ -5718,28 +5710,6 @@ internal partial class StatementBinder {
             var toRemove List[AccessPath]? = nil
             for key in state.Keys {
                 if object.ReferenceEquals(key.Root, root) {
-                    (
-                        (
-                            if toRemove == nil {
-                                (toRemove = List[AccessPath]())
-                            } else {
-                                toRemove
-                            }
-                        )!!
-                    ).Add(key)
-                }
-            }
-            if toRemove != nil {
-                for key in toRemove {
-                    state.Remove(key)
-                }
-            }
-        }
-
-        private func RemoveByRoots(state Dictionary[AccessPath, TypeSymbol], roots HashSet[VariableSymbol]) {
-            var toRemove List[AccessPath]? = nil
-            for key in state.Keys {
-                if roots.Contains(key.Root) {
                     (
                         (
                             if toRemove == nil {
@@ -6177,15 +6147,6 @@ internal partial class StatementBinder {
                     (!structType.IsClass || (!structType.IsOpen && !structType.IsSealedHierarchy))
             )
         }
-
-        /// ADR-0208 R14 and R16 (#5231): whether [`node`](paramref) reads an imported (CLR) property whose getter
-        /// can run user code. Such a read is a `call`: the one definition for the straight-line pass, the loop
-        /// collector and the `finally` summaries. A field is no getter. A property is stable (it runs no user
-        /// code) only when (cref:IsStableClrGetter) says so; an unlisted property is a call.
-        internal func ClrPropertyReadRunsUserCode(
-            node BoundExpression
-        ) bool -> node is BoundClrPropertyAccessExpression{Member: var member} &&
-            ClrMemberReadRunsUserCode(member)
 
         /// ADR-0208 R16 and R17 (#5231, #5532): the one predicate that every imported accessor goes through. It is
         /// true when [`node`](paramref) reads or writes an imported property or indexer whose accessor can run user
