@@ -613,9 +613,12 @@ shared class TypeMemberModel {
         let sourceRef = source.ReferenceNullability
         let targetRef = target.ReferenceNullability
         if sourceRef != targetRef {
-            if !allowTopLevelWidening ||
-                sourceRef != ReferenceNullabilityKind.NotNull ||
-                targetRef != ReferenceNullabilityKind.Nullable {
+            let isSafeWidening = targetRef == ReferenceNullabilityKind.Nullable &&
+                (
+                sourceRef == ReferenceNullabilityKind.Platform ||
+                    (allowTopLevelWidening && sourceRef == ReferenceNullabilityKind.NotNull)
+            )
+            if !isSafeWidening {
                 return false
             }
         }

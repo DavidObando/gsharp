@@ -876,7 +876,10 @@ public record ClrMiddleWithField : ClrBase
 {
     public new string Value = "clr-middle";
     public ClrMiddleWithField() : base(31) { }
-}`
+}
+#nullable disable
+public record ClrObliviousBase(string Name);
+#nullable restore`
         let tempDir = Directory.CreateTempSubdirectory("gs_adr0199_clrbase_").FullName
         try {
             let extPath = Path.Combine(tempDir, "ExtLib.dll")
@@ -958,7 +961,9 @@ interface IClrValue {
 }
 data class ReusesValueWithExplicit(Value int32, Extra int32) : ClrBase(Value), IClrValue {
     prop (IClrValue) Value int32 -> Value + 100
+    func SpreadSelf() SpreadTarget -> SpreadTarget{...this}
 }
+data class ReusesObliviousAsNullable(Name string?, Extra int32) : ClrObliviousBase(Name)
 data class BehindClrField(Value int32, Extra int32) : ClrMiddleWithField()
 data class DifferentType(IntProp string, Extra int32) : ClrBase()
 data class InaccessibleGetters(InternalProp int32, PrivateProtectedProp int32) : ClrBase()
@@ -987,6 +992,10 @@ func Run() string {
     let rve = ReusesValueWithExplicit{Value: 2, Extra: 3}.copy(Value: 4)
     let rveIface IClrValue = rve
     let rveMatched = (rve is { Value: 4, Extra: 3 }) && !(rve is { Value: 104 })
+    let rveSpreadExt = SpreadTarget{...rve}
+    let rveSpreadSelf = rve.SpreadSelf()
+    let obNull = ReusesObliviousAsNullable(nil, 7)
+    let (obn, obe) = obNull
     let bf = BehindClrField(81, 82)
     let (bfv, bfe) = bf
     let ctorDefault = ReusesValue()
@@ -995,7 +1004,7 @@ func Run() string {
     let (ci, ce) = c
     let d = InaccessibleGetters(1, 2)
     let (di, dp) = d
-    return "${a.Value}:${a.Extra}|${bv}:${be}|${spread.Value}:${spread.Extra}|${spreadRef.RefVal}:${spreadRef.Extra}:${refMatched}|${pgv}:${pge}|${ps.Value}:${ps.Extra}|${psm.Value}:${psm.Extra}|${pps.Value}:${pps.Extra}|${rve.Value}:${rve.Extra}:${rveIface.Value}:${rveMatched}|${bf.Value}:${bfv}:${bfe}|${ctorDefault.Value}:${ctorDefault.Extra}|${gen.Value}|${ci}:${ce}|${di}:${dp}"
+    return "${a.Value}:${a.Extra}|${bv}:${be}|${spread.Value}:${spread.Extra}|${spreadRef.RefVal}:${spreadRef.Extra}:${refMatched}|${pgv}:${pge}|${ps.Value}:${ps.Extra}|${psm.Value}:${psm.Extra}|${pps.Value}:${pps.Extra}|${rve.Value}:${rve.Extra}:${rveIface.Value}:${rveMatched}:${rveSpreadExt.Value}:${rveSpreadSelf.Value}|${obn ?? "nil"}:${obe}|${bf.Value}:${bfv}:${bfe}|${ctorDefault.Value}:${ctorDefault.Extra}|${gen.Value}|${ci}:${ce}|${di}:${dp}"
 }`
             let srcPath = Path.Combine(tempDir, "test.gs")
             let outPath = Path.Combine(tempDir, "test.dll")
@@ -1073,6 +1082,8 @@ class ProtSetSibling : ClrProtSetBase {
                 Assert.DoesNotContain(protGetType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
                 let protSetType = asm.GetType("W.ReusesProtSet", throwOnError: true)!!
                 Assert.DoesNotContain(protSetType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
+                let obNullType = asm.GetType("W.ReusesObliviousAsNullable", throwOnError: true)!!
+                Assert.DoesNotContain(obNullType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
                 let behindClrFieldType = asm.GetType("W.BehindClrField", throwOnError: true)!!
                 Assert.Contains(behindClrFieldType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
                 let diffType = asm.GetType("W.DifferentType", throwOnError: true)!!
@@ -1082,7 +1093,7 @@ class ProtSetSibling : ClrProtSetBase {
                 Assert.Contains(inaccType.GetProperties(declared), (p PropertyInfo) -> p.Name == "PrivateProtectedProp")
                 let result = asm.GetType("W.<Program>", throwOnError: true)!!.GetMethod("Run")!!.Invoke(nil, nil)
                 Assert.Equal(
-                    "0:0|42:7|42:7|55:66:True|12:34|90:80|30:20|95:60|4:3:104:True|81:81:82|11:22|77|hello:9|1:2",
+                    "0:0|42:7|42:7|55:66:True|12:34|90:80|30:20|95:60|4:3:104:True:4:4|nil:7|81:81:82|11:22|77|hello:9|1:2",
                     result
                 )
             } finally {

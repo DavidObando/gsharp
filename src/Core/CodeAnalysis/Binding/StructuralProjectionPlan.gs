@@ -366,6 +366,7 @@ internal shared class StructuralProjectionPlanner {
             }
             for property in current.Properties {
                 if property.Accessibility != Accessibility.Public ||
+                    property.HasExplicitInterfaceClause ||
                     property.IsStatic ||
                     property.IsIndexer ||
                     !property.HasSetter ||
@@ -916,6 +917,7 @@ internal shared class StructuralProjectionPlanner {
                 for property in current.Properties {
                     if property.Accessibility == Accessibility.Public &&
                         property.GetterAccessibility == Accessibility.Public &&
+                        !property.HasExplicitInterfaceClause &&
                         property.HasGetter &&
                         !property.IsStatic &&
                         !property.IsIndexer &&
