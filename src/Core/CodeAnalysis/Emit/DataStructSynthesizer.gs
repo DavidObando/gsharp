@@ -219,7 +219,7 @@ internal class DataStructSynthesizer {
             bodyOffset: bodyOffset,
             parameterList: synthesizedRows.First
         )
-        this.StampSynthesized(synthesizedMethod, synthesizedRows)
+        this.StampSynthesized(synthesizedMethod, synthesizedRows, emitCompilerGenerated: false)
         return synthesizedMethod
     }
 
@@ -1004,7 +1004,12 @@ internal class DataStructSynthesizer {
             bodyOffset: bodyOffset,
             parameterList: synthesizedRows.First
         )
-        this.StampSynthesized(synthesizedMethod, synthesizedRows, emitParameterTupleNames: false)
+        this.StampSynthesized(
+            synthesizedMethod,
+            synthesizedRows,
+            emitParameterTupleNames: false,
+            emitCompilerGenerated: false
+        )
         return synthesizedMethod
     }
 
@@ -1244,11 +1249,16 @@ internal class DataStructSynthesizer {
     /// @param handle The synthesized member's MethodDef.
     /// @param rows The rows minted for it.
     /// @param emitParameterTupleNames Whether to stamp parameter tuple names here (`false` when already stamped).
+    /// @param emitCompilerGenerated Whether to stamp `CompilerGeneratedAttribute` on [`handle`](paramref).
     private func StampSynthesized(
         handle MethodDefinitionHandle,
         rows SignatureRows,
-        emitParameterTupleNames bool = true
+        emitParameterTupleNames bool = true,
+        emitCompilerGenerated bool = true
     ) {
+        if emitCompilerGenerated {
+            this.EmitCompilerGeneratedAttribute(handle)
+        }
         this.emitMethodNullability(handle, rows.Nullability, rows.ReturnRow, rows.Rows)
         if rows.ReturnRow is {} returnRow {
             this.emitTupleElementNamesAttribute(returnRow, rows.ReturnType)
@@ -1258,6 +1268,17 @@ internal class DataStructSynthesizer {
                 this.emitTupleElementNamesAttribute(rows.Rows[i], rows.Parameters[i].Type)
             }
         }
+    }
+
+    private func EmitCompilerGeneratedAttribute(handle EntityHandle) {
+        let ctorRef = this.wellKnown.GetCompilerGeneratedAttributeCtorRef()
+        if ctorRef.IsNil {
+            return
+        }
+        let value = BlobBuilder()
+        value.WriteUInt16(0x0001)
+        value.WriteUInt16(0)
+        this.emitCtx.Metadata.AddCustomAttribute(handle, ctorRef, this.emitCtx.Metadata.GetOrAddBlob(value))
     }
 
     /// Issue #410 / ADR-0029: emits
