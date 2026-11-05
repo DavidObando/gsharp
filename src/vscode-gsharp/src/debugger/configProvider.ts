@@ -34,8 +34,8 @@ export class GSharpDebugConfigurationProvider implements vscode.DebugConfigurati
       config.type = 'coreclr';
     }
 
-    // If no program is specified, try to auto-detect from the project layout.
-    if (!config.program && folder) {
+    // If no program is specified for a launch request, try to auto-detect from the project layout.
+    if (config.request !== 'attach' && !config.program && folder) {
       const targetProject = await findPrimaryProject(folder);
       if (!targetProject) {
         return undefined;

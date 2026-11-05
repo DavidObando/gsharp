@@ -84,20 +84,21 @@ describe('computeLaunchPaths', () => {
     }
   });
 
-  it('evaluates MSBuild Condition attributes for Debug configuration (#5009)', () => {
+  it('evaluates MSBuild Condition attributes including Platform=AnyCPU and Exists(...) for Debug configuration (#5009)', () => {
     const xml = [
       '<Project Sdk="Gsharp.NET.Sdk/0.5.212">',
-      '  <PropertyGroup>',
+      '  <PropertyGroup Condition="\'$(Configuration)|$(Platform)\' == \'Debug|AnyCPU\'">',
       '    <OutputType>Exe</OutputType>',
-      '    <OutputType Condition="\'$(Configuration)\' == \'Release\'">Library</OutputType>',
-      '    <AssemblyName Condition="\'$(Configuration)\' == \'Debug\'">Waikiki.Debug</AssemblyName>',
-      '    <AssemblyName Condition="\'$(Configuration)\' == \'Release\'">Waikiki.Release</AssemblyName>',
+      '    <AssemblyName>Waikiki.Debug</AssemblyName>',
+      '    <TargetFramework>net10.0</TargetFramework>',
       '  </PropertyGroup>',
-      '  <PropertyGroup Condition="\'$(Configuration)\' == \'Release\'">',
+      '  <PropertyGroup Condition="\'$(Configuration)|$(Platform)\' == \'Release|AnyCPU\'">',
+      '    <OutputType>Library</OutputType>',
+      '    <AssemblyName>Waikiki.Release</AssemblyName>',
       '    <TargetFramework>net8.0</TargetFramework>',
       '  </PropertyGroup>',
-      '  <PropertyGroup Condition="\'$(Configuration)\' == \'Debug\'">',
-      '    <TargetFramework>net10.0</TargetFramework>',
+      '  <PropertyGroup>',
+      '    <AssemblyName Condition="Exists(\'absent.props\')">AbsentOverride</AssemblyName>',
       '  </PropertyGroup>',
       '</Project>',
     ].join('\n');
@@ -280,6 +281,16 @@ describe('gsharp.generateAssets (#5009)', () => {
       const initialProvider = new GSharpDebugConfigurationInitialProvider();
       const initialConfigs = await initialProvider.provideDebugConfigurations(folder);
       expect(initialConfigs).toEqual([]);
+
+      const attachResolved = await provider.resolveDebugConfiguration(folder, {
+        name: 'Attach',
+        type: 'gsharp',
+        request: 'attach',
+        processId: 1234,
+      });
+      expect(attachResolved).toBeDefined();
+      expect(attachResolved!.type).toBe('coreclr');
+      expect(attachResolved!.request).toBe('attach');
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }

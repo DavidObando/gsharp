@@ -95,19 +95,46 @@ function evaluateAtomicCondition(expr: string): boolean {
   return true;
 }
 
+function evaluateConditionFunctions(expr: string, baseDir?: string): string {
+  return expr.replace(
+    /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)/g,
+    (_full, rawName: string, rawArg: string) => {
+      const fnName = rawName.toLowerCase();
+      const arg = unquoteConditionAtom(rawArg);
+      if (fnName === 'exists') {
+        if (!arg) {
+          return "'false'";
+        }
+        const resolved =
+          baseDir && !path.isAbsolute(arg) ? path.resolve(baseDir, arg) : arg;
+        return fs.existsSync(resolved) ? "'true'" : "'false'";
+      }
+      if (fnName === 'hastrailingslash') {
+        return arg.endsWith('/') || arg.endsWith('\\') ? "'true'" : "'false'";
+      }
+      return "'false'";
+    },
+  );
+}
+
 function evaluateMsBuildCondition(
   rawCondition: string | undefined,
   props: ReadonlyMap<string, string>,
+  baseDir?: string,
 ): boolean {
   if (rawCondition === undefined || !rawCondition.trim()) {
     return true;
   }
-  let expanded = resolveMsBuildVariables(rawCondition, props, '');
+  let expanded = evaluateConditionFunctions(
+    resolveMsBuildVariables(rawCondition, props, ''),
+    baseDir,
+  );
   // Reduce innermost parenthesized groups when present.
   while (/\([^()]*\)/.test(expanded)) {
     expanded = expanded.replace(/\(([^()]*)\)/g, (_full, inner: string) =>
-      evaluateMsBuildCondition(inner, props) ? "'true'" : "'false'",
+      evaluateMsBuildCondition(inner, props, baseDir) ? "'true'" : "'false'",
     );
+    expanded = evaluateConditionFunctions(expanded, baseDir);
   }
   const orParts = expanded.split(/\s+or\s+/i);
   return orParts.some((orPart) => {
@@ -116,7 +143,11 @@ function evaluateMsBuildCondition(
   });
 }
 
-function extractXmlProperties(xml: string, target: Map<string, string>): void {
+function extractXmlProperties(
+  xml: string,
+  target: Map<string, string>,
+  baseDir?: string,
+): void {
   const stripped = xml.replace(/<!--[\s\S]*?-->/g, '');
   const groupPattern = /<PropertyGroup\b([^>]*)>([\s\S]*?)<\/PropertyGroup>/gi;
   let groupMatch: RegExpExecArray | null;
@@ -124,23 +155,27 @@ function extractXmlProperties(xml: string, target: Map<string, string>): void {
   while ((groupMatch = groupPattern.exec(stripped)) !== null) {
     matchedAnyGroup = true;
     const groupCondition = extractConditionAttribute(groupMatch[1]);
-    if (!evaluateMsBuildCondition(groupCondition, target)) {
+    if (!evaluateMsBuildCondition(groupCondition, target, baseDir)) {
       continue;
     }
-    extractPropertiesFromBlock(groupMatch[2], target);
+    extractPropertiesFromBlock(groupMatch[2], target, baseDir);
   }
   if (!matchedAnyGroup) {
-    extractPropertiesFromBlock(stripped, target);
+    extractPropertiesFromBlock(stripped, target, baseDir);
   }
 }
 
-function extractPropertiesFromBlock(blockXml: string, target: Map<string, string>): void {
+function extractPropertiesFromBlock(
+  blockXml: string,
+  target: Map<string, string>,
+  baseDir?: string,
+): void {
   const propPattern = /<([A-Za-z_][A-Za-z0-9_.-]*)\b([^>]*)>([^<]*)<\/\1>/g;
   let match: RegExpExecArray | null;
   while ((match = propPattern.exec(blockXml)) !== null) {
     const key = match[1].toLowerCase();
     const propCondition = extractConditionAttribute(match[2]);
-    if (!evaluateMsBuildCondition(propCondition, target)) {
+    if (!evaluateMsBuildCondition(propCondition, target, baseDir)) {
       continue;
     }
     const value = resolveMsBuildVariables(match[3].trim(), target);
@@ -170,18 +205,25 @@ function resolveMsBuildVariables(
  */
 export function parseProjectMetadata(projectPath: string, projectXml?: string): ProjectMetadata {
   const projectName = path.basename(projectPath, '.gsproj');
+  const projectDir = path.dirname(projectPath);
   const props = new Map<string, string>([
     ['configuration', 'Debug'],
+    ['platform', 'AnyCPU'],
     ['msbuildprojectname', projectName],
     ['msbuildprojectfile', path.basename(projectPath)],
     ['msbuildprojectextension', path.extname(projectPath) || '.gsproj'],
+    ['msbuildthisfiledirectory', projectDir + path.sep],
   ]);
 
   let rawProjectXml = projectXml;
   if (rawProjectXml === undefined && fs.existsSync(projectPath)) {
     try {
-      for (const propsFile of collectInheritedPropsFiles(path.dirname(projectPath))) {
-        extractXmlProperties(fs.readFileSync(propsFile, 'utf8'), props);
+      for (const propsFile of collectInheritedPropsFiles(projectDir)) {
+        extractXmlProperties(
+          fs.readFileSync(propsFile, 'utf8'),
+          props,
+          path.dirname(propsFile),
+        );
       }
       rawProjectXml = fs.readFileSync(projectPath, 'utf8');
     } catch {
@@ -191,7 +233,7 @@ export function parseProjectMetadata(projectPath: string, projectXml?: string): 
 
   let hasTestSdkPackage = false;
   if (rawProjectXml !== undefined) {
-    extractXmlProperties(rawProjectXml, props);
+    extractXmlProperties(rawProjectXml, props, projectDir);
     const stripped = rawProjectXml.replace(/<!--[\s\S]*?-->/g, '');
     hasTestSdkPackage =
       /<PackageReference\b[^>]*\bInclude\s*=\s*["']Microsoft\.NET\.Test\.Sdk["']/i.test(stripped);
