@@ -574,6 +574,47 @@ func Run(callback () -> string) int32 {
     return 0
 }
 Console.WriteLine(Run(() -> "abc"))`, "GS0158@27:26", "reject", ""}
+            yield[]object{"r5606_control_structural_equality_invalidates_callable_alias_before_copy", `import System
+
+class Hook {
+    shared {
+        var Escaped (() -> void)?
+    }
+    override func Equals(other object?) bool {
+        Escaped?()
+        return true
+    }
+    override func GetHashCode() int32 -> 0
+}
+data struct Pair(H Hook)
+func Run(callback () -> string) int32 {
+    var x string? = "abc"
+    var action = callback
+    var copied = callback
+    Hook.Escaped = func() {
+        action = func() string {
+            x = nil
+            return "abc"
+        }
+    }
+    if x == nil {
+        return 0
+    }
+    let left = Pair(Hook())
+    let right = Pair(Hook())
+    if ({
+        action = callback
+        let _ = left == right
+        copied = action
+        true
+    }) {
+        if x is copied() {
+            return x.Length
+        }
+    }
+    return 0
+}
+Console.WriteLine(Run(() -> "abc"))`, "GS0158@36:22", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

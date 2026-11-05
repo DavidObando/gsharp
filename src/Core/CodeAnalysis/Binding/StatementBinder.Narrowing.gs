@@ -2514,9 +2514,11 @@ internal partial class StatementBinder {
                 mapLiteral
                 .MapType
                 .KeyType != TypeSymbol.String &&
-                !TypeSymbol.IsLegalPointeeType(mapLiteral.MapType.KeyType) {
+                !TypeSymbol
+                .IsLegalPointeeType(mapLiteral.MapType.KeyType) {
                 MayMutateMemberPaths = true
                 MarkMayMutateGlobalRoots()
+                nodeRunsEscapedClosure = true
             }
             if node is BoundFunctionLiteralExpression nestedLiteral {
                 for captured in nestedLiteral.CapturedVariables {
@@ -2555,8 +2557,7 @@ internal partial class StatementBinder {
                 }
             }
             if nodeRunsEscapedClosure {
-                normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                InvalidateCallableStateForUnknownClosure()
             }
             if node is BoundCallOperationExpression{
                 CalledFunction: ImportedFunctionSymbol importedFunction
@@ -2827,6 +2828,7 @@ internal partial class StatementBinder {
                 // ADR-0208 R19 (#5710): structural equality calls `Equals`, which can be user code. It is a plain
                 // method call, so it does not write by-reference storage (R12, amendment A3).
                 MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                InvalidateCallableStateForUnknownClosure()
             }
         }
 
@@ -2867,28 +2869,32 @@ internal partial class StatementBinder {
                 // A computed property of a pattern runs its getter.
                 if field.Property is {} property && StatementBinder.SourcePropertyRunsUserCode(property, node.Type) {
                     MarkMayMutateGlobalRoots()
+                    InvalidateCallableStateForUnknownClosure()
                 }
                 // ADR-0208 R16 (#5231): so does an imported property that is not on the stable list.
                 if StatementBinder.ClrMemberReadRunsUserCode(field.ClrMember) {
                     MarkMayMutateGlobalRoots()
+                    InvalidateCallableStateForUnknownClosure()
                 }
                 VisitPossiblySkipped(() -> VisitPattern(field.Pattern))
             }
         }
 
         protected open override func VisitConstantPattern(node BoundConstantPattern) {
+            base.VisitConstantPattern(node)
             // ADR-0208 R19 (#5593): the test can call the input's `Equals`, which can be user code. It is a plain
             // method call, so it does not write by-reference storage (R12, amendment A3).
             if StatementBinder.ConstantPatternRunsUserCode(node) {
                 MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                InvalidateCallableStateForUnknownClosure()
             }
-            base.VisitConstantPattern(node)
         }
 
         protected open override func VisitListPattern(node BoundListPattern) {
             // ADR-0208 R19 (#5593): the `Length`/`Count` getter and the indexer of an indexable input (R16, R17).
             if StatementBinder.ListPatternRunsUserCode(node) {
                 MarkMayMutateGlobalRoots()
+                InvalidateCallableStateForUnknownClosure()
             }
             for element in node.Elements {
                 VisitPossiblySkipped(() -> VisitPattern(element))
@@ -2928,6 +2934,9 @@ internal partial class StatementBinder {
             }
             VisitExpression(node.Receiver)
             VisitCallableArguments(node.Arguments)
+            if node.Method != nil {
+                InvalidateCallableStateForUnknownClosure()
+            }
             if node.Method is {} method {
                 InvalidateParameterRefArguments(node.Arguments, method.Parameters)
             }
@@ -3229,18 +3238,20 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitForRangeStatement(node BoundForRangeStatement) {
+            VisitExpression(node.Collection)
             // ADR-0208 R11 (#5170): lowering adds GetEnumerator, MoveNext and Current calls, and an
             // iterator body runs inside them. Indexed iteration runs no user code.
             if node.IterationKind != ForRangeKind.Indexed {
                 MarkMayMutateGlobalRoots()
+                InvalidateCallableStateForUnknownClosure()
             }
-            VisitExpression(node.Collection)
             VisitPossiblySkippedBody(node.Body)
         }
 
         protected open override func VisitAwaitForRangeStatement(node BoundAwaitForRangeStatement) {
-            MarkMayMutateGlobalRoots()
             VisitExpression(node.Stream)
+            MarkMayMutateGlobalRoots()
+            InvalidateCallableStateForUnknownClosure()
             VisitPossiblySkippedBody(node.Body)
         }
 
@@ -3612,6 +3623,11 @@ internal partial class StatementBinder {
             }
             normalCallableState.RestoreFrom(joinedNormal ?? entryState.Normal)
             allEntryCallableState.RestoreFrom(joinedAllEntry ?? entryState.AllEntry)
+        }
+
+        private func InvalidateCallableStateForUnknownClosure() {
+            normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+            allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
         }
 
         // [`runsSourceCode`](paramref) is false for a call through a callable value: it keeps its own classification
