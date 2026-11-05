@@ -724,7 +724,12 @@ internal partial class ExpressionBinder {
             whenFalse = bindWhenFalse(targetType)
             TruncateBranchSiblingExpressions(afterCondition)
             falseExit = CaptureExpressionNarrowingFrames()
-            MergeBranchExpressionNarrowingFrames(thenExit)
+            JoinConditionalBranchExpressionNarrowingFrames(
+                thenExit,
+                falseExit,
+                whenTrue.Type != TypeSymbol.Never,
+                whenFalse.Type != TypeSymbol.Never
+            )
         } else if trueIsBareDefault && falseIsBareDefault {
             Diagnostics.ReportBareDefaultNoTargetType(
                 (cast[DefaultExpressionSyntax](syntax.WhenTrue)).DefaultKeyword.Location
@@ -745,7 +750,12 @@ internal partial class ExpressionBinder {
             )
             TruncateBranchSiblingExpressions(afterCondition)
             thenExit = CaptureExpressionNarrowingFrames()
-            MergeBranchExpressionNarrowingFrames(falseExit)
+            JoinConditionalBranchExpressionNarrowingFrames(
+                thenExit,
+                falseExit,
+                whenTrue.Type != TypeSymbol.Never,
+                whenFalse.Type != TypeSymbol.Never
+            )
         } else if falseIsBareDefault {
             whenTrue = bindWhenTrue(nil)
             if whenTrue is BoundErrorExpression {
@@ -761,7 +771,12 @@ internal partial class ExpressionBinder {
             )
             TruncateBranchSiblingExpressions(afterCondition)
             falseExit = CaptureExpressionNarrowingFrames()
-            MergeBranchExpressionNarrowingFrames(thenExit)
+            JoinConditionalBranchExpressionNarrowingFrames(
+                thenExit,
+                falseExit,
+                whenTrue.Type != TypeSymbol.Never,
+                whenFalse.Type != TypeSymbol.Never
+            )
         } else {
             whenTrue = bindWhenTrue(nil)
             TruncateBranchSiblingExpressions(afterCondition)
@@ -770,11 +785,18 @@ internal partial class ExpressionBinder {
             whenFalse = bindWhenFalse(nil)
             TruncateBranchSiblingExpressions(afterCondition)
             falseExit = CaptureExpressionNarrowingFrames()
-            MergeBranchExpressionNarrowingFrames(thenExit)
+            JoinConditionalBranchExpressionNarrowingFrames(
+                thenExit,
+                falseExit,
+                whenTrue.Type != TypeSymbol.Never,
+                whenFalse.Type != TypeSymbol.Never
+            )
         }
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }
+        let thenCompletes = whenTrue.Type != TypeSymbol.Never
+        let falseCompletes = whenFalse.Type != TypeSymbol.Never
         TryAdaptConditionalIntegerLiteralArm(&whenTrue, &whenFalse)
         let resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
         if resultType == nil {
@@ -807,7 +829,8 @@ internal partial class ExpressionBinder {
             elseArmExitFrame,
             patternWhenFalse
         )
-        MergeBranchExpressionNarrowingFrames(thenExit)
+        let finalFalseExit = CaptureExpressionNarrowingFrames()
+        JoinConditionalBranchExpressionNarrowingFrames(thenExit, finalFalseExit, thenCompletes, falseCompletes)
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
@@ -931,7 +954,9 @@ internal partial class ExpressionBinder {
         var whenFalse = BindWithPatternVariables(patternWhenFalse, bindWhenFalseNarrowed, elseSyntax)
         TruncateBranchSiblingExpressions(afterCondition)
         let falseExit = CaptureExpressionNarrowingFrames()
-        MergeBranchExpressionNarrowingFrames(thenExit)
+        let thenCompletes = whenTrue.Type != TypeSymbol.Never
+        let falseCompletes = whenFalse.Type != TypeSymbol.Never
+        JoinConditionalBranchExpressionNarrowingFrames(thenExit, falseExit, thenCompletes, falseCompletes)
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }
@@ -978,7 +1003,8 @@ internal partial class ExpressionBinder {
             elseArmExitFrame,
             patternWhenFalse
         )
-        MergeBranchExpressionNarrowingFrames(thenExit)
+        let finalFalseExit = CaptureExpressionNarrowingFrames()
+        JoinConditionalBranchExpressionNarrowingFrames(thenExit, finalFalseExit, thenCompletes, falseCompletes)
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)

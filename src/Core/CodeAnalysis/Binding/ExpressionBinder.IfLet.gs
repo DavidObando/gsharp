@@ -111,7 +111,7 @@ internal partial class ExpressionBinder {
             () -> {
                 afterHeader = CaptureExpressionNarrowingFrames()
                 let savedStatementAliases = getCallableAliases()
-                let initialAliases = guardTrueAliases ?? GetCurrentExpressionCallableAliases()
+                let initialAliases = HashSet[VariableSymbol](guardTrueAliases ?? GetCurrentExpressionCallableAliases())
                 setCallableAliases(initialAliases)
                 let topFrame = binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1]
                 nextExpressionFrameId += 1
@@ -151,7 +151,9 @@ internal partial class ExpressionBinder {
         var whenFalse = BindIfLetElseBranch(syntax.ElseExpression!!, canBeVoid, targetType)
         TruncateBranchSiblingExpressions(afterHeader)
         let falseExit = CaptureExpressionNarrowingFrames()
-        MergeBranchExpressionNarrowingFrames(thenExit)
+        let thenCompletes = whenTrue.Type != TypeSymbol.Never
+        let falseCompletes = whenFalse.Type != TypeSymbol.Never
+        JoinConditionalBranchExpressionNarrowingFrames(thenExit, falseExit, thenCompletes, falseCompletes)
         if anyInvalid ||
             clauses.Length == 0 ||
             guard_ is BoundErrorExpression ||
@@ -200,7 +202,8 @@ internal partial class ExpressionBinder {
             whenFalse,
             resultType
         )
-        MergeBranchExpressionNarrowingFrames(thenExit)
+        let finalFalseExit = CaptureExpressionNarrowingFrames()
+        JoinConditionalBranchExpressionNarrowingFrames(thenExit, finalFalseExit, thenCompletes, falseCompletes)
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)

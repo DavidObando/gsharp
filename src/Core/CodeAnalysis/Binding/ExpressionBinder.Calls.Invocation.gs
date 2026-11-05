@@ -1856,7 +1856,60 @@ internal partial class ExpressionBinder {
             boundArguments.Clear()
             boundArguments.AddRange(mutableArgs)
         }
-        var arguments = boundArguments.ToImmutable()
+        let initialArguments = boundArguments.ToImmutable()
+        let overloadDiagMark = Diagnostics.Count
+        var result = BindAccessorCallAfterArguments(
+            receiver,
+            classSymbol,
+            methodName,
+            ce,
+            explicitTypeArgs,
+            typeArgSymbols,
+            argumentNames,
+            initialArguments,
+            receiverSyntax,
+            receiverStart
+        )
+        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+            let savedDiagnostics = List[Diagnostic]()
+            Diagnostics.DrainSince(overloadDiagMark, savedDiagnostics)
+            let retryDiagMark = Diagnostics.Count
+            let retryResult = BindAccessorCallAfterArguments(
+                receiver,
+                classSymbol,
+                methodName,
+                ce,
+                explicitTypeArgs,
+                typeArgSymbols,
+                argumentNames,
+                refreshedArguments,
+                receiverSyntax,
+                receiverStart
+            )
+            if !(retryResult is BoundErrorExpression) && Diagnostics.Count == retryDiagMark {
+                result = retryResult
+            } else {
+                Diagnostics.TruncateTo(overloadDiagMark)
+                Diagnostics.AddRange(savedDiagnostics)
+            }
+        }
+        return result
+    }
+
+    private func BindAccessorCallAfterArguments(
+        receiver BoundExpression?,
+        classSymbol ImportedClassSymbol?,
+        methodName string,
+        ce CallExpressionSyntax,
+        explicitTypeArgs[]?Type,
+        typeArgSymbols ImmutableArray[TypeSymbol],
+        argumentNames ImmutableArray[string],
+        arguments ImmutableArray[BoundExpression],
+        receiverSyntax ExpressionSyntax?,
+        receiverStart int32?
+    ) BoundExpression {
+        var receiver = receiver
+        var arguments = arguments
         if !ValidateNativeSharingArguments(classSymbol, methodName, arguments, ce) {
             return BoundErrorExpression(ce)
         }

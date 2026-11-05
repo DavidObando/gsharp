@@ -1000,6 +1000,44 @@ internal partial class OverloadResolver {
             }
             boundArguments.Add(boundArgument)
         }
+        let initialArguments = boundArguments.ToImmutable()
+        let overloadDiagMark = Diagnostics.Count
+        var result = BindCallExpressionAfterArguments(
+            syntax,
+            resolvedType,
+            argumentNames,
+            boundArguments,
+            deferredArrowLambdas
+        )
+        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+            let savedDiagnostics = List[Diagnostic]()
+            Diagnostics.DrainSince(overloadDiagMark, savedDiagnostics)
+            let retryDiagMark = Diagnostics.Count
+            let retryResult = BindCallExpressionAfterArguments(
+                syntax,
+                resolvedType,
+                argumentNames,
+                refreshedArguments.ToBuilder(),
+                deferredArrowLambdas
+            )
+            if !(retryResult is BoundErrorExpression) && Diagnostics.Count == retryDiagMark {
+                result = retryResult
+            } else {
+                Diagnostics.TruncateTo(overloadDiagMark)
+                Diagnostics.AddRange(savedDiagnostics)
+            }
+        }
+        return result
+    }
+
+    private func BindCallExpressionAfterArguments(
+        syntax CallExpressionSyntax,
+        resolvedType TypeSymbol?,
+        argumentNames ImmutableArray[string],
+        boundArguments ImmutableArray[BoundExpression].Builder,
+        deferredArrowLambdas HashSet[LambdaExpressionSyntax]?
+    ) BoundExpression {
+        var boundArguments = boundArguments
         let symbol Symbol? = Scope.TryLookupSymbol(syntax.Identifier.ValueText)
         if symbol is VariableSymbol callTarget && AccessibilityChecker.TryGetInaccessibleImplicitMemberRead(
             callTarget,

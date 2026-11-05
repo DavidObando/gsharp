@@ -262,7 +262,7 @@ internal partial class ExpressionBinder {
             ),
             $scope.GetDeclaredStructs()
         )
-        JoinSwitchArmExpressionNarrowingFrames(armExits, unmatchedExit, includeUnmatched)
+        JoinSwitchArmExpressionNarrowingFrames(armExits, boundArmBuilders, unmatchedExit, includeUnmatched)
         let armResults = List[BoundExpression](boundArmBuilders.Count)
         for arm in boundArmBuilders {
             armResults.Add(arm.Result)
@@ -338,7 +338,7 @@ internal partial class ExpressionBinder {
             }
             arms.Add(BoundSwitchExpressionArm(nil, arm.Pattern, arm.Guard, result))
         }
-        JoinSwitchArmExpressionNarrowingFrames(armExits, unmatchedExit, includeUnmatched)
+        JoinSwitchArmExpressionNarrowingFrames(armExits, boundArmBuilders, unmatchedExit, includeUnmatched)
         let boundArms = arms.ToImmutable()
         // Issue #1238: a deferred argument switch-expression whose arms could not
         // unify without a target — suppress the GS0179 diagnostics and return a
@@ -370,6 +370,9 @@ internal partial class ExpressionBinder {
                 )
             ]?
         ],
+        armBuilders IReadOnlyList[
+            (Syntax SwitchExpressionArmSyntax, Pattern BoundPattern?, Guard BoundExpression?, Result BoundExpression)
+        ],
         unmatchedExit List[
             (
                 Id int32,
@@ -384,8 +387,26 @@ internal partial class ExpressionBinder {
             RestoreExpressionNarrowingFrames(unmatchedExit, truncateSiblings: false)
             return
         }
-        RestoreExpressionNarrowingFrames(armExits[0], truncateSiblings: false)
-        for var i = 1; i < armExits.Count; i++ {
+        var firstCompleting = -1
+        for var i = 0; i < armExits.Count; i++ {
+            if i >= armBuilders.Count || armBuilders[i].Result.Type != TypeSymbol.Never {
+                firstCompleting = i
+                break
+            }
+        }
+        if firstCompleting < 0 {
+            if includeUnmatched {
+                RestoreExpressionNarrowingFrames(unmatchedExit, truncateSiblings: false)
+            } else {
+                RestoreExpressionNarrowingFrames(armExits[0], truncateSiblings: false)
+            }
+            return
+        }
+        RestoreExpressionNarrowingFrames(armExits[firstCompleting], truncateSiblings: false)
+        for var i = firstCompleting + 1; i < armExits.Count; i++ {
+            if i < armBuilders.Count && armBuilders[i].Result.Type == TypeSymbol.Never {
+                continue
+            }
             MergeBranchExpressionNarrowingFrames(armExits[i])
         }
         if includeUnmatched {

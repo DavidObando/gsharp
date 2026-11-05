@@ -187,6 +187,37 @@ internal class ConversionClassifier {
         return ResolveReboundSibling(argument)
     }
 
+    internal func TryRefreshReboundArguments(
+        arguments ImmutableArray[BoundExpression],
+        out refreshed ImmutableArray[BoundExpression]
+    ) bool {
+        refreshed = arguments
+        if tryGetReboundSibling == nil {
+            return false
+        }
+        var builder ImmutableArray[BoundExpression].Builder? = nil
+        var anyTypeChanged = false
+        for var i = 0; i < arguments.Length; i++ {
+            let orig = arguments[i]
+            let reb = ResolveReboundSibling(orig)
+            if !object.ReferenceEquals(reb, orig) {
+                if reb is BoundErrorExpression || reb.Type == TypeSymbol.Error {
+                    return false
+                }
+                builder ??= arguments.ToBuilder()
+                builder!![i] = reb
+                if reb.Type != orig.Type {
+                    anyTypeChanged = true
+                }
+            }
+        }
+        if !anyTypeChanged || builder == nil {
+            return false
+        }
+        refreshed = builder.ToImmutable()
+        return true
+    }
+
     /// Initializes a new instance of the (cref:ConversionClassifier)
     /// class.
     /// @param binderCtx The shared binder context that exposes the

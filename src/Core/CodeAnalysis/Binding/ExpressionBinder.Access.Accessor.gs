@@ -3593,7 +3593,53 @@ internal partial class ExpressionBinder {
             boundArguments.Add(boundArgument)
             staticArgIndex++
         }
-        var arguments = boundArguments.ToImmutable()
+        let initialArguments = boundArguments.ToImmutable()
+        let overloadDiagMark = Diagnostics.Count
+        var result = BindUserTypeStaticCallAfterArguments(
+            ownerType,
+            structSym,
+            ifaceSym,
+            methodName,
+            ce,
+            argumentNames,
+            initialArguments,
+            deferredStaticLambdaIndices
+        )
+        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+            let savedDiagnostics = List[Diagnostic]()
+            Diagnostics.DrainSince(overloadDiagMark, savedDiagnostics)
+            let retryDiagMark = Diagnostics.Count
+            let retryResult = BindUserTypeStaticCallAfterArguments(
+                ownerType,
+                structSym,
+                ifaceSym,
+                methodName,
+                ce,
+                argumentNames,
+                refreshedArguments,
+                deferredStaticLambdaIndices
+            )
+            if !(retryResult is BoundErrorExpression) && Diagnostics.Count == retryDiagMark {
+                result = retryResult
+            } else {
+                Diagnostics.TruncateTo(overloadDiagMark)
+                Diagnostics.AddRange(savedDiagnostics)
+            }
+        }
+        return result
+    }
+
+    private func BindUserTypeStaticCallAfterArguments(
+        ownerType TypeSymbol,
+        structSym StructSymbol?,
+        ifaceSym InterfaceSymbol?,
+        methodName string,
+        ce CallExpressionSyntax,
+        argumentNames ImmutableArray[string],
+        arguments ImmutableArray[BoundExpression],
+        deferredStaticLambdaIndices List[int32]?
+    ) BoundExpression {
+        var arguments = arguments
         // Issue #940: resolve static (shared) method overloads against the FULL
         // method group by arity, parameter types, and ref-kinds — identical to
         // the instance-method path — instead of taking the first by-name match

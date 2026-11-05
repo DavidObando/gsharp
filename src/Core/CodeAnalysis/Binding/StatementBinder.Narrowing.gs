@@ -1297,7 +1297,148 @@ internal partial class StatementBinder {
             object.ReferenceEquals(targetVar.Variable, path.Root) {
             return AssignmentTypePreservesNarrowing(expr.Type, underlying)
         }
+        return CallDischargesNullableWidening(expr, path.Root, underlying)
+    }
+
+    private func CallDischargesNullableWidening(
+        expr BoundExpression,
+        targetRoot VariableSymbol,
+        underlying TypeSymbol
+    ) bool {
+        switch expr {
+            case call is BoundCallExpression {
+                return UserCallDischargesNullableWidening(
+                    call.Function.Parameters,
+                    call.Arguments,
+                    0,
+                    targetRoot,
+                    underlying
+                )
+            }
+            case uic is BoundUserInstanceCallExpression {
+                let offset = if uic.Method.Parameters.Length == uic.Arguments.Length + 1 {
+                    1
+                } else {
+                    0
+                }
+                return UserCallDischargesNullableWidening(
+                    uic.Method.Parameters,
+                    uic.Arguments,
+                    offset,
+                    targetRoot,
+                    underlying
+                )
+            }
+            case impCall is BoundImportedCallExpression {
+                return ClrCallDischargesNullableWidening(
+                    impCall.Function.Method,
+                    impCall.Arguments,
+                    targetRoot,
+                    underlying
+                )
+            }
+            case impInstCall is BoundImportedInstanceCallExpression {
+                return ClrCallDischargesNullableWidening(
+                    impInstCall.Method,
+                    impInstCall.Arguments,
+                    targetRoot,
+                    underlying
+                )
+            }
+            case clrStaticCall is BoundClrStaticCallExpression {
+                return ClrCallDischargesNullableWidening(
+                    clrStaticCall.Method,
+                    clrStaticCall.Arguments,
+                    targetRoot,
+                    underlying
+                )
+            }
+            default {
+                return false
+            }
+        }
+    }
+
+    private func UserCallDischargesNullableWidening(
+        parameters ImmutableArray[ParameterSymbol],
+        arguments ImmutableArray[BoundExpression],
+        parameterOffset int32,
+        targetRoot VariableSymbol,
+        underlying TypeSymbol
+    ) bool {
+        for var i = 0; i < arguments.Length && i + parameterOffset < parameters.Length; i++ {
+            let param = parameters[i + parameterOffset]
+            if param.RefKind != RefKind.Out || HasUserNullabilityContract(param) {
+                continue
+            }
+            if arguments[i] is BoundAddressOfExpression{IsReadOnly: false, Operand: BoundVariableExpression v} &&
+                object.ReferenceEquals(v.Variable, targetRoot) &&
+                AssignmentTypePreservesNarrowing(param.Type, underlying) &&
+                !HasCompetingWritableReferenceArgument(arguments, i, targetRoot) {
+                return true
+            }
+        }
         return false
+    }
+
+    private func ClrCallDischargesNullableWidening(
+        method MethodInfo,
+        arguments ImmutableArray[BoundExpression],
+        targetRoot VariableSymbol,
+        underlying TypeSymbol
+    ) bool {
+        let parameters = method.GetParameters()
+        for var i = 0; i < arguments.Length && i < parameters.Length; i++ {
+            let param = parameters[i]
+            if RefCapabilities.GetParameterRefKind(param) != RefKind.Out || HasClrNullabilityContract(param) {
+                continue
+            }
+            let paramType = ClrNullability.GetParameterTypeSymbol(param).StripToBareShape()
+            if arguments[i] is BoundAddressOfExpression{IsReadOnly: false, Operand: BoundVariableExpression v} &&
+                object.ReferenceEquals(v.Variable, targetRoot) &&
+                AssignmentTypePreservesNarrowing(paramType, underlying) &&
+                !HasCompetingWritableReferenceArgument(arguments, i, targetRoot) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func HasCompetingWritableReferenceArgument(
+        arguments ImmutableArray[BoundExpression],
+        outIndex int32,
+        targetRoot VariableSymbol
+    ) bool {
+        for var j = 0; j < arguments.Length; j++ {
+            if j == outIndex {
+                continue
+            }
+            if ArgumentSharesWritableStorageWith(arguments[j], targetRoot) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func ArgumentSharesWritableStorageWith(argument BoundExpression, targetRoot VariableSymbol) bool {
+        switch argument {
+            case BoundAddressOfExpression{IsReadOnly: false, Operand: BoundVariableExpression v} {
+                return object.ReferenceEquals(v.Variable, targetRoot) || MayShareStorage(v.Variable, targetRoot)
+            }
+            case condAddr is BoundConditionalAddressExpression {
+                return (
+                    condAddr.WhenTrueOperand is BoundVariableExpression tv &&
+                        (object.ReferenceEquals(tv.Variable, targetRoot) || MayShareStorage(tv.Variable, targetRoot))
+                ) ||
+                    (
+                    condAddr.WhenFalseOperand is BoundVariableExpression fv &&
+                        (object.ReferenceEquals(fv.Variable, targetRoot) || MayShareStorage(fv.Variable, targetRoot))
+                )
+            }
+            default {
+                return false
+            }
+        }
     }
 
     private func StatementDischargesNullableWidening(
@@ -2072,6 +2213,16 @@ internal partial class StatementBinder {
             if DischargesNullableWidening(node, path, NullableTypeSymbol.Get(targetVar.Variable.Type)) {
                 state[path] = targetVar.Variable.Type
             }
+        } else if node is BoundCallOperationExpression callOp {
+            for child in callOp.ChildNodes {
+                if child is BoundAddressOfExpression{IsReadOnly: false, Operand: BoundVariableExpression outVar} &&
+                    !(outVar.Variable.Type is NullableTypeSymbol) {
+                    let path = AccessPath.ForVariable(outVar.Variable)
+                    if DischargesNullableWidening(node, path, NullableTypeSymbol.Get(outVar.Variable.Type)) {
+                        state[path] = outVar.Variable.Type
+                    }
+                }
+            }
         }
         processed.Add(node)
         exitAliases[node] = HashSet[VariableSymbol](aliases)
@@ -2526,6 +2677,7 @@ internal partial class StatementBinder {
                 let killedByFilter = filterWrites != nil &&
                     (FilterWritesVariable(filterWrites, path.Root) || MayBeMutatedByUnknownCallable(path))
                 let killed = killedByFilter || collector.AssignsRoot(path.Root) ||
+                    collector.MayMutateReferenceStorage ||
                     MayBeMutatedByUnknownWrite(collector, rootPath) ||
                     (collector.MayMutateMemberPaths && MayBeMutatedByUnknownCallable(rootPath))
                 if !killed {

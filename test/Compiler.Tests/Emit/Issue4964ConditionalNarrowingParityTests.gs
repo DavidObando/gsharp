@@ -842,6 +842,11 @@ func TryRead(out r int32) bool {
     r = 42
     return true
 }
+func ConsumeOverload(x float64, v int32) bool -> true
+func ConsumeOverload(x float64, v int32?) bool -> v != nil
+func Id[T](x float64, v T) T -> v
+func OuterOverload(v int32) bool -> true
+func OuterOverload(v int32?) bool -> v != nil
 let token = Token{}
 let sink = VariadicSink{}
 let reader = Reader{}
@@ -871,6 +876,10 @@ Console.WriteLine(n != nil ? Consume(token, o is string p1 && TryRead(out var re
 n = 5
 let tuplePatternOut (float64, bool) = if n != nil { (token, o is string p2 && TryRead(out var resTup) && p2.Length + resTup == 44) } else { (0.0, false) }
 Console.WriteLine(tuplePatternOut.Item2)
+n = 5
+Console.WriteLine(!(n == nil) ? ConsumeOverload(token, n) : false)
+n = 5
+Console.WriteLine(!(n == nil) ? OuterOverload(Id(token, n)) : false)
 `)
         Assert.Equal(
             string.Join(
@@ -885,12 +894,66 @@ Console.WriteLine(tuplePatternOut.Item2)
                 "False",
                 "False",
                 "True",
-                "True"
+                "True",
+                "False",
+                "False"
             ) +
                 Environment.NewLine,
             identityArgRebindRun.Output
         )
         Assert.DoesNotContain("GS0536", identityArgRebindRun.CompilerOutput)
+
+        let throwingArmAndCtorFieldWriteDiag = DiagnoseSource(`package Issue4969.ThrowingArmAndCtorFieldWrite
+import System
+func CheckThrowingConditionalArms(ref s string?, n int32?, flag bool) int32 {
+    let a = s != nil ? (flag ? 0 : {
+        s = nil
+        throw Exception()
+    }) + s.Length : 0
+    let b = s != nil ? (if flag {
+        0
+    } else {
+        s = nil
+        throw Exception()
+    }) + s.Length : 0
+    let c = s != nil ? (if let x = n {
+        x
+    } else {
+        s = nil
+        throw Exception()
+    }) + s.Length : 0
+    let d = s != nil ? (switch flag {
+        case true: 0
+        default: {
+            s = nil
+            throw Exception()
+        }
+    }) + s.Length : 0
+    return a + b + c + d
+}
+class CtorHolder {
+    let n int32?
+    init(seed int32?) {
+        this.n = seed
+        let _ int32 = (this.n != nil && (this.n = nil) == nil) ? this.n : 0
+    }
+}
+func CheckIfLetEmptyAliasesNotCorrupted(external () -> bool, seed string?, n int32?) int32 {
+    var s = seed
+    let reset = () -> {
+        s = nil
+        return true
+    }
+    let first = if let x = n {
+        var action = external
+        action() ? x : 0
+    } else {
+        0
+    }
+    return first + (s != nil ? (reset() ? s.Length : 0) : 0)
+}
+`)
+        Assert.Equal("GS0156:this.n;GS0158:Length", throwingArmAndCtorFieldWriteDiag)
 
         let deferredCoalesceAndSwitchDiag = DiagnoseSource(`package Issue4969.DeferredBranchyRetry
 interface I {}
@@ -1037,9 +1100,20 @@ func Check[T IComparer[int32]](comparer T, token Token) int32 -> !(n == nil) ? c
         "return dict.TryGetValue(\"missing\", out value) ? 0 : (switch flag { case true: (value = \"a\", 1).Item2 default: (value = \"b\", 2).Item2 }) + value.Length",
         ""
     )
+    @InlineData("return dict.TryGetValue(\"missing\", out value) ? 0 : (Reset(out value), value.Length).Item2", "")
+    @InlineData("if !dict.TryGetValue(\"missing\", out value) { Reset(out value) }\n return value.Length", "")
+    @InlineData("return (!dict.TryGetValue(\"missing\", out value) && ResetBool(out value)) ? value.Length : 0", "")
     func Composed_MaybeNullWhen_Preserves_Widening_Across_And_And_Or(body string, expected string) {
         let source = (`package Issue4969.ComposedMaybeNull
 import System.Collections.Generic
+func Reset(out v string) int32 {
+    v = "ok"
+    return 1
+}
+func ResetBool(out v string) bool {
+    v = "ok"
+    return true
+}
 func Check(dict Dictionary[string, string], flag bool) int32 {
     var value = "seed"
     ` + body + `

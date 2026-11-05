@@ -625,11 +625,7 @@ internal partial class ExpressionBinder {
         for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
             let entry = expressionNarrowingFrames[i]
             if IsExpressionFrameActive(entry) {
-                return if entry.Aliases.Count == 0 {
-                    emptyCallableAliases
-                } else {
-                    HashSet[VariableSymbol](entry.Aliases)
-                }
+                return HashSet[VariableSymbol](entry.Aliases)
             }
         }
         return getCallableAliases()
@@ -862,6 +858,36 @@ internal partial class ExpressionBinder {
         }
         if HasActiveExpressionNarrowings() {
             setCallableAliases(GetCurrentExpressionCallableAliases())
+        }
+    }
+
+    private func JoinConditionalBranchExpressionNarrowingFrames(
+        thenExit List[
+            (
+                Id int32,
+                Frame NarrowingFrame?,
+                Entries Dictionary[AccessPath, TypeSymbol]?,
+                Aliases HashSet[VariableSymbol]
+            )
+        ]?,
+        falseExit List[
+            (
+                Id int32,
+                Frame NarrowingFrame?,
+                Entries Dictionary[AccessPath, TypeSymbol]?,
+                Aliases HashSet[VariableSymbol]
+            )
+        ]?,
+        trueCompletes bool,
+        falseCompletes bool
+    ) {
+        if trueCompletes && falseCompletes {
+            RestoreExpressionNarrowingFrames(falseExit, truncateSiblings: false)
+            MergeBranchExpressionNarrowingFrames(thenExit)
+        } else if trueCompletes {
+            RestoreExpressionNarrowingFrames(thenExit, truncateSiblings: false)
+        } else {
+            RestoreExpressionNarrowingFrames(falseExit, truncateSiblings: false)
         }
     }
 
