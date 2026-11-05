@@ -106,8 +106,8 @@ namespace Demo
         public static string Run()
         {
             var entry = new Entry(new Node(), 1);
-            return L(entry, new System.Collections.Generic.List<Node> { null }) + " " +
-                LPlain(entry, new System.Collections.Generic.List<Node> { null });
+            return L(entry, new System.Collections.Generic.List<Node> { default(Node) }) + " " +
+                LPlain(entry, new System.Collections.Generic.List<Node> { default(Node) });
         }
     }
 }`)

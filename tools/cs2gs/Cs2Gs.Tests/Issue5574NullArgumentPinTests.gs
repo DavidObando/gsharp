@@ -75,7 +75,7 @@ namespace Demo.Tests
     {
         public static string Run() =>
             Demo.TypeSymbol.ContainsTypeParameter(Demo.TypeSymbol.Int32) + " " +
-            Demo.TypeSymbol.ContainsTypeParameter(null);
+            Demo.TypeSymbol.ContainsTypeParameter(default(Demo.TypeSymbol)!);
     }
 }`, "Core.Tests", NullableContextOptions.Enable, []MetadataReference{image})
         let repository = []CSharpCompilation{core, tests}
@@ -159,7 +159,7 @@ namespace Demo
                         b + "\n        " + a
                     }
                 ) + `
-        public static void Go(Holder h, Sink s) => h.B(null!, s, 1);
+        public static void Go(Holder h, Sink s) => h.B(default(Node)!, s, 1);
     }
 }`))
         Assert.DoesNotContain("Stored Node?", printed)
@@ -203,7 +203,7 @@ namespace Demo
         public static void Sink<T>(T value) { }
         public static void Named(Node p) => Sink<Node>(p);
         public static void Inferred(Node q) => Sink(q);
-        public static void Go() { Named(null!); Inferred(null!); }
+        public static void Go() { Named(default(Node)!); Inferred(default(Node)!); }
     }
 }`))
         Assert.Contains("Named(p Node)", printed)
@@ -302,7 +302,7 @@ namespace Demo
     {
         public static async Task<Node?> Open(Node p) { await Task.Yield(); return p; }
         public static async Task<Node> Closed(Node q) { await Task.Yield(); return q; }
-        public static void Go() { _ = Open(null!); _ = Closed(null!); }
+        public static void Go() { _ = Open(null!); _ = Closed(default(Node)!); }
     }
 }`))
         Assert.Contains("Open(p Node?)", printed)
@@ -322,7 +322,7 @@ namespace Demo
     {
         public static bool Arrow(Node p) { Node Local() => p; return Local() is null; }
         public static bool Block(Node q) { Node Local() { return q; } return Local() is null; }
-        public static string Run() => Arrow(null!) + " " + Block(null!);
+        public static string Run() => Arrow(default(Node)!) + " " + Block(default(Node)!);
     }
 }`))
         let printed = TranslateFile(compilation, "Check.cs", []CSharpCompilation{compilation})
@@ -345,7 +345,7 @@ namespace Demo
         private readonly Node stored;
         public Holder(Node node) { stored = node; }
         public string Run(Sink s) => s.Take(stored);
-        public static string Probe() => new Holder(null!).Run(new Sink());
+        public static string Probe() => new Holder(default(Node)!).Run(new Sink());
     }
 }`))
         let printed = TranslateFile(compilation, "Holder.cs", []CSharpCompilation{compilation})
@@ -395,8 +395,8 @@ namespace Demo
         public static string Run()
         {
             var sink = new Sink();
-            return sink.Take(new Entry(null!).Item) + " " + sink.Take(Identity<int>(null!)) + " " +
-                Block(null!) + " " + Arrow(null!);
+            return sink.Take(new Entry(default(Node)!).Item) + " " + sink.Take(Identity<int>(default(Node)!)) + " " +
+                Block(default(Node)!) + " " + Arrow(default(Node)!);
         }
     }
 }`))
@@ -426,7 +426,7 @@ namespace Demo
         public Node Current { get => item; set { Taken = sink.Take(value); item = value; } }
         public Node this[int i] => second;
         public string Run() => Taken + " " + sink.Take(this[0]) + " " + (Stored == null);
-        public static string Probe() => new Holder(null!, null!, null!).Run();
+        public static string Probe() => new Holder(default(Node)!, default(Node)!, default(Node)!).Run();
     }
 }`))
         let printed = TranslateFile(compilation, "Holder.cs", []CSharpCompilation{compilation})
@@ -450,7 +450,7 @@ namespace Demo
         let app = CompileFiles("App", MetadataReference.CreateFromStream(image), ("Probe.cs", `
 namespace Demo.App
 {
-    public static class Probe { public static string Run() => Demo.Fwd.Forward(null!); }
+    public static class Probe { public static string Run() => Demo.Fwd.Forward(default(Demo.Node)!); }
 }`))
         let repository = []CSharpCompilation{library, app}
         let libraryPrinted = TranslateFile(library, "Fwd.cs", repository)
@@ -493,9 +493,10 @@ namespace Demo
     public class Sink { public virtual string Take(Node n) => "taken"; }
     public static class Use
     {
+        public static Entry Null() => new Entry(default(Node)!, 0);
         public static string Run()
         {
-            (Node item, int id) = new Entry(null!, 0);
+            (Node item, int id) = Null();
             return new Sink().Take(item) + id;
         }
     }
@@ -542,7 +543,7 @@ namespace Demo
     {
         public static partial string Forward(Node p);
         public static partial string Forward(Node q) => new Sink().Take(q);
-        public static string Run() => Forward(null!);
+        public static string Run() => Forward(default(Node)!);
     }
 }`))
         let printed = TranslateFile(compilation, "Partial.cs", []CSharpCompilation{compilation})
@@ -560,7 +561,7 @@ namespace Demo
     public class Node { }
     public record Entry(Node Item, int Id);
     public class Sink { public virtual string Take(Node n) => "taken"; }
-    public static class Make { public static Entry Null() => new Entry(null!, 0); }
+    public static class Make { public static Entry Null() => new Entry(default(Node)!, 0); }
 }`))
         let image = MemoryStream()
         Assert.True(library.Emit(image).Success)
@@ -600,9 +601,10 @@ namespace Demo
     public class Sink { public virtual string Take(Node n) => "taken"; }
     public static class Use
     {
+        public static Entry Null() => new Entry(default(Node)!, 0);
         public static string Run()
         {
-            (int outer, (Node item, int id)) = (1, new Entry(null!, 0));
+            (int outer, (Node item, int id)) = (1, Null());
             return new Sink().Take(item) + id + outer;
         }
     }
@@ -625,7 +627,7 @@ namespace Demo
     {
         public Holder(Node stored) { Stored = stored; }
         public Node Stored { get; }
-        public static string Run() => new Holder(null!) is { Stored: var captured } ? new Sink().Take(captured) : "none";
+        public static string Run() => new Holder(default(Node)!) is { Stored: var captured } ? new Sink().Take(captured) : "none";
     }
 }`))
         let printed = TranslateFile(compilation, "Holder.cs", []CSharpCompilation{compilation})
@@ -646,7 +648,7 @@ namespace Demo
         public override bool Equals(object? obj) => ReferenceEquals(this, obj);
         public override int GetHashCode() => 0;
         public static bool Forward(Node p) => p == new Node();
-        public static string Run() => Forward(null!).ToString();
+        public static string Run() => Forward(default(Node)!).ToString();
     }
 }`))
         let printed = TranslateFile(compilation, "Node.cs", []CSharpCompilation{compilation})
@@ -675,8 +677,8 @@ namespace Demo
                 case var c: return new Sink().Take(c);
             }
         }
-        public static string Run() => Is(null!);
-        public static string Others() => Arm(null!) + Case(null!);
+        public static string Run() => Is(default(Node)!);
+        public static string Others() => Arm(default(Node)!) + Case(default(Node)!);
     }
 }`))
         let printed = TranslateFile(compilation, "Capture.cs", []CSharpCompilation{compilation})
@@ -792,7 +794,8 @@ namespace Demo
         public static string Wrap(Node q) => q.Ext() + "/" + q.ExtC();
         public static string G(Node p) => p.Ext() + new Sink().Take(p);
         public static string Run() =>
-            A(null!) + " " + B(null!) + " " + C(null!) + " " + D(null!) + " " + E(null!) + " " + F(null!) + " " + G(null!);
+            A(default(Node)!) + " " + B(default(Node)!) + " " + C(default(Node)!) + " " + D(default(Node)!) + " " +
+            E(default(Node)!) + " " + F(default(Node)!) + " " + G(default(Node)!);
     }
 }`))
         let printed = TranslateFile(compilation, "Exts.cs", []CSharpCompilation{compilation})
@@ -801,6 +804,86 @@ namespace Demo
             CompileAndRun([]string{printed}, "Demo.P.Run()").Trim()
         )
         Assert.DoesNotContain("!!", printed)
+    }
+
+    /// A read through a switch expression, conditional or coalesce into an explicitly typed nullable
+    /// reference local (`SyntaxNode? declaration = type switch { DelegateTypeSymbol d => d.Declaration, _ => null }`)
+    /// takes the null, so `DelegateTypeSymbol(declaration: null!)` widens `declaration` and `Declaration`,
+    /// the upcast arm emits `d.Declaration as SyntaxNode`, and the call `declaration: nil` compiles and
+    /// runs. Control: a read through a switch arm into an inferred `var` local still pins.
+    @Fact
+    func AReadThroughASwitchOrConditionalIntoAnExplicitNullableLocal_DoesNotPin() {
+        let compilation = CompileFiles("App", nil, ("Delegates.cs", `
+namespace Demo
+{
+    public class SyntaxNode { public bool Implicit; }
+    public sealed class DelegateDeclarationSyntax : SyntaxNode { }
+    public abstract class TypeSymbol { }
+    public sealed class DelegateTypeSymbol : TypeSymbol
+    {
+        public DelegateTypeSymbol(string name, DelegateDeclarationSyntax declaration)
+        {
+            Name = name;
+            Declaration = declaration;
+        }
+        public string Name { get; }
+        public DelegateDeclarationSyntax Declaration { get; }
+    }
+    public sealed class PinnedSymbol : TypeSymbol
+    {
+        public PinnedSymbol(DelegateDeclarationSyntax declaration) { Declaration = declaration; }
+        public DelegateDeclarationSyntax Declaration { get; }
+    }
+    public class Sink { public virtual string Take(SyntaxNode n) => "taken"; }
+    public static class BoundScope
+    {
+        public static bool IsImplicit(TypeSymbol type)
+        {
+            SyntaxNode? declaration = type switch
+            {
+                DelegateTypeSymbol d => d.Declaration,
+                PinnedSymbol => new SyntaxNode(),
+                _ => null,
+            };
+            return declaration != null && declaration.Implicit;
+        }
+        public static string PinnedRead(PinnedSymbol p)
+        {
+            var captured = p switch { PinnedSymbol x => x.Declaration };
+            return new Sink().Take(captured);
+        }
+        public static string UnguardedNullableLocalPins(DelegateDeclarationSyntax p)
+        {
+            SyntaxNode? q = p;
+            return new Sink().Take(q);
+        }
+        public static bool RepeatedSafeNullableLocalConsumerWidens(DelegateDeclarationSyntax p, bool c)
+        {
+            SyntaxNode? q = p;
+            SyntaxNode? r = c ? q : q;
+            SyntaxNode? s = c ? r : r;
+            return s == null;
+        }
+        public static string Run()
+        {
+            if (false) UnguardedNullableLocalPins(default(DelegateDeclarationSyntax)!);
+            var synth = new DelegateTypeSymbol("<>RefFunc0", declaration: null!);
+            var real = new DelegateTypeSymbol("D", declaration: new DelegateDeclarationSyntax { Implicit = true });
+            return IsImplicit(synth) + " " + IsImplicit(real) + " " +
+                PinnedRead(new PinnedSymbol(default(DelegateDeclarationSyntax)!)) + " " +
+                RepeatedSafeNullableLocalConsumerWidens(null!, true);
+        }
+    }
+}`))
+        let printed = TranslateFile(compilation, "Delegates.cs", []CSharpCompilation{compilation})
+        Assert.Equal("False True taken True", CompileAndRun([]string{printed}, "Demo.BoundScope.Run()").Trim())
+        Assert.Contains("declaration DelegateDeclarationSyntax?", printed)
+        Assert.Contains("prop Declaration DelegateDeclarationSyntax?", printed)
+        Assert.Contains("(d.Declaration as SyntaxNode)", printed)
+        Assert.Contains("declaration: nil", printed)
+        Assert.Contains("init(declaration DelegateDeclarationSyntax)", printed)
+        Assert.Contains("UnguardedNullableLocalPins(p DelegateDeclarationSyntax)", printed)
+        Assert.Contains("RepeatedSafeNullableLocalConsumerWidens(p DelegateDeclarationSyntax?, c bool)", printed)
     }
 
     shared {
