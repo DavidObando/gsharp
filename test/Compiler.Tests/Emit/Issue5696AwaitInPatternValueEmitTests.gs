@@ -52,6 +52,11 @@ Console.Write("${A(3).Result} ${B(4).Result} ${A(2).Result} ${B(3).Result} ${Not
     func ConstantPattern_AwaitInPatternValue_MatchesPrimitiveStringAndDecimal() {
         const source = `import System
 import System.Threading.Tasks
+class FloatTrace {
+    shared {
+        var Calls int32 = 0
+    }
+}
 async func Num() Task[int32] {
     await Task.Yield()
     return 7
@@ -64,15 +69,34 @@ async func Price() Task[decimal] {
     await Task.Yield()
     return 12.5m
 }
+async func Big() Task[int64] {
+    await Task.Yield()
+    return 4294967296L
+}
+async func GetFloat() Task[float64] {
+    FloatTrace.Calls += 1
+    await Task.Yield()
+    return 1.5
+}
 async func Check(n int32, s string, d decimal) Task[string] {
     let a = if n is (await Num()) { "1" } else { "0" }
     let b = if s is (await Text()) { "1" } else { "0" }
     let c = if d is (await Price()) { "1" } else { "0" }
     return a + b + c
 }
-Console.Write(Check(7, "ok", 12.50m).Result + "|" + Check(8, "no", 1.0m).Result)
+async func CheckBoxedFloat(v object?) Task[bool] -> v is (await GetFloat())
+async func CheckNestedChecked(n int64) Task[string] {
+    try {
+        return if n is (checked(cast[int32](await Big()))) { "1" } else { "0" }
+    } catch (OverflowException) {
+        return "ovf"
+    }
+}
+let f1 = if CheckBoxedFloat("not-a-float").Result { "1" } else { "0" }
+let f2 = if CheckBoxedFloat(1.5).Result { "1" } else { "0" }
+Console.Write(Check(7, "ok", 12.50m).Result + "|" + Check(8, "no", 1.0m).Result + "|" + f1 + f2 + ":${FloatTrace.Calls}|" + CheckNestedChecked(0L).Result)
 `
-        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(source, "111|000", "5696")
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(source, "111|000|01:1|ovf", "5696")
     }
 
     @Fact

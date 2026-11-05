@@ -1625,7 +1625,8 @@ shared class SpillSequenceSpiller {
                 return Trivial(conv)
             }
             let spilled = SpillExpression(conv.Expression)
-            let value = BoundConversionExpression(nil, conv.Type, spilled.Value)
+            let value = BoundConversionExpression(nil, conv.Type, spilled.Value, conv.IsChecked)
+            conv.CopyImplicitConversionTo(value)
             return BoundSpillSequenceExpression(nil, spilled.Locals, spilled.SideEffects, value)
         }
 
@@ -2149,6 +2150,27 @@ shared class SpillSequenceSpiller {
             }
             switch pattern {
                 case cp is BoundConstantPattern {
+                    if BoundConstantPattern.ClassifyTest(cp.Type, cp.Value) == ConstantPatternTestKind
+                        .BoxedFloatEquals {
+                        let patternValue = BoundConstantPattern.UnwrapInputConversion(cp.Type, cp.Value)
+                        let floatGuardVar = LocalVariableSymbol(
+                            "<boxed-float-pattern-value>",
+                            isReadOnly: true,
+                            patternValue.Type
+                        )
+                        let floatGuardPattern = BoundTypePattern(
+                            cp.Syntax,
+                            cp.Type,
+                            patternValue.Type,
+                            floatGuardVar,
+                            hasBinding: false,
+                            propertyPattern: nil
+                        )
+                        let isFloatMatch = BoundIsExpression(cp.Syntax, input, floatGuardPattern)
+                        sideEffects.Add(
+                            BoundConditionalGotoStatement(cp.Syntax, failLabel, isFloatMatch, jumpIfTrue: false)
+                        )
+                    }
                     if cp.Value is BoundConversionExpression conversion &&
                         conversion.Type == cp.Type &&
                         HasAwait(conversion.Expression) {
