@@ -2490,6 +2490,17 @@ internal partial class StatementBinder {
                     }
                 }
             }
+            if node is BoundMapLiteralExpression mapLiteral &&
+                !mapLiteral
+                .Entries
+                .IsDefaultOrEmpty &&
+                mapLiteral
+                .MapType
+                .KeyType != TypeSymbol.String &&
+                !TypeSymbol.IsLegalPointeeType(mapLiteral.MapType.KeyType) {
+                MayMutateMemberPaths = true
+                MarkMayMutateGlobalRoots()
+            }
             if node is BoundFunctionLiteralExpression nestedLiteral {
                 for captured in nestedLiteral.CapturedVariables {
                     normalCallableState.CapturedVariables.Add(captured)

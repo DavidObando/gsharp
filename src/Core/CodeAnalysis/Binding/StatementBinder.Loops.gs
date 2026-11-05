@@ -572,6 +572,7 @@ internal partial class StatementBinder {
         //     breakLabel:
         //   }
         $scope = BoundScope($scope)
+        let externalCallableAliasesAtInitEntry = externalCallableAliases.ToArray()
         let init BoundStatement? = if syntax.Initializer == nil {
             default(BoundStatement?)
         } else {
@@ -589,6 +590,7 @@ internal partial class StatementBinder {
             if binderCtx.NarrowedVariables.Count > 0 {
                 ApplyAssignmentNarrowing(init, binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1])
             }
+            UpdateExternalCallableAliases(init, externalCallableAliasesAtInitEntry)
         }
         let body = BindConditionedLoopBody(
             syntax.Condition,

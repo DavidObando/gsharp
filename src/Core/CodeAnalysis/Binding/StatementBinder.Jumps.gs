@@ -586,6 +586,7 @@ internal partial class StatementBinder {
                 stopped = true
                 return
             }
+            Prefixes.Add((node, default(bool?)))
         }
     }
 
@@ -763,7 +764,19 @@ internal partial class StatementBinder {
                     }
                     prefixes.Add((copySource, default(bool?)))
                 }
-                if !BoundStructLiteralExpression.UsesPrimaryConstructor(structLit.StructType) {
+                let primaryInits = HashSet[BoundFieldInitializer]()
+                if structLit.CallsPrimaryConstructor {
+                    for parameter in structLit.StructType.PrimaryConstructorParameters {
+                        if structLit.GetPrimaryArgument(parameter.Name) is {} primaryInit {
+                            primaryInits.Add(primaryInit)
+                            if object.ReferenceEquals(primaryInit.Value, child) {
+                                return prefixes
+                            }
+                            prefixes.Add((primaryInit.Value, default(bool?)))
+                        }
+                    }
+                }
+                if structLit.CopySource == nil {
                     prefixes.Add(
                         (
                             BoundStructLiteralExpression(
@@ -776,6 +789,9 @@ internal partial class StatementBinder {
                     )
                 }
                 for init in structLit.Initializers {
+                    if primaryInits.Contains(init) {
+                        continue
+                    }
                     if object.ReferenceEquals(init.Value, child) {
                         break
                     }
@@ -793,12 +809,128 @@ internal partial class StatementBinder {
                     }
                 }
             }
+            case mapLit is BoundMapLiteralExpression {
+                for entry in mapLit.Entries {
+                    if object.ReferenceEquals(entry.Key, child) {
+                        break
+                    }
+                    if object.ReferenceEquals(entry.Value, child) {
+                        prefixes.Add((entry.Key, default(bool?)))
+                        break
+                    }
+                    prefixes.Add(
+                        (
+                            BoundMapLiteralExpression(mapLit.Syntax, mapLit.MapType, ImmutableArray.Create(entry)),
+                            default(bool?)
+                        )
+                    )
+                }
+            }
+            case propPattern is BoundPropertyPattern {
+                for field in propPattern.Fields {
+                    if object.ReferenceEquals(field.Pattern, child) {
+                        let discard = BoundDiscardPattern(field.Syntax, field.Type)
+                        let getterOnlyField = if field.Field is {} matchedField {
+                            BoundPropertyPatternField(field.Syntax, matchedField, field.DeclaringType, discard)
+                        } else if field.Property is {} matchedProp {
+                            BoundPropertyPatternField(field.Syntax, matchedProp, field.DeclaringType, discard)
+                        } else if field.ClrMember is {} clrMember {
+                            BoundPropertyPatternField(field.Syntax, clrMember, field.Type, discard)
+                        } else {
+                            default(BoundPropertyPatternField?)
+                        }
+                        if getterOnlyField != nil {
+                            prefixes.Add(
+                                (
+                                    BoundPropertyPattern(
+                                        propPattern.Syntax,
+                                        propPattern.Type,
+                                        ImmutableArray.Create(getterOnlyField)
+                                    ),
+                                    default(bool?)
+                                )
+                            )
+                        }
+                        break
+                    }
+                    prefixes.Add(
+                        (
+                            BoundPropertyPattern(propPattern.Syntax, propPattern.Type, ImmutableArray.Create(field)),
+                            default(bool?)
+                        )
+                    )
+                }
+            }
+            case listPattern is BoundListPattern {
+                prefixes.Add(
+                    (
+                        BoundListPattern(
+                            listPattern.Syntax,
+                            listPattern.Type,
+                            ImmutableArray[BoundPattern].Empty,
+                            listPattern.ElementType,
+                            listPattern.LengthProperty,
+                            nil,
+                            listPattern.InputVariable
+                        ),
+                        default(bool?)
+                    )
+                )
+                for element in listPattern.Elements {
+                    if object.ReferenceEquals(element, child) {
+                        if element is not BoundSlicePattern && PatternReadsInput(element) {
+                            prefixes.Add(
+                                (
+                                    BoundListPattern(
+                                        listPattern.Syntax,
+                                        listPattern.Type,
+                                        ImmutableArray.Create[BoundPattern](
+                                            BoundDiscardPattern(
+                                                element.Syntax,
+                                                listPattern.ElementType,
+                                                LocalVariableSymbol(
+                                                    "<list-pattern-element>",
+                                                    isReadOnly: true,
+                                                    listPattern.ElementType
+                                                )
+                                            )
+                                        ),
+                                        listPattern.ElementType,
+                                        nil,
+                                        listPattern.IndexerProperty,
+                                        listPattern.InputVariable
+                                    ),
+                                    default(bool?)
+                                )
+                            )
+                        }
+                        break
+                    }
+                    prefixes.Add(
+                        (
+                            BoundListPattern(
+                                listPattern.Syntax,
+                                listPattern.Type,
+                                ImmutableArray.Create(element),
+                                listPattern.ElementType,
+                                nil,
+                                listPattern.IndexerProperty,
+                                listPattern.InputVariable
+                            ),
+                            default(bool?)
+                        )
+                    )
+                }
+            }
             case blockStmt is BoundBlockStatement {
                 for s in blockStmt.Statements {
                     if object.ReferenceEquals(s, child) {
                         break
                     }
-                    if !boundStatementEntries.ContainsKey(s) && s is BoundVariableDeclaration {
+                    let isForInitializer = blockStmt.Syntax is ForClauseStatementSyntax forClause &&
+                        forClause.Initializer != nil &&
+                        object.ReferenceEquals(s.Syntax, forClause.Initializer)
+                    if (!boundStatementEntries.ContainsKey(s) && s is BoundVariableDeclaration) || isForInitializer {
                         prefixes.Add((s, default(bool?)))
                     }
                 }
@@ -833,7 +965,8 @@ internal partial class StatementBinder {
         let collector = NewCollector(AssignmentPreservesNarrowing, aliasesBefore)
         collector.Visit(prefix)
         let dropAllMemberPaths = (prefix.Syntax is {} prefixSyntax && SyntaxMayMutateMemberPaths(prefixSyntax)) ||
-            collector.MayMutateMemberPaths
+            collector.MayMutateMemberPaths ||
+            collector.MayMutateGlobalRoots
         var survivingBranchFacts Dictionary[AccessPath, TypeSymbol]? = nil
         if conditionBranch is {} whenTrue && prefix is BoundExpression condExpr {
             let (thenNarrow, elseNarrow) = ComputeConditionNarrowing(condExpr, aliasesBefore)

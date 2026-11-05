@@ -883,6 +883,91 @@ func RunIndexed() int32 {
 }
 var s string? = "ok"
 Console.WriteLine(RunIndexed())`, "", "run", "2"}
+            yield[]object{"control12_pattern_getter_struct_ctor_for_init_and_map_breaks", `import System
+func Clear() int32 {
+    g = nil
+    return 0
+}
+class PatternTarget {
+    prop P int32 {
+        get {
+            g = nil
+            return 0
+        }
+    }
+}
+data struct D() {
+    public var Init int32 = Clear()
+    public var Value int32
+}
+class Key {
+    public override func GetHashCode() int32 {
+        g = nil
+        return 1
+    }
+    public override func Equals(other object?) bool {
+        return true
+    }
+}
+func RunPatternGetter(obj PatternTarget) int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let matched = obj is { P: 0 + ({
+            break
+            0
+        }) }
+        return 0
+    }
+    return g.Length
+}
+func RunDataStructCtor() int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let d = D{Value: ({
+            break
+            0
+        })}
+        return d.Value
+    }
+    return g.Length
+}
+func RunForAssignmentInit(cb () -> int32) int32 {
+    var s string? = "ok"
+    let clear = func () int32 {
+        s = nil
+        return 1
+    }
+    var f = cb
+    outer: while true {
+        f = cb
+        for f = clear; s != nil && (f() + {
+            break outer
+            0
+        }) > 0; {
+        }
+        return 0
+    }
+    return s.Length
+}
+func RunMapInsertion(key Key) int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let m = map[Key, int32]{key: 1, key: ({
+            break
+            0
+        })}
+        return m.Count
+    }
+    return g.Length
+}
+var g string? = "ok"
+Console.WriteLine(RunPatternGetter(PatternTarget{}) + RunDataStructCtor() + RunForAssignmentInit(() -> 0) + RunMapInsertion(Key{}))`, "GS0158@38:14 GS0158@51:14 GS0158@69:14 GS0158@82:14", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
