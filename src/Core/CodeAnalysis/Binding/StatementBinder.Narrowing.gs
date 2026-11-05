@@ -6318,10 +6318,9 @@ internal partial class StatementBinder {
         let declarations = ImmutableArray.CreateBuilder[BoundStatement](identifiers.Count)
         let receiverScoped = HasFunctionLocalEscapeScope(receiver) ||
             (
-            method.ThisParameter?.IsUnscopedRefReceiver == true && !Binder.IsReferenceTypeForConstraint(
-                receiver.Type
-            ) &&
-                HasFunctionLocalRefScope(receiver)
+            (method.HasUnscopedRef || method.ThisParameter?.IsUnscopedRefReceiver == true) &&
+                !Binder.IsReferenceTypeForConstraint(receiver.Type) &&
+                (HasFunctionLocalRefScope(receiver) || RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(receiver))
         )
         for var i = 0; i < identifiers.Count; i++ {
             let parameter = method.Parameters[i + parameterOffset]
@@ -6437,6 +6436,23 @@ internal partial class StatementBinder {
             return false
         }
         var survivors = extensionMatches
+        if survivors.Count > 1 {
+            let identityMatches = List[
+                (
+                    Method FunctionSymbol,
+                    Substitution Dictionary[TypeParameterSymbol, TypeSymbol]?,
+                    ReceiverParamType TypeSymbol
+                )
+            ]()
+            for current in survivors {
+                if current.ReceiverParamType == receiverType {
+                    identityMatches.Add(current)
+                }
+            }
+            if identityMatches.Count > 0 && identityMatches.Count < survivors.Count {
+                survivors = identityMatches
+            }
+        }
         if survivors.Count > 1 {
             let dominatedFiltered = List[
                 (

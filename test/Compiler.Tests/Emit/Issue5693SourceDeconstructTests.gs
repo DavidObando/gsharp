@@ -238,7 +238,21 @@ func (n uint32) Deconstruct(out a int32, out b int32) {
     a = int32(n)
     b = 2
 }
-func Run(p Pair, items []Pair, h Holder[string], pt Point, kv KeyValuePair[int32, int32], b uint8) string {
+class ShapeA {
+    var Value int32
+}
+class ShapeB {
+    var Value int32
+}
+func (a ShapeA) Deconstruct(out x int32, out y int32) {
+    x = a.Value
+    y = 10
+}
+func (b ShapeB) Deconstruct(out x int32, out y int32) {
+    x = b.Value
+    y = 20
+}
+func Run(p Pair, items []Pair, h Holder[string], pt Point, kv KeyValuePair[int32, int32], b uint8, sa ShapeA, sas []ShapeA) string {
     let (a, b1) = p
     var total = a + b1
     for (x, y) in items {
@@ -248,9 +262,14 @@ func Run(p Pair, items []Pair, h Holder[string], pt Point, kv KeyValuePair[int32
     let (px, py, psum) = pt
     let (k, v) = kv
     let (na, nb) = b
-    return "${total}:${text}:${w}:${px + py + psum}:${k + v}:${na + nb}"
+    let (sx, sy) = sa
+    var shapeSum = sx + sy
+    for (lx, ly) in sas {
+        shapeSum += lx + ly
+    }
+    return "${total}:${text}:${w}:${px + py + psum}:${k + v}:${na + nb}:${shapeSum}"
 }
-Console.WriteLine(Run(Pair{A: 2, B: 3}, []Pair{Pair{A: 4, B: 5}}, Holder[string]{Item: "ext", Weight: 7}, Point(6, 8), KeyValuePair[int32, int32](10, 20), uint8(5)))`, "", "run", "14:ext:7:28:30:6"}
+Console.WriteLine(Run(Pair{A: 2, B: 3}, []Pair{Pair{A: 4, B: 5}}, Holder[string]{Item: "ext", Weight: 7}, Point(6, 8), KeyValuePair[int32, int32](10, 20), uint8(5), ShapeA{Value: 3}, []ShapeA{ShapeA{Value: 4}}))`, "", "run", "14:ext:7:28:30:6:27"}
             yield[]object{"byref_like_receiver_rejected_by_generic_extension_deconstruct", `import System
 func (p T) Deconstruct[T](out a int32, out b int32) {
     a = 1
@@ -262,6 +281,25 @@ func Run(s Span[int32]) int32 {
 }
 Console.WriteLine(Run(Span[int32].Empty))`, "GS0164@7:9", "reject", ""}
             yield[]object{"scoped_receiver_deconstruct_output_cannot_escape", `import System
+import System.Diagnostics.CodeAnalysis
+import System.Runtime.InteropServices
+func LeakUnscopedLocal() Span[int32] {
+    var holder = UnscopedHolder{Value: 7}
+    let (s, _) = holder
+    return s
+}
+func LeakInDefensiveCopy(in holder UnscopedHolder) Span[int32] {
+    let (s, _) = holder
+    return s
+}
+struct UnscopedHolder {
+    var Value int32
+    @UnscopedRef
+    func Deconstruct(out s Span[int32], out n int32) {
+        s = MemoryMarshal.CreateSpan(&Value, 1)
+        n = Value
+    }
+}
 ref struct SpanPair {
     var S Span[int32]
     func Deconstruct(out s Span[int32], out n int32) {
@@ -281,7 +319,7 @@ func LeakExtension(scoped s Span[int32]) Span[int32] {
     let (head, _) = s
     return head
 }
-Console.WriteLine(0)`, "GS0219@15:12 GS0219@19:12", "reject", ""}
+Console.WriteLine(0)`, "GS0219@7:12 GS0219@11:12 GS0219@34:12 GS0219@38:12", "reject", ""}
             yield[]object{"overloaded_deconstruct_selects_matching_arity", `import System
 struct Multi {
     var A int32
