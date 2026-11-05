@@ -355,6 +355,7 @@ class C {
 interface ITag { }
 struct Token : ITag {
     var N int32
+    var Value int32
 }
 func (t Token) operator -() int32 {
     g = nil
@@ -365,6 +366,11 @@ func (t Token) operator ==(o object?) bool {
     return false
 }
 func (t Token) operator !=(o object?) bool -> true
+func (n int32) operator ==(o object?) bool {
+    g = nil
+    return false
+}
+func (n int32) operator !=(o object?) bool -> true
 enum Tag {
     A = 1,
     B = 2
@@ -380,6 +386,7 @@ func (t Tag) operator ==(o object?) bool {
 func (t Tag) operator !=(o object?) bool -> true
 class Holder {
     var Kind Tag = Tag.A
+    var N int32 = 1
     let Item ITag = Token{N: 1}
 }
 
@@ -421,6 +428,26 @@ func RunNestedEnumUnaryInSpan(n int32) int32 {
     return total
 }
 
+func RunNullableWrapperValueUnaryInLoop(p Token?, n int32) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + g.Value + -p.Value
+    }
+    return total
+}
+
+func RunNullableWrapperValueUnaryInSpan(p Token?, n int32) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    var i = 0
+    Again:
+    total = total + g.Value + -p.Value
+    i = i + 1
+    if i < n { goto Again }
+    return total
+}
+
 func RunEnumNilCompareInLoop(holder Holder, n int32) int32 {
     if g == nil { return 0 }
     var total = 0
@@ -438,6 +465,28 @@ func RunEnumNilCompareInSpan(holder Holder, n int32) int32 {
     Again:
     total = total + g.Value
     if holder.Kind == nil { total = total + 1 }
+    i = i + 1
+    if i < n { goto Again }
+    return total
+}
+
+func RunIntNilCompareInLoop(holder Holder, n int32) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + g.Value
+        if holder.N == nil { total = total + 1 }
+    }
+    return total
+}
+
+func RunIntNilCompareInSpan(holder Holder, n int32) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    var i = 0
+    Again:
+    total = total + g.Value
+    if holder.N == nil { total = total + 1 }
     i = i + 1
     if i < n { goto Again }
     return total
@@ -473,7 +522,7 @@ func CallDeref(n int32) int32 {
 }
 
 var g C? = C{}
-Console.WriteLine(CallDeref(2) + RunEnumUnaryInLoop(2) + RunNestedEnumUnaryInLoop(2) + RunNestedEnumUnaryInSpan(2) + RunEnumNilCompareInLoop(Holder{}, 2) + RunEnumNilCompareInSpan(Holder{}, 2) + RunNarrowedMemberNilCompareInLoop(Holder{}, 2) + RunEntryNarrowedMemberNilCompareInSpan(Holder{}, 2))`, "GS0158@41:27 GS0158@50:27 GS0158@59:27 GS0158@69:23 GS0158@79:27 GS0158@90:23 GS0158@101:27 GS0158@114:23", "reject", ""}
+Console.WriteLine(CallDeref(2) + RunEnumUnaryInLoop(2) + RunNestedEnumUnaryInLoop(2) + RunNestedEnumUnaryInSpan(2) + RunNullableWrapperValueUnaryInLoop(Token{N: 1, Value: 1}, 2) + RunNullableWrapperValueUnaryInSpan(Token{N: 1, Value: 1}, 2) + RunEnumNilCompareInLoop(Holder{}, 2) + RunEnumNilCompareInSpan(Holder{}, 2) + RunIntNilCompareInLoop(Holder{}, 2) + RunIntNilCompareInSpan(Holder{}, 2) + RunNarrowedMemberNilCompareInLoop(Holder{}, 2) + RunEntryNarrowedMemberNilCompareInSpan(Holder{}, 2))`, "GS0158@48:27 GS0158@57:27 GS0158@66:27 GS0158@76:23 GS0158@86:27 GS0158@96:23 GS0158@106:27 GS0158@117:23 GS0158@128:27 GS0158@139:23 GS0158@150:27 GS0158@163:23", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

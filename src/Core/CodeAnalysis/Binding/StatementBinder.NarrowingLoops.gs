@@ -777,14 +777,15 @@ internal partial class StatementBinder {
     ) List[ReceiverType]? {
         let saved = keepNullableValueTypes
         try {
-            keepNullableValueTypes = keepNullableValueAtEnd && path.Steps.Length == 0
+            keepNullableValueTypes = keepNullableValueAtEnd || path.Steps.Length > 0
             return ResolveReceiverPathCore(path, effects, keepNullableValueAtEnd)
         } finally {
             keepNullableValueTypes = saved
         }
     }
 
-    // Whether (cref:AddSymbolType) keeps a nullable value type: only for the last type of a conversion site's path.
+    // Whether (cref:AddSymbolType) keeps a nullable value type: on intermediate receiver steps and when requested at
+    // the end of a path.
     private var keepNullableValueTypes bool = false
 
     private func ResolveReceiverPathCore(
@@ -827,7 +828,7 @@ internal partial class StatementBinder {
         }
         for var stepIndex = 0; stepIndex < path.Steps.Length; stepIndex++ {
             let step = path.Steps[stepIndex]
-            keepNullableValueTypes = keepNullableValueAtEnd && stepIndex == path.Steps.Length - 1
+            keepNullableValueTypes = keepNullableValueAtEnd || stepIndex < path.Steps.Length - 1
             let next = List[ReceiverType]()
             for type in types {
                 let outcome = AddStepTypes(type, step, next)
@@ -1014,6 +1015,27 @@ internal partial class StatementBinder {
     // that the step names, or `StepUnresolved` when a member that it names has a type that does not resolve.
     private func AddStepTypes(type ReceiverType, step RegionReceiverStep, next List[ReceiverType]) int32 {
         if type.Clr is {} clr {
+            if clr.IsGenericType && clr.Name == "Nullable`1" {
+                let nullableOutcome = AddClrStepTypes(clr, step, ImmutableArray[TypeSymbol].Empty, nil, next)
+                if nullableOutcome == StepUnresolved {
+                    return StepUnresolved
+                }
+                let underlyingOutcome = AddClrStepTypes(
+                    clr.GetGenericArguments()[0],
+                    step,
+                    ImmutableArray[TypeSymbol].Empty,
+                    nil,
+                    next
+                )
+                if underlyingOutcome == StepUnresolved {
+                    return StepUnresolved
+                }
+                return if nullableOutcome == StepFound || underlyingOutcome == StepFound {
+                    StepFound
+                } else {
+                    StepAbsent
+                }
+            }
             return AddClrStepTypes(clr, step, ImmutableArray[TypeSymbol].Empty, nil, next)
         }
         let symbol = type.Symbol
@@ -1021,6 +1043,30 @@ internal partial class StatementBinder {
         switch symbol {
             case nil {
                 return StepUnresolved
+            }
+            case nullable is NullableTypeSymbol {
+                if StripAllNullability(nullable.UnderlyingType) is not{} underlying {
+                    return StepUnresolved
+                }
+                let nullableOutcome = AddClrStepTypes(
+                    typeof(Nullable[_]),
+                    step,
+                    ImmutableArray.Create[TypeSymbol](underlying),
+                    typeof(Nullable[_]),
+                    next
+                )
+                if nullableOutcome == StepUnresolved {
+                    return StepUnresolved
+                }
+                let underlyingOutcome = AddStepTypes(ReceiverType(underlying, nil), step, next)
+                if underlyingOutcome == StepUnresolved {
+                    return StepUnresolved
+                }
+                return if nullableOutcome == StepFound || underlyingOutcome == StepFound {
+                    StepFound
+                } else {
+                    StepAbsent
+                }
             }
             case array is ArrayTypeSymbol {
                 if elementStep {
@@ -2517,26 +2563,36 @@ internal partial class StatementBinder {
                 .Length > 0 &&
                 (effects.ContainsMemberTypeTest || HasEntryMemberTypeTest() || HasTypeTestOnReceiver(compared, effects))
         ) ||
-            ResolveReceiverPath(compared, effects) is not{} types {
+            ResolveReceiverPath(compared, effects, keepNullableValueAtEnd: true) is not{} types {
             return true
         }
         for type in types {
-            if !forReferenceStorage &&
-                (
-                object.Equals(type.Symbol, TypeSymbol.Object) ||
-                    type.Symbol is EnumSymbol ||
-                    (type.Symbol is StructSymbol structType && !structType.IsClass)
-            ) {
-                return true
+            if !forReferenceStorage {
+                if type.Symbol is {} symbol {
+                    if object.Equals(symbol, TypeSymbol.Object) ||
+                        (symbol !is NullableTypeSymbol && !IsReferenceLikeType(symbol)) {
+                        return true
+                    }
+                } else if type.Clr is {} clrType && ReflectionType(clrType) is {} reflectedClr {
+                    if reflectedClr.FullName == "System.Object" ||
+                        (
+                        reflectedClr.IsValueType && !(reflectedClr.IsGenericType && reflectedClr.Name == "Nullable`1")
+                    ) {
+                        return true
+                    }
+                }
             }
-            let clr = type.Clr ??
+            var clr = type.Clr ??
                 (
                 if type.Symbol is StructSymbol {
                     default(Type?)
                 } else {
-                    type.Symbol?.ClrType
+                    StripAllNullability(type.Symbol)?.ClrType
                 }
             )
+            if clr != nil && clr.IsGenericType && clr.Name == "Nullable`1" {
+                clr = clr.GetGenericArguments()[0]
+            }
             if clr != nil && ClrEqualityTakesReference(clr) {
                 return true
             }
@@ -2579,7 +2635,7 @@ internal partial class StatementBinder {
             HasTypeTestOnReceiver(path, effects) {
             return true
         }
-        let types = ResolveReceiverPath(path, effects)
+        let types = ResolveReceiverPath(path, effects, keepNullableValueAtEnd: true)
         if types == nil {
             return true
         }
@@ -2623,12 +2679,36 @@ internal partial class StatementBinder {
 
     private func ReadOfTypeRunsUserCode(type ReceiverType, member string?) bool {
         if type.Clr is {} clr {
+            if clr.IsGenericType && clr.Name == "Nullable`1" {
+                let underlyingClr = clr.GetGenericArguments()[0]
+                if member == "Value" {
+                    return true
+                }
+                if member == "HasValue" {
+                    return !ClrReadRunsUserCode(underlyingClr, "HasValue", false) == false &&
+                        ClrDeclaresMember(underlyingClr, "HasValue")
+                }
+                return ClrReadRunsUserCode(underlyingClr, member, false)
+            }
             return ClrReadRunsUserCode(clr, member, false)
         }
         let symbol = type.Symbol
         switch symbol {
             case nil {
                 return true
+            }
+            case nullable is NullableTypeSymbol {
+                if StripAllNullability(nullable.UnderlyingType) is not{} underlying {
+                    return true
+                }
+                if member == "Value" {
+                    return true
+                }
+                if member == "HasValue" {
+                    return TypeDeclaresMember(underlying, "HasValue") &&
+                        ReadOfTypeRunsUserCode(ReceiverType(underlying, nil), "HasValue")
+                }
+                return ReadOfTypeRunsUserCode(ReceiverType(underlying, nil), member)
             }
             case ArrayTypeSymbol, SliceTypeSymbol, RectangularArrayTypeSymbol {
                 // An element and the length of an array or a slice are intrinsic reads.
@@ -2708,6 +2788,35 @@ internal partial class StatementBinder {
             return true
         }
         return ClrReadRunsUserCode(clrType, member, false)
+    }
+
+    private func TypeDeclaresMember(type TypeSymbol, member string) bool {
+        if type is StructSymbol declared {
+            for level in declared.GetHierarchy() {
+                for candidate in level.GetMembers() {
+                    if candidate.Name == member {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+        if type.ClrType is {} clr {
+            return ClrDeclaresMember(clr, member)
+        }
+        return false
+    }
+
+    private func ClrDeclaresMember(type Type, member string) bool {
+        if ReflectionType(type) is not{} reflected {
+            return true
+        }
+        try {
+            let flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy
+            return reflected.GetMember(member, flags).Length > 0
+        } catch (ex NotSupportedException) {
+            return true
+        }
     }
 
     // An imported read: a field of a value type or sealed class or a constant runs no user code; a property or an

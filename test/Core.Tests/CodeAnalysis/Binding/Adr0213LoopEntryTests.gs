@@ -3926,7 +3926,10 @@ func Main() { }`, "GS0158@20:27")
 import System
 class C { var Value int32 = 1 }
 interface ITag { }
-struct Token : ITag { var N int32 }
+struct Token : ITag {
+    var N int32
+    var Value int32
+}
 func (t Token) operator -() int32 {
     g = nil
     return -t.N
@@ -3936,6 +3939,11 @@ func (t Token) operator ==(o object?) bool {
     return false
 }
 func (t Token) operator !=(o object?) bool -> true
+func (n int32) operator ==(o object?) bool {
+    g = nil
+    return false
+}
+func (n int32) operator !=(o object?) bool -> true
 enum Tag {
     A = 1,
     B = 2
@@ -3951,6 +3959,7 @@ func (t Tag) operator ==(o object?) bool {
 func (t Tag) operator !=(o object?) bool -> true
 class Holder {
     var Kind Tag = Tag.A
+    var N int32 = 1
     let Item ITag = Token{N: 1}
 }
 var g C? = C{}
@@ -3978,12 +3987,29 @@ func RunNestedEnumUnary() int32 {
     }
     return total
 }
+func RunNullableWrapperValueUnary(p Token?) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + g.Value + -p.Value
+    }
+    return total
+}
 func RunEnumNil(holder Holder) int32 {
     if g == nil { return 0 }
     var total = 0
     for var i = 0; i < 2; i++ {
         total = total + g.Value
         if holder.Kind == nil { total = total + 1 }
+    }
+    return total
+}
+func RunIntNil(holder Holder) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + g.Value
+        if holder.N == nil { total = total + 1 }
     }
     return total
 }
@@ -4007,7 +4033,7 @@ func RunEntryNarrowedMemberNil(holder Holder) int32 {
     }
     return total
 }
-func Main() { }`, "GS0158@37:27 GS0158@45:27 GS0158@53:27 GS0158@61:27 GS0158@70:27 GS0158@81:27")
+func Main() { }`, "GS0158@46:27 GS0158@54:27 GS0158@62:27 GS0158@70:27 GS0158@78:27 GS0158@87:27 GS0158@96:27 GS0158@107:27")
             return rows
         }
     }
