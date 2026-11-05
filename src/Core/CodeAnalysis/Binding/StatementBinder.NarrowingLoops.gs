@@ -13,15 +13,9 @@ import System.Collections.Immutable
 import System.Linq
 import System.Reflection
 
-/// ADR-0213 section 20, slice L0: the loop comparison. At each loop whose entry
-/// state holds a fact, the binder computes the lower bound `Lower(S, R)` of
-/// section 6 from the walker (cref:RegionEffectScanner) and compares it, fact by
-/// fact, with what today's back-edge analysis removes. It writes every
-/// disagreement to the `.loops` report of (cref:NarrowingComparison). At each
-/// function with a backward `goto` it computes the span of section 11 and
-/// reports it.
-/// @remarks Nothing here changes the frames, the diagnostics or the bound tree.
-/// The mechanism is off unless (cref:NarrowingComparison.LoopsEnabled) is true.
+/// ADR-0213 sections 6, 7, 11 and 13: the syntactic region lower bound `Lower(S, R)`
+/// for loops and backward-jump spans, computed from (cref:RegionEffectScanner) and
+/// (cref:BackwardJumpSpans).
 internal partial class StatementBinder {
     private var regionScanner RegionEffectScanner? = nil
 
@@ -3378,8 +3372,7 @@ internal partial class StatementBinder {
     /// frames joined with any forward `goto` from outside the loop to a label inside it (section 6, J6),
     /// `R` the region of the loop. A fact that the consumer rule of section 7 removes leaves its
     /// frame, and stays out of it after the loop. The external callable aliases that the region may
-    /// reassign leave their set. When `GSHARP_NARROWING_COMPARE` is set, the decision for every fact goes
-    /// to the `.loops` report.
+    /// reassign leave their set.
     private func ApplyLoopEntryLowerBound(body StatementSyntax, iterationRunsUserCode bool) {
         let loop = body.Parent
         let frameCount = binderCtx.NarrowedVariables.Count
@@ -3395,15 +3388,6 @@ internal partial class StatementBinder {
             InvalidateInheritedNarrowings(invalidations)
             externalCallableAliases.Clear()
             CompilationMeasurements.Count("narrowing.region-facts-killed", cast[int64](invalidations.Count))
-            if NarrowingComparison.LoopsEnabled {
-                NarrowingComparison.ReportLoopSummary(
-                    body.Location,
-                    invalidations.Count,
-                    invalidations.Count,
-                    0,
-                    "no-loop-parent"
-                )
-            }
             return
         }
         JoinPendingForwardJumpsIntoNode(loop)
@@ -3425,25 +3409,13 @@ internal partial class StatementBinder {
             CompilationMeasurements.Count("narrowing.region-walks")
             CompilationMeasurements.Count("narrowing.region-nodes", cast[int64](scanner.NodesVisited - visitedBefore))
         }
-        let (factCount, killedCount) = ApplyRegionLowerBoundCore(effects, loop, reportLoop: true)
-        if NarrowingComparison.LoopsEnabled {
-            NarrowingComparison.ReportLoopSummary(
-                loop.Location,
-                factCount,
-                killedCount,
-                factCount - killedCount,
-                "nodes=${effects.NodesVisited} reads=${effects.MemberReadCount} ${effects}"
-            )
-        }
+        ApplyRegionLowerBoundCore(effects, loop)
     }
 
     /// ADR-0213 sections 6, 7 and 13 (slices L1 and L2, #5317, #5318, #5461, #5671): the one shared
     /// application of `Lower(S, R)` to the narrowing frames and `externalCallableAliases` for a loop or a
     /// backward-jump span.
-    private func ApplyRegionLowerBoundCore(effects RegionEffects, regionNode SyntaxNode, reportLoop bool)(
-        FactCount int32,
-        KilledCount int32
-    ) {
+    private func ApplyRegionLowerBoundCore(effects RegionEffects, regionNode SyntaxNode) {
         EnsureClosureAssignedNames(regionNode)
         let frameCount = binderCtx.NarrowedVariables.Count
         let invalidations = List[(FrameIndex int32, Path AccessPath)]()
@@ -3455,12 +3427,9 @@ internal partial class StatementBinder {
                 filterWrites = CollectEnclosingFilterWrites(filters)
             }
         }
-        // S: the facts of the frames. A path that two frames hold is reported once, for the innermost frame.
+        // S: the facts of the frames. A path that two frames hold is counted once, for the innermost frame.
         let reported = List[AccessPath]()
-        var factCount = 0
-        var killedCount = 0
         var memberReadsWithLiveFacts = 0
-        let location = regionNode.Location
         for var i = frameCount - 1; i >= 0; i-- {
             for entry in binderCtx.NarrowedVariables[i] {
                 let path = entry.Key
@@ -3479,22 +3448,11 @@ internal partial class StatementBinder {
                     continue
                 }
                 reported.Add(path)
-                factCount++
                 if decision.Killed {
-                    killedCount++
                     CompilationMeasurements.Count("narrowing.region-facts-killed")
                 }
                 if effects.MemberReadCount > 0 && MayBeMutatedByUnknownCallable(path) {
                     memberReadsWithLiveFacts++
-                }
-                if reportLoop && NarrowingComparison.LoopsEnabled && decision.Killed {
-                    NarrowingComparison.ReportLoopKill(
-                        location,
-                        path.ToString(),
-                        FactKind(path, entry.Value),
-                        decision.Rule,
-                        decision.Row
-                    )
                 }
             }
         }
@@ -3525,7 +3483,6 @@ internal partial class StatementBinder {
                 )
             }
         }
-        return (factCount, killedCount)
     }
 
     private sealed class SpanEntrySnapshot {
@@ -3612,15 +3569,7 @@ internal partial class StatementBinder {
             let topLevelSpan = BackwardJumpSpans.Compute(rootKey, topLevelStatementList)
             spansByBody[rootKey] = topLevelSpan
             if topLevelSpan != nil {
-                let key = NarrowingComparison.Format(rootKey.Location) + ":" + rootKey.Span.Start.ToString()
-                if NarrowingComparison.TryRegisterSpanFunction("span:" + key) && NarrowingComparison.LoopsEnabled {
-                    let effects = GetSpanEffects(topLevelSpan)
-                    NarrowingComparison.ReportSpan(
-                        topLevelSpan.FirstStatement.Location,
-                        "labels=${string.Join(",", topLevelSpan.Labels)} gotos=${topLevelSpan.GotoCount}",
-                        effects.ToString()
-                    )
-                }
+                CompilationMeasurements.Count("narrowing.spans")
             }
             return topLevelSpan
         }
@@ -3630,16 +3579,7 @@ internal partial class StatementBinder {
         let span = BackwardJumpSpans.Compute(body)
         spansByBody[body] = span
         if span != nil {
-            let keyNode = body.Parent ?? body
-            let key = NarrowingComparison.Format(keyNode.Location) + ":" + keyNode.Span.Start.ToString()
-            if NarrowingComparison.TryRegisterSpanFunction("span:" + key) && NarrowingComparison.LoopsEnabled {
-                let effects = GetSpanEffects(span)
-                NarrowingComparison.ReportSpan(
-                    span.FirstStatement.Location,
-                    "labels=${string.Join(",", span.Labels)} gotos=${span.GotoCount}",
-                    effects.ToString()
-                )
-            }
+            CompilationMeasurements.Count("narrowing.spans")
         }
         return span
     }
@@ -3676,7 +3616,7 @@ internal partial class StatementBinder {
     private func ApplySpanEntryLowerBound(span BackwardJumpSpan) {
         JoinPendingForwardJumpsIntoRegion(span.Labels)
         if HasAnyActiveNarrowings() || externalCallableAliases.Count > 0 {
-            let _ = ApplyRegionLowerBoundCore(GetSpanEffects(span), span.FirstStatement, reportLoop: false)
+            ApplyRegionLowerBoundCore(GetSpanEffects(span), span.FirstStatement)
         }
         spanEntryStates[span] = SpanEntrySnapshot(
             binderCtx
@@ -3725,7 +3665,7 @@ internal partial class StatementBinder {
         }
         JoinPendingForwardJumpsIntoRegion(span.Labels)
         if HasAnyActiveNarrowings() || externalCallableAliases.Count > 0 {
-            let _ = ApplyRegionLowerBoundCore(GetSpanEffects(span), span.FirstStatement, reportLoop: false)
+            ApplyRegionLowerBoundCore(GetSpanEffects(span), span.FirstStatement)
         }
     }
 
@@ -3851,29 +3791,9 @@ internal partial class StatementBinder {
         if elseFacts == nil || elseFacts.Count == 0 {
             return
         }
-        let hasBreak = ContainsBreakFor(loop)
-        if NarrowingComparison.LoopsEnabled {
-            for entry in elseFacts {
-                // The frames hold the state after the loop. A fact that they hold is not a gain.
-                if binderCtx.NarrowedVariables.Query(entry.Key) != nil {
-                    continue
-                }
-                let text = if entry.Key.HasMembers {
-                    ""
-                } else {
-                    entry.Key.Root.Name
-                }
-                NarrowingComparison.ReportLoopExitGain(
-                    loop.Location,
-                    entry.Key.ToString(),
-                    hasBreak,
-                    FindBangSitesAfter(loop, text)
-                )
-            }
-        }
         // The loop ends when the header is false, so the break of a block expression in the header or in the post
         // statement also leaves it: the whole loop is scanned.
-        if hasBreak || binderCtx.FunctionContainsUserGotoOrLabel {
+        if binderCtx.FunctionContainsUserGotoOrLabel || ContainsBreakFor(loop) {
             return
         }
         // The effects of the header decide which facts survive it, by the same rule as the entry (A2): a call,
@@ -3951,63 +3871,5 @@ internal partial class StatementBinder {
             }
         }
         return false
-    }
-
-    // The `name!!` sites after the loop in its statement list and in the lists that enclose it, up to
-    // the function. An upper bound: the walk does not stop at a write to the name.
-    private func FindBangSitesAfter(loop SyntaxNode, name string) string {
-        if name.Length == 0 {
-            return "-"
-        }
-        let sites = List[string]()
-        var child SyntaxNode = loop
-        var parent = loop.Parent
-        while parent != nil {
-            if parent is BlockStatementSyntax block {
-                var seenChild = false
-                for statement in block.Statements {
-                    if seenChild {
-                        CollectBangSites(statement, name, sites)
-                    } else if object.ReferenceEquals(statement, child) {
-                        seenChild = true
-                    }
-                }
-            }
-            if parent is FunctionDeclarationSyntax or
-                FunctionLiteralExpressionSyntax or
-                LambdaExpressionSyntax or
-                ConstructorDeclarationSyntax or
-                PropertyAccessorSyntax {
-                break
-            }
-            child = parent
-            parent = parent.Parent
-        }
-        return if sites.Count == 0 {
-            "-"
-        } else {
-            string.Join(";", sites)
-        }
-    }
-
-    private func CollectBangSites(node SyntaxNode, name string, sites List[string]) {
-        if node is UnaryExpressionSyntax{OperatorToken: {Kind: SyntaxKind.BangBangToken}} assertion {
-            var operand ExpressionSyntax = assertion.Operand
-            while operand is ParenthesizedExpressionSyntax parenthesized {
-                operand = parenthesized.Expression
-            }
-            if operand is NameExpressionSyntax identifier && identifier.IdentifierToken.ValueText == name {
-                sites.Add(NarrowingComparison.Format(assertion.Location))
-            }
-        }
-        for child in node.GetChildren() {
-            CollectBangSites(child, name, sites)
-        }
-    }
-
-    /// Computes and reports the backward-jump span of the function that holds the label at
-    /// [`labeled`](paramref) (ADR-0213 section 11). A function asks once per label, and it counts once.
-    private func ReportBackwardJumpSpan(labeled SyntaxNode) {
-        let _ = GetEnclosingBackwardJumpSpan(labeled)
     }
 }
