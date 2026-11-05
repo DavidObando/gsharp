@@ -805,7 +805,8 @@ partial class SemanticModel {
         case variable is BoundVariableExpression: variable.Variable
         case call is BoundCallOperationExpression when call.CalledFunction is FunctionSymbol{
             AssociatedSymbol: PropertySymbol property
-        }: property
+        } function &&
+            object.ReferenceEquals(property.GetterSymbol, function): property
         case call is BoundCallOperationExpression: call.CalledFunction
         case baseCall is BoundBaseClassCallExpression: baseCall.Method ?? cast[Symbol?](baseCall.Property)
         case property is BoundPropertyReferenceOperationExpression: property.ReferencedProperty
@@ -856,7 +857,10 @@ partial class SemanticModel {
     }
 
     private func ReferencedCallSymbol(function FunctionSymbol?, type TypeSymbol) Symbol? {
-        if function?.AssociatedSymbol is PropertySymbol property {
+        if function?.AssociatedSymbol is PropertySymbol property && object.ReferenceEquals(
+            property.GetterSymbol,
+            function
+        ) {
             return if !object.ReferenceEquals(type, property.Type) {
                 property.WithSignature(type, property.Parameters)
             } else {

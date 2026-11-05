@@ -1453,6 +1453,27 @@ func Run() {
     }
 
     @Fact
+    func GetSymbolInfo_OnSystemIndexSetterWrite_KeepsSetterAccessorInsteadOfVoidProperty() {
+        const source = `package Query
+class Buffer {
+    prop this[index System.Index] int32 {
+        get -> 0
+        set { }
+    }
+}
+func Write(buffer Buffer) {
+    buffer[^1] = 9
+}
+`
+        let (compilation, model, tree) = CreateQualifierModel(source)
+        let bufferType = compilation.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Buffer")
+        let indexer = bufferType.Properties.Single((p PropertySymbol) -> p.IsIndexer)
+        let writeStmt = tree.Root.DescendantNodes().OfType[IndexAssignmentExpressionSyntax]().Single()
+        let symbol = model.GetSymbolInfo(writeStmt).Symbol
+        Assert.Same(indexer.SetterSymbol, symbol)
+    }
+
+    @Fact
     func StaticQualifierQuery_PreservesTypeParametersShadowingAndColorColor() {
         const source = `package Query
 class Box[T] {

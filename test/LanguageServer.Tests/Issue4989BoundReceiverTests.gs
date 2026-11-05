@@ -2579,6 +2579,42 @@ func Run() {
         AssertPosition(Position(fieldDeclPos.Line, fieldDeclPos.Character + "Fields".Length), fieldDef.Range.End)
     }
 
+    @Fact
+    func Issue5043_InterfaceMethodDeclarations_PreserveIndividualOverloadIdentity() {
+        let source = `package Repro
+interface IReader {
+    func Read() string { return Read(1) }
+    private func Read(code int32) string { return "ok" }
+    shared {
+        func Read(label string) string { return Decode(label) }
+        private func Decode(label string) string { return label }
+    }
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let iface = compilation.GlobalScope.Interfaces.Single((i InterfaceSymbol) -> i.Name == "IReader")
+        let publicRead = Assert.Single(iface.Methods)
+        let privateRead = Assert.Single(iface.PrivateMethods)
+        let staticRead = Assert.Single(iface.StaticMethods)
+        let staticPrivateDecode = Assert.Single(iface.StaticPrivateMethods)
+        Assert.Same(publicRead, SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "Read() string", 0)))
+        Assert.Same(
+            privateRead,
+            SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "Read(code int32)", 0))
+        )
+        Assert.Same(
+            staticRead,
+            SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "Read(label string)", 0))
+        )
+        Assert.Same(
+            staticPrivateDecode,
+            SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "Decode(label string)", 0))
+        )
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)

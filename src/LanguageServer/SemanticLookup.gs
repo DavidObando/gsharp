@@ -1067,15 +1067,15 @@ shared class SemanticLookup {
                 globals[iface.Name] = iface
                 if iface.Declaration != nil {
                     declarations[iface.Declaration.Identifier] = iface
-                    MapMembersByName(
-                        declarations,
-                        iface.Declaration.Methods.Select((m FunctionDeclarationSyntax) -> m.Identifier),
-                        iface
-                            .Methods
-                            .Concat(iface.StaticMethods)
-                            .Concat(iface.PrivateMethods)
-                            .Concat(iface.StaticPrivateMethods)
-                    )
+                    for method in iface
+                        .Methods
+                        .Concat(iface.StaticMethods)
+                        .Concat(iface.PrivateMethods)
+                        .Concat(iface.StaticPrivateMethods) {
+                        if method.Declaration is {Identifier: {IsMissing: false} methodIdentifier} {
+                            declarations[methodIdentifier] = method
+                        }
+                    }
                     MapMembersByName(
                         declarations,
                         iface.Declaration.Properties.Select((p PropertyDeclarationSyntax) -> p.Identifier),
@@ -1160,9 +1160,6 @@ shared class SemanticLookup {
                 (p PropertyDeclarationSyntax) -> p.Identifier
             )
             var allEventIdentifiers = aggregate.Declaration!!.Events.Select((e EventDeclarationSyntax) -> e.Identifier)
-            var allMethodIdentifiers = aggregate.Declaration!!.Methods.Select(
-                (m FunctionDeclarationSyntax) -> m.Identifier
-            )
             if aggregate.Declaration!!.SharedBlock != nil {
                 allFieldIdentifiers = allFieldIdentifiers.Concat(
                     aggregate.Declaration!!.SharedBlock!!.Fields.Select((f FieldDeclarationSyntax) -> f.Identifier)
@@ -1174,9 +1171,6 @@ shared class SemanticLookup {
                 )
                 allEventIdentifiers = allEventIdentifiers.Concat(
                     aggregate.Declaration!!.SharedBlock!!.Events.Select((e EventDeclarationSyntax) -> e.Identifier)
-                )
-                allMethodIdentifiers = allMethodIdentifiers.Concat(
-                    aggregate.Declaration!!.SharedBlock!!.Methods.Select((m FunctionDeclarationSyntax) -> m.Identifier)
                 )
             }
             MapMembersByName(
@@ -1190,9 +1184,11 @@ shared class SemanticLookup {
                 aggregate.Properties.Concat(aggregate.StaticProperties)
             )
             MapMembersByName(declarations, allEventIdentifiers, aggregate.Events.Concat(aggregate.StaticEvents))
-            MapMembersByName(declarations, allMethodIdentifiers, aggregate.Methods.Concat(aggregate.StaticMethods))
             for method in aggregate.Methods.Concat(aggregate.StaticMethods) {
                 if method.Declaration != nil {
+                    if !method.Declaration!!.Identifier.IsMissing {
+                        declarations[method.Declaration!!.Identifier] = method
+                    }
                     MapParameters(method.Declaration!!.Parameters.ToArray(), method.Parameters, declarations)
                 }
             }
