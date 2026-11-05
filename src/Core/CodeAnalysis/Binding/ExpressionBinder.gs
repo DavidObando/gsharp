@@ -1445,15 +1445,17 @@ internal partial class ExpressionBinder {
             }
             return ConvertTargetTypedValue(syntax, BindExpression(syntax), targetType)
         }
-        if syntax is TupleLiteralExpressionSyntax tupleLiteral &&
-            TryGetTargetTupleType(targetType, out var targetTuple) &&
-            targetTuple!!
-            .ElementTypes
-            .Length == tupleLiteral
-            .Elements
-            .Count &&
-            IsNestedLambdaExpression(tupleLiteral) {
-            let boundTuple = BindTupleLiteralExpression(tupleLiteral, targetTuple)
+        if syntax is TupleLiteralExpressionSyntax tupleLiteral && IsNestedLambdaExpression(tupleLiteral) {
+            let boundTuple = if TryGetTargetTupleType(targetType, out var targetTuple) &&
+                targetTuple!!
+                .ElementTypes
+                .Length == tupleLiteral
+                .Elements
+                .Count {
+                BindTupleLiteralExpression(tupleLiteral, targetTuple)
+            } else {
+                BindTupleLiteralExpression(tupleLiteral)
+            }
             return ConvertTargetTypedValue(syntax, boundTuple, targetType)
         }
         // Issue #3355: prefix statements bind normally; the expected type

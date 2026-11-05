@@ -180,6 +180,24 @@ func TakeNullableDelegate(f (() -> string)?) string -> if f != nil { f() } else 
         var f () -> string = () -> Maybe()
     }
 }`, "Maybe()")
+            yield Row("field-conditional-lambda-initializer", `class C {
+    var f () -> string = true ? (() -> Maybe()) : (() -> "ok")
+}`, "Maybe()")
+            yield Row("shared-field-conditional-lambda-initializer", `class C {
+    shared {
+        var f () -> string = true ? (() -> Maybe()) : (() -> "ok")
+    }
+}`, "Maybe()")
+            yield Row("interface-static-field-conditional-lambda-initializer", `interface I {
+    shared {
+        var f () -> string = true ? (() -> Maybe()) : (() -> "ok")
+    }
+}`, "Maybe()")
+            yield Row(
+                "imported-generic-receiver-nullable-param-passthrough",
+                `func Run(b StrictGenericBox5686[Box]) string -> b.RunWithNullableParam((box, s) -> s)`,
+                "s"
+            )
             yield Row("slice-element", `func Run() []() -> string -> []() -> string{() -> Maybe()}`, "Maybe()")
             yield Row("map-value", `func Run() {
     let m = map[int32, () -> string]{1: () -> Maybe()}
@@ -323,7 +341,7 @@ func TakeNullableDelegate(f (() -> string)?) string -> if f != nil { f() } else 
         private func EmitLibrary() string {
             let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue5686Binding")
             Directory.CreateDirectory(outputDir)
-            let libraryPath = Path.Combine(outputDir, "Lib5686_v2.dll")
+            let libraryPath = Path.Combine(outputDir, "Lib5686_v3.dll")
             const csharpSource = `#nullable enable
 using System;
 using System.Linq.Expressions;
@@ -345,6 +363,7 @@ namespace Lib5686
     {
         public string Run(Func<T, string> f) => "";
         public string? RunNullable(Func<T, string?> f) => null;
+        public string RunWithNullableParam(Func<T, string?, string> f) => "";
     }
 }
 

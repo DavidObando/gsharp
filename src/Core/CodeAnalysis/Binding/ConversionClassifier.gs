@@ -357,8 +357,7 @@ internal class ConversionClassifier {
         // Issue #3355: bind a block against its target before converting so
         // target-only trailing forms (`default`, untyped lambdas, branchy
         // expressions) receive their expected type.
-        if syntax is BlockExpressionSyntax ||
-            (!allowExplicit && type != nil && OverloadResolver.GetLambdaArgumentSyntax(syntax) != nil) {
+        if syntax is BlockExpressionSyntax || (!allowExplicit && type != nil && ContainsNestedLambdaSyntax(syntax)) {
             return bindExpressionWithTargetType(syntax, type!!)
         }
         // ADR-0055 Tier 4: contextual conversion of an interpolated string to
@@ -3878,7 +3877,7 @@ internal class ConversionClassifier {
         }
     }
 
-    private func ContainsNestedLambdaSyntax(syntax ExpressionSyntax) bool {
+    internal func ContainsNestedLambdaSyntax(syntax ExpressionSyntax) bool {
         var syntax = syntax
         while syntax is ParenthesizedExpressionSyntax parenthesized {
             syntax = parenthesized.Expression

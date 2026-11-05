@@ -1256,7 +1256,8 @@ internal partial class ExpressionBinder {
                             methodTypeArgs
                         )
                     }
-                    if mappedReturnType != TypeSymbol.Void && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                    var resolvedParameterTypes = parameterTypes.ToImmutable()
+                    if MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
                         MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
                             openParameters[paramIndex],
                             receiverOpenDefinition,
@@ -1266,9 +1267,14 @@ internal partial class ExpressionBinder {
                         ),
                         out var mergedFunctionType
                     ) {
-                        mappedReturnType = mergedFunctionType!!.ReturnType
+                        if mergedFunctionType.ParameterTypes.Length == resolvedParameterTypes.Length {
+                            resolvedParameterTypes = mergedFunctionType.ParameterTypes
+                        }
+                        if mappedReturnType != TypeSymbol.Void {
+                            mappedReturnType = mergedFunctionType.ReturnType
+                        }
                     }
-                    functionType = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), mappedReturnType)
+                    functionType = FunctionTypeSymbol.Get(resolvedParameterTypes, mappedReturnType)
                     returnGroundedInReceiver = returnClrType != nil &&
                         AllMethodTypeParametersResolved(returnClrType, openMethod, inferred)
                     returnHasInferredMethodTypeParameter = explicitTypeArgSymbols.IsDefaultOrEmpty &&

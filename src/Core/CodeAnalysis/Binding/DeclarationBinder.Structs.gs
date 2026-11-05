@@ -4437,9 +4437,9 @@ internal partial class DeclarationBinder {
             $scope.TryDeclareVariable(primaryCtorParameter)
         }
         try {
-            let targetTypedInit = initSyntax is BlockExpressionSyntax || OverloadResolver.GetLambdaArgumentSyntax(
+            let targetTypedInit = initSyntax is BlockExpressionSyntax || conversions.ContainsNestedLambdaSyntax(
                 initSyntax
-            ) != nil
+            )
             let boundInit = if targetTypedInit {
                 conversions.BindConversion(initSyntax, fieldType)
             } else {
@@ -4495,9 +4495,9 @@ internal partial class DeclarationBinder {
         try {
             let staticInitBuilder = ImmutableDictionary.CreateBuilder[FieldSymbol, BoundExpression]()
             for (fieldSym, initSyntax, fieldType) in staticFieldInitializers {
-                let targetTypedInit = initSyntax is BlockExpressionSyntax || OverloadResolver.GetLambdaArgumentSyntax(
+                let targetTypedInit = initSyntax is BlockExpressionSyntax || conversions.ContainsNestedLambdaSyntax(
                     initSyntax
-                ) != nil
+                )
                 let boundInit = if targetTypedInit {
                     conversions.BindConversion(initSyntax, fieldType)
                 } else {
