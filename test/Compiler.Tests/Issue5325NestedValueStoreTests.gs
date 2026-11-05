@@ -277,6 +277,10 @@ func ReplaceRows(ref rows []SliceRow, replacement []SliceRow) int32 {
 async func RunHolderSet(h SliceHolder, ch chan[int32]) {
     h.Frames[0, false].Left.Item = <-ch
 }
+async func RunReseatedCompoundAdd(initial slice[Pair], replacement slice[Pair], ch chan[int32]) {
+    var s = initial
+    s[ReplaceSlice(ref s, replacement), false].Left.Item += <-ch
+}
 func Owner() slice[Pair] {
     owners++
     return frames
@@ -358,12 +362,21 @@ try {
     rows[99].Frames[{ badRowIdxCalls++ 0 }, false].Left.Item = 47
 } catch (error IndexOutOfRangeException) {
 }
-Console.WriteLine("go:${afterGo}:${storage[0].Left.Item}:${reseatStorage[0].Left.Item}:${parkedReplacement[0].Left.Item}:${rowBacking[0].Left.Item}:${rowReplacementBacking[0].Left.Item}:${badRowIdxCalls}:${owners}:${indices}:${blockIdxCalls}:${holder.Frames[0].Left.Item}")`
+let compoundOldBacking = []Pair{Pair{Left: Cell{Item: 5}}}
+let compoundNewBacking = []Pair{Pair{Left: Cell{Item: 10}}}
+let compoundCh = chan[int32](1)
+compoundCh <- 9
+RunReseatedCompoundAdd(
+    slice[Pair].FromArray(compoundOldBacking),
+    slice[Pair].FromArray(compoundNewBacking),
+    compoundCh
+).GetAwaiter().GetResult()
+Console.WriteLine("go:${afterGo}:${storage[0].Left.Item}:${reseatStorage[0].Left.Item}:${parkedReplacement[0].Left.Item}:${rowBacking[0].Left.Item}:${rowReplacementBacking[0].Left.Item}:${badRowIdxCalls}:${compoundOldBacking[0].Left.Item}:${compoundNewBacking[0].Left.Item}:${owners}:${indices}:${blockIdxCalls}:${holder.Frames[0].Left.Item}")`
         let dll = fixture.Compile(source, "channel_parameter_store", true)
         VerifyStrict(dll)
         Assert.Equal(
             Encoding.UTF8.GetBytes(
-                "10\nFalse\n10:55:88:0\nFalse:1:1\n25:1:1\nbounds:2:2\ngo:27:41:37:0:43:0:0:3:3:1:0\n"
+                "10\nFalse\n10:55:88:0\nFalse:1:1\n25:1:1\nbounds:2:2\ngo:27:41:37:0:43:0:0:5:19:3:3:1:0\n"
             ),
             Encoding.UTF8.GetBytes(fixture.Run(dll))
         )
