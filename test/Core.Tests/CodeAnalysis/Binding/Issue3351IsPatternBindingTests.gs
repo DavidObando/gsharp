@@ -315,15 +315,62 @@ class Outer {
         let obsoleteTargetDiagnostics = Bind(`package Demo
 import System
 
+class EarlyHolder {
+    var NullableField OldClass?
+    var ArrayField []OldClass
+    var ConstructedField OldBox[int32]
+}
+
 @Obsolete("old-interface", true)
 interface IOld {}
 
 @Obsolete("old-class", true)
 class OldClass {}
 
+@Obsolete("old-box", true)
+class OldBox[T] {}
+
 type AliasI = IOld
 type AliasC = OldClass`).Where((d Diagnostic) -> d.Id == "GS0204").ToArray()
-        Assert.Equal(2, obsoleteTargetDiagnostics.Length)
+        Assert.Equal(5, obsoleteTargetDiagnostics.Length)
+
+        let invalidNestedAliasQualification = Assert.Single(Bind(`package Demo
+import InnerAlias = Demo.Outer.Inner
+
+class Outer {
+    public class Inner {}
+}
+
+type Renamed = InnerAlias
+
+let invalid Outer.Renamed = Outer.Inner{}`))
+        Assert.Equal("GS0113", invalidNestedAliasQualification.Id)
+
+        let crossPackageTree1 = SyntaxTree.Parse(SourceText.From(`package App1
+import Lib1
+type Parent = Base1
+class Derived1 : Parent {
+    override func First() int32 -> 10
+}`, "app1.gs"))
+        let crossPackageTree2 = SyntaxTree.Parse(SourceText.From(`package App2
+import Lib2
+type Parent = Base2
+class Derived2 : Parent {
+    override func Second() int32 -> 20
+}`, "app2.gs"))
+        let crossPackageLib1 = SyntaxTree.Parse(SourceText.From(`package Lib1
+public open class Base1 {
+    public open func First() int32 -> 1
+}`, "lib1.gs"))
+        let crossPackageLib2 = SyntaxTree.Parse(SourceText.From(`package Lib2
+public open class Base2 {
+    public open func Second() int32 -> 2
+}`, "lib2.gs"))
+        let crossPackageScope = Binder.BindGlobalScope(
+            previous: nil,
+            ImmutableArray.Create(crossPackageTree1, crossPackageTree2, crossPackageLib1, crossPackageLib2)
+        )
+        Assert.Empty(crossPackageScope.Diagnostics)
 
         const derivedFirstNestedBaseAliasSource = `package Demo
 import NestedInClass = Demo.ClassContainer.NestedBase

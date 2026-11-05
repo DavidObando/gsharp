@@ -6204,13 +6204,37 @@ partial class Binder {
     // <paramref name="location"/>. Severity is Warning by default,
     // promoted to Error when the attribute's second positional
     // argument (IsError) is true.
+    private var deferObsoleteUseChecks bool
+    private let pendingObsoleteUseChecks List[(Location TextLocation, Symbol Symbol, DisplayName string)] = List[
+        (Location TextLocation, Symbol Symbol, DisplayName string)
+    ]()
+
     private func ReportObsoleteUseIfApplicable(location TextLocation, symbol Symbol?, displayName string) {
         if symbol == nil {
             return
         }
-        if KnownAttributes.TryGetObsolete(symbol.Attributes, out var message, out var isError) {
+        let target Symbol = switch symbol {
+            case structSym is StructSymbol: structSym.Definition ?? structSym
+            case ifaceSym is InterfaceSymbol: ifaceSym.Definition ?? ifaceSym
+            case delegateSym is DelegateTypeSymbol: delegateSym.Definition ?? delegateSym
+            case enumSym is EnumSymbol: enumSym.Definition ?? enumSym
+            default: symbol
+        }
+        if deferObsoleteUseChecks && target is TypeSymbol{ClrType: nil} {
+            pendingObsoleteUseChecks.Add((location, target, displayName))
+            return
+        }
+        if KnownAttributes.TryGetObsolete(target.Attributes, out var message, out var isError) {
             Diagnostics.ReportObsoleteUse(location, displayName, message, isError)
         }
+    }
+
+    private func FlushPendingObsoleteUseChecks() {
+        deferObsoleteUseChecks = false
+        for pending in pendingObsoleteUseChecks {
+            ReportObsoleteUseIfApplicable(pending.Location, pending.Symbol, pending.DisplayName)
+        }
+        pendingObsoleteUseChecks.Clear()
     }
 
     private func LookupType(identifier SyntaxToken, preferredArity int32) TypeSymbol? {
@@ -6970,6 +6994,7 @@ partial class Binder {
             for import_ in importDeclarations {
                 binder.BindImport(import_)
             }
+            binder.deferObsoleteUseChecks = true
             // Declare named delegate type-name shells before other type bodies so
             // their members can reference delegates. Signatures are bound after all
             // interface/enum/struct shells exist, making delegate constraints,
@@ -7157,16 +7182,17 @@ partial class Binder {
             // validation also needs the base type's members. Bind same-compilation
             // base classes before their derived classes, independent of tree/source
             // order.
-            let declarationsByName = Dictionary[string, List[int32]](StringComparer.Ordinal)
+            let declarationsByName = Dictionary[string, List[(Index int32, PackageName string, IsClass bool)]](
+                StringComparer.Ordinal
+            )
             let declarationsBySymbol = Dictionary[StructSymbol, int32](ReferenceEqualityComparer.Instance)
-            let classAliasContainerIndices = HashSet[int32]()
             for var i = 0; i < declaredStructs.Count; i++ {
                 let name = declaredStructs[i].Symbol.Name
                 if !declarationsByName.TryGetValue(name, out var indices) {
-                    indices = List[int32]()
+                    indices = List[(Index int32, PackageName string, IsClass bool)]()
                     declarationsByName.Add(name, indices)
                 }
-                indices.Add(i)
+                indices.Add((i, declaredStructs[i].Symbol.PackageName, declaredStructs[i].Symbol.IsClass))
                 declarationsBySymbol[declaredStructs[i].Symbol] = i
             }
             for aliasSymbol in declaredTypeAliases {
@@ -7180,13 +7206,13 @@ partial class Binder {
                     topLevelTarget = enclosingStruct.Definition ?? enclosingStruct
                 }
                 if declarationsBySymbol.TryGetValue(topLevelTarget, out var targetIndex) {
-                    classAliasContainerIndices.Add(targetIndex)
                     if !declarationsByName.TryGetValue(aliasSymbol.Name, out var aliasIndices) {
-                        aliasIndices = List[int32]()
+                        aliasIndices = List[(Index int32, PackageName string, IsClass bool)]()
                         declarationsByName.Add(aliasSymbol.Name, aliasIndices)
                     }
-                    if !aliasIndices.Contains(targetIndex) {
-                        aliasIndices.Add(targetIndex)
+                    let entry = (targetIndex, aliasSymbol.PackageName, true)
+                    if !aliasIndices.Contains(entry) {
+                        aliasIndices.Add(entry)
                     }
                 }
             }
@@ -7241,24 +7267,24 @@ partial class Binder {
                     packageName
                 }
                 let matchingPackage = List[int32]()
-                var classCandidateCount = 0
-                var soleClassCandidate = -1
+                let uniqueClassCandidates = List[int32]()
                 for candidate in candidates {
-                    if !declaredStructs[candidate].Symbol.IsClass && !classAliasContainerIndices.Contains(candidate) {
+                    if !candidate.IsClass {
                         continue
                     }
-                    classCandidateCount++
-                    soleClassCandidate = candidate
-                    if declaredStructs[candidate].Symbol.PackageName == requestedPackage {
-                        matchingPackage.Add(candidate)
+                    if !uniqueClassCandidates.Contains(candidate.Index) {
+                        uniqueClassCandidates.Add(candidate.Index)
+                    }
+                    if candidate.PackageName == requestedPackage && !matchingPackage.Contains(candidate.Index) {
+                        matchingPackage.Add(candidate.Index)
                     }
                 }
                 return if matchingPackage.Count == 1 {
                     matchingPackage[0]
                 } else {
                     (
-                        if classCandidateCount == 1 {
-                            soleClassCandidate
+                        if uniqueClassCandidates.Count == 1 {
+                            uniqueClassCandidates[0]
                         } else {
                             -1
                         }
@@ -7315,21 +7341,7 @@ partial class Binder {
                     () -> binder.declarations.BindStructDeclarationBody(structSyntax, owningPackage, structSymbol)
                 )
             }
-            for declaredAlias in declaredTypeAliases {
-                if declaredAlias
-                    .Declaration
-                    ?.AliasedType
-                    .Identifier is {} aliasTargetIdentifier &&
-                    declaredAlias
-                    .Target
-                    .ClrType == nil {
-                    binder.ReportObsoleteUseIfApplicable(
-                        aliasTargetIdentifier.Location,
-                        declaredAlias.Target,
-                        declaredAlias.Target.Name
-                    )
-                }
-            }
+            binder.FlushPendingObsoleteUseChecks()
             binder.declarations.ReportExplicitLayoutReferenceOverlaps(
                 declaredStructs.Select(
                     (declaration(Syntax StructDeclarationSyntax, Symbol StructSymbol)) -> declaration.Symbol

@@ -1425,7 +1425,7 @@ partial class BoundScope {
                 MangleArity(qualifiedName, preferredArity)
             }
             if TryGetTypeAliasInChain(qualifiedKey, out var qualifiedMatch) &&
-                IsNestedDirectlyIn(qualifiedMatch, containerDefinition) {
+                IsNestedTypeMatch(qualifiedKey, qualifiedMatch, simpleName, containerDefinition) {
                 type = qualifiedMatch
                 return true
             }
@@ -1435,7 +1435,7 @@ partial class BoundScope {
                 MangleArity(simpleName, preferredArity)
             }
             if TryGetTypeAliasInChain(simpleKey, out var simpleMatch) &&
-                IsNestedDirectlyIn(simpleMatch, containerDefinition) {
+                IsNestedTypeMatch(simpleKey, simpleMatch, simpleName, containerDefinition) {
                 type = simpleMatch
                 return true
             }
@@ -1443,12 +1443,12 @@ partial class BoundScope {
         }
         // Unknown arity: prefer the non-generic nested type.
         if TryGetTypeAliasInChain(qualifiedName, out var qualifiedExact) &&
-            IsNestedDirectlyIn(qualifiedExact, containerDefinition) {
+            IsNestedTypeMatch(qualifiedName, qualifiedExact, simpleName, containerDefinition) {
             type = qualifiedExact
             return true
         }
         if TryGetTypeAliasInChain(simpleName, out var simpleExact) &&
-            IsNestedDirectlyIn(simpleExact, containerDefinition) {
+            IsNestedTypeMatch(simpleName, simpleExact, simpleName, containerDefinition) {
             type = simpleExact
             return true
         }
@@ -1458,7 +1458,7 @@ partial class BoundScope {
         for pair in EnumerateNestedTypeAliasCandidates(containerDefinition, simpleName) {
             if TryParseAritySuffix(pair.Key, qualifiedName, out var qualifiedArity) &&
                 qualifiedArity < bestArity &&
-                IsNestedDirectlyIn(pair.Value, containerDefinition) {
+                IsNestedTypeMatch(pair.Key, pair.Value, simpleName, containerDefinition) {
                 best = pair.Value
                 bestArity = qualifiedArity
             }
@@ -1467,7 +1467,7 @@ partial class BoundScope {
             for pair in EnumerateNestedTypeAliasCandidates(containerDefinition, simpleName) {
                 if TryParseAritySuffix(pair.Key, simpleName, out var simpleArity) &&
                     simpleArity < bestArity &&
-                    IsNestedDirectlyIn(pair.Value, containerDefinition) {
+                    IsNestedTypeMatch(pair.Key, pair.Value, simpleName, containerDefinition) {
                     best = pair.Value
                     bestArity = simpleArity
                 }
@@ -1479,6 +1479,16 @@ partial class BoundScope {
         }
         return false
     }
+
+    private func IsNestedTypeMatch(
+        key string,
+        candidate TypeSymbol?,
+        simpleName string,
+        containerDefinition TypeSymbol
+    ) bool -> candidate != nil &&
+        string.Equals(candidate.Name, simpleName, StringComparison.Ordinal) &&
+        !TryGetAliasDeclaringPackageInChain(key, out _) &&
+        IsNestedDirectlyIn(candidate, containerDefinition)
 
     /// Resolves an unqualified nested source type through the current lexical
     /// containing-type chain before global simple-name lookup.
