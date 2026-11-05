@@ -382,4 +382,9 @@ partial class InterfaceDeclarationSyntax : MemberSyntax {
             _partialPartExtents = value
         }
     }
+
+    internal prop DocumentationSource InterfaceDeclarationSyntax? {
+        get;
+        internal set;
+    }
 }

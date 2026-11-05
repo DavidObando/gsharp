@@ -202,10 +202,18 @@ internal class PortablePdbEmitter {
                 if primaryDoc.IsNil {
                     this.pdbMetadata.AddMethodDebugInformation(default(DocumentHandle), default(BlobHandle))
                 } else {
+                    let multiDoc = HasMultipleDocuments(rec.Points!!, primaryDoc)
                     let blobBuilder = BlobBuilder()
-                    EncodeSequencePoints(blobBuilder, rec.Points!!, primaryDoc, rec.LocalSignatureToken)
+                    EncodeSequencePoints(blobBuilder, rec.Points!!, primaryDoc, rec.LocalSignatureToken, multiDoc)
                     let blobHandle = this.pdbMetadata.GetOrAddBlob(blobBuilder)
-                    this.pdbMetadata.AddMethodDebugInformation(primaryDoc, blobHandle)
+                    this.pdbMetadata.AddMethodDebugInformation(
+                        if multiDoc {
+                            default(DocumentHandle)
+                        } else {
+                            primaryDoc
+                        },
+                        blobHandle
+                    )
                 }
             } else {
                 this.pdbMetadata.AddMethodDebugInformation(default(DocumentHandle), default(BlobHandle))
@@ -595,7 +603,8 @@ internal class PortablePdbEmitter {
             blob BlobBuilder,
             points IReadOnlyList[SequencePoint],
             primaryDocument DocumentHandle,
-            localSignatureToken StandaloneSignatureHandle
+            localSignatureToken StandaloneSignatureHandle,
+            includeInitialDocument bool = false
         ) {
             // LocalSignature — the row id of the method's StandaloneSignature for
             // locals (0 when the method has no locals), written as a compressed
@@ -611,8 +620,10 @@ internal class PortablePdbEmitter {
                 MetadataTokens.GetRowNumber(localSignatureToken)
             }
             blob.WriteCompressedInteger(rowId)
-            // InitialDocument is omitted because every visible point shares the
-            // method's primary document (asserted by the caller). Records follow.
+            if includeInitialDocument {
+                blob.WriteCompressedInteger(MetadataTokens.GetRowNumber(primaryDocument))
+            }
+            var currentDocument = primaryDocument
             var firstNonHidden = true
             var prevIl = 0
             var prevStartLine = 0
@@ -639,6 +650,11 @@ internal class PortablePdbEmitter {
             }
             for var idx = startIndex; idx < points.Count; idx++ {
                 let p = points[idx]
+                if !firstRecord && !p.IsHidden && !p.Document.IsNil && p.Document != currentDocument {
+                    blob.WriteCompressedInteger(0)
+                    blob.WriteCompressedInteger(MetadataTokens.GetRowNumber(p.Document))
+                    currentDocument = p.Document
+                }
                 // δIL — first record encodes the absolute IL offset, the rest the
                 // delta from the previous record. The spec forbids two records
                 // sharing the same IL offset; the BodyEmitter is responsible for
@@ -685,6 +701,15 @@ internal class PortablePdbEmitter {
                 }
             }
             return default(DocumentHandle)
+        }
+
+        private func HasMultipleDocuments(points IReadOnlyList[SequencePoint], primaryDocument DocumentHandle) bool {
+            for p in points {
+                if !p.IsHidden && !p.Document.IsNil && p.Document != primaryDocument {
+                    return true
+                }
+            }
+            return false
         }
     }
 }

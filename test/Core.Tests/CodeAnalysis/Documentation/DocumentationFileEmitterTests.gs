@@ -288,6 +288,77 @@ func Alpha() {}
         Assert.True(alphaPos < zuluPos, "Members should be sorted by DocID")
     }
 
+    @Fact
+    func EmitsXmlSummariesForPartialTypes() {
+        let source = `package Additional
+
+public class Implicit {}
+public class Explicit { public init() {} }
+public data class Record(Value int32)
+
+public partial class Late {}
+/// Late summary.
+public partial class Late {}
+
+/// Early summary.
+public partial class Early {}
+public partial class Early {}
+
+public partial struct LateStruct {}
+/// Late struct summary.
+public partial struct LateStruct {}
+
+/// Early interface summary.
+public partial interface EarlyInterface {}
+public partial interface EarlyInterface {}
+
+public partial interface LateInterface {}
+/// Late interface summary.
+public partial interface LateInterface {}
+
+/// Control summary.
+public class Control {}
+`
+        let xml = EmitDocXml(source, "Additional")
+        Assert.Contains("<member name=\"T:Additional.Control\">", xml)
+        Assert.Contains("Control summary.", xml)
+        Assert.Contains("<member name=\"T:Additional.Early\">", xml)
+        Assert.Contains("Early summary.", xml)
+        Assert.Contains("<member name=\"T:Additional.Late\">", xml)
+        Assert.Contains("Late summary.", xml)
+        Assert.Contains("<member name=\"T:Additional.LateStruct\">", xml)
+        Assert.Contains("Late struct summary.", xml)
+        Assert.Contains("<member name=\"T:Additional.EarlyInterface\">", xml)
+        Assert.Contains("Early interface summary.", xml)
+        Assert.Contains("<member name=\"T:Additional.LateInterface\">", xml)
+        Assert.Contains("Late interface summary.", xml)
+
+        let treeA = SyntaxTree.Parse(`package Additional
+
+public partial class CrossFileLate {}
+
+/// Cross-file early summary.
+public partial class CrossFileEarly {}
+`)
+        let treeB = SyntaxTree.Parse(`package Additional
+
+/// Cross-file late summary.
+public partial class CrossFileLate {}
+
+public partial class CrossFileEarly {}
+`)
+        let multiCompilation = Compilation(treeA, treeB)
+        using let peStream = MemoryStream()
+        using let docStream = MemoryStream()
+        let multiResult = multiCompilation.Emit(peStream, pdbStream: nil, refStream: nil, docStream, "Additional")
+        Assert.True(multiResult.Success, string.Join("\n", multiResult.Diagnostics))
+        let multiXml = Encoding.UTF8.GetString(docStream.ToArray())
+        Assert.Contains("<member name=\"T:Additional.CrossFileEarly\">", multiXml)
+        Assert.Contains("Cross-file early summary.", multiXml)
+        Assert.Contains("<member name=\"T:Additional.CrossFileLate\">", multiXml)
+        Assert.Contains("Cross-file late summary.", multiXml)
+    }
+
     shared {
         private func EmitDocXml(source string, assemblyName string) string {
             let tree = SyntaxTree.Parse(source)

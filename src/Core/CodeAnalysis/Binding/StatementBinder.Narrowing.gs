@@ -546,6 +546,46 @@ internal partial class StatementBinder {
         }
     }
 
+    /// Issue #5000: returns a predicate that decides whether [`expression`](paramref)
+    /// can reassign a variable or mutate its value-type contents.
+    internal func CreateExpressionVariableMutationChecker(anchor SyntaxNode, expression BoundExpression)(
+        VariableSymbol
+    ) -> bool {
+        var collector AssignedRootsCollector? = nil
+        var dropAllMemberPaths = false
+        var filterWrites List[(TryBlock SyntaxNode?, Names HashSet[string])]? = nil
+        return func (variable VariableSymbol) bool {
+            let strippedType = StripNullability(variable.Type) ?? variable.Type
+            let isValueType = !Binder.IsReferenceTypeForConstraint(strippedType)
+            if variable.IsReadOnly &&
+                !isValueType &&
+                !IsByReferenceRoot(variable) &&
+                !IsExternalStorageAlias(variable) {
+                return false
+            }
+            var effects = collector
+            if effects == nil {
+                EnsureClosureAssignedNames(anchor)
+                effects = NewCollector(nil, nil)
+                effects.VisitExpression(expression)
+                collector = effects
+                dropAllMemberPaths = (expression.Syntax is {} exprSyntax && SyntaxMayMutateMemberPaths(exprSyntax)) ||
+                    effects.MayMutateMemberPaths
+                filterWrites = EnclosingFilterWrites(anchor, effects)
+            }
+            let path = AccessPath.ForVariable(variable)
+            return (
+                filterWrites != nil &&
+                    (FilterWritesVariable(filterWrites, variable) || MayBeMutatedByUnknownCallable(path))
+            ) ||
+                (
+                (isValueType || IsExternalStorageAlias(variable) || IsByReferenceRoot(variable)) &&
+                    (dropAllMemberPaths || effects.MayMutateReferenceStorage || effects.MayMutateGlobalRoots)
+            ) ||
+                StatementKillsPath(effects, path, dropAllMemberPaths, effects.MayMutateReferenceStorage)
+        }
+    }
+
     // The one rule for the facts that a statement kills: a root it assigns, a root
     // an unknown write reaches, a mutable global when it can write one, and every
     // member path when it can mutate one (ADR-0069 #1180, #2943).

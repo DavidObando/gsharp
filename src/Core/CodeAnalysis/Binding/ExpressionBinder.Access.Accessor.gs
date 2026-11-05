@@ -3917,6 +3917,9 @@ internal partial class ExpressionBinder {
                         arguments.Length
                     }
                     for var i = 0; i < inferenceLimit; i++ {
+                        if i >= parameterSyntax.Length || parameterSyntax[i] == nil {
+                            continue
+                        }
                         Binder.InferTypeArguments(
                             method!!.Parameters[i].Type,
                             RefCapabilities.GetInferenceType(method!!.Parameters[i], arguments[i].Type),
@@ -4101,6 +4104,17 @@ internal partial class ExpressionBinder {
                     Binder.SubstituteType(paramType, substitution, $scope.References!!.MapClrTypeToReferences)
                 } else {
                     paramType
+                }
+                if slotSyntax == nil &&
+                    !method!!
+                    .Parameters[i]
+                    .IsVariadic &&
+                    expectedType != nil &&
+                    expectedType != paramType {
+                    permutedArgs = permutedArgs.SetItem(
+                        i,
+                        OverloadResolver.CreateOptionalUserDefaultArgument(method!!.Parameters[i], expectedType)
+                    )
                 }
                 let argLoc = if i < parameterSyntax.Length {
                     parameterSyntax[i]?.Location ?? ce.Location

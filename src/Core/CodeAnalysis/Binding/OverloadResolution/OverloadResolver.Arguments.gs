@@ -1276,12 +1276,18 @@ internal partial class OverloadResolver {
         /// primitive/string previously captured on the parameter symbol; `nil`
         /// becomes a (cref:BoundDefaultExpression).
         /// @param parameter The omitted optional parameter.
+        /// @param parameterType The substituted parameter type at the call site, or `null` to use the
+        /// declared parameter type.
         /// @returns The bound default-value argument for the omitted slot.
-        internal func CreateOptionalUserDefaultArgument(parameter ParameterSymbol) BoundExpression {
+        internal func CreateOptionalUserDefaultArgument(
+            parameter ParameterSymbol,
+            parameterType TypeSymbol? = nil
+        ) BoundExpression {
+            let effectiveType = parameterType ?? parameter.Type
             if !parameter.HasExplicitDefaultValue {
-                return BoundDefaultExpression(nil, parameter.Type)
+                return BoundDefaultExpression(nil, effectiveType)
             }
-            return ConversionClassifier.CreateConstantDefaultArgument(parameter.ExplicitDefaultValue, parameter.Type)
+            return ConversionClassifier.CreateConstantDefaultArgument(parameter.ExplicitDefaultValue, effectiveType)
         }
 
         /// Issue #343: returns the underlying value expression for a call-argument

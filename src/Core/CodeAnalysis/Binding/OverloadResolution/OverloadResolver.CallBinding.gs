@@ -1959,6 +1959,9 @@ internal partial class OverloadResolver {
                 }
             } else {
                 for var i = 0; i < function!!.Parameters.Length && i < boundArguments.Count; i++ {
+                    if i >= parameterSyntax.Length || parameterSyntax[i] == nil {
+                        continue
+                    }
                     let paramType = function!!.Parameters[i].Type
                     // ADR-0101 / issue #799: when the trailing parameter is
                     // variadic (`name ...T`), inference must consider every
@@ -2058,6 +2061,12 @@ internal partial class OverloadResolver {
                 substituteType(parameter.Type, substitution)
             } else {
                 parameter.Type
+            }
+            if (i >= parameterSyntax.Length || parameterSyntax[i] == nil) &&
+                !parameter.IsVariadic &&
+                expectedType != nil &&
+                expectedType != parameter.Type {
+                boundArguments[i] = (argument = CreateOptionalUserDefaultArgument(parameter, expectedType))
             }
             // Issue #1238: a deferred target-typed conditional/if/switch
             // argument is re-bound here against the resolved parameter type so
@@ -2353,13 +2362,8 @@ internal partial class OverloadResolver {
                     !object.ReferenceEquals(widenLiteralFnType.ReturnType, widenTargetFn.ReturnType) &&
                     Conversion
                     .Classify(widenLiteralFnType.ReturnType, widenTargetFn.ReturnType).IsImplicit {
-                    let widenLoc = if i < parameterSyntax.Length {
-                        Invariant.Required(
-                            parameterSyntax[i],
-                            "a widened lambda argument has source syntax",
-                            expression: "parameterSyntax[i]"
-                        )
-                            .Location
+                    let widenLoc = if i < parameterSyntax.Length && parameterSyntax[i] is {} widenSyntax {
+                        widenSyntax.Location
                     } else {
                         syntax.Identifier.Location
                     }
@@ -2415,13 +2419,8 @@ internal partial class OverloadResolver {
                     argument.ResolvedMethod == nil
             ) &&
                 !(substitution != nil && (expectedType == nil || TypeSymbol.ContainsTypeParameter(expectedType))) {
-                let groupLoc = if i < parameterSyntax.Length {
-                    Invariant.Required(
-                        parameterSyntax[i],
-                        "a method group argument has source syntax",
-                        expression: "parameterSyntax[i]"
-                    )
-                        .Location
+                let groupLoc = if i < parameterSyntax.Length && parameterSyntax[i] is {} groupSyntax {
+                    groupSyntax.Location
                 } else {
                     syntax.Identifier.Location
                 }
@@ -2455,13 +2454,8 @@ internal partial class OverloadResolver {
                 argTuple != paramTuple &&
                 Conversion
                 .Classify(argTuple, paramTuple).IsImplicit {
-                let tupleLoc = if i < parameterSyntax.Length {
-                    Invariant.Required(
-                        parameterSyntax[i],
-                        "a tuple argument has source syntax",
-                        expression: "parameterSyntax[i]"
-                    )
-                        .Location
+                let tupleLoc = if i < parameterSyntax.Length && parameterSyntax[i] is {} tupleSyntax {
+                    tupleSyntax.Location
                 } else {
                     syntax.Identifier.Location
                 }
@@ -2495,13 +2489,8 @@ internal partial class OverloadResolver {
                 argument.Type
             }
             if nominalDelegateCallTarget is DelegateTypeSymbol && structuralArgumentType is FunctionTypeSymbol {
-                let namedDelegateLoc = if i < parameterSyntax.Length {
-                    Invariant.Required(
-                        parameterSyntax[i],
-                        "a delegate argument has source syntax",
-                        expression: "parameterSyntax[i]"
-                    )
-                        .Location
+                let namedDelegateLoc = if i < parameterSyntax.Length && parameterSyntax[i] is {} namedDelegateSyntax {
+                    namedDelegateSyntax.Location
                 } else {
                     syntax.Identifier.Location
                 }
@@ -2604,13 +2593,8 @@ internal partial class OverloadResolver {
                 )
             ) {
                 // Issue #889: arrow/func literal → void-returning delegate.
-                let voidDelegateLoc = if i < parameterSyntax.Length {
-                    Invariant.Required(
-                        parameterSyntax[i],
-                        "a delegate argument has source syntax",
-                        expression: "parameterSyntax[i]"
-                    )
-                        .Location
+                let voidDelegateLoc = if i < parameterSyntax.Length && parameterSyntax[i] is {} voidDelegateSyntax {
+                    voidDelegateSyntax.Location
                 } else {
                     syntax.Identifier.Location
                 }
@@ -2669,12 +2653,7 @@ internal partial class OverloadResolver {
                 }
                 if argument.Type != TypeSymbol.Error {
                     conversions.ReportCallArgumentConversionFailure(
-                        Invariant.Required(
-                            parameterSyntax[i],
-                            "an argument with a conversion error has source syntax",
-                            expression: "parameterSyntax[i]"
-                        )
-                            .Location,
+                        voidDelegateLoc,
                         parameter,
                         targetType,
                         argument.Type
@@ -2697,13 +2676,8 @@ internal partial class OverloadResolver {
                 // bare `UserT` where `Nullable<UserT>` is expected). Include the
                 // symbol-aware predicate so the `UserT → UserT?` argument lift is
                 // lowered to a `newobj Nullable<UserT>::.ctor` here too.
-                let argLoc = if i < parameterSyntax.Length {
-                    Invariant.Required(
-                        parameterSyntax[i],
-                        "a nullable-lifted argument has source syntax",
-                        expression: "parameterSyntax[i]"
-                    )
-                        .Location
+                let argLoc = if i < parameterSyntax.Length && parameterSyntax[i] is {} nullableLiftSyntax {
+                    nullableLiftSyntax.Location
                 } else {
                     syntax.Identifier.Location
                 }
@@ -2736,13 +2710,8 @@ internal partial class OverloadResolver {
                 // C# program and which verifies. The value is unchanged: for a
                 // `[T class]` slot `default(T)` IS the null reference, so the
                 // `nil` still arrives.
-                let nilArgLoc = if i < parameterSyntax.Length {
-                    Invariant.Required(
-                        parameterSyntax[i],
-                        "a nil argument has source syntax",
-                        expression: "parameterSyntax[i]"
-                    )
-                        .Location
+                let nilArgLoc = if i < parameterSyntax.Length && parameterSyntax[i] is {} nilArgSyntax {
+                    nilArgSyntax.Location
                 } else {
                     syntax.Identifier.Location
                 }
@@ -2818,13 +2787,8 @@ internal partial class OverloadResolver {
                 // re-materializing it here rebuilt the delegate from the
                 // collapsed structural shape (`Func<int32,int32>`), tripping
                 // ilverify's DelegateCtor check.
-                let argLoc = if i < parameterSyntax.Length {
-                    Invariant.Required(
-                        parameterSyntax[i],
-                        "an implicitly converted argument has source syntax",
-                        expression: "parameterSyntax[i]"
-                    )
-                        .Location
+                let argLoc = if i < parameterSyntax.Length && parameterSyntax[i] is {} implicitArgSyntax {
+                    implicitArgSyntax.Location
                 } else {
                     syntax.Identifier.Location
                 }
