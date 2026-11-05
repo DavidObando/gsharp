@@ -975,8 +975,13 @@ internal partial class OverloadResolver {
         calleeName string,
         calleeLocation TextLocation
     ) BoundExpression {
+        var callee = callee
         if callee is BoundErrorExpression {
             return callee
+        }
+        let materializedCalleeType = TypeSymbol.MaterializeNeverFunctionReturns(callee.Type)
+        if !object.ReferenceEquals(materializedCalleeType, callee.Type) {
+            callee = conversions.BindConversion(calleeLocation, callee, materializedCalleeType)
         }
         let callableType = if callee.Type is NullableTypeSymbol nullable {
             nullable.UnderlyingType

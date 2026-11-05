@@ -420,6 +420,70 @@ internal class ConversionClassifier {
                     )
                 }
             }
+            if expression is BoundConversionExpression neverConversion {
+                return BindConversion(
+                    diagnosticLocation,
+                    neverConversion.Expression,
+                    type,
+                    allowExplicit,
+                    callParameter,
+                    trackNarrowing
+                )
+            }
+            if expression is BoundUnaryExpression neverAssertion &&
+                neverAssertion
+                .Op
+                .Kind == BoundUnaryOperatorKind
+                .NullAssertion {
+                let convertedOperand = BindConversion(
+                    diagnosticLocation,
+                    neverAssertion.Operand,
+                    NullableTypeSymbol.Get(type),
+                    allowExplicit,
+                    callParameter,
+                    trackNarrowing
+                )
+                if BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, convertedOperand.Type) is {} rebuiltOp {
+                    return BoundUnaryExpression(
+                        neverAssertion.Syntax,
+                        rebuiltOp,
+                        convertedOperand,
+                        neverAssertion.IsChecked
+                    ){
+                        IsConversionUnwrap = neverAssertion.IsConversionUnwrap,
+                        IsNarrowingUnwrap = neverAssertion.IsNarrowingUnwrap
+                    }
+                }
+            }
+            if expression is BoundBinaryExpression neverCoalesce &&
+                neverCoalesce
+                .Op
+                .Kind == BoundBinaryOperatorKind
+                .NullCoalesce {
+                let convertedLeft = BindConversion(
+                    diagnosticLocation,
+                    neverCoalesce.Left,
+                    NullableTypeSymbol.Get(type),
+                    allowExplicit,
+                    callParameter,
+                    trackNarrowing
+                )
+                let convertedRight = BindConversion(
+                    diagnosticLocation,
+                    neverCoalesce.Right,
+                    type,
+                    allowExplicit,
+                    callParameter,
+                    trackNarrowing
+                )
+                return BoundBinaryExpression(
+                    neverCoalesce.Syntax,
+                    convertedLeft,
+                    BoundBinaryOperator.MakeNullCoalesce(convertedLeft.Type, convertedRight.Type, type),
+                    convertedRight,
+                    neverCoalesce.IsChecked
+                )
+            }
             if expression is BoundBlockExpression neverBlock {
                 return ConvertNeverBlockExpression(
                     neverBlock,
@@ -5362,10 +5426,81 @@ internal class ConversionClassifier {
             expression BoundExpression,
             target TypeSymbol
         ) bool -> expression is BoundFunctionLiteralExpression ||
-            TypeSymbol.ContainsNeverType(expression.Type) || Conversion.KeepsFunctionValueDelegate(
-            expression.Type,
-            target
-        )
+            CanAdaptNeverDelegateValue(expression) ||
+            Conversion.KeepsFunctionValueDelegate(expression.Type, target)
+
+        private func CanAdaptNeverDelegateValue(expression BoundExpression) bool {
+            if !TypeSymbol.ContainsNeverType(expression.Type) {
+                return false
+            }
+            switch expression {
+                case BoundFunctionLiteralExpression {
+                    return true
+                }
+                case conversion is BoundConversionExpression {
+                    return conversion
+                        .Expression
+                        .Type == TypeSymbol.Null ||
+                        conversion
+                        .Expression
+                        .Type == TypeSymbol.Never ||
+                        CanAdaptNeverDelegateValue(conversion.Expression)
+                }
+                case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.NullAssertion {
+                    return CanAdaptNeverDelegateValue(unary.Operand)
+                }
+                case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.NullCoalesce {
+                    return CanAdaptNeverDelegateValue(binary.Left) &&
+                        (binary.Right.Type == TypeSymbol.Never || CanAdaptNeverDelegateValue(binary.Right))
+                }
+                case block is BoundBlockExpression {
+                    if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&
+                        resultLocal
+                        .Name
+                        .StartsWith("<blockResult", StringComparison.Ordinal) {
+                        return TypeSymbol.ContainsNeverType(resultLocal.Type)
+                    }
+                    return CanAdaptNeverDelegateValue(block.Expression)
+                }
+                case conditional is BoundConditionalExpression {
+                    return (
+                        conditional
+                            .WhenTrue
+                            .Type == TypeSymbol.Null ||
+                            conditional
+                            .WhenTrue
+                            .Type == TypeSymbol.Never ||
+                            CanAdaptNeverDelegateValue(conditional.WhenTrue)
+                    ) &&
+                        (
+                        conditional
+                            .WhenFalse
+                            .Type == TypeSymbol.Null ||
+                            conditional
+                            .WhenFalse
+                            .Type == TypeSymbol.Never ||
+                            CanAdaptNeverDelegateValue(conditional.WhenFalse)
+                    )
+                }
+                case switchExpr is BoundSwitchExpression {
+                    for arm in switchExpr.Arms {
+                        if arm
+                            .Result
+                            .Type != TypeSymbol.Null &&
+                            arm
+                            .Result
+                            .Type != TypeSymbol.Never &&
+                            !CanAdaptNeverDelegateValue(arm.Result) {
+                            return false
+                        }
+                    }
+                    return true
+                }
+                default {
+                    return false
+                }
+            }
+        }
 
         /// Issue #5536: adjusts the type-pair classification of [`expression`](paramref) for a function value
         /// that keeps its delegate. An implicit conversion that needs a new body does not exist for a function

@@ -851,6 +851,14 @@ let asyncFn = async () -> throw Exception("async")
 let typedFunc Func[int32] = () -> throw Exception("func")
 let typedAction Action = () -> throw Exception("action")
 let voidAdaptedNested Action = (() -> (() -> throw Exception("void-adapted-nested")))
+let assertedCond = (() -> {
+    if true { return () -> throw Exception("asserted-cond") }
+    return nil
+})()!!
+let nestedCleanupTup = () -> ({
+    defer Console.WriteLine("cleanup-in-tup")
+    () -> throw Exception("tup-cleanup-lam")
+}, 12)
 let swFirst = switch 2 { case 1: () -> throw Exception("sw-first") default: () -> 42 }
 try { f() } catch (e Exception) { Console.WriteLine(e.Message) }
 f = () -> Console.WriteLine("reassigned")
@@ -864,12 +872,16 @@ try { tup.Item1() } catch (e Exception) { Console.WriteLine("${e.Message}:${tup.
 try { deconFn() } catch (e Exception) { Console.WriteLine("${e.Message}:${deconVal}") }
 try { anon.F() } catch (e Exception) { Console.WriteLine("${e.Message}:${anon.N}") }
 try { (() -> throw Exception("direct"))() } catch (e Exception) { Console.WriteLine(e.Message) }
+try { (() -> throw Exception("null-cond-direct"))?() } catch (e Exception) { Console.WriteLine(e.Message) }
 try { ((n int32) -> throw Exception("direct:${n}"))(4) } catch (e Exception) { Console.WriteLine(e.Message) }
 try { asyncFn().GetAwaiter().GetResult() } catch (e Exception) { Console.WriteLine(e.Message) }
 try { Console.WriteLine(typedFunc()) } catch (e Exception) { Console.WriteLine(e.Message) }
 try { typedAction() } catch (e Exception) { Console.WriteLine(e.Message) }
+try { assertedCond() } catch (e Exception) { Console.WriteLine(e.Message) }
+let (cleanupFn, cleanupNum) = nestedCleanupTup()
+try { cleanupFn() } catch (e Exception) { Console.WriteLine("${e.Message}:${cleanupNum}") }
 voidAdaptedNested()
-Console.WriteLine(swFirst())`, "zero\nreassigned\narg:7\nif-f\nsw-1\nnested\ncond-t\ntup:9\ndecon:5\nanon:3\ndirect\ndirect:4\nasync\nfunc\naction\n42\n")
+Console.WriteLine(swFirst())`, "zero\nreassigned\narg:7\nif-f\nsw-1\nnested\ncond-t\ntup:9\ndecon:5\nanon:3\ndirect\nnull-cond-direct\ndirect:4\nasync\nfunc\naction\nasserted-cond\ncleanup-in-tup\ntup-cleanup-lam:12\n42\n")
     }
 
     // Issue #5003: a `never` operand in a generic call or composite yields to

@@ -221,6 +221,14 @@ let f = () -> throw Exception("zero")
 let g = (x int32) -> throw Exception("arg:${x}")
 let nested = () -> (() -> throw Exception("nested"))
 let voidAdapted Action = (() -> (() -> throw Exception("void-adapted")))
+let assertedCond = (() -> {
+    if true { return () -> throw Exception("asserted-cond") }
+    return nil
+})()!!
+let nestedCleanupTup = () -> ({
+    defer Console.WriteLine("cleanup-in-tup")
+    () -> throw Exception("tup-cleanup-lam")
+}, 12)
 let tup = (() -> throw Exception("tup"), 7)
 let cleanupChosen = Choose({
     defer Console.WriteLine("cleanup-choose")
@@ -228,6 +236,22 @@ let cleanupChosen = Choose({
 }, () -> 42)
 
 voidAdapted()
+try {
+    assertedCond()
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+let (cleanupFn, cleanupNum) = nestedCleanupTup()
+try {
+    cleanupFn()
+} catch (e Exception) {
+    Console.WriteLine("${e.Message}:${cleanupNum}")
+}
+try {
+    (() -> throw Exception("null-cond"))?()
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
 try {
     Console.WriteLine(cleanupChosen())
 } catch (e Exception) {
@@ -265,7 +289,7 @@ try {
 }`
         let output = CompileAndRun(source)
         Assert.Equal(
-            "cleanup-choose${Environment.NewLine}cleanup-lam${Environment.NewLine}zero${Environment.NewLine}arg:42${Environment.NewLine}nested${Environment.NewLine}tup:7${Environment.NewLine}choose-r${Environment.NewLine}choose-l${Environment.NewLine}",
+            "cleanup-choose${Environment.NewLine}asserted-cond${Environment.NewLine}cleanup-in-tup${Environment.NewLine}tup-cleanup-lam:12${Environment.NewLine}null-cond${Environment.NewLine}cleanup-lam${Environment.NewLine}zero${Environment.NewLine}arg:42${Environment.NewLine}nested${Environment.NewLine}tup:7${Environment.NewLine}choose-r${Environment.NewLine}choose-l${Environment.NewLine}",
             output
         )
     }

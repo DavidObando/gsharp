@@ -1834,7 +1834,8 @@ internal class LambdaBinder {
                 adapterResultType,
                 conversions,
                 Diagnostics,
-                literal.Syntax?.Location ?? default(TextLocation)
+                literal.Syntax?.Location ?? default(TextLocation),
+                FindUnpackedCleanupResultLocal(literal.Body)
             ).RewriteStatement(literal.Body)
         )
         if adapterPrefix.Count > 0 {
@@ -3345,6 +3346,7 @@ internal class LambdaBinder {
         private let conversions ConversionClassifier
         private let diagnostics DiagnosticBag
         private let defaultLocation TextLocation
+        private let unpackedCleanupResultLocal LocalVariableSymbol?
 
         init(
             replacementMap Dictionary[VariableSymbol, BoundExpression],
@@ -3352,7 +3354,8 @@ internal class LambdaBinder {
             adapterReturnType TypeSymbol,
             conversions ConversionClassifier,
             diagnostics DiagnosticBag,
-            defaultLocation TextLocation
+            defaultLocation TextLocation,
+            unpackedCleanupResultLocal LocalVariableSymbol?
         ) {
             this.replacementMap = replacementMap
             this.nestedSubstitution = nestedSubstitution
@@ -3360,17 +3363,20 @@ internal class LambdaBinder {
             this.conversions = conversions
             this.diagnostics = diagnostics
             this.defaultLocation = defaultLocation
+            this.unpackedCleanupResultLocal = unpackedCleanupResultLocal
         }
 
         protected override func RewriteVariableDeclaration(node BoundVariableDeclaration) BoundStatement {
             let rewritten = cast[BoundVariableDeclaration](base.RewriteVariableDeclaration(node))
-            if rewritten.Variable is LocalVariableSymbol local &&
+            if this.unpackedCleanupResultLocal is {} unpackedLocal && object.ReferenceEquals(
+                rewritten.Variable,
+                unpackedLocal
+            ) &&
                 rewritten.Initializer is {} initializer &&
-                local
-                .Name
-                .StartsWith("<blockResult", StringComparison.Ordinal) && TypeSymbol.ContainsNeverType(local.Type) {
+                TypeSymbol
+                .ContainsNeverType(unpackedLocal.Type) {
                 let targetLocalType = if this.adapterReturnType == TypeSymbol.Void {
-                    TypeSymbol.MaterializeNeverFunctionReturns(local.Type)
+                    TypeSymbol.MaterializeNeverFunctionReturns(unpackedLocal.Type)
                 } else {
                     this.adapterReturnType
                 }
@@ -3380,12 +3386,12 @@ internal class LambdaBinder {
                     targetLocalType
                 )
                 let replacedLocal = LocalVariableSymbol(
-                    local.Name,
-                    local.IsReadOnly,
+                    unpackedLocal.Name,
+                    unpackedLocal.IsReadOnly,
                     convertedInitializer.Type,
-                    local.DeclaringSyntax
+                    unpackedLocal.DeclaringSyntax
                 )
-                this.replacementMap[local] = BoundVariableExpression(nil, replacedLocal)
+                this.replacementMap[unpackedLocal] = BoundVariableExpression(nil, replacedLocal)
                 return BoundVariableDeclaration(
                     rewritten.Syntax,
                     replacedLocal,
@@ -4443,6 +4449,32 @@ internal class LambdaBinder {
                 NestedCaptureCollector(sink).RewriteStatement(body)
             }
             return sink
+        }
+
+        private func FindUnpackedCleanupResultLocal(body BoundBlockStatement) LocalVariableSymbol? {
+            let statements = body.Statements
+            if statements.Length == 0 {
+                return nil
+            }
+            if statements[^1] is BoundReturnStatement{
+                Expression: BoundVariableExpression{Variable: LocalVariableSymbol returnLocal}
+            } &&
+                returnLocal
+                .Name
+                .StartsWith("<blockResult", StringComparison.Ordinal) {
+                return returnLocal
+            }
+            if statements.Length >= 2 &&
+                statements[^1] is BoundReturnStatement{Expression: nil} &&
+                statements[^2] is BoundExpressionStatement{
+                Expression: BoundVariableExpression{Variable: LocalVariableSymbol discardedLocal}
+            } &&
+                discardedLocal
+                .Name
+                .StartsWith("<blockResult", StringComparison.Ordinal) {
+                return discardedLocal
+            }
+            return nil
         }
 
         /// Issue #1940: scans a generic local function's parameter types, return type, and body for any
