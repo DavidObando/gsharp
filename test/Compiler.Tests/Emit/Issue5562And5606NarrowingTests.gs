@@ -262,6 +262,26 @@ func Run(ref text string?) int32 {
 }
 var s string? = "abc"
 Console.WriteLine(Run(ref s))`, "GS0158@80:27", "reject", ""}
+            yield[]object{"r5562_control_lambda_in_earlier_field_initializer_removes_ref_parameter_narrowing", `import System
+
+class Box {
+    shared {
+        var G string? = "abc"
+    }
+    var Probe (ref string?) -> int32 = func(ref text string?) int32 {
+        if text == nil {
+            return 0
+        }
+        let _ = Box()
+        return text.Length
+    }
+    var Id int32 = ({
+        G = nil
+        1
+    })
+}
+let b = Box()
+Console.WriteLine(b.Probe(ref Box.G))`, "GS0158@12:21", "reject", ""}
             yield[]object{"r5606_if_condition_gained_alias_carried_into_then_branch", `import System
 
 func Run(callback () -> string) int32 {

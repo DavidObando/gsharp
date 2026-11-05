@@ -6612,7 +6612,8 @@ internal partial class StatementBinder {
             var current StructSymbol? = type
             for var depth = 0; current != nil && depth < 64; depth++ {
                 let definition = current.Definition ?? current
-                if !definition
+                if definition.DeclaresInstanceFieldInitializer ||
+                    !definition
                     .InstanceFieldInitializers
                     .IsEmpty ||
                     definition.HasPrimaryConstructor ||
