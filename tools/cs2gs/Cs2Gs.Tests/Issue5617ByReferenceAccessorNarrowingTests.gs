@@ -1211,8 +1211,12 @@ public class Demo
     @Fact
     func RefParameter_ReadAroundALoopWithAConversionCall_IsAsserted() {
         let printed = AssertRunsLikeCSharp(`
-public class Demo
+public class Base { public int V = 1; }
+public sealed class Derived : Base { }
+public partial class Demo
 {
+    static partial void ElidedTrace(long n);
+    public static void TakeUint(uint value) { }
     public static int ForEachCharToInt(ref string? s, string text)
     {
         if (s == null) return 0;
@@ -1282,6 +1286,44 @@ public class Demo
         }
         return s.Length + 4;
     }
+    public static int ConditionalReferenceUpcastInLoop(ref string? s, Derived d, Base b, bool flag)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        var i = 0;
+        while (i < 1)
+        {
+            var picked = flag ? d : b;
+            total += picked.V;
+            i++;
+        }
+        return s.Length + total + 5;
+    }
+    public static int SwitchReferenceUpcastInLoop(ref string? s, Derived d, Base b, int k)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        var i = 0;
+        while (i < 1)
+        {
+            var picked = k switch { 0 => d, _ => b };
+            total += picked.V;
+            i++;
+        }
+        return s.Length + total + 6;
+    }
+    public static int ElidedPartialAndUnsignedLiteralControls(ref string? s)
+    {
+        if (s == null) return 0;
+        var i = 0;
+        while (i < 1)
+        {
+            ElidedTrace((long)i);
+            Demo.TakeUint(5);
+            i++;
+        }
+        return s.Length + 7;
+    }
     public static int GuardInsideLoop(ref string? s, string text)
     {
         var total = 0;
@@ -1306,6 +1348,9 @@ public class Demo
             ArrayLengthLongToInt(ref text, 2L) + "," + CovariantArrayInLoop(ref text, new[] { "a" }) + "," +
             CoalesceAssignCovariantArrayInLoop(ref text, new[] { "b" }) + "," +
             BareGenericStaticCallInLoop(ref text) + "," +
+            ConditionalReferenceUpcastInLoop(ref text, new Derived(), new Base(), true) + "," +
+            SwitchReferenceUpcastInLoop(ref text, new Derived(), new Base(), 0) + "," +
+            ElidedPartialAndUnsignedLiteralControls(ref text) + "," +
             GuardInsideLoop(ref text, "z") + "," + OutsideLoop(ref text, 4);
     }
 }`)
@@ -1317,6 +1362,9 @@ public class Demo
         Assert.Contains("return s!!.Length + total + 2", printed)
         Assert.Contains("return s!!.Length + copy!!.Length + 3", printed)
         Assert.Contains("return s!!.Length + 4", printed)
+        Assert.Contains("return s!!.Length + total + 5", printed)
+        Assert.Contains("return s!!.Length + total + 6", printed)
+        Assert.Contains("return s.Length + 7", printed)
         Assert.Contains("total += s.Length + 1", printed)
         Assert.Contains("return int64(s.Length) + wide", printed)
     }
@@ -1417,6 +1465,19 @@ namespace OtherNs
         public static void ShadowedParts(this ShadowedBox box, int n) { }
     }
 }
+public interface IParent
+{
+    T Parts<T>(T value);
+}
+public interface IChild : IParent
+{
+    string[] Parts();
+}
+public sealed class ChildImpl : IChild
+{
+    public T Parts<T>(T value) => value;
+    public string[] Parts() => new[] { "f" };
+}
 public sealed class Unrelated { }
 public static class WordExtensions
 {
@@ -1469,6 +1530,13 @@ public class Demo
         foreach (var part in shadowed.ShadowedParts()) total += part.Length;
         return s.Length + total + 5;
     }
+    public static int OverInheritedInterfaceGenericOverload(ref string? s, IChild child)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in child.Parts()) total += part.Length;
+        return s.Length + total + 6;
+    }
     public static int OverParameterArray(ref string? s, string[] parts)
     {
         if (s == null) return 0;
@@ -1484,6 +1552,8 @@ public class Demo
         foreach (var part in box.InstanceParts()) total += part.Length;
         foreach (var part in word.WordParts()) total += part.Length;
         foreach (var entry in values.Entries()) total += entry;
+        foreach (var c in string.Empty) { if (c == 'a') total += 1; }
+        foreach (var c in string.Intern("x")) { if (c == 'x') total += 1; }
         return s.Length + total + 2;
     }
     public static int OverPureStringConcatenation(ref string? s)
@@ -1502,6 +1572,7 @@ public class Demo
         return AfterCallCollection(ref text) + "," + InsideCallCollection(ref text) + "," +
             OverUnqualifiedStaticCall(ref text) + "," +
             OverSourceShadowedMemberCall(ref text, new ShadowedBox()) + "," +
+            OverInheritedInterfaceGenericOverload(ref text, new ChildImpl()) + "," +
             OverParameterArray(ref text, new[] { "a", "b" }) + "," +
             OverResolvableMemberCalls(ref text, new Box(), "hi", new[] { 1 }) + "," +
             OverPureStringConcatenation(ref text);
@@ -1511,18 +1582,20 @@ public class Demo
         Assert.Contains("total += s!!.Length", printed)
         Assert.Contains("return s!!.Length + total + 3", printed)
         Assert.Contains("return s!!.Length + total + 5", printed)
+        Assert.Contains("return s!!.Length + total + 6", printed)
         Assert.Contains("return s.Length + total + 1", printed)
         Assert.Contains("return s.Length + total + 2", printed)
         Assert.Contains("return s.Length + total + 4", printed)
-        Assert.Equal(4, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(5, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null
     /// when the loop has no emitted `break` (`RecordLoopExitFacts`, ADR-0213 R7 (f)). A loop with a `break` (targeting
     /// it, a nested loop, a non-terminal switch break, a lowered `goto case` to an empty arm, or inside a lambda), a
     /// loop whose condition lowers to a hoisted `break` guard, a loop in a function with a lowered `goto case` or a
-    /// synthesized `forContinue` label, or a loop whose condition runs an accessor that can write by-reference storage
-    /// does not get the loop-exit fact on main, so its read after the loop stays asserted.
+    /// synthesized `forContinue` label, or a loop whose condition runs an accessor or triggers an enclosing catch
+    /// filter that writes the variable does not get the loop-exit fact on main, so its read after the loop stays
+    /// asserted.
     @Fact
     func RefParameter_ReadAfterALoopWhoseExitConditionProvesNonNull_StaysBare() {
         let printed = AssertRunsLikeCSharp(`
@@ -1530,9 +1603,12 @@ using System;
 public sealed class Box
 {
     public int F;
+    public bool Again() => false;
 }
-public class Demo
+public partial class Demo
 {
+    static partial void ElidedHook(Action a);
+    static bool Clear(ref string? s) { s = null; return false; }
     public static int DoLoop(ref string? s, Box box)
     {
         do { box.F = 1; s = box.F > 0 ? "abc" : null; } while (s == null);
@@ -1552,6 +1628,7 @@ public class Demo
         s = null;
         while (s == null)
         {
+            ElidedHook(() => { while (true) { break; } });
             box.F = 1;
             s = box.F > 0 ? "abc" : null;
         }
@@ -1690,6 +1767,22 @@ public class Demo
         }
         return s.Length + 13;
     }
+    public static int WhileLoopInTryWithEnclosingFilterWrite(ref string? s, Box box)
+    {
+        try
+        {
+            s = null;
+            while (box.Again() || s == null)
+            {
+                s = "abc";
+            }
+            return s.Length + 14;
+        }
+        catch (Exception) when (Clear(ref s))
+        {
+            return 0;
+        }
+    }
     public static string Run()
     {
         string? text = "abc";
@@ -1703,7 +1796,8 @@ public class Demo
             WhileLoopWithNonTerminalSwitchBreak(ref text, new Box(), 0) + "," +
             WhileLoopInSwitchGotoFunction(ref text, new Box(), 2) + "," +
             WhileLoopAfterSynthesizedForContinueLabel(ref text, new Box()) + "," +
-            WhileLoopWithGotoCaseToEmptyArm(ref text, new Box(), 0);
+            WhileLoopWithGotoCaseToEmptyArm(ref text, new Box(), 0) + "," +
+            WhileLoopInTryWithEnclosingFilterWrite(ref text, new Box());
     }
 }`)
         Assert.Contains("return s.Length + 1\n", printed.Replace("\r\n", "\n"))
@@ -1719,7 +1813,8 @@ public class Demo
         Assert.Contains("return s!!.Length + 11", printed)
         Assert.Contains("return s!!.Length + 12", printed)
         Assert.Contains("return s!!.Length + 13", printed)
-        Assert.Equal(9, Regex.Matches(printed, `s!!`).Count)
+        Assert.Contains("return s!!.Length + 14", printed)
+        Assert.Equal(10, Regex.Matches(printed, `s!!`).Count)
     }
 
     shared {

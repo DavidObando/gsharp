@@ -1540,8 +1540,15 @@ partial class CSharpToGSharpTranslator {
         private func LoopContainsEmittedBreak(loop StatementSyntax) bool {
             for node in loop.DescendantNodes(
                 (child SyntaxNode) -> !(
-                    child is LocalFunctionStatementSyntax localFunction && this.IsLiftedLocalFunctionInRegion(
-                        localFunction
+                    (
+                        child is LocalFunctionStatementSyntax localFunction && this.IsLiftedLocalFunctionInRegion(
+                            localFunction
+                        )
+                    ) ||
+                        (
+                        child is ExpressionStatementSyntax exprStmt && this.IsElidedPartialMethodInvocation(
+                            exprStmt.Expression
+                        )
                     )
                 )
             ) {
