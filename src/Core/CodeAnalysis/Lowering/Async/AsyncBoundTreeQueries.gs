@@ -166,18 +166,12 @@ shared class AsyncBoundTreeQueries {
     }
 
     /// Returns `true` when the given bound pattern subtree
-    /// contains at least one (cref:BoundAwaitExpression).
-    /// @param pattern The bound pattern to inspect.
-    /// @returns Whether the subtree contains an `await`.
-    func HasAwait(pattern BoundPattern) bool -> HasAwait(pattern, memo: nil)
-
-    /// Returns `true` when the given bound pattern subtree
     /// contains at least one (cref:BoundAwaitExpression), consulting and
     /// populating [`memo`](paramref).
     /// @param pattern The bound pattern to inspect.
     /// @param memo An optional reference-keyed cache shared across calls in one lowering pass.
     /// @returns Whether the subtree contains an `await`.
-    func HasAwait(pattern BoundPattern?, memo Dictionary[BoundNode, bool]?) bool {
+    internal func HasAwait(pattern BoundPattern?, memo Dictionary[BoundNode, bool]?) bool {
         if pattern == nil {
             return false
         }

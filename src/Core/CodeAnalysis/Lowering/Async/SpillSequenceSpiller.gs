@@ -2327,6 +2327,9 @@ shared class SpillSequenceSpiller {
                 }
             }
             for field in pp.Fields {
+                if !field.IsProperty && field.Pattern is BoundDiscardPattern{Variable: nil} {
+                    continue
+                }
                 let memberAccess = BuildPropertyPatternMemberAccess(field, receiver, receiverType)
                 let memberInput = StoreOperand(memberAccess, locals, sideEffects)
                 EmitSpilledPatternTest(field.Pattern, memberInput, locals, sideEffects, failLabel)
