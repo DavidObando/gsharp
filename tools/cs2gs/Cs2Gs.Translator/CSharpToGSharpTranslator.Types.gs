@@ -202,9 +202,25 @@ partial class CSharpToGSharpTranslator {
                     // idiomatic inferred arrow form. Issue #3414: when a direct
                     // argument's return expressions need conversion to the target
                     // delegate result, preserve that exact result on a func literal.
+                    var translatedBlock = this.WithParameterShadows(lambda, this.TranslateBlock(block))
+                    // Issue #4977: a C# void statement lambda whose translated G#
+                    // block ends in a value-capable tail would infer a non-void
+                    // return type in G#. Emit a trailing bare `return` so the G#
+                    // arrow lambda stays void.
+                    if exactTargetInvoke == nil &&
+                        IsVoidStatementLambda(lambdaSymbol, isAsync) &&
+                        BlockHasValueCapableTail(translatedBlock) {
+                        let statements = List[GStatement](translatedBlock.Statements){ReturnStatement()}
+                        translatedBlock = BlockStatement(
+                            statements,
+                            translatedBlock.IsUnsafe,
+                            translatedBlock.IsChecked,
+                            translatedBlock.IsUnchecked
+                        ){SuppressedDiagnostics = translatedBlock.SuppressedDiagnostics}
+                    }
                     return LambdaExpression(
                         parameters,
-                        blockBody: this.WithParameterShadows(lambda, this.TranslateBlock(block)),
+                        blockBody: translatedBlock,
                         isAsync: isAsync,
                         returnType: exactReturnType,
                         isFunctionLiteral: exactTargetInvoke != nil
@@ -3704,6 +3720,90 @@ partial class CSharpToGSharpTranslator {
         }
 
         shared {
+            // Issue #4977: whether a C# statement lambda has a void body (either
+            // synchronous `void` or `async` returning non-generic `Task`/`ValueTask`).
+            private func IsVoidStatementLambda(symbol IMethodSymbol?, isAsync bool) bool {
+                if symbol == nil {
+                    return false
+                }
+                if symbol.ReturnsVoid {
+                    return true
+                }
+                return isAsync &&
+                    symbol.ReturnType is INamedTypeSymbol{IsGenericType: false} taskLike &&
+                    (taskLike.Name is "Task" or "ValueTask") &&
+                    taskLike
+                    .ContainingNamespace
+                    ?.ToDisplayString() == "System.Threading.Tasks"
+            }
+
+            // Issue #4977: whether `block` ends in a G# value-capable tail that
+            // would cause an arrow lambda to infer a non-void return type.
+            private func BlockHasValueCapableTail(block BlockStatement?) bool {
+                if block == nil || block.Statements.Count == 0 {
+                    return false
+                }
+                for var i = block.Statements.Count - 1; i >= 0; i-- {
+                    let candidate = block.Statements[i]
+                    if candidate is RawStatement raw &&
+                        raw
+                        .Text
+                        .TrimStart()
+                        .StartsWith("//", StringComparison.Ordinal) {
+                        continue
+                    }
+                    return StatementHasValueCapableTail(candidate)
+                }
+                return false
+            }
+
+            private func StatementHasValueCapableTail(statement GStatement) bool -> switch statement {
+                case exprStmt is ExpressionStatement: !exprStmt.IsVoid && ExpressionProducesValue(exprStmt.Expression)
+                case assignStmt is AssignmentStatement: !assignStmt.IsVoid && ExpressionProducesValue(assignStmt.Value)
+                case IncrementDecrementStatement: true
+                case block is BlockStatement: !block.IsUnsafe &&
+                    !block.IsChecked &&
+                    !block.IsUnchecked &&
+                    block
+                    .SuppressedDiagnostics
+                    .Count == 0 &&
+                    BlockHasValueCapableTail(block)
+                case ifStmt is IfStatement: IfChainEndsInPlainElse(ifStmt) && IfChainHasValueCapableBranch(ifStmt)
+                case ifLetStmt is IfLetStatement: IfChainEndsInPlainElse(ifLetStmt) &&
+                    IfChainHasValueCapableBranch(ifLetStmt)
+                default: false
+            }
+
+            private func IfChainEndsInPlainElse(statement GStatement?) bool -> switch statement {
+                case ifStmt is IfStatement: IfChainEndsInPlainElse(ifStmt.ElseBranch)
+                case ifLetStmt is IfLetStatement: IfChainEndsInPlainElse(ifLetStmt.Else)
+                case BlockStatement: true
+                default: false
+            }
+
+            private func IfChainHasValueCapableBranch(statement GStatement?) bool -> switch statement {
+                case ifStmt is IfStatement: BlockHasValueCapableTail(ifStmt.Then) ||
+                    IfChainHasValueCapableBranch(ifStmt.ElseBranch)
+                case ifLetStmt is IfLetStatement: BlockHasValueCapableTail(ifLetStmt.Then) ||
+                    IfChainHasValueCapableBranch(ifLetStmt.Else)
+                case block is BlockStatement: BlockHasValueCapableTail(block)
+                default: false
+            }
+
+            private func ExpressionProducesValue(expression GExpression?) bool -> switch expression {
+                case nil, ThrowExpression: false
+                case paren is ParenthesizedExpression: ExpressionProducesValue(paren.Inner)
+                case block is BlockExpression: ExpressionProducesValue(block.Value)
+                case ifExpr is IfExpression: ExpressionProducesValue(ifExpr.ThenExpression) ||
+                    ExpressionProducesValue(ifExpr.ElseExpression)
+                case ifLetExpr is IfLetExpression: ExpressionProducesValue(ifLetExpr.ThenExpression) ||
+                    ExpressionProducesValue(ifLetExpr.ElseExpression)
+                case switchExpr is SwitchExpression: switchExpr.Arms.Any(
+                    (arm SwitchArm) -> ExpressionProducesValue(arm.Body)
+                )
+                default: true
+            }
+
             private func HasOmittedTypeArgument(name NameSyntax) bool -> switch name {
                 case generic is GenericNameSyntax: generic
                     .TypeArgumentList

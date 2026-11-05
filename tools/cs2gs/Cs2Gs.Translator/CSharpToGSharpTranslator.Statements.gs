@@ -4767,10 +4767,22 @@ partial class CSharpToGSharpTranslator {
                     return RawStatement("// unsupported: delegate multicast '$combineOp'")
                 }
                 case assignment is AssignmentExpressionSyntax {
+                    let isEventSubscription = (
+                        assignment.IsKind(SyntaxKind.AddAssignmentExpression) || assignment.IsKind(
+                            SyntaxKind.SubtractAssignmentExpression
+                        )
+                    ) &&
+                        this
+                        .context
+                        .GetSymbolInfo(assignment.Left)
+                        .Symbol is IEventSymbol
+                    let isVoidAssignment = this.context.GetTypeInfo(assignment).Type?.SpecialType ==
+                    SpecialType.System_Void || isEventSubscription
                     return AssignmentStatement(
                         this.TranslateAssignmentTarget(assignment.Left),
                         this.TranslateAssignmentValue(assignment),
-                        assignment.OperatorToken.Text
+                        assignment.OperatorToken.Text,
+                        isVoid: isVoidAssignment
                     )
                 }
                 case postfix is PostfixUnaryExpressionSyntax when postfix.IsKind(SyntaxKind.PostIncrementExpression) ||
@@ -4807,7 +4819,13 @@ partial class CSharpToGSharpTranslator {
                     return this.TranslateSwitchExpressionAsStatement(switchExpression)
                 }
                 default {
-                    return ExpressionStatement(this.TranslateExpression(expression))
+                    let isVoid = expression != nil &&
+                        this
+                        .context
+                        .GetTypeInfo(expression)
+                        .Type
+                        ?.SpecialType == SpecialType.System_Void
+                    return ExpressionStatement(this.TranslateExpression(expression), isVoid: isVoid)
                 }
             }
         }
@@ -4833,7 +4851,9 @@ partial class CSharpToGSharpTranslator {
                 replacements
             )
             try {
-                statements.Add(ExpressionStatement(this.TranslateExpression(conditionalAccess.WhenNotNull)))
+                statements.Add(
+                    ExpressionStatement(this.TranslateExpression(conditionalAccess.WhenNotNull), isVoid: true)
+                )
             } finally {
                 this.ReleaseHoistedAssignments(embedded, replacements)
                 this.state.PendingSpillPrologue = outerSpillPrologue

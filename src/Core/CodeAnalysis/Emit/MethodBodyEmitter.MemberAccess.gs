@@ -768,7 +768,8 @@ internal partial class MethodBodyEmitter {
                 .TryGetValue(access.Property, out var handles) &&
                 (handles.Getter != nil) {
                 getterHandle = handles.Getter!!
-            } else if access.StructType is {ClrType: not nil} importedGetterContainer {
+            } else if access.StructType is StructSymbol importedGetterContainer &&
+                (importedGetterContainer.ClrType != nil || access.Property.ImportedMember != nil) {
                 // Issue #2291: a property on an IMPORTED type (e.g. a C# record's
                 // auto-property) has no planned PropertyAccessorHandles entry —
                 // resolve its getter MethodRef directly off the imported CLR type.
@@ -854,7 +855,8 @@ internal partial class MethodBodyEmitter {
                 .TryGetValue(assn.Property, out var handles) &&
                 (handles.Setter != nil) {
                 setterHandle = handles.Setter!!
-            } else if assn.StructType is StructSymbol structType && structType.ClrType != nil {
+            } else if assn.StructType is StructSymbol structType &&
+                (structType.ClrType != nil || assn.Property.ImportedMember != nil) {
                 // Issue #2291: mirrors the getter fallback above for IMPORTED
                 // properties with no planned PropertyAccessorHandles entry.
                 setterHandle = this

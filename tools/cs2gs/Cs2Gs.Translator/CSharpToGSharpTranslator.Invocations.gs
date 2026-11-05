@@ -742,14 +742,16 @@ partial class CSharpToGSharpTranslator {
             if DependsOnEnclosingConditionalReceiver(conditionalAccess.Expression) {
                 this.ReportUnsupportedNestedConditionalStaticHelperChain(conditionalAccess)
                 result = ExpressionStatement(
-                    this.PreserveNullConditionalStaticExtensionInvocation(conditionalAccess, invocation, helperName)
+                    this.PreserveNullConditionalStaticExtensionInvocation(conditionalAccess, invocation, helperName),
+                    isVoid: true
                 )
                 return true
             }
             if chainedReceiver != nil && !IsSupportedConditionalStaticHelperReceiver(chainedReceiver) {
                 this.ReportUnsupportedConditionalStaticHelperChain(conditionalAccess)
                 result = ExpressionStatement(
-                    this.PreserveNullConditionalStaticExtensionInvocation(conditionalAccess, invocation, helperName)
+                    this.PreserveNullConditionalStaticExtensionInvocation(conditionalAccess, invocation, helperName),
+                    isVoid: true
                 )
                 return true
             }
@@ -778,7 +780,7 @@ partial class CSharpToGSharpTranslator {
             } finally {
                 this.ReleaseHoistedAssignments(embedded, replacements)
             }
-            localStatements.Add(ExpressionStatement(call))
+            localStatements.Add(ExpressionStatement(call, isVoid: true))
             result = IfStatement(guard_, BlockStatement(localStatements))
             return true
         }

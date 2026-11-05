@@ -2155,8 +2155,15 @@ internal partial class ExpressionBinder {
                         structSymbol,
                         initSyntax.FieldIdentifier.ValueText,
                         out var property
+                    ) ||
+                        TypeMemberModel
+                        .TryGetInheritedDataPositionalProperty(
+                        structSymbol,
+                        initSyntax.FieldIdentifier.ValueText,
+                        out property,
+                        out _
                     ) {
-                        memberType = property.Type
+                        memberType = property!!.Type
                     } else {
                         continue
                     }
@@ -2336,11 +2343,29 @@ internal partial class ExpressionBinder {
             var property PropertySymbol? = nil
             var propertyDeclaringType StructSymbol? = nil
             if !hasField {
-                if !TypeMemberModel.TryGetProperty(structSymbol!!, fieldName, out property, out propertyDeclaringType) {
+                if !TypeMemberModel.TryGetProperty(
+                    structSymbol!!,
+                    fieldName,
+                    out property,
+                    out propertyDeclaringType
+                ) &&
+                    !TypeMemberModel
+                    .TryGetInheritedDataPositionalProperty(
+                    structSymbol!!,
+                    fieldName,
+                    out property,
+                    out propertyDeclaringType
+                ) {
                     Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, fieldName)
                     continue
                 }
             }
+            let primaryMember Symbol? = if callsPrimary {
+                BoundStructLiteralExpression.GetPrimaryMember(structSymbol!!, fieldName)
+            } else {
+                default(Symbol?)
+            }
+            let consumesPrimaryArgument = primaryMember != nil && (field == primaryMember || property == primaryMember)
             // Issue #2059: a composite/struct literal `Foo{ member: value }`
             // writes the member directly, bypassing normal assignment binding
             // — so it must enforce the SAME `private`/`protected` accessibility
@@ -2372,12 +2397,6 @@ internal partial class ExpressionBinder {
             } else {
                 Invariant.Required(property, "a resolved property has a type", expression: "property").Type
             }
-            let primaryMember Symbol? = if callsPrimary {
-                BoundStructLiteralExpression.GetPrimaryMember(structSymbol!!, fieldName)
-            } else {
-                default(Symbol?)
-            }
-            let consumesPrimaryArgument = primaryMember != nil && (field == primaryMember || property == primaryMember)
             let inputType = if consumesPrimaryArgument {
                 structSymbol!!
                     .PrimaryConstructorParameters
@@ -2386,7 +2405,9 @@ internal partial class ExpressionBinder {
             } else {
                 memberType
             }
-            if !AccessibilityChecker.IsAccessible(
+            if (!((callsDataConstructor || callsPrimary) && consumesPrimaryArgument) || usesGetter) &&
+                !AccessibilityChecker
+                .IsAccessible(
                 memberAccessibility,
                 Invariant.Required(
                     memberDeclaringType,
@@ -2454,7 +2475,7 @@ internal partial class ExpressionBinder {
             }
             // A get-only property (no `set` and no `init` accessor) cannot be
             // assigned in a composite literal — keep it diagnosed.
-            if !hasField && !(callsDataConstructor && consumesPrimaryArgument) && !Invariant.Required(
+            if !hasField && !((callsDataConstructor || callsPrimary) && consumesPrimaryArgument) && !Invariant.Required(
                 property,
                 "a resolved property is present",
                 expression: "property"

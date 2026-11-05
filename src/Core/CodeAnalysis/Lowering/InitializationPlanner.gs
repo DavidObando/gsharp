@@ -304,7 +304,9 @@ internal shared class InitializationPlanner {
                     fields.Add(parameter, field)
                     continue
                 }
-                TypeMemberModel.TryGetProperty(owner, parameter.Name, out var property)
+                if !TypeMemberModel.TryGetProperty(owner, parameter.Name, out var property) {
+                    TypeMemberModel.TryGetInheritedDataPositionalProperty(owner, parameter, out property, out _)
+                }
                 properties.Add(
                     parameter,
                     Invariant.Required(
