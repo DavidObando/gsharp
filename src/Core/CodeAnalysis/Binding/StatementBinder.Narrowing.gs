@@ -262,10 +262,10 @@ internal partial class StatementBinder {
                 ).Else
                 computedInOrderElse = true
             }
-            if inOrderElse == nil || !inOrderElse.ContainsKey(path) {
+            if inOrderElse == nil || !inOrderElse.TryGetValue(path, out var inOrderType) {
                 continue
             }
-            SetPersistentNarrowing(persistentFrame, path, narrowedType)
+            SetPersistentNarrowing(persistentFrame, path, inOrderType)
         }
     }
 
@@ -2454,7 +2454,7 @@ internal partial class StatementBinder {
             // ADR-0208 R16 and R17 (#5231, #5532): an imported accessor that is not on the stable list is a call,
             // like a source accessor.
             if StatementBinder.ClrAccessRunsUserCode(node) {
-                MarkMayMutateGlobalRoots()
+                MarkMayMutateGlobalRoots(invalidateCallableAliases: false)
                 runsEscapedClosureHere = true
             }
             let sourceConstructionRunsUserCode = (
@@ -2479,7 +2479,7 @@ internal partial class StatementBinder {
             if sourcePropertyRunsUserCode ||
                 sourceConstructionRunsUserCode ||
                 StatementBinder.StaticMemberAccessRunsUserCode(node) || node is BoundClrConversionCallExpression {
-                MarkMayMutateGlobalRoots()
+                MarkMayMutateGlobalRoots(invalidateCallableAliases: false)
                 if node is not BoundStructLiteralExpression {
                     runsEscapedClosureHere = true
                 }
@@ -2494,7 +2494,7 @@ internal partial class StatementBinder {
                 BoundEventSubscriptionExpression or
                 BoundClrEventSubscriptionExpression or
                 BoundTypeParameterConstructionExpression {
-                MarkRunsEscapedClosure()
+                MarkRunsEscapedClosure(invalidateCallableAliases: false)
                 runsEscapedClosureHere = true
             }
             // A custom interpolated-string handler constructs the handler and calls its AppendLiteral /
@@ -2502,14 +2502,14 @@ internal partial class StatementBinder {
             // built-in value or a string.
             if node is BoundInterpolatedStringExpression interpolation {
                 if interpolation.Handler != nil {
-                    MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                    MarkMayMutateGlobalRoots(writesReferenceStorage: false, invalidateCallableAliases: false)
                     runsEscapedClosureHere = true
                 } else {
                     for part in interpolation.Parts {
                         if part.Value is {} hole && hole.Type != TypeSymbol.String && !TypeSymbol.IsLegalPointeeType(
                             hole.Type
                         ) {
-                            MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                            MarkMayMutateGlobalRoots(writesReferenceStorage: false, invalidateCallableAliases: false)
                             runsEscapedClosureHere = true
                             break
                         }
@@ -2526,7 +2526,7 @@ internal partial class StatementBinder {
                 !TypeSymbol
                 .IsLegalPointeeType(mapLiteral.MapType.KeyType) {
                 MayMutateMemberPaths = true
-                MarkMayMutateGlobalRoots()
+                MarkMayMutateGlobalRoots(invalidateCallableAliases: false)
                 runsEscapedClosureHere = true
             }
             if node is BoundFunctionLiteralExpression nestedLiteral {
@@ -2536,7 +2536,7 @@ internal partial class StatementBinder {
                 }
             }
             if node is BoundCallOperationExpression && !IsCallableValueInvocation(node) {
-                MarkRunsEscapedClosure()
+                MarkRunsEscapedClosure(invalidateCallableAliases: false)
                 runsEscapedClosureHere = true
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function} {
@@ -2544,7 +2544,8 @@ internal partial class StatementBinder {
                 // A property accessor, an indexer accessor, or a conversion operator can write the storage.
                 MarkMayMutateGlobalRoots(
                     writesReferenceStorage: (function.MethodKind is MethodKind.PropertyGet or MethodKind.PropertySet) ||
-                        StatementBinder.IsConversionOperator(function)
+                        StatementBinder.IsConversionOperator(function),
+                    invalidateCallableAliases: false
                 )
                 runsEscapedClosureHere = true
                 if function.HasCaptures {
@@ -2900,7 +2901,7 @@ internal partial class StatementBinder {
         protected open override func VisitBaseClassCallExpression(node BoundBaseClassCallExpression) {
             // ADR-0208 R11 (#5170): a base method or computed accessor runs user code.
             if node.Method != nil {
-                MarkMayMutateGlobalRoots()
+                MarkMayMutateGlobalRoots(invalidateCallableAliases: false)
             }
             VisitExpression(node.Receiver)
             VisitCallableArguments(node.Arguments)
@@ -2960,20 +2961,51 @@ internal partial class StatementBinder {
                 VisitExpression(node.CopySource)
             }
             let consumed = HashSet[BoundFieldInitializer]()
-            if node.CallsPrimaryConstructor || !node.StructType.PrimaryConstructorParameters.IsDefaultOrEmpty {
-                for parameter in node.StructType.PrimaryConstructorParameters {
+            let type = node.StructType
+            let definition = type.Definition ?? type
+            let spillsPrimaryInLexicalOrder = !node.IsZeroInitialization &&
+                node.CopySource == nil &&
+                !node.CallsPrimaryConstructor &&
+                type.HasDeclaredPrimaryConstructor &&
+                definition.NeedsSynthesizedValueStructDefaultCtor
+            if node.CallsPrimaryConstructor {
+                for parameter in type.PrimaryConstructorParameters {
                     if node.GetPrimaryArgument(parameter.Name) is {} primaryArgument {
                         consumed.Add(primaryArgument)
                         VisitExpression(primaryArgument.Value)
                     }
                 }
+            } else if spillsPrimaryInLexicalOrder {
+                let primaryFields = HashSet[FieldSymbol]()
+                for argument in node.GetPrimaryConstructorArguments() {
+                    primaryFields.Add(argument.Field)
+                }
+                for initializer in node.Initializers {
+                    if initializer.IsDeclarationInitializer {
+                        consumed.Add(initializer)
+                        continue
+                    }
+                    let target FieldSymbol? = initializer.Field ?? initializer.Property?.BackingField
+                    if target != nil && primaryFields.Contains(target) {
+                        consumed.Add(initializer)
+                        VisitExpression(initializer.Value)
+                    }
+                }
             }
-            if StatementBinder.ConstructionRunsUserCode(node.StructType) {
+            if (
+                node.CallsPrimaryConstructor ||
+                    spillsPrimaryInLexicalOrder ||
+                    type.IsClass ||
+                    definition.NeedsSynthesizedValueStructDefaultCtor
+            ) &&
+                StatementBinder
+                .ConstructionRunsUserCode(type) {
                 normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
                 allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
             }
             for initializer in node.Initializers {
-                if !consumed.Contains(initializer) {
+                if !consumed.Contains(initializer) &&
+                    !(initializer.IsDeclarationInitializer && definition.NeedsSynthesizedValueStructDefaultCtor) {
                     VisitExpression(initializer.Value)
                 }
                 if initializer.Property is {} property && StatementBinder.SourcePropertyRunsUserCode(
@@ -3597,9 +3629,13 @@ internal partial class StatementBinder {
 
         // [`runsSourceCode`](paramref) is false for a call through a callable value: it keeps its own classification
         // (ADR-0208 row R15).
-        private func MarkMayMutateGlobalRoots(writesReferenceStorage bool = true, runsSourceCode bool = true) {
+        private func MarkMayMutateGlobalRoots(
+            writesReferenceStorage bool = true,
+            runsSourceCode bool = true,
+            invalidateCallableAliases bool = true
+        ) {
             if runsSourceCode {
-                MarkRunsEscapedClosure()
+                MarkRunsEscapedClosure(invalidateCallableAliases)
             }
             // User code can also write members and the storage behind by-reference aliases.
             MayMutateMemberPaths = true
@@ -3624,10 +3660,12 @@ internal partial class StatementBinder {
             }
         }
 
-        private func MarkRunsEscapedClosure() {
+        private func MarkRunsEscapedClosure(invalidateCallableAliases bool = true) {
             MayRunEscapedClosure = true
-            normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
-            allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+            if invalidateCallableAliases {
+                normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+            }
             if enclosingAssignments.Count == 0 {
                 if escapedClosureProtectedRoots == nil {
                     escapedClosureProtectedRoots = HashSet[VariableSymbol]()

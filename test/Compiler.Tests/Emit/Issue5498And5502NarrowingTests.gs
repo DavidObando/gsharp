@@ -490,6 +490,87 @@ func Run(stop bool) int32 {
     return x.Value + y.Value
 }
 func Main() { Console.WriteLine(Run(false)) }`, "GS0612@23:16", "run", "2"}
+            yield[]object{"review_5498_subtype_proof_weakened_by_later_call_and_nil_test_restores_base_only", `import System
+
+open class Base {
+    var BaseVal int32 = 1
+}
+class Derived : Base {
+    var DerivedVal int32 = 2
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) bool {
+    h.Callback()
+    return false
+}
+func TryGet(out x Base?) bool {
+    x = Derived{}
+    return true
+}
+func Run() int32 {
+    var x Base? = nil
+    let h = Holder{}
+    h.Callback = func() { x = Base{} }
+    if !TryGet(out x) || x !is Derived || Wrapper(h) || x == nil { return 0 }
+    return x.BaseVal + x.DerivedVal
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@25:26", "reject", ""}
+            yield[]object{"review_5502_plain_struct_literal_lexical_initializer_order", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) int32 {
+    h.Callback()
+    return 1
+}
+struct Box(A int32) {
+    var F () -> void
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    {
+        let b = Box{F: (action = callback), A: Wrapper(h)}
+        if b.A == 0 { return 0 }
+    }
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@27:14", "reject", ""}
+            yield[]object{"review_5502_uncaptured_alias_saved_in_call_argument_keeps_external_classification", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Consume(f () -> void, h Holder) {
+    h.Callback()
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    var saved () -> void = func() { x = nil }
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    {
+        Consume((saved = action), h)
+    }
+    if x == nil { return 0 }
+    saved()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "", "run", "1"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
