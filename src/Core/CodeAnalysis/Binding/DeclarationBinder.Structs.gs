@@ -32,8 +32,13 @@ internal partial class DeclarationBinder {
     internal func BindStructDeclarationBody(
         syntax StructDeclarationSyntax,
         $package PackageSymbol,
-        structSymbol StructSymbol
+        structSymbol StructSymbol,
+        bindNestedTypes bool = true
     ) {
+        let shouldBindOwnBody = boundStructBodies.Add(structSymbol)
+        if !shouldBindOwnBody && (!bindNestedTypes || boundNestedTypeContainers.Contains(structSymbol)) {
+            return
+        }
         let previousTypeParameters = binderCtx.CurrentTypeParameters
         let previousContainingType = binderCtx.CurrentContainingType
         this.binderCtx.CurrentContainingType = structSymbol
@@ -58,19 +63,26 @@ internal partial class DeclarationBinder {
                         binderCtx.CurrentTypeParameters!![tp.Name] = tp
                     }
                 }
+            } else {
+                this.binderCtx.CurrentTypeParameters = nil
             }
-            // Issue #2519: aggregate shells carry bare type parameters so every
-            // same-compilation constraint target can be published first.
-            // Resolve constraints now, with the declaring shell and all sibling
-            // source type shells visible, before binding signatures and members.
-            ResolvePartialTypeParameterConstraints(
-                syntax.TypeParameterList,
-                syntax.PartialTypeParameterLists,
-                structSymbol.TypeParameters,
-                structSymbol.Name,
-                syntax.PartialPartLocations
-            )
-            BindStructDeclarationBodyCore(syntax, $package, structSymbol)
+            if shouldBindOwnBody {
+                // Issue #2519: aggregate shells carry bare type parameters so every
+                // same-compilation constraint target can be published first.
+                // Resolve constraints now, with the declaring shell and all sibling
+                // source type shells visible, before binding signatures and members.
+                ResolvePartialTypeParameterConstraints(
+                    syntax.TypeParameterList,
+                    syntax.PartialTypeParameterLists,
+                    structSymbol.TypeParameters,
+                    structSymbol.Name,
+                    syntax.PartialPartLocations
+                )
+                BindStructDeclarationBodyCore(syntax, $package, structSymbol, bindNestedTypes)
+            } else if bindNestedTypes && boundNestedTypeContainers.Add(structSymbol) {
+                using let _ = binderCtx.PushUnsafeContext(syntax.IsUnsafe)
+                BindNestedTypeBodies(syntax, $package)
+            }
         } finally {
             this.binderCtx.CurrentTypeParameters = previousTypeParameters
             this.binderCtx.CurrentContainingType = previousContainingType
@@ -183,7 +195,8 @@ internal partial class DeclarationBinder {
     private func BindStructDeclarationBodyCore(
         syntax StructDeclarationSyntax,
         $package PackageSymbol,
-        structSymbol StructSymbol
+        structSymbol StructSymbol,
+        bindNestedTypes bool
     ) {
         // ADR-0122 / issue #1014: an `unsafe class` / `unsafe struct` binds all
         // of its members (field types, method signatures, …) within an unsafe
@@ -196,6 +209,7 @@ internal partial class DeclarationBinder {
         ValidateProtectedMemberPlacement(syntax)
         let fieldBinding = BindStructFieldsAndPrimaryConstructor(syntax, $package, structSymbol)
         let baseBinding = BindStructBaseAndInterfaces(syntax, structSymbol, fieldBinding)
+        EnsureBaseStructBodyBound(baseBinding.BaseClass)
         let memberBinding = CreateStructMemberBindingContext(structSymbol)
         BindStructInstanceMethods(syntax, $package, structSymbol, baseBinding, memberBinding)
         BindStructProperties(syntax, $package, structSymbol, memberBinding)
@@ -204,7 +218,46 @@ internal partial class DeclarationBinder {
         RegisterStructConversionOperators($package, structSymbol, memberBinding.PendingConversionOperators)
         RegisterStructDeferredInitializers($package, structSymbol, fieldBinding)
         RegisterStructInterfaceChecks(syntax, structSymbol, baseBinding)
-        BindStructFinalMembers(syntax, $package, structSymbol, baseBinding)
+        BindStructFinalMembers(syntax, $package, structSymbol, baseBinding, bindNestedTypes)
+    }
+
+    private func EnsureBaseStructBodyBound(baseClass StructSymbol?) {
+        if baseClass == nil {
+            return
+        }
+        let baseDefinition = baseClass.Definition ?? baseClass
+        if boundStructBodies.Contains(baseDefinition) {
+            return
+        }
+        if baseDefinition.Declaration is {} baseSyntax && nestedStructPackages.TryGetValue(
+            baseDefinition,
+            out var basePackage
+        ) {
+            let savedUnsafeDepth = binderCtx.UnsafeDepth
+            var enclosingUnsafe = false
+            var currentParent TypeSymbol? = baseDefinition.ContainingType
+            while !enclosingUnsafe && currentParent is StructSymbol parentStruct {
+                let parentDef = parentStruct.Definition ?? parentStruct
+                if parentDef.Declaration?.IsUnsafe == true {
+                    enclosingUnsafe = true
+                }
+                currentParent = parentDef.ContainingType
+            }
+            binderCtx.UnsafeDepth = if enclosingUnsafe {
+                1
+            } else {
+                0
+            }
+            let previousPackage = $scope.SetCurrentDeclaringPackage(basePackage.Name)
+            let previousTree = $scope.SetCurrentReferencingSyntaxTree(baseSyntax.SyntaxTree)
+            try {
+                BindStructDeclarationBody(baseSyntax, basePackage, baseDefinition, bindNestedTypes: false)
+            } finally {
+                binderCtx.UnsafeDepth = savedUnsafeDepth
+                $scope.SetCurrentDeclaringPackage(previousPackage)
+                $scope.SetCurrentReferencingSyntaxTree(previousTree)
+            }
+        }
     }
 
     private func BindStructFieldsAndPrimaryConstructor(
@@ -1664,9 +1717,59 @@ internal partial class DeclarationBinder {
         // consumers see the same ABI as C# records.
         if !syntax.Properties.IsDefaultOrEmpty || (structSymbol.IsData && structSymbol.HasPrimaryConstructor) {
             let propertiesBuilder = ImmutableArray.CreateBuilder[PropertySymbol]()
+            let inheritedPositionalBuilder = ImmutableArray.CreateBuilder[PropertySymbol]()
             let positionalPropertyIndices = Dictionary[string, int32](StringComparer.Ordinal)
             if structSymbol.IsData && structSymbol.HasPrimaryConstructor {
                 for parameter in structSymbol.PrimaryConstructorParameters {
+                    let primaryConstructorParameters = syntax.PrimaryConstructorParameters ??
+                        throw InvalidOperationException(
+                        "A data positional property requires primary constructor parameters."
+                    )
+                    var parameterSyntax ParameterSyntax? = nil
+                    for candidate in primaryConstructorParameters {
+                        // ADR-0185: a primary-constructor parameter never
+                        // comes from the destructured arrow-lambda path.
+                        if candidate.Identifier!!.ValueText == parameter.Name {
+                            parameterSyntax = candidate
+                            break
+                        }
+                    }
+                    parameterSyntax = Invariant.Required(
+                        parameterSyntax,
+                        "a data positional property has matching primary constructor syntax",
+                        expression: "parameterSyntax"
+                    )
+                    let hasExplicitReplacement = !syntax.Properties.IsDefaultOrEmpty && syntax.Properties.Any(
+                        (propSyntax PropertyDeclarationSyntax) -> !propSyntax.IsIndexer &&
+                            !propSyntax.HasExplicitInterfaceClause &&
+                            propSyntax
+                            .Identifier
+                            .ValueText == parameter.Name
+                    )
+                    if !hasExplicitReplacement && TypeMemberModel.ResolveInheritedDataPositionalProperty(
+                        structSymbol,
+                        parameter,
+                        binderCtx.References,
+                        out var inheritedProperty,
+                        out var inheritedDeclaringType
+                    ) {
+                        if inheritedProperty is {} resolvedInheritedProperty {
+                            if !TypeMemberModel.PositionalTypeSatisfiedByInheritedGetter(
+                                resolvedInheritedProperty.Type,
+                                parameter.Type
+                            ) {
+                                Diagnostics.ReportCannotConvert(
+                                    parameterSyntax.Location,
+                                    resolvedInheritedProperty.Type,
+                                    parameter.Type
+                                )
+                            }
+                            if inheritedDeclaringType == nil || inheritedDeclaringType.ClrType != nil {
+                                inheritedPositionalBuilder.Add(resolvedInheritedProperty)
+                            }
+                        }
+                        continue
+                    }
                     let property = PropertySymbol(
                         parameter.Name,
                         parameter.Type,
@@ -1687,24 +1790,6 @@ internal partial class DeclarationBinder {
                             Accessibility.Internal
                         },
                         isReadOnly: false
-                    )
-                    let primaryConstructorParameters = syntax.PrimaryConstructorParameters ??
-                        throw InvalidOperationException(
-                        "A data positional property requires primary constructor parameters."
-                    )
-                    var parameterSyntax ParameterSyntax? = nil
-                    for candidate in primaryConstructorParameters {
-                        // ADR-0185: a primary-constructor parameter never
-                        // comes from the destructured arrow-lambda path.
-                        if candidate.Identifier!!.ValueText == parameter.Name {
-                            parameterSyntax = candidate
-                            break
-                        }
-                    }
-                    parameterSyntax = Invariant.Required(
-                        parameterSyntax,
-                        "a data positional property has matching primary constructor syntax",
-                        expression: "parameterSyntax"
                     )
                     let propertyAttributes = BindDataPositionalPropertyAttributes(parameterSyntax)
                     if !propertyAttributes.IsDefaultOrEmpty {
@@ -2209,6 +2294,9 @@ internal partial class DeclarationBinder {
                 } else {
                     propertiesBuilder.Add(propertySymbol)
                 }
+            }
+            if inheritedPositionalBuilder.Count > 0 {
+                structSymbol.SetInheritedPositionalProperties(inheritedPositionalBuilder.ToImmutable())
             }
             structSymbol.SetProperties(propertiesBuilder.ToImmutable())
         }
@@ -3807,7 +3895,8 @@ internal partial class DeclarationBinder {
         syntax StructDeclarationSyntax,
         $package PackageSymbol,
         structSymbol StructSymbol,
-        baseBinding StructBaseBindingResult
+        baseBinding StructBaseBindingResult,
+        bindNestedTypes bool
     ) {
         let baseClassSymbol = baseBinding.BaseClass
         let importedBaseType = baseBinding.ImportedBaseType
@@ -3829,7 +3918,9 @@ internal partial class DeclarationBinder {
         // shells were declared earlier (DeclareNestedTypeShells) so sibling
         // member signatures could forward-reference them; here we fill in their
         // members. The emitter materialises real CLR nested types.
-        BindNestedTypeBodies(syntax, $package)
+        if bindNestedTypes && boundNestedTypeContainers.Add(structSymbol) {
+            BindNestedTypeBodies(syntax, $package)
+        }
         // Issue #987: queue the abstract-member contract check for classes. A
         // concrete (non-`open`) class with a base must override every inherited
         // abstract method; deferred so base-class methods are bound first.
@@ -4079,9 +4170,6 @@ internal partial class DeclarationBinder {
             }
             switch nested {
                 case nestedStruct is StructDeclarationSyntax {
-                    // The shell (and its own nested shells, recursively) was
-                    // declared in phase 1; bind its body now. Binding the body
-                    // recurses into BindNestedTypeBodies for nested-in-nested.
                     if nestedStructShells.TryGetValue(nestedStruct, out var nestedStructSymbol) {
                         BindStructDeclarationBody(nestedStruct, $package, nestedStructSymbol)
                     }
@@ -4122,6 +4210,7 @@ internal partial class DeclarationBinder {
                     let nestedStructSymbol StructSymbol? = DeclareStructShell(nestedStruct, $package, containerSymbol)
                     if nestedStructSymbol != nil {
                         nestedStructShells[nestedStruct] = nestedStructSymbol
+                        nestedStructPackages[nestedStructSymbol] = $package
                         DeclareNestedTypeShells(nestedStruct, nestedStructSymbol, $package)
                     }
                 }
