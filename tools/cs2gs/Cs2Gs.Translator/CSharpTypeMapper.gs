@@ -877,11 +877,18 @@ class CSharpTypeMapper {
             }
         }
         for importedNamespace in importedNamespaces {
+            this.reservedImportedNamespaces.Add(importedNamespace)
             for type in importedNamespace.GetTypeMembers() {
                 this.reservedImportedTypeNames.Add(names.GetName(type)!!)
             }
         }
     }
+
+    private let reservedImportedNamespaces HashSet[INamespaceSymbol] = HashSet[INamespaceSymbol](
+        SymbolEqualityComparer.Default
+    )
+
+    internal prop ReservedImportedNamespaces IReadOnlyCollection[INamespaceSymbol] -> this.reservedImportedNamespaces
 
     /// Issue #3471: whether a bare identifier at file scope would bind to an
     /// import alias, an imported type, a synthesized type alias, or a

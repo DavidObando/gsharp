@@ -1205,6 +1205,1248 @@ public class Demo
         Assert.Equal(1, Regex.Matches(printed, `s!!`).Count)
     }
 
+    /// Issue #5692 (1): a numeric conversion in a loop that cs2gs emits as `T(x)` counts as a construction call in
+    /// gsc's region scanner (`CallIsIndirect`), which removes a by-reference fact at loop entry and after the loop.
+    /// Outside a loop, or after a guard inside the same loop body, the fact stays.
+    @Fact
+    func RefParameter_ReadAroundALoopWithAConversionCall_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+public class Base { public int V = 1; }
+public sealed class Derived : Base { }
+public partial class Demo
+{
+    static partial void ElidedTrace(long n);
+    public static void TakeUint(uint value) { }
+    public static int ForEachCharToInt(ref string? s, string text)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var c in text) total += c;
+        return s.Length + total;
+    }
+    public static long WhileIntToLong(ref string? s)
+    {
+        if (s == null) return 0;
+        long total = 0;
+        var i = 0;
+        while (i < 2)
+        {
+            total += s.Length;
+            i++;
+        }
+        return total + s.Length;
+    }
+    public static int ArrayLengthLongToInt(ref string? s, long n)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        var i = 0;
+        while (i < 1)
+        {
+            var buf = new byte[n];
+            total += buf.Length;
+            i++;
+        }
+        return s.Length + total;
+    }
+    public static int CovariantArrayInLoop(ref string? s, string[] strings)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        var i = 0;
+        while (i < 1)
+        {
+            object[] copy = strings;
+            total += copy.Length;
+            i++;
+        }
+        return s.Length + total + 2;
+    }
+    public static int CoalesceAssignCovariantArrayInLoop(ref string? s, string[] strings)
+    {
+        if (s == null) return 0;
+        object[]? copy = null;
+        var i = 0;
+        while (i < 1)
+        {
+            copy ??= strings;
+            i++;
+        }
+        return s.Length + copy!.Length + 3;
+    }
+    static void Touch<T>() { }
+    public static int BareGenericStaticCallInLoop(ref string? s)
+    {
+        if (s == null) return 0;
+        var i = 0;
+        while (i < 1)
+        {
+            Touch<int>();
+            i++;
+        }
+        return s.Length + 4;
+    }
+    public static int ConditionalReferenceUpcastInLoop(ref string? s, Derived d, Base b, bool flag)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        var i = 0;
+        while (i < 1)
+        {
+            var picked = flag ? d : b;
+            total += picked.V;
+            i++;
+        }
+        return s.Length + total + 5;
+    }
+    public static int SwitchReferenceUpcastInLoop(ref string? s, Derived d, Base b, int k)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        var i = 0;
+        while (i < 1)
+        {
+            var picked = k switch { 0 => d, _ => b };
+            total += picked.V;
+            i++;
+        }
+        return s.Length + total + 6;
+    }
+    public static int CollectionElementConversionInLoop(ref string? s)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        var i = 0;
+        while (i < 1)
+        {
+            byte[] bytes = [1];
+            total += bytes.Length;
+            i++;
+        }
+        return s.Length + total + 8;
+    }
+    public static int RelationalPatternConversionInLoop(ref string? s, byte b)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        var i = 0;
+        while (i < 1)
+        {
+            if (b is > 1) total++;
+            if (b is 2) total++;
+            i++;
+        }
+        return s.Length + total + 9;
+    }
+    public static int CoalesceAssignNumericInLoop(ref string? s)
+    {
+        if (s == null) return 0;
+        long? n = null;
+        var i = 0;
+        while (i < 1)
+        {
+            n ??= 1;
+            i++;
+        }
+        return n == null ? 0 : s.Length + 10;
+    }
+    public static uint UnsignedReturnControl(ref string? s, bool exitEarly)
+    {
+        if (s == null) return 0;
+        var i = 0;
+        while (i < 1)
+        {
+            if (exitEarly) return 0;
+            i++;
+        }
+        return (uint)s.Length;
+    }
+    public static int ElidedPartialAndUnsignedLiteralControls(ref string? s, byte b)
+    {
+        if (s == null) return 0;
+        var i = 0;
+        while (i < 1)
+        {
+            ElidedTrace((long)i);
+            Demo.TakeUint(5);
+            switch (b)
+            {
+                case > 1:
+                    break;
+            }
+            i++;
+        }
+        return s.Length + 7;
+    }
+    public static int GuardInsideLoop(ref string? s, string text)
+    {
+        var total = 0;
+        foreach (var c in text)
+        {
+            if (s == null) continue;
+            total += c;
+            total += s.Length + 1;
+        }
+        return total;
+    }
+    public static long OutsideLoop(ref string? s, int n)
+    {
+        if (s == null) return 0;
+        long wide = (long)n;
+        return s.Length + wide;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        return ForEachCharToInt(ref text, "xy") + "," + WhileIntToLong(ref text) + "," +
+            ArrayLengthLongToInt(ref text, 2L) + "," + CovariantArrayInLoop(ref text, new[] { "a" }) + "," +
+            CoalesceAssignCovariantArrayInLoop(ref text, new[] { "b" }) + "," +
+            BareGenericStaticCallInLoop(ref text) + "," +
+            ConditionalReferenceUpcastInLoop(ref text, new Derived(), new Base(), true) + "," +
+            SwitchReferenceUpcastInLoop(ref text, new Derived(), new Base(), 0) + "," +
+            CollectionElementConversionInLoop(ref text) + "," +
+            RelationalPatternConversionInLoop(ref text, 3) + "," +
+            CoalesceAssignNumericInLoop(ref text) + "," +
+            UnsignedReturnControl(ref text, false) + "," +
+            ElidedPartialAndUnsignedLiteralControls(ref text, 3) + "," +
+            GuardInsideLoop(ref text, "z") + "," + OutsideLoop(ref text, 4);
+    }
+}`)
+        Assert.Contains("return s!!.Length + total\n", printed.Replace("\r\n", "\n"))
+        Assert.Contains("total += int64(s!!.Length)", printed)
+        Assert.Contains("return total + int64(s!!.Length)", printed)
+        Assert.Contains("[int32(n)]uint8", printed)
+        Assert.Contains("cast[[]object](strings)", printed)
+        Assert.Contains("return s!!.Length + total + 2", printed)
+        Assert.Contains("return s!!.Length + copy!!.Length + 3", printed)
+        Assert.Contains("return s!!.Length + 4", printed)
+        Assert.Contains("return s!!.Length + total + 5", printed)
+        Assert.Contains("return s!!.Length + total + 6", printed)
+        Assert.Contains("return s!!.Length + total + 8", printed)
+        Assert.Contains("return s!!.Length + total + 9", printed)
+        Assert.Contains("s!!.Length + 10", printed)
+        Assert.Contains("return uint32(s.Length)", printed)
+        Assert.Contains("return s.Length + 7", printed)
+        Assert.Contains("total += s.Length + 1", printed)
+        Assert.Contains("return int64(s.Length) + wide", printed)
+    }
+
+    /// Issue #5692 (2): gsc's region scanner gives no origin to the variables of a deconstructing `for (a, b) in items`
+    /// loop, so using a deconstructed variable (or an inferred copy or pattern-bound alias of it) in the body removes
+    /// a by-reference fact at loop entry and after it. Unused deconstructed variables, an unused `var` or same-typed
+    /// copy, a dropped `_ = a` discard statement, and a pure type test keep the fact.
+    @Fact
+    func RefParameter_ReadAroundAForEachThatUsesADeconstructedLoopVariable_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+public class Demo
+{
+    public static int AfterLoop(ref string? s, (int, int)[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (a, b) in items) total += a + b;
+        return s.Length + total;
+    }
+    public static int InsideLoop(ref string? s, (int, int)[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (a, b) in items) total += a + s.Length;
+        return total;
+    }
+    public static int UsedThroughCopy(ref string? s, (int, int)[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (a, b) in items)
+        {
+            var copy = a;
+            total += copy;
+        }
+        return s.Length + total + 2;
+    }
+    public static int UsedThroughPatternAlias(ref string? s, (int, int)[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (a, b) in items)
+        {
+            if (a is var copy) total += copy;
+        }
+        return s.Length + total + 5;
+    }
+    public static int UsedThroughTupleCopy(ref string? s, (int, int)[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (a, b) in items)
+        {
+            var pair = (a, b);
+            total += pair.a;
+        }
+        return s.Length + total + 6;
+    }
+    public static int UnusedVariables(ref string? s, (int, int)[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (a, b) in items) total += s.Length + 1;
+        return s.Length + total;
+    }
+    static void Touch(ref int value) { }
+    public static int UnusedCopyOnly(ref string? s, (int, int)[] items)
+    {
+        if (s == null) return 0;
+        foreach (var (a, b) in items)
+        {
+            _ = a;
+            var copy = a;
+            _ = copy;
+            Demo.Touch(ref copy);
+            var unusedPair = (a, b);
+            _ = unusedPair;
+            int typedCopy = b;
+            if (b is var unusedAlias)
+            {
+                _ = unusedAlias;
+            }
+            for (var i = 0; i < 1; i++, _ = a)
+            {
+            }
+        }
+        return s.Length + 3;
+    }
+    public static int PureTypeTestOnly(ref string? s, (object, int)[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (a, b) in items)
+        {
+            if (a is string) total += 1;
+        }
+        return s.Length + total + 4;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        var items = new[] { (1, 2) };
+        return AfterLoop(ref text, items) + "," + InsideLoop(ref text, items) + "," +
+            UsedThroughCopy(ref text, items) + "," + UsedThroughPatternAlias(ref text, items) + "," +
+            UsedThroughTupleCopy(ref text, items) + "," +
+            UnusedVariables(ref text, items) + "," + UnusedCopyOnly(ref text, items) + "," +
+            PureTypeTestOnly(ref text, new (object, int)[] { ("x", 1) });
+    }
+}`)
+        Assert.Contains("return s!!.Length + total\n", printed.Replace("\r\n", "\n"))
+        Assert.Contains("total += a + s!!.Length", printed)
+        Assert.Contains("return s!!.Length + total + 2", printed)
+        Assert.Contains("return s!!.Length + total + 5", printed)
+        Assert.Contains("return s!!.Length + total + 6", printed)
+        Assert.Contains("total += s.Length + 1", printed)
+        Assert.Contains("return s.Length + 3", printed)
+        Assert.Contains("return s.Length + total + 4", printed)
+        Assert.Equal(5, Regex.Matches(printed, `s!!`).Count)
+    }
+
+    /// Issue #5692 (3): gsc's region scanner cannot resolve the element origin of an untyped `for x in call()` loop
+    /// when an extension method of that name can bind (`"a,b".Split(',')` or a source extension on `ShadowedBox`),
+    /// when a source generic type's method returns `T[]` (`GenericBox<int>.GetItems()`), when type arguments are
+    /// emitted on the call (`box.Collide(new Unrelated())`), or when the call is an unqualified static class method
+    /// (`Parts()`), so reading a member of `x` in the body counts as a read on an untyped receiver (W5) and removes a
+    /// by-reference fact. Over a parameter slice `parts`, a qualified static call `Box.Parts()` or
+    /// `QualifiedNs.StaticHolder.MakeSeed()`, an instance member call `box.InstanceParts()` or inferred generic
+    /// `box.InstanceParts(1)` or chained `box.Self().InstanceParts(1)`, a source extension `word.WordParts()` or
+    /// `values.Entries()`, or a pure string concatenation, the fact stays.
+    @Fact
+    func RefParameter_ReadAroundAForEachOverACallWhoseLoopVariableIsRead_IsAsserted() {
+        let printed = AssertRunsLikeCSharp(`
+namespace System
+{
+    public static class MergedSystemExtensions
+    {
+        public static void InstanceParts(this int value) { }
+    }
+}
+namespace OtherNs
+{
+    public static class ShadowExtensions
+    {
+        public static void ShadowedParts(this ShadowedBox box, int n) { }
+    }
+#pragma warning disable CS8618
+    public static class StaticHolder
+    {
+        public static string[] Seed;
+        public static Box Instance;
+        public static string[] MakeSeed(string[] seed) => seed;
+    }
+#pragma warning restore CS8618
+}
+public interface IParent
+{
+    T Parts<T>(T value);
+}
+public interface IChild : IParent
+{
+    string[] Parts();
+}
+public sealed class ChildImpl : IChild
+{
+    public T Parts<T>(T value) => value;
+    public string[] Parts() => new[] { "f" };
+}
+public sealed class GenericBox<T>
+{
+#pragma warning disable CS8618
+    public System.Collections.Generic.List<T> StoredList;
+#pragma warning restore CS8618
+    public T[] GetItems(T item) => new[] { item };
+    public System.Collections.Generic.List<T> Items() => StoredList;
+}
+public sealed class SelectBox
+{
+    public string[] Select() => new[] { "g" };
+}
+public sealed class Holder
+{
+    public object? Tag = "t";
+    public Box Child = new Box();
+}
+public sealed class Unrelated { }
+public sealed class DisposableBox : System.IDisposable
+{
+    public void Dispose() { }
+    public string[] ConstrainedParts() => new[] { "z" };
+}
+public sealed class ChildA
+{
+    public string Child = "x";
+}
+public sealed class ChildB
+{
+    public int Child = 1;
+}
+public sealed class MixedBox
+{
+    public string[] MixedParts() => new[] { "x" };
+    public int[] MixedParts(int n) => new[] { 1 };
+    public ChildA[] MixedChildren() => new[] { new ChildA() };
+    public ChildB[] MixedChildren(int n) => new[] { new ChildB() };
+    public Box MixedSelf() => new Box();
+    public Unrelated MixedSelf(int n) => new Unrelated();
+}
+public interface IBox
+{
+    void Ping();
+}
+public static class WordExtensions
+{
+    public static string[] WordParts(this string text) => new[] { text };
+    public static string[] WordParts<T>(this string text, T tag) => new[] { text };
+    public static void WordParts(this Unrelated other) { }
+    public static void InstanceParts(this Unrelated other) { }
+    public static void InstanceParts<T>(this T value) where T : System.IDisposable { }
+    public static void ConstrainedParts<T>(this T value) where T : System.IDisposable { }
+    public static int[] Entries(this int[] values) => values;
+    public static string[] GenericArrayParts<T>(this T[] values) => new[] { "p" };
+    public static string[] NewableParts<T>(this System.Collections.Generic.List<T> values) where T : new() => new[] { "r" };
+    public static void NewablePing<T>(this T[] values) where T : new() { }
+    public static string[] LibExtParts(this OtherNs.LibBox box) => new[] { "n" };
+}
+public sealed class Box : IBox
+{
+    public static string[] Parts() => new[] { "a", "b" };
+    public Box Self() => this;
+    public void Ping() { }
+    public string[] InstanceParts() => new[] { "c" };
+    public string[] InstanceParts<T>(T tag) => new[] { "c" };
+    public string[] Collide(System.Collections.Generic.List<object> tags) => new[] { "k" };
+    public string[] Collide<T>(System.Collections.Generic.List<T> tags) => new[] { "k" };
+}
+public sealed class ShadowedBox
+{
+    public string[] ShadowedParts() => new[] { "e" };
+}
+public class Demo
+{
+    static string[] UnqualifiedParts() => new[] { "d" };
+    public static int AfterCallCollection(ref string? s)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in "a,b".Split(',')) total += part.Length;
+        return s.Length + total;
+    }
+    public static int InsideCallCollection(ref string? s)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in "a,b".Split(','))
+        {
+            total += part.Length;
+            total += s.Length;
+        }
+        return total;
+    }
+    public static int OverUnqualifiedStaticCall(ref string? s)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in UnqualifiedParts()) total += part.Length;
+        return s.Length + total + 3;
+    }
+    public static int OverSourceShadowedMemberCall(ref string? s, ShadowedBox shadowed)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in shadowed.ShadowedParts()) total += part.Length;
+        return s.Length + total + 5;
+    }
+    public static int OverInheritedInterfaceGenericOverload(ref string? s, IChild child)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in child.Parts()) total += part.Length;
+        return s.Length + total + 6;
+    }
+    public static int OverConstructedSourceGenericReturn(ref string? s, GenericBox<string> genericBox)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in genericBox.GetItems("h")) total += part.Length;
+        return s.Length + total + 7;
+    }
+    public static int OverSynthesizedLinqImportConflict(
+        ref string? s,
+        SelectBox selectBox,
+        System.Linq.IOrderedEnumerable<int>? unused = null
+    )
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in selectBox.Select()) total += part.Length;
+        return s.Length + total + 8;
+    }
+    public static int OverSynthesizedGenericCollisionCall(
+        ref string? s,
+        Box box,
+        System.Collections.Generic.List<Unrelated> tags
+    )
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in box.Collide(tags)) total += part.Length;
+        return s.Length + total + 9;
+    }
+    public static int ConditionalCopyReceiverCall(ref string? s, Box a, Box b, bool flag)
+    {
+        if (s == null) return 0;
+        var i = 0;
+        while (i < 1)
+        {
+            var copy = flag ? a : b;
+            copy.Ping();
+            i++;
+        }
+        return s.Length + 10;
+    }
+    public static int TypeTestedCopyReceiverCall(ref string? s, Box box)
+    {
+        if (s == null) return 0;
+        var i = 0;
+        while (i < 1)
+        {
+            var copy = box;
+            if (copy is Box) copy.Ping();
+            i++;
+        }
+        return s.Length + 14;
+    }
+    public static int OverMixedReturnOverloads(ref string? s, MixedBox mixed)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in mixed.MixedParts()) total += part.Length;
+        return s.Length + total + 11;
+    }
+    public static int OverMixedChainedReceiverOverloads(ref string? s, MixedBox mixed)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in mixed.MixedSelf().InstanceParts()) total += part.Length;
+        return s.Length + total + 12;
+    }
+    public static int OverMixedChainedFieldOverloads(ref string? s, MixedBox mixed)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in mixed.MixedChildren()) total += part.Child.Length;
+        return s.Length + total + 20;
+    }
+    public static int OverMixedReturnEqualityControl(ref string? s, MixedBox mixed)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in mixed.MixedParts())
+        {
+            if (part == "x") total += 1;
+        }
+        return s.Length + total + 21;
+    }
+    public static int ForInitializerMemberTypeTestControl(ref string? s, Holder holder)
+    {
+        if (s == null) return 0;
+        var i = 0;
+        for (var unused = holder.Tag is string; i < 1; i++, i++)
+        {
+            holder.Child.Ping();
+        }
+        return s.Length + 22;
+    }
+    public static int OverConstrainedExtensionConflict(ref string? s, DisposableBox dbox)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in dbox.ConstrainedParts()) total += part.Length;
+        return s.Length + total + 13;
+    }
+    public static int ExplicitGenericLocalReceiverCall(
+        ref string? s,
+        System.Collections.Generic.Stack<Box> stack
+    )
+    {
+        if (s == null) return 0;
+        var i = 0;
+        while (i < 1)
+        {
+            System.Collections.Generic.Stack<Box>? copy = stack;
+            copy.Peek().Ping();
+            i++;
+        }
+        return s.Length + 17;
+    }
+    public static int MemberTypeTestInvalidatesMemberReceiverCall(ref string? s, Holder holder)
+    {
+        if (s == null) return 0;
+        var i = 0;
+        while (i < 1)
+        {
+            if (holder.Tag is string) holder.Child.Ping();
+            i++;
+        }
+        return s.Length + 18;
+    }
+    public static int ForHeaderConditionalInitializerControl(ref string? s, Box a, Box b, bool flag)
+    {
+        if (s == null) return 0;
+        var i = 0;
+        for (var copy = flag ? a : b; i < 1; i++, i++)
+        {
+            copy.Ping();
+        }
+        return s.Length + 19;
+    }
+    public static int ConstrainedReceiverControl<T>(ref string? s, T constrainedBox, Holder holder) where T : class, IBox
+    {
+        if (s == null) return 0;
+        var run = true;
+        while (run)
+        {
+            if (holder.Tag is string) constrainedBox.Ping();
+            run = false;
+        }
+        return s.Length + 15;
+    }
+    public static int NewableAndStaticExtensionControl<T>(
+        ref string? s,
+        T[] newableItems,
+        System.Collections.Generic.List<T> newableList,
+        System.Collections.Generic.List<T>[] lists,
+        string word
+    ) where T : new()
+    {
+        if (s == null) return 0;
+        var run = true;
+        while (run)
+        {
+            newableItems.NewablePing();
+            run = false;
+        }
+        var total = 0;
+        foreach (var list in lists) list.Clear();
+        foreach (var part in newableList.NewableParts()) total += part.Length;
+        foreach (var part in WordExtensions.WordParts(word)) total += part.Length;
+        return s.Length + total + 16;
+    }
+    public static int OverParameterArray(ref string? s, string[] parts)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in parts) total += part.Length;
+        return s.Length + total + 1;
+    }
+    public static int OverResolvableMemberCalls(
+        ref string? s,
+        Box box,
+        string word,
+        int[] values,
+        string[] parts,
+        GenericBox<int> genericIntBox,
+        OtherNs.LibBox libBox
+    )
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in Box.Parts()) total += part.Length;
+        foreach (var part in box.InstanceParts()) total += part.Length;
+        foreach (var part in box.InstanceParts(1)) total += part.Length;
+        foreach (var part in box.Self().InstanceParts(1)) total += part.Length;
+        foreach (var part in word.WordParts()) total += part.Length;
+        foreach (var entry in values.Entries()) total += entry;
+        foreach (var part in values.GenericArrayParts()) total += part.Length;
+        foreach (var part in libBox.LibParts()) total += part.Length;
+        foreach (var part in libBox.LibExtParts()) total += part.Length;
+        foreach (var part in OtherNs.StaticHolder.Seed) total += part.Length;
+        foreach (var part in OtherNs.StaticHolder.MakeSeed(parts)) total += part.Length;
+        foreach (var c in string.Empty) { if (c == 'a') total += 1; }
+        foreach (var c in string.Intern("x"))
+        {
+            var copyBox = box;
+            copyBox.Ping();
+            Box? annotatedCopy = box;
+            annotatedCopy.Ping();
+            genericIntBox.Items().Clear();
+            System.String.Intern("x");
+            box.Self().Ping();
+            OtherNs.StaticHolder.Instance.Ping();
+            if (c == 'x') total += 1;
+        }
+        return s.Length + total + 2;
+    }
+    public static int OverPureStringConcatenation(ref string? s)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var c in "a" + "b")
+        {
+            if (c == 'a') total += 1;
+        }
+        return s.Length + total + 4;
+    }
+    public static string Run()
+    {
+        OtherNs.StaticHolder.Seed = new[] { "q" };
+        OtherNs.StaticHolder.Instance = new Box();
+        var genericIntBox = new GenericBox<int> { StoredList = new System.Collections.Generic.List<int>() };
+        var stack = new System.Collections.Generic.Stack<Box>();
+        stack.Push(new Box());
+        string? text = "abc";
+        return AfterCallCollection(ref text) + "," + InsideCallCollection(ref text) + "," +
+            OverUnqualifiedStaticCall(ref text) + "," +
+            OverSourceShadowedMemberCall(ref text, new ShadowedBox()) + "," +
+            OverInheritedInterfaceGenericOverload(ref text, new ChildImpl()) + "," +
+            OverConstructedSourceGenericReturn(ref text, new GenericBox<string>()) + "," +
+            OverSynthesizedLinqImportConflict(ref text, new SelectBox()) + "," +
+            OverSynthesizedGenericCollisionCall(ref text, new Box(), new System.Collections.Generic.List<Unrelated>()) + "," +
+            ConditionalCopyReceiverCall(ref text, new Box(), new Box(), true) + "," +
+            TypeTestedCopyReceiverCall(ref text, new Box()) + "," +
+            OverMixedReturnOverloads(ref text, new MixedBox()) + "," +
+            OverMixedChainedReceiverOverloads(ref text, new MixedBox()) + "," +
+            OverMixedChainedFieldOverloads(ref text, new MixedBox()) + "," +
+            OverMixedReturnEqualityControl(ref text, new MixedBox()) + "," +
+            ForInitializerMemberTypeTestControl(ref text, new Holder()) + "," +
+            OverConstrainedExtensionConflict(ref text, new DisposableBox()) + "," +
+            ExplicitGenericLocalReceiverCall(ref text, stack) + "," +
+            MemberTypeTestInvalidatesMemberReceiverCall(ref text, new Holder()) + "," +
+            ForHeaderConditionalInitializerControl(ref text, new Box(), new Box(), true) + "," +
+            ConstrainedReceiverControl(ref text, new Box(), new Holder()) + "," +
+            NewableAndStaticExtensionControl(
+                ref text,
+                new[] { new Box() },
+                new System.Collections.Generic.List<Box> { new Box() },
+                new[] { new System.Collections.Generic.List<Box>() },
+                "hi"
+            ) + "," +
+            OverParameterArray(ref text, new[] { "a", "b" }) + "," +
+            OverResolvableMemberCalls(
+                ref text,
+                new Box(),
+                "hi",
+                new[] { 1 },
+                new[] { "q" },
+                genericIntBox,
+                new OtherNs.LibBox()
+            ) + "," +
+            OverPureStringConcatenation(ref text);
+    }
+}`, library: `
+namespace OtherNs
+{
+    public class LibBox
+    {
+        public string[] LibParts() => new[] { "m" };
+        protected void LibParts(int n) { }
+        protected void LibExtParts() { }
+    }
+}`)
+        Assert.Contains("return s!!.Length + total\n", printed.Replace("\r\n", "\n"))
+        Assert.Contains("total += s!!.Length", printed)
+        Assert.Contains("return s!!.Length + total + 3", printed)
+        Assert.Contains("return s!!.Length + total + 5", printed)
+        Assert.Contains("return s!!.Length + total + 6", printed)
+        Assert.Contains("return s!!.Length + total + 7", printed)
+        Assert.Contains("return s!!.Length + total + 8", printed)
+        Assert.Contains("return s!!.Length + total + 9", printed)
+        Assert.Contains("return s!!.Length + 10", printed)
+        Assert.Contains("return s!!.Length + 14", printed)
+        Assert.Contains("return s!!.Length + total + 11", printed)
+        Assert.Contains("return s!!.Length + total + 12", printed)
+        Assert.Contains("return s!!.Length + total + 20", printed)
+        Assert.Contains("return s.Length + total + 21", printed)
+        Assert.Contains("return s.Length + 22", printed)
+        Assert.Contains("return s!!.Length + total + 13", printed)
+        Assert.Contains("return s!!.Length + 17", printed)
+        Assert.Contains("return s!!.Length + 18", printed)
+        Assert.Contains("return s.Length + 19", printed)
+        Assert.Contains("return s.Length + 15", printed)
+        Assert.Contains("return s.Length + total + 16", printed)
+        Assert.Contains("return s.Length + total + 1", printed)
+        Assert.Contains("return s.Length + total + 2", printed)
+        Assert.Contains("return s.Length + total + 4", printed)
+        Assert.Equal(16, Regex.Matches(printed, `s!!`).Count)
+    }
+
+    /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null
+    /// when the loop has no emitted `break` (`RecordLoopExitFacts`, ADR-0213 R7 (f)). A loop with a `break` (targeting
+    /// it, a nested loop, a non-terminal switch break, a lowered `goto case` to an empty arm, or inside a lambda), a
+    /// loop whose condition lowers to a hoisted `break` guard, a loop in a function with a lowered `goto case` or a
+    /// synthesized `forContinue` label, or a loop whose condition runs an accessor or triggers an enclosing catch
+    /// filter that writes the variable does not get the loop-exit fact on main, so its read after the loop stays
+    /// asserted.
+    @Fact
+    func RefParameter_ReadAfterALoopWhoseExitConditionProvesNonNull_StaysBare() {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+public sealed class FieldValue
+{
+    public int Value = 1;
+}
+public sealed class ComputedValue
+{
+    public int Value => 1;
+}
+public sealed class Box
+{
+    public int F;
+    public bool Again() => false;
+    public static bool AgainNamed(bool repeat) => repeat;
+    public FieldValue Pick() => new FieldValue();
+    public ComputedValue Pick(int n) => new ComputedValue();
+}
+public sealed class Holder
+{
+    public object? Tag = "t";
+    public Box Child = new Box();
+}
+public sealed class HidingHolder
+{
+    public new Func<int> GetHashCode = () => 0;
+}
+public partial class Demo
+{
+    static partial void ElidedHook(Action a);
+    static bool Clear(ref string? s) { s = null; return false; }
+    public static int DoLoop(ref string? s, Box box)
+    {
+        do { box.F = 1; s = box.F > 0 ? "abc" : null; } while (s == null);
+        return s.Length + 1;
+    }
+    public static int DoLoopWithGuardAndForEach(ref string? s, Box box, int[] items)
+    {
+        if (s == null) return 0;
+        do
+        {
+            foreach (var i in items) { box.F = i; s = i > 0 ? "abc" : null; }
+        } while (s == null);
+        return s.Length + 2;
+    }
+    public static int WhileLoop(ref string? s, Box box)
+    {
+        s = null;
+        while (s == null)
+        {
+            ElidedHook(() => { while (true) { break; } });
+            box.F = 1;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 3;
+    }
+    public static int ForLoop(ref string? s, Box box)
+    {
+        s = null;
+        for (var i = 0; s == null; i++)
+        {
+            box.F = 1;
+            s = i >= 0 ? "abc" : null;
+        }
+        return s.Length + 4;
+    }
+    public static int WhileLoopWithBreak(ref string? s, Box box, Lazy<int> lazy)
+    {
+        while (s == null)
+        {
+            s = "abc";
+            if (lazy.Value > 0) break;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 5;
+    }
+    public static int WhileConditionRunsAccessor(ref string? s, Lazy<int> lazy)
+    {
+        while (lazy.Value < 0 || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 6;
+    }
+    public static int WhileLoopWithNestedBreak(ref string? s, Box box)
+    {
+        s = null;
+        while (s == null)
+        {
+            while (true) { break; }
+            box.F = 1;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 7;
+    }
+    public static int WhileConditionHoistsOutPattern(ref string? s, object probe)
+    {
+        s = null;
+        while (!(probe is int y && s != null))
+        {
+            y = 2;
+            s = "abc";
+        }
+        return s.Length + 8;
+    }
+    public static int WhileLoopWithLambdaBreak(ref string? s, Box box)
+    {
+        s = null;
+        while (s == null)
+        {
+            Action a = () => { while (true) { break; } };
+            a();
+            box.F = 1;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 9;
+    }
+    public static int WhileLoopWithNonTerminalSwitchBreak(ref string? s, Box box, int k)
+    {
+        s = null;
+        while (s == null)
+        {
+            switch (k)
+            {
+                case 0:
+                    if (box.F == 0) break;
+                    box.F = 2;
+                    break;
+            }
+            box.F = 1;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 10;
+    }
+    public static int WhileLoopInSwitchGotoFunction(ref string? s, Box box, int k)
+    {
+        switch (k)
+        {
+            case 0:
+                box.F = 1;
+                break;
+            case 1:
+                box.F = 2;
+                break;
+            default:
+                goto case 0;
+        }
+        s = null;
+        while (s == null)
+        {
+            box.F = 1;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 11;
+    }
+    public static int WhileLoopAfterSynthesizedForContinueLabel(ref string? s, Box box)
+    {
+        for (var i = 0; i < 1; i++, i++)
+        {
+            try { continue; } catch (Exception) { }
+        }
+        s = null;
+        while (s == null)
+        {
+            box.F = 1;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 12;
+    }
+    public static int WhileLoopWithGotoCaseToEmptyArm(ref string? s, Box box, int k)
+    {
+        s = null;
+        while (s == null)
+        {
+            switch (k)
+            {
+                case 0:
+                    goto case 2;
+                case 1:
+                    box.F = 2;
+                    break;
+                case 2:
+                    break;
+            }
+            box.F = 1;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 13;
+    }
+    public static int WhileLoopInTryWithEnclosingFilterWrite(ref string? s, Box box)
+    {
+        try
+        {
+            s = null;
+            while (box.Again() || s == null)
+            {
+                s = "abc";
+            }
+            return s.Length + 14;
+        }
+        catch (Exception) when (Clear(ref s))
+        {
+            return 0;
+        }
+    }
+    public static int WhileConditionWithConditionalReceiver(ref string? s, Box a, Box b, bool flag)
+    {
+        s = null;
+        while ((flag ? a : b).Again() || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 15;
+    }
+    public static int WhileLoopAfterPatternGuardEndLabel(ref string? s, Box box, object probe)
+    {
+        if (probe is int n && n > 0)
+        {
+            n++;
+        }
+        else
+        {
+        }
+        s = null;
+        while (s == null)
+        {
+            box.F = 1;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 16;
+    }
+    public static int WhileConditionCoalesceAssignNumeric(ref string? s)
+    {
+        long? n = null;
+        s = null;
+        while ((n ??= 1) < 0L || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 17;
+    }
+    public static int WhileConditionRelationalPatternConversion(ref string? s, byte b)
+    {
+        s = null;
+        while (b is > 250 || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 18;
+    }
+    public static int WhileConditionWithMemberTypeTestAndMemberCall(ref string? s, Holder holder)
+    {
+        s = null;
+        while ((holder.Tag is string && holder.Child.Again()) || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 19;
+    }
+    public static int WhileConditionWithNullConditionalReceiver(ref string? s, Box? a, Box? b, bool flag)
+    {
+        s = null;
+        while ((flag ? a : b)?.Again() == true || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 20;
+    }
+    public static int WhileConditionWithDelegateInvoke(ref string? s, Func<bool> callback, bool direct)
+    {
+        s = null;
+        while ((direct ? callback() : callback.Invoke()) || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 21;
+    }
+    public static int WhileConditionWithTestedHidingFieldReceiver(ref string? s, object o)
+    {
+        s = null;
+        while ((o is HidingHolder && o.GetHashCode() < 0) || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 22;
+    }
+    public static int WhileConditionWithConditionalFieldRead(ref string? s, Box a, Box b, bool flag)
+    {
+        s = null;
+        while ((flag ? a : b).F < 0 || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 23;
+    }
+    public static int WhileConditionWithObjectNilComparison(ref string? s, object? probe)
+    {
+        s = null;
+        while (probe == null || s == null)
+        {
+            probe = new object();
+            s = "abc";
+        }
+        return s.Length + 24;
+    }
+    public static int WhileConditionWithNamedArgumentCall(ref string? s)
+    {
+        s = null;
+        while (Box.AgainNamed(repeat: false) || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 25;
+    }
+    public static int WhileConditionWithDominatingHidingFieldReceiver(ref string? s, object o)
+    {
+        if (o is HidingHolder)
+        {
+            s = null;
+            while (o.GetHashCode() < 0 || s == null)
+            {
+                s = "abc";
+            }
+            return s.Length + 26;
+        }
+        return 0;
+    }
+    public static int WhileConditionAfterExpiredHidingFieldTypeTestControl(ref string? s, object o)
+    {
+        if (o is HidingHolder)
+        {
+        }
+        s = null;
+        while (o.GetHashCode() < 0 || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 29;
+    }
+    public static int WhileConditionWithOverloadedReadCandidate(ref string? s, Box box)
+    {
+        s = null;
+        while (box.Pick().Value < 0 || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 27;
+    }
+    public static int WhileRefObjectExitCondition(ref object? obj)
+    {
+        obj = null;
+        while (obj == null)
+        {
+            obj = "abc";
+        }
+        return obj.GetHashCode() > int.MinValue ? 28 : 0;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        object? obj = "abc";
+        return DoLoop(ref text, new Box()) + "," + DoLoopWithGuardAndForEach(ref text, new Box(), new[] { 1 }) + "," +
+            WhileLoop(ref text, new Box()) + "," + ForLoop(ref text, new Box()) + "," +
+            WhileLoopWithBreak(ref text, new Box(), new Lazy<int>(() => 1)) + "," +
+            WhileConditionRunsAccessor(ref text, new Lazy<int>(() => 1)) + "," +
+            WhileLoopWithNestedBreak(ref text, new Box()) + "," +
+            WhileConditionHoistsOutPattern(ref text, 1) + "," +
+            WhileLoopWithLambdaBreak(ref text, new Box()) + "," +
+            WhileLoopWithNonTerminalSwitchBreak(ref text, new Box(), 0) + "," +
+            WhileLoopInSwitchGotoFunction(ref text, new Box(), 2) + "," +
+            WhileLoopAfterSynthesizedForContinueLabel(ref text, new Box()) + "," +
+            WhileLoopWithGotoCaseToEmptyArm(ref text, new Box(), 0) + "," +
+            WhileLoopInTryWithEnclosingFilterWrite(ref text, new Box()) + "," +
+            WhileConditionWithConditionalReceiver(ref text, new Box(), new Box(), true) + "," +
+            WhileLoopAfterPatternGuardEndLabel(ref text, new Box(), 1) + "," +
+            WhileConditionCoalesceAssignNumeric(ref text) + "," +
+            WhileConditionRelationalPatternConversion(ref text, 3) + "," +
+            WhileConditionWithMemberTypeTestAndMemberCall(ref text, new Holder()) + "," +
+            WhileConditionWithNullConditionalReceiver(ref text, new Box(), new Box(), true) + "," +
+            WhileConditionWithDelegateInvoke(ref text, () => false, true) + "," +
+            WhileConditionWithTestedHidingFieldReceiver(ref text, new HidingHolder()) + "," +
+            WhileConditionWithConditionalFieldRead(ref text, new Box(), new Box(), true) + "," +
+            WhileConditionWithObjectNilComparison(ref text, null) + "," +
+            WhileConditionWithNamedArgumentCall(ref text) + "," +
+            WhileConditionWithDominatingHidingFieldReceiver(ref text, new HidingHolder()) + "," +
+            WhileConditionAfterExpiredHidingFieldTypeTestControl(ref text, new HidingHolder()) + "," +
+            WhileConditionWithOverloadedReadCandidate(ref text, new Box()) + "," +
+            WhileRefObjectExitCondition(ref obj);
+    }
+}`)
+        Assert.Contains("return s.Length + 1\n", printed.Replace("\r\n", "\n"))
+        Assert.Contains("return s.Length + 2", printed)
+        Assert.Contains("return s.Length + 3", printed)
+        Assert.Contains("return s.Length + 4", printed)
+        Assert.Contains("return s!!.Length + 5", printed)
+        Assert.Contains("return s!!.Length + 6", printed)
+        Assert.Contains("return s.Length + 7", printed)
+        Assert.Contains("return s!!.Length + 8", printed)
+        Assert.Contains("return s.Length + 9", printed)
+        Assert.Contains("return s.Length + 10", printed)
+        Assert.Contains("return s!!.Length + 11", printed)
+        Assert.Contains("return s!!.Length + 12", printed)
+        Assert.Contains("return s.Length + 13", printed)
+        Assert.Contains("return s!!.Length + 14", printed)
+        Assert.Contains("return s!!.Length + 15", printed)
+        Assert.Contains("return s!!.Length + 16", printed)
+        Assert.Contains("return s!!.Length + 17", printed)
+        Assert.Contains("return s!!.Length + 18", printed)
+        Assert.Contains("return s!!.Length + 19", printed)
+        Assert.Contains("return s!!.Length + 20", printed)
+        Assert.Contains("return s!!.Length + 21", printed)
+        Assert.Contains("return s!!.Length + 22", printed)
+        Assert.Contains("return s!!.Length + 23", printed)
+        Assert.Contains("return s!!.Length + 24", printed)
+        Assert.Contains("return s!!.Length + 25", printed)
+        Assert.Contains("return s!!.Length + 26", printed)
+        Assert.Contains("return s.Length + 29", printed)
+        Assert.Contains("return s!!.Length + 27", printed)
+        Assert.Contains("obj!!.GetHashCode()", printed)
+        Assert.Equal(19, Regex.Matches(printed, `s!!`).Count)
+    }
+
     shared {
         /// Runs `Demo.Run()` of the C# and of its translation and compares the output. [`library`](paramref) is C#
         /// that both reference as a prebuilt assembly (`Lib5617`), so its types are imported in the G#.
