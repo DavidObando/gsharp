@@ -723,6 +723,77 @@ func Run() int32 {
     })
 }
 Console.WriteLine(Run())`, "", "run", "1"}
+            yield[]object{"r06_conditional_true_default_uses_when_false_callable_aliases", `import System
+
+class C { var Value int32 = 1 }
+func Run(flag bool, callback () -> bool) int32 {
+    var x C? = C{}
+    var action () -> bool = func() bool {
+        x = nil
+        return true
+    }
+    if x == nil { return 0 }
+    return (flag && (action = callback) is {}) ? default : (if action() { x.Value } else { 0 })
+}
+Console.WriteLine(Run(false, () -> true))`, "GS0158@11:77", "reject", ""}
+            yield[]object{"r07_trailing_condition_effects_use_entry_callable_aliases", `import System
+
+class C { var Value int32 = 1 }
+func Run(flag bool, callback () -> bool) int32 {
+    var x C? = C{}
+    var action () -> bool = func() bool {
+        x = nil
+        return true
+    }
+    if x == nil { return 0 }
+    if action() == (if flag {
+        action = callback
+        true
+    } else {
+        action = callback
+        false
+    }) {
+        return x.Value
+    }
+    return 0
+}
+Console.WriteLine(Run(true, () -> true))`, "GS0158@18:18", "reject", ""}
+            yield[]object{"r08_subtype_proof_preserved_across_nil_guard_both_orders", `import System
+
+open class Pet {}
+class Dog : Pet { func Bark() int32 -> 1 }
+func Check1(p Pet?) int32 {
+    if p is Dog && p != nil { return p.Bark() }
+    return 0
+}
+func Check2(p Pet?) int32 {
+    if p != nil && p is Dog { return p.Bark() }
+    return 0
+}
+func Check3(p Pet?) int32 {
+    if p !is Dog || p == nil { return 0 }
+    return p.Bark()
+}
+func Check4(p Pet?) int32 {
+    if p == nil || p !is Dog { return 0 }
+    return p.Bark()
+}
+let d Pet? = Dog()
+Console.WriteLine(Check1(d) + Check2(d) + Check3(d) + Check4(d))`, "", "run", "4"}
+            yield[]object{"r09_conditional_expression_in_left_operand_propagates_gained_callable_alias", `import System
+
+func Run(flag bool, callback () -> string) int32 {
+    var x string? = "hi"
+    var action () -> string = func() string {
+        x = nil
+        return ""
+    }
+    if (flag ? ((action = callback) is {}) : ((action = callback) is {})) && (x is action()) {
+        return x.Length
+    }
+    return 0
+}
+Console.WriteLine(Run(true, () -> "hi"))`, "", "run", "2"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

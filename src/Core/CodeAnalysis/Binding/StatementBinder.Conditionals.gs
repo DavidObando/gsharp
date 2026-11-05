@@ -308,6 +308,7 @@ internal partial class StatementBinder {
             },
             thenSyntax,
             (clauseSyntax IfLetBindingClauseSyntax, bound IfLetBindingSupport.BoundIfLetBinding) -> {
+                RestoreExternalCallableAliases(clauseEntryAliases)
                 ApplyTrailingConditionEffects(clauseSyntax.Initializer, bound.Initializer)
                 RestoreExternalCallableAliases(clauseEntryAliases)
                 EnsureClosureAssignedNames(clauseSyntax)
@@ -914,11 +915,8 @@ internal partial class StatementBinder {
             return HashSet[VariableSymbol]()
         }
         let operandSyntax = operand.Syntax
-        if before.Count == 0 &&
-            (
-            operandSyntax == nil || !operandSyntax.DescendantNodesAndSelf().Any(
-                (node SyntaxNode) -> node is AssignmentExpressionSyntax or VariableDeclarationSyntax
-            )
+        if before.Count == 0 && operandSyntax != nil && !operandSyntax.DescendantNodesAndSelf().Any(
+            (node SyntaxNode) -> node is AssignmentExpressionSyntax or VariableDeclarationSyntax
         ) {
             return before
         }
@@ -1897,9 +1895,15 @@ internal partial class StatementBinder {
             }
             let merged = Dictionary[AccessPath, TypeSymbol](a)
             for kv in b {
-                // Later (more specific) wins on conflict. The type-test path passes
-                // its frame as `b`, so a type-test narrowing supersedes a coincident
-                // nil-guard narrowing on the same variable.
+                if merged.TryGetValue(kv.Key, out var existing) && existing != kv.Value {
+                    let existingToNew = Conversion.ClassifyNonStructural(existing, kv.Value)
+                    let newToExisting = Conversion.ClassifyNonStructural(kv.Value, existing)
+                    if existingToNew.Exists &&
+                        existingToNew.IsImplicit &&
+                        !(newToExisting.Exists && newToExisting.IsImplicit) {
+                        continue
+                    }
+                }
                 merged[kv.Key] = kv.Value
             }
             return merged

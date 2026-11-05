@@ -2142,6 +2142,7 @@ internal partial class StatementBinder {
         } finally {
             activeConditionRemovedFacts = outerRemoved
         }
+        RestoreExternalCallableAliases(aliasesBefore)
         ApplyTrailingConditionEffects(conditionSyntax, condition, removedFacts)
         if outerRemoved != nil {
             for entry in removedFacts {
@@ -2177,6 +2178,7 @@ internal partial class StatementBinder {
     internal func BindInitializerWithEffects(initializerSyntax ExpressionSyntax) BoundExpression {
         let aliasesBefore = CaptureExternalCallableAliases()
         let bound = bindExpression(initializerSyntax, false)
+        RestoreExternalCallableAliases(aliasesBefore)
         ApplyTrailingConditionEffects(initializerSyntax, bound)
         RestoreExternalCallableAliases(aliasesBefore)
         ApplyHeaderCallableEffects(bound)
@@ -2194,6 +2196,7 @@ internal partial class StatementBinder {
     )(Left BoundExpression, Right BoundExpression) {
         let aliasesBeforeLeft = CaptureExternalCallableAliases()
         let boundLeft = bindLeft()
+        RestoreExternalCallableAliases(aliasesBeforeLeft)
         ApplyTrailingConditionEffects(leftSyntax, boundLeft)
         let (thenNarrow, elseNarrow, whenTrueAliases, whenFalseAliases) = ComputeConditionNarrowingInOrder(
             boundLeft,
@@ -2203,13 +2206,12 @@ internal partial class StatementBinder {
             allowBoolCall: false,
             header: leftSyntax
         )
-        RestoreExternalCallableAliases(
-            if isAnd {
-                whenTrueAliases
-            } else {
-                whenFalseAliases
-            }
-        )
+        let rightAliases = if isAnd {
+            whenTrueAliases
+        } else {
+            whenFalseAliases
+        }
+        RestoreExternalCallableAliases(rightAliases)
         try {
             let rightFrame = if isAnd {
                 thenNarrow
@@ -2217,6 +2219,7 @@ internal partial class StatementBinder {
                 elseNarrow
             }
             let boundRight = bindRight(boundLeft, rightFrame)
+            RestoreExternalCallableAliases(rightAliases)
             ApplyTrailingConditionEffects(rightSyntax, boundRight)
             return (boundLeft, boundRight)
         } finally {

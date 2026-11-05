@@ -53,10 +53,14 @@ internal partial class StatementBinder {
         originatingSyntax SyntaxNode,
         labelName string?
     ) BoundStatement {
+        let aliasesBeforeLower = CaptureExternalCallableAliases()
         let lowerBound = bindExpressionWithTargetType(syntax.LowerBound, TypeSymbol.Int32)
+        RestoreExternalCallableAliases(aliasesBeforeLower)
         ApplyTrailingConditionEffects(syntax.LowerBound, lowerBound)
         ApplyHeaderCallableEffects(lowerBound)
+        let aliasesBeforeUpper = CaptureExternalCallableAliases()
         let upperBound = bindExpressionWithTargetType(syntax.UpperBound, TypeSymbol.Int32)
+        RestoreExternalCallableAliases(aliasesBeforeUpper)
         ApplyTrailingConditionEffects(syntax.UpperBound, upperBound)
         ApplyHeaderCallableEffects(upperBound)
         $scope = BoundScope($scope)
@@ -683,8 +687,8 @@ internal partial class StatementBinder {
                     } else {
                         let aliasesBeforeCondition = CaptureExternalCallableAliases()
                         let bound = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool)
-                        ApplyTrailingConditionEffects(conditionSyntax, bound)
                         RestoreExternalCallableAliases(aliasesBeforeCondition)
+                        ApplyTrailingConditionEffects(conditionSyntax, bound)
                         ApplyHeaderCallableEffects(bound)
                         boundCondition = bound
                     }

@@ -697,13 +697,27 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         } else if trueIsBareDefault {
-            whenFalse = bindWhenFalse(nil)
-            if whenFalse is BoundErrorExpression {
+            var falseFailed = false
+            var inferredDefaultType TypeSymbol = TypeSymbol.Error
+            _,
+            whenFalse = bindConditionalBranches(
+                true,
+                () -> BoundErrorExpression(nil),
+                () -> {
+                    let bound = bindWhenFalse(nil)
+                    falseFailed = bound is BoundErrorExpression
+                    if !falseFailed {
+                        inferredDefaultType = bound.Type
+                    }
+                    return bound
+                }
+            )
+            if falseFailed {
                 return BoundErrorExpression(nil)
             }
             whenTrue = BindWithPatternVariables(
                 patternWhenTrue,
-                () -> BoundDefaultExpression(syntax.WhenTrue, whenFalse.Type),
+                () -> BoundDefaultExpression(syntax.WhenTrue, inferredDefaultType),
                 syntax.WhenTrue
             )
         } else if falseIsBareDefault {
