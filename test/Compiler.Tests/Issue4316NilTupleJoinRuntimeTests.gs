@@ -176,6 +176,8 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
     })
     let isMatched = (d ? (nil, "x") : (nil, nil)) is { }
     let asObj = (d ? (nil, "x") : (nil, nil)) as object
+    let fs FormattableString = "${d ? (nil, "x") : (nil, nil)}"
+    let fmt IFormattable = "${d ? (nil, "x") : (nil, nil)}"
     return if standalone.Item1 == nil &&
         da == nil &&
         (db != nil || !d) &&
@@ -204,7 +206,9 @@ func PartiallyUnresolved(c bool, d bool, i int32) (string?, string?) {
         (nestedOuterNil != nil || !d) &&
         cleanupTuple.Item1 == nil &&
         isMatched &&
-        asObj != nil {
+        asObj != nil &&
+        fs.ArgumentCount == 1 &&
+        fmt != nil {
         (a.Item2, b.Item2)
     } else {
         ("bad", "bad")

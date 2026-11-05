@@ -1549,9 +1549,16 @@ internal partial class ExpressionBinder {
                 "an interpolation segment has an expression",
                 expression: "segment.Expression"
             )
-            let bound = BindExpression(segmentExpression)
+            var bound = BindExpression(segmentExpression)
             if bound is BoundErrorExpression {
                 return false
+            }
+            if bound.Type is TupleTypeSymbol{HasNilElement: true} {
+                bound = conversions.BindConversion(
+                    segmentExpression.Location,
+                    bound,
+                    TupleTypeSymbol.ResolveNilElements(bound.Type)
+                )
             }
             let index = values.Count
             values.Add(bound)
