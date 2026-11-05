@@ -120,14 +120,10 @@ shared class ExhaustivenessAnalyzer {
             return false
         }
         let nonNullPatterns = patternArray.OfType[BoundPattern]().ToArray()
-        // Issue #1643: an `or` disjunction (`Red or Green`) covers whatever its
-        // leaves cover, including a nested discard, so flatten before checking
-        // for a wildcard arm. `and` conjunctions narrow and are NOT flattened.
-        if nonNullPatterns.Any(
-            (pattern BoundPattern) -> FlattenDisjunction(pattern).Any(
-                (leaf BoundPattern) -> leaf is BoundDiscardPattern
-            )
-        ) {
+        // Issue #1643 / #5016: an `or` disjunction (`Red or Green`) covers
+        // whatever its leaves cover, and any irrefutable pattern combination
+        // (`1 or _`, `_ and _`, `not not _`) covers all inputs.
+        if nonNullPatterns.Any((pattern BoundPattern) -> BoundSwitchExpressionArm.MatchesAllInputs(pattern)) {
             return false
         }
         if TryGetEnumVariants(discriminantType, out var enumVariants) {

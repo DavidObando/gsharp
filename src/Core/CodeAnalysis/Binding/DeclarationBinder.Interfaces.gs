@@ -29,15 +29,23 @@ internal partial class DeclarationBinder {
         if containingType != nil {
             interfaceSymbol.SetContainingType(containingType)
         }
-        interfaceSymbol.SetAttributes(
-            BindAttributes(
-                syntax.Annotations,
-                AttributeTargetKind.Type,
-                Binder.TypeDeclarationAllowedTargets,
-                "an interface declaration",
-                AttributeTargets.Interface
+        if !syntax.Annotations.IsDefaultOrEmpty {
+            DeferOrBindShellAttributes(
+                syntax.SyntaxTree,
+                $package.Name,
+                () -> {
+                    interfaceSymbol.SetAttributes(
+                        BindAttributes(
+                            syntax.Annotations,
+                            AttributeTargetKind.Type,
+                            Binder.TypeDeclarationAllowedTargets,
+                            "an interface declaration",
+                            AttributeTargets.Interface
+                        )
+                    )
+                }
             )
-        )
+        }
         // Issue #2519: publish bare type parameters with the interface shell
         // and resolve their constraints only when members are bound, after all
         // same-compilation aggregate shells exist. This is the interface

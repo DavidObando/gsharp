@@ -3137,7 +3137,10 @@ internal partial class ExpressionBinder {
             }
             case accessorChain is AccessorExpressionSyntax when !accessorChain.IsNullConditional {
                 if TryResolveQualifiedSourceType(accessorChain, out var remainder, out var sourceType) &&
-                    (remainder is IndexExpressionSyntax or GenericNameExpressionSyntax) {
+                    (
+                    remainder is IndexExpressionSyntax{IsNullConditional: false, Target: NameExpressionSyntax} ||
+                        remainder is GenericNameExpressionSyntax
+                ) {
                     return TryResolveConstructedGenericTypeReceiver(
                         remainder,
                         out constructedStruct,

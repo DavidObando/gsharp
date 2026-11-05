@@ -540,9 +540,12 @@ internal partial class ExpressionBinder {
             case accessor is AccessorExpressionSyntax {
                 return TryResolveQualifiedSourceTypeHead(accessor.LeftPart, packageSegments, out sourceType)
             }
-            case call is CallExpressionSyntax when !call.Identifier.IsMissing {
+            case call is CallExpressionSyntax when call.Callee == nil && !call.Identifier.IsMissing {
                 simpleName = call.Identifier.ValueText
                 arity = call.TypeArgumentList?.Arguments.Count ?? -1
+            }
+            case CallExpressionSyntax{Callee: {} callee} {
+                return TryResolveQualifiedSourceTypeHead(callee, packageSegments, out sourceType)
             }
             case literal is StructLiteralExpressionSyntax when !literal.TypeIdentifier.IsMissing {
                 simpleName = literal.TypeIdentifier.ValueText
@@ -559,6 +562,9 @@ internal partial class ExpressionBinder {
             case index is IndexExpressionSyntax when index.Target is NameExpressionSyntax indexNameHead {
                 simpleName = indexNameHead.IdentifierToken.ValueText
                 arity = index.Indices.Count
+            }
+            case index is IndexExpressionSyntax {
+                return TryResolveQualifiedSourceTypeHead(index.Target, packageSegments, out sourceType)
             }
             default {
                 return false
@@ -582,8 +588,10 @@ internal partial class ExpressionBinder {
         }
         var structure StructSymbol? = sourceType as StructSymbol
         var interface_ InterfaceSymbol? = sourceType as InterfaceSymbol
-        if receiverSyntax is IndexExpressionSyntax{IsNullConditional: false} or
-            GenericNameExpressionSyntax &&
+        if (
+            receiverSyntax is IndexExpressionSyntax{IsNullConditional: false, Target: NameExpressionSyntax} ||
+                receiverSyntax is GenericNameExpressionSyntax
+        ) &&
             !TryResolveConstructedGenericTypeReceiver(
             receiverSyntax,
             out structure,
@@ -595,6 +603,24 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(remainder)
         }
         switch remainder {
+            case CallExpressionSyntax{Callee: {} callee} call {
+                let target = BindQualifiedSourceTypeRemainder(callee, sourceType)
+                if target is BoundErrorExpression {
+                    return target
+                }
+                let targetText = callee.SyntaxTree.Text.ToString(callee.Span)
+                return if call.NullableQuestionToken != nil {
+                    overloads.BindNullConditionalIndirectCallExpression(call, target, targetText, callee.Location)
+                } else {
+                    overloads.BindIndirectCallExpression(
+                        call,
+                        target,
+                        targetText,
+                        callee.Location,
+                        nullSafeInvocation: "?(...)"
+                    )
+                }
+            }
             case call is CallExpressionSyntax {
                 return overloads.BindCallExpression(call, sourceType)
             }
@@ -607,10 +633,26 @@ internal partial class ExpressionBinder {
             case CollectionInitializerExpressionSyntax{Target: {} target} collection {
                 return BindCollectionInitializerSuffix(collection, BindQualifiedSourceTypeRemainder(target, sourceType))
             }
+            case index is IndexExpressionSyntax when index.Target is not NameExpressionSyntax {
+                let indexTarget = BindQualifiedSourceTypeRemainder(index.Target, sourceType)
+                if indexTarget is BoundErrorExpression {
+                    return indexTarget
+                }
+                if index.IsNullConditional {
+                    return BindNullConditionalIndexFromBoundTarget(indexTarget, index)
+                }
+                return if index.Indices.Count > 1 || IsRectangularArrayType(indexTarget.Type) {
+                    BindRectangularIndexAgainstTarget(indexTarget, index.Indices, index.Target.Location)
+                } else {
+                    BindIndexAgainstTarget(indexTarget, index.Index, index.Target.Location)
+                }
+            }
             case accessor is AccessorExpressionSyntax when accessor.LeftPart is CallExpressionSyntax or
                 StructLiteralExpressionSyntax or
                 ObjectCreationExpressionSyntax or
-                CollectionInitializerExpressionSyntax {
+                CollectionInitializerExpressionSyntax or
+                IndexExpressionSyntax and
+                {Target: not NameExpressionSyntax} {
                 let receiver = BindQualifiedSourceTypeRemainder(accessor.LeftPart, sourceType)
                 if receiver is BoundErrorExpression {
                     return receiver

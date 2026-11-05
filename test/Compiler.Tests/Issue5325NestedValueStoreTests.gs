@@ -234,6 +234,154 @@ import System.Threading.Tasks
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "rejected.dll")))
     }
 
+    @Fact
+    func Issue5012_ChannelSuspendedNativeSliceNestedValueStores_VerifyAndExecute() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package ChannelParameterStore
+import System
+struct Cell {
+    var Item int32
+    var Other int32
+    func Bump() { Item++ }
+}
+struct Pair {
+    var Left Cell
+    var Right Cell
+    func Bump() { Left.Item++ }
+}
+class SliceHolder {
+    var Frames slice[Pair]
+}
+struct SliceRow {
+    var Frames slice[Pair]
+}
+var owners = 0
+var indices = 0
+var index = 0
+let storage = []Pair{Pair{Left: Cell{Item: 3, Other: 50}, Right: Cell{Item: 80}}}
+var frames = slice[Pair].FromArray(storage)
+var holder = SliceHolder{Frames: slice[Pair].FromArray(storage)}
+func ChangeHolder() int32 {
+    let replacement = []Pair{Pair{}}
+    holder = SliceHolder{Frames: slice[Pair].FromArray(replacement)}
+    return 0
+}
+func ReplaceSlice(ref s slice[Pair], replacement slice[Pair]) int32 {
+    s = replacement
+    return 0
+}
+func ReplaceRows(ref rows []SliceRow, replacement []SliceRow) int32 {
+    rows = replacement
+    return 0
+}
+async func RunHolderSet(h SliceHolder, ch chan[int32]) {
+    h.Frames[0, false].Left.Item = <-ch
+}
+async func RunReseatedCompoundAdd(initial slice[Pair], replacement slice[Pair], ch chan[int32]) {
+    var s = initial
+    s[ReplaceSlice(ref s, replacement), false].Left.Item += <-ch
+}
+func Owner() slice[Pair] {
+    owners++
+    return frames
+}
+func Index() int32 {
+    indices++
+    return index
+}
+async func RunAdd(s slice[Pair], ch chan[int32]) {
+    s[0].Left.Item += <-ch
+}
+async func RunSet(ch chan[int32]) {
+    Owner()[Index()].Left.Item = <-ch
+}
+let ready = chan[int32](1)
+ready <- 7
+RunAdd(frames, ready).GetAwaiter().GetResult()
+Console.WriteLine(storage[0].Left.Item)
+storage[0].Left.Item = 3
+let parked = chan[int32](0)
+let pending = RunAdd(frames, parked)
+Console.WriteLine(pending.IsCompleted)
+frames = slice[Pair]{Pair{}}
+storage[0] = Pair{Left: Cell{Item: 40, Other: 55}, Right: Cell{Item: 88}}
+parked <- 7
+pending.GetAwaiter().GetResult()
+Console.WriteLine("${storage[0].Left.Item}:${storage[0].Left.Other}:${storage[0].Right.Item}:${frames[0].Left.Item}")
+frames = slice[Pair].FromArray(storage)
+let setCh = chan[int32](0)
+let pendingSet = RunSet(setCh)
+Console.WriteLine("${pendingSet.IsCompleted}:${owners}:${indices}")
+frames = slice[Pair]{Pair{}}
+index = 99
+setCh <- 25
+pendingSet.GetAwaiter().GetResult()
+Console.WriteLine("${storage[0].Left.Item}:${owners}:${indices}")
+frames = slice[Pair].FromArray(storage)
+index = 5
+let neverRead = chan[int32](0)
+try {
+    RunSet(neverRead).GetAwaiter().GetResult()
+} catch (error IndexOutOfRangeException) {
+    Console.WriteLine("bounds:${owners}:${indices}")
+}
+frames = slice[Pair].FromArray(storage)
+index = 0
+var blockIdxCalls = 0
+scope {
+    go frames[{ blockIdxCalls++ 0 }].Bump()
+    frames = slice[Pair]{Pair{}}
+}
+frames = slice[Pair].FromArray(storage)
+index = 0
+scope {
+    go Owner()[Index()].Left.Bump()
+    frames = slice[Pair]{Pair{}}
+    index = 99
+}
+let afterGo = storage[0].Left.Item
+holder = SliceHolder{Frames: slice[Pair].FromArray(storage)}
+holder.Frames[ChangeHolder(), false].Left.Item = 31
+let reseatStorage = []Pair{Pair{Left: Cell{Item: 1}}}
+var reseated = slice[Pair]{Pair{}}
+reseated[ReplaceSlice(ref reseated, slice[Pair].FromArray(reseatStorage)), false].Left.Item = 37
+let holderCh = chan[int32](0)
+let holderTarget = SliceHolder{Frames: slice[Pair].FromArray(storage)}
+let pendingHolder = RunHolderSet(holderTarget, holderCh)
+let parkedReplacement = []Pair{Pair{}}
+holderTarget.Frames = slice[Pair].FromArray(parkedReplacement)
+holderCh <- 41
+pendingHolder.GetAwaiter().GetResult()
+let rowBacking = []Pair{Pair{}}
+let rowReplacementBacking = []Pair{Pair{}}
+var rows = []SliceRow{SliceRow{Frames: slice[Pair].FromArray(rowBacking)}}
+let replacementRows = []SliceRow{SliceRow{Frames: slice[Pair].FromArray(rowReplacementBacking)}}
+rows[0].Frames[ReplaceRows(ref rows, replacementRows), false].Left.Item = 43
+var badRowIdxCalls = 0
+try {
+    rows[99].Frames[{ badRowIdxCalls++ 0 }, false].Left.Item = 47
+} catch (error IndexOutOfRangeException) {
+}
+let compoundOldBacking = []Pair{Pair{Left: Cell{Item: 5}}}
+let compoundNewBacking = []Pair{Pair{Left: Cell{Item: 10}}}
+let compoundCh = chan[int32](1)
+compoundCh <- 9
+RunReseatedCompoundAdd(
+    slice[Pair].FromArray(compoundOldBacking),
+    slice[Pair].FromArray(compoundNewBacking),
+    compoundCh
+).GetAwaiter().GetResult()
+Console.WriteLine("go:${afterGo}:${storage[0].Left.Item}:${reseatStorage[0].Left.Item}:${parkedReplacement[0].Left.Item}:${rowBacking[0].Left.Item}:${rowReplacementBacking[0].Left.Item}:${badRowIdxCalls}:${compoundOldBacking[0].Left.Item}:${compoundNewBacking[0].Left.Item}:${owners}:${indices}:${blockIdxCalls}:${holder.Frames[0].Left.Item}")`
+        let dll = fixture.Compile(source, "channel_parameter_store", true)
+        VerifyStrict(dll)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                "10\nFalse\n10:55:88:0\nFalse:1:1\n25:1:1\nbounds:2:2\ngo:27:41:37:0:43:0:0:5:19:3:3:1:0\n"
+            ),
+            Encoding.UTF8.GetBytes(fixture.Run(dll))
+        )
+    }
+
     shared {
         private func VerifyStrict(path string, references ...string) {
             var report = string.Empty

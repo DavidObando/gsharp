@@ -320,10 +320,8 @@ public struct WrongOwner {
         )
     }
 
-    /// Issue #5425: an alias to an imported nongeneric data class gets the literal arity check.
-    /// The check applies before the imported constructor path, for literals and spreads.
-    /// The test reads global-scope diagnostics only.
-    /// A separate defect makes program binding fail for these aliases.
+    /// Issue #5425 / #5528: an alias to an imported nongeneric data class gets the literal arity check
+    /// without failing program binding.
     @Theory
     @InlineData(false)
     @InlineData(true)
@@ -370,28 +368,32 @@ public class Generic<T> {
         } else {
             implementationPath
         }
-        let prefix = "package Demo\nimport AliasArity5425\ntype A = Box\ntype B = A\ndata struct S(Value int32)\n"
-        for statement in[]string{
-            "let value = A[int32]{Value: 7}",
-            "let value = B[int32]{Value: 7}",
-            "let value = A[int32, string]{Value: 7}",
-            "let value = A[int32]{...S{Value: 7}}"
+        for prefix in[]string{
+            "package Demo\nimport AliasArity5425\ntype A = Box\ntype B = A\ndata struct S(Value int32)\n",
+            "import AliasArity5425\ntype A = Box\ntype B = A\ndata struct S(Value int32)\n"
         } {
-            let diagnostics = BindGlobalScope(selected, prefix + statement)
-            let diagnostic = Assert.Single(diagnostics, (d Diagnostic) -> d.IsError)
-            Assert.Equal("GS0148", diagnostic.Id)
-            let typeArguments = statement.Substring(13, statement.IndexOf('{') - 13)
-            Assert.Equal(prefix.Length + 13, diagnostic.Location.Span.Start)
-            Assert.Equal(typeArguments, diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
-        }
-        let controls = BindGlobalScope(selected, prefix + `let a = A{Value: 1}
+            for statement in[]string{
+                "let value = A[int32]{Value: 7}",
+                "let value = B[int32]{Value: 7}",
+                "let value = A[int32, string]{Value: 7}",
+                "let value = A[int32]{...S{Value: 7}}"
+            } {
+                let diagnostics = BindGlobalScope(selected, prefix + statement)
+                let diagnostic = Assert.Single(diagnostics, (d Diagnostic) -> d.IsError)
+                Assert.Equal("GS0148", diagnostic.Id)
+                let typeArguments = statement.Substring(13, statement.IndexOf('{') - 13)
+                Assert.Equal(prefix.Length + 13, diagnostic.Location.Span.Start)
+                Assert.Equal(typeArguments, diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+            }
+            let controls = BindGlobalScope(selected, prefix + `let a = A{Value: 1}
 let b = B{Value: 2}
 let c = Box{Value: 3}
 let d = A{...S{Value: 4}}
 let e = Generic[int32]{Value: 5}
 let f = Generic[int32]{...S{Value: 6}}
 let g int32 = a.Value + b.Value + c.Value + d.Value + e.Value + f.Value`)
-        Assert.Empty(controls.Where((d Diagnostic) -> d.IsError))
+            Assert.Empty(controls.Where((d Diagnostic) -> d.IsError))
+        }
     }
 
     shared {
@@ -400,7 +402,11 @@ let g int32 = a.Value + b.Value + c.Value + d.Value + e.Value + f.Value`)
             resolver.CurrentAssemblyName = "AliasArity5425.Consumer"
             let tree = SyntaxTree.Parse(SourceText.From(source))
             let compilation = Compilation(resolver, tree)
-            return tree.Diagnostics.Concat(compilation.GlobalScope.Diagnostics).ToArray()
+            return tree
+                .Diagnostics
+                .Concat(compilation.GlobalScope.Diagnostics)
+                .Concat(compilation.BoundProgram.Diagnostics)
+                .ToArray()
         }
 
         private func EmitLibraryAssembly(libraryPath string) {

@@ -337,6 +337,35 @@ func Main() {
         Assert.Equal("13${Environment.NewLine}", output)
     }
 
+    @Fact
+    func NominalInterfaceStaticStructInitializer_LibraryAndExecutable_EmitsAndRuns() {
+        const librarySource = `public struct Payload { public var Number int32 }
+public interface State {
+    shared { public var Saved Payload = Payload{Number: 17} }
+}`
+        let dllPath = CompileLibrary(librarySource)
+        TryCleanup(dllPath)
+
+        const executableSource = `package Probe
+import System
+
+public struct Payload {
+    public var Number int32
+    public var Label string
+}
+public interface State {
+    shared {
+        public var Saved Payload = Payload{Number: 17, Label: "ready"}
+    }
+}
+
+func Main() {
+    Console.WriteLine("${State.Saved.Number}:${State.Saved.Label}")
+}`
+        let output = CompileAndRun(executableSource)
+        Assert.Equal("17:ready${Environment.NewLine}", output)
+    }
+
     shared {
         private func CompileLibrary(source string) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_1030_lib_").FullName

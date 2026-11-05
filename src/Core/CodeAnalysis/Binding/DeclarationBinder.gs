@@ -121,6 +121,9 @@ internal partial class DeclarationBinder {
     // == false for a parameter whose default hasn't been bound yet.
     private let pendingParameterDefaultValueBindings List[() -> void] = List[() -> void]()
 
+    private let pendingShellAttributeBindings List[() -> void] = List[() -> void]()
+    private var deferShellAttributes bool = true
+
     // Issue #4481: property overrides whose type differs from the base
     // property's. Whether the difference is a covariant narrowing depends on
     // the override type's base class, and that type may be bound after the
@@ -452,15 +455,23 @@ internal partial class DeclarationBinder {
             enumSymbol.SetContainingType(containingType)
         }
         Binder.AttachDocumentation(enumSymbol, syntax)
-        enumSymbol.SetAttributes(
-            BindAttributes(
-                syntax.Annotations,
-                AttributeTargetKind.Type,
-                Binder.TypeDeclarationAllowedTargets,
-                "an enum declaration",
-                AttributeTargets.Enum
+        if !syntax.Annotations.IsDefaultOrEmpty {
+            DeferOrBindShellAttributes(
+                syntax.SyntaxTree,
+                $package.Name,
+                () -> {
+                    enumSymbol.SetAttributes(
+                        BindAttributes(
+                            syntax.Annotations,
+                            AttributeTargetKind.Type,
+                            Binder.TypeDeclarationAllowedTargets,
+                            "an enum declaration",
+                            AttributeTargets.Enum
+                        )
+                    )
+                }
             )
-        )
+        }
         let seenMemberNames = HashSet[string]()
         let declaredValues = Dictionary[string, int32]()
         let members = ImmutableArray.CreateBuilder[EnumMemberSymbol]()
@@ -498,14 +509,21 @@ internal partial class DeclarationBinder {
             // per ECMA-335 §I.8.5.2), so #175 use-site diagnostics
             // (e.g. `@Obsolete`) fire on `Color.Red` references.
             if !memberSyntax.Annotations.IsDefaultOrEmpty {
-                memberSymbol.SetAttributes(
-                    BindAttributes(
-                        memberSyntax.Annotations,
-                        AttributeTargetKind.Field,
-                        Binder.VariableDeclarationAllowedTargets,
-                        "an enum member declaration",
-                        AttributeTargets.Field
-                    )
+                let currentMemberSyntax = memberSyntax
+                DeferOrBindShellAttributes(
+                    currentMemberSyntax.SyntaxTree,
+                    $package.Name,
+                    () -> {
+                        memberSymbol.SetAttributes(
+                            BindAttributes(
+                                currentMemberSyntax.Annotations,
+                                AttributeTargetKind.Field,
+                                Binder.VariableDeclarationAllowedTargets,
+                                "an enum member declaration",
+                                AttributeTargets.Field
+                            )
+                        )
+                    }
                 )
             }
             members.Add(memberSymbol)
@@ -518,6 +536,33 @@ internal partial class DeclarationBinder {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name)
         }
         return enumSymbol
+    }
+
+    internal func DeferOrBindShellAttributes(syntaxTree SyntaxTree, packageName string, bind() -> void) {
+        if !deferShellAttributes {
+            bind()
+            return
+        }
+        pendingShellAttributeBindings.Add(
+            () -> {
+                let previousPackage = $scope.SetCurrentDeclaringPackage(packageName)
+                let previousTree = $scope.SetCurrentReferencingSyntaxTree(syntaxTree)
+                try {
+                    bind()
+                } finally {
+                    $scope.SetCurrentDeclaringPackage(previousPackage)
+                    $scope.SetCurrentReferencingSyntaxTree(previousTree)
+                }
+            }
+        )
+    }
+
+    internal func BindPendingShellAttributes() {
+        deferShellAttributes = false
+        for bind in pendingShellAttributeBindings {
+            bind()
+        }
+        pendingShellAttributeBindings.Clear()
     }
 
     /// Issue #973: declares and fully binds a struct/class in a single pass

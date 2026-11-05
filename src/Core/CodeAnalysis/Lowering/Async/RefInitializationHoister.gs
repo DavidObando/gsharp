@@ -65,7 +65,8 @@ shared class RefInitializationHoister {
                         BoundFieldAccessExpression and
                         {Receiver: not nil} or
                         BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: not nil} or
-                        BoundDereferenceExpression{Operand: BoundConditionalAddressExpression}
+                        BoundDereferenceExpression{Operand: BoundConditionalAddressExpression} or
+                        BoundDereferenceExpression{Operand: BoundClrIndexExpression}
                 ) {
                     prelude.Add(
                         BoundExpressionStatement(node.Syntax, BoundAddressOfExpression(addressOf.Syntax, template))
@@ -127,14 +128,30 @@ shared class RefInitializationHoister {
             prelude ImmutableArray[BoundStatement].Builder,
             captureComponents bool = false
         ) BoundExpression {
-            if RefCapabilities.IsRefReturningAccess(operand) {
+            if RefCapabilities.IsRefReturningAccess(operand) && !SideEffectSpiller.IsNativeSliceElementOperand(
+                operand
+            ) {
                 throw System.InvalidOperationException(
                     "Opaque ref-returning storage must be rejected before async address reconstruction."
                 )
             }
             switch operand {
+                case block is BoundBlockExpression {
+                    for statement in block.Statements {
+                        prelude.Add(RewriteStatement(statement))
+                    }
+                    return HoistOperand(block.Expression, prelude, captureComponents)
+                }
                 case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
                     return HoistOperand(address.Operand, prelude, captureComponents: true)
+                }
+                case dereference is BoundDereferenceExpression when SideEffectSpiller.IsNativeSliceElementOperand(
+                    dereference.Operand
+                ) {
+                    return BoundDereferenceExpression(
+                        dereference.Syntax,
+                        HoistOperand(dereference.Operand, prelude, captureComponents: true)
+                    )
                 }
                 case tuple is BoundTupleElementAccessExpression {
                     // Later arguments can replace an owner or index before address reconstruction.
@@ -183,10 +200,45 @@ shared class RefInitializationHoister {
                 }
                 case clrIdx is BoundClrIndexExpression {
                     {
-                        let target = HoistIfNeeded(clrIdx.Target, prelude)
+                        var snapshotAfterArgs = false
+                        let receiverLocation = if SideEffectSpiller.IsInPlaceStorageWriteReceiver(clrIdx.Target) {
+                            snapshotAfterArgs = true
+                            let captured = HoistOperand(clrIdx.Target, prelude, captureComponents: true)
+                            if (
+                                captured is BoundTupleElementAccessExpression or
+                                    BoundIndexExpression or
+                                    BoundFieldAccessExpression and
+                                    {Receiver: not nil} or
+                                    BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: not nil} or
+                                    BoundDereferenceExpression{Operand: BoundConditionalAddressExpression} or
+                                    BoundDereferenceExpression{Operand: BoundClrIndexExpression}
+                            ) {
+                                prelude.Add(
+                                    BoundExpressionStatement(
+                                        clrIdx.Syntax,
+                                        BoundAddressOfExpression(clrIdx.Syntax, captured)
+                                    )
+                                )
+                            }
+                            captured
+                        } else {
+                            HoistIfNeeded(clrIdx.Target, prelude, captureComponents)
+                        }
                         let args = ImmutableArray.CreateBuilder[BoundExpression](clrIdx.Arguments.Length)
                         for arg in clrIdx.Arguments {
-                            args.Add(HoistIfNeeded(arg, prelude))
+                            args.Add(HoistIfNeeded(arg, prelude, captureComponents))
+                        }
+                        let target = if snapshotAfterArgs {
+                            HoistIfNeeded(
+                                receiverLocation,
+                                prelude,
+                                forceCapture: captureComponents &&
+                                    receiverLocation is not BoundVariableExpression{
+                                    Variable: LocalVariableSymbol{IsReadOnly: true, RefKind: RefKind.None}
+                                }
+                            )
+                        } else {
+                            receiverLocation
                         }
                         return BoundClrIndexExpression(
                             clrIdx.Syntax,

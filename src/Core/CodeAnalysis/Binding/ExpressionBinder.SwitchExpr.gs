@@ -99,6 +99,7 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         var hasDefault = false
+        var hasCatchAll = false
         let boundArmBuilders = ImmutableArray
             .CreateBuilder[
             (Syntax SwitchExpressionArmSyntax, Pattern BoundPattern?, Guard BoundExpression?, Result BoundExpression)
@@ -129,6 +130,7 @@ internal partial class ExpressionBinder {
                     Diagnostics.ReportDuplicateSwitchDefault(armSyntax.Keyword.Location)
                 }
                 hasDefault = true
+                hasCatchAll = true
                 let defaultIndex = armIndex
                 var defaultExit List[
                     (
@@ -221,6 +223,9 @@ internal partial class ExpressionBinder {
             // particular a guarded discard `case _ when …` does NOT act as a
             // default/total arm.
             let hasGuard = armSyntax.Guard != nil
+            if !hasGuard && BoundSwitchExpressionArm.MatchesAllInputs(pattern) {
+                hasCatchAll = true
+            }
             if pattern is BoundDiscardPattern && !hasGuard {
                 if hasDefault {
                     Diagnostics.ReportDuplicateSwitchDefault(patternSyntax.Location)
@@ -286,7 +291,7 @@ internal partial class ExpressionBinder {
             }
             return BoundSwitchExpression(nil, discriminant, voidArms.MoveToImmutable(), TypeSymbol.Void)
         }
-        if !hasDefault && !ExhaustivenessAnalyzer.IsExhaustiveDiscriminant(switchType) {
+        if !hasCatchAll && !ExhaustivenessAnalyzer.IsExhaustiveDiscriminant(switchType) {
             Diagnostics.ReportSwitchExpressionMissingDefault(syntax.SwitchKeyword.Location)
         }
         let resultType = ComputeSwitchExpressionResultType(boundArmBuilders, targetType)

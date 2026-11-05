@@ -219,6 +219,188 @@ let typeMatch = value is string`)
         Assert.Empty(diagnostics)
     }
 
+    @Fact
+    func PackageQualifiedSourceConstruction_TrailingMemberAndIndexAccess_BindsWithoutGS0157() {
+        const source = `package QualifiedCalls5267.Sub
+import System
+
+data struct Stamp(Value int32) {
+    func Twice() int32 -> Value * 2
+}
+class Box[T](Value T) {
+    prop this[index int32] T {
+        get -> Value
+    }
+}
+
+func Main() {
+    let a = QualifiedCalls5267.Sub.Stamp(8).Value
+    let b = QualifiedCalls5267.Sub.Stamp{Value: 9}.Value
+    let c = QualifiedCalls5267.Sub.Stamp(8).Twice()
+    let d = QualifiedCalls5267.Sub.Box[int32](10).Value
+    let e = QualifiedCalls5267.Sub.Box[int32]{Value: 11}.Value
+    let f = QualifiedCalls5267.Sub.Box[int32](12)[0]
+    let g = QualifiedCalls5267.Sub.Box[string]("ok")[0].Length
+    let h = QualifiedCalls5267.Sub.Box[(int32) -> int32]((x int32) -> x + 5)[0](3)
+    Console.Write(a + b + c + d + e + f + g + h)
+}`
+        Assert.Empty(Bind(source))
+    }
+
+    @Fact
+    func DeclaredTypeAlias_TargetingSameCompilationSourceTypes_BindsAndPreservesPackageQualification() {
+        const validSource = `package Demo
+open class Item {
+    var Value int32 = 3
+}
+struct Payload {
+    var Count int32
+}
+interface IReader {
+    func Read() int32;
+}
+enum Mode { Fast, Safe }
+delegate Step(x int32) int32;
+
+type Renamed = Item
+type ForwardClass = LaterItem
+type PayloadAlias = Payload
+type ReaderAlias = IReader
+type ModeAlias = Mode
+type StepAlias = Step
+
+class LaterItem : Item {}
+
+func Use(r Renamed, f Demo.ForwardClass, p PayloadAlias, rdr ReaderAlias, m ModeAlias, s StepAlias) int32 {
+    let local Renamed = Item{}
+    let viaAlias Demo.Renamed = Renamed{}
+    return r.Value + f.Value + local.Value + viaAlias.Value + p.Count + rdr.Read() + s(1)
+}
+let item Renamed = Item{}`
+        Assert.Empty(Bind(validSource))
+
+        let badPackageDiagnostic = Assert.Single(Bind(`package Demo
+class Item {}
+type Renamed = Item
+let item Other.Renamed = Item{}`))
+        Assert.Equal("GS0113", badPackageDiagnostic.Id)
+        Assert.Equal("Type 'Other.Renamed' doesn't exist.", badPackageDiagnostic.Message)
+        Assert.Equal("Other", badPackageDiagnostic.Location.Text!!.ToString(badPackageDiagnostic.Location.Span))
+
+        const attributeAliasSource = `package Demo
+import System
+type Mark = ObsoleteAttribute
+
+@Mark
+interface I {}
+
+@Mark
+enum E {
+    @Mark
+    A
+}
+
+class Outer {
+    @Mark
+    interface NestedInterface {}
+
+    @Mark
+    enum NestedEnum {
+        @Mark
+        B
+    }
+}`
+        Assert.Empty(Bind(attributeAliasSource))
+
+        let obsoleteTargetDiagnostics = Bind(`package Demo
+import System
+
+class EarlyHolder {
+    var NullableField OldClass?
+    var ArrayField []OldClass
+    var ConstructedField OldBox[int32]
+}
+
+@Obsolete("old-interface", true)
+interface IOld {}
+
+@Obsolete("old-class", true)
+class OldClass {}
+
+@Obsolete("old-box", true)
+class OldBox[T] {}
+
+type AliasI = IOld
+type AliasC = OldClass`).Where((d Diagnostic) -> d.Id == "GS0204").ToArray()
+        Assert.Equal(5, obsoleteTargetDiagnostics.Length)
+
+        let invalidNestedAliasQualification = Assert.Single(Bind(`package Demo
+import InnerAlias = Demo.Outer.Inner
+
+class Outer {
+    public class Inner {}
+}
+
+type Renamed = InnerAlias
+
+let invalid Outer.Renamed = Outer.Inner{}`))
+        Assert.Equal("GS0113", invalidNestedAliasQualification.Id)
+
+        let crossPackageTree1 = SyntaxTree.Parse(SourceText.From(`package App1
+import Lib1
+type Parent = Base1
+class Derived1 : Parent {
+    override func First() int32 -> 10
+}`, "app1.gs"))
+        let crossPackageTree2 = SyntaxTree.Parse(SourceText.From(`package App2
+import Lib2
+type Parent = Base2
+class Derived2 : Parent {
+    override func Second() int32 -> 20
+}`, "app2.gs"))
+        let crossPackageLib1 = SyntaxTree.Parse(SourceText.From(`package Lib1
+public open class Base1 {
+    public open func First() int32 -> 1
+}`, "lib1.gs"))
+        let crossPackageLib2 = SyntaxTree.Parse(SourceText.From(`package Lib2
+public open class Base2 {
+    public open func Second() int32 -> 2
+}`, "lib2.gs"))
+        let crossPackageScope = Binder.BindGlobalScope(
+            previous: nil,
+            ImmutableArray.Create(crossPackageTree1, crossPackageTree2, crossPackageLib1, crossPackageLib2)
+        )
+        Assert.Empty(crossPackageScope.Diagnostics)
+
+        const derivedFirstNestedBaseAliasSource = `package Demo
+import NestedInClass = Demo.ClassContainer.NestedBase
+import NestedInStruct = Demo.StructContainer.NestedStructBase
+
+type BaseFromClass = NestedInClass
+type BaseFromStruct = NestedInStruct
+
+class DerivedFromClass : BaseFromClass {
+    override func Value() int32 -> 10
+}
+
+class DerivedFromStruct : BaseFromStruct {
+    override func Value() int32 -> 20
+}
+
+class ClassContainer {
+    public open class NestedBase {
+        public open func Value() int32 -> 1
+    }
+}
+
+struct StructContainer {
+    public open class NestedStructBase {
+        public open func Value() int32 -> 2
+    }
+}`
+        Assert.Empty(Bind(derivedFirstNestedBaseAliasSource))
+    }
+
     shared {
         private func Bind(source string) ImmutableArray[Diagnostic] {
             let tree = SyntaxTree.Parse(SourceText.From(source))

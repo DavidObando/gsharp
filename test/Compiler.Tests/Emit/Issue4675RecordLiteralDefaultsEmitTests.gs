@@ -2339,4 +2339,52 @@ Console.WriteLine(Trace.Count)
             fixture.Run(dll)
         )
     }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedDataClassAlias_CompilesAndRejectsTypeArgumentsInDriver(referenceAssembly bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = System.IO.Path.Combine(fixture.Directory, "Shapes5425Alias.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554434|class|1|Value:67108865")]
+namespace Shapes5425Alias;
+public class Box {
+    public int Value;
+    public Box(int Value) { this.Value = Value; }
+}`, "Shapes5425Alias", reference)
+        VerifyPrimaryShapeIl(contract)
+        VerifyPrimaryShapeIl(reference)
+        let selected = if referenceAssembly {
+            reference
+        } else {
+            contract
+        }
+        let dll = fixture.Compile(`import Shapes5425Alias
+type A = Box
+let v = Box{Value: 2}
+let viaAlias = A{Value: 5}
+System.Console.WriteLine(v.Value)
+System.Console.WriteLine(viaAlias.Value)
+`, "AliasConsumer5528", true, "/r:" + selected)
+        VerifyPrimaryShapeIl(dll, []string{contract})
+        Assert.Equal("2\n5\n", fixture.Run(dll))
+
+        let rejectedReference = System.IO.Path.Combine(fixture.Directory, "AliasRejected5528.ref.dll")
+        let pdb = System.IO.Path.Combine(fixture.Directory, "AliasRejected5528.pdb")
+        let (code, output) = fixture.TryCompile(
+            "import Shapes5425Alias\ntype A = Box\nlet v = A[int32]{Value: 2}\n",
+            "AliasRejected5528",
+            true,
+            "/r:" + selected,
+            "/refout:" + rejectedReference,
+            "/debug:portable",
+            "/pdb:" + pdb
+        )
+        Assert.Equal(1, code)
+        Assert.True(output.Contains("AliasRejected5528.gs(3,10,3,17): error GS0148", StringComparison.Ordinal), output)
+        Assert.False(System.IO.File.Exists(System.IO.Path.Combine(fixture.Directory, "AliasRejected5528.dll")))
+        Assert.False(System.IO.File.Exists(rejectedReference))
+        Assert.False(System.IO.File.Exists(pdb))
+    }
 }
