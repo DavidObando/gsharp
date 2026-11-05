@@ -1667,11 +1667,23 @@ internal partial class MethodBodyEmitter {
         property PropertySymbol,
         isGeneric bool
     ) EntityHandle {
-        if isGeneric || property.ImportedMember != nil {
-            return this.outer.userTokens.ResolveUserPropertyAccessorToken(structType, property, wantSetter: true)
+        let declaringType = (
+            if TypeMemberModel.TryGetPropertyWithOwner(structType, property, out _, out var ownerType) {
+                ownerType as StructSymbol
+            } else {
+                default(StructSymbol?)
+            }
+        ) ??
+            structType
+        let setterContainer StructSymbol? = ResolvePropertyReferenceContainer(declaringType, structType, property)
+        if setterContainer != nil {
+            return this.outer.userTokens.ResolveUserPropertyAccessorToken(setterContainer, property, wantSetter: true)
         }
         if this.outer.cache.PropertyAccessorHandles.TryGetValue(property, out var handles) && (handles.Setter != nil) {
             return handles.Setter!!
+        }
+        if isGeneric || property.ImportedMember != nil || declaringType.ClrType != nil {
+            return this.outer.userTokens.ResolveUserPropertyAccessorToken(declaringType, property, wantSetter: true)
         }
         throw InvalidOperationException("Property '${property.Name}' has no emitted setter MethodDef.")
     }

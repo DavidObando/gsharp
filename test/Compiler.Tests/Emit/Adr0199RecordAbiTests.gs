@@ -729,6 +729,15 @@ open class ExplicitMiddle : HiddenBase(41), IValueCarrier {
 }
 data class DerivedOverExplicitMiddle(Value int32, Extra int32) : ExplicitMiddle(Value)
 
+open data class GenBase[T](Value T)
+open data class GenMiddle(Value int32) : GenBase[int32](Value)
+data class GenLeaf(Extra int32) : GenMiddle(0)
+
+class SiblingConstructingDerived : BaseWithProtectedGetter {
+    init() : super(0) {}
+    func Make() DerivedFromProtectedGetter -> DerivedFromProtectedGetter{Value: 42, Extra: 8}
+}
+
 func Run() string {
     let d = Outer.DerivedBeforeBase("ok", 7)
     let (n, v) = d
@@ -756,7 +765,10 @@ func Run() string {
     let (eov) = eo
     let em = DerivedOverExplicitMiddle(88, 89)
     let (emv, eme) = em
-    return "${d}|${n}:${v}|${q}|${qn}:${qv}|${msg}|${mn}:${md}|${esc}|${en}:${ev}|${p}|${h}:${e}|${unpacked}|${pv}:${pe}|${pair.Left}:${pair.Right}:${te}|${gd.Name}:${gd.Payload}:${gd.Tag.Kind}|${explicitCarrier.Value}|${behind.Value}:${bv}:${be}|${faItems[0]}:${faItems[2]}:${faExtra}|${eo.Value}:${eov}|${em.Value}:${emv}:${eme}"
+    let gl = GenLeaf{Extra: 1, Value: 2}
+    let sibConstructed = SiblingConstructingDerived().Make()
+    let sibUnpacked = Outer.EnclosingUnpack(sibConstructed)
+    return "${d}|${n}:${v}|${q}|${qn}:${qv}|${msg}|${mn}:${md}|${esc}|${en}:${ev}|${p}|${h}:${e}|${unpacked}|${pv}:${pe}|${pair.Left}:${pair.Right}:${te}|${gd.Name}:${gd.Payload}:${gd.Tag.Kind}|${explicitCarrier.Value}|${behind.Value}:${bv}:${be}|${faItems[0]}:${faItems[2]}:${faExtra}|${eo.Value}:${eov}|${em.Value}:${emv}:${eme}|${gl.Value}:${gl.Extra}|${sibUnpacked}"
 }`
         let assembly = Adr0199RecordAbiWitness.CompileGSharp(source)
         let declared = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
@@ -810,6 +822,13 @@ data class D(Items List[string], Value int32) : B(Items)`
         let (nestedNullExit, nestedNullOut) = Adr0199RecordAbiWitness.TryCompileGSharp(nestedNullableBaseCheck)
         Assert.NotEqual(0, nestedNullExit)
         Assert.Contains("GS0155", nestedNullOut, StringComparison.Ordinal)
+        const nestedTupleInContainerCheck = `package W
+import System.Collections.Generic
+open data class B(Items List[(Name string, Id int32)])
+data class D(Items List[(Name string?, Id int32)], Value int32) : B(Items)`
+        let (nestedTupleExit, nestedTupleOut) = Adr0199RecordAbiWitness.TryCompileGSharp(nestedTupleInContainerCheck)
+        Assert.NotEqual(0, nestedTupleExit)
+        Assert.Contains("GS0155", nestedTupleOut, StringComparison.Ordinal)
         let qualifiedDerived = assembly.GetType("W.Outer+QualifiedDerivedBeforeBase", throwOnError: true)!!
         Assert.DoesNotContain(qualifiedDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
         let packageQualifiedDerived = assembly.GetType("W.Outer+PackageQualifiedDerived", throwOnError: true)!!
@@ -829,7 +848,7 @@ data class D(Items List[string], Value int32) : B(Items)`
         let protectedGetterDerived = assembly.GetType("W.DerivedFromProtectedGetter", throwOnError: true)!!
         Assert.DoesNotContain(protectedGetterDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
         Assert.Equal(
-            "DerivedBeforeBase { Name = ok, Value = 7 }|ok:7|QualifiedDerivedBeforeBase { Name = qual, Value = 8 }|qual:8|Message { Name = msg, Data = 99 }|msg:99|EscapedDerived { Name = ev, Value = 3 }|ev:3|DerivedFromPrivateGetter { Hidden = 99, Extra = 5 }|99:5|15:25|16:26|3:4:10|tok:payload:7|51|61:61:62|10:30:5|77:77|88:88:89",
+            "DerivedBeforeBase { Name = ok, Value = 7 }|ok:7|QualifiedDerivedBeforeBase { Name = qual, Value = 8 }|qual:8|Message { Name = msg, Data = 99 }|msg:99|EscapedDerived { Name = ev, Value = 3 }|ev:3|DerivedFromPrivateGetter { Hidden = 99, Extra = 5 }|99:5|15:25|16:26|3:4:10|tok:payload:7|51|61:61:62|10:30:5|77:77|88:88:89|2:1|42:8",
             Adr0199RecordAbiWitness.Invoke(assembly, "Run")
         )
     }
@@ -911,6 +930,11 @@ public record FriendPrivProtSetBase
 {
     public FriendPrivProtSetBase(int value) { Value = value; }
     public int Value { get; private protected set; }
+}
+public record FriendProtInternalSetBase
+{
+    public FriendProtInternalSetBase(int value) { Value = value; }
+    public int Value { get; protected internal set; }
 }`
             let friendPath = Path.Combine(tempDir, "FriendLib.dll")
             let friendCompilation = Microsoft
@@ -956,6 +980,7 @@ data class ReusesProtSetViaMiddle(Value int32, Extra int32) : ProtSetMiddle(Valu
 data class ReusesPrivProtSet(Value int32, Extra int32) : FriendPrivProtSetBase(Value) {
     func WithUpdated(v int32) ReusesPrivProtSet -> this.copy(Value: v)
 }
+data class ReusesProtInternalSet(Value int32, Extra int32) : FriendProtInternalSetBase(Value)
 interface IClrValue {
     prop Value int32 { get; }
 }
@@ -989,6 +1014,9 @@ func Run() string {
     let ps = ReusesProtSet(70, 80).WithUpdated(90)
     let psm = ProtSetMiddle(0).UpdateChild(ReusesProtSetViaMiddle(10, 20), 30)
     let pps = ReusesPrivProtSet(50, 60).WithUpdated(95)
+    let pis = ReusesProtInternalSet(40, 50).copy(Value: 45)
+    let exprTree System.Linq.Expressions.Expression[System.Func[ReusesValue, int32]] = (rv ReusesValue) -> rv.Value
+    let exprVal = exprTree.Compile().Invoke(b)
     let rve = ReusesValueWithExplicit{Value: 2, Extra: 3}.copy(Value: 4)
     let rveIface IClrValue = rve
     let rveMatched = (rve is { Value: 4, Extra: 3 }) && !(rve is { Value: 104 })
@@ -1004,7 +1032,7 @@ func Run() string {
     let (ci, ce) = c
     let d = InaccessibleGetters(1, 2)
     let (di, dp) = d
-    return "${a.Value}:${a.Extra}|${bv}:${be}|${spread.Value}:${spread.Extra}|${spreadRef.RefVal}:${spreadRef.Extra}:${refMatched}|${pgv}:${pge}|${ps.Value}:${ps.Extra}|${psm.Value}:${psm.Extra}|${pps.Value}:${pps.Extra}|${rve.Value}:${rve.Extra}:${rveIface.Value}:${rveMatched}:${rveSpreadExt.Value}:${rveSpreadSelf.Value}|${obn ?? "nil"}:${obe}|${bf.Value}:${bfv}:${bfe}|${ctorDefault.Value}:${ctorDefault.Extra}|${gen.Value}|${ci}:${ce}|${di}:${dp}"
+    return "${a.Value}:${a.Extra}|${bv}:${be}|${spread.Value}:${spread.Extra}|${spreadRef.RefVal}:${spreadRef.Extra}:${refMatched}|${pgv}:${pge}|${ps.Value}:${ps.Extra}|${psm.Value}:${psm.Extra}|${pps.Value}:${pps.Extra}|${pis.Value}:${pis.Extra}:${exprVal}|${rve.Value}:${rve.Extra}:${rveIface.Value}:${rveMatched}:${rveSpreadExt.Value}:${rveSpreadSelf.Value}|${obn ?? "nil"}:${obe}|${bf.Value}:${bfv}:${bfe}|${ctorDefault.Value}:${ctorDefault.Extra}|${gen.Value}|${ci}:${ce}|${di}:${dp}"
 }`
             let srcPath = Path.Combine(tempDir, "test.gs")
             let outPath = Path.Combine(tempDir, "test.dll")
@@ -1093,7 +1121,7 @@ class ProtSetSibling : ClrProtSetBase {
                 Assert.Contains(inaccType.GetProperties(declared), (p PropertyInfo) -> p.Name == "PrivateProtectedProp")
                 let result = asm.GetType("W.<Program>", throwOnError: true)!!.GetMethod("Run")!!.Invoke(nil, nil)
                 Assert.Equal(
-                    "0:0|42:7|42:7|55:66:True|12:34|90:80|30:20|95:60|4:3:104:True:4:4|nil:7|81:81:82|11:22|77|hello:9|1:2",
+                    "0:0|42:7|42:7|55:66:True|12:34|90:80|30:20|95:60|45:50:42|4:3:104:True:4:4|nil:7|81:81:82|11:22|77|hello:9|1:2",
                     result
                 )
             } finally {

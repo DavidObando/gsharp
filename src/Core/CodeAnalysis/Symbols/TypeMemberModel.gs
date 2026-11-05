@@ -490,10 +490,38 @@ shared class TypeMemberModel {
                         boundProperty.ImportedMember != nil && candidate.ImportedMember == boundProperty.ImportedMember
                     ) {
                         property = candidate
-                        declaringType = (inheritedOwner.ImportedBaseType as StructSymbol) ?? inheritedOwner
+                        if candidate.ImportedMember is System
+                            .Reflection
+                            .PropertyInfo importedProp &&
+                            importedProp.DeclaringType is Type declaringClr &&
+                            GetNearestImportedBase(inheritedOwner) is {} importedBase &&
+                            importedBase.ClrType is Type baseClr &&
+                            ClrTypeUtilities.AreSame(baseClr, declaringClr) {
+                            declaringType = importedBase
+                        } else {
+                            declaringType = ResolveInheritedPropertyOwner(inheritedOwner, candidate)
+                        }
                         return true
                     }
                 }
+            }
+        }
+        if boundProperty.ImportedMember is System
+            .Reflection
+            .PropertyInfo boundClrProp &&
+            boundClrProp.DeclaringType is Type boundDeclaringClr {
+            if type is StructSymbol typeStruct &&
+                typeStruct.ImportedBaseType is {} typeImportedBase &&
+                typeImportedBase.ClrType is Type typeBaseClr &&
+                ClrTypeUtilities.AreSame(typeBaseClr, boundDeclaringClr) {
+                property = boundProperty
+                declaringType = typeImportedBase
+                return true
+            }
+            if type.ClrType is Type typeClr && ClrTypeUtilities.AreSame(typeClr, boundDeclaringClr) {
+                property = boundProperty
+                declaringType = type
+                return true
             }
         }
         property = nil
@@ -613,11 +641,9 @@ shared class TypeMemberModel {
         let sourceRef = source.ReferenceNullability
         let targetRef = target.ReferenceNullability
         if sourceRef != targetRef {
-            let isSafeWidening = targetRef == ReferenceNullabilityKind.Nullable &&
-                (
-                sourceRef == ReferenceNullabilityKind.Platform ||
-                    (allowTopLevelWidening && sourceRef == ReferenceNullabilityKind.NotNull)
-            )
+            let isSafeWidening = allowTopLevelWidening &&
+                targetRef == ReferenceNullabilityKind.Nullable &&
+                (sourceRef == ReferenceNullabilityKind.NotNull || sourceRef == ReferenceNullabilityKind.Platform)
             if !isSafeWidening {
                 return false
             }
@@ -632,7 +658,7 @@ shared class TypeMemberModel {
                 if !PositionalTypeSatisfiedByInheritedGetter(
                     targetFn.ParameterTypes[i],
                     sourceFn.ParameterTypes[i],
-                    allowTopLevelWidening: true
+                    allowTopLevelWidening: allowTopLevelWidening
                 ) {
                     return false
                 }
@@ -641,7 +667,7 @@ shared class TypeMemberModel {
                 PositionalTypeSatisfiedByInheritedGetter(
                 sourceFn.ReturnType,
                 targetFn.ReturnType,
-                allowTopLevelWidening: true
+                allowTopLevelWidening: allowTopLevelWidening
             )
         }
         let isTuplePair = bareSource is TupleTypeSymbol && bareTarget is TupleTypeSymbol
@@ -654,7 +680,7 @@ shared class TypeMemberModel {
             if !PositionalTypeSatisfiedByInheritedGetter(
                 sourcePositions[i],
                 targetPositions[i],
-                allowTopLevelWidening: isTuplePair
+                allowTopLevelWidening: allowTopLevelWidening && isTuplePair
             ) {
                 return false
             }
@@ -857,7 +883,7 @@ shared class TypeMemberModel {
                     if !ArePositionalRuntimeTypesEquivalent(effectiveClrPropertyType, parameter.Type) {
                         return false
                     }
-                    let getterAcc = MapClrAccessorAccessibility(getter)
+                    let getterAcc = MapClrAccessorAccessibility(getter, includeInternal)
                     let rawSetter = clrProp.GetSetMethod(nonPublic: true)
                     let visibleSetter = if rawSetter != nil &&
                         !rawSetter.IsStatic &&
@@ -869,7 +895,7 @@ shared class TypeMemberModel {
                     let setterAcc = if visibleSetter == nil {
                         getterAcc
                     } else {
-                        MapClrAccessorAccessibility(visibleSetter)
+                        MapClrAccessorAccessibility(visibleSetter, includeInternal)
                     }
                     let propAcc = if getterAcc == Accessibility.Public || setterAcc == Accessibility.Public {
                         Accessibility.Public
@@ -929,9 +955,12 @@ shared class TypeMemberModel {
         (includeInternal && (accessor.IsAssembly || accessor.IsFamilyAndAssembly))
 
     private func MapClrAccessorAccessibility(
-        accessor System.Reflection.MethodInfo
+        accessor System.Reflection.MethodInfo,
+        includeInternal bool
     ) Accessibility -> if accessor.IsPublic {
         Accessibility.Public
+    } else if accessor.IsFamilyOrAssembly && includeInternal {
+        Accessibility.Internal
     } else if accessor.IsFamily || accessor.IsFamilyOrAssembly || accessor.IsFamilyAndAssembly {
         Accessibility.Protected
     } else {

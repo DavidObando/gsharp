@@ -105,7 +105,15 @@ internal shared class ProtectedReceiverDiagnostics {
             // type (C# reports CS1540 for `new Source { f = 1 }` in a
             // derived class). The initializers carry no syntax of their own,
             // so each reports at its member name in the literal.
+            let usesPrimaryCtor = node.CallsDataConstructor || node.CallsPrimaryConstructor
             for init in node.Initializers {
+                if usesPrimaryCtor && BoundStructLiteralExpression.GetPrimaryMember(
+                    node.StructType,
+                    init.MemberName
+                ) is {} primaryMember &&
+                    (init.Field == primaryMember || init.Property == primaryMember) {
+                    continue
+                }
                 if init.Field is {IsStatic: false} field {
                     let declaring = init.FieldDeclaringType ?? ProtectedReceiverDiagnostics.FindDeclaringClass(
                         node.StructType,
