@@ -716,170 +716,35 @@ shared class CSharpProjectLoader {
         return ordered
     }
 
-    private func ReadActiveProjectReferencePaths(projectPath string, configuration string?) IReadOnlyList[string] {
-        if TryReadMsbuildEvaluatedProjectReferencePaths(projectPath, configuration, out var msbuildPaths) {
-            return msbuildPaths
-        }
-        return ReadXmlActiveProjectReferencePaths(projectPath, configuration)
-    }
-
-    private func TryReadMsbuildEvaluatedProjectReferencePaths(
-        projectPath string,
-        configuration string?,
-        out paths List[string]
-    ) bool {
-        paths = List[string]()
-        if string.IsNullOrEmpty(projectPath) || !File.Exists(projectPath) {
-            return false
-        }
-        let fullProjectPath = Path.GetFullPath(projectPath)
-        let projectDir string? = Path.GetDirectoryName(fullProjectPath)
-        if string.IsNullOrEmpty(projectDir) {
-            return false
-        }
-        EnsureMSBuildRegistered()
-        try {
-            let msbuildAssembly = System.Reflection.Assembly.Load("Microsoft.Build")
-            let projectCollectionType = msbuildAssembly.GetType("Microsoft.Build.Evaluation.ProjectCollection")
-            if projectCollectionType == nil {
-                return false
-            }
-            let globalProps = Dictionary[string, string](StringComparer.OrdinalIgnoreCase)
-            if !string.IsNullOrWhiteSpace(configuration) {
-                globalProps["Configuration"] = configuration
-            }
-            using let collection = System.Activator.CreateInstance(
-                projectCollectionType,
-                []object? {globalProps}
-            ) as IDisposable
-            if collection == nil {
-                return false
-            }
-            let loadProjectMethod = projectCollectionType.GetMethod("LoadProject", []Type{typeof(string)})
-            if loadProjectMethod == nil {
-                return false
-            }
-            let evaluatedProject = loadProjectMethod.Invoke(collection, []object? {fullProjectPath})
-            if evaluatedProject == nil {
-                return false
-            }
-            let getItemsMethod = evaluatedProject.GetType().GetMethod("GetItems", []Type{typeof(string)})
-            if getItemsMethod == nil {
-                return false
-            }
-            if getItemsMethod.Invoke(evaluatedProject, []object? {"ProjectReference"}) is System
-                .Collections
-                .IEnumerable items {
-                for item in items {
-                    if item == nil {
-                        continue
-                    }
-                    let itemType = item.GetType()
-                    let getMetadataValue = itemType.GetMethod("GetMetadataValue", []Type{typeof(string)})
-                    if getMetadataValue != nil {
-                        let refOutput = getMetadataValue.Invoke(item, []object? {"ReferenceOutputAssembly"}) as string
-                        if string.Equals(refOutput?.Trim(), "false", StringComparison.OrdinalIgnoreCase) {
-                            continue
-                        }
-                    }
-                    let evaluatedInclude = itemType.GetProperty("EvaluatedInclude")?.GetValue(item) as string
-                    if string.IsNullOrWhiteSpace(evaluatedInclude) {
-                        continue
-                    }
-                    let normalized = evaluatedInclude.Replace('\\', Path.DirectorySeparatorChar).Replace(
-                        '/',
-                        Path.DirectorySeparatorChar
-                    )
-                    paths.Add(Path.GetFullPath(Path.Combine(projectDir, normalized)))
-                }
-                return true
-            }
-        } catch (Exception) {
-            return false
-        }
-        return false
-    }
+    private func ReadActiveProjectReferencePaths(projectPath string, configuration string?) IReadOnlyList[string] ->
+    ReadXmlActiveProjectReferencePaths(projectPath, configuration)
 
     private func ReadXmlActiveProjectReferencePaths(projectPath string, configuration string?) IReadOnlyList[string] {
         let paths = List[string]()
         if string.IsNullOrEmpty(projectPath) || !File.Exists(projectPath) {
             return paths
         }
-        let projectDir string? = Path.GetDirectoryName(Path.GetFullPath(projectPath))
+        let fullProjectPath = Path.GetFullPath(projectPath)
+        let projectDir string? = Path.GetDirectoryName(fullProjectPath)
         if string.IsNullOrEmpty(projectDir) {
             return paths
         }
+        let effectiveConfig = if string.IsNullOrWhiteSpace(configuration) {
+            "Debug"
+        } else {
+            configuration?.Trim() ?? "Debug"
+        }
+        let properties = Dictionary[string, string](StringComparer.OrdinalIgnoreCase)
+        properties["Configuration"] = effectiveConfig
+        properties["MSBuildProjectDirectory"] = projectDir
+        let customItems = Dictionary[string, List[string]](StringComparer.OrdinalIgnoreCase)
+        let visitedFiles = HashSet[string](StringComparer.OrdinalIgnoreCase)
+        visitedFiles.Add(fullProjectPath)
         try {
-            let document = XDocument.Load(projectPath)
+            let document = XDocument.Load(fullProjectPath)
             let root = document.Root
-            if root == nil {
-                return paths
-            }
-            let activeGroups = List[XElement]()
-            CollectActiveItemGroups(root, configuration, activeGroups)
-            for itemGroup in activeGroups {
-                for item in itemGroup.Elements().Where(
-                    (e XElement) -> e.Name.LocalName.Equals("ProjectReference", StringComparison.OrdinalIgnoreCase)
-                ) {
-                    if !EvaluateSimpleMsbuildCondition(item.Attribute(XName?("Condition")!!)?.Value, configuration) {
-                        continue
-                    }
-                    let removeSpec = item.Attribute(XName?("Remove")!!)?.Value
-                    if !string.IsNullOrWhiteSpace(removeSpec) {
-                        for part in removeSpec.Split(';', StringSplitOptions.RemoveEmptyEntries) {
-                            let trimmed = part.Trim()
-                            if string.IsNullOrEmpty(trimmed) || trimmed.Contains("$$(", StringComparison.Ordinal) ||
-                                trimmed.Contains("@(", StringComparison.Ordinal) {
-                                continue
-                            }
-                            let normalizedRemove = trimmed.Replace('\\', Path.DirectorySeparatorChar).Replace(
-                                '/',
-                                Path.DirectorySeparatorChar
-                            )
-                            let fullRemove = Path.GetFullPath(Path.Combine(projectDir, normalizedRemove))
-                            paths.RemoveAll(
-                                (existing string) -> string.Equals(
-                                    existing,
-                                    fullRemove,
-                                    StringComparison.OrdinalIgnoreCase
-                                )
-                            )
-                        }
-                    }
-                    let include = item.Attribute(XName?("Include")!!)?.Value
-                    if string.IsNullOrWhiteSpace(include) || include!!.Contains("$$(", StringComparison.Ordinal) ||
-                        include!!.Contains("@(", StringComparison.Ordinal) {
-                        continue
-                    }
-                    let refOutput = item.Attribute(XName?("ReferenceOutputAssembly")!!)
-                        ?.Value ??
-                        item
-                        .Elements()
-                        .FirstOrDefault(
-                        (e XElement) -> e
-                            .Name
-                            .LocalName
-                            .Equals("ReferenceOutputAssembly", StringComparison.OrdinalIgnoreCase)
-                    )
-                        ?.Value
-                    if string.Equals(refOutput?.Trim(), "false", StringComparison.OrdinalIgnoreCase) {
-                        continue
-                    }
-                    for part in include!!.Split(';', StringSplitOptions.RemoveEmptyEntries) {
-                        let trimmed = part.Trim()
-                        if string.IsNullOrEmpty(trimmed) {
-                            continue
-                        }
-                        let normalized = trimmed.Replace('\\', Path.DirectorySeparatorChar).Replace(
-                            '/',
-                            Path.DirectorySeparatorChar
-                        )
-                        let fullInclude = Path.GetFullPath(Path.Combine(projectDir, normalized))
-                        if !paths.Contains(fullInclude, StringComparer.OrdinalIgnoreCase) {
-                            paths.Add(fullInclude)
-                        }
-                    }
-                }
+            if root != nil {
+                EvaluateXmlProjectContainer(root, projectDir, projectDir, properties, customItems, paths, visitedFiles)
             }
         } catch (ex Exception) when ex is IOException || ex is XmlException || ex is UnauthorizedAccessException {
             return paths
@@ -887,28 +752,220 @@ shared class CSharpProjectLoader {
         return paths
     }
 
-    private func CollectActiveItemGroups(container XElement, configuration string?, activeGroups List[XElement]) {
+    private func EvaluateXmlProjectContainer(
+        container XElement,
+        rootProjectDir string,
+        currentFileDir string,
+        properties Dictionary[string, string],
+        customItems Dictionary[string, List[string]],
+        projectReferences List[string],
+        visitedFiles HashSet[string]
+    ) {
         for child in container.Elements() {
-            if child.Name.LocalName.Equals("ItemGroup", StringComparison.OrdinalIgnoreCase) {
-                if EvaluateSimpleMsbuildCondition(child.Attribute(XName?("Condition")!!)?.Value, configuration) {
-                    activeGroups.Add(child)
+            let localName = child.Name.LocalName
+            if localName.Equals("PropertyGroup", StringComparison.OrdinalIgnoreCase) {
+                if !EvaluateMsbuildCondition(child.Attribute(XName?("Condition")!!)?.Value, properties) {
+                    continue
                 }
-            } else if child.Name.LocalName.Equals("Choose", StringComparison.OrdinalIgnoreCase) {
+                for propElement in child.Elements() {
+                    if !EvaluateMsbuildCondition(propElement.Attribute(XName?("Condition")!!)?.Value, properties) {
+                        continue
+                    }
+                    properties[propElement.Name.LocalName] = ExpandMsbuildExpressions(
+                        propElement.Value,
+                        currentFileDir,
+                        properties,
+                        customItems
+                    )
+                }
+            } else if localName.Equals("Import", StringComparison.OrdinalIgnoreCase) {
+                if !EvaluateMsbuildCondition(child.Attribute(XName?("Condition")!!)?.Value, properties) {
+                    continue
+                }
+                let rawImport = ExpandMsbuildExpressions(
+                    child.Attribute(XName?("Project")!!)?.Value,
+                    currentFileDir,
+                    properties,
+                    customItems
+                )
+                if string.IsNullOrWhiteSpace(rawImport) || rawImport.Contains("$$(", StringComparison.Ordinal) ||
+                    rawImport.Contains("@(", StringComparison.Ordinal) {
+                    continue
+                }
+                let normalizedImport = rawImport.Replace('\\', Path.DirectorySeparatorChar).Replace(
+                    '/',
+                    Path.DirectorySeparatorChar
+                )
+                let importPath = Path.GetFullPath(Path.Combine(currentFileDir, normalizedImport))
+                if !File.Exists(importPath) || !visitedFiles.Add(importPath) {
+                    continue
+                }
+                let importDir string? = Path.GetDirectoryName(importPath)
+                if string.IsNullOrEmpty(importDir) {
+                    continue
+                }
+                try {
+                    let importedDoc = XDocument.Load(importPath)
+                    if importedDoc.Root != nil {
+                        EvaluateXmlProjectContainer(
+                            importedDoc.Root!!,
+                            rootProjectDir,
+                            importDir,
+                            properties,
+                            customItems,
+                            projectReferences,
+                            visitedFiles
+                        )
+                    }
+                } catch (ex Exception) when ex is IOException ||
+                    ex is XmlException ||
+                    ex is UnauthorizedAccessException { }
+            } else if localName.Equals("Choose", StringComparison.OrdinalIgnoreCase) {
                 var matchedBranch = false
                 for branch in child.Elements() {
                     if branch.Name.LocalName.Equals("When", StringComparison.OrdinalIgnoreCase) {
                         if !matchedBranch &&
-                            EvaluateSimpleMsbuildCondition(
-                            branch.Attribute(XName?("Condition")!!)?.Value,
-                            configuration
-                        ) {
+                            EvaluateMsbuildCondition(branch.Attribute(XName?("Condition")!!)?.Value, properties) {
                             matchedBranch = true
-                            CollectActiveItemGroups(branch, configuration, activeGroups)
+                            EvaluateXmlProjectContainer(
+                                branch,
+                                rootProjectDir,
+                                currentFileDir,
+                                properties,
+                                customItems,
+                                projectReferences,
+                                visitedFiles
+                            )
                         }
                     } else if branch.Name.LocalName.Equals("Otherwise", StringComparison.OrdinalIgnoreCase) {
                         if !matchedBranch {
                             matchedBranch = true
-                            CollectActiveItemGroups(branch, configuration, activeGroups)
+                            EvaluateXmlProjectContainer(
+                                branch,
+                                rootProjectDir,
+                                currentFileDir,
+                                properties,
+                                customItems,
+                                projectReferences,
+                                visitedFiles
+                            )
+                        }
+                    }
+                }
+            } else if localName.Equals("ItemGroup", StringComparison.OrdinalIgnoreCase) {
+                if !EvaluateMsbuildCondition(child.Attribute(XName?("Condition")!!)?.Value, properties) {
+                    continue
+                }
+                for item in child.Elements() {
+                    if !EvaluateMsbuildCondition(item.Attribute(XName?("Condition")!!)?.Value, properties) {
+                        continue
+                    }
+                    let itemName = item.Name.LocalName
+                    if itemName.Equals("ProjectReference", StringComparison.OrdinalIgnoreCase) {
+                        let removeSpec = ExpandMsbuildExpressions(
+                            item.Attribute(XName?("Remove")!!)?.Value,
+                            currentFileDir,
+                            properties,
+                            customItems
+                        )
+                        if !string.IsNullOrWhiteSpace(removeSpec) {
+                            for part in removeSpec.Split(';', StringSplitOptions.RemoveEmptyEntries) {
+                                let trimmed = part.Trim()
+                                if string.IsNullOrEmpty(trimmed) || trimmed.Contains("$$(", StringComparison.Ordinal) ||
+                                    trimmed.Contains("@(", StringComparison.Ordinal) {
+                                    continue
+                                }
+                                let normalizedRemove = trimmed.Replace('\\', Path.DirectorySeparatorChar).Replace(
+                                    '/',
+                                    Path.DirectorySeparatorChar
+                                )
+                                let fullRemove = Path.GetFullPath(Path.Combine(currentFileDir, normalizedRemove))
+                                projectReferences.RemoveAll(
+                                    (existing string) -> string.Equals(
+                                        existing,
+                                        fullRemove,
+                                        StringComparison.OrdinalIgnoreCase
+                                    )
+                                )
+                            }
+                        }
+                        let includeSpec = ExpandMsbuildExpressions(
+                            item.Attribute(XName?("Include")!!)?.Value,
+                            currentFileDir,
+                            properties,
+                            customItems
+                        )
+                        if string.IsNullOrWhiteSpace(includeSpec) || includeSpec.Contains(
+                            "$$(",
+                            StringComparison.Ordinal
+                        ) ||
+                            includeSpec.Contains("@(", StringComparison.Ordinal) {
+                            continue
+                        }
+                        let refOutput = item.Attribute(XName?("ReferenceOutputAssembly")!!)
+                            ?.Value ??
+                            item
+                            .Elements()
+                            .FirstOrDefault(
+                            (e XElement) -> e
+                                .Name
+                                .LocalName
+                                .Equals("ReferenceOutputAssembly", StringComparison.OrdinalIgnoreCase)
+                        )
+                            ?.Value
+                        if string.Equals(refOutput?.Trim(), "false", StringComparison.OrdinalIgnoreCase) {
+                            continue
+                        }
+                        for part in includeSpec.Split(';', StringSplitOptions.RemoveEmptyEntries) {
+                            let trimmed = part.Trim()
+                            if string.IsNullOrEmpty(trimmed) {
+                                continue
+                            }
+                            let normalized = trimmed.Replace('\\', Path.DirectorySeparatorChar).Replace(
+                                '/',
+                                Path.DirectorySeparatorChar
+                            )
+                            let fullInclude = Path.GetFullPath(Path.Combine(currentFileDir, normalized))
+                            if !projectReferences.Contains(fullInclude, StringComparer.OrdinalIgnoreCase) {
+                                projectReferences.Add(fullInclude)
+                            }
+                        }
+                    } else {
+                        if !customItems.TryGetValue(itemName, out var itemList) {
+                            itemList = List[string]()
+                            customItems[itemName] = itemList
+                        }
+                        let removeSpec = ExpandMsbuildExpressions(
+                            item.Attribute(XName?("Remove")!!)?.Value,
+                            currentFileDir,
+                            properties,
+                            customItems
+                        )
+                        if !string.IsNullOrWhiteSpace(removeSpec) {
+                            for part in removeSpec.Split(';', StringSplitOptions.RemoveEmptyEntries) {
+                                let trimmed = part.Trim()
+                                itemList.RemoveAll(
+                                    (existing string) -> string.Equals(
+                                        existing,
+                                        trimmed,
+                                        StringComparison.OrdinalIgnoreCase
+                                    )
+                                )
+                            }
+                        }
+                        let includeSpec = ExpandMsbuildExpressions(
+                            item.Attribute(XName?("Include")!!)?.Value,
+                            currentFileDir,
+                            properties,
+                            customItems
+                        )
+                        if !string.IsNullOrWhiteSpace(includeSpec) {
+                            for part in includeSpec.Split(';', StringSplitOptions.RemoveEmptyEntries) {
+                                let trimmed = part.Trim()
+                                if !string.IsNullOrEmpty(trimmed) {
+                                    itemList.Add(trimmed)
+                                }
+                            }
                         }
                     }
                 }
@@ -916,20 +973,56 @@ shared class CSharpProjectLoader {
         }
     }
 
-    private func EvaluateSimpleMsbuildCondition(condition string?, configuration string?) bool {
+    private func ExpandMsbuildExpressions(
+        raw string?,
+        currentFileDir string,
+        properties Dictionary[string, string],
+        customItems Dictionary[string, List[string]]
+    ) string {
+        if string.IsNullOrEmpty(raw) {
+            return string.Empty
+        }
+        var result = raw.Replace(
+            "$$(MSBuildThisFileDirectory)",
+            currentFileDir + Path.DirectorySeparatorChar,
+            StringComparison.OrdinalIgnoreCase
+        )
+        for kvp in properties {
+            result = result.Replace("$$(" + kvp.Key + ")", kvp.Value, StringComparison.OrdinalIgnoreCase)
+        }
+        for kvp in customItems {
+            result = result.Replace(
+                "@(" + kvp.Key + ")",
+                string.Join(";", kvp.Value),
+                StringComparison.OrdinalIgnoreCase
+            )
+        }
+        var openAt = result.IndexOf("@(", StringComparison.Ordinal)
+        while openAt >= 0 {
+            let closeAt = result.IndexOf(')', openAt + 2)
+            if closeAt < 0 {
+                break
+            }
+            let itemName = result.Substring(openAt + 2, closeAt - openAt - 2).Trim()
+            if !customItems.ContainsKey(itemName) {
+                result = result.Substring(0, openAt) + result.Substring(closeAt + 1)
+                openAt = result.IndexOf("@(", StringComparison.Ordinal)
+            } else {
+                openAt = result.IndexOf("@(", closeAt + 1, StringComparison.Ordinal)
+            }
+        }
+        return result
+    }
+
+    private func EvaluateMsbuildCondition(condition string?, properties Dictionary[string, string]) bool {
         if string.IsNullOrWhiteSpace(condition) {
             return true
         }
-        let effectiveConfig = if string.IsNullOrWhiteSpace(configuration) {
-            "Debug"
-        } else {
-            configuration?.Trim() ?? "Debug"
+        var expanded = condition.Trim()
+        for kvp in properties {
+            expanded = expanded.Replace("$$(" + kvp.Key + ")", kvp.Value, StringComparison.OrdinalIgnoreCase)
         }
-        let expanded = condition
-            .Trim()
-            .Replace("$$(Configuration)", effectiveConfig, StringComparison.OrdinalIgnoreCase)
-            .Replace("'", string.Empty, StringComparison.Ordinal)
-            .Trim()
+        expanded = expanded.Replace("'", string.Empty, StringComparison.Ordinal).Trim()
         if string.Equals(expanded, "true", StringComparison.OrdinalIgnoreCase) {
             return true
         }
@@ -955,6 +1048,16 @@ shared class CSharpProjectLoader {
             return false
         }
         return false
+    }
+
+    private func EvaluateSimpleMsbuildCondition(condition string?, configuration string?) bool {
+        let props = Dictionary[string, string](StringComparer.OrdinalIgnoreCase)
+        props["Configuration"] = if string.IsNullOrWhiteSpace(configuration) {
+            "Debug"
+        } else {
+            configuration?.Trim() ?? "Debug"
+        }
+        return EvaluateMsbuildCondition(condition, props)
     }
 
     private func ReadDeclaredTargetPaths(projectPath string, configuration string? = nil) HashSet[string] {

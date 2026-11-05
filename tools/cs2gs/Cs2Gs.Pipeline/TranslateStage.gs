@@ -881,6 +881,17 @@ class TranslateStage : IMigrationStage {
                 context.Options.ProjectEmittedGsPaths!![Path.GetFullPath(generatedAppProjectPath)] = ownGsPaths
             }
         }
+        if project.ReferencedWorkspaceLoadFailed {
+            referencedDependencyFailed = true
+            let refLoadMessage = string.Join(
+                " | ",
+                project.ReferencedWorkspaceLoadErrors.Select((d Microsoft.CodeAnalysis.Diagnostic) -> d.GetMessage())
+            )
+            Note(
+                context,
+                "dependency-blocked: referenced project of '$projectPath' failed workspace load: $refLoadMessage"
+            )
+        }
         if sdkReferencedProjects != nil {
             for referencedProject in sdkReferencedProjects.Skip(1) {
                 if string.IsNullOrEmpty(referencedProject.ProjectPath) {
@@ -997,6 +1008,10 @@ class TranslateStage : IMigrationStage {
                 resolved = Array.Empty[LoadedCSharpProject]()
                 return false
             }
+            if rootProject.ReferencedWorkspaceLoadFailed {
+                resolved = Array.Empty[LoadedCSharpProject]()
+                return false
+            }
             let evaluatedPaths = rootProject.EvaluatedProjectReferencePaths
             if evaluatedPaths == nil {
                 resolved = Array.Empty[LoadedCSharpProject]()
@@ -1017,6 +1032,10 @@ class TranslateStage : IMigrationStage {
                     continue
                 }
                 if repositoryLoadedProjects.TryGetValue(referencedPath, out var referencedProject) {
+                    if referencedProject.ReferencedWorkspaceLoadFailed {
+                        resolved = Array.Empty[LoadedCSharpProject]()
+                        return false
+                    }
                     results.Add(referencedProject)
                     continue
                 }
