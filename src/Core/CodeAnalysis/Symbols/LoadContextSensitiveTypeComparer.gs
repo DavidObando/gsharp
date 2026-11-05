@@ -54,7 +54,8 @@ internal class LoadContextSensitiveTypeComparer : IEqualityComparer[Type] {
         if x == nil || y == nil {
             return false
         }
-        return TypeIdentityComparer.Instance.Equals(x, y) && SameAssemblyInstances(x, y)
+        return TypeIdentityComparer.Instance.Equals(x, y) && ClrTypeUtilities.AreSame(x, y) &&
+            SameAssemblyInstances(x, y)
     }
 
     /// ```xmldoc

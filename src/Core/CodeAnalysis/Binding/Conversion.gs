@@ -2497,6 +2497,17 @@ class Conversion {
                 ) {
                     return true
                 }
+                if OneDimensionalArrayElement(sourceShape) is {} sourceArrayElement &&
+                    OneDimensionalArrayElement(targetShape) is {} targetArrayElement &&
+                    !IsRejectedFixedArrayShapeMismatch(sourceShape, targetShape) &&
+                    IsVariantArgumentRelated(
+                    sourceArrayElement,
+                    targetArrayElement,
+                    nominalOnly: true,
+                    allowPlatformNilCheck: false
+                ) {
+                    return true
+                }
                 if OneDimensionalArrayElement(sourceShape) is {} sourceElement &&
                     ArrayElementConvertsToInterfaceSymbolically(sourceElement, targetShape, nominalOnly: true) {
                     return true
@@ -3142,8 +3153,10 @@ class Conversion {
                 case nil: false
                 case _ is EnumSymbol: false
                 case s is StructSymbol: s.IsClass
-                case tp is TypeParameterSymbol: tp.HasReferenceTypeConstraint || tp.ClassConstraint != nil
-                default: type.ClrType is not{IsValueType: true}
+                case tp is TypeParameterSymbol: tp.HasReferenceTypeConstraint ||
+                    tp.ClassConstraint != nil ||
+                    tp.DependentBoundProvesReferenceType
+                default: type.ClrType == nil || ClrTypeUtilities.IsReferenceTypeForVariance(type.ClrType)
             }
         }
 
@@ -4890,13 +4903,40 @@ class Conversion {
             return (type is FunctionTypeSymbol or DelegateTypeSymbol) || ClrTypeUtilities.IsDelegateType(type?.ClrType)
         }
 
-        private func IsVarianceArgumentCompatible(
+        internal func IsVarianceArgumentCompatible(
             source TypeSymbol,
             target TypeSymbol,
             allowPlatformNilCheck bool
         ) bool {
             if !IsReferenceTypeArgument(source) || !IsReferenceTypeArgument(target) {
                 return false
+            }
+            switch source.ReferenceNullability {
+                case ReferenceNullabilityKind.Nullable {
+                    if target.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                        return false
+                    }
+                }
+                case ReferenceNullabilityKind.Platform {
+                    if !allowPlatformNilCheck && target.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                        return false
+                    }
+                }
+                default { }
+            }
+            let bareSource = source.StripToBareShape()
+            let bareTarget = target.StripToBareShape()
+            if OneDimensionalArrayElement(bareSource) != nil &&
+                OneDimensionalArrayElement(bareTarget) != nil &&
+                !IsRejectedFixedArrayShapeMismatch(bareSource, bareTarget) {
+                let sourcePositions = source.GetElementPositions()
+                let targetPositions = target.GetElementPositions()
+                return sourcePositions.Length == 1 &&
+                    targetPositions.Length == 1 &&
+                    (
+                    HaveIdenticalTypeArgumentContracts(sourcePositions[0], targetPositions[0]) ||
+                        IsVarianceArgumentCompatible(sourcePositions[0], targetPositions[0], allowPlatformNilCheck)
+                )
             }
             // Classification already related nested arguments; only the nominal proof is added for this pair.
             let conversion = Classify(source, target)
