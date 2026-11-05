@@ -2322,6 +2322,10 @@ class Dog : Animal {
 func F7(x Func[Dog]) () -> Dog -> x
 func F4(x Func[Dog]) () -> Animal -> x
 func A1(x Action[Animal]) (Dog) -> void -> x
+func Pick(x () -> Dog) string -> "D"
+func Pick(x () -> Animal) string -> "A"
+func Tie(x () -> Dog, y int32) string -> "D"
+func Tie(x Func[Dog], y int64) string -> "F"
 func Main() {
     let dog = Dog()
     let f Func[Dog] = () -> dog
@@ -2337,6 +2341,8 @@ func Main() {
     Console.Write(f7().Tag())
     Console.Write(f4().Tag())
     Console.Write(seen)
+    Console.Write(Pick(f))
+    Console.Write(Tie(f, 1))
 }
 `, `using System;
 using FunctionControl;
@@ -2346,6 +2352,9 @@ class Program {
     static Func<Dog> F7(Func<Dog> x) => x;
     static Func<Animal> F4(Func<Dog> x) => x;
     static Action<Dog> A1(Action<Animal> x) => x;
+    static string Pick(Func<Dog> x) => "D";
+    static string Pick(Func<Animal> x) => "A";
+    static string Tie(Func<Dog> x, int y) => "D";
     static void Main() {
         var dog = new Dog();
         Func<Dog> f = () => dog;
@@ -2361,9 +2370,11 @@ class Program {
         Console.Write(f7().Tag());
         Console.Write(f4().Tag());
         Console.Write(seen);
+        Console.Write(Pick(f));
+        Console.Write(Tie(f, 1));
     }
 }
-`, "TrueTrueTrueDDD")
+`, "TrueTrueTrueDDDDD")
         Reject(fixture, `import System
 open class Animal {}
 class Dog : Animal {}

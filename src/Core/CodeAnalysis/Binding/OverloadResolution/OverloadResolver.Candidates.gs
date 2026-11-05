@@ -856,11 +856,7 @@ internal partial class OverloadResolver {
         }
         var hasBetter = false
         for var i = 0; i < boundArguments.Count; i++ {
-            if candidateRank.IsTailSlot[i] != otherRank.IsTailSlot[i] ||
-                candidateRank.Kinds[i] != otherRank.Kinds[i] ||
-                candidateRank.ParamTypes[i] == nil ||
-                otherRank.ParamTypes[i] == nil ||
-                !DeclarationBinder.TypeSignaturesEquivalent(candidateRank.ParamTypes[i], otherRank.ParamTypes[i]) {
+            if candidateRank.IsTailSlot[i] != otherRank.IsTailSlot[i] {
                 return false
             }
             if boundArguments[i]?.Type is ByRefTypeSymbol || candidateRank.IsTailSlot[i] {

@@ -54,6 +54,10 @@ namespace SpanOverloadContract;
 public static class Probe {
     public static string OnlyObj(ReadOnlySpan<object> value) => "Object";
     public static string OnlyInt(ReadOnlySpan<int> value) => "Int32";
+}
+public class IntSpanHolder {
+    public IntSpanHolder(Span<int> value) {}
+    public IntSpanHolder(ReadOnlySpan<int> value, int tag) {}
 }`, "SpanOverloadContract")
         let assembly = fixture.Compile(`package Preexisting
 import System
@@ -73,7 +77,13 @@ func Main() {
 }`, "span-enum-overload-identity", true)
         IlVerifier.Verify(assembly)
         Assert.Equal("Code\nCode\nCode\n1\n1\n1\n", fixture.Run(assembly))
-        for rejectedCall in[]string{"Probe.OnlyObj(sp1)", "Probe.OnlyObj(sp2)", "Probe.OnlyInt(sp3)"} {
+        for (rejectedCall, expectedDiag) in[](Call string, Diag string){
+            ("Probe.OnlyObj(sp1)", "GS0159"),
+            ("Probe.OnlyObj(sp2)", "GS0159"),
+            ("Probe.OnlyInt(sp3)", "GS0159"),
+            ("IntSpanHolder(sp1)", "GS0267"),
+            ("IntSpanHolder(sp3, 1)", "GS0267")
+        } {
             let (code, output) = fixture.TryCompile(`package PreexistingReject
 import System
 import SpanOverloadContract
@@ -86,7 +96,7 @@ func Main() {
     Console.WriteLine(` + rejectedCall + `)
 }`, "span-enum-overload-reject", true, "/reference:" + contract)
             Assert.NotEqual(0, code)
-            Assert.Contains("GS0159", output, StringComparison.Ordinal)
+            Assert.Contains(expectedDiag, output, StringComparison.Ordinal)
         }
     }
 
