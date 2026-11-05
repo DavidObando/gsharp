@@ -213,9 +213,32 @@ internal partial class ExpressionBinder {
             $scope = $scope.Pop()
             boundArmBuilders.Add((armSyntax, pattern, guard_, armResult))
         }
-        for armExit in armExits {
-            MergeBranchExpressionNarrowingFrames(armExit)
-        }
+        let unmatchedExit = CaptureExpressionNarrowingFrames(recordSiblingCount: false)
+        let includeUnmatched = !hasDefault && !ExhaustivenessAnalyzer.CoversAllVariants(
+            switchType,
+            boundArmBuilders.Where(
+                (
+                    a(
+                        Syntax SwitchExpressionArmSyntax,
+                        Pattern BoundPattern?,
+                        Guard BoundExpression?,
+                        Result BoundExpression
+                    )
+                ) -> a.Guard == nil
+            )
+                .Select(
+                (
+                    a(
+                        Syntax SwitchExpressionArmSyntax,
+                        Pattern BoundPattern?,
+                        Guard BoundExpression?,
+                        Result BoundExpression
+                    )
+                ) -> a.Pattern
+            ),
+            $scope.GetDeclaredStructs()
+        )
+        JoinSwitchArmExpressionNarrowingFrames(armExits, unmatchedExit, includeUnmatched)
         let armResults = List[BoundExpression](boundArmBuilders.Count)
         for arm in boundArmBuilders {
             armResults.Add(arm.Result)
@@ -251,9 +274,9 @@ internal partial class ExpressionBinder {
                 resultType != TypeSymbol.Error &&
                 resultType != TypeSymbol
                 .Void {
-                RestoreExpressionNarrowingFrames(armExits[armIndex])
+                RestoreExpressionNarrowingFrames(armExits[armIndex], truncateSiblings: false)
                 result = BindExpression(arm.Syntax.Result, resultType)
-                armExits[armIndex] = CaptureExpressionNarrowingFrames()
+                armExits[armIndex] = CaptureExpressionNarrowingFrames(recordSiblingCount: false)
                 arms.Add(BoundSwitchExpressionArm(nil, arm.Pattern, arm.Guard, result))
                 continue
             }
@@ -276,7 +299,7 @@ internal partial class ExpressionBinder {
                 // BoundDefaultExpression (the verifiable Nullable<T> default),
                 // matching the if-expression path. The Conversion.Classify check
                 // above still governs the GS0179 arm-mismatch diagnostic.
-                RestoreExpressionNarrowingFrames(armExits[armIndex])
+                RestoreExpressionNarrowingFrames(armExits[armIndex], truncateSiblings: false)
                 result = ConvertConditionalBranchWithNarrowing(
                     BranchValueLocation(arm.Syntax.Result),
                     result,
@@ -284,13 +307,11 @@ internal partial class ExpressionBinder {
                     armExitFrames[armIndex],
                     armPatternVariables[armIndex]
                 )
-                armExits[armIndex] = CaptureExpressionNarrowingFrames()
+                armExits[armIndex] = CaptureExpressionNarrowingFrames(recordSiblingCount: false)
             }
             arms.Add(BoundSwitchExpressionArm(nil, arm.Pattern, arm.Guard, result))
         }
-        for armExit in armExits {
-            MergeBranchExpressionNarrowingFrames(armExit)
-        }
+        JoinSwitchArmExpressionNarrowingFrames(armExits, unmatchedExit, includeUnmatched)
         let boundArms = arms.ToImmutable()
         // Issue #1238: a deferred argument switch-expression whose arms could not
         // unify without a target — suppress the GS0179 diagnostics and return a
@@ -308,6 +329,40 @@ internal partial class ExpressionBinder {
             Diagnostics
         )
         return BoundSwitchExpression(nil, discriminant, boundArms, resultType)
+    }
+
+    private func JoinSwitchArmExpressionNarrowingFrames(
+        armExits List[
+            List[
+                (
+                    Id int32,
+                    Frame NarrowingFrame?,
+                    Entries Dictionary[AccessPath, TypeSymbol]?,
+                    Aliases HashSet[VariableSymbol]
+                )
+            ]?
+        ],
+        unmatchedExit List[
+            (
+                Id int32,
+                Frame NarrowingFrame?,
+                Entries Dictionary[AccessPath, TypeSymbol]?,
+                Aliases HashSet[VariableSymbol]
+            )
+        ]?,
+        includeUnmatched bool
+    ) {
+        if armExits.Count == 0 {
+            RestoreExpressionNarrowingFrames(unmatchedExit, truncateSiblings: false)
+            return
+        }
+        RestoreExpressionNarrowingFrames(armExits[0], truncateSiblings: false)
+        for var i = 1; i < armExits.Count; i++ {
+            MergeBranchExpressionNarrowingFrames(armExits[i])
+        }
+        if includeUnmatched {
+            MergeBranchExpressionNarrowingFrames(unmatchedExit)
+        }
     }
 
     shared {

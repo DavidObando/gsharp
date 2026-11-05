@@ -84,7 +84,8 @@ internal partial class StatementBinder {
         state Dictionary[AccessPath, TypeSymbol],
         beforeAliases HashSet[VariableSymbol],
         alreadyProcessed HashSet[BoundExpression]?,
-        exitAliases Dictionary[BoundExpression, HashSet[VariableSymbol]]? = nil
+        exitAliases Dictionary[BoundExpression, HashSet[VariableSymbol]]? = nil,
+        commitProcessed bool = true
     ) HashSet[VariableSymbol] {
         if bound.Syntax is {} anchor {
             EnsureClosureAssignedNames(anchor)
@@ -93,6 +94,9 @@ internal partial class StatementBinder {
         collector.AlreadyProcessedExpressions = alreadyProcessed
         collector.ProcessedExpressionExitAliases = exitAliases
         collector.VisitExpression(bound)
+        if commitProcessed && alreadyProcessed != nil {
+            alreadyProcessed.UnionWith(collector.NewlyProcessedExpressions)
+        }
         if state.Count > 0 {
             ClearAssignedRoots(bound, state, collector)
         }
@@ -2634,6 +2638,9 @@ internal partial class StatementBinder {
         private let visitedFunctionLiterals HashSet[BoundFunctionLiteralExpression] = HashSet[
             BoundFunctionLiteralExpression
         ]()
+        private let localProcessedExpressions HashSet[BoundExpression] = HashSet[BoundExpression](
+            ReferenceEqualityComparer.Instance
+        )
         private let pendingConditionalTargets HashSet[BoundLabel] = HashSet[BoundLabel]()
         private let visitedLabels HashSet[BoundLabel] = HashSet[BoundLabel]()
         private let declaredRegionLabels List[BoundLabel] = List[BoundLabel]()
@@ -2707,6 +2714,8 @@ internal partial class StatementBinder {
             get;
             set;
         }
+
+        prop NewlyProcessedExpressions HashSet[BoundExpression] -> localProcessedExpressions
 
         prop ProcessedExpressionExitAliases Dictionary[BoundExpression, HashSet[VariableSymbol]]? {
             get;
@@ -2804,8 +2813,7 @@ internal partial class StatementBinder {
             }
             if AlreadyProcessedExpressions != nil &&
                 visitedFunctionLiterals.Count == 0 &&
-                !AlreadyProcessedExpressions!!
-                .Add(node) {
+                (AlreadyProcessedExpressions!!.Contains(node) || !localProcessedExpressions.Add(node)) {
                 if ProcessedExpressionExitAliases != nil && ProcessedExpressionExitAliases!!.TryGetValue(
                     node,
                     out var exitAliases
@@ -3177,7 +3185,7 @@ internal partial class StatementBinder {
                 let left = bin.Left
                 if AlreadyProcessedExpressions != nil &&
                     visitedFunctionLiterals.Count == 0 &&
-                    AlreadyProcessedExpressions!!.Contains(left) {
+                    (AlreadyProcessedExpressions!!.Contains(left) || localProcessedExpressions.Contains(left)) {
                     current = left
                     break
                 }
@@ -3189,7 +3197,7 @@ internal partial class StatementBinder {
                 if !object.ReferenceEquals(bin, node) &&
                     AlreadyProcessedExpressions != nil &&
                     visitedFunctionLiterals.Count == 0 {
-                    AlreadyProcessedExpressions!!.Add(bin)
+                    localProcessedExpressions.Add(bin)
                 }
                 VisitExpression(bin.Right)
                 if StatementBinder.BinaryEqualityRunsUserCode(bin) {

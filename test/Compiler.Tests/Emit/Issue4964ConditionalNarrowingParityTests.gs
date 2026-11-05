@@ -816,11 +816,41 @@ struct Token {
     }
 }
 func Consume(x float64, b bool) bool -> b
+func ConsumeThree(x float64, b bool, tail int32?) bool -> b
+func ConsumeNamed(b bool, x float64) bool -> b
+func ConsumeVariadic(x float64, values ...bool) bool -> values[0]
 let token = Token{}
 Console.WriteLine(n != nil ? Consume(token, n > 0) : false)
+n = 5
+Console.WriteLine(n != nil ? ConsumeThree(token, n > 0, (n = nil)) : false)
+n = 5
+let tupleTarget (float64, bool, int32?) = if n != nil { (token, n > 0, (n = nil)) } else { (0.0, false, nil) }
+Console.WriteLine(tupleTarget.Item2)
+n = 5
+Console.WriteLine(n != nil ? ConsumeNamed(x: token, b: n > 0) : false)
+n = 5
+Console.WriteLine(n != nil ? ConsumeVariadic(token, n > 0) : false)
 `)
-        Assert.Equal("False" + Environment.NewLine, identityArgRebindRun.Output)
+        Assert.Equal(
+            string.Join(Environment.NewLine, "False", "False", "False", "False", "False") + Environment.NewLine,
+            identityArgRebindRun.Output
+        )
         Assert.DoesNotContain("GS0536", identityArgRebindRun.CompilerOutput)
+
+        let constrainedComparerDiag = DiagnoseSource(`package Issue4969.ConstrainedComparerRebind
+import System.Collections.Generic
+var n int32? = 5
+struct Token {
+    shared {
+        func operator implicit(t Token) int32 {
+            n = nil
+            return 0
+        }
+    }
+}
+func Check[T IComparer[int32]](comparer T, token Token) int32 -> !(n == nil) ? comparer.Compare(token, n) : 0
+`)
+        Assert.Contains("GS0156:n", constrainedComparerDiag)
     }
 
     @Theory
@@ -891,6 +921,10 @@ Console.WriteLine(n != nil ? Consume(token, n > 0) : false)
     @InlineData("return (dict.TryGetValue(\"missing\", out value) || { value = \"ok\"\n true }) ? value.Length : 0", "")
     @InlineData("return (!dict.TryGetValue(\"missing\", out value) && ((value = \"ok\") is {})) ? value.Length : 0", "")
     @InlineData("return (dict.TryGetValue(\"missing\", out value) || ((value = \"ok\") is {})) ? value.Length : 0", "")
+    @InlineData(
+        "return dict.TryGetValue(\"missing\", out value) ? 0 : (switch flag { case true: (value = \"a\", 1).Item2 default: (value = \"b\", 2).Item2 }) + value.Length",
+        ""
+    )
     func Composed_MaybeNullWhen_Preserves_Widening_Across_And_And_Or(body string, expected string) {
         let source = (`package Issue4969.ComposedMaybeNull
 import System.Collections.Generic
@@ -1062,9 +1096,10 @@ func f() int32 {
     @Fact
     func Left_Associated_Arithmetic_Chain_In_Narrowed_Arm_Scales_Linearly() {
         let buildChainSource = func (terms int32) string {
-            let chain = string.Join(" + ", Enumerable.Repeat("1", terms))
+            let chain = string.Join(" + ", Enumerable.Repeat("F()", terms))
             return (`package Issue4969.ChainScaling
-func Compute(s string?, n int32?) int32 -> (s != nil && n != nil) ? (` + chain + ` + s.Length + n) : 0
+func F() int32 -> 1
+func Compute(s string?, n int32?) int32 -> s != nil ? (n != nil ? (` + chain + ` + s.Length + n) : 0) : 0
 `)
         }
         // Warm up compilation pipeline.

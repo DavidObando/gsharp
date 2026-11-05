@@ -106,6 +106,44 @@ internal class ConversionClassifier {
         return expression
     }
 
+    internal func ResolveReboundArgument(argument BoundExpression) BoundExpression {
+        if tryGetReboundSibling == nil {
+            return argument
+        }
+        if tryGetReboundSibling!!(argument) is {} directRebound {
+            if directRebound.Type == argument.Type || argument.Type == TypeSymbol.Error {
+                return directRebound
+            }
+            return BindConversion(directRebound.Syntax?.Location ?? default(TextLocation), directRebound, argument.Type)
+        }
+        if argument.ImplicitConversionOperand is {} origOperand &&
+            tryGetReboundSibling!!(origOperand) is {} reboundOperand {
+            return BindConversion(
+                reboundOperand.Syntax?.Location ?? default(TextLocation),
+                reboundOperand,
+                argument.Type
+            )
+        }
+        if argument is BoundAddressOfExpression{IsReadOnly: true} addr {
+            let pointeeType = addr.Operand.Type
+            if tryGetReboundSibling!!(addr.Operand) is {} reboundAddrOp {
+                let convertedAddrOp = if reboundAddrOp.Type == pointeeType {
+                    reboundAddrOp
+                } else {
+                    BindConversion(reboundAddrOp.Syntax?.Location ?? default(TextLocation), reboundAddrOp, pointeeType)
+                }
+                return CreateImplicitInReference(convertedAddrOp, pointeeType)
+            }
+            if OverloadResolver.TryGetImplicitInSpilledValue(addr, out var spilled) && spilled != nil {
+                let resolvedSpilled = ResolveReboundArgument(spilled)
+                if !object.ReferenceEquals(resolvedSpilled, spilled) {
+                    return CreateImplicitInReference(resolvedSpilled, pointeeType)
+                }
+            }
+        }
+        return argument
+    }
+
     /// Initializes a new instance of the (cref:ConversionClassifier)
     /// class.
     /// @param binderCtx The shared binder context that exposes the
@@ -3012,6 +3050,11 @@ internal class ConversionClassifier {
     ) ImmutableArray[BoundExpression] {
         var builder ImmutableArray[BoundExpression].Builder? = nil
         for var i = 0; i < arguments.Length; i++ {
+            let argument = ResolveReboundSibling(arguments[i])
+            if !object.ReferenceEquals(argument, arguments[i]) {
+                builder ??= arguments.ToBuilder()
+                builder!![i] = argument
+            }
             let paramIndex = if parameterMapping.IsDefault {
                 i
             } else {
@@ -3038,18 +3081,18 @@ internal class ConversionClassifier {
             } else {
                 default(TypeSymbol?)
             }
-            if paramIndex < parameters.Length && IsImplicitInClrArgument(arguments[i], parameters[paramIndex]) {
+            if paramIndex < parameters.Length && IsImplicitInClrArgument(argument, parameters[paramIndex]) {
                 let pointeeType = GetImplicitInClrPointeeType(
                     parameters[paramIndex],
                     paramIndex,
                     method,
                     receiverType,
                     symbolicMethodTypeArgs: default(ImmutableArray[TypeSymbol?]),
-                    arguments[i]
+                    argument
                 )
                 builder ??= arguments.ToBuilder()
                 builder!![i] = if TryRejectClrPlatformContainerArgument(
-                    arguments[i],
+                    argument,
                     parameters[paramIndex],
                     pointeeType,
                     location,
@@ -3057,19 +3100,19 @@ internal class ConversionClassifier {
                 ) {
                     rejectedArgument
                 } else {
-                    BindImplicitInArgument(location, arguments[i], pointeeType, parameter: nil)
+                    BindImplicitInArgument(location, argument, pointeeType, parameter: nil)
                 }
             } else if paramIndex < parameters.Length &&
                 (
-                Conversion.ContainsPlatformTypeInStructure(arguments[i].Type) || TypeSymbol.ContainsNullLiteralType(
-                    arguments[i].Type
+                Conversion.ContainsPlatformTypeInStructure(argument.Type) || TypeSymbol.ContainsNullLiteralType(
+                    argument.Type
                 ) ||
-                    arguments[i].Type is NullableTypeSymbol
+                    argument.Type is NullableTypeSymbol
             ) &&
                 parameterType != nil {
-                if Conversion.ContainsPlatformTypeInStructure(arguments[i].Type) &&
+                if Conversion.ContainsPlatformTypeInStructure(argument.Type) &&
                     TryRejectClrPlatformContainerArgument(
-                    arguments[i],
+                    argument,
                     parameters[paramIndex],
                     parameterType,
                     location,
@@ -3077,19 +3120,17 @@ internal class ConversionClassifier {
                 ) {
                     builder ??= arguments.ToBuilder()
                     builder!![i] = rejectedArgument
-                } else if (
-                    TypeSymbol.ContainsNullLiteralType(arguments[i].Type) || arguments[i].Type is NullableTypeSymbol
-                ) &&
+                } else if (TypeSymbol.ContainsNullLiteralType(argument.Type) || argument.Type is NullableTypeSymbol) &&
                     !Conversion
-                    .Classify(arguments[i].Type, parameterType).IsImplicit {
+                    .Classify(argument.Type, parameterType).IsImplicit {
                     builder ??= arguments.ToBuilder()
-                    builder!![i] = BindConversion(location, arguments[i], parameterType)
+                    builder!![i] = BindConversion(location, argument, parameterType)
                 } else if !parameters[paramIndex]
                     .ParameterType
                     .IsGenericParameter &&
-                    arguments[i].Type is PlatformTypeSymbol &&
+                    argument.Type is PlatformTypeSymbol &&
                     Conversion
-                    .Classify(arguments[i].Type, parameterType).RequiresPlatformNilCheck {
+                    .Classify(argument.Type, parameterType).RequiresPlatformNilCheck {
                     // ADR-0186 §4, #4451: a platform argument at a non-null
                     // parameter of a constrained call is a coercion point like
                     // any other. This path otherwise passes arguments
@@ -3097,7 +3138,7 @@ internal class ConversionClassifier {
                     // only the check and leaves the value's CLR shape alone.
                     builder ??= arguments.ToBuilder()
                     builder!![i] = PlatformCoercion.InsertCheck(
-                        arguments[i],
+                        argument,
                         location,
                         "a conversion to the non-null type '${parameterType.Name}'"
                     )
@@ -3410,7 +3451,13 @@ internal class ConversionClassifier {
     ) BoundExpression {
         let parameterType = methodOwner.SubstituteMemberType(method.Parameters[0].Type)
         let resultType = methodOwner.SubstituteMemberType(method.Type)
-        let operand = BindConversion(diagnosticLocation, expression, parameterType, allowExplicit: false)
+        let operand = BindConversion(
+            diagnosticLocation,
+            expression,
+            parameterType,
+            allowExplicit: false,
+            trackNarrowing: false
+        )
         let call = BoundCallExpression(nil, method, ImmutableArray.Create(operand), resultType){
             StaticGenericOwnerType = if !methodOwner
                 .TypeArguments
@@ -3423,7 +3470,7 @@ internal class ConversionClassifier {
                 default(StructSymbol?)
             }
         }
-        return BindConversion(diagnosticLocation, call, targetType, allowExplicit)
+        return BindConversion(diagnosticLocation, call, targetType, allowExplicit, trackNarrowing: false)
     }
 
     /// Issue #1256: lowers a non-identity implicit tuple-to-tuple conversion
@@ -3467,8 +3514,7 @@ internal class ConversionClassifier {
                         diagnosticLocation,
                         element,
                         targetTuple.ElementTypes[i],
-                        allowExplicit,
-                        trackNarrowing: false
+                        allowExplicit
                     )
                     if (expressionNarrowingVersion?.Invoke() ?? 0) != beforeVersion {
                         earlierElementChangedNarrowing = true

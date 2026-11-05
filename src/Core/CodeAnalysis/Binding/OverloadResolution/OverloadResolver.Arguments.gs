@@ -172,6 +172,7 @@ internal partial class OverloadResolver {
         sourceIndex int32,
         receiverArgCount int32
     ) BoundExpression {
+        let arg = conversions.ResolveReboundSibling(arg)
         let conversionSyntaxIndex = sourceIndex - receiverArgCount
         let location = if callSyntax != nil &&
             conversionSyntaxIndex >= 0 &&
@@ -508,6 +509,19 @@ internal partial class OverloadResolver {
         parameterNameAt(int32) -> string,
         parameterOffset int32 = 0
     ) ImmutableArray[BoundExpression] {
+        var parameterOrderedArguments = parameterOrderedArguments
+        var reboundBuilder ImmutableArray[BoundExpression].Builder? = nil
+        for var i = parameterOffset; i < parameterOrderedArguments.Length; i++ {
+            let arg = parameterOrderedArguments[i]
+            let resolved = conversions.ResolveReboundArgument(arg)
+            if !object.ReferenceEquals(resolved, arg) {
+                reboundBuilder ??= parameterOrderedArguments.ToBuilder()
+                reboundBuilder!![i] = resolved
+            }
+        }
+        if reboundBuilder != nil {
+            parameterOrderedArguments = reboundBuilder.ToImmutable()
+        }
         var hasNamedArgument = false
         for argument in sourceArguments {
             hasNamedArgument |= argument is NamedArgumentExpressionSyntax
@@ -1120,6 +1134,7 @@ internal partial class OverloadResolver {
             parameterName string,
             ref hasErrors bool
         ) BoundExpression {
+            let argument = conversions.ResolveReboundSibling(argument)
             let argType TypeSymbol? = argument.Type
             // Unknown/error argument, or an open (unsubstituted) element type whose
             // members are erased: leave the argument untouched. Open element types
