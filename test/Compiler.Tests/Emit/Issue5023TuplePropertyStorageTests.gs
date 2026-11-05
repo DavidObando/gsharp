@@ -785,6 +785,7 @@ interface ICell[U] {
 open class BaseCell {
     var Stored object?
     var Total int32
+    var Shadow int32 = 1
     open prop Value object? {
         get -> Stored
         set { Stored = value }
@@ -794,6 +795,11 @@ class RefCell : BaseCell, ICell[object?] {
     prop Count int32 {
         get -> Total
         set { Total = value }
+    }
+    prop Slot ref int32 -> Total
+    prop Shadow int32 {
+        get -> Total
+        set { Total = value * 10 }
     }
 }
 struct ValueCell : ICell[object?] {
@@ -807,6 +813,18 @@ struct ValueCell : ICell[object?] {
         get -> Total
         set { Total = value }
     }
+}
+var getCalls = 0
+func GetCounter(counter ICell[object?]) ICell[object?] {
+    getCalls++
+    return counter
+}
+func GetRefCell[T RefCell](cell T) T {
+    getCalls++
+    return cell
+}
+func IncrementSlot[T RefCell](cell T) {
+    GetRefCell(cell).Slot++
 }
 async func SetByInterface[T ICell[object?]](items [](T, int32), replacement T) {
     items[0].Item1.Value = {
@@ -827,11 +845,16 @@ async func SetByClass[T BaseCell](items [](T, int32), replacement T) {
     }
     items[0].Item1.Total = 5
 }
+func SetShadow[T RefCell](items [](T, int32)) {
+    items[0].Item1.Shadow = 7
+}
 let oldRef = RefCell{}
 let newRef = RefCell{}
 let refs = [](RefCell, int32){(oldRef, 0)}
 SetByInterface(refs, newRef).GetAwaiter().GetResult()
-Console.WriteLine("${oldRef.Stored ?? "nil"} ${newRef.Stored ?? "nil"} ${newRef.Total}")
+GetCounter(newRef).Count++
+IncrementSlot(newRef)
+Console.WriteLine("${oldRef.Stored ?? "nil"} ${newRef.Stored ?? "nil"} ${newRef.Total} ${getCalls}")
 let values = [](ValueCell, int32){(ValueCell{}, 0)}
 SetByInterface(values, ValueCell{Stored: "r", Total: 10}).GetAwaiter().GetResult()
 Console.WriteLine("${values[0].Item1.Stored ?? "nil"} ${values[0].Item1.Total}")
@@ -839,6 +862,7 @@ let oldClass = RefCell{}
 let newClass = RefCell{}
 let classes = [](RefCell, int32){(oldClass, 0)}
 SetByClass(classes, newClass).GetAwaiter().GetResult()
+SetShadow(classes)
 Console.WriteLine("${oldClass.Stored ?? "nil"} ${newClass.Stored ?? "nil"} ${newClass.Total}")`.Replace(
             "SUSPEND",
             if suspending {
@@ -847,7 +871,41 @@ Console.WriteLine("${oldClass.Stored ?? "nil"} ${newClass.Stored ?? "nil"} ${new
                 ""
             }
         )
-        Assert.Equal("v nil 2\nv 12\nc nil 5\n", CompileAndRun(source))
+        Assert.Equal("v nil 4 2\nv 12\nc nil 70\n", CompileAndRun(source))
+    }
+
+    @Theory
+    @InlineData("Base", "Frozen", "GS0127")
+    @InlineData("Base", "Secret", "GS0472")
+    @InlineData("Base", "Locked", "GS0472")
+    @InlineData("Derived", "ReadOnlyShadow", "GS0127")
+    func ClassConstrainedTupleMemberWrite_EnforcesReadOnlyAndAccessibility(
+        constraint string,
+        member string,
+        expectedDiagnostic string
+    ) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`package Test
+open class Base {
+    let Frozen int32 = 1
+    private var Secret int32 = 1
+    var ReadOnlyShadow int32 = 1
+    prop Locked int32 {
+        get -> 1
+        private set { }
+    }
+}
+class Derived : Base {
+    prop ReadOnlyShadow int32 {
+        get -> 1
+    }
+}
+func Mutate[T CONSTRAINT](items [](T, int32), direct T) {
+    items[0].Item1.MEMBER = 2
+    direct.MEMBER = 2
+}`.Replace("CONSTRAINT", constraint).Replace("MEMBER", member), "ClassConstrainedWrite5029", false)
+        Assert.NotEqual(0, code)
+        Assert.Contains(expectedDiagnostic, output)
     }
 
     @Theory

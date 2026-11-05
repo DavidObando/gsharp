@@ -3656,6 +3656,18 @@ internal partial class ExpressionBinder {
                     "an interface property has an effective interface owner",
                     expression: "ifaceOwner as InterfaceSymbol"
                 )
+                if !AccessibilityChecker.IsAccessible(
+                    ifaceProp.SetterAccessibility,
+                    effectiveInterface,
+                    this.function
+                ) {
+                    Diagnostics.ReportMemberInaccessible(
+                        initSyntax.FieldIdentifier.Location,
+                        ifaceProp.Name,
+                        effectiveInterface.Name,
+                        ifaceProp.SetterAccessibility
+                    )
+                }
                 let propertyType = effectiveInterface.SubstituteMemberType(ifaceProp.Type)
                 let ifacePropConverted = BindExpression(initSyntax.Value, propertyType)
                 statements.Add(

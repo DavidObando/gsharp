@@ -1253,13 +1253,67 @@ internal partial class ExpressionBinder {
         // `box !!T; ldfld`/`callvirt get_X`.
         if assignmentReceiverType is TypeParameterSymbol tpVarType {
             if tpVarType.ClassConstraint is StructSymbol tpClassConstraint {
-                if TypeMemberModel.TryGetFieldIncludingInherited(
+                let hasNearestTpProperty = TypeMemberModel.TryGetProperty(
+                    tpClassConstraint,
+                    syntax.FieldIdentifier.ValueText,
+                    out var nearestTpProperty,
+                    out var nearestTpPropertyDeclaringType
+                )
+                let hasTpField = TypeMemberModel.TryGetFieldIncludingInherited(
                     tpClassConstraint,
                     syntax.FieldIdentifier.ValueText,
                     MemberQuery.Instance(MemberKinds.Field),
                     out var tpField,
                     out var tpFieldDeclaringType
+                )
+                if hasTpField &&
+                    (
+                    !hasNearestTpProperty ||
+                        IsFieldAtLeastAsNearAsProperty(
+                        tpClassConstraint,
+                        Invariant.Required(
+                            tpFieldDeclaringType,
+                            "a resolved field has a declaring type",
+                            expression: "tpFieldDeclaringType"
+                        ),
+                        Invariant.Required(
+                            nearestTpProperty,
+                            "a resolved property has a symbol",
+                            expression: "nearestTpProperty"
+                        ),
+                        Invariant.Required(
+                            nearestTpPropertyDeclaringType,
+                            "a resolved property has a declaring type",
+                            expression: "nearestTpPropertyDeclaringType"
+                        )
+                    )
                 ) {
+                    tpField = Invariant.Required(
+                        tpField,
+                        "a resolved assignment field has a symbol",
+                        expression: "tpField"
+                    )
+                    tpFieldDeclaringType = Invariant.Required(
+                        tpFieldDeclaringType,
+                        "a resolved assignment field has a declaring type",
+                        expression: "tpFieldDeclaringType"
+                    )
+                    if tpField.IsReadOnly &&
+                        !IsReadOnlyFieldAssignmentAllowed(
+                        tpField,
+                        tpFieldDeclaringType,
+                        ReceiverVariableIsThis(variable)
+                    ) {
+                        Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.ValueText)
+                    }
+                    if !AccessibilityChecker.IsAccessible(tpField.Accessibility, tpFieldDeclaringType, this.function) {
+                        Diagnostics.ReportMemberInaccessible(
+                            syntax.FieldIdentifier.Location,
+                            tpField.Name,
+                            tpFieldDeclaringType.Name,
+                            tpField.Accessibility
+                        )
+                    }
                     let tpFieldType = tpFieldDeclaringType.SubstituteMemberType(tpField.Type) ?? tpField.Type
                     let tpFieldConverted = conversions.BindConversion(
                         syntax.Value.Location,
@@ -1274,17 +1328,34 @@ internal partial class ExpressionBinder {
                         tpFieldConverted
                     )
                 }
-                if TypeMemberModel.TryGetProperty(
-                    tpClassConstraint,
-                    syntax.FieldIdentifier.ValueText,
-                    out var tpProp,
-                    out var tpPropDeclaringType
-                ) {
+                if hasNearestTpProperty {
+                    let tpProp = Invariant.Required(
+                        nearestTpProperty,
+                        "a resolved property has a symbol",
+                        expression: "nearestTpProperty"
+                    )
+                    let tpPropDeclaringType = Invariant.Required(
+                        nearestTpPropertyDeclaringType,
+                        "a user-defined struct property has a declaring type",
+                        expression: "nearestTpPropertyDeclaringType"
+                    )
                     if !tpProp.HasSetter {
                         Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.ValueText)
                         return BoundErrorExpression(nil)
                     }
-                    let tpPropType = tpPropDeclaringType?.SubstituteMemberType(tpProp.Type) ?? tpProp.Type
+                    if !AccessibilityChecker.IsAccessible(
+                        tpProp.SetterAccessibility,
+                        tpPropDeclaringType,
+                        this.function
+                    ) {
+                        Diagnostics.ReportMemberInaccessible(
+                            syntax.FieldIdentifier.Location,
+                            tpProp.Name,
+                            tpPropDeclaringType.Name,
+                            tpProp.SetterAccessibility
+                        )
+                    }
+                    let tpPropType = tpPropDeclaringType.SubstituteMemberType(tpProp.Type) ?? tpProp.Type
                     let tpPropConverted = conversions.BindConversion(
                         syntax.Value.Location,
                         BindValue(tpPropType),
@@ -2280,36 +2351,6 @@ internal partial class ExpressionBinder {
         syntax EventSubscriptionExpressionSyntax,
         baseOpSyntaxKind SyntaxKind
     ) BoundExpression? {
-        if TrySaveNativeElementReceiver(receiver, out var savedReceiver, out var prefix) {
-            let assignment BoundExpression? = TryBindInterfaceCompoundAssignment(
-                interfaceType,
-                savedReceiver,
-                memberName,
-                memberNameSyntax,
-                syntax,
-                baseOpSyntaxKind
-            )
-            return if assignment == nil {
-                default(BoundBlockExpression?)
-            } else {
-                BoundBlockExpression(syntax, prefix, assignment)
-            }
-        }
-        if TrySavePostfixReceiver(syntax, receiver, out savedReceiver, out prefix) {
-            let assignment BoundExpression? = TryBindInterfaceCompoundAssignment(
-                interfaceType,
-                savedReceiver,
-                memberName,
-                memberNameSyntax,
-                syntax,
-                baseOpSyntaxKind
-            )
-            return if assignment == nil {
-                default(BoundBlockExpression?)
-            } else {
-                BoundBlockExpression(syntax, prefix, assignment)
-            }
-        }
         if !TypeMemberModel.TryGetPropertyWithOwner(
             interfaceType,
             memberName,
@@ -2354,6 +2395,36 @@ internal partial class ExpressionBinder {
                 )
             }
             return BindRefGetterCompoundAssignment(syntax)
+        }
+        if TrySaveNativeElementReceiver(receiver, out var savedReceiver, out var prefix) {
+            let assignment BoundExpression? = TryBindInterfaceCompoundAssignment(
+                interfaceType,
+                savedReceiver,
+                memberName,
+                memberNameSyntax,
+                syntax,
+                baseOpSyntaxKind
+            )
+            return if assignment == nil {
+                default(BoundBlockExpression?)
+            } else {
+                BoundBlockExpression(syntax, prefix, assignment)
+            }
+        }
+        if TrySavePostfixReceiver(syntax, receiver, out savedReceiver, out prefix) {
+            let assignment BoundExpression? = TryBindInterfaceCompoundAssignment(
+                interfaceType,
+                savedReceiver,
+                memberName,
+                memberNameSyntax,
+                syntax,
+                baseOpSyntaxKind
+            )
+            return if assignment == nil {
+                default(BoundBlockExpression?)
+            } else {
+                BoundBlockExpression(syntax, prefix, assignment)
+            }
         }
         if !property.HasGetter || !property.HasSetter {
             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName)
@@ -2552,6 +2623,67 @@ internal partial class ExpressionBinder {
         syntax EventSubscriptionExpressionSyntax,
         baseOpSyntaxKind SyntaxKind
     ) BoundExpression? {
+        // ADR-0112 A3: this-first base-chain instance field walk, using the
+        // declaring struct as the owner for both the read access and assignment.
+        let hasCompoundProperty = TypeMemberModel.TryGetProperty(
+            structSym,
+            memberName,
+            out var compoundProperty,
+            out var compoundPropertyDeclaringType
+        )
+        let hasCompoundField = TypeMemberModel.TryGetFieldIncludingInherited(
+            structSym,
+            memberName,
+            MemberQuery.Instance(MemberKinds.Field),
+            out var field,
+            out var declaringType
+        ) &&
+            (
+            !hasCompoundProperty ||
+                IsFieldAtLeastAsNearAsProperty(
+                structSym,
+                declaringType!!,
+                Invariant.Required(
+                    compoundProperty,
+                    "a resolved property has a symbol",
+                    expression: "compoundProperty"
+                ),
+                Invariant.Required(
+                    compoundPropertyDeclaringType,
+                    "a resolved property has a declaring type",
+                    expression: "compoundPropertyDeclaringType"
+                )
+            )
+        )
+        if !hasCompoundField &&
+            hasCompoundProperty &&
+            compoundProperty!!.ReturnRefKind == RefKind.Ref &&
+            !compoundProperty!!
+            .HasSetter {
+            let prop = compoundProperty!!
+            let propDeclaringType = Invariant.Required(
+                compoundPropertyDeclaringType,
+                "a user-defined struct property has a declaring type",
+                expression: "compoundPropertyDeclaringType"
+            )
+            if !structSym.IsClass && !IsWritableStructFieldReceiver(boundReceiver) {
+                Diagnostics.ReportFieldAssignmentThroughStructTemporary(
+                    syntax.OperatorToken.Location,
+                    prop.Name,
+                    structSym
+                )
+                return BoundErrorExpression(syntax)
+            }
+            if !AccessibilityChecker.IsAccessible(prop.GetterAccessibility, propDeclaringType, this.function) {
+                Diagnostics.ReportMemberInaccessible(
+                    memberNameSyntax.IdentifierToken.Location,
+                    prop.Name,
+                    propDeclaringType.Name,
+                    prop.GetterAccessibility
+                )
+            }
+            return BindRefGetterCompoundAssignment(syntax)
+        }
         if TrySaveNativeElementReceiver(boundReceiver, out var savedReceiver, out var prefix) {
             let assignment BoundExpression? = TryBindChainedCompoundAssignment(
                 structSym,
@@ -2582,38 +2714,7 @@ internal partial class ExpressionBinder {
                 BoundBlockExpression(syntax, prefix, assignment)
             }
         }
-        // ADR-0112 A3: this-first base-chain instance field walk, using the
-        // declaring struct as the owner for both the read access and assignment.
-        let hasCompoundProperty = TypeMemberModel.TryGetProperty(
-            structSym,
-            memberName,
-            out var compoundProperty,
-            out var compoundPropertyDeclaringType
-        )
-        if TypeMemberModel.TryGetFieldIncludingInherited(
-            structSym,
-            memberName,
-            MemberQuery.Instance(MemberKinds.Field),
-            out var field,
-            out var declaringType
-        ) &&
-            (
-            !hasCompoundProperty ||
-                IsFieldAtLeastAsNearAsProperty(
-                structSym,
-                declaringType!!,
-                Invariant.Required(
-                    compoundProperty,
-                    "a resolved property has a symbol",
-                    expression: "compoundProperty"
-                ),
-                Invariant.Required(
-                    compoundPropertyDeclaringType,
-                    "a resolved property has a declaring type",
-                    expression: "compoundPropertyDeclaringType"
-                )
-            )
-        ) {
+        if hasCompoundField {
             let boundRhs = BindExpression(syntax.Value)
             if field!!.IsReadOnly &&
                 !IsReadOnlyFieldAssignmentAllowed(field, declaringType, ReceiverExpressionIsThis(boundReceiver)) {
@@ -2695,31 +2796,13 @@ internal partial class ExpressionBinder {
             return FinishPostfixCompoundAssignment(syntax, previousDeclaration, previousValue, assignment)
         }
         // ADR-0051: check properties.
-        if TypeMemberModel.TryGetProperty(structSym, memberName, out var prop, out var propDeclaringType) {
-            propDeclaringType = Invariant.Required(
-                propDeclaringType,
+        if hasCompoundProperty {
+            let prop = compoundProperty!!
+            let propDeclaringType = Invariant.Required(
+                compoundPropertyDeclaringType,
                 "a user-defined struct property has a declaring type",
-                expression: "propDeclaringType"
+                expression: "compoundPropertyDeclaringType"
             )
-            if prop.ReturnRefKind == RefKind.Ref && !prop.HasSetter {
-                if !structSym.IsClass && !IsWritableStructFieldReceiver(boundReceiver) {
-                    Diagnostics.ReportFieldAssignmentThroughStructTemporary(
-                        syntax.OperatorToken.Location,
-                        prop.Name,
-                        structSym
-                    )
-                    return BoundErrorExpression(syntax)
-                }
-                if !AccessibilityChecker.IsAccessible(prop.GetterAccessibility, propDeclaringType, this.function) {
-                    Diagnostics.ReportMemberInaccessible(
-                        memberNameSyntax.IdentifierToken.Location,
-                        prop.Name,
-                        propDeclaringType.Name,
-                        prop.GetterAccessibility
-                    )
-                }
-                return BindRefGetterCompoundAssignment(syntax)
-            }
             let boundRhs = BindExpression(syntax.Value)
             let compoundTarget BoundExpression = BoundPropertyAccessExpression(nil, boundReceiver, structSym, prop)
             // Issue #2834: a user-defined compound-assignment operator mutates
@@ -4310,13 +4393,63 @@ internal partial class ExpressionBinder {
         }
         if receiverType is TypeParameterSymbol tpReceiver {
             if tpReceiver.ClassConstraint is StructSymbol tpClassConstraint {
-                if TypeMemberModel.TryGetFieldIncludingInherited(
+                let hasNearestTpProperty = TypeMemberModel.TryGetProperty(
+                    tpClassConstraint,
+                    fieldName,
+                    out var nearestTpProperty,
+                    out var nearestTpPropertyDeclaringType
+                )
+                let hasTpField = TypeMemberModel.TryGetFieldIncludingInherited(
                     tpClassConstraint,
                     fieldName,
                     MemberQuery.Instance(MemberKinds.Field),
                     out var tpField,
                     out var tpFieldDeclaringType
+                )
+                if hasTpField &&
+                    (
+                    !hasNearestTpProperty ||
+                        IsFieldAtLeastAsNearAsProperty(
+                        tpClassConstraint,
+                        Invariant.Required(
+                            tpFieldDeclaringType,
+                            "a resolved field has a declaring type",
+                            expression: "tpFieldDeclaringType"
+                        ),
+                        Invariant.Required(
+                            nearestTpProperty,
+                            "a resolved property has a symbol",
+                            expression: "nearestTpProperty"
+                        ),
+                        Invariant.Required(
+                            nearestTpPropertyDeclaringType,
+                            "a resolved property has a declaring type",
+                            expression: "nearestTpPropertyDeclaringType"
+                        )
+                    )
                 ) {
+                    tpField = Invariant.Required(tpField, "a resolved member field has a symbol", expression: "tpField")
+                    tpFieldDeclaringType = Invariant.Required(
+                        tpFieldDeclaringType,
+                        "a resolved member field has a declaring type",
+                        expression: "tpFieldDeclaringType"
+                    )
+                    if tpField.IsReadOnly &&
+                        !IsReadOnlyFieldAssignmentAllowed(
+                        tpField,
+                        tpFieldDeclaringType,
+                        ReceiverExpressionIsThis(receiver)
+                    ) {
+                        Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName)
+                    }
+                    if !AccessibilityChecker.IsAccessible(tpField.Accessibility, tpFieldDeclaringType, this.function) {
+                        Diagnostics.ReportMemberInaccessible(
+                            syntax.FieldIdentifier.Location,
+                            tpField.Name,
+                            tpFieldDeclaringType.Name,
+                            tpField.Accessibility
+                        )
+                    }
                     let tpFieldType = tpFieldDeclaringType.SubstituteMemberType(tpField.Type) ?? tpField.Type
                     let tpFieldConverted = conversions.BindConversion(
                         syntax.Value.Location,
@@ -4331,17 +4464,34 @@ internal partial class ExpressionBinder {
                         tpFieldConverted
                     )
                 }
-                if TypeMemberModel.TryGetProperty(
-                    tpClassConstraint,
-                    fieldName,
-                    out var tpProp,
-                    out var tpPropDeclaringType
-                ) {
+                if hasNearestTpProperty {
+                    let tpProp = Invariant.Required(
+                        nearestTpProperty,
+                        "a resolved member property has a symbol",
+                        expression: "nearestTpProperty"
+                    )
+                    let tpPropDeclaringType = Invariant.Required(
+                        nearestTpPropertyDeclaringType,
+                        "a user-defined struct property has a declaring type",
+                        expression: "nearestTpPropertyDeclaringType"
+                    )
                     if !tpProp.HasSetter {
                         Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName)
                         return BoundErrorExpression(nil)
                     }
-                    let tpPropType = tpPropDeclaringType?.SubstituteMemberType(tpProp.Type) ?? tpProp.Type
+                    if !AccessibilityChecker.IsAccessible(
+                        tpProp.SetterAccessibility,
+                        tpPropDeclaringType,
+                        this.function
+                    ) {
+                        Diagnostics.ReportMemberInaccessible(
+                            syntax.FieldIdentifier.Location,
+                            tpProp.Name,
+                            tpPropDeclaringType.Name,
+                            tpProp.SetterAccessibility
+                        )
+                    }
+                    let tpPropType = tpPropDeclaringType.SubstituteMemberType(tpProp.Type) ?? tpProp.Type
                     let tpPropConverted = conversions.BindConversion(
                         syntax.Value.Location,
                         BindValue(tpPropType),
