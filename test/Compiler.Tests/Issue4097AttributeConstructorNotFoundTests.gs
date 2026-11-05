@@ -280,6 +280,8 @@ Log:
 class SinkAttribute(Value Sink) : Attribute {
 }`)
     @InlineData("SourceMap", "class MapAttribute(Lookup map[string, int32]) : Attribute {\n}")
+    @InlineData("SourceNullableValueType", "class NullableValueAttribute(Value int32?) : Attribute {\n}")
+    @InlineData("SourceNullableValueTypeArray", "class NullableArrayAttribute(Values []int32?) : Attribute {\n}")
     func AnInvalidAttributeParameterType_ReportsGS0585AtDeclaration(name string, declaration string) {
         const ProbeSource = `package P
 import System
@@ -355,6 +357,25 @@ Log:
                         "$log"
                 )
             )
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData("@Opt(nil)")
+    @InlineData("@Opt(5)")
+    func AnImportedAttributeWithNullableValueTypeParameter_ReportsGS0585(annotation string) {
+        let tempDir = Directory.CreateTempSubdirectory("gs_5771_opt_").FullName
+        try {
+            let libPath = CompileCSharpLibrary(tempDir)
+            let appPath = Path.Combine(tempDir, "P.dll")
+            let source = Preamble + annotation + "\nclass Marked {\n}\n\nConsole.WriteLine(\"ok\")\n"
+            let log = Compile(tempDir, "App.gs", source, appPath, "/target:exe", "/reference:" + libPath)
+            let ids = ErrorIds(log)
+            Assert.Contains("GS0585", ids)
+            Assert.DoesNotContain("GS9998", ids)
+            Assert.False(File.Exists(appPath))
         } finally {
             Directory.Delete(tempDir, recursive: true)
         }
@@ -1076,6 +1097,14 @@ public class ExpandedTieAttribute : Attribute
     public ExpandedTieAttribute(params object[] values) { }
 
     public ExpandedTieAttribute(object first, params object[] rest) { }
+}
+
+[AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+public sealed class OptAttribute : Attribute
+{
+    public OptAttribute(int? value) { Value = value; }
+
+    public int? Value { get; }
 }`)
 
         private const Preamble string = `package P

@@ -52,6 +52,7 @@ internal partial class ExpressionBinder {
         }
         var boundOperand = BindExpression(syntax.Operand)
         if boundOperand.Type == TypeSymbol.Error {
+            ReportUnresolvedBareDefaults(boundOperand)
             return BoundErrorExpression(nil)
         }
         // Issue #2616 / ECMA-334 §14.2.6.1: char participates in unary numeric
@@ -355,8 +356,8 @@ internal partial class ExpressionBinder {
             }
         }
         let operand = BindExpression(syntax.Operand)
-        if operand is BoundErrorExpression {
-            return operand
+        if operand is BoundErrorExpression || ReportUnresolvedBareDefaults(operand) {
+            return BoundErrorExpression(nil)
         }
         // ADR-0122 / issue #1014: inside an unsafe context, `*<type>(expr)`
         // (e.g. `*uint8(p)`, the form cs2gs emits for a C# `(byte*)p` cast)
@@ -592,7 +593,7 @@ internal partial class ExpressionBinder {
     /// existing rule ((cref:StatementBinder)).
     private func BindThrowExpression(syntax ThrowExpressionSyntax) BoundExpression {
         let expression = BindExpression(syntax.Expression)
-        if expression is BoundErrorExpression {
+        if expression is BoundErrorExpression || ReportUnresolvedBareDefaults(expression) {
             return BoundErrorExpression(nil)
         }
         let exceptionType TypeSymbol? = ResolveExceptionType()
@@ -904,6 +905,34 @@ internal partial class ExpressionBinder {
         }
         return false
     }
+
+    private func MaterializeBareDefault(operand BoundExpression, targetType TypeSymbol) BoundExpression {
+        switch operand {
+            case BoundDefaultExpression{
+                Type: var defaultType,
+                Syntax: DefaultExpressionSyntax bareDefault
+            } when defaultType ==
+            TypeSymbol.Error && bareDefault.TypeClause == nil {
+                return BoundDefaultExpression(bareDefault, targetType)
+            }
+            case block is BoundBlockExpression when block.Type == TypeSymbol.Error {
+                let tail = MaterializeBareDefault(block.Expression, targetType)
+                if !object.ReferenceEquals(tail, block.Expression) {
+                    return BoundBlockExpression(block.Syntax, block.Statements, tail)
+                }
+                return operand
+            }
+            default {
+                return operand
+            }
+        }
+    }
+
+    private func CanSupplyBareDefaultEqualityType(type TypeSymbol?) bool -> type != nil &&
+        type != TypeSymbol.Error &&
+        type != TypeSymbol.Null &&
+        type != TypeSymbol.Void &&
+        !TypeSymbol.ContainsNeverType(type)
 
     /// Issue #4966 (ADR-0202): reports GS0362 for each unresolved bare
     /// `default` placeholder that [`value`](paramref) yields — the value itself,
@@ -1376,8 +1405,8 @@ internal partial class ExpressionBinder {
         // exception. The operand may be any channel-shaped handle (D2's matrix);
         // a send-only `out chan[T]` cannot be received from (GS0550).
         var operand = BindExpression(syntax.Operand)
-        if operand is BoundErrorExpression {
-            return operand
+        if operand is BoundErrorExpression || ReportUnresolvedBareDefaults(operand) {
+            return BoundErrorExpression(nil)
         }
         // ADR-0186 §4: a receive requires a non-null channel, so a platform
         // operand is checked (and unwrapped) here, like any other receiver.
@@ -1551,6 +1580,21 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         var boundLeft = left
         var boundRight = right
+        // Issue #5019: logical `&&` and `||` require `bool` on both sides, so a bare `default`
+        // operand takes `TypeSymbol.Bool`. Equality operators (`==` and `!=`) target-type a bare
+        // `default` operand from the other operand when that operand has a concrete type. Any
+        // remaining unresolved bare `default` operand reports GS0362 instead of reaching emit as
+        // an error-typed node with zero diagnostics (GS9998).
+        if (operatorKind is SyntaxKind.AmpersandAmpersandToken or SyntaxKind.PipePipeToken) {
+            boundLeft = MaterializeBareDefault(boundLeft, TypeSymbol.Bool)
+            boundRight = MaterializeBareDefault(boundRight, TypeSymbol.Bool)
+        } else if (operatorKind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken) {
+            if CanSupplyBareDefaultEqualityType(boundRight.Type) {
+                boundLeft = MaterializeBareDefault(boundLeft, boundRight.Type)
+            } else if CanSupplyBareDefaultEqualityType(boundLeft.Type) {
+                boundRight = MaterializeBareDefault(boundRight, boundLeft.Type)
+            }
+        }
         if boundLeft.Type == TypeSymbol.Error || boundRight.Type == TypeSymbol.Error {
             if TryBindDelegateCombinationOperator(
                 operatorKind,
@@ -1571,6 +1615,12 @@ internal partial class ExpressionBinder {
                     boundRight
                 )
             }
+            if deferTargetlessCoalesce {
+                Diagnostics.TruncateTo(coalesceDiagMark)
+                return BoundErrorExpression(syntax)
+            }
+            ReportUnresolvedBareDefaults(boundLeft)
+            ReportUnresolvedBareDefaults(boundRight)
             return BoundErrorExpression.WithFailedOperands(boundLeft, boundRight)
         }
         let nativeEqualityLeftType = if boundLeft.Type is NullableTypeSymbol nullableNativeLeft {

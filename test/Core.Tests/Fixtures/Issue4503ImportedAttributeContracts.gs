@@ -74,6 +74,25 @@ public sealed class ImportedOverloadedReservedAttribute : Attribute
 {
     public ImportedOverloadedReservedAttribute(int @params) { }
     public ImportedOverloadedReservedAttribute(string params_) { }
+}
+
+#pragma warning disable CS0181
+[AttributeUsage(AttributeTargets.All)]
+public sealed class ImportedNullableConstructorAttribute : Attribute
+{
+    public ImportedNullableConstructorAttribute(int? value)
+    {
+        Value = value;
+    }
+
+    public int? Value { get; }
+}
+#pragma warning restore CS0181
+
+[AttributeUsage(AttributeTargets.All)]
+public sealed class ImportedNullablePropertyAttribute : Attribute
+{
+    public int? Value { get; set; }
 }`
     }
 }

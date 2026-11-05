@@ -242,6 +242,11 @@ class Tagged {
     @InlineData("@ImportedNamedConstructor(\"a\", Label = 1)", "GS0614")
     @InlineData("@ImportedNamedConstructor(\"a\", Item = 1)", "GS0613")
     @InlineData("@ImportedNamedConstructor(\"a\", Unsupported = nil)", "GS0615")
+    @InlineData("@ImportedNullableProperty(Value = nil)", "GS0615")
+    @InlineData("@ImportedNullableProperty(Value = 5)", "GS0615")
+    @InlineData("@ImportedNullableConstructor(nil)", "GS0585")
+    @InlineData("@ImportedNullableConstructor(5)", "GS0585")
+    @InlineData("@ImportedNullableConstructor(value: 5)", "GS0585")
     @InlineData("@ImportedNamedConstructor(third: 3, 2)", "GS0583")
     @InlineData("@ImportedNamedConstructor(Label = \"ok\", \"a\")", "GS0616")
     func InvalidNamedAttributeArguments_ReportClearDiagnostics(annotation string, expectedId string) {
