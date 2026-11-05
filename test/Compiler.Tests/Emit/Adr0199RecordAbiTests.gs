@@ -1132,6 +1132,170 @@ class ProtSetSibling : ClrProtSetBase {
         }
     }
 
+    @Fact
+    func OmittedOptionalGenericDelegateArguments_AndSynthesizedRecordCompilerGeneratedMetadata() {
+        const source = `package Additional
+import System
+
+delegate NamedCallback[T]() T;
+
+func Accept[T](callback(() -> T)? = nil) bool -> callback == nil
+func AcceptNamed[T](callback NamedCallback[T]? = nil) bool -> callback == nil
+func AcceptWithSeed[T](seed T, callback(() -> T)? = nil) T -> if callback == nil { seed } else { callback() }
+
+func (self string) ExtAccept[T](callback(() -> T)? = nil) string -> if callback == nil { self } else { "called" }
+
+public class Implicit {}
+public class Explicit { public init() {} }
+public data class Record(Value int32) {
+    public func MethodAccept[T](callback(() -> T)? = nil) int32 -> if callback == nil { this.Value } else { 0 }
+    public func MethodVariadic[T](items ...T) int32 -> items.Length
+    shared {
+        public func StaticAccept[T](callback(() -> T)? = nil) string -> if callback == nil { "static" } else { "called" }
+        public func StaticVariadic[T](items ...T) int32 -> items.Length
+    }
+}
+
+public partial class Late {}
+/// Late summary.
+public partial class Late {}
+
+/// Early summary.
+public partial class Early {}
+public partial class Early {}
+
+/// Control summary.
+public class Control {}
+
+public func Invoke() string {
+    let r = Record(42)
+    return "${Accept[string]()}|${AcceptNamed[string]()}|${AcceptWithSeed("seed")}|${"ext".ExtAccept[string]()}|${r.MethodAccept[string]()}|${Record.StaticAccept[string]()}|${r.MethodVariadic[int32]()}|${Record.StaticVariadic[int32]()}"
+}`
+        let tempDir = Directory.CreateTempSubdirectory("gs_5760_5761_5762_").FullName
+        try {
+            let srcPath = Path.Combine(tempDir, "Additional.gs")
+            let outPath = Path.Combine(tempDir, "Additional.dll")
+            let pdbPath = Path.Combine(tempDir, "Additional.pdb")
+            let docPath = Path.Combine(tempDir, "Additional.xml")
+            File.WriteAllText(srcPath, source)
+            using let compileOut = StringWriter()
+            using let compileErr = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(compileOut)
+            Console.SetError(compileErr)
+            var exit int32
+            try {
+                exit = Program.Main(
+                    []string{
+                        "/out:" + outPath,
+                        "/assemblyname:Additional",
+                        "/target:library",
+                        "/targetframework:net10.0",
+                        "/debug:portable",
+                        "/doc:" + docPath,
+                        srcPath
+                    }
+                )
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            Assert.True(exit == 0, "${compileOut}${compileErr}")
+            IlVerifier.Verify(outPath)
+            let assembly = EmittedFixture.Load(outPath)
+            Assert.Equal("True|True|seed|ext|42|static|0|0", Adr0199RecordAbiWitness.Invoke(assembly, "Invoke"))
+
+            using let peStream = File.OpenRead(outPath)
+            using let pe = PEReader(peStream)
+            let metadata = pe.GetMetadataReader()
+            using let pdbStream = File.OpenRead(pdbPath)
+            using let pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+            let pdb = pdbProvider.GetMetadataReader()
+
+            let GetMethodSummary = func (typeName string, methodName string, paramCount int32)(
+                Attributes[]string,
+                SequencePoints int32
+            ) {
+                let typeDef = metadata
+                    .TypeDefinitions
+                    .Select(metadata.GetTypeDefinition)
+                    .Single((t TypeDefinition) -> metadata.GetString(t.Name) == typeName)
+                for methodHandle in typeDef.GetMethods() {
+                    let method = metadata.GetMethodDefinition(methodHandle)
+                    if metadata.GetString(method.Name) != methodName || method.GetParameters().Count != paramCount {
+                        continue
+                    }
+                    let attrs = method
+                        .GetCustomAttributes()
+                        .Select(
+                        func (attrHandle CustomAttributeHandle) string {
+                            let attr = metadata.GetCustomAttribute(attrHandle)
+                            if attr.Constructor.Kind != HandleKind.MemberReference {
+                                return attr.Constructor.Kind.ToString()
+                            }
+                            let parent = metadata.GetMemberReference(cast[MemberReferenceHandle](attr.Constructor))
+                                .Parent
+                            if parent.Kind != HandleKind.TypeReference {
+                                return parent.Kind.ToString()
+                            }
+                            let attrType = metadata.GetTypeReference(cast[TypeReferenceHandle](parent))
+                            return metadata.GetString(attrType.Namespace) + "." + metadata.GetString(attrType.Name)
+                        }
+                    )
+                        .ToArray()
+                    let debugHandle = System
+                        .Reflection
+                        .Metadata
+                        .Ecma335
+                        .MetadataTokens
+                        .MethodDebugInformationHandle(
+                        System.Reflection.Metadata.Ecma335.MetadataTokens.GetRowNumber(methodHandle)
+                    )
+                    let points = pdb.GetMethodDebugInformation(debugHandle).GetSequencePoints().Count()
+                    return (attrs, points)
+                }
+                throw InvalidOperationException("Missing $typeName.$methodName/$paramCount")
+            }
+
+            let implicitCtor = GetMethodSummary("Implicit", ".ctor", 0)
+            Assert.Empty(implicitCtor.Attributes)
+            Assert.Equal(0, implicitCtor.SequencePoints)
+
+            let explicitCtor = GetMethodSummary("Explicit", ".ctor", 0)
+            Assert.Empty(explicitCtor.Attributes)
+            Assert.Equal(2, explicitCtor.SequencePoints)
+
+            for (methodName, paramCount) in[](string, int32){
+                ("GetHashCode", 0),
+                ("ToString", 0),
+                ("Deconstruct", 1),
+                ("PrintMembers", 1),
+                ("Equals", 1),
+                ("op_Equality", 2),
+                ("op_Inequality", 2),
+                ("<Clone>$$", 0),
+                ("get_EqualityContract", 0),
+                ("get_Value", 0),
+                ("set_Value", 1)
+            } {
+                let summary = GetMethodSummary("Record", methodName, paramCount)
+                Assert.Contains("System.Runtime.CompilerServices.CompilerGeneratedAttribute", summary.Attributes)
+                Assert.Equal(0, summary.SequencePoints)
+            }
+
+            let docXml = File.ReadAllText(docPath)
+            Assert.Contains("<member name=\"T:Additional.Early\">", docXml, StringComparison.Ordinal)
+            Assert.Contains("Early summary.", docXml, StringComparison.Ordinal)
+            Assert.Contains("<member name=\"T:Additional.Late\">", docXml, StringComparison.Ordinal)
+            Assert.Contains("Late summary.", docXml, StringComparison.Ordinal)
+            Assert.Contains("<member name=\"T:Additional.Control\">", docXml, StringComparison.Ordinal)
+            Assert.Contains("Control summary.", docXml, StringComparison.Ordinal)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         private const CSharpWitness string = `#nullable enable
 public sealed record SealedRoot(int X, string? Y);

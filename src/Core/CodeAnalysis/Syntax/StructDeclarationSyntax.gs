@@ -871,7 +871,7 @@ partial class StructDeclarationSyntax : MemberSyntax {
     /// binder looks up a copy's type documentation through this (ADR-0192).
     internal prop DocumentationSource StructDeclarationSyntax? {
         get;
-        private set;
+        internal set;
     }
 
     /// ADR-0192: returns a copy of this declaration with the given method list,

@@ -416,6 +416,51 @@ func main() {
     }
 
     @Fact
+    func CrossFilePartialConstructor_SwitchesSequencePointDocuments() {
+        let treeA = SyntaxTree.Parse(SourceText.From(`package Split
+public partial class Widget {
+    public var Value int32 = 42
+}
+`, "Widget.Fields.gs"))
+        let treeB = SyntaxTree.Parse(SourceText.From(`package Split
+public partial class Widget {
+    public init() {
+    }
+}
+`, "Widget.Ctor.gs"))
+        let compilation = Compilation(treeA, treeB){
+            DebugInformation = DebugInformationOptions{Format: DebugInformationFormat.Portable}
+        }
+        using let peStream = MemoryStream()
+        using let pdbStream = MemoryStream()
+        let result = compilation.Emit(peStream, pdbStream, nil)
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select((d Diagnostic) -> d.Message)))
+        peStream.Position = 0
+        using let pe = PEReader(peStream)
+        let metadata = pe.GetMetadataReader()
+        let widgetType = metadata
+            .TypeDefinitions
+            .Select(metadata.GetTypeDefinition)
+            .Single((t TypeDefinition) -> metadata.GetString(t.Name) == "Widget")
+        let ctorHandle = widgetType.GetMethods().Single(
+            (h MethodDefinitionHandle) -> metadata.GetString(metadata.GetMethodDefinition(h).Name) == ".ctor"
+        )
+        pdbStream.Position = 0
+        using let provider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+        let pdb = provider.GetMetadataReader()
+        let debugInfo = pdb.GetMethodDebugInformation(
+            MetadataTokens.MethodDebugInformationHandle(MetadataTokens.GetRowNumber(ctorHandle))
+        )
+        Assert.True(debugInfo.Document.IsNil)
+        let points = debugInfo.GetSequencePoints().Where((p MetadataSequencePoint) -> !p.IsHidden).ToArray()
+        Assert.Equal(3, points.Length)
+        Assert.Equal("Widget.Ctor.gs", pdb.GetString(pdb.GetDocument(points[0].Document).Name))
+        Assert.Equal("Widget.Fields.gs", pdb.GetString(pdb.GetDocument(points[1].Document).Name))
+        Assert.Equal(3, points[1].StartLine)
+        Assert.Equal("Widget.Ctor.gs", pdb.GetString(pdb.GetDocument(points[2].Document).Name))
+    }
+
+    @Fact
     func FinallyHandler_MapsFirstStatementAtEntry() {
         const source = `import System
 func main() {
