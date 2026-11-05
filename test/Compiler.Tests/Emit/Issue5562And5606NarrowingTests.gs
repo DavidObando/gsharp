@@ -519,6 +519,41 @@ func Run(flag bool, callback () -> string) int32 {
     return 0
 }
 Console.WriteLine(Run(true, () -> "abc"))`, "GS0158@17:18", "reject", ""}
+            yield[]object{"r5606_control_enclosing_catch_filter_invalidates_condition_gained_alias", `import System
+
+func Replace(ref a () -> string, replacement () -> string) bool {
+    a = replacement
+    return false
+}
+func Run(callback () -> string) int32 {
+    var x string? = "abc"
+    var action = callback
+    let bad = func() string {
+        x = nil
+        return "abc"
+    }
+    if x == nil {
+        return 0
+    }
+    try {
+        if ({
+            action = callback
+            try {
+                throw Exception("boom")
+            } catch {
+            }
+            true
+        }) {
+            if x is action() {
+                return x.Length
+            }
+        }
+    } catch (FormatException) when Replace(ref action, bad) {
+        return 0
+    }
+    return 0
+}
+Console.WriteLine(Run(() -> "abc"))`, "GS0158@27:26", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

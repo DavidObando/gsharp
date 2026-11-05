@@ -517,16 +517,25 @@ internal partial class StatementBinder {
         ApplyCallableAliasExitState(externalCallableAliases, statement, aliasesAtEntry, collector)
         // A filter of an enclosing try can run between any two statements of its protected block,
         // when a nested handler catches a replacement exception.
-        if externalCallableAliases.Count > 0 && statement.Syntax is {} syntax {
-            let filters = if collector.MayMutateMemberPaths || collector.ContainsTry {
-                CollectCatchFiltersAbove(syntax)
-            } else {
-                List[ExpressionSyntax]()
-            }
-            filters.AddRange(collector.VisitedCatchFilters)
-            if filters.Count > 0 {
-                RemoveFilterAffectedAliases(externalCallableAliases, filters)
-            }
+        RemoveCollectorFilterAffectedAliases(externalCallableAliases, statement.Syntax, collector)
+    }
+
+    private func RemoveCollectorFilterAffectedAliases(
+        aliases HashSet[VariableSymbol],
+        syntax SyntaxNode?,
+        collector AssignedRootsCollector
+    ) {
+        if aliases.Count == 0 || syntax == nil {
+            return
+        }
+        let filters = if collector.MayMutateMemberPaths || collector.ContainsTry {
+            CollectCatchFiltersAbove(syntax)
+        } else {
+            List[ExpressionSyntax]()
+        }
+        filters.AddRange(collector.VisitedCatchFilters)
+        if filters.Count > 0 {
+            RemoveFilterAffectedAliases(aliases, filters)
         }
     }
 
@@ -1847,6 +1856,7 @@ internal partial class StatementBinder {
         if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
             aliases.RemoveWhere(NamesClosureAssignedStorage)
         }
+        RemoveCollectorFilterAffectedAliases(aliases, header.Syntax, collector)
     }
 
     /// ADR-0208 section 9 and row R18 (#5534): the else-branch of an `if` statement is bound under the state after

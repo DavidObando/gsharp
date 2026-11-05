@@ -948,7 +948,7 @@ internal partial class StatementBinder {
             entry.UnionWith(removed)
         }
         let aliasesAt = Dictionary[BoundExpression, HashSet[VariableSymbol]]()
-        let (whenTrue, whenFalse) = WalkTestAliases(condition, entry, aliasesAt)
+        let (whenTrue, whenFalse) = WalkTestAliases(condition, entry, aliasesAt, header)
         return (aliasesAt, whenTrue, whenFalse)
     }
 
@@ -958,33 +958,34 @@ internal partial class StatementBinder {
     private func WalkTestAliases(
         expression BoundExpression,
         before HashSet[VariableSymbol],
-        aliasesAt Dictionary[BoundExpression, HashSet[VariableSymbol]]
+        aliasesAt Dictionary[BoundExpression, HashSet[VariableSymbol]],
+        header SyntaxNode? = nil
     )(WhenTrue HashSet[VariableSymbol], WhenFalse HashSet[VariableSymbol]) {
         switch expression {
             case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
                 {
-                    let (leftTrue, leftFalse) = WalkTestAliases(binary.Left, before, aliasesAt)
-                    let (rightTrue, rightFalse) = WalkTestAliases(binary.Right, leftTrue, aliasesAt)
+                    let (leftTrue, leftFalse) = WalkTestAliases(binary.Left, before, aliasesAt, header)
+                    let (rightTrue, rightFalse) = WalkTestAliases(binary.Right, leftTrue, aliasesAt, header)
                     return (rightTrue, JoinAliases(leftFalse, rightFalse))
                 }
             }
             case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
                 {
-                    let (leftTrue, leftFalse) = WalkTestAliases(binary.Left, before, aliasesAt)
-                    let (rightTrue, rightFalse) = WalkTestAliases(binary.Right, leftFalse, aliasesAt)
+                    let (leftTrue, leftFalse) = WalkTestAliases(binary.Left, before, aliasesAt, header)
+                    let (rightTrue, rightFalse) = WalkTestAliases(binary.Right, leftFalse, aliasesAt, header)
                     return (JoinAliases(leftTrue, rightTrue), rightFalse)
                 }
             }
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
                 {
-                    let (operandTrue, operandFalse) = WalkTestAliases(unary.Operand, before, aliasesAt)
+                    let (operandTrue, operandFalse) = WalkTestAliases(unary.Operand, before, aliasesAt, header)
                     return (operandFalse, operandTrue)
                 }
             }
             default {
                 {
                     aliasesAt[expression] = before
-                    let after = AliasesAfter(expression, before)
+                    let after = AliasesAfter(expression, before, header)
                     return (after, after)
                 }
             }
@@ -1002,7 +1003,11 @@ internal partial class StatementBinder {
 
     // The aliases after [`operand`](paramref) on every path, from the aliases before it. An assignment of an external
     // callable adds the alias.
-    private func AliasesAfter(operand BoundExpression, before HashSet[VariableSymbol]) HashSet[VariableSymbol] {
+    private func AliasesAfter(
+        operand BoundExpression,
+        before HashSet[VariableSymbol],
+        header SyntaxNode? = nil
+    ) HashSet[VariableSymbol] {
         if ContainsUserLabel(operand) {
             return HashSet[VariableSymbol]()
         }
@@ -1015,6 +1020,7 @@ internal partial class StatementBinder {
         if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
             after.RemoveWhere(NamesClosureAssignedStorage)
         }
+        RemoveCollectorFilterAffectedAliases(after, operand.Syntax ?? header, collector)
         return after
     }
 
