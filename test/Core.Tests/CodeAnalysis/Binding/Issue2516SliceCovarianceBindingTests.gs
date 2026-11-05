@@ -199,19 +199,63 @@ open class Issue2516SliceCovarianceBindingTests {
         Assert.True(ClrTypeUtilities.IsAssignableByName(typeof([]object), baseClassConstrained))
         Assert.True(ClrTypeUtilities.IsAssignableByName(typeof([]object), dependentClassConstrained))
         Assert.True(ClrTypeUtilities.IsAssignableByName(typeof([]object), dependentBaseClassConstrained))
+
+        let objectSlice = TypeSymbol.FromClrType(typeof([]object))
+        Assert.False(
+            Conversion.IsVarianceArgumentCompatible(
+                TypeSymbol.FromClrType(unconstrained ?? typeof(void)),
+                objectSlice,
+                allowPlatformNilCheck: false
+            )
+        )
+        Assert.False(
+            Conversion.IsVarianceArgumentCompatible(
+                TypeSymbol.FromClrType(structConstrained ?? typeof(void)),
+                objectSlice,
+                allowPlatformNilCheck: false
+            )
+        )
+        Assert.True(
+            Conversion.IsVarianceArgumentCompatible(
+                TypeSymbol.FromClrType(classConstrained ?? typeof(void)),
+                objectSlice,
+                allowPlatformNilCheck: false
+            )
+        )
+        Assert.True(
+            Conversion.IsVarianceArgumentCompatible(
+                TypeSymbol.FromClrType(baseClassConstrained ?? typeof(void)),
+                objectSlice,
+                allowPlatformNilCheck: false
+            )
+        )
+        Assert.True(
+            Conversion.IsVarianceArgumentCompatible(
+                TypeSymbol.FromClrType(dependentClassConstrained ?? typeof(void)),
+                objectSlice,
+                allowPlatformNilCheck: false
+            )
+        )
+        Assert.True(
+            Conversion.IsVarianceArgumentCompatible(
+                TypeSymbol.FromClrType(dependentBaseClassConstrained ?? typeof(void)),
+                objectSlice,
+                allowPlatformNilCheck: false
+            )
+        )
     }
 
-    private func UnconstrainedGenericArray[T]() { }
+    private func UnconstrainedGenericArray[TUnconstrained]() { }
 
-    private func StructConstrainedGenericArray[T struct]() { }
+    private func StructConstrainedGenericArray[TStruct struct]() { }
 
-    private func ClassConstrainedGenericArray[T class]() { }
+    private func ClassConstrainedGenericArray[TClass class]() { }
 
-    private func BaseClassConstrainedGenericArray[T Exception]() { }
+    private func BaseClassConstrainedGenericArray[TBase Exception]() { }
 
-    private func DependentClassConstrainedGenericArray[T U, U class]() { }
+    private func DependentClassConstrainedGenericArray[TDepClass UClass, UClass class]() { }
 
-    private func DependentBaseClassConstrainedGenericArray[T U, U Exception]() { }
+    private func DependentBaseClassConstrainedGenericArray[TDepBase UBase, UBase Exception]() { }
 
     private interface ICovariant[out T] { }
 

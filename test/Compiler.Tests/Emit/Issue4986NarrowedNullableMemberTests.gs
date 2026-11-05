@@ -2833,12 +2833,26 @@ func mismatchRef(items IEnumerable[string?], comparer IComparer[object]) object 
     Probes.EchoJoinedBounds(items, comparer)
 `, fixture.AssemblyPath)
         Assert.NotEqual(0, nullableRefMismatch.ExitCode)
+        Assert.True(
+            Regex.IsMatch(
+                nullableRefMismatch.Output,
+                `\(4,12,4,45\): error GS0159: Cannot find function EchoJoinedBounds\.`
+            ),
+            nullableRefMismatch.Output
+        )
         let nullableElementMismatch = Compile(`import System.Collections.Generic
 import Fixture4986
 func mismatch(items IEnumerable[[]string?], comparer IComparer[[]object]) []object ->
     Probes.EchoJoinedBounds(items, comparer)
 `, fixture.AssemblyPath)
         Assert.NotEqual(0, nullableElementMismatch.ExitCode)
+        Assert.True(
+            Regex.IsMatch(
+                nullableElementMismatch.Output,
+                `\(4,12,4,45\): error GS0159: Cannot find function EchoJoinedBounds\.`
+            ),
+            nullableElementMismatch.Output
+        )
     }
 
     @Theory

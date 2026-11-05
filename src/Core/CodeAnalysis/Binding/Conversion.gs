@@ -3153,8 +3153,10 @@ class Conversion {
                 case nil: false
                 case _ is EnumSymbol: false
                 case s is StructSymbol: s.IsClass
-                case tp is TypeParameterSymbol: tp.HasReferenceTypeConstraint || tp.ClassConstraint != nil
-                default: type.ClrType is not{IsValueType: true}
+                case tp is TypeParameterSymbol: tp.HasReferenceTypeConstraint ||
+                    tp.ClassConstraint != nil ||
+                    tp.DependentBoundProvesReferenceType
+                default: type.ClrType == nil || ClrTypeUtilities.IsReferenceTypeForVariance(type.ClrType)
             }
         }
 
