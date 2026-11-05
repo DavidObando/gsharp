@@ -48,13 +48,14 @@ class PathMember : IEquatable[PathMember] {
         if SourceSymbol != nil || other.SourceSymbol != nil {
             return object.ReferenceEquals(SourceSymbol, other.SourceSymbol)
         }
-        if ClrMember == nil || other.ClrMember == nil {
-            return ClrMember == nil && other.ClrMember == nil
+        let otherClrMember = other.ClrMember
+        if ClrMember == nil || otherClrMember == nil {
+            return ClrMember == nil && otherClrMember == nil
         }
         let clrMember = ClrMember!!
-        return clrMember.MetadataToken == other.ClrMember.MetadataToken && object.ReferenceEquals(
+        return clrMember.MetadataToken == otherClrMember.MetadataToken && object.ReferenceEquals(
             clrMember.Module,
-            other.ClrMember.Module
+            otherClrMember.Module
         )
     }
 

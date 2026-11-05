@@ -587,7 +587,11 @@ internal partial class StatementBinder {
                     }
                     // Issue #5640: the receiver and arguments run at the `defer` statement. The deferred call runs when the block exits.
                     let prefix = DeferPrefixBlock(deferSyntax, defer_.PrefixStatements)
-                    InvalidateNarrowingsForAssignedVariables(statementSyntax, prefix)
+                    InvalidateNarrowingsForAssignedVariables(
+                        statementSyntax,
+                        prefix,
+                        aliasesAtEntry: externalCallableAliasesAtEntry
+                    )
                     UpdateExternalCallableAliases(prefix, externalCallableAliasesAtEntry)
                     ShadowAfterStatement(prefix)
                     let innerStatements = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -608,6 +612,7 @@ internal partial class StatementBinder {
                     return fallsThrough
                 }
                 if statementSyntax is UsingStatementSyntax usingSyntax {
+                    let externalCallableAliasesAtEntry = externalCallableAliases.ToArray()
                     let usingLowering = BindUsingStatementInBlock(usingSyntax)
                     if usingLowering.InitializedDeclaration != nil {
                         statements.Add(usingLowering.InitializedDeclaration!!)
@@ -630,7 +635,11 @@ internal partial class StatementBinder {
                                 expression: "usingLowering.ErrorStatement"
                             )
                         )
-                        InvalidateNarrowingsForAssignedVariables(statementSyntax, usingLowering.Declaration)
+                        InvalidateNarrowingsForAssignedVariables(
+                            statementSyntax,
+                            usingLowering.Declaration,
+                            aliasesAtEntry: externalCallableAliasesAtEntry
+                        )
                         continue
                     }
                     statements.Add(
@@ -642,7 +651,11 @@ internal partial class StatementBinder {
                             )
                         )
                     )
-                    InvalidateNarrowingsForAssignedVariables(statementSyntax, usingLowering.Declaration)
+                    InvalidateNarrowingsForAssignedVariables(
+                        statementSyntax,
+                        usingLowering.Declaration,
+                        aliasesAtEntry: externalCallableAliasesAtEntry
+                    )
                     let innerStatements = ImmutableArray.CreateBuilder[BoundStatement]()
                     let cleanupEffect = BoundExpressionStatement(nil, usingLowering.Cleanup!!)
                     let fallsThrough = BindWithinSynthesizedCleanup(
@@ -666,6 +679,7 @@ internal partial class StatementBinder {
                     return fallsThrough
                 }
                 if statementSyntax is AwaitUsingStatementSyntax awaitUsingSyntax {
+                    let externalCallableAliasesAtEntry = externalCallableAliases.ToArray()
                     let awaitUsingLowering = BindAwaitUsingStatementInBlock(awaitUsingSyntax)
                     if awaitUsingLowering.InitializedDeclaration != nil {
                         statements.Add(awaitUsingLowering.InitializedDeclaration!!)
@@ -687,7 +701,11 @@ internal partial class StatementBinder {
                                 expression: "awaitUsingLowering.ErrorStatement"
                             )
                         )
-                        InvalidateNarrowingsForAssignedVariables(statementSyntax, awaitUsingLowering.Declaration)
+                        InvalidateNarrowingsForAssignedVariables(
+                            statementSyntax,
+                            awaitUsingLowering.Declaration,
+                            aliasesAtEntry: externalCallableAliasesAtEntry
+                        )
                         continue
                     }
                     statements.Add(
@@ -699,7 +717,11 @@ internal partial class StatementBinder {
                             )
                         )
                     )
-                    InvalidateNarrowingsForAssignedVariables(statementSyntax, awaitUsingLowering.Declaration)
+                    InvalidateNarrowingsForAssignedVariables(
+                        statementSyntax,
+                        awaitUsingLowering.Declaration,
+                        aliasesAtEntry: externalCallableAliasesAtEntry
+                    )
                     let innerStatements = ImmutableArray.CreateBuilder[BoundStatement]()
                     let cleanupEffect = BoundExpressionStatement(nil, awaitUsingLowering.Cleanup!!)
                     let fallsThrough = BindWithinSynthesizedCleanup(
@@ -730,12 +752,14 @@ internal partial class StatementBinder {
                 // narrowing into the persistent block frame for subsequent reads.
                 if statementSyntax is GuardLetStatementSyntax guardLetSyntax {
                     let guardLetStart = statements.Count
+                    let externalCallableAliasesAtEntry = externalCallableAliases.ToArray()
                     BindGuardLetStatementInBlock(guardLetSyntax, statements, memberNotNullFrame)
                     // The bound statements carry effects that the syntax cannot show, such as a getter in
                     // an initializer (ADR-0208 R12).
                     InvalidateNarrowingsForAssignedVariables(
                         statementSyntax,
-                        BoundBlockStatement(nil, statements.Skip(guardLetStart).ToImmutableArray())
+                        BoundBlockStatement(nil, statements.Skip(guardLetStart).ToImmutableArray()),
+                        aliasesAtEntry: externalCallableAliasesAtEntry
                     )
                     continue
                 }
@@ -772,7 +796,11 @@ internal partial class StatementBinder {
                 // a statement that writes to a narrowed variable, drop its
                 // narrowing from the current frame so subsequent reads in this
                 // block see the variable at its declared (nullable) type again.
-                InvalidateNarrowingsForAssignedVariables(statementSyntax, statement)
+                InvalidateNarrowingsForAssignedVariables(
+                    statementSyntax,
+                    statement,
+                    aliasesAtEntry: externalCallableAliasesAtEntry
+                )
                 RestoreEarlyExitLiftsWrittenOnlyByCondition(
                     statement,
                     memberNotNullFrame,

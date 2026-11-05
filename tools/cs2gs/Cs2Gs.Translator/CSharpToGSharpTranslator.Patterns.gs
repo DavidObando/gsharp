@@ -4754,6 +4754,7 @@ partial class CSharpToGSharpTranslator {
                 out elementBinding ElementBindingExpressionSyntax?
             ) bool {
                 elementBinding = nil
+                var resolvedBinding ElementBindingExpressionSyntax? = nil
                 for var current ExpressionSyntax? = whenNotNull; current != nil; {
                     switch current {
                         case parenthesized is ParenthesizedExpressionSyntax {
@@ -4777,7 +4778,7 @@ partial class CSharpToGSharpTranslator {
                             continue
                         }
                         case binding is ElementBindingExpressionSyntax {
-                            elementBinding = binding
+                            resolvedBinding = binding
                             current = nil
                             continue
                         }
@@ -4786,18 +4787,19 @@ partial class CSharpToGSharpTranslator {
                         }
                     }
                 }
+                elementBinding = resolvedBinding
                 // Fire only when the step DIRECTLY after the index is an ordinary
                 // `.` / `[`. A bare `a?[i]` needs no second seam, and `a?[i]?.b`
                 // already has one (re-splitting it would print `[i]??.b`).
-                return elementBinding != nil &&
+                return resolvedBinding != nil &&
                     (
                     (
-                        elementBinding.Parent is MemberAccessExpressionSyntax member &&
-                            member.Expression == elementBinding
+                        resolvedBinding.Parent is MemberAccessExpressionSyntax member &&
+                            member.Expression == resolvedBinding
                     ) ||
                         (
-                        elementBinding.Parent is ElementAccessExpressionSyntax element &&
-                            element.Expression == elementBinding
+                        resolvedBinding.Parent is ElementAccessExpressionSyntax element &&
+                            element.Expression == resolvedBinding
                     )
                 )
             }

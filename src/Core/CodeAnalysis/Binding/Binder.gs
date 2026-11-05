@@ -305,6 +305,9 @@ partial class Binder {
                     ImportedClassSymbol(clrType, ce, references: $scope.References),
                     ce
                 )
+            },
+            captureCallArgumentPrebindRollback: (syntax SyntaxNode) -> {
+                return Statements.CaptureCallArgumentPrebindRollback(syntax)
             }
         )
         patterns = PatternBinder(
@@ -573,6 +576,15 @@ partial class Binder {
             ) -> Statements.ReapplySwitchArmHeaderEffects(valueSyntax, guardSyntax, header),
             bindAfterLaterArmTests: (bindLaterTests() -> void, fallsThrough bool, bind() -> BoundNode) ->
             Statements.BindAfterLaterArmTests(bindLaterTests, fallsThrough, bind),
+            bindDeferrableConditional: (syntax SyntaxNode, deferOnFailure bool, bind() -> BoundExpression) ->
+            Statements.BindDeferrableConditional(syntax, deferOnFailure, bind),
+            applyShortCircuitOperandEffects: (
+                syntax SyntaxNode,
+                expression BoundExpression,
+                aliases IReadOnlyCollection[VariableSymbol]
+            ) -> Statements.ApplyShortCircuitOperandEffects(syntax, expression, aliases),
+            classifyIsTestNarrowing: (isExpr BoundIsExpression, aliases IReadOnlyCollection[VariableSymbol]?) ->
+            Statements.TryClassifyActiveIsExpressionNarrowing(isExpr, aliases),
             clearAssignedRoots: (
                 node BoundNode,
                 state Dictionary[AccessPath, TypeSymbol],

@@ -104,8 +104,7 @@ shared class AsyncIteratorDetection {
         // `TypeArguments`. Its `ClrType` is the erased
         // `IAsyncEnumerable<object>`; honour the symbolic argument so the
         // state machine emits the strongly-typed interface rows.
-        if type is ImportedTypeSymbol imported &&
-            imported.OpenDefinition != nil &&
+        if type is ImportedTypeSymbol{OpenDefinition: {} openDefinition} imported &&
             !imported
             .TypeArguments
             .IsDefaultOrEmpty &&
@@ -113,12 +112,8 @@ shared class AsyncIteratorDetection {
             .TypeArguments
             .Length == 1 &&
             (
-            imported
-                .OpenDefinition
-                .FullName == "System.Collections.Generic.IAsyncEnumerable`1" ||
-                imported
-                .OpenDefinition
-                .FullName == "System.Collections.Generic.IAsyncEnumerator`1"
+            openDefinition.FullName == "System.Collections.Generic.IAsyncEnumerable`1" ||
+                openDefinition.FullName == "System.Collections.Generic.IAsyncEnumerator`1"
         ) {
             return imported.TypeArguments[0]
         }

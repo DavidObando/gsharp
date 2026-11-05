@@ -198,7 +198,11 @@ internal partial class ExpressionBinder {
             rawOperand = pen.Expression
         }
         if rawOperand is ConditionalRefArgumentExpressionSyntax condOperand {
-            return conversions.BindConditionalRefArgument(condOperand, outerModifier: nil)
+            return conversions.BindConditionalRefArgument(
+                condOperand,
+                outerModifier: nil,
+                bindConditionalAddress: BindConditionalAddressCore
+            )
         }
         // ADR-0062: a general conditional expression as the operand of `&`
         // binds to the conditional-address path (preserving ADR-0061 byref
@@ -645,11 +649,23 @@ internal partial class ExpressionBinder {
         // immediately so nested sub-expressions bind with normal semantics.
         let deferOnFailure = targetType == nil && binderCtx.DeferTargetlessConditional
         this.binderCtx.DeferTargetlessConditional = false
+        return bindDeferrableConditional(
+            syntax,
+            deferOnFailure,
+            () -> BindConditionalExpressionCore(syntax, targetType, deferOnFailure)
+        )
+    }
+
+    private func BindConditionalExpressionCore(
+        syntax ConditionalExpressionSyntax,
+        targetType TypeSymbol?,
+        deferOnFailure bool
+    ) BoundExpression {
         let diagMark = Diagnostics.Count
         let suppressionMark = Diagnostics.SuppressionCount
-        let beforeConditional = CaptureExpressionNarrowingFrames()
         let conditionEntryAliases = GetCurrentExpressionCallableAliases()
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
+        applyShortCircuitOperandEffects(syntax.Condition, condition, conditionEntryAliases)
         let afterCondition = CaptureExpressionNarrowingFrames()
         // ADR-0100 / issue #795: a bare `default` branch takes its type
         // from the sibling branch. Bind whichever branch is typed first so
@@ -674,13 +690,15 @@ internal partial class ExpressionBinder {
             return BindWithPatternVariables(
                 patternWhenTrue,
                 () -> {
-                    return BindExpressionWithNarrowing(
+                    let boundTrue = BindExpressionWithNarrowing(
                         syntax.WhenTrue,
                         whenTrueNarrowing,
                         out thenArmExitFrame,
                         branchTargetType,
                         aliases: whenTrueAliases
                     )
+                    applyShortCircuitOperandEffects(syntax.WhenTrue, boundTrue, whenTrueAliases)
+                    return boundTrue
                 },
                 syntax.WhenTrue
             )
@@ -689,13 +707,15 @@ internal partial class ExpressionBinder {
             return BindWithPatternVariables(
                 patternWhenFalse,
                 () -> {
-                    return BindExpressionWithNarrowing(
+                    let boundFalse = BindExpressionWithNarrowing(
                         syntax.WhenFalse,
                         whenFalseNarrowing,
                         out elseArmExitFrame,
                         branchTargetType,
                         aliases: whenFalseAliases
                     )
+                    applyShortCircuitOperandEffects(syntax.WhenFalse, boundFalse, whenFalseAliases)
+                    return boundFalse
                 },
                 syntax.WhenFalse
             )
@@ -805,7 +825,6 @@ internal partial class ExpressionBinder {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
                 Diagnostics.RestoreSuppressionsTo(suppressionMark)
-                RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
             Diagnostics.ReportConditionalNoCommonResultType(
@@ -838,7 +857,6 @@ internal partial class ExpressionBinder {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
                 Diagnostics.RestoreSuppressionsTo(suppressionMark)
-                RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
             return BoundErrorExpression(nil)
@@ -880,7 +898,11 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         if syntax.Initializer is not StatementSyntax initializer {
-            return BindIfExpressionBranches(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
+            return bindDeferrableConditional(
+                syntax,
+                deferOnFailure,
+                () -> BindIfExpressionBranches(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
+            )
         }
         // Issue #4962: `if init; cond { … } else { … }` scopes the initializer
         // exactly as BindIfStatement does for the statement form. It is
@@ -888,18 +910,22 @@ internal partial class ExpressionBinder {
         // `else if` chain, and not after the expression. It runs once, before
         // the condition:
         //   { init; cond ? then : else }
-        return BindInBlockExpressionScope(
-            () -> {
-                let (statements, value) = BindStatementsBeforeValue(
-                    ImmutableArray.Create[StatementSyntax](initializer),
-                    syntax,
-                    () -> BindIfExpressionBranches(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
-                )
-                if value is BoundErrorExpression {
-                    return value
+        return bindDeferrableConditional(
+            syntax,
+            deferOnFailure,
+            () -> BindInBlockExpressionScope(
+                () -> {
+                    let (statements, value) = BindStatementsBeforeValue(
+                        ImmutableArray.Create[StatementSyntax](initializer),
+                        syntax,
+                        () -> BindIfExpressionBranches(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
+                    )
+                    if value is BoundErrorExpression {
+                        return value
+                    }
+                    return BoundBlockExpression(nil, statements, value)
                 }
-                return BoundBlockExpression(nil, statements, value)
-            }
+            )
         )
     }
 
@@ -923,9 +949,9 @@ internal partial class ExpressionBinder {
         // position; BindIfExpression rejects it elsewhere (GS0276).
         let elseSyntax = syntax.ElseExpression
         let suppressionMark = Diagnostics.SuppressionCount
-        let beforeConditional = CaptureExpressionNarrowingFrames()
         let conditionEntryAliases = GetCurrentExpressionCallableAliases()
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
+        applyShortCircuitOperandEffects(syntax.Condition, condition, conditionEntryAliases)
         let afterCondition = CaptureExpressionNarrowingFrames()
         let (whenTrueNarrowing, whenFalseNarrowing, whenTrueAliases, whenFalseAliases) = ClassifyConditionalNarrowing(
             condition,
@@ -982,7 +1008,6 @@ internal partial class ExpressionBinder {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
                 Diagnostics.RestoreSuppressionsTo(suppressionMark)
-                RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
             Diagnostics.ReportConditionalNoCommonResultType(
@@ -1015,7 +1040,6 @@ internal partial class ExpressionBinder {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
                 Diagnostics.RestoreSuppressionsTo(suppressionMark)
-                RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
             return BoundErrorExpression(nil)
@@ -1333,11 +1357,18 @@ internal partial class ExpressionBinder {
         canBeVoid bool = false,
         targetType TypeSymbol? = nil,
         preserveEmptyBlock bool = false
-    ) BoundExpression -> BindInBlockExpressionScope(
-        () -> {
-            return BindBlockExpressionValueCore(syntax, canBeVoid, targetType, preserveEmptyBlock)
-        }
-    )
+    ) BoundExpression {
+        let deferBlock = targetType == nil && binderCtx.DeferTargetlessConditional
+        return bindDeferrableConditional(
+            syntax,
+            deferBlock,
+            () -> BindInBlockExpressionScope(
+                () -> {
+                    return BindBlockExpressionValueCore(syntax, canBeVoid, targetType, preserveEmptyBlock)
+                }
+            )
+        )
+    }
 
     private func BindBlockExpressionValueCore(
         syntax BlockExpressionSyntax,
@@ -1644,21 +1675,20 @@ internal partial class ExpressionBinder {
             binderCtx.DeferTargetlessConditional
         if syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken {
             this.binderCtx.DeferTargetlessConditional = false
-        }
-        let beforeCoalesce = if deferTargetlessCoalesce {
-            CaptureExpressionNarrowingFrames()
-        } else {
-            default(
-                List[
-                    (
-                        Id int32,
-                        Frame NarrowingFrame?,
-                        Entries Dictionary[AccessPath, TypeSymbol]?,
-                        Aliases HashSet[VariableSymbol]
-                    )
-                ]?
+            return bindDeferrableConditional(
+                syntax,
+                deferTargetlessCoalesce,
+                () -> BindBinaryExpressionCore(syntax, coalesceTargetType, deferTargetlessCoalesce)
             )
         }
+        return BindBinaryExpressionCore(syntax, coalesceTargetType, deferTargetlessCoalesce: false)
+    }
+
+    private func BindBinaryExpressionCore(
+        syntax BinaryExpressionSyntax,
+        coalesceTargetType TypeSymbol?,
+        deferTargetlessCoalesce bool
+    ) BoundExpression {
         let coalesceDiagMark = Diagnostics.Count
         let coalesceSuppressionMark = Diagnostics.SuppressionCount
         let leftEntryAliases = GetCurrentExpressionCallableAliases()
@@ -1686,8 +1716,16 @@ internal partial class ExpressionBinder {
         // `!(x is T t) || t.Length > 0` likewise through the negation.
         var boundRight BoundExpression
         if syntax.OperatorToken.Kind == SyntaxKind.AmpersandAmpersandToken {
+            applyShortCircuitOperandEffects(syntax.Left, boundLeft, leftEntryAliases)
+            let rightFrame = TryClassifyTypeTestNarrowingForAnd(
+                boundLeft,
+                leftEntryAliases,
+                out var rightAliases,
+                out var skippedAliases
+            )
+            SyncActiveExpressionCallableAliases(skippedAliases)
+            setCallableAliases(skippedAliases)
             let beforeRight = CaptureExpressionNarrowingFrames()
-            let rightFrame = TryClassifyTypeTestNarrowingForAnd(boundLeft, leftEntryAliases, out var rightAliases)
             let (leftWhenTrue, _) = PatternVariables.Classify(boundLeft)
             boundRight = BindWithPatternVariables(
                 leftWhenTrue,
@@ -1696,11 +1734,20 @@ internal partial class ExpressionBinder {
                 },
                 syntax.Right
             )
+            applyShortCircuitOperandEffects(syntax.Right, boundRight, rightAliases)
             MergeBranchExpressionNarrowingFrames(beforeRight)
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenTrue, leftWhenTrue)
         } else if syntax.OperatorToken.Kind == SyntaxKind.PipePipeToken {
+            applyShortCircuitOperandEffects(syntax.Left, boundLeft, leftEntryAliases)
+            let rightFrame = TryClassifyTypeTestNarrowingForOr(
+                boundLeft,
+                leftEntryAliases,
+                out var rightAliases,
+                out var skippedAliases
+            )
+            SyncActiveExpressionCallableAliases(skippedAliases)
+            setCallableAliases(skippedAliases)
             let beforeRight = CaptureExpressionNarrowingFrames()
-            let rightFrame = TryClassifyTypeTestNarrowingForOr(boundLeft, leftEntryAliases, out var rightAliases)
             let (_, leftWhenFalse) = PatternVariables.Classify(boundLeft)
             boundRight = BindWithPatternVariables(
                 leftWhenFalse,
@@ -1709,6 +1756,7 @@ internal partial class ExpressionBinder {
                 },
                 syntax.Right
             )
+            applyShortCircuitOperandEffects(syntax.Right, boundRight, rightAliases)
             MergeBranchExpressionNarrowingFrames(beforeRight)
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenFalse, leftWhenFalse)
         } else if syntax
@@ -1762,7 +1810,6 @@ internal partial class ExpressionBinder {
         )
         if deferTargetlessCoalesce && result is BoundErrorExpression{Syntax: not nil} {
             Diagnostics.RestoreSuppressionsTo(coalesceSuppressionMark)
-            RestoreExpressionNarrowingFrames(beforeCoalesce)
         }
         return result
     }

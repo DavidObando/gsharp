@@ -60,6 +60,9 @@ func Main() {
     Console.Write(Take[` + element + `](Reader[` + element + `](channel)).Value)
     Console.Write(channel.Writer.TryWrite(` + element + `{Value:29}))
     Console.Write(Read[` + element + `](Reader[` + element + `](channel)).Value)
+    Console.Write(channel.Writer.TryWrite(` + element + `{Value:31}))
+    Console.Write(reader.TryRead(out var unbranched))
+    Console.Write(unbranched.Value)
 }
 `)
         let runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
@@ -108,7 +111,7 @@ func Main() {
         let executed = Run([]string{image})
         Assert.Equal(0, executed.Code)
         Assert.Empty(executed.Error)
-        Assert.Equal(Encoding.UTF8.GetBytes("True37TrueR19TrueRT23TrueRA29"), executed.Output)
+        Assert.Equal(Encoding.UTF8.GetBytes("True37TrueR19TrueRT23TrueRA29TrueTrue31"), executed.Output)
         let repeated = Run(arguments)
         Assert.Equal(0, repeated.Code)
         Assert.Equal(compiled.Output, repeated.Output)
@@ -116,6 +119,100 @@ func Main() {
         Assert.Equal(bytes, File.ReadAllBytes(image))
         Assert.Equal(referenceBytes, File.ReadAllBytes(reference))
         Assert.Equal(pdbBytes, File.ReadAllBytes(pdb))
+    }
+
+    @Fact
+    func ReturnedChannelHandles_NestedGenericTupleAndNullableValueElementsRetainProjection() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = Path.Combine(fixture.Directory, "NestedReader.gs")
+        let image = Path.Combine(fixture.Directory, "NestedReader.dll")
+        let reference = Path.Combine(fixture.Directory, "NestedReader.ref.dll")
+        let pdb = Path.ChangeExtension(image, ".pdb")
+        File.WriteAllText(source, `package ChannelNestedOut
+import System
+import System.Collections.Generic
+import System.Threading.Channels
+class C { var Value int32 }
+func Identity[T](channel chan[T]) chan[T] -> channel
+func Reader[T](channel chan[T]) in chan[T] -> Identity[T](channel).Reader
+func Writer[T](channel chan[T]) out chan[T] -> Identity[T](channel).Writer
+func TakeFirst[T](reader in chan[List[T]]) T {
+    if reader.TryRead(out var items) {
+        return items[0]
+    }
+    throw InvalidOperationException("Empty nested channel")
+}
+func ReadFirstAsync[T](reader in chan[List[T]]) T {
+    return reader.ReadAsync().AsTask().GetAwaiter().GetResult()[0]
+}
+func Main() {
+    let nestedChannel chan[List[C]] = Channel.CreateUnbounded[List[C]]()
+    let nestedWriter = Writer[List[C]](nestedChannel)
+    let nestedReader = Reader[List[C]](nestedChannel)
+    Console.Write(nestedWriter.TryWrite(List[C]{C{Value:41}}))
+    Console.Write(nestedReader.TryRead(out var nestedItems))
+    Console.Write(nestedItems[0].Value)
+    Console.Write(nestedWriter.TryWrite(List[C]{C{Value:43}}))
+    Console.Write(TakeFirst[C](nestedReader).Value)
+    Console.Write(nestedWriter.TryWrite(List[C]{C{Value:47}}))
+    Console.Write(ReadFirstAsync[C](nestedReader).Value)
+
+    let tupleChannel chan[(Item C, Tag int32)] = Channel.CreateUnbounded[(Item C, Tag int32)]()
+    let tupleWriter = Writer[(Item C, Tag int32)](tupleChannel)
+    let tupleReader = Reader[(Item C, Tag int32)](tupleChannel)
+    Console.Write(tupleWriter.TryWrite((Item: C{Value:53}, Tag: 59)))
+    Console.Write(tupleReader.TryRead(out var pair))
+    Console.Write(pair.Item.Value)
+    Console.Write(pair.Tag)
+
+    let nullableChannel chan[int32?] = Channel.CreateUnbounded[int32?]()
+    let nullableWriter = Writer[int32?](nullableChannel)
+    let nullableReader = Reader[int32?](nullableChannel)
+    Console.Write(nullableWriter.TryWrite(61))
+    Console.Write(nullableReader.TryRead(out var maybeNumber))
+    Console.Write(maybeNumber ?? -1)
+}
+`)
+        let runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
+        let references = (cast[string](AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")))
+            .Split(Path.PathSeparator)
+            .Where((path string) -> Path.GetDirectoryName(path) == runtimeDirectory)
+            .OrderBy((path string) -> path, StringComparer.Ordinal)
+            .ToArray()
+        Assert.NotEmpty(references)
+        let arguments = List[string]{
+            typeof(Program).Assembly.Location,
+            source,
+            "/target:exe",
+            "/targetframework:net10.0",
+            "--nullability=platform-types",
+            "/deterministic+",
+            "/debug:portable",
+            "/out:" + image,
+            "/refout:" + reference
+        }
+        arguments.AddRange(references.Select((path string) -> "/r:" + path))
+        let compiled = Run(arguments)
+        Assert.True(compiled.Code == 0, Encoding.UTF8.GetString(compiled.Output) + compiled.Error)
+        Assert.Empty(compiled.Error)
+        let bytes = File.ReadAllBytes(image)
+        let referenceBytes = File.ReadAllBytes(reference)
+        let pdbBytes = File.ReadAllBytes(pdb)
+        Assert.NotEmpty(bytes)
+        Assert.NotEmpty(referenceBytes)
+        Assert.NotEmpty(pdbBytes)
+        let verify = List[string]{"tool", "run", "ilverify", "--", image, "-s", "System.Private.CoreLib"}
+        for path in references {
+            verify.Add("-r")
+            verify.Add(path)
+        }
+        let verified = Run(verify)
+        Assert.True(verified.Code == 0, Encoding.UTF8.GetString(verified.Output) + verified.Error)
+        Assert.Empty(verified.Error)
+        let executed = Run([]string{image})
+        Assert.Equal(0, executed.Code)
+        Assert.Empty(executed.Error)
+        Assert.Equal(Encoding.UTF8.GetBytes("TrueTrue41True43True47TrueTrue5359TrueTrue61"), executed.Output)
     }
 
     shared {
