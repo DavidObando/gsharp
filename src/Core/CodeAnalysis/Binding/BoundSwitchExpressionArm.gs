@@ -53,7 +53,7 @@ class BoundSwitchExpressionArm : BoundNode {
     shared {
         internal func MatchesAllInputs(pattern BoundPattern?) bool -> GetConstantMatch(pattern) == true
 
-        private func GetConstantMatch(pattern BoundPattern?) bool? {
+        internal func GetConstantMatch(pattern BoundPattern?) bool? {
             if pattern == nil || pattern is BoundDiscardPattern {
                 return true
             }
