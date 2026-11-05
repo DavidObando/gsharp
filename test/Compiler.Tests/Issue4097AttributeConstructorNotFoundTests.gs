@@ -365,6 +365,8 @@ Log:
     @Theory
     @InlineData("@Opt(nil)")
     @InlineData("@Opt(5)")
+    @InlineData("@OptOrObject(nil)")
+    @InlineData("@OptOrObject(5)")
     func AnImportedAttributeWithNullableValueTypeParameter_ReportsGS0585(annotation string) {
         let tempDir = Directory.CreateTempSubdirectory("gs_5771_opt_").FullName
         try {
@@ -1105,6 +1107,16 @@ public sealed class OptAttribute : Attribute
     public OptAttribute(int? value) { Value = value; }
 
     public int? Value { get; }
+}
+
+[AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+public sealed class OptOrObjectAttribute : Attribute
+{
+    public OptOrObjectAttribute(int? value) { Value = value; }
+
+    public OptOrObjectAttribute(object? value) { Value = value; }
+
+    public object? Value { get; }
 }`)
 
         private const Preamble string = `package P
@@ -1161,6 +1173,7 @@ class NoteAttribute(Text string) : Attribute {
             yield[]object{"WidenedTypeArray", "@Many([]Type{typeof(Status)})", []string{"ManyAttribute"}}
             yield[]object{"ScalarType", "@Marker(typeof(Status))", []string{"MarkerAttribute"}}
             yield[]object{"UserAttributeMatched", "@Note(\"hello\")", []string{"NoteAttribute"}}
+            yield[]object{"OptOrObjectStringMatched", "@OptOrObject(\"ok\")", []string{"OptOrObjectAttribute"}}
             // Issue #4097, found in the Oahu corpus rather than by reasoning: a
             // constructor reached through its trailing OPTIONAL parameter. Legal
             // C#, legal G#, and matched by NO pass of the resolver before this

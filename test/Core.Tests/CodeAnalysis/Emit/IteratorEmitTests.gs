@@ -132,17 +132,32 @@ func stopBeforeYield(empty bool) sequence[int32] {
     yield 20
 }
 
+func emptyYieldBreak(stop bool) sequence[int32] {
+if stop {
+    return
+}
+yield break
+}
+
 for x in stopFirst([]int32{4, 5, 6}) {
-    Console.Write(x)
-    Console.Write(" ")
+Console.Write(x)
+Console.Write(" ")
 }
 for x in stopBeforeYield(true) {
-    Console.Write(x)
-    Console.Write(" ")
+Console.Write(x)
+Console.Write(" ")
 }
 for x in stopBeforeYield(false) {
-    Console.Write(x)
-    Console.Write(" ")
+Console.Write(x)
+Console.Write(" ")
+}
+for x in emptyYieldBreak(true) {
+Console.Write(x)
+Console.Write(" ")
+}
+for x in emptyYieldBreak(false) {
+Console.Write(x)
+Console.Write(" ")
 }
 `
         let output = CompileLoadInvokeCaptureStdout(source, "Iterator_BareReturn_TerminatesEnumerationEarly")

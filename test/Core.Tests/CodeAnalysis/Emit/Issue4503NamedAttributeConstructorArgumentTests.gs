@@ -247,6 +247,8 @@ class Tagged {
     @InlineData("@ImportedNullableConstructor(nil)", "GS0585")
     @InlineData("@ImportedNullableConstructor(5)", "GS0585")
     @InlineData("@ImportedNullableConstructor(value: 5)", "GS0585")
+    @InlineData("@ImportedNullableOrObject(nil)", "GS0585")
+    @InlineData("@ImportedNullableOrObject(5)", "GS0585")
     @InlineData("@ImportedNamedConstructor(third: 3, 2)", "GS0583")
     @InlineData("@ImportedNamedConstructor(Label = \"ok\", \"a\")", "GS0616")
     func InvalidNamedAttributeArguments_ReportClearDiagnostics(annotation string, expectedId string) {

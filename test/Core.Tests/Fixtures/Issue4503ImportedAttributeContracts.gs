@@ -93,6 +93,22 @@ public sealed class ImportedNullableConstructorAttribute : Attribute
 public sealed class ImportedNullablePropertyAttribute : Attribute
 {
     public int? Value { get; set; }
+}
+
+[AttributeUsage(AttributeTargets.All)]
+public sealed class ImportedNullableOrObjectAttribute : Attribute
+{
+    public ImportedNullableOrObjectAttribute(int? value)
+    {
+        Value = value;
+    }
+
+    public ImportedNullableOrObjectAttribute(object? value)
+    {
+        Value = value;
+    }
+
+    public object? Value { get; }
 }`
     }
 }

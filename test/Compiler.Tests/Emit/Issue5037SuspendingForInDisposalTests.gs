@@ -171,6 +171,13 @@ shared class Forwarder {
         }
     }
 
+    func EmptyYieldBreak(stop bool) sequence[int32] {
+        if stop {
+            return
+        }
+        yield break
+    }
+
     async func AwaitBody(values IEnumerable[int32], gate Task, fail bool) Task[int32] {
         var sum = 0
         for value in values {

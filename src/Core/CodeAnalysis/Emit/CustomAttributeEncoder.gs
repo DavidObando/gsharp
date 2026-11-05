@@ -1954,13 +1954,13 @@ internal class CustomAttributeEncoder {
             isAmbiguous = false
             unsupportedParameter = nil
             var sawProjectableCandidate = false
-            var matchedInvalidCandidate = false
             let constructors = attributeType.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
             let candidates = List[ImportedAttributeConstructorCandidate]()
             // Select each constructor's highest-precedence applicable form first.
             // Rank candidates across constructors by argument conversion specificity, then by form.
             for constructor in constructors {
                 let parameters = constructor.GetParameters()
+                let invalidParameter = FirstInvalidAttributeConstructorParameter(parameters)
                 for desiredForm in Enum.GetValues[AttributeConstructorArgumentForm]() {
                     if !TryMapAttributeConstructorArguments(
                         parameters,
@@ -1970,25 +1970,22 @@ internal class CustomAttributeEncoder {
                         out var candidateConversions,
                         out var duplicate,
                         out var conflict,
-                        out var invalidParameter,
-                        out var invalidMatched,
-                        out var isProjectableSlotMatch
+                        out var isSlotMatch
                     ) {
                         duplicateNamedArgument ??= duplicate
                         positionalConflict ??= conflict
-                        if invalidParameter != nil {
-                            if invalidMatched && !matchedInvalidCandidate {
-                                unsupportedParameter = invalidParameter
-                                matchedInvalidCandidate = true
+                        if isSlotMatch {
+                            if invalidParameter == nil {
+                                sawProjectableCandidate = true
                             } else {
                                 unsupportedParameter ??= invalidParameter
                             }
-                            break
                         }
-                        sawProjectableCandidate |= isProjectableSlotMatch
                         continue
                     }
-                    sawProjectableCandidate = true
+                    if invalidParameter == nil {
+                        sawProjectableCandidate = true
+                    }
                     candidates.Add(
                         ImportedAttributeConstructorCandidate(
                             constructor,
@@ -2001,7 +1998,7 @@ internal class CustomAttributeEncoder {
                 }
             }
             if candidates.Count == 0 {
-                if sawProjectableCandidate && !matchedInvalidCandidate {
+                if sawProjectableCandidate {
                     unsupportedParameter = nil
                 }
                 return nil
@@ -2035,8 +2032,16 @@ internal class CustomAttributeEncoder {
                 isAmbiguous = true
                 return nil
             }
-            effectiveArguments = candidates[bestIndex].EffectiveArguments
-            return candidates[bestIndex].Constructor
+            // Issue #5771: validate the winning constructor's parameter types after overload ranking
+            // so a more-specific overload with an invalid ECMA-335 parameter type (such as `int?`
+            // ahead of `object`) reports GS0585/CS0181 instead of silently falling back to `object`.
+            let winner = candidates[bestIndex]
+            if FirstInvalidAttributeConstructorParameter(winner.Constructor.GetParameters()) is {} offendingWinner {
+                unsupportedParameter = offendingWinner
+                return nil
+            }
+            effectiveArguments = winner.EffectiveArguments
+            return winner.Constructor
         }
 
         private func ValidateUniqueNamedConstructorArguments(attribute BoundAttribute) {
@@ -2063,17 +2068,13 @@ internal class CustomAttributeEncoder {
             out conversions[]AttributeArgumentConversionKind,
             out duplicateNamedArgument BoundAttributeArgument?,
             out positionalConflict BoundAttributeArgument?,
-            out invalidParameter ParameterInfo?,
-            out invalidCandidateMatched bool,
-            out isProjectableSlotMatch bool
+            out isSlotMatch bool
         ) bool {
             effective = Array.Empty[object?]()
             conversions = Array.Empty[AttributeArgumentConversionKind]()
             duplicateNamedArgument = nil
             positionalConflict = nil
-            invalidParameter = nil
-            invalidCandidateMatched = false
-            isProjectableSlotMatch = false
+            isSlotMatch = false
             let expanded = desiredForm == AttributeConstructorArgumentForm.ParamsExpanded
             let hasParams = parameters.Length > 0 && IsParamsArray(parameters[parameters.Length - 1])
             let fixedCount = if expanded && hasParams {
@@ -2166,21 +2167,7 @@ internal class CustomAttributeEncoder {
                     return false
                 }
             }
-            // Issue #5771: reject any constructor that declares a parameter type ECMA-335 II.23.3
-            // cannot encode (such as `Nullable<T>`). A constructor with an unencodable parameter
-            // must never be selected or emitted with a fallback `.ctor(System.Object)` signature.
-            if FirstInvalidAttributeConstructorParameter(parameters) is {} offending {
-                invalidParameter = offending
-                invalidCandidateMatched = InvalidConstructorArgumentsMatch(
-                    parameters,
-                    slots,
-                    expandedTail,
-                    fixedCount,
-                    expanded
-                )
-                return false
-            }
-            isProjectableSlotMatch = true
+            isSlotMatch = true
             let slotConversions = [parameters.Length]AttributeArgumentConversionKind
             for var i = 0; i < fixedCount; i++ {
                 if slots[i] is not BoundAttributeArgument supplied {
@@ -2245,59 +2232,6 @@ internal class CustomAttributeEncoder {
                 }
             }
             return nil
-        }
-
-        private func InvalidConstructorArgumentsMatch(
-            parameters[]ParameterInfo,
-            slots[]object?,
-            expandedTail List[BoundAttributeArgument],
-            fixedCount int32,
-            expanded bool
-        ) bool {
-            for var i = 0; i < fixedCount; i++ {
-                if slots[i] is BoundAttributeArgument supplied &&
-                    !InvalidConstructorParameterAcceptsArgument(parameters[i].ParameterType, supplied) {
-                    return false
-                }
-            }
-            if !expanded {
-                return true
-            }
-            if parameters[parameters.Length - 1].ParameterType.GetElementType() is not{} elementType {
-                return false
-            }
-            for argument in expandedTail {
-                if !InvalidConstructorParameterAcceptsArgument(elementType, argument) {
-                    return false
-                }
-            }
-            return true
-        }
-
-        private func InvalidConstructorParameterAcceptsArgument(paramType Type, supplied BoundAttributeArgument) bool {
-            if IsValidAttributeMemberType(paramType) {
-                return ArgAssignable(supplied.Value, paramType, supplied.Type)
-            }
-            if NullableLifting.GetValueTypeNullableUnderlyingClr(paramType) is {} underlying {
-                return supplied.Value == nil || ArgAssignable(supplied.Value, underlying, supplied.Type)
-            }
-            if paramType.IsArray && paramType.GetArrayRank() == 1 && paramType.GetElementType() is {} elementType {
-                if supplied.Value == nil {
-                    return true
-                }
-                if supplied.Value is Array array && NullableLifting.GetValueTypeNullableUnderlyingClr(
-                    elementType
-                ) is {} underlyingElement {
-                    for var i = 0; i < array.Length; i++ {
-                        let item = array.GetValue(i)
-                        if item != nil && !ArgAssignable(item, underlyingElement) {
-                            return false
-                        }
-                    }
-                    return true
-                }
-            }
-            return supplied.Value == nil && !paramType.IsValueType
         }
 
         /// Reads an omitted parameter's default. Uses `RawDefaultValue` rather
@@ -2383,14 +2317,26 @@ internal class CustomAttributeEncoder {
             declaredParamType TypeSymbol? = nil
         ) AttributeArgumentConversionKind {
             var paramType = paramType
+            if NullableLifting.GetValueTypeNullableUnderlyingClr(paramType) is {} nullableUnderlying {
+                if supplied == nil {
+                    let unwrappedNullSupplied = UnwrapAttributeReferenceNullability(suppliedType)
+                    if unwrappedNullSupplied != nil && unwrappedNullSupplied != TypeSymbol.Null {
+                        return AttributeArgumentConversionKind.NotApplicable
+                    }
+                    return AttributeArgumentConversionKind.UntypedNullToOtherReference
+                }
+                return ClassifyAttributeArgumentConversion(
+                    supplied,
+                    nullableUnderlying,
+                    suppliedType,
+                    declaredParamType
+                )
+            }
             // Third-party attributes are commonly resolved through a
             // MetadataLoadContext. Normalize framework types before using CLR
             // assignability so, for example, its System.String matches a runtime
             // string constant.
             paramType = NormalizeWellKnownType(paramType)!!
-            if !IsValidAttributeMemberType(paramType) {
-                return AttributeArgumentConversionKind.NotApplicable
-            }
             let unwrappedSupplied = UnwrapAttributeReferenceNullability(suppliedType)
             let unwrappedDeclared = UnwrapAttributeReferenceNullability(declaredParamType)
             let suppliedIsObject = unwrappedSupplied != nil &&
@@ -2418,6 +2364,9 @@ internal class CustomAttributeEncoder {
                     return ClassifyTypedNullAttributeArgumentConversion(paramType, unwrappedSupplied, unwrappedDeclared)
                 }
                 return ClassifyUntypedNullAttributeArgumentConversion(paramType, unwrappedDeclared)
+            }
+            if !IsValidAttributeMemberType(paramType) {
+                return AttributeArgumentConversionKind.NotApplicable
             }
             if unwrappedDeclared is EnumSymbol declaredEnum {
                 return if unwrappedSupplied is EnumSymbol suppliedEnum && suppliedEnum == declaredEnum {

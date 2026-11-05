@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Lowering
+import GSharp.Core.CodeAnalysis.Syntax
 import System.Runtime.CompilerServices
 
 /// Issue #5131: facts about one bound body, computed once per body object.
@@ -23,6 +24,17 @@ internal shared class BodyFacts {
         prop Found bool {
             get;
             private set;
+        }
+
+        public override func VisitStatement(node BoundStatement?) {
+            if Found || node == nil {
+                return
+            }
+            if node.Syntax is YieldStatementSyntax {
+                Found = true
+                return
+            }
+            base.VisitStatement(node)
         }
 
         protected override func VisitYieldStatement(node BoundYieldStatement) {

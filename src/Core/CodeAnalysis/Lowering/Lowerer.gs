@@ -152,8 +152,8 @@ class Lowerer : BoundTreeRewriter {
             let assignment = BoundAssignmentExpression(nil, this.returnValueLocal!!, rewritten.Expression!!)
             stmts.Add(BoundExpressionStatement(nil, assignment))
         }
-        stmts.Add(BoundGotoStatement(nil, this.methodExitLabel!!))
-        return BoundBlockStatement(nil, stmts.ToImmutable())
+        stmts.Add(BoundGotoStatement(rewritten.Syntax, this.methodExitLabel!!))
+        return BoundBlockStatement(rewritten.Syntax, stmts.ToImmutable())
     }
 
     /// ```xmldoc
