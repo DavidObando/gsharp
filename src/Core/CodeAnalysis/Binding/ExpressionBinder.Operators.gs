@@ -3133,9 +3133,12 @@ internal partial class ExpressionBinder {
             if type is TupleTypeSymbol tuple {
                 return NullableTypeSymbol.Get(TupleTypeSymbol.ResolveNilElements(tuple))
             }
-            if type.IsValueType ||
-                type is TypeParameterSymbol{HasValueTypeConstraint: true} ||
-                Conversion.IsReferenceLikeTarget(type) {
+            if !TypeSymbol.IsByRefLike(type) &&
+                (
+                type.IsValueType ||
+                    type is TypeParameterSymbol{HasValueTypeConstraint: true} ||
+                    Conversion.IsReferenceLikeTarget(type)
+            ) {
                 return NullableTypeSymbol.Get(type)
             }
             return type

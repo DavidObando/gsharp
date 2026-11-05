@@ -2964,7 +2964,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             return false
         }
         for id in enclosingScope.DescendantNodes().OfType[IdentifierNameSyntax]() {
-            if !SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(id).Symbol, local) {
+            if IsInsideNameof(id) || !SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(id).Symbol, local) {
                 continue
             }
             if id.Parent is AssignmentExpressionSyntax assignment && assignment.Left == id {

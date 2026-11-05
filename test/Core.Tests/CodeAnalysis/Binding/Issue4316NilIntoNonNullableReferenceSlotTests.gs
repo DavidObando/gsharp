@@ -437,6 +437,10 @@ func Run(c bool, v string) string {
     return sdk.Version
 }`, "")
             yield Row("ok-default-of-class", `func F() Box -> default(Box)`, "")
+            yield Row("ref-struct-conditional-nil-arm", `ref struct R { var n int32 }
+func F(c bool, r R) {
+    let x = c ? r : nil
+}`, "GS0155")
             // A default argument of `nil` for a bare class was already refused (GS0265).
             yield Row("default-argument-bare-class", `func D(b Box = nil) int32 -> 0`, "GS0265")
         }
