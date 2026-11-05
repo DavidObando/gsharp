@@ -1312,6 +1312,30 @@ public partial class Demo
         }
         return s.Length + total + 6;
     }
+    public static int CollectionElementConversionInLoop(ref string? s)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        var i = 0;
+        while (i < 1)
+        {
+            byte[] bytes = [1];
+            total += bytes.Length;
+            i++;
+        }
+        return s.Length + total + 8;
+    }
+    public static uint UnsignedReturnControl(ref string? s, bool exitEarly)
+    {
+        if (s == null) return 0;
+        var i = 0;
+        while (i < 1)
+        {
+            if (exitEarly) return 0;
+            i++;
+        }
+        return (uint)s.Length;
+    }
     public static int ElidedPartialAndUnsignedLiteralControls(ref string? s)
     {
         if (s == null) return 0;
@@ -1350,6 +1374,8 @@ public partial class Demo
             BareGenericStaticCallInLoop(ref text) + "," +
             ConditionalReferenceUpcastInLoop(ref text, new Derived(), new Base(), true) + "," +
             SwitchReferenceUpcastInLoop(ref text, new Derived(), new Base(), 0) + "," +
+            CollectionElementConversionInLoop(ref text) + "," +
+            UnsignedReturnControl(ref text, false) + "," +
             ElidedPartialAndUnsignedLiteralControls(ref text) + "," +
             GuardInsideLoop(ref text, "z") + "," + OutsideLoop(ref text, 4);
     }
@@ -1364,6 +1390,8 @@ public partial class Demo
         Assert.Contains("return s!!.Length + 4", printed)
         Assert.Contains("return s!!.Length + total + 5", printed)
         Assert.Contains("return s!!.Length + total + 6", printed)
+        Assert.Contains("return s!!.Length + total + 8", printed)
+        Assert.Contains("return uint32(s.Length)", printed)
         Assert.Contains("return s.Length + 7", printed)
         Assert.Contains("total += s.Length + 1", printed)
         Assert.Contains("return int64(s.Length) + wide", printed)
@@ -1371,8 +1399,8 @@ public partial class Demo
 
     /// Issue #5692 (2): gsc's region scanner gives no origin to the variables of a deconstructing `for (a, b) in items`
     /// loop, so using a deconstructed variable (or an inferred copy of it) in the body removes a by-reference fact at
-    /// loop entry and after it. Unused deconstructed variables, an unused inferred `var` copy, and a pure type test
-    /// keep the fact.
+    /// loop entry and after it. Unused deconstructed variables, an unused `var` or same-typed copy, and a pure type
+    /// test keep the fact.
     @Fact
     func RefParameter_ReadAroundAForEachThatUsesADeconstructedLoopVariable_IsAsserted() {
         let printed = AssertRunsLikeCSharp(`
@@ -1416,6 +1444,7 @@ public class Demo
         foreach (var (a, b) in items)
         {
             var copy = a;
+            int typedCopy = b;
         }
         return s.Length + 3;
     }
@@ -1449,11 +1478,12 @@ public class Demo
     }
 
     /// Issue #5692 (3): gsc's region scanner cannot resolve the element origin of an untyped `for x in call()` loop
-    /// when an extension method of that name can bind (`"a,b".Split(',')` or a source extension on `ShadowedBox`) or
-    /// when the call is an unqualified static class method (`Parts()`), so reading a member of `x` in the body counts
-    /// as a read on an untyped receiver (W5) and removes a by-reference fact. Over a parameter slice `parts`, a
-    /// qualified static call `Box.Parts()`, an instance member call `box.InstanceParts()` with no applicable extension
-    /// of that name, a source extension `word.WordParts()` or `values.Entries()`, or a pure string concatenation, the
+    /// when an extension method of that name can bind (`"a,b".Split(',')` or a source extension on `ShadowedBox`),
+    /// when a source generic type's method returns `T[]` (`GenericBox<int>.GetItems()`), or when the call is an
+    /// unqualified static class method (`Parts()`), so reading a member of `x` in the body counts as a read on an
+    /// untyped receiver (W5) and removes a by-reference fact. Over a parameter slice `parts`, a qualified static call
+    /// `Box.Parts()`, an instance member call `box.InstanceParts()` (even with a generic overload returning concrete
+    /// `string[]`), a source extension `word.WordParts()` or `values.Entries()`, or a pure string concatenation, the
     /// fact stays.
     @Fact
     func RefParameter_ReadAroundAForEachOverACallWhoseLoopVariableIsRead_IsAsserted() {
@@ -1478,10 +1508,19 @@ public sealed class ChildImpl : IChild
     public T Parts<T>(T value) => value;
     public string[] Parts() => new[] { "f" };
 }
+public sealed class GenericBox<T>
+{
+    public T[] GetItems(T item) => new[] { item };
+}
+public sealed class SelectBox
+{
+    public string[] Select() => new[] { "g" };
+}
 public sealed class Unrelated { }
 public static class WordExtensions
 {
     public static string[] WordParts(this string text) => new[] { text };
+    public static string[] WordParts<T>(this string text, T tag) => new[] { text };
     public static void WordParts(this Unrelated other) { }
     public static void InstanceParts(this Unrelated other) { }
     public static int[] Entries(this int[] values) => values;
@@ -1490,6 +1529,7 @@ public sealed class Box
 {
     public static string[] Parts() => new[] { "a", "b" };
     public string[] InstanceParts() => new[] { "c" };
+    public string[] InstanceParts<T>(T tag) => new[] { "c" };
 }
 public sealed class ShadowedBox
 {
@@ -1537,6 +1577,24 @@ public class Demo
         foreach (var part in child.Parts()) total += part.Length;
         return s.Length + total + 6;
     }
+    public static int OverConstructedSourceGenericReturn(ref string? s, GenericBox<string> genericBox)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in genericBox.GetItems("h")) total += part.Length;
+        return s.Length + total + 7;
+    }
+    public static int OverSynthesizedLinqImportConflict(
+        ref string? s,
+        SelectBox selectBox,
+        System.Linq.IOrderedEnumerable<int>? unused = null
+    )
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in selectBox.Select()) total += part.Length;
+        return s.Length + total + 8;
+    }
     public static int OverParameterArray(ref string? s, string[] parts)
     {
         if (s == null) return 0;
@@ -1573,6 +1631,8 @@ public class Demo
             OverUnqualifiedStaticCall(ref text) + "," +
             OverSourceShadowedMemberCall(ref text, new ShadowedBox()) + "," +
             OverInheritedInterfaceGenericOverload(ref text, new ChildImpl()) + "," +
+            OverConstructedSourceGenericReturn(ref text, new GenericBox<string>()) + "," +
+            OverSynthesizedLinqImportConflict(ref text, new SelectBox()) + "," +
             OverParameterArray(ref text, new[] { "a", "b" }) + "," +
             OverResolvableMemberCalls(ref text, new Box(), "hi", new[] { 1 }) + "," +
             OverPureStringConcatenation(ref text);
@@ -1583,10 +1643,12 @@ public class Demo
         Assert.Contains("return s!!.Length + total + 3", printed)
         Assert.Contains("return s!!.Length + total + 5", printed)
         Assert.Contains("return s!!.Length + total + 6", printed)
+        Assert.Contains("return s!!.Length + total + 7", printed)
+        Assert.Contains("return s!!.Length + total + 8", printed)
         Assert.Contains("return s.Length + total + 1", printed)
         Assert.Contains("return s.Length + total + 2", printed)
         Assert.Contains("return s.Length + total + 4", printed)
-        Assert.Equal(5, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(7, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null
@@ -1783,6 +1845,32 @@ public partial class Demo
             return 0;
         }
     }
+    public static int WhileConditionWithConditionalReceiver(ref string? s, Box a, Box b, bool flag)
+    {
+        s = null;
+        while ((flag ? a : b).Again() || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 15;
+    }
+    public static int WhileLoopAfterPatternGuardEndLabel(ref string? s, Box box, object probe)
+    {
+        if (probe is int n && n > 0)
+        {
+            n++;
+        }
+        else
+        {
+        }
+        s = null;
+        while (s == null)
+        {
+            box.F = 1;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 16;
+    }
     public static string Run()
     {
         string? text = "abc";
@@ -1797,7 +1885,9 @@ public partial class Demo
             WhileLoopInSwitchGotoFunction(ref text, new Box(), 2) + "," +
             WhileLoopAfterSynthesizedForContinueLabel(ref text, new Box()) + "," +
             WhileLoopWithGotoCaseToEmptyArm(ref text, new Box(), 0) + "," +
-            WhileLoopInTryWithEnclosingFilterWrite(ref text, new Box());
+            WhileLoopInTryWithEnclosingFilterWrite(ref text, new Box()) + "," +
+            WhileConditionWithConditionalReceiver(ref text, new Box(), new Box(), true) + "," +
+            WhileLoopAfterPatternGuardEndLabel(ref text, new Box(), 1);
     }
 }`)
         Assert.Contains("return s.Length + 1\n", printed.Replace("\r\n", "\n"))
@@ -1814,7 +1904,9 @@ public partial class Demo
         Assert.Contains("return s!!.Length + 12", printed)
         Assert.Contains("return s!!.Length + 13", printed)
         Assert.Contains("return s!!.Length + 14", printed)
-        Assert.Equal(10, Regex.Matches(printed, `s!!`).Count)
+        Assert.Contains("return s!!.Length + 15", printed)
+        Assert.Contains("return s!!.Length + 16", printed)
+        Assert.Equal(12, Regex.Matches(printed, `s!!`).Count)
     }
 
     shared {

@@ -1473,6 +1473,34 @@ partial class CSharpToGSharpTranslator {
                     BodyContainsOwnLoopContinue(doLoop.Statement) {
                     return true
                 }
+                if node is IfStatementSyntax ifStatement &&
+                    ifStatement.Else != nil &&
+                    !this
+                    .ConditionUsesNativePatternVariables(ifStatement.Condition) {
+                    DecomposeConjunction(ifStatement.Condition, out var leftmost, out var guards)
+                    if guards.Count > 0 && !guards.Any(
+                        ($guard ExpressionSyntax) -> ContainsSpillHoistingConstruct(
+                            $guard,
+                            includeOutVarDeclarations: false
+                        )
+                    ) &&
+                        leftmost is IsPatternExpressionSyntax isPattern &&
+                        TryExtractSingleVarTypePattern(isPattern.Pattern, out var typeSyntax, out var single) &&
+                        this
+                        .context
+                        .GetTypeInfo(typeSyntax)
+                        .Type is {IsValueType: true} &&
+                        this
+                        .context
+                        .GetDeclaredSymbol(single) is ILocalSymbol && !this.TryResolveSharedNodeGuardHoistType(
+                        typeSyntax,
+                        out _,
+                        out _,
+                        out _
+                    ) {
+                        return true
+                    }
+                }
                 if node is ForStatementSyntax forLoop &&
                     forLoop
                     .Incrementors
