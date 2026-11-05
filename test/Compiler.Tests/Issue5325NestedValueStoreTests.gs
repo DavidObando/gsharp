@@ -311,7 +311,7 @@ frames = slice[Pair].FromArray(storage)
 index = 0
 var blockIdxCalls = 0
 scope {
-    go frames[{ blockIdxCalls++; 0 }].Bump()
+    go frames[{ blockIdxCalls++ 0 }].Bump()
     frames = slice[Pair]{Pair{}}
 }
 frames = slice[Pair].FromArray(storage)
