@@ -278,22 +278,23 @@ internal partial class ExpressionBinder {
         if elementType == nil || !MemberLookup.TryProjectErasedClrType(elementType, out var erasedElement) {
             return false
         }
-        var openDefinition Type
+        let references = $scope.References!!
+        if !references.TryMapClrTypeToReferences(
+            typeof(System.Collections.Generic.IEnumerable[_]),
+            out var openDefinition
+        ) ||
+            !references.TryMapClrTypeToReferences(erasedElement, out var mappedElement) {
+            return false
+        }
         var closedEnumerable Type
         try {
-            openDefinition = $scope.References!!.MapClrTypeToReferences(
-                typeof(System.Collections.Generic.IEnumerable[_])
-            )!!
-            let mappedElement = $scope.References!!.MapClrTypeToReferences(erasedElement)
-            closedEnumerable = openDefinition.MakeGenericType(mappedElement!!)
-        } catch (ex Exception) when ClrTypeUtilities.IsMetadataLoadFailure(ex) ||
-            ex is ArgumentException ||
-            ex is InvalidOperationException {
+            closedEnumerable = openDefinition!!.MakeGenericType(mappedElement!!)
+        } catch (ex Exception) when ReferenceResolver.IsProjectionFailure(ex) {
             return false
         }
         normalized = ImportedTypeSymbol.GetConstructed(
             closedEnumerable,
-            openDefinition,
+            openDefinition!!,
             ImmutableArray.Create(elementType)
         )
         return true
@@ -1493,12 +1494,36 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         let pending = literalTargetDiagnostics.Count
         let mark = Diagnostics.Count
-        let call = BindAccessorCallCore(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+        let beforeCall = if ce.NullableQuestionToken != nil {
+            CaptureExpressionNarrowingFrames()
+        } else {
+            default(
+                List[
+                    (
+                        Id int32,
+                        Frame NarrowingFrame?,
+                        Entries Dictionary[AccessPath, TypeSymbol]?,
+                        Aliases HashSet[VariableSymbol]
+                    )
+                ]?
+            )
+        }
+        let entryAliases = if ce.NullableQuestionToken != nil {
+            GetCurrentExpressionCallableAliases()
+        } else {
+            default(HashSet[VariableSymbol]?)
+        }
+        let call = BindAccessorCallWithArgumentRefresh(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+        if ce.NullableQuestionToken != nil && call is BoundNullConditionalAccessExpression {
+            InvalidateExpressionNarrowingFrames(call, entryAliases)
+            MergeBranchExpressionNarrowingFrames(beforeCall)
+            expressionExitAliases[call] = GetCurrentExpressionCallableAliases()
+        }
         ReportDiscardedLiteralTargetDiagnostics(pending, HasErrorDiagnosticSince(mark))
         return call
     }
 
-    private func BindAccessorCallCore(
+    private func BindAccessorCallWithArgumentRefresh(
         receiver BoundExpression?,
         classSymbol ImportedClassSymbol?,
         ce CallExpressionSyntax,
@@ -1831,7 +1856,52 @@ internal partial class ExpressionBinder {
             boundArguments.Clear()
             boundArguments.AddRange(mutableArgs)
         }
-        var arguments = boundArguments.ToImmutable()
+        let initialArguments = boundArguments.ToImmutable()
+        let overloadDiagMark = Diagnostics.Count
+        var result = BindAccessorCallCore(
+            receiver,
+            classSymbol,
+            methodName,
+            ce,
+            explicitTypeArgs,
+            typeArgSymbols,
+            argumentNames,
+            initialArguments,
+            receiverSyntax,
+            receiverStart
+        )
+        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+            Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+            result = BindAccessorCallCore(
+                receiver,
+                classSymbol,
+                methodName,
+                ce,
+                explicitTypeArgs,
+                typeArgSymbols,
+                argumentNames,
+                refreshedArguments,
+                receiverSyntax,
+                receiverStart
+            )
+        }
+        return result
+    }
+
+    private func BindAccessorCallCore(
+        receiver BoundExpression?,
+        classSymbol ImportedClassSymbol?,
+        methodName string,
+        ce CallExpressionSyntax,
+        explicitTypeArgs[]?Type,
+        typeArgSymbols ImmutableArray[TypeSymbol],
+        argumentNames ImmutableArray[string],
+        arguments ImmutableArray[BoundExpression],
+        receiverSyntax ExpressionSyntax?,
+        receiverStart int32?
+    ) BoundExpression {
+        var receiver = receiver
+        var arguments = arguments
         if !ValidateNativeSharingArguments(classSymbol, methodName, arguments, ce) {
             return BoundErrorExpression(ce)
         }

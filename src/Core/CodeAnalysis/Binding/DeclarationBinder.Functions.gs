@@ -1461,7 +1461,7 @@ internal partial class DeclarationBinder {
             var candidateDiagnostics ImmutableArray[Diagnostic]
             try {
                 ResolveTypeParameterConstraints(candidate, candidateSymbols)
-                candidateDiagnostics = Diagnostics.Skip(diagnosticCount).ToImmutableArray()
+                candidateDiagnostics = Diagnostics.VisibleSince(diagnosticCount)
             } finally {
                 RollbackSpeculativeBind(diagnosticCount, pendingCheckCount)
             }

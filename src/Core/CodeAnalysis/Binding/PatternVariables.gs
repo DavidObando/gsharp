@@ -135,6 +135,12 @@ internal shared class PatternVariables {
                     continue
                 }
                 if !saved.TryDeclareVariable(declared) && declared.DeclaringSyntax is SyntaxNode declaring {
+                    if saved.TryLookupSymbol(declared.Name) is VariableSymbol existing && object.ReferenceEquals(
+                        existing.DeclaringSyntax,
+                        declaring
+                    ) {
+                        continue
+                    }
                     binderCtx.Diagnostics.ReportSymbolAlreadyDeclared(declaring.Location, declared.Name)
                 }
             }
