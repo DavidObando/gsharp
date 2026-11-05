@@ -2645,30 +2645,33 @@ internal class ConversionClassifier {
     /// @returns The shaped bound expression.
     func BindConditionalRefArgument(
         syntax ConditionalRefArgumentExpressionSyntax,
-        outerModifier SyntaxToken?
+        outerModifier SyntaxToken?,
+        bindConditionalAddress(
+            (ExpressionSyntax, ExpressionSyntax, ExpressionSyntax, TextLocation, SyntaxToken?) -> BoundExpression
+        )? = nil
     ) BoundExpression {
-        // Condition must be bool.
-        let condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
         // Inner-modifier matching (GS0251). The outer modifier text is `ref`,
         // `out`, `in`, or `&`. The bare `&` form (outerModifier == null) maps
         // to `ref`/`&` semantics; an inner `in`/`out` on a `&` operand is a
         // mismatch since `&` already denotes mutable byref.
         let outerText = outerModifier?.Text ?? "&"
-        if syntax.WhenTrueRefKindModifier != nil &&
-            !InnerModifierMatchesOuter(syntax.WhenTrueRefKindModifier.Text, outerText) {
+        let whenTrueModifier = syntax.WhenTrueRefKindModifier
+        if whenTrueModifier != nil && !InnerModifierMatchesOuter(whenTrueModifier.Text, outerText) {
+            let _ = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
             Diagnostics.ReportConditionalRefArgumentInnerModifierMismatch(
-                syntax.WhenTrueRefKindModifier.Location,
+                whenTrueModifier.Location,
                 outerText,
-                syntax.WhenTrueRefKindModifier.Text
+                whenTrueModifier.Text
             )
             return BoundErrorExpression(nil)
         }
-        if syntax.WhenFalseRefKindModifier != nil &&
-            !InnerModifierMatchesOuter(syntax.WhenFalseRefKindModifier.Text, outerText) {
+        let whenFalseModifier = syntax.WhenFalseRefKindModifier
+        if whenFalseModifier != nil && !InnerModifierMatchesOuter(whenFalseModifier.Text, outerText) {
+            let _ = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
             Diagnostics.ReportConditionalRefArgumentInnerModifierMismatch(
-                syntax.WhenFalseRefKindModifier.Location,
+                whenFalseModifier.Location,
                 outerText,
-                syntax.WhenFalseRefKindModifier.Text
+                whenFalseModifier.Text
             )
             return BoundErrorExpression(nil)
         }
@@ -2677,13 +2680,26 @@ internal class ConversionClassifier {
         // explicitly reject the inline-declaration form here (GS0250) before
         // attempting to bind.
         if syntax.WhenTrue is RefArgumentExpressionSyntax wtRefArg && wtRefArg.IsInlineDeclaration {
+            let _ = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
             Diagnostics.ReportInlineDeclarationInConditionalRefBranch(wtRefArg.Location)
             return BoundErrorExpression(nil)
         }
         if syntax.WhenFalse is RefArgumentExpressionSyntax wfRefArg && wfRefArg.IsInlineDeclaration {
+            let _ = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
             Diagnostics.ReportInlineDeclarationInConditionalRefBranch(wfRefArg.Location)
             return BoundErrorExpression(nil)
         }
+        if bindConditionalAddress != nil {
+            return bindConditionalAddress(
+                syntax.Condition,
+                syntax.WhenTrue,
+                syntax.WhenFalse,
+                syntax.Location,
+                outerModifier
+            )
+        }
+        // Condition must be bool.
+        let condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
         let whenTrue = bindExpression(syntax.WhenTrue)
         let whenFalse = bindExpression(syntax.WhenFalse)
         if whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression || condition is BoundErrorExpression {
@@ -2700,9 +2716,20 @@ internal class ConversionClassifier {
         // Branch types must match in physical storage — no implicit widening or
         // value-nullable adjustment, since the resulting byref selects between
         // slots whose physical type must agree.
-        let trueStorageType = ExpressionBinder.AddressedLeafStorageType(whenTrue)
-        let falseStorageType = ExpressionBinder.AddressedLeafStorageType(whenFalse)
-        if !ExpressionBinder.ConditionalStorageTypesMatch(trueStorageType, falseStorageType) {
+        let standaloneAddress = outerModifier == nil
+        let trueStorageType = ExpressionBinder.AddressedLeafStorageType(
+            whenTrue,
+            useEffectiveNullability: !standaloneAddress
+        )
+        let falseStorageType = ExpressionBinder.AddressedLeafStorageType(
+            whenFalse,
+            useEffectiveNullability: !standaloneAddress
+        )
+        if !ExpressionBinder.ConditionalStorageTypesMatch(
+            trueStorageType,
+            falseStorageType,
+            requireExactNullability: standaloneAddress
+        ) {
             Diagnostics.ReportConditionalRefArgumentBranchTypeMismatch(
                 syntax.Location,
                 trueStorageType?.Name ?? "?",

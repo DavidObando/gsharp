@@ -2201,8 +2201,7 @@ internal partial class StatementBinder {
         let bound = bindExpression(initializerSyntax, false)
         RestoreExternalCallableAliases(aliasesBefore)
         ApplyTrailingConditionEffects(initializerSyntax, bound)
-        RestoreExternalCallableAliases(aliasesBefore)
-        ApplyHeaderCallableEffects(bound)
+        RestoreExternalCallableAliases(AliasesAfter(bound, aliasesBefore, initializerSyntax))
         return bound
     }
 

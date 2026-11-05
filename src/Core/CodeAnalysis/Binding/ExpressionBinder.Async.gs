@@ -1150,43 +1150,72 @@ internal partial class ExpressionBinder {
     private func BindConditionalAddressFromGeneral(
         syntax ConditionalExpressionSyntax,
         outerModifier SyntaxToken?
+    ) BoundExpression -> BindConditionalAddressCore(
+        syntax.Condition,
+        syntax.WhenTrue,
+        syntax.WhenFalse,
+        syntax.Location,
+        outerModifier
+    )
+
+    internal func BindConditionalAddressCore(
+        conditionSyntax ExpressionSyntax,
+        whenTrueSyntax ExpressionSyntax,
+        whenFalseSyntax ExpressionSyntax,
+        location TextLocation,
+        outerModifier SyntaxToken?
     ) BoundExpression {
         // Condition must be bool.
-        let (condition, whenTrueNarrowing, whenFalseNarrowing) = bindConditionWithEffects(syntax.Condition)
+        let (condition, whenTrueNarrowing, whenFalseNarrowing) = bindConditionWithEffects(conditionSyntax)
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
         let (whenTrue, whenFalse) = bindConditionalBranches(
             true,
             () -> BindWithPatternVariables(
                 patternWhenTrue,
-                () -> BindExpressionWithNarrowing(syntax.WhenTrue, whenTrueNarrowing),
-                syntax.WhenTrue
+                () -> BindExpressionWithNarrowing(whenTrueSyntax, whenTrueNarrowing),
+                whenTrueSyntax
             ),
             () -> BindWithPatternVariables(
                 patternWhenFalse,
-                () -> BindExpressionWithNarrowing(syntax.WhenFalse, whenFalseNarrowing),
-                syntax.WhenFalse
+                () -> BindExpressionWithNarrowing(whenFalseSyntax, whenFalseNarrowing),
+                whenFalseSyntax
             )
         )
         if whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression || condition is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }
         if !IsLvalueIgnoringConditionalTypeMatch(whenTrue) {
-            Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenTrue.Location, syntax.WhenTrue.ToString())
+            Diagnostics.ReportCannotTakeAddressOfNonLvalue(whenTrueSyntax.Location, whenTrueSyntax.ToString())
             return BoundErrorExpression(nil)
         }
         if !IsLvalueIgnoringConditionalTypeMatch(whenFalse) {
-            Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenFalse.Location, syntax.WhenFalse.ToString())
+            Diagnostics.ReportCannotTakeAddressOfNonLvalue(whenFalseSyntax.Location, whenFalseSyntax.ToString())
             return BoundErrorExpression(nil)
         }
         // Branch storage types must match — no implicit widening, since the
         // resulting byref selects between slots whose physical type must agree.
-        if !TryResolveConditionalAddressStorageType(whenTrue, syntax.WhenTrue.Location, out var trueStorageType) ||
-            !TryResolveConditionalAddressStorageType(whenFalse, syntax.WhenFalse.Location, out var falseStorageType) {
+        let standaloneAddress = outerModifier == nil
+        if !TryResolveConditionalAddressStorageType(
+            whenTrue,
+            whenTrueSyntax.Location,
+            standaloneAddress,
+            out var trueStorageType
+        ) ||
+            !TryResolveConditionalAddressStorageType(
+            whenFalse,
+            whenFalseSyntax.Location,
+            standaloneAddress,
+            out var falseStorageType
+        ) {
             return BoundErrorExpression(nil)
         }
-        if !ConditionalStorageTypesMatch(trueStorageType, falseStorageType) {
+        if !ConditionalStorageTypesMatch(
+            trueStorageType,
+            falseStorageType,
+            requireExactNullability: standaloneAddress
+        ) {
             Diagnostics.ReportConditionalRefArgumentBranchTypeMismatch(
-                syntax.Location,
+                location,
                 trueStorageType?.Name ?? "?",
                 falseStorageType?.Name ?? "?"
             )
@@ -1196,11 +1225,11 @@ internal partial class ExpressionBinder {
         let requiresWritable = outerText == "ref" || outerText == "out" || outerText == "&"
         if requiresWritable {
             if RefCapabilities.IsReadOnlyStorage(whenTrue) {
-                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenTrue.Location, syntax.WhenTrue.ToString())
+                Diagnostics.ReportCannotTakeAddressOfConstant(whenTrueSyntax.Location, whenTrueSyntax.ToString())
                 return BoundErrorExpression(nil)
             }
             if RefCapabilities.IsReadOnlyStorage(whenFalse) {
-                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenFalse.Location, syntax.WhenFalse.ToString())
+                Diagnostics.ReportCannotTakeAddressOfConstant(whenFalseSyntax.Location, whenFalseSyntax.ToString())
                 return BoundErrorExpression(nil)
             }
         }
@@ -1228,6 +1257,7 @@ internal partial class ExpressionBinder {
     private func TryResolveConditionalAddressStorageType(
         expression BoundExpression,
         location TextLocation,
+        standaloneAddress bool,
         @NotNullWhen(true) out storageType TypeSymbol?
     ) bool {
         var current = expression
@@ -1236,12 +1266,22 @@ internal partial class ExpressionBinder {
         }
         if current is BoundConditionalExpression conditional {
             let condLocation = conditional.Syntax?.Location ?? location
-            if !TryResolveConditionalAddressStorageType(conditional.WhenTrue, condLocation, out var nestedTrue) ||
-                !TryResolveConditionalAddressStorageType(conditional.WhenFalse, condLocation, out var nestedFalse) {
+            if !TryResolveConditionalAddressStorageType(
+                conditional.WhenTrue,
+                condLocation,
+                standaloneAddress,
+                out var nestedTrue
+            ) ||
+                !TryResolveConditionalAddressStorageType(
+                conditional.WhenFalse,
+                condLocation,
+                standaloneAddress,
+                out var nestedFalse
+            ) {
                 storageType = nil
                 return false
             }
-            if !ConditionalStorageTypesMatch(nestedTrue, nestedFalse) {
+            if !ConditionalStorageTypesMatch(nestedTrue, nestedFalse, requireExactNullability: standaloneAddress) {
                 Diagnostics.ReportConditionalRefArgumentBranchTypeMismatch(
                     condLocation,
                     nestedTrue?.Name ?? "?",
@@ -1253,7 +1293,7 @@ internal partial class ExpressionBinder {
             storageType = MergeConditionalStorageType(nestedTrue, nestedFalse)
             return true
         }
-        storageType = AddressedLeafStorageType(current)
+        storageType = AddressedLeafStorageType(current, useEffectiveNullability: !standaloneAddress)
         return true
     }
 

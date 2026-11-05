@@ -909,6 +909,102 @@ func Run(flag bool) int32 {
     }
 }
 Console.WriteLine(Run(true))`, "", "run", "42"}
+            yield[]object{"r16_standalone_conditional_address_mismatched_top_level_nullability_rejected", `import System
+
+func Run(flag bool) int32 {
+    var a string = "ok"
+    var b string? = nil
+    let p = &(flag ? a : b)
+    return a.Length
+}
+Console.WriteLine(Run(true))`, "GS0260@6:15", "reject", ""}
+            yield[]object{"r17_standalone_conditional_address_mismatched_nested_nullability_rejected", `import System
+import System.Collections.Generic
+
+func Run(flag bool) int32 {
+    var a = List[string]{"ok"}
+    var b = List[string?]{nil}
+    let p = &(flag ? a : b)
+    return a[0].Length
+}
+Console.WriteLine(Run(false))`, "GS0260@7:15", "reject", ""}
+            yield[]object{"r18_legacy_conditional_ref_argument_applies_condition_effects", `import System
+
+class C { var Value string = "ok" }
+class Holder { var Callback () -> void = func() { } }
+func Check(h Holder) bool {
+    h.Callback()
+    return true
+}
+func Read(in v string?) int32 -> v?.Length ?? 0
+func Run() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    var fallback string? = "fb"
+    if x == nil { return 0 }
+    return Read(in (Check(h) ? in x.Value : in fallback))
+}
+Console.WriteLine(Run())`, "GS0158@16:37", "reject", ""}
+            yield[]object{"r19_for_post_alias_assignment_does_not_affect_condition_narrowing", `import System
+
+func Run(flag bool, callback () -> string) int32 {
+    var x string? = "hi"
+    var kept = false
+    var action () -> string = func() string {
+        let old = x ?? ""
+        x = nil
+        return old
+    }
+    for ; x is action(); kept = (flag ? ((action = callback) is {}) : ((action = callback) is {})) && true {
+        return x.Length
+    }
+    return 0
+}
+Console.WriteLine(Run(true, () -> "hi"))`, "GS0158@12:18", "reject", ""}
+            yield[]object{"r20_while_let_and_for_ellipsis_propagate_gained_callable_aliases", `import System
+
+class C { var Value int32 = 5 }
+func Run1(flag bool, callback () -> bool) int32 {
+    var x C? = C{}
+    var action () -> bool = func() bool {
+        x = nil
+        return true
+    }
+    while let v = (if flag {
+        action = callback
+        cast[C?](C{})
+    } else {
+        action = callback
+        cast[C?](C{})
+    }) {
+        if x != nil && action() {
+            return x.Value + v.Value
+        }
+        break
+    }
+    return 0
+}
+func Run2(flag bool, callback () -> bool) int32 {
+    var x C? = C{}
+    var action () -> bool = func() bool {
+        x = nil
+        return true
+    }
+    for i in (if flag {
+        action = callback
+        0
+    } else {
+        action = callback
+        0
+    }) ... 1 {
+        if x != nil && action() {
+            return x.Value + i
+        }
+    }
+    return 0
+}
+Console.WriteLine(Run1(true, () -> true) + Run2(true, () -> true))`, "", "run", "15"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

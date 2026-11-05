@@ -2524,11 +2524,28 @@ internal partial class ExpressionBinder {
         private func IsAddressableFieldReceiver(receiver BoundExpression?) bool -> receiver == nil ||
             Binder.IsReferenceTypeForConstraint(receiver.Type) || IsLvalue(receiver)
 
-        internal func ConditionalStorageTypesMatch(left TypeSymbol?, right TypeSymbol?) bool -> object.ReferenceEquals(
-            left,
-            right
-        ) ||
-            (left != nil && right != nil && ByRefStorageMatching.AreSameStorageType(left, right, out _, out _, out _))
+        internal func ConditionalStorageTypesMatch(
+            left TypeSymbol?,
+            right TypeSymbol?,
+            requireExactNullability bool = false
+        ) bool {
+            if object.ReferenceEquals(left, right) {
+                return true
+            }
+            if left == nil || right == nil {
+                return false
+            }
+            if !ByRefStorageMatching.AreSameStorageType(
+                left,
+                right,
+                out var storageNullable,
+                out var parameterNullable,
+                out var nestedMismatch
+            ) {
+                return false
+            }
+            return !requireExactNullability || (!storageNullable && !parameterNullable && !nestedMismatch)
+        }
 
         internal func MergeConditionalStorageType(left TypeSymbol?, right TypeSymbol?) TypeSymbol? {
             if left == nil {
@@ -2595,14 +2612,14 @@ internal partial class ExpressionBinder {
             if current is BoundConditionalExpression conditional {
                 if !TryGetAddressedStorageType(conditional.WhenTrue, out var nestedTrue) ||
                     !TryGetAddressedStorageType(conditional.WhenFalse, out var nestedFalse) ||
-                    !ConditionalStorageTypesMatch(nestedTrue, nestedFalse) {
+                    !ConditionalStorageTypesMatch(nestedTrue, nestedFalse, requireExactNullability: true) {
                     storageType = nil
                     return false
                 }
                 storageType = MergeConditionalStorageType(nestedTrue, nestedFalse)
                 return true
             }
-            storageType = AddressedLeafStorageType(current)
+            storageType = AddressedLeafStorageType(current, useEffectiveNullability: false)
             return true
         }
 

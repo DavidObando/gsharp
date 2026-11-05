@@ -198,7 +198,11 @@ internal partial class ExpressionBinder {
             rawOperand = pen.Expression
         }
         if rawOperand is ConditionalRefArgumentExpressionSyntax condOperand {
-            return conversions.BindConditionalRefArgument(condOperand, outerModifier: nil)
+            return conversions.BindConditionalRefArgument(
+                condOperand,
+                outerModifier: nil,
+                bindConditionalAddress: BindConditionalAddressCore
+            )
         }
         // ADR-0062: a general conditional expression as the operand of `&`
         // binds to the conditional-address path (preserving ADR-0061 byref
