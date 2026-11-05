@@ -82,7 +82,7 @@ func Main() {
             ("Probe.OnlyObj(sp2)", "GS0159"),
             ("Probe.OnlyInt(sp3)", "GS0159"),
             ("IntSpanHolder(sp1)", "GS0155"),
-            ("IntSpanHolder(sp3, 1)", "GS0267")
+            ("IntSpanHolder(sp3, 1)", "GS0130")
         } {
             let (code, output) = fixture.TryCompile(`package PreexistingReject
 import System
