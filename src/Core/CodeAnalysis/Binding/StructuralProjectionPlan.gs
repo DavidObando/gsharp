@@ -366,6 +366,7 @@ internal shared class StructuralProjectionPlanner {
             }
             for property in current.Properties {
                 if property.Accessibility != Accessibility.Public ||
+                    property.HasExplicitInterfaceClause ||
                     property.IsStatic ||
                     property.IsIndexer ||
                     !property.HasSetter ||
@@ -915,6 +916,8 @@ internal shared class StructuralProjectionPlanner {
             for current in structSource.GetHierarchy() {
                 for property in current.Properties {
                     if property.Accessibility == Accessibility.Public &&
+                        property.GetterAccessibility == Accessibility.Public &&
+                        !property.HasExplicitInterfaceClause &&
                         property.HasGetter &&
                         !property.IsStatic &&
                         !property.IsIndexer &&
@@ -926,6 +929,25 @@ internal shared class StructuralProjectionPlanner {
                                 property.Name,
                                 property.Type,
                                 declaringType: current,
+                                property: property
+                            )
+                        )
+                    }
+                }
+                for property in current.InheritedPositionalProperties {
+                    if property.Accessibility == Accessibility.Public &&
+                        property.GetterAccessibility == Accessibility.Public &&
+                        property.HasGetter &&
+                        !property.IsStatic &&
+                        !property.IsIndexer &&
+                        !result
+                        .ContainsKey(property.Name) {
+                        result.Add(
+                            property.Name,
+                            StructuralProjectionSourceMember(
+                                property.Name,
+                                property.Type,
+                                declaringType: TypeMemberModel.ResolveInheritedPropertyOwner(current, property),
                                 property: property
                             )
                         )

@@ -8727,7 +8727,8 @@ internal class MemberLookup {
             // matching. Multiple inference sources join compatible nullable
             // evidence instead of depending on argument order.
             if openClr.IsGenericParameter && openClr.DeclaringMethod != nil {
-                if TypeSymbol.ContainsNullLiteralType(actual) {
+                if actual == TypeSymbol.Void || TypeSymbol.ContainsNeverType(actual) ||
+                    TypeSymbol.ContainsNullLiteralType(actual) {
                     return
                 }
                 if object.ReferenceEquals(openClr.DeclaringMethod, openMethod) ||

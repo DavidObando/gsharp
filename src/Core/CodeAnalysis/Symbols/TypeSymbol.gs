@@ -969,7 +969,10 @@ open partial class TypeSymbol : Symbol {
         /// Returns whether a type structurally contains a non-emittable `never` slot.
         /// @param type The type to inspect.
         /// @returns `true` when any wrapped type is (cref:Never).
-        internal func ContainsNeverType(type TypeSymbol) bool {
+        internal func ContainsNeverType(type TypeSymbol?) bool {
+            if type == nil {
+                return false
+            }
             if type == Never {
                 return true
             }
@@ -979,6 +982,95 @@ open partial class TypeSymbol : Symbol {
                 }
             }
             return false
+        }
+
+        /// Replaces any `never` function return slot in [`type`](paramref) with `void`.
+        /// @param type The inferred type to materialize.
+        /// @returns The type with targetless `never` function returns materialized as `void`.
+        internal func MaterializeNeverFunctionReturns(type TypeSymbol) TypeSymbol {
+            if !ContainsNeverType(type) {
+                return type
+            }
+            switch type {
+                case fn is FunctionTypeSymbol {
+                    let materializedReturn = if fn.ReturnType == Never {
+                        Void
+                    } else {
+                        MaterializeNeverFunctionReturns(fn.ReturnType)
+                    }
+                    var changed = !object.ReferenceEquals(materializedReturn, fn.ReturnType)
+                    let parameters = ImmutableArray.CreateBuilder[TypeSymbol](fn.ParameterTypes.Length)
+                    for parameter in fn.ParameterTypes {
+                        let materializedParameter = MaterializeNeverFunctionReturns(parameter)
+                        changed |= !object.ReferenceEquals(materializedParameter, parameter)
+                        parameters.Add(materializedParameter)
+                    }
+                    return if changed {
+                        cast[TypeSymbol](
+                            FunctionTypeSymbol.Get(parameters.MoveToImmutable(), fn.IsVariadic, materializedReturn)
+                        )
+                    } else {
+                        type
+                    }
+                }
+                case tuple is TupleTypeSymbol {
+                    var changed = false
+                    let elements = ImmutableArray.CreateBuilder[TypeSymbol](tuple.ElementTypes.Length)
+                    for element in tuple.ElementTypes {
+                        let materializedElement = MaterializeNeverFunctionReturns(element)
+                        changed |= !object.ReferenceEquals(materializedElement, element)
+                        elements.Add(materializedElement)
+                    }
+                    return if changed {
+                        cast[TypeSymbol](TupleTypeSymbol.Get(elements.MoveToImmutable(), tuple.ElementNames))
+                    } else {
+                        type
+                    }
+                }
+                case nullable is NullableTypeSymbol {
+                    let underlying = MaterializeNeverFunctionReturns(nullable.UnderlyingType)
+                    return if !object.ReferenceEquals(underlying, nullable.UnderlyingType) {
+                        cast[TypeSymbol](NullableTypeSymbol.Get(underlying))
+                    } else {
+                        type
+                    }
+                }
+                case platform is PlatformTypeSymbol {
+                    let underlying = MaterializeNeverFunctionReturns(platform.UnderlyingType)
+                    return if !object.ReferenceEquals(underlying, platform.UnderlyingType) {
+                        cast[TypeSymbol](PlatformTypeSymbol.Get(underlying))
+                    } else {
+                        type
+                    }
+                }
+                case slice is SliceTypeSymbol {
+                    let element = MaterializeNeverFunctionReturns(slice.ElementType)
+                    return if !object.ReferenceEquals(element, slice.ElementType) {
+                        cast[TypeSymbol](SliceTypeSymbol.Get(element))
+                    } else {
+                        type
+                    }
+                }
+                case array is ArrayTypeSymbol {
+                    let element = MaterializeNeverFunctionReturns(array.ElementType)
+                    return if !object.ReferenceEquals(element, array.ElementType) {
+                        cast[TypeSymbol](ArrayTypeSymbol.Get(element, array.Length))
+                    } else {
+                        type
+                    }
+                }
+                case rectangular is RectangularArrayTypeSymbol {
+                    let element = MaterializeNeverFunctionReturns(rectangular.ElementType)
+                    return if !object.ReferenceEquals(element, rectangular.ElementType) {
+                        cast[TypeSymbol](RectangularArrayTypeSymbol.Get(element, rectangular.Rank))
+                    } else {
+                        type
+                    }
+                }
+                default {
+                    return type
+                }
+            }
         }
 
         /// Compares runtime type identity while ignoring nullable-reference
