@@ -1571,7 +1571,7 @@ partial class CSharpToGSharpTranslator {
                 (child SyntaxNode) -> !(
                     child is LocalFunctionStatementSyntax ||
                         child is AnonymousFunctionExpressionSyntax ||
-                        (child is ExpressionStatementSyntax exprStmt && this.IsDroppedExpressionStatement(exprStmt))
+                        this.IsDroppedStatementOrLoopClause(child)
                 )
             )
                 .OfType[BreakStatementSyntax]()

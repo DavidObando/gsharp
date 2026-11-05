@@ -1495,6 +1495,9 @@ public class Demo
             {
                 _ = unusedAlias;
             }
+            for (var i = 0; i < 1; i++, _ = a)
+            {
+            }
         }
         return s.Length + 3;
     }
@@ -1570,20 +1573,40 @@ public sealed class ChildImpl : IChild
 }
 public sealed class GenericBox<T>
 {
+#pragma warning disable CS8618
+    public System.Collections.Generic.List<T> StoredList;
+#pragma warning restore CS8618
     public T[] GetItems(T item) => new[] { item };
+    public System.Collections.Generic.List<T> Items() => StoredList;
 }
 public sealed class SelectBox
 {
     public string[] Select() => new[] { "g" };
 }
 public sealed class Unrelated { }
+public sealed class DisposableBox : System.IDisposable
+{
+    public void Dispose() { }
+    public string[] ConstrainedParts() => new[] { "z" };
+}
+public sealed class MixedBox
+{
+    public string[] MixedParts() => new[] { "x" };
+    public int[] MixedParts(int n) => new[] { 1 };
+    public Box MixedSelf() => new Box();
+    public Unrelated MixedSelf(int n) => new Unrelated();
+}
 public static class WordExtensions
 {
     public static string[] WordParts(this string text) => new[] { text };
     public static string[] WordParts<T>(this string text, T tag) => new[] { text };
     public static void WordParts(this Unrelated other) { }
     public static void InstanceParts(this Unrelated other) { }
+    public static void InstanceParts<T>(this T value) where T : System.IDisposable { }
+    public static void ConstrainedParts<T>(this T value) where T : System.IDisposable { }
     public static int[] Entries(this int[] values) => values;
+    public static string[] GenericArrayParts<T>(this T[] values) => new[] { "p" };
+    public static string[] LibExtParts(this OtherNs.LibBox box) => new[] { "n" };
 }
 public sealed class Box
 {
@@ -1670,6 +1693,39 @@ public class Demo
         foreach (var part in box.Collide(tags)) total += part.Length;
         return s.Length + total + 9;
     }
+    public static int ConditionalCopyReceiverCall(ref string? s, Box a, Box b, bool flag)
+    {
+        if (s == null) return 0;
+        var i = 0;
+        while (i < 1)
+        {
+            var copy = flag ? a : b;
+            copy.Ping();
+            i++;
+        }
+        return s.Length + 10;
+    }
+    public static int OverMixedReturnOverloads(ref string? s, MixedBox mixed)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in mixed.MixedParts()) total += part.Length;
+        return s.Length + total + 11;
+    }
+    public static int OverMixedChainedReceiverOverloads(ref string? s, MixedBox mixed)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in mixed.MixedSelf().InstanceParts()) total += part.Length;
+        return s.Length + total + 12;
+    }
+    public static int OverConstrainedExtensionConflict(ref string? s, DisposableBox dbox)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in dbox.ConstrainedParts()) total += part.Length;
+        return s.Length + total + 13;
+    }
     public static int OverParameterArray(ref string? s, string[] parts)
     {
         if (s == null) return 0;
@@ -1677,7 +1733,15 @@ public class Demo
         foreach (var part in parts) total += part.Length;
         return s.Length + total + 1;
     }
-    public static int OverResolvableMemberCalls(ref string? s, Box box, string word, int[] values, string[] parts)
+    public static int OverResolvableMemberCalls(
+        ref string? s,
+        Box box,
+        string word,
+        int[] values,
+        string[] parts,
+        GenericBox<int> genericIntBox,
+        OtherNs.LibBox libBox
+    )
     {
         if (s == null) return 0;
         var total = 0;
@@ -1687,11 +1751,19 @@ public class Demo
         foreach (var part in box.Self().InstanceParts(1)) total += part.Length;
         foreach (var part in word.WordParts()) total += part.Length;
         foreach (var entry in values.Entries()) total += entry;
+        foreach (var part in values.GenericArrayParts()) total += part.Length;
+        foreach (var part in libBox.LibParts()) total += part.Length;
+        foreach (var part in libBox.LibExtParts()) total += part.Length;
         foreach (var part in OtherNs.StaticHolder.Seed) total += part.Length;
         foreach (var part in OtherNs.StaticHolder.MakeSeed(parts)) total += part.Length;
         foreach (var c in string.Empty) { if (c == 'a') total += 1; }
         foreach (var c in string.Intern("x"))
         {
+            var copyBox = box;
+            copyBox.Ping();
+            Box? annotatedCopy = box;
+            annotatedCopy.Ping();
+            genericIntBox.Items().Clear();
             System.String.Intern("x");
             box.Self().Ping();
             OtherNs.StaticHolder.Instance.Ping();
@@ -1713,6 +1785,7 @@ public class Demo
     {
         OtherNs.StaticHolder.Seed = new[] { "q" };
         OtherNs.StaticHolder.Instance = new Box();
+        var genericIntBox = new GenericBox<int> { StoredList = new System.Collections.Generic.List<int>() };
         string? text = "abc";
         return AfterCallCollection(ref text) + "," + InsideCallCollection(ref text) + "," +
             OverUnqualifiedStaticCall(ref text) + "," +
@@ -1721,9 +1794,30 @@ public class Demo
             OverConstructedSourceGenericReturn(ref text, new GenericBox<string>()) + "," +
             OverSynthesizedLinqImportConflict(ref text, new SelectBox()) + "," +
             OverSynthesizedGenericCollisionCall(ref text, new Box(), new System.Collections.Generic.List<Unrelated>()) + "," +
+            ConditionalCopyReceiverCall(ref text, new Box(), new Box(), true) + "," +
+            OverMixedReturnOverloads(ref text, new MixedBox()) + "," +
+            OverMixedChainedReceiverOverloads(ref text, new MixedBox()) + "," +
+            OverConstrainedExtensionConflict(ref text, new DisposableBox()) + "," +
             OverParameterArray(ref text, new[] { "a", "b" }) + "," +
-            OverResolvableMemberCalls(ref text, new Box(), "hi", new[] { 1 }, new[] { "q" }) + "," +
+            OverResolvableMemberCalls(
+                ref text,
+                new Box(),
+                "hi",
+                new[] { 1 },
+                new[] { "q" },
+                genericIntBox,
+                new OtherNs.LibBox()
+            ) + "," +
             OverPureStringConcatenation(ref text);
+    }
+}`, library: `
+namespace OtherNs
+{
+    public class LibBox
+    {
+        public string[] LibParts() => new[] { "m" };
+        protected void LibParts(int n) { }
+        protected void LibExtParts() { }
     }
 }`)
         Assert.Contains("return s!!.Length + total\n", printed.Replace("\r\n", "\n"))
@@ -1734,10 +1828,14 @@ public class Demo
         Assert.Contains("return s!!.Length + total + 7", printed)
         Assert.Contains("return s!!.Length + total + 8", printed)
         Assert.Contains("return s!!.Length + total + 9", printed)
+        Assert.Contains("return s!!.Length + 10", printed)
+        Assert.Contains("return s!!.Length + total + 11", printed)
+        Assert.Contains("return s!!.Length + total + 12", printed)
+        Assert.Contains("return s!!.Length + total + 13", printed)
         Assert.Contains("return s.Length + total + 1", printed)
         Assert.Contains("return s.Length + total + 2", printed)
         Assert.Contains("return s.Length + total + 4", printed)
-        Assert.Equal(8, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(12, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null
