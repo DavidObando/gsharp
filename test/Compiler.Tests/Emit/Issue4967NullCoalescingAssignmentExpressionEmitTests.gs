@@ -1262,6 +1262,16 @@ func main() {
     dCall["b"] = nil
     fillViaReassignedCallable(dCall, () -> "noop")
     Console.WriteLine("callA=${dCall["a"] ?? "nil"} callB=${dCall["b"] ?? "nil"}")
+
+    let dTuple = Dictionary[ValueTuple[int32, int32], string?]()
+    dTuple[ValueTuple[int32, int32](0, 0)] = nil
+    dTuple[ValueTuple[int32, int32](1, 0)] = nil
+    var tupleKey = ValueTuple[int32, int32](0, 0)
+    dTuple[tupleKey] ??= {
+        tupleKey.Item1 = 1
+        "tupleRhs"
+    }
+    Console.WriteLine("t00=${dTuple[ValueTuple[int32, int32](0, 0)] ?? "nil"} t10=${dTuple[ValueTuple[int32, int32](1, 0)] ?? "nil"}")
 }
 
 main()`
@@ -1275,7 +1285,8 @@ main()`
                 "sTag=2 sF=struct${Environment.NewLine}" +
                 "inA=inAlias inB=nil${Environment.NewLine}" +
                 "globA=global globB=nil${Environment.NewLine}" +
-                "callA=callable callB=nil${Environment.NewLine}",
+                "callA=callable callB=nil${Environment.NewLine}" +
+                "t00=tupleRhs t10=nil${Environment.NewLine}",
             CompileAndRun(source)
         )
     }

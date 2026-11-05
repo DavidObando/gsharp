@@ -485,7 +485,7 @@ internal partial class StatementBinder {
     }
 
     /// Issue #5000: returns a predicate that decides whether [`expression`](paramref)
-    /// can reassign a variable.
+    /// can reassign a variable or mutate its value-type contents.
     internal func CreateExpressionVariableMutationChecker(anchor SyntaxNode, expression BoundExpression)(
         VariableSymbol
     ) -> bool {
@@ -493,7 +493,12 @@ internal partial class StatementBinder {
         var dropAllMemberPaths = false
         var filterWrites List[(TryBlock SyntaxNode?, Names HashSet[string])]? = nil
         return func (variable VariableSymbol) bool {
-            if variable.IsReadOnly && !IsByReferenceRoot(variable) && !IsExternalStorageAlias(variable) {
+            let strippedType = StripNullability(variable.Type) ?? variable.Type
+            let isValueType = !Binder.IsReferenceTypeForConstraint(strippedType)
+            if variable.IsReadOnly &&
+                !isValueType &&
+                !IsByReferenceRoot(variable) &&
+                !IsExternalStorageAlias(variable) {
                 return false
             }
             var effects = collector
@@ -512,8 +517,8 @@ internal partial class StatementBinder {
                     (FilterWritesVariable(filterWrites, variable) || MayBeMutatedByUnknownCallable(path))
             ) ||
                 (
-                (IsExternalStorageAlias(variable) || IsByReferenceRoot(variable)) &&
-                    (dropAllMemberPaths || effects.MayMutateGlobalRoots)
+                (isValueType || IsExternalStorageAlias(variable) || IsByReferenceRoot(variable)) &&
+                    (dropAllMemberPaths || effects.MayMutateReferenceStorage || effects.MayMutateGlobalRoots)
             ) ||
                 StatementKillsPath(effects, path, dropAllMemberPaths, effects.MayMutateReferenceStorage)
         }
