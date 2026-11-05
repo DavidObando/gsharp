@@ -97,19 +97,36 @@ internal partial class ExpressionBinder {
     /// @returns The lowered statement.
     internal func BindNullCoalescingAssignmentStatement(
         statement ExpressionStatementSyntax,
-        syntax NullCoalescingAssignmentExpressionSyntax
+        syntax NullCoalescingAssignmentExpressionSyntax,
+        createVariableMutationChecker((BoundExpression) -> (VariableSymbol) -> bool)? = nil
     ) BoundStatement {
         let (boundRead, boundRhs, _, _, isNonNullableReferenceTarget) = BindNullCoalescingAssignmentOperands(syntax)
         if boundRead == nil || boundRhs == nil {
             return BoundExpressionStatement(statement, BoundErrorExpression(nil))
         }
+        let mayReassignVariable = if createVariableMutationChecker == nil {
+            default(((VariableSymbol) -> bool)?)
+        } else {
+            createVariableMutationChecker(boundRhs)
+        }
         let receiver = GetNullCoalescingReceiver(boundRead)
         // Evaluate a suspending value before entering the write node: generic
         // operand spilling would otherwise spill a struct receiver by value.
-        let suspendingStorageWrite = receiver != nil &&
-            !ReceiverTypeIsReference(receiver.Type) &&
-            AsyncBoundTreeQueries.HasAwait(boundRhs)
-        let rhsLocal LocalVariableSymbol? = if suspendingStorageWrite && boundRhs.Type != TypeSymbol.Never {
+        // Issue #5000: also spill a right-hand side that can reassign a
+        // value-type field receiver variable before the write node.
+        let mutatingValueFieldReceiver = boundRead is BoundFieldAccessExpression{
+            InterfaceType: nil,
+            Receiver: BoundVariableExpression fieldReceiverVar
+        } &&
+            !ReceiverTypeIsReference(fieldReceiverVar.Type) &&
+            fieldReceiverVar.Variable is not LocalVariableSymbol{RefKind: not RefKind.None} &&
+            mayReassignVariable != nil &&
+            mayReassignVariable(fieldReceiverVar.Variable)
+        let spillRhsBeforeWrite = (
+            receiver != nil && !ReceiverTypeIsReference(receiver.Type) && AsyncBoundTreeQueries.HasAwait(boundRhs)
+        ) ||
+            mutatingValueFieldReceiver
+        let rhsLocal LocalVariableSymbol? = if spillRhsBeforeWrite && boundRhs.Type != TypeSymbol.Never {
             LocalVariableSymbol(
                 "<ncaRhs${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
                 isReadOnly: true,
@@ -136,7 +153,9 @@ internal partial class ExpressionBinder {
             },
             preStatements,
             snapshotReceivers: false,
-            rhsHasAwait: rhsHasAwait
+            rhsHasAwait: rhsHasAwait,
+            mayReassignVariable: mayReassignVariable,
+            createVariableMutationChecker: createVariableMutationChecker
         )
         if read == nil || write == nil {
             return BoundExpressionStatement(statement, BoundErrorExpression(nil))
@@ -159,7 +178,7 @@ internal partial class ExpressionBinder {
             expression: "BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, conditionRead.Type, TypeSymbol.Null)"
         )
         let condition BoundExpression = BoundBinaryExpression(nil, conditionRead, eqOp, nilLiteral)
-        let thenStmt BoundStatement = if suspendingStorageWrite && boundRhs.Type == TypeSymbol.Never {
+        let thenStmt BoundStatement = if spillRhsBeforeWrite && boundRhs.Type == TypeSymbol.Never {
             BoundExpressionStatement(statement, boundRhs)
         } else if rhsLocal == nil {
             BoundExpressionStatement(statement, write)
@@ -343,7 +362,9 @@ internal partial class ExpressionBinder {
         boundRhs BoundExpression,
         preStatements ImmutableArray[BoundStatement].Builder,
         snapshotReceivers bool,
-        rhsHasAwait bool = false
+        rhsHasAwait bool = false,
+        mayReassignVariable((VariableSymbol) -> bool)? = nil,
+        createVariableMutationChecker((BoundExpression) -> (VariableSymbol) -> bool)? = nil
     )(Read BoundExpression?, Write BoundExpression?) {
         let memberReceiver = GetNullCoalescingReceiver(boundRead)
         if memberReceiver != nil && !ReceiverTypeIsReference(memberReceiver.Type) {
@@ -364,8 +385,16 @@ internal partial class ExpressionBinder {
                 return (nil, nil)
             }
         }
+        let SnapshotsExpression = func (expression BoundExpression?) bool {
+            if snapshotReceivers {
+                return true
+            }
+            return expression is BoundVariableExpression variable &&
+                mayReassignVariable != nil &&
+                mayReassignVariable(variable.Variable)
+        }
         let SnapshotsReference = func (receiver BoundExpression?) bool {
-            return snapshotReceivers && receiver != nil && ReceiverTypeIsReference(receiver.Type)
+            return receiver != nil && ReceiverTypeIsReference(receiver.Type) && SnapshotsExpression(receiver)
         }
         switch boundRead {
             case varExpr is BoundVariableExpression {
@@ -648,11 +677,38 @@ internal partial class ExpressionBinder {
                         }
                         hasNonReconstructableClrArg |= RequiresSuspensionFreeAddressCapture(arg)
                     }
+                    var argumentMutationCheckers[]? ((VariableSymbol) -> bool)? = nil
+                    let ArgumentMayReassign = func (startIndex int32, variable VariableSymbol) bool {
+                        if createVariableMutationChecker == nil {
+                            return false
+                        }
+                        for var k = startIndex; k < clrIdx.Arguments.Length; k++ {
+                            var checkers = argumentMutationCheckers
+                            if checkers == nil {
+                                checkers = [clrIdx.Arguments.Length]((VariableSymbol) -> bool)?
+                                argumentMutationCheckers = checkers
+                            }
+                            var checker = checkers[k]
+                            if checker == nil {
+                                checker = createVariableMutationChecker(clrIdx.Arguments[k])
+                                checkers[k] = checker
+                            }
+                            if checker(variable) {
+                                return true
+                            }
+                        }
+                        return false
+                    }
                     let target = CaptureStorageReceiver(
                         captureAnchor,
                         clrIdx.Target,
                         preStatements,
-                        forceCapture: SnapshotsReference(clrIdx.Target)
+                        forceCapture: SnapshotsReference(clrIdx.Target) ||
+                            (
+                            clrIdx.Target is BoundVariableExpression targetVar &&
+                                ReceiverTypeIsReference(clrIdx.Target.Type) &&
+                                ArgumentMayReassign(0, targetVar.Variable)
+                        )
                     )
                     // Evaluate storage checks before arguments, without keeping
                     // the managed pointer alive across a suspending argument.
@@ -662,12 +718,22 @@ internal partial class ExpressionBinder {
                         )
                     }
                     let argsBuilder = ImmutableArray.CreateBuilder[BoundExpression](clrIdx.Arguments.Length)
-                    for arg in clrIdx.Arguments {
+                    for var i = 0; i < clrIdx.Arguments.Length; i++ {
+                        let arg = clrIdx.Arguments[i]
                         argsBuilder.Add(
                             if arg is BoundAddressOfExpression or BoundConditionalAddressExpression {
                                 CaptureUserIndexerArgument(arg, preStatements)
                             } else {
-                                CaptureReceiver(captureAnchor, arg, preStatements, forceCapture: snapshotReceivers)
+                                CaptureReceiver(
+                                    captureAnchor,
+                                    arg,
+                                    preStatements,
+                                    forceCapture: SnapshotsExpression(arg) ||
+                                        (
+                                        arg is BoundVariableExpression argVar &&
+                                            ArgumentMayReassign(i + 1, argVar.Variable)
+                                    )
+                                )
                             }
                         )
                     }

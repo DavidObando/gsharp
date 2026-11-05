@@ -1651,7 +1651,12 @@ internal class MemberLookup {
                 }
                 var match = true
                 for var i = 0; i < existingParams.Length; i++ {
-                    if !ClrTypeUtilities.AreSame(existingParams[i].ParameterType, candidateParams[i].ParameterType) {
+                    if !ClrTypeUtilities.IsSameAsCore(
+                        existingParams[i].ParameterType,
+                        candidateParams[i].ParameterType,
+                        m,
+                        candidate
+                    ) {
                         match = false
                         break
                     }
@@ -8072,7 +8077,12 @@ internal class MemberLookup {
                 }
                 var match = true
                 for var i = 0; i < existingParams.Length; i++ {
-                    if !ClrTypeUtilities.AreSame(existingParams[i].ParameterType, candidateParams[i].ParameterType) {
+                    if !ClrTypeUtilities.IsSameAsCore(
+                        existingParams[i].ParameterType,
+                        candidateParams[i].ParameterType,
+                        m,
+                        candidate
+                    ) {
                         match = false
                         break
                     }
