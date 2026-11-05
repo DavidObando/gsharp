@@ -187,6 +187,23 @@ func TakeNullableDelegate(f (() -> string)?) string -> if f != nil { f() } else 
             yield Row("tuple-element", `func Run() {
     let t (() -> string, int32) = (() -> Maybe(), 1)
 }`, "Maybe()")
+            yield Row("nested-tuple-element", `func Run() {
+    let t ((() -> string, int32), int32) = ((() -> Maybe(), 1), 2)
+}`, "Maybe()")
+            yield Row("outer-lambda-tuple-element-capturing-param", `func Run() {
+    let f (string?) -> (() -> string, int32) = (x string?) -> (() -> x, 0)
+}`, "x")
+            yield Row("field-init-int-lambda", `class C {
+    var f int32 = () -> 1
+}`, "() -> 1")
+            yield Row("nullable-delegate-arity-mismatch-fallback", `func Run() {
+    let f ((int32, int32) -> string)? = (x int32) -> "ok"
+}`, `(x int32) -> "ok"`)
+            yield Row(
+                "imported-annotated-arg-delegate-nonnull-return",
+                `func Run() string -> StrictSink5686.TakeArg((x) -> Maybe())`,
+                "Maybe()"
+            )
             yield Row("object-initializer-member", `func Run() Holder -> Holder{Callback: () -> Maybe()}`, "Maybe()")
             yield Row("conditional-arm", `func Run(c bool) () -> string -> c ? () -> Maybe() : () -> "ok"`, "Maybe()")
             yield Row(
@@ -244,6 +261,22 @@ func TakeNullableDelegate(f (() -> string)?) string -> if f != nil { f() } else 
                 "ok-linq-thenby-inferred-key",
                 `func Run(xs []Box) []IGrouping[int32, Box] -> xs.GroupBy((x Box) -> x.Value).OrderByDescending((g IGrouping[int32, Box]) -> g.Count()).ThenBy((g IGrouping[int32, Box]) -> g.Min((x Box) -> x.ToString()), StringComparer.Ordinal).ToArray()`
             )
+            yield AcceptedRow("ok-field-init-object-lambda", `class C {
+    var f object = () -> 1
+    var d Delegate = () -> 1
+}`)
+            yield AcceptedRow("ok-outer-lambda-tuple-capturing-param", `func Run() {
+    let f (int32) -> (() -> int64, int32) = (x int32) -> (() -> x, 0)
+    let g (int32) -> (() -> int64, int32) = (x int32) -> {
+        return (() -> x, 0)
+    }
+}`)
+            yield AcceptedRow("ok-imported-annotated-nullable-delegate", `func Run() string? {
+    let a = StrictSink5686.TakeNullable(() -> Maybe())
+    let b = StrictSink5686.TakeNullableArg((x) -> Maybe())
+    let c = StrictSink5686.TakeNullableExpression(() -> Box().MaybeName)
+    return a ?? b ?? c
+}`)
         }
 
         private func Row(
@@ -281,7 +314,7 @@ func TakeNullableDelegate(f (() -> string)?) string -> if f != nil { f() } else 
         private func EmitLibrary() string {
             let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue5686Binding")
             Directory.CreateDirectory(outputDir)
-            let libraryPath = Path.Combine(outputDir, "Lib5686.dll")
+            let libraryPath = Path.Combine(outputDir, "Lib5686_v2.dll")
             const csharpSource = `#nullable enable
 using System;
 using System.Linq.Expressions;
@@ -293,6 +326,10 @@ namespace Lib5686
     public static class StrictSink5686
     {
         public static string Take(Func<string> f) => f();
+        public static string TakeArg(Func<int, string> f) => f(1);
+        public static string? TakeNullable(Func<string?> f) => f();
+        public static string? TakeNullableArg(Func<int, string?> f) => f(1);
+        public static string? TakeNullableExpression(Expression<Func<string?>> f) => f.Compile()();
     }
 
     public class StrictGenericBox5686<T>

@@ -3242,6 +3242,15 @@ internal partial class ExpressionBinder {
                     .OperatorToken
                     .Kind == SyntaxKind.QuestionQuestionToken: IsNestedLambdaExpression(binary.Left) ||
                     IsNestedLambdaExpression(binary.Right)
+                case tupleLiteral is TupleLiteralExpressionSyntax: tupleLiteral.Elements.Any(
+                    (element ExpressionSyntax) -> IsNestedLambdaExpression(
+                        if element is NamedTupleElementSyntax named {
+                            named.Expression
+                        } else {
+                            element
+                        }
+                    )
+                )
                 default: false
             }
         }

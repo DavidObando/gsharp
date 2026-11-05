@@ -1175,9 +1175,7 @@ internal class ConversionClassifier {
                 }
                 if !object.ReferenceEquals(identitySourceTuple.WithoutNames(), identityTargetTuple.WithoutNames()) &&
                     identitySourceTuple.Arity == identityTargetTuple.Arity &&
-                    identityTupleLiteral
-                    .Elements
-                    .Any((e BoundExpression) -> e is BoundFunctionLiteralExpression) {
+                    ContainsTupleFunctionLiteral(identityTupleLiteral) {
                     return BindTupleConversion(
                         diagnosticLocation,
                         expression,
@@ -3831,6 +3829,18 @@ internal class ConversionClassifier {
             }
         }
         return BindConversion(diagnosticLocation, call, targetType, allowExplicit, trackNarrowing: false)
+    }
+
+    private func ContainsTupleFunctionLiteral(tuple BoundTupleLiteralExpression) bool {
+        for element in tuple.Elements {
+            if element is BoundFunctionLiteralExpression {
+                return true
+            }
+            if element is BoundTupleLiteralExpression nestedTuple && ContainsTupleFunctionLiteral(nestedTuple) {
+                return true
+            }
+        }
+        return false
     }
 
     /// Issue #1256: lowers a non-identity implicit tuple-to-tuple conversion

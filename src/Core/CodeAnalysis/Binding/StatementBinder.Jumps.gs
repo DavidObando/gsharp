@@ -1300,6 +1300,7 @@ internal partial class StatementBinder {
                     returnExpression is IfLetExpressionSyntax ||
                     returnExpression is ConditionalExpressionSyntax ||
                     returnExpression is BlockExpressionSyntax ||
+                    returnExpression is TupleLiteralExpressionSyntax ||
                     IsNullCoalescingExpression(returnExpression)
             ) &&
                 function != nil &&

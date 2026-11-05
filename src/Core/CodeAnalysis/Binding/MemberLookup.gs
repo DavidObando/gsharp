@@ -4190,6 +4190,21 @@ internal class MemberLookup {
                 case platform is PlatformTypeSymbol {
                     return TryGetDelegateFunctionTypeFromSymbol(platform.UnderlyingType, out functionType)
                 }
+                case annotated is NullabilityAnnotatedTypeSymbol {
+                    let annotatedClr = annotated.ClrType
+                    if annotatedClr != nil && annotatedClr.IsGenericType && !annotatedClr.IsGenericTypeDefinition {
+                        let annotatedArguments = annotatedClr
+                            .GetGenericArguments()
+                            .Select((_ Type, index int32) -> annotated.GetTypeArgumentSymbol(index))
+                            .ToImmutableArray()
+                        let openDef = (annotated.BaseType as ImportedTypeSymbol)?.OpenDefinition ??
+                            annotatedClr.GetGenericTypeDefinition()
+                        if TryGetDelegateFunctionTypeFromOpenDefinition(openDef, annotatedArguments, out functionType) {
+                            return true
+                        }
+                    }
+                    return TryGetDelegateFunctionTypeFromSymbol(annotated.BaseType, out functionType)
+                }
                 case imported is ImportedTypeSymbol when imported.OpenDefinition != nil &&
                     !imported
                     .TypeArguments
@@ -4376,7 +4391,36 @@ internal class MemberLookup {
             if type == nil {
                 return false
             }
-            if type.StripToBareShape() is ImportedTypeSymbol imported &&
+            var current = type
+            while true {
+                if current is NullableTypeSymbol nullable {
+                    current = nullable.UnderlyingType
+                    continue
+                }
+                if current is PlatformTypeSymbol platform {
+                    current = platform.UnderlyingType
+                    continue
+                }
+                break
+            }
+            if current is NullabilityAnnotatedTypeSymbol annotated {
+                let annotatedClr = annotated.ClrType
+                if annotatedClr != nil && annotatedClr.IsGenericType && !annotatedClr.IsGenericTypeDefinition {
+                    let openDef = (annotated.BaseType as ImportedTypeSymbol)?.OpenDefinition ??
+                        annotatedClr.GetGenericTypeDefinition()
+                    if string.Equals(
+                        openDef.FullName,
+                        "System.Linq.Expressions.Expression`1",
+                        StringComparison.Ordinal
+                    ) &&
+                        annotatedClr
+                        .GetGenericArguments().Length == 1 {
+                        delegateType = annotated.GetTypeArgumentSymbol(0)
+                        return true
+                    }
+                }
+            }
+            if current.StripToBareShape() is ImportedTypeSymbol imported &&
                 imported.OpenDefinition != nil &&
                 string.Equals(
                 imported.OpenDefinition.FullName,
@@ -4389,7 +4433,7 @@ internal class MemberLookup {
                 delegateType = imported.TypeArguments[0]
                 return true
             }
-            if type.ClrType == nil || !TryGetExpressionTreeDelegateType(type.ClrType, out var delegateClrType) {
+            if current.ClrType == nil || !TryGetExpressionTreeDelegateType(current.ClrType, out var delegateClrType) {
                 return false
             }
             delegateType = TypeSymbol.FromClrTypeWithoutNullability(

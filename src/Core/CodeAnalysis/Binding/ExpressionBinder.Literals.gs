@@ -3736,7 +3736,10 @@ internal partial class ExpressionBinder {
         return BoundBlockExpression(syntax, statements.ToImmutable(), resultExpr)
     }
 
-    private func BindTupleLiteralExpression(syntax TupleLiteralExpressionSyntax) BoundExpression {
+    private func BindTupleLiteralExpression(
+        syntax TupleLiteralExpressionSyntax,
+        targetTuple TupleTypeSymbol? = nil
+    ) BoundExpression {
         // Phase 4.5: bind each element expression, derive the tuple type from
         // their static types, and produce a BoundTupleLiteralExpression.
         // ADR-0172: a `name: expr` element contributes the label to the
@@ -3746,6 +3749,7 @@ internal partial class ExpressionBinder {
         let elementNames = ImmutableArray.CreateBuilder[string?](syntax.Elements.Count)
         var anyName = false
         let nameTokens = [syntax.Elements.Count]SyntaxToken?
+        let hasTargetElements = targetTuple != nil && targetTuple.ElementTypes.Length == syntax.Elements.Count
         for var i = 0; i < syntax.Elements.Count; i++ {
             var e = syntax.Elements[i]
             if e is NamedTupleElementSyntax named {
@@ -3756,7 +3760,11 @@ internal partial class ExpressionBinder {
             } else {
                 elementNames.Add(nil)
             }
-            var be = BindExpression(e)
+            var be = if hasTargetElements && IsNestedLambdaExpression(e) {
+                BindExpression(e, targetTuple!!.ElementTypes[i])
+            } else {
+                BindExpression(e)
+            }
             if be.Type == TypeSymbol.Error {
                 return BoundErrorExpression(nil)
             }

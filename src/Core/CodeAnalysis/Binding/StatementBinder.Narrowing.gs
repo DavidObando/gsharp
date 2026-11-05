@@ -5843,8 +5843,7 @@ internal partial class StatementBinder {
                 // `let f Func[int32, int32] = (x) -> x + 1`), not just the
                 // canonical `(int32) -> int32` function-type clause.
                 variableType = type
-                let lambda = bindLambdaWithTargetType!!(targetTypedLambda, targetFnType!!)
-                convertedInitializer = conversions.BindConversion(syntax.Initializer!!.Location, lambda, variableType)
+                convertedInitializer = bindExpressionWithTargetType(syntax.Initializer!!, variableType)
             } else if type is PointerTypeSymbol && syntax.Initializer is StackAllocExpressionSyntax {
                 // ADR-0124 / issue #1024: `var p *T = stackalloc [n]T` inside
                 // an unsafe context yields the raw `T*` pointer. The target

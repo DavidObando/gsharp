@@ -767,9 +767,10 @@ internal partial class ExpressionBinder {
                 let parameterType = ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex])
                 // The delegate slot's bare shape: a function literal is never
                 // nil, so the slot's own top-level nullability does not apply.
-                let delegateType = ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape()
+                let parameterTypeSymbol = ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
+                let delegateType = parameterTypeSymbol.StripToBareShape()
                 if parameterType.ContainsGenericParameters || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
-                    delegateType,
+                    parameterTypeSymbol,
                     out var fn
                 ) ||
                     fn == nil {

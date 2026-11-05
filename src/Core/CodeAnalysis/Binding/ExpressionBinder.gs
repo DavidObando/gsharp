@@ -148,6 +148,9 @@ internal partial class ExpressionBinder {
     private var expressionScopes Dictionary[BoundExpression, BoundScope] = Dictionary[BoundExpression, BoundScope](
         ReferenceEqualityComparer.Instance
     )
+    private let lambdaSyntaxScopes Dictionary[SyntaxNode, BoundScope] = Dictionary[SyntaxNode, BoundScope](
+        ReferenceEqualityComparer.Instance
+    )
     private var expressionExitSnapshots Dictionary[
         BoundExpression,
         List[
@@ -1422,8 +1425,36 @@ internal partial class ExpressionBinder {
         if syntax is StackAllocExpressionSyntax stackAlloc && targetType is PointerTypeSymbol {
             return BindStackAllocExpression(stackAlloc, targetType)
         }
-        if TryBindLambdaExpressionWithTargetType(syntax, targetType, out var targetTypedLambda) {
-            return ConvertTargetTypedValue(syntax, targetTypedLambda!!, targetType)
+        if syntax is LambdaExpressionSyntax {
+            if lambdaSyntaxScopes.TryGetValue(syntax, out var savedLambdaScope) &&
+                IsStrictDescendantScope(savedLambdaScope, $scope) {
+                let outerScope = $scope
+                $scope = savedLambdaScope
+                try {
+                    if TryBindLambdaExpressionWithTargetType(syntax, targetType, out var reboundTargetTypedLambda) {
+                        return ConvertTargetTypedValue(syntax, reboundTargetTypedLambda!!, targetType)
+                    }
+                    return ConvertTargetTypedValue(syntax, BindExpression(syntax), targetType)
+                } finally {
+                    $scope = outerScope
+                }
+            }
+            lambdaSyntaxScopes[syntax] = $scope
+            if TryBindLambdaExpressionWithTargetType(syntax, targetType, out var targetTypedLambda) {
+                return ConvertTargetTypedValue(syntax, targetTypedLambda!!, targetType)
+            }
+            return ConvertTargetTypedValue(syntax, BindExpression(syntax), targetType)
+        }
+        if syntax is TupleLiteralExpressionSyntax tupleLiteral &&
+            targetType.StripToBareShape() is TupleTypeSymbol targetTuple &&
+            targetTuple
+            .ElementTypes
+            .Length == tupleLiteral
+            .Elements
+            .Count &&
+            IsNestedLambdaExpression(tupleLiteral) {
+            let boundTuple = BindTupleLiteralExpression(tupleLiteral, targetTuple)
+            return ConvertTargetTypedValue(syntax, boundTuple, targetType)
         }
         // Issue #3355: prefix statements bind normally; the expected type
         // flows into the trailing expression.
@@ -1486,6 +1517,20 @@ internal partial class ExpressionBinder {
         return conversions.BindConversion(syntax.Location, value, targetType)
     }
 
+    private func IsStrictDescendantScope(candidate BoundScope?, ancestor BoundScope?) bool {
+        if candidate == nil || ancestor == nil || object.ReferenceEquals(candidate, ancestor) {
+            return false
+        }
+        var current = candidate.Parent
+        while current != nil {
+            if object.ReferenceEquals(current, ancestor) {
+                return true
+            }
+            current = current.Parent
+        }
+        return false
+    }
+
     private func TryBindLambdaExpressionWithTargetType(
         syntax ExpressionSyntax,
         targetType TypeSymbol?,
@@ -1508,7 +1553,8 @@ internal partial class ExpressionBinder {
             Invariant.Required(lambda, "lambda target typing requires lambda syntax", expression: "lambda"),
             targetFunctionType
         )
-        if targetType is NullableTypeSymbol && candidate is BoundErrorExpression {
+        if targetType is NullableTypeSymbol &&
+            (candidate is BoundErrorExpression || lambda.Parameters.Count != targetFunctionType.Arity) {
             Diagnostics.TruncateTo(mark)
             return false
         }
@@ -1522,6 +1568,9 @@ internal partial class ExpressionBinder {
             PushExpressionNarrowingFrame(nil)
         }
         try {
+            if syntax is LambdaExpressionSyntax {
+                lambdaSyntaxScopes[syntax] = $scope
+            }
             expressionBindStep++
             let entryStep = expressionBindStep
             let entryAliases = GetCurrentExpressionCallableAliases()

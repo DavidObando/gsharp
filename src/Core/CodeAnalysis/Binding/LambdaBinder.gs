@@ -1467,6 +1467,7 @@ internal class LambdaBinder {
         // enclosing function's labels and loop stack exactly like the
         // function-literal path above.
         let savedFrame = EnterNestedFrame(syntax.Body)
+        let lambdaScope = Scope
         var boundBody BoundExpression
         try {
             var bodyTargetType TypeSymbol? = contextualReturnType
@@ -1500,7 +1501,8 @@ internal class LambdaBinder {
                 default(FunctionTypeSymbol?)
             } else {
                 targetFunctionType
-            },
+            }
+            ,
             isAsync
         )
         if defersReturnConversion {
@@ -1515,13 +1517,21 @@ internal class LambdaBinder {
             )
             let targetBody = deferredReturns.WithTargetOperands(boundBody)
             let trialMark = Diagnostics.Count
-            let converted = ApplyInferredReturnTypeConversion(
-                targetBody,
-                syntax,
-                placeholderReturnType,
-                true,
-                deferredReturns
-            )
+            var converted BoundExpression
+            Scope = lambdaScope
+            setCurrentFunction(placeholder)
+            try {
+                converted = ApplyInferredReturnTypeConversion(
+                    targetBody,
+                    syntax,
+                    placeholderReturnType,
+                    true,
+                    deferredReturns
+                )
+            } finally {
+                Scope = outerScope
+                setCurrentFunction(outerFunction)
+            }
             let targetDiagnostics = deferredReturns.OperandDiagnostics().AddRange(Diagnostics.VisibleSince(trialMark))
             Diagnostics.TruncateTo(trialMark)
             // The body fits the target only when the target-typed inference adopts the target return type, which
@@ -1590,10 +1600,6 @@ internal class LambdaBinder {
         synthetic.IsAsync = isAsync
         synthetic.AsyncReturnsValueTask = asyncReturnsValueTask
         synthetic.LexicalEnclosingType = placeholder.LexicalEnclosingType
-        // ADR-0076 / issue #716: rewrite the bound body so every return
-        // statement's expression is converted to the inferred return type.
-        // We deferred the conversion in BindReturnStatement; apply it now.
-        boundBody = ApplyInferredReturnTypeConversion(boundBody, syntax, returnType, defersReturnConversion)
         // Synthesize the lambda's BoundBlockStatement body: for void bodies, an
         // ExpressionStatement; for value bodies, a ReturnStatement.
         let bodyStatements = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -1606,22 +1612,33 @@ internal class LambdaBinder {
         // `bodyStatements` is the single list every body-statement,
         // including this prelude, is collected into below.
         bodyStatements.AddRange(destructuringPrelude)
-        if (returnType == TypeSymbol.Void || returnType == TypeSymbol.Error) && boundBody is BoundBlockExpression {
-            let materializedBodyType = TypeSymbol.MaterializeNeverFunctionReturns(boundBody.Type)
-            if !object.ReferenceEquals(materializedBodyType, boundBody.Type) {
-                boundBody = conversions.BindConversion(syntax.Body.Location, boundBody, materializedBodyType)
+        Scope = lambdaScope
+        setCurrentFunction(placeholder)
+        try {
+            // ADR-0076 / issue #716: rewrite the bound body so every return
+            // statement's expression is converted to the inferred return type.
+            // We deferred the conversion in BindReturnStatement; apply it now.
+            boundBody = ApplyInferredReturnTypeConversion(boundBody, syntax, returnType, defersReturnConversion)
+            if (returnType == TypeSymbol.Void || returnType == TypeSymbol.Error) && boundBody is BoundBlockExpression {
+                let materializedBodyType = TypeSymbol.MaterializeNeverFunctionReturns(boundBody.Type)
+                if !object.ReferenceEquals(materializedBodyType, boundBody.Type) {
+                    boundBody = conversions.BindConversion(syntax.Body.Location, boundBody, materializedBodyType)
+                }
             }
-        }
-        if boundBody is BoundBlockExpression blockExpr && syntax.Body is BlockExpressionSyntax {
-            // Block body — emit the prefix statements, then either a return-
-            // statement on the trailing expression (when the lambda returns a
-            // value) or an expression-statement + void return (when it doesn't).
-            for stmt in blockExpr.Statements {
-                bodyStatements.Add(stmt)
+            if boundBody is BoundBlockExpression blockExpr && syntax.Body is BlockExpressionSyntax {
+                // Block body — emit the prefix statements, then either a return-
+                // statement on the trailing expression (when the lambda returns a
+                // value) or an expression-statement + void return (when it doesn't).
+                for stmt in blockExpr.Statements {
+                    bodyStatements.Add(stmt)
+                }
+                EmitTrailingExpression(bodyStatements, syntax, blockExpr.Expression, returnType)
+            } else {
+                EmitTrailingExpression(bodyStatements, syntax, boundBody, returnType)
             }
-            EmitTrailingExpression(bodyStatements, syntax, blockExpr.Expression, returnType)
-        } else {
-            EmitTrailingExpression(bodyStatements, syntax, boundBody, returnType)
+        } finally {
+            Scope = outerScope
+            setCurrentFunction(outerFunction)
         }
         let bodyBlock = BoundBlockStatement(syntax.Body, bodyStatements.ToImmutable())
         CheckAllPathsReturn(bodyBlock, returnType, syntax.Body.Location)

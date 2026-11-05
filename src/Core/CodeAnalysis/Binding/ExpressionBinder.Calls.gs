@@ -3392,8 +3392,9 @@ internal partial class ExpressionBinder {
                     return false
                 }
                 // The delegate slot's bare shape: a function literal is never nil.
-                let nominalCandidate = ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape()
-                if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(nominalCandidate, out var candidate) ||
+                let parameterTypeSymbol = ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
+                let nominalCandidate = parameterTypeSymbol.StripToBareShape()
+                if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameterTypeSymbol, out var candidate) ||
                     candidate == nil {
                     continue
                 }
