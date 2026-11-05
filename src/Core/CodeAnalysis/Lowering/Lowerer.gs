@@ -152,8 +152,8 @@ class Lowerer : BoundTreeRewriter {
             let assignment = BoundAssignmentExpression(nil, this.returnValueLocal!!, rewritten.Expression!!)
             stmts.Add(BoundExpressionStatement(nil, assignment))
         }
-        stmts.Add(BoundGotoStatement(nil, this.methodExitLabel!!))
-        return BoundBlockStatement(nil, stmts.ToImmutable())
+        stmts.Add(BoundGotoStatement(rewritten.Syntax, this.methodExitLabel!!))
+        return BoundBlockStatement(rewritten.Syntax, stmts.ToImmutable())
     }
 
     /// ```xmldoc
@@ -1243,11 +1243,16 @@ class Lowerer : BoundTreeRewriter {
         /// @param statement The bound statement.
         /// @returns A lowered version of the bound statement.
         func Lower(statement BoundStatement) BoundBlockStatement {
+            let hadYield = BodyFacts.ContainsYield(statement)
             let lowerer = Lowerer()
             var result = lowerer.RewriteStatement(statement)
             result = lowerer.WrapWithMethodExitEpilogue(result)
             let protectedResult = lowerer.RewriteProtectedRegionEntries(result)
-            return SpillSequenceSpiller.RewriteControlFlowBlocks(protectedResult)
+            let lowered = SpillSequenceSpiller.RewriteControlFlowBlocks(protectedResult)
+            if hadYield {
+                BodyFacts.PreserveContainsYield(statement, lowered)
+            }
+            return lowered
         }
 
         /// Produces a lowered version of the supplied bound statement within the
@@ -1258,11 +1263,16 @@ class Lowerer : BoundTreeRewriter {
         /// @param declaringType The type whose member body is being lowered.
         /// @returns A lowered version of the bound statement.
         func Lower(statement BoundStatement, declaringType StructSymbol) BoundBlockStatement {
+            let hadYield = BodyFacts.ContainsYield(statement)
             let lowerer = Lowerer(declaringType)
             var result = lowerer.RewriteStatement(statement)
             result = lowerer.WrapWithMethodExitEpilogue(result)
             let protectedResult = lowerer.RewriteProtectedRegionEntries(result)
-            return SpillSequenceSpiller.RewriteControlFlowBlocks(protectedResult)
+            let lowered = SpillSequenceSpiller.RewriteControlFlowBlocks(protectedResult)
+            if hadYield {
+                BodyFacts.PreserveContainsYield(statement, lowered)
+            }
+            return lowered
         }
 
         /// Issue #5630: determines whether an accessor call of [`prop`](paramref)

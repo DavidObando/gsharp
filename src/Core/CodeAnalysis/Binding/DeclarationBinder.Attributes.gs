@@ -513,6 +513,7 @@ internal partial class DeclarationBinder {
         let positional = ImmutableArray.CreateBuilder[BoundAttributeArgument]()
         let named = ImmutableArray.CreateBuilder[BoundAttributeArgument]()
         var sawMemberAssignment = false
+        var hadArgumentError = false
         if annotation.Arguments != nil {
             for argSyntax in annotation.Arguments {
                 if argSyntax is NamedArgumentExpressionSyntax namedArg {
@@ -535,10 +536,12 @@ internal partial class DeclarationBinder {
                             },
                             namedArg.NameToken.ValueText
                         )
+                        hadArgumentError = true
                         continue
                     }
                     if !TryBindAttributeArgument(namedArg.Expression, out var value, out var valueType) {
                         Diagnostics.ReportAttributeArgumentNotConstant(namedArg.Expression.Location)
+                        hadArgumentError = true
                         continue
                     }
                     let argument = BoundAttributeArgument(
@@ -553,6 +556,7 @@ internal partial class DeclarationBinder {
                             Diagnostics.ReportAttributeConstructorArgumentAfterMemberAssignment(
                                 namedArg.NameToken.Location
                             )
+                            hadArgumentError = true
                             continue
                         }
                         positional.Add(argument)
@@ -563,17 +567,41 @@ internal partial class DeclarationBinder {
                 } else {
                     if sawMemberAssignment {
                         Diagnostics.ReportAttributeConstructorArgumentAfterMemberAssignment(argSyntax.Location)
+                        hadArgumentError = true
                         continue
                     }
                     if !TryBindAttributeArgument(argSyntax, out var value, out var valueType) {
                         Diagnostics.ReportAttributeArgumentNotConstant(argSyntax.Location)
+                        hadArgumentError = true
                         continue
                     }
                     positional.Add(BoundAttributeArgument(name: nil, value, valueType!!, argSyntax))
                 }
             }
         }
-        return BoundAttribute(annotation, attrType, targetKind, positional.ToImmutable(), named.ToImmutable())
+        let bound = BoundAttribute(annotation, attrType, targetKind, positional.ToImmutable(), named.ToImmutable())
+        if !hadArgumentError && attrType.ClrType is {} clrType {
+            CustomAttributeEncoder.TryResolveImportedAttributeConstructor(
+                clrType,
+                bound,
+                out _,
+                out var duplicateNamedArgument,
+                out var positionalConflict,
+                out _,
+                out var unsupportedParameter
+            )
+            if duplicateNamedArgument == nil &&
+                positionalConflict == nil &&
+                unsupportedParameter is {} offendingParameter {
+                Diagnostics.ReportAttributeConstructorParameterInvalidType(
+                    GetAnnotationNameLocation(annotation),
+                    offendingParameter.Name ?? "?",
+                    ClrNullability.GetParameterTypeSymbol(offendingParameter).Name
+                )
+                return nil
+            }
+        }
+        return bound
     }
 
     // Issue #1913: resolves a C# 11-style generic attribute application
@@ -1778,13 +1806,28 @@ internal partial class DeclarationBinder {
         }
 
         private func IsScalarAttributeParameterType(type TypeSymbol?) bool {
-            if type == nil {
+            var current = type
+            while true {
+                if current is PlatformTypeSymbol platform {
+                    current = platform.UnderlyingType
+                    continue
+                }
+                if current is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(nullable) {
+                    current = nullable.UnderlyingType
+                    continue
+                }
+                break
+            }
+            // Issue #5771: a nullable value type `T?` (`NullableTypeSymbol` over a value type)
+            // carries its underlying `ClrType` on `TypeSymbol.ClrType`, but its runtime type is
+            // `System.Nullable<T>`, which ECMA-335 II.23.3 cannot encode in a custom-attribute blob.
+            if current == nil || current is NullableTypeSymbol {
                 return false
             }
-            if IsEnumLikeType(type) {
+            if IsEnumLikeType(current) {
                 return true
             }
-            let clr Type? = type.ClrType
+            let clr Type? = current.ClrType
             return clr != nil && !clr.IsSameAs(typeof(nint)) && !clr.IsSameAs(typeof(nuint)) &&
                 (
                 clr.IsPrimitive || clr.IsSameAs(typeof(string)) || clr.IsSameAs(typeof(Type)) || clr.IsSameAs(

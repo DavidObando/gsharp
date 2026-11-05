@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding.OverloadResolution
 import GSharp.Core.CodeAnalysis.Lowering
+import GSharp.Core.CodeAnalysis.Lowering.Async
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
@@ -1187,6 +1188,38 @@ internal partial class StatementBinder {
         }
     }
 
+    /// Issue #5044 / ADR-0040 §3: returns `true` when the current callable is an iterator
+    /// function, where a bare `return` terminates enumeration (`yield break`).
+    private func IsIteratorFunction(syntax ReturnStatementSyntax) bool {
+        if function == nil || !isIteratorReturnType(function!!.Type) {
+            return false
+        }
+        if function!!.IsAsync && AsyncIteratorDetection.IsAsyncIteratorReturnType(function!!.Type) {
+            return true
+        }
+        var current SyntaxNode? = syntax.Parent
+        while current != nil {
+            switch current {
+                case fn is FunctionDeclarationSyntax {
+                    return fn.Body != nil && IteratorDetection.ContainsYield(fn.Body)
+                }
+                case lit is FunctionLiteralExpressionSyntax {
+                    return IteratorDetection.ContainsYield(lit.Body)
+                }
+                case lam is LambdaExpressionSyntax {
+                    return IteratorDetection.ContainsYield(lam.Body)
+                }
+                case acc is PropertyAccessorSyntax {
+                    return acc.Body != nil && IteratorDetection.ContainsYield(acc.Body)
+                }
+                default {
+                    current = current.Parent
+                }
+            }
+        }
+        return function!!.Declaration?.Body is {} declaredBody && IteratorDetection.ContainsYield(declaredBody)
+    }
+
     private func BindReturnStatement(syntax ReturnStatementSyntax) BoundStatement {
         // ADR-0055 Tier 4: returning an interpolated string where the function's
         // declared type is IFormattable/FormattableString lowers to
@@ -1362,7 +1395,7 @@ internal partial class StatementBinder {
             // statement expression once the return type is known.
 
         } else {
-            if function!!.Type == TypeSymbol.Void {
+            if function!!.Type == TypeSymbol.Void || IsIteratorFunction(syntax) {
                 if expression != nil {
                     Diagnostics.ReportInvalidReturnExpression(
                         Invariant.Required(
