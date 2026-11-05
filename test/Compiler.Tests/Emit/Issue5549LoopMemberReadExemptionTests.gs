@@ -94,6 +94,133 @@ open class Issue5549LoopMemberReadExemptionTests {
         Assert.Equal(names.Length, names.Distinct(StringComparer.Ordinal).Count())
     }
 
+    @Fact
+    func ImportedCustomNullable_IsNotTreatedAsSystemNullable_5549() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`#nullable enable
+using System;
+namespace Custom {
+    public struct Nullable<T> {
+        public static Action? Clear;
+        public bool HasValue {
+            get {
+                Clear?.Invoke();
+                return true;
+            }
+        }
+        public static bool operator ==(Nullable<T> left, object? right) {
+            Clear?.Invoke();
+            return false;
+        }
+        public static bool operator !=(Nullable<T> left, object? right) => true;
+        public override bool Equals(object? obj) => false;
+        public override int GetHashCode() => 0;
+    }
+    public sealed class Holder {
+        public Nullable<int> Item;
+    }
+}`, "CustomNullableContract")
+        let source = `import System
+import Custom
+
+class C {
+    var Value int32 = 1
+}
+
+func RunHasValueInLoop(holder Holder, n int32) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + g.Value
+        if holder.Item.HasValue { total = total + 1 }
+    }
+    return total
+}
+
+func RunHasValueInSpan(holder Holder, n int32) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    var i = 0
+    Again:
+    total = total + g.Value
+    if holder.Item.HasValue { total = total + 1 }
+    i = i + 1
+    if i < n { goto Again }
+    return total
+}
+
+func RunNilCompareInLoop(holder Holder, n int32) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + g.Value
+        if holder.Item == nil { total = total + 1 }
+    }
+    return total
+}
+
+func RunNilCompareInSpan(holder Holder, n int32) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    var i = 0
+    Again:
+    total = total + g.Value
+    if holder.Item == nil { total = total + 1 }
+    i = i + 1
+    if i < n { goto Again }
+    return total
+}
+
+func RunRefNilCompareInLoop(ref text string?, holder Holder, n int32) int32 {
+    if text == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + text.Length
+        if holder.Item == nil { total = total + 1 }
+    }
+    return total
+}
+
+var g C? = C{}
+var s string? = "ab"
+Console.WriteLine(RunHasValueInLoop(Holder(), 2) + RunHasValueInSpan(Holder(), 2) + RunNilCompareInLoop(Holder(), 2) + RunNilCompareInSpan(Holder(), 2) + RunRefNilCompareInLoop(ref s, Holder(), 2))`
+        let srcPath = Path.Combine(fixture.Directory, "CustomNullableProbe.gs")
+        let outPath = Path.Combine(fixture.Directory, "CustomNullableProbe.dll")
+        File.WriteAllText(srcPath, source)
+        let args = List[string]{
+            "/out:" + outPath,
+            "/target:exe",
+            "/targetframework:net10.0",
+            "/nowarn:GS9100",
+            "/reference:" + contract
+        }
+        for reference in TrustedPlatformAssemblies() {
+            args.Add("/reference:" + reference)
+        }
+        args.Add(srcPath)
+        using let compileOut = StringWriter()
+        using let compileErr = StringWriter()
+        let prevOut = Console.Out
+        let prevErr = Console.Error
+        Console.SetOut(compileOut)
+        Console.SetError(compileErr)
+        try {
+            Program.Main(args.ToArray())
+        } finally {
+            Console.SetOut(prevOut)
+            Console.SetError(prevErr)
+        }
+        let log = compileOut.ToString() + compileErr.ToString()
+        let actualDiagnostics = string.Join(
+            " ",
+            Regex
+                .Matches(log, `\((\d+),(\d+),\d+,\d+\): (?:error|warning) (GS\d+)`)
+                .Select((m Match) -> m.Groups[3].Value + "@" + m.Groups[1].Value + ":" + m.Groups[2].Value)
+                .Where((d string) -> !d.StartsWith("GS9100", StringComparison.Ordinal))
+        )
+        Assert.Equal("GS0158@12:27 GS0158@23:23 GS0158@34:27 GS0158@45:23 GS0158@56:30", actualDiagnostics)
+    }
+
     shared {
         private const RunTimeout int32 = 30000
 

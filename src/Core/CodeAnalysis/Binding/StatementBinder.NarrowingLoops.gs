@@ -1015,13 +1015,13 @@ internal partial class StatementBinder {
     // that the step names, or `StepUnresolved` when a member that it names has a type that does not resolve.
     private func AddStepTypes(type ReceiverType, step RegionReceiverStep, next List[ReceiverType]) int32 {
         if type.Clr is {} clr {
-            if clr.IsGenericType && clr.Name == "Nullable`1" {
+            if NullableLifting.GetValueTypeNullableUnderlyingClr(clr) is {} underlyingClr {
                 let nullableOutcome = AddClrStepTypes(clr, step, ImmutableArray[TypeSymbol].Empty, nil, next)
                 if nullableOutcome == StepUnresolved {
                     return StepUnresolved
                 }
                 let underlyingOutcome = AddClrStepTypes(
-                    clr.GetGenericArguments()[0],
+                    underlyingClr,
                     step,
                     ImmutableArray[TypeSymbol].Empty,
                     nil,
@@ -1968,7 +1968,7 @@ internal partial class StatementBinder {
         if type is NullableTypeSymbol || type is TypeParameterSymbol || type is ByRefTypeSymbol || !type.IsValueType {
             return true
         }
-        return type.ClrType is {} clr && clr.IsGenericType && clr.Namespace == "System" && clr.Name == "Nullable`1"
+        return type.ClrType is {} clr && NullableLifting.IsValueTypeNullableClr(clr)
     }
 
     // Whether `nil` reaches the target of a conversion without an operator. The receiver resolution strips
@@ -2575,9 +2575,7 @@ internal partial class StatementBinder {
                     }
                 } else if type.Clr is {} clrType && ReflectionType(clrType) is {} reflectedClr {
                     if reflectedClr.FullName == "System.Object" ||
-                        (
-                        reflectedClr.IsValueType && !(reflectedClr.IsGenericType && reflectedClr.Name == "Nullable`1")
-                    ) {
+                        (reflectedClr.IsValueType && !NullableLifting.IsValueTypeNullableClr(reflectedClr)) {
                         return true
                     }
                 }
@@ -2590,9 +2588,7 @@ internal partial class StatementBinder {
                     StripAllNullability(type.Symbol)?.ClrType
                 }
             )
-            if clr != nil && clr.IsGenericType && clr.Name == "Nullable`1" {
-                clr = clr.GetGenericArguments()[0]
-            }
+            clr = NullableLifting.GetValueTypeNullableUnderlyingClr(clr) ?? clr
             if clr != nil && ClrEqualityTakesReference(clr) {
                 return true
             }
@@ -2611,7 +2607,7 @@ internal partial class StatementBinder {
                 }
                 for parameter in method.GetParameters() {
                     let parameterType = parameter.ParameterType
-                    if !parameterType.IsValueType || parameterType.IsGenericType && parameterType.Name == "Nullable`1" {
+                    if !parameterType.IsValueType || NullableLifting.IsValueTypeNullableClr(parameterType) {
                         return true
                     }
                 }
@@ -2679,14 +2675,13 @@ internal partial class StatementBinder {
 
     private func ReadOfTypeRunsUserCode(type ReceiverType, member string?) bool {
         if type.Clr is {} clr {
-            if clr.IsGenericType && clr.Name == "Nullable`1" {
-                let underlyingClr = clr.GetGenericArguments()[0]
+            if NullableLifting.GetValueTypeNullableUnderlyingClr(clr) is {} underlyingClr {
                 if member == "Value" {
                     return true
                 }
                 if member == "HasValue" {
-                    return !ClrReadRunsUserCode(underlyingClr, "HasValue", false) == false &&
-                        ClrDeclaresMember(underlyingClr, "HasValue")
+                    return ClrDeclaresMember(underlyingClr, "HasValue") &&
+                        ClrReadRunsUserCode(underlyingClr, "HasValue", false)
                 }
                 return ClrReadRunsUserCode(underlyingClr, member, false)
             }
