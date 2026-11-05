@@ -289,6 +289,58 @@ class TriageBuilder {
         return artifact
     }
 
+    /// Builds a stage-3 `tool-setup-error` artifact when `dotnet-ilverify` is
+    /// not installed in either a local tool manifest or on `PATH` (#4956).
+    /// Reported as an environment setup error rather than an `ilverify-failure`
+    /// (`cil-emit`) gap in the translated code.
+    /// @param output The tool-probe output.
+    /// @param gsFile The emitted G# file (relative path), or null.
+    /// @returns The populated triage artifact.
+    func IlVerifyToolUnavailable(output string?, gsFile string? = nil) TriageArtifact {
+        let detail = if string.IsNullOrWhiteSpace(output) {
+            "dotnet-ilverify is not installed in a local tool manifest or on PATH."
+        } else {
+            output!!.Trim()
+        }
+        let message = "Prerequisite tool 'ilverify' (dotnet-ilverify) is not installed or could not be restored. " +
+            "Install it with 'dotnet tool install --global dotnet-ilverify' or add it to a local tool manifest " +
+            "('dotnet new tool-manifest && dotnet tool install dotnet-ilverify'). Output: " +
+            detail
+        let artifact = this.NewArtifact(MigrationStageKind.IlVerify, TriageCategory.ToolSetupError)
+        artifact.Diagnostic = TriageDiagnostic{Id: "ILVERIFY-UNAVAILABLE", Message: message, Severity: "error"}
+        artifact.SourceLocation = TriageSourceLocation{
+            GsFile: gsFile,
+            GsLine: nil,
+            GsColumn: nil,
+            CsFile: nil,
+            CsLine: nil,
+            CsColumn: nil
+        }
+        artifact.OffendingCSharpConstruct = TriageOffendingConstruct{Kind: "ToolSetup", Snippet: Truncate(detail)}
+        artifact.Fingerprint = Fingerprint.Compute(
+            artifact.Category,
+            artifact.Stage,
+            artifact.Diagnostic!!.Id,
+            artifact.OffendingCSharpConstruct!!.Kind,
+            "ILVERIFY-UNAVAILABLE"
+        )
+        let title = "[cs2gs] prerequisite tool 'dotnet-ilverify' is not installed (${this.CorpusAppId})"
+        let lines[]string = []string{
+            "Stage 3 (`ilverify`) could not run for **${this.CorpusAppId}** because the `dotnet-ilverify` " +
+                "tool is not installed in a local tool manifest or on `PATH`.",
+            string.Empty,
+            "- Diagnostic: `${artifact.Diagnostic!!.Id}` — ${artifact.Diagnostic!!.Message}",
+            string.Empty,
+            "This is a local environment setup problem, not a CIL-emission gap in the translated code.",
+            "**Fix:** run `dotnet tool install --global dotnet-ilverify` or add `dotnet-ilverify` to `.config/dotnet-tools.json`.",
+            "**Fingerprint:** `${artifact.Fingerprint}`"
+        }
+        let issue = TriageSuggestedIssue{Title: title, Body: string.Join("\n", lines)}
+        issue.Labels.Add("Oats")
+        artifact.SuggestedIssue = issue
+        return artifact
+    }
+
     /// Builds a stage-4 `test-parity-failure` artifact for an executable
     /// app whose migrated program stdout diverged from the committed
     /// `baseline.stdout.golden` (ADR-0115 §C/§E). The diagnostic id is

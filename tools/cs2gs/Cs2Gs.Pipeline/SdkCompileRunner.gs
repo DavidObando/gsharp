@@ -56,7 +56,7 @@ class SdkCompileRunner {
         analyzerVerifierPackageVersion string?,
         warningsNotAsErrors string? = nil
     ) SdkCompileResult {
-        let repoRoot string? = GsharpTestProjectRunner.FindRepoRoot()
+        let repoRoot string? = GsharpTestProjectRunner.TryFindRepoRoot()
         if sdkMoniker == nil {
             return SdkCompileResult.Unavailable(
                 "No locally-built Gsharp.NET.Sdk nupkg was found under out/bin/<Config>/nupkgs/ or .nugs/."
@@ -217,15 +217,21 @@ class SdkCompileRunner {
         if string.IsNullOrWhiteSpace(projectName) {
             throw ArgumentException("A project name is required.", "projectName")
         }
-        let repoRoot string? = GsharpTestProjectRunner.FindRepoRoot()
-        let sdk = GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot, config) ??
+        let repoRoot string? = GsharpTestProjectRunner.TryFindRepoRoot()
+        let localSdk = GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot, config) ??
             ResolveFallbackSdkPackageFromLocalFeed(repoRoot)
-        if sdk == nil || sdk!!.NupkgPath == nil {
+        var sdkVersion string? = nil
+        if localSdk != nil && localSdk!!.NupkgPath != nil {
+            GsharpTestProjectRunner.EnsureInLocalFeed(repoRoot, localSdk.NupkgPath)
+            sdkVersion = localSdk.Version
+        } else if repoRoot == nil {
+            sdkVersion = ResolveExternalPackageVersion(SdkPackageId)
+        }
+        if string.IsNullOrEmpty(sdkVersion) {
             return SdkCompileResult.Unavailable(
                 "No locally-built Gsharp.NET.Sdk nupkg was found under out/bin/<Config>/nupkgs/ or .nugs/."
             )
         }
-        GsharpTestProjectRunner.EnsureInLocalFeed(repoRoot, sdk.NupkgPath)
         Directory.CreateDirectory(appRunDir)
         GsharpTestProjectRunner.WriteIsolationBoundary(appRunDir)
         WriteLocalNugetConfig(appRunDir, repoRoot)
@@ -296,7 +302,7 @@ class SdkCompileRunner {
             generatedProjectPaths
         )
         let projectXml = BuildProjectXml(
-            sdk.Version,
+            sdkVersion,
             target,
             rootNamespace,
             projectSources,
@@ -316,7 +322,13 @@ class SdkCompileRunner {
         if !string.IsNullOrEmpty(warningsNotAsErrors) {
             args.Add("-p:WarningsNotAsErrors=" + warningsNotAsErrors)
         }
-        let repoNugetConfig = Path.Combine(repoRoot!!, "nuget.config")
+        let repoNugetConfig = if !string.IsNullOrEmpty(repoRoot) && File.Exists(
+            Path.Combine(repoRoot, "nuget.config")
+        ) {
+            Path.Combine(repoRoot, "nuget.config")
+        } else {
+            Path.Combine(appRunDir, "nuget.config")
+        }
         if File.Exists(repoNugetConfig) {
             // MSBuild has no `--configfile` switch (that is a `dotnet restore`/
             // `dotnet nuget` only switch, and fails hard with MSB1001 under
@@ -912,7 +924,7 @@ class SdkCompileRunner {
             timeout TimeSpan
         ) ProcessRunResult {
             let projectDirectory string? = Path.GetDirectoryName(Path.GetFullPath(generatedProjectPath))
-            let repoRoot string? = GsharpTestProjectRunner.FindRepoRoot()
+            let repoRoot string? = GsharpTestProjectRunner.TryFindRepoRoot()
             let projectNugetConfig = Directory.EnumerateFiles(projectDirectory!!).FirstOrDefault(
                 (path string) -> Path.GetFileName(path).Equals("nuget.config", StringComparison.OrdinalIgnoreCase)
             ) ??
@@ -1450,27 +1462,54 @@ class SdkCompileRunner {
         /// `.gsproj` makes it discoverable unconditionally.
         /// @param appRunDir The directory the `.gsproj` is written to.
         /// @param repoRoot The repository root containing the `.nugs` feed.
-        internal func WriteLocalNugetConfig(appRunDir string, repoRoot string?) {
-            WriteLocalNugetConfigFile(Path.Combine(appRunDir, "nuget.config"), repoRoot)
+        internal func WriteLocalNugetConfig(appRunDir string, repoRoot string?, globalPackagesOverride string? = nil) {
+            WriteLocalNugetConfigFile(Path.Combine(appRunDir, "nuget.config"), repoRoot, globalPackagesOverride)
         }
 
-        private func WriteLocalNugetConfigFile(path string, repoRoot string?) {
-            let localFeed = Path.Combine(repoRoot!!, ".nugs")
-            let sb = StringBuilder()
-            sb.Append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
-            sb.Append("<configuration>\n")
-            sb.Append("  <packageSources>\n")
-            sb.Append("    <clear />\n")
-            sb.Append(
-                "    <add key=\"NuGet official package source\" value=\"https://api.nuget.org/v3/index.json\" />\n"
+        private func WriteLocalNugetConfigFile(path string, repoRoot string?, globalPackagesOverride string? = nil) {
+            let localFeed string? = if string.IsNullOrEmpty(repoRoot) {
+                default(string?)
+            } else {
+                Path.Combine(repoRoot, ".nugs")
+            }
+            let packageSources = XElement(
+                XName?("packageSources")!!,
+                XElement(XName?("clear")!!),
+                XElement(
+                    XName?("add")!!,
+                    XAttribute(XName?("key")!!, "NuGet official package source"),
+                    XAttribute(XName?("value")!!, "https://api.nuget.org/v3/index.json")
+                )
             )
-            sb.Append("    <add key=\"Gsharp local packages\" value=\"").Append(localFeed).Append("\" />\n")
-            sb.Append("  </packageSources>\n")
-            sb.Append("  <disabledPackageSources>\n")
-            sb.Append("    <clear />\n")
-            sb.Append("  </disabledPackageSources>\n")
-            sb.Append("</configuration>\n")
-            File.WriteAllText(path, sb.ToString())
+            if !string.IsNullOrEmpty(localFeed) && Directory.Exists(localFeed) {
+                packageSources.Add(
+                    XElement(
+                        XName?("add")!!,
+                        XAttribute(XName?("key")!!, "Gsharp local packages"),
+                        XAttribute(XName?("value")!!, localFeed)
+                    )
+                )
+            }
+            let configuration = XElement(XName?("configuration")!!, packageSources)
+            if string.IsNullOrEmpty(repoRoot) {
+                let globalPackages string? = globalPackagesOverride ?? ResolveNugetPackagesRoot()
+                if !string.IsNullOrEmpty(globalPackages) && Directory.Exists(globalPackages) {
+                    configuration.Add(
+                        XElement(
+                            XName?("fallbackPackageFolders")!!,
+                            XElement(XName?("clear")!!),
+                            XElement(
+                                XName?("add")!!,
+                                XAttribute(XName?("key")!!, "Global packages"),
+                                XAttribute(XName?("value")!!, globalPackages)
+                            )
+                        )
+                    )
+                }
+            }
+            configuration.Add(XElement(XName?("disabledPackageSources")!!, XElement(XName?("clear")!!)))
+            let document = XDocument(XDeclaration("1.0", "utf-8", nil), configuration)
+            File.WriteAllText(path, document.Declaration!!.ToString() + "\n" + document.Root!!.ToString() + "\n")
         }
 
         private func AddOrUpgradePackage(
@@ -1490,7 +1529,7 @@ class SdkCompileRunner {
             packages.Add((id, version))
         }
 
-        private func ResolveNugetPackagesRoot() string? {
+        internal func ResolveNugetPackagesRoot() string? {
             let envOverride string? = Environment.GetEnvironmentVariable("NUGET_PACKAGES")
             if !string.IsNullOrEmpty(envOverride) {
                 return envOverride
@@ -1504,7 +1543,7 @@ class SdkCompileRunner {
         }
 
         private func ResolvePinnedPackageVersion(packageId string, config string, explicitVersion string?) string? {
-            let repoRoot string? = GsharpTestProjectRunner.FindRepoRoot()
+            let repoRoot string? = GsharpTestProjectRunner.TryFindRepoRoot()
             if explicitVersion != nil {
                 if !SdkPin.IsValidVersion(explicitVersion) {
                     throw ArgumentException(
@@ -1526,11 +1565,123 @@ class SdkCompileRunner {
             let package_ = GsharpTestProjectRunner.ResolveLocalPackage(repoRoot, packageId, config) ??
                 ResolveFallbackPackageFromLocalFeed(repoRoot, packageId)
             if package_ == nil || package_!!.NupkgPath == nil {
-                return nil
+                return if repoRoot == nil {
+                    ResolveExternalPackageVersion(packageId)
+                } else {
+                    default(string?)
+                }
             }
             GsharpTestProjectRunner.EnsureInLocalFeed(repoRoot, package_.NupkgPath)
             return package_.Version
         }
+
+        internal func ResolveExternalPackageVersion(
+            packageId string,
+            nugetPackagesRoot string? = nil,
+            assemblyLocation string? = nil,
+            informationalVersion string? = nil
+        ) string? {
+            let packagesRoot = nugetPackagesRoot ?? ResolveNugetPackagesRoot()
+            let toolVersion string? = ResolveToolPackageVersion(assemblyLocation, informationalVersion)
+            let cachedVersion string? = ResolveHighestInstalledPackageVersion(packagesRoot, packageId)
+            if !string.IsNullOrEmpty(toolVersion) {
+                if !IsLocalGitPrereleaseVersion(toolVersion) ||
+                    HasInstalledPackageVersion(packagesRoot, packageId, toolVersion) {
+                    return toolVersion
+                }
+                return cachedVersion ?? toolVersion
+            }
+            return cachedVersion
+        }
+
+        internal func ResolveToolPackageVersion(
+            assemblyLocation string? = nil,
+            informationalVersion string? = nil
+        ) string? {
+            let location = assemblyLocation ?? typeof(MigrationPipeline).Assembly.Location
+            if !string.IsNullOrEmpty(location) {
+                let normalized = location.Replace('\\', '/')
+                let storeMarker = "/.store/gsharp.cs2gs/"
+                let markerIndex = normalized.IndexOf(storeMarker, StringComparison.OrdinalIgnoreCase)
+                if markerIndex >= 0 {
+                    let remainder = normalized.Substring(markerIndex + storeMarker.Length)
+                    let slash = remainder.IndexOf('/')
+                    let storeVersion = if slash >= 0 {
+                        remainder.Substring(0, slash)
+                    } else {
+                        remainder
+                    }
+                    if SdkPin.IsValidVersion(storeVersion) {
+                        return storeVersion
+                    }
+                }
+            }
+            var infoVersion string? = informationalVersion
+            if string.IsNullOrEmpty(infoVersion) {
+                infoVersion = typeof(MigrationPipeline)
+                    .Assembly
+                    .GetCustomAttribute[AssemblyInformationalVersionAttribute]()
+                    ?.InformationalVersion
+            }
+            if !string.IsNullOrEmpty(infoVersion) {
+                let plus = infoVersion.IndexOf('+')
+                let candidate = if plus >= 0 {
+                    infoVersion.Substring(0, plus)
+                } else {
+                    infoVersion
+                }
+                if SdkPin.IsValidVersion(candidate) {
+                    return candidate
+                }
+            }
+            return nil
+        }
+
+        internal func ResolveHighestInstalledPackageVersion(nugetPackagesRoot string?, packageId string) string? {
+            let packageDir string? = FindInstalledPackageDirectory(nugetPackagesRoot, packageId)
+            if string.IsNullOrEmpty(packageDir) || !Directory.Exists(packageDir) {
+                return nil
+            }
+            var best string? = nil
+            for versionDir in Directory.EnumerateDirectories(packageDir) {
+                let version = Path.GetFileName(versionDir)
+                if !SdkPin.IsValidVersion(version) {
+                    continue
+                }
+                if best == nil || GsharpTestProjectRunner.CompareVersions(version, best) > 0 {
+                    best = version
+                }
+            }
+            return best
+        }
+
+        internal func HasInstalledPackageVersion(nugetPackagesRoot string?, packageId string, version string) bool {
+            let packageDir string? = FindInstalledPackageDirectory(nugetPackagesRoot, packageId)
+            if string.IsNullOrEmpty(packageDir) || !Directory.Exists(packageDir) {
+                return false
+            }
+            return Directory.EnumerateDirectories(packageDir).Any(
+                (dir string) -> string.Equals(Path.GetFileName(dir), version, StringComparison.OrdinalIgnoreCase)
+            )
+        }
+
+        internal func FindInstalledPackageDirectory(nugetPackagesRoot string?, packageId string) string? {
+            if string.IsNullOrEmpty(nugetPackagesRoot) || !Directory.Exists(nugetPackagesRoot) {
+                return nil
+            }
+            let direct = Path.Combine(nugetPackagesRoot, packageId.ToLowerInvariant())
+            if Directory.Exists(direct) {
+                return direct
+            }
+            return Directory.EnumerateDirectories(nugetPackagesRoot).FirstOrDefault(
+                (dir string) -> string.Equals(Path.GetFileName(dir), packageId, StringComparison.OrdinalIgnoreCase)
+            )
+        }
+
+        private func IsLocalGitPrereleaseVersion(version string) bool -> version.Contains(
+            "-g",
+            StringComparison.OrdinalIgnoreCase
+        )
 
         private func ResolveFallbackSdkPackageFromLocalFeed(repoRoot string?)(
             NupkgPath string,
@@ -1541,7 +1692,10 @@ class SdkCompileRunner {
             NupkgPath string,
             Version string
         )? {
-            let feed = Path.Combine(repoRoot!!, ".nugs")
+            if string.IsNullOrEmpty(repoRoot) {
+                return nil
+            }
+            let feed = Path.Combine(repoRoot, ".nugs")
             return GsharpTestProjectRunner.ResolveNewestPackage(feed, packageId)
         }
 

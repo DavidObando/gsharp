@@ -135,18 +135,32 @@ class GscInvoker {
 
         /// Resolves the `gsc.dll` to use: the explicit override when supplied,
         /// otherwise the first `out/bin/<Config>/Compiler/gsc.dll` found
-        /// by walking up from [`startDirectory`](paramref) (ADR-0115 §C).
+        /// by walking up from [`startDirectory`](paramref) (ADR-0115 §C),
+        /// then the NuGet global-packages cache (`gsharp.net.sdk/<version>/tools/compiler/gsc.dll`),
+        /// and finally `PATH` (#4956).
         /// @param explicitPath The `--gsc` override, or `null`.
         /// @param config The build configuration to probe (e.g. `Release`).
         /// @param startDirectory The directory to begin the upward walk from.
+        /// @param sdkVersion Optional SDK version preference when probing the NuGet cache.
+        /// @param nugetPackagesRoot Optional NuGet global-packages root override.
         /// @returns The resolved path, or `null` if none was found.
-        func Resolve(explicitPath string?, config string, startDirectory string) string? -> ResolveSiblingTool(
-            explicitPath,
-            config,
-            startDirectory,
-            "Compiler",
-            "gsc.dll"
-        )
+        func Resolve(
+            explicitPath string?,
+            config string,
+            startDirectory string,
+            sdkVersion string? = nil,
+            nugetPackagesRoot string? = nil
+        ) string? {
+            let sibling string? = ResolveSiblingTool(explicitPath, config, startDirectory, "Compiler", "gsc.dll")
+            if sibling != nil || !string.IsNullOrEmpty(explicitPath) {
+                return sibling
+            }
+            return ResolvePackagedCompiler(
+                sdkVersion,
+                nugetPackagesRoot ?? SdkCompileRunner.ResolveNugetPackagesRoot()
+            ) ??
+                ResolvePathCompiler()
+        }
 
         /// Issue #2215: resolves the `gsgen.dll` to use, the same way
         /// (cref:Resolve) resolves gsc — the explicit override when
@@ -170,6 +184,10 @@ class GscInvoker {
             for startDirectory in startDirectories {
                 if string.IsNullOrWhiteSpace(startDirectory) {
                     continue
+                }
+                let packagedCandidate = Path.Combine(startDirectory, "..", "gsgen", "gsgen.dll")
+                if File.Exists(packagedCandidate) {
+                    return Path.GetFullPath(packagedCandidate)
                 }
                 let resolved string? = ResolveSiblingTool(nil, config, startDirectory, "Gsgen.Cli", "gsgen.dll")
                 if resolved != nil {
@@ -236,6 +254,144 @@ class GscInvoker {
                     }
                 }
                 dir = dir.Parent
+            }
+            return nil
+        }
+
+        internal func ResolvePackagedCompiler(
+            sdkVersion string?,
+            nugetPackagesRoot string?,
+            toolVersion string? = nil,
+            acquirePackage((string, string?) -> bool)? = nil
+        ) string? {
+            let preferredVersions = List[string]()
+            if !string.IsNullOrEmpty(sdkVersion) {
+                preferredVersions.Add(sdkVersion)
+            }
+            let resolvedToolVersion = toolVersion ?? SdkCompileRunner.ResolveToolPackageVersion()
+            if !string.IsNullOrEmpty(resolvedToolVersion) {
+                preferredVersions.Add(resolvedToolVersion)
+            }
+            var sdkDir string? = SdkCompileRunner.FindInstalledPackageDirectory(nugetPackagesRoot, "Gsharp.NET.Sdk")
+            if !string.IsNullOrEmpty(sdkDir) && Directory.Exists(sdkDir) {
+                for preferred in preferredVersions {
+                    let exact string? = FindPackagedCompilerInDirectory(sdkDir, preferred)
+                    if exact != nil {
+                        return exact
+                    }
+                }
+            }
+            let acquire = acquirePackage ?? EnsureSdkPackageRestored
+            for preferred in preferredVersions {
+                if !SdkPin.IsValidVersion(preferred) {
+                    continue
+                }
+                if !acquire(preferred, nugetPackagesRoot) {
+                    continue
+                }
+                sdkDir = SdkCompileRunner.FindInstalledPackageDirectory(nugetPackagesRoot, "Gsharp.NET.Sdk")
+                if !string.IsNullOrEmpty(sdkDir) && Directory.Exists(sdkDir) {
+                    let exact string? = FindPackagedCompilerInDirectory(sdkDir, preferred)
+                    if exact != nil {
+                        return exact
+                    }
+                }
+            }
+            sdkDir = SdkCompileRunner.FindInstalledPackageDirectory(nugetPackagesRoot, "Gsharp.NET.Sdk")
+            if string.IsNullOrEmpty(sdkDir) || !Directory.Exists(sdkDir) {
+                return nil
+            }
+            var bestVersion string? = nil
+            var bestCompiler string? = nil
+            for versionDir in Directory.EnumerateDirectories(sdkDir) {
+                let version = Path.GetFileName(versionDir)
+                if !SdkPin.IsValidVersion(version) {
+                    continue
+                }
+                let compiler = Path.Combine(versionDir, "tools", "compiler", "gsc.dll")
+                if !File.Exists(compiler) {
+                    continue
+                }
+                if bestVersion == nil || GsharpTestProjectRunner.CompareVersions(version, bestVersion) > 0 {
+                    bestVersion = version
+                    bestCompiler = Path.GetFullPath(compiler)
+                }
+            }
+            return bestCompiler
+        }
+
+        internal func EnsureSdkPackageRestored(version string, nugetPackagesRoot string?) bool {
+            if !SdkPin.IsValidVersion(version) || string.IsNullOrEmpty(nugetPackagesRoot) {
+                return false
+            }
+            let repoRoot string? = GsharpTestProjectRunner.TryFindRepoRoot()
+            if repoRoot == nil && version.Contains("-g", StringComparison.OrdinalIgnoreCase) {
+                return false
+            }
+            let fullPackagesRoot = Path.GetFullPath(nugetPackagesRoot)
+            let scratchDir = Path.Combine(fullPackagesRoot, ".cs2gs-sdk-acquire-" + Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(scratchDir)
+            try {
+                GsharpTestProjectRunner.WriteIsolationBoundary(scratchDir)
+                SdkCompileRunner.WriteLocalNugetConfig(scratchDir, repoRoot, fullPackagesRoot)
+                let projectPath = Path.Combine(scratchDir, "AcquireSdk.csproj")
+                let projectXml = "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>netstandard2.0</TargetFramework>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <ItemGroup>\n" +
+                    "    <PackageDownload Include=\"Gsharp.NET.Sdk\" Version=\"[" +
+                    version +
+                    "]\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+                File.WriteAllText(projectPath, projectXml)
+                let result = ProcessRunner.Run(
+                    "dotnet",
+                    []string{
+                        "restore",
+                        projectPath,
+                        "-p:RestoreConfigFile=" + Path.Combine(scratchDir, "nuget.config"),
+                        "-p:RestorePackagesPath=" + fullPackagesRoot
+                    },
+                    scratchDir,
+                    TimeSpan.FromMinutes(2)
+                )
+                return result.ExitCode == 0
+            } catch {
+                return false
+            } finally {
+                try {
+                    if Directory.Exists(scratchDir) {
+                        Directory.Delete(scratchDir, recursive: true)
+                    }
+                } catch { }
+            }
+        }
+
+        private func FindPackagedCompilerInDirectory(sdkDir string?, version string) string? {
+            for versionDir in Directory.EnumerateDirectories(sdkDir!!) {
+                if !string.Equals(Path.GetFileName(versionDir), version, StringComparison.OrdinalIgnoreCase) {
+                    continue
+                }
+                let candidate = Path.Combine(versionDir, "tools", "compiler", "gsc.dll")
+                if File.Exists(candidate) {
+                    return Path.GetFullPath(candidate)
+                }
+            }
+            return nil
+        }
+
+        private func ResolvePathCompiler() string? {
+            let pathEnv string? = Environment.GetEnvironmentVariable("PATH")
+            if string.IsNullOrEmpty(pathEnv) {
+                return nil
+            }
+            for entry in pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries) {
+                let candidate = Path.Combine(entry, "gsc.dll")
+                if File.Exists(candidate) {
+                    return Path.GetFullPath(candidate)
+                }
             }
             return nil
         }

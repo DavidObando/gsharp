@@ -57,17 +57,30 @@ open class IlVerifyRunner {
         }
         this.EnsureToolAvailable()
         let references = BuildReferenceSet(assemblyPath, additionalReferences)
-        let args = List[string]{"tool", "run", "ilverify", assemblyPath!!, "-s", "System.Private.CoreLib", "--verbose"}
+        let verifierArgs = List[string]{assemblyPath!!, "-s", "System.Private.CoreLib", "--verbose"}
         for reference in references {
-            args.Add("-r")
-            args.Add(reference)
+            verifierArgs.Add("-r")
+            verifierArgs.Add(reference)
         }
         for code in KnownIlVerifyFalsePositives {
             // ilverify's `-g` regex matches the bare error-category name.
-            args.Add("-g")
-            args.Add(code)
+            verifierArgs.Add("-g")
+            verifierArgs.Add(code)
         }
+        let args = List[string]{"tool", "run", "ilverify"}
+        args.AddRange(verifierArgs)
         var (exit, output) = this.RunDotnet(args)
+        var usedGlobalTool = false
+        var globalToolExecutable string? = nil
+        if exit != 0 && IsMissingToolOutput(output) {
+            globalToolExecutable = this.ResolveGlobalToolExecutable()
+            if !string.IsNullOrEmpty(globalToolExecutable) {
+                usedGlobalTool = true
+                exit, output = this.RunGlobalTool(globalToolExecutable, verifierArgs)
+            } else {
+                return IlVerifyResult.Unavailable(output)
+            }
+        }
         let initialExit = exit
         let outputs = List[string]{output}
         // The #4489 rule reads every method body, so load it only once a
@@ -96,12 +109,21 @@ open class IlVerifyRunner {
                 break
             }
             excludedMembers.Add(crashingMember!!)
-            let retryArgs = List[string](args)
-            for member in excludedMembers {
-                retryArgs.Add("--exclude")
-                retryArgs.Add("^" + Regex.Escape(member) + "$$")
+            if usedGlobalTool {
+                let retryVerifierArgs = List[string](verifierArgs)
+                for member in excludedMembers {
+                    retryVerifierArgs.Add("--exclude")
+                    retryVerifierArgs.Add("^" + Regex.Escape(member) + "$$")
+                }
+                exit, output = this.RunGlobalTool(globalToolExecutable!!, retryVerifierArgs)
+            } else {
+                let retryArgs = List[string](args)
+                for member in excludedMembers {
+                    retryArgs.Add("--exclude")
+                    retryArgs.Add("^" + Regex.Escape(member) + "$$")
+                }
+                exit, output = this.RunDotnet(retryArgs)
             }
-            exit, output = this.RunDotnet(retryArgs)
             outputs.Add(output)
             errors.AddRange(FilterFalsePositives(ParseErrors(output)))
         }
@@ -143,10 +165,13 @@ open class IlVerifyRunner {
             // tool is already restored. Only pay the restore cost when needed.
             let (probeExit, _) = this.RunDotnet([]string{"tool", "run", "ilverify", "--version"})
             available = probeExit == 0
-            if !available {
+            if !available && HasLocalToolManifest(this.RepoRoot) {
                 let (restoreExit, _) = this.RunDotnet([]string{"tool", "restore"})
                 available = restoreExit == 0 && this.RunDotnet([]string{"tool", "run", "ilverify", "--version"})
                     .Exit == 0
+            }
+            if !available {
+                available = !string.IsNullOrEmpty(this.ResolveGlobalToolExecutable())
             }
             ToolAvailabilityByRepoRoot[this.RepoRoot!!] = available
             return available
@@ -160,6 +185,29 @@ open class IlVerifyRunner {
         // The local tool manifest is discovered relative to the working
         // directory; anchor at the repo root. All paths are passed absolute.
         let result = ProcessRunner.Run("dotnet", arguments, this.RepoRoot, DotnetToolTimeout)
+        return (result.ExitCode, result.Output)
+    }
+
+    /// Resolves a globally or tool-path installed `ilverify` executable when
+    /// no local tool manifest defines `ilverify` (#4956).
+    /// @returns The executable path, or `null` when none exists.
+    protected open func ResolveGlobalToolExecutable() string? {
+        return ResolveGlobalToolExecutableOnDisk(
+            typeof(IlVerifyRunner).Assembly.Location,
+            Environment.GetEnvironmentVariable("PATH"),
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+        )
+    }
+
+    /// Runs a globally or tool-path installed `ilverify` executable directly.
+    /// @param executablePath The resolved `ilverify` executable path.
+    /// @param arguments The verifier arguments.
+    /// @returns The process exit code and combined output.
+    protected open func RunGlobalTool(executablePath string, arguments IReadOnlyList[string])(
+        Exit int32,
+        Output string
+    ) {
+        let result = ProcessRunner.Run(executablePath, arguments, this.RepoRoot, DotnetToolTimeout)
         return (result.ExitCode, result.Output)
     }
 
@@ -466,17 +514,98 @@ open class IlVerifyRunner {
         }
 
         private func FindRepoRoot() string? {
-            // Walk up from this assembly's location until we find a directory holding
-            // `.config/dotnet-tools.json`, so the local tool manifest is discovered
-            // regardless of the runner's current directory (mirrors IlVerifier).
-            var dir string? = Path.GetDirectoryName(typeof(IlVerifyRunner).Assembly.Location)
+            // Walk up from this assembly's location (and then from the current
+            // directory) until we find a directory holding `.config/dotnet-tools.json`
+            // or `dotnet-tools.json`.
+            for start in[]string? {
+                Path.GetDirectoryName(typeof(IlVerifyRunner).Assembly.Location),
+                Environment.CurrentDirectory
+            } {
+                var dir string? = start
+                while !string.IsNullOrEmpty(dir) {
+                    if File.Exists(Path.Combine(dir, ".config", "dotnet-tools.json")) || File.Exists(
+                        Path.Combine(dir, "dotnet-tools.json")
+                    ) {
+                        return dir
+                    }
+                    dir = Path.GetDirectoryName(dir)
+                }
+            }
+            return Environment.CurrentDirectory
+        }
+
+        private func HasLocalToolManifest(startDirectory string?) bool {
+            var dir string? = startDirectory
             while !string.IsNullOrEmpty(dir) {
-                if File.Exists(Path.Combine(dir, ".config", "dotnet-tools.json")) {
-                    return dir
+                if File.Exists(Path.Combine(dir, ".config", "dotnet-tools.json")) || File.Exists(
+                    Path.Combine(dir, "dotnet-tools.json")
+                ) {
+                    return true
                 }
                 dir = Path.GetDirectoryName(dir)
             }
-            return Environment.CurrentDirectory
+            return false
+        }
+
+        internal func IsMissingToolOutput(output string?) bool {
+            if string.IsNullOrEmpty(output) {
+                return false
+            }
+            return output.Contains(
+                "Cannot find a tool in the manifest file that has a command named 'ilverify'",
+                StringComparison.OrdinalIgnoreCase
+            ) ||
+                output.Contains("Cannot find a manifest file", StringComparison.OrdinalIgnoreCase) || output.Contains(
+                "No manifest file exists",
+                StringComparison.OrdinalIgnoreCase
+            ) ||
+                output
+                .Contains(
+                "Run a \"dotnet tool restore\" to make the \"ilverify\" command available",
+                StringComparison.OrdinalIgnoreCase
+            )
+        }
+
+        internal func ResolveGlobalToolExecutableOnDisk(
+            assemblyLocation string?,
+            pathEnvironment string?,
+            userProfileDirectory string?
+        ) string? {
+            let exeNames = if Path.DirectorySeparatorChar == '\\' {
+                []string{"ilverify.exe", "ilverify"}
+            } else {
+                []string{"ilverify", "ilverify.exe"}
+            }
+            let searchDirectories = List[string]()
+            if !string.IsNullOrEmpty(assemblyLocation) {
+                let normalized = assemblyLocation.Replace('\\', '/')
+                let storeIndex = normalized.IndexOf("/.store/", StringComparison.OrdinalIgnoreCase)
+                if storeIndex > 0 {
+                    let toolPathRoot = assemblyLocation.Substring(0, storeIndex)
+                    if Directory.Exists(toolPathRoot) {
+                        searchDirectories.Add(toolPathRoot)
+                    }
+                }
+            }
+            if !string.IsNullOrEmpty(pathEnvironment) {
+                for entry in pathEnvironment.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries) {
+                    if !string.IsNullOrWhiteSpace(entry) {
+                        searchDirectories.Add(entry.Trim())
+                    }
+                }
+            }
+            if !string.IsNullOrEmpty(userProfileDirectory) {
+                searchDirectories.Add(Path.Combine(userProfileDirectory, ".dotnet", "tools"))
+            }
+            for dir in searchDirectories {
+                for exeName in exeNames {
+                    let candidate = Path.Combine(dir, exeName)
+                    if File.Exists(candidate) {
+                        return Path.GetFullPath(candidate)
+                    }
+                }
+            }
+            return nil
         }
     }
 }
@@ -598,6 +727,17 @@ class IlVerifyResult {
             errors IReadOnlyList[IlVerifyError],
             incompleteMembers IReadOnlyList[string]? = nil
         ) IlVerifyResult -> IlVerifyResult(IlVerifyStatus.Incomplete, exitCode, output, errors, incompleteMembers)
+
+        /// Creates an unavailable result when `dotnet-ilverify` is not installed
+        /// in a local tool manifest or on `PATH` (#4956).
+        /// @param output The tool-probe output.
+        /// @returns An unavailable (cref:IlVerifyResult).
+        func Unavailable(output string) IlVerifyResult -> IlVerifyResult(
+            IlVerifyStatus.Unavailable,
+            1,
+            output ?? string.Empty,
+            Array.Empty[IlVerifyError]()
+        )
 
         /// Classifies a completed ilverify run (#1747/#2748): exit 0 is the
         /// only signal ilverify gives for "verified clean" — the `-g` ignore

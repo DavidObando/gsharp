@@ -58,7 +58,8 @@ class MigrationPipeline {
         let gscPath string? = GscInvoker.Resolve(
             this.options.GscPath,
             this.options.Config,
-            Directory.GetCurrentDirectory()
+            Directory.GetCurrentDirectory(),
+            this.options.SdkVersion
         )
         if gscPath == nil {
             throw InvalidOperationException(
@@ -453,10 +454,12 @@ class MigrationPipeline {
             throw InvalidOperationException("Migrated tree '$migratedRoot' does not exist.")
         }
         this.options.OutputLayout = MigrationOutputLayout.Repository
+        this.ResolveValidationSdkPin(migratedRoot)
         let gscPath string? = GscInvoker.Resolve(
             this.options.GscPath,
             this.options.Config,
-            Directory.GetCurrentDirectory()
+            Directory.GetCurrentDirectory(),
+            this.options.RepositorySdkVersion ?? this.options.SdkVersion
         )
         if gscPath == nil {
             throw InvalidOperationException(
@@ -490,7 +493,6 @@ class MigrationPipeline {
             runDir,
             repositoryLayout: true
         )
-        this.ResolveValidationSdkPin(migratedRoot)
         let evaluatedProjectReferences = await this.LoadEvaluatedProjectReferencesAsync(
             allApps,
             includeBuildOrdering: true,
