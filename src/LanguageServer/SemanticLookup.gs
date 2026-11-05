@@ -427,9 +427,18 @@ shared class SemanticLookup {
             if boundType != nil {
                 return boundType
             }
+            if BoundSemantics.GetNodeSymbol(this.compilation, expression) is TypeSymbol staticQualifier {
+                return staticQualifier
+            }
             switch expression {
                 case name is NameExpressionSyntax {
                     return AsTypeSymbol(this.Resolve(name.IdentifierToken))
+                }
+                case genericName is GenericNameExpressionSyntax {
+                    return AsTypeSymbol(this.Resolve(genericName.Identifier))
+                }
+                case index is IndexExpressionSyntax when index.Target is NameExpressionSyntax targetName {
+                    return AsTypeSymbol(this.Resolve(targetName.IdentifierToken))
                 }
                 case call is CallExpressionSyntax {
                     return AsTypeSymbol(this.Resolve(call.Identifier))
@@ -506,11 +515,6 @@ shared class SemanticLookup {
                         }
                     }
                 }
-            }
-
-            private func LookupMember(structSymbol StructSymbol, memberName string) Symbol? {
-                // ADR-0112: shared canonical member lookup (see TypeMemberModel).
-                return TypeMemberModel.LookupMember(structSymbol, memberName, MemberQuery.All)
             }
 
             private func TokenMatches(candidate SyntaxToken?, token SyntaxToken?) bool {
@@ -620,16 +624,10 @@ shared class SemanticLookup {
             }
 
             private func LookupTypeMember(receiverType TypeSymbol?, memberName string) Symbol? {
-                switch receiverType {
-                    case structSymbol is StructSymbol {
-                        return LookupMember(structSymbol, memberName)
-                    }
-                    case enumSymbol is EnumSymbol {
-                        return enumSymbol.Members.FirstOrDefault((m EnumMemberSymbol) -> m.Name == memberName)
-                    }
-                    default {
-                        return nil
-                    }
+                return if receiverType == nil {
+                    default(Symbol?)
+                } else {
+                    TypeMemberModel.LookupMember(receiverType, memberName, MemberQuery.All)
                 }
             }
         }
@@ -1072,7 +1070,11 @@ shared class SemanticLookup {
                     MapMembersByName(
                         declarations,
                         iface.Declaration.Methods.Select((m FunctionDeclarationSyntax) -> m.Identifier),
-                        iface.Methods
+                        iface
+                            .Methods
+                            .Concat(iface.StaticMethods)
+                            .Concat(iface.PrivateMethods)
+                            .Concat(iface.StaticPrivateMethods)
                     )
                     MapMembersByName(
                         declarations,
@@ -1083,6 +1085,11 @@ shared class SemanticLookup {
                         declarations,
                         iface.Declaration.Events.Select((e EventDeclarationSyntax) -> e.Identifier),
                         iface.Events
+                    )
+                    MapMembersByName(
+                        declarations,
+                        iface.Declaration.StaticFields.Select((f FieldDeclarationSyntax) -> f.Identifier),
+                        iface.StaticFields.Concat(iface.ConstFields)
                     )
                 }
             }
@@ -1148,9 +1155,7 @@ shared class SemanticLookup {
         globals[aggregate.Name] = aggregate
         if aggregate.Declaration != nil {
             declarations[aggregate.Declaration!!.Identifier] = aggregate
-            for var i = 0; i < aggregate.Declaration!!.Fields.Length && i < aggregate.Fields.Length; i++ {
-                declarations[aggregate.Declaration!!.Fields[i].Identifier] = aggregate.Fields[i]
-            }
+            var allFieldIdentifiers = aggregate.Declaration!!.Fields.Select((f FieldDeclarationSyntax) -> f.Identifier)
             var allPropertyIdentifiers = aggregate.Declaration!!.Properties.Select(
                 (p PropertyDeclarationSyntax) -> p.Identifier
             )
@@ -1159,6 +1164,9 @@ shared class SemanticLookup {
                 (m FunctionDeclarationSyntax) -> m.Identifier
             )
             if aggregate.Declaration!!.SharedBlock != nil {
+                allFieldIdentifiers = allFieldIdentifiers.Concat(
+                    aggregate.Declaration!!.SharedBlock!!.Fields.Select((f FieldDeclarationSyntax) -> f.Identifier)
+                )
                 allPropertyIdentifiers = allPropertyIdentifiers.Concat(
                     aggregate.Declaration!!.SharedBlock!!.Properties.Select(
                         (p PropertyDeclarationSyntax) -> p.Identifier
@@ -1170,22 +1178,12 @@ shared class SemanticLookup {
                 allMethodIdentifiers = allMethodIdentifiers.Concat(
                     aggregate.Declaration!!.SharedBlock!!.Methods.Select((m FunctionDeclarationSyntax) -> m.Identifier)
                 )
-                if !aggregate.StaticFields.IsDefaultOrEmpty {
-                    for var si = 0;
-                        si < aggregate.Declaration!!.SharedBlock!!
-                        .Fields
-                        .Length &&
-                        si < aggregate
-                        .StaticFields
-                        .Length;
-                        si++ {
-                        let fieldId SyntaxToken? = aggregate.Declaration!!.SharedBlock!!.Fields[si].Identifier
-                        if fieldId != nil {
-                            declarations[fieldId] = aggregate.StaticFields[si]
-                        }
-                    }
-                }
             }
+            MapMembersByName(
+                declarations,
+                allFieldIdentifiers,
+                aggregate.Fields.Concat(aggregate.StaticFields).Concat(aggregate.ConstFields)
+            )
             MapMembersByName(
                 declarations,
                 allPropertyIdentifiers,

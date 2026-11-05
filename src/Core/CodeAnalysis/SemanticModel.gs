@@ -210,7 +210,10 @@ partial class SemanticModel {
                 (
                 current is BoundLiteralExpression ||
                     current is BoundFieldAccessExpression ||
-                    current is BoundPropertyAccessExpression
+                    current is BoundPropertyAccessExpression ||
+                    current is BoundCallExpression ||
+                    current is BoundConstrainedStaticCallExpression ||
+                    current is BoundUserInstanceCallExpression
             ) &&
                 ReferencedSourceSymbol(expression) is {} widened {
                 return SymbolInfo(widened)
