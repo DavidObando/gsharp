@@ -722,6 +722,22 @@ internal partial class ExpressionBinder {
         return snapshot
     }
 
+    private func TruncateBranchSiblingExpressions(
+        snapshot List[
+            (
+                Id int32,
+                Frame NarrowingFrame?,
+                Entries Dictionary[AccessPath, TypeSymbol]?,
+                Aliases HashSet[VariableSymbol]
+            )
+        ]?
+    ) {
+        if snapshot != nil && snapshotSiblingCounts.TryGetValue(snapshot, out var siblingCount) &&
+            boundSiblingExpressions.Count > siblingCount {
+            boundSiblingExpressions.RemoveRange(siblingCount, boundSiblingExpressions.Count - siblingCount)
+        }
+    }
+
     private func RestoreExpressionNarrowingFrames(
         snapshot List[
             (
@@ -736,9 +752,8 @@ internal partial class ExpressionBinder {
         if snapshot == nil {
             return
         }
-        if truncateSiblings && snapshotSiblingCounts.TryGetValue(snapshot, out var siblingCount) &&
-            boundSiblingExpressions.Count > siblingCount {
-            boundSiblingExpressions.RemoveRange(siblingCount, boundSiblingExpressions.Count - siblingCount)
+        if truncateSiblings {
+            TruncateBranchSiblingExpressions(snapshot)
         }
         for (id, frame, entries, aliases) in snapshot {
             if frame != nil && frame.Owner == nil {
@@ -780,6 +795,7 @@ internal partial class ExpressionBinder {
         if snapshot == nil {
             return
         }
+        TruncateBranchSiblingExpressions(snapshot)
         for (id, frame, branchEntries, branchAliases) in snapshot {
             if frame != nil && frame.Owner == nil {
                 continue

@@ -718,9 +718,11 @@ internal partial class ExpressionBinder {
         ]? = nil
         if targetType != nil {
             whenTrue = bindWhenTrue(targetType)
+            TruncateBranchSiblingExpressions(afterCondition)
             thenExit = CaptureExpressionNarrowingFrames()
             RestoreExpressionNarrowingFrames(afterCondition)
             whenFalse = bindWhenFalse(targetType)
+            TruncateBranchSiblingExpressions(afterCondition)
             falseExit = CaptureExpressionNarrowingFrames()
             MergeBranchExpressionNarrowingFrames(thenExit)
         } else if trueIsBareDefault && falseIsBareDefault {
@@ -733,6 +735,7 @@ internal partial class ExpressionBinder {
             if whenFalse is BoundErrorExpression {
                 return BoundErrorExpression(nil)
             }
+            TruncateBranchSiblingExpressions(afterCondition)
             falseExit = CaptureExpressionNarrowingFrames()
             RestoreExpressionNarrowingFrames(afterCondition)
             whenTrue = BindWithPatternVariables(
@@ -740,6 +743,7 @@ internal partial class ExpressionBinder {
                 () -> BoundDefaultExpression(syntax.WhenTrue, whenFalse.Type),
                 syntax.WhenTrue
             )
+            TruncateBranchSiblingExpressions(afterCondition)
             thenExit = CaptureExpressionNarrowingFrames()
             MergeBranchExpressionNarrowingFrames(falseExit)
         } else if falseIsBareDefault {
@@ -747,6 +751,7 @@ internal partial class ExpressionBinder {
             if whenTrue is BoundErrorExpression {
                 return BoundErrorExpression(nil)
             }
+            TruncateBranchSiblingExpressions(afterCondition)
             thenExit = CaptureExpressionNarrowingFrames()
             RestoreExpressionNarrowingFrames(afterCondition)
             whenFalse = BindWithPatternVariables(
@@ -754,13 +759,16 @@ internal partial class ExpressionBinder {
                 () -> BoundDefaultExpression(syntax.WhenFalse, whenTrue.Type),
                 syntax.WhenFalse
             )
+            TruncateBranchSiblingExpressions(afterCondition)
             falseExit = CaptureExpressionNarrowingFrames()
             MergeBranchExpressionNarrowingFrames(thenExit)
         } else {
             whenTrue = bindWhenTrue(nil)
+            TruncateBranchSiblingExpressions(afterCondition)
             thenExit = CaptureExpressionNarrowingFrames()
             RestoreExpressionNarrowingFrames(afterCondition)
             whenFalse = bindWhenFalse(nil)
+            TruncateBranchSiblingExpressions(afterCondition)
             falseExit = CaptureExpressionNarrowingFrames()
             MergeBranchExpressionNarrowingFrames(thenExit)
         }
@@ -917,9 +925,11 @@ internal partial class ExpressionBinder {
             return BindWithNarrowing(whenFalseNarrowing, bindWhenFalse, out elseArmExitFrame, whenFalseAliases)
         }
         var whenTrue = BindWithPatternVariables(patternWhenTrue, bindWhenTrueNarrowed, syntax.ThenBlock)
+        TruncateBranchSiblingExpressions(afterCondition)
         var thenExit = CaptureExpressionNarrowingFrames()
         RestoreExpressionNarrowingFrames(afterCondition)
         var whenFalse = BindWithPatternVariables(patternWhenFalse, bindWhenFalseNarrowed, elseSyntax)
+        TruncateBranchSiblingExpressions(afterCondition)
         let falseExit = CaptureExpressionNarrowingFrames()
         MergeBranchExpressionNarrowingFrames(thenExit)
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {

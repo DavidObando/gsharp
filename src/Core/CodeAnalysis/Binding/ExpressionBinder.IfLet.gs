@@ -142,12 +142,14 @@ internal partial class ExpressionBinder {
         }
         // Bound AFTER the binding scope/frame is popped: the else branch never
         // sees the bindings.
+        TruncateBranchSiblingExpressions(afterHeader)
         var thenExit = CaptureExpressionNarrowingFrames()
         RestoreExpressionNarrowingFrames(afterHeader)
         for initExit in afterBindingInitializers {
             MergeBranchExpressionNarrowingFrames(initExit)
         }
         var whenFalse = BindIfLetElseBranch(syntax.ElseExpression!!, canBeVoid, targetType)
+        TruncateBranchSiblingExpressions(afterHeader)
         let falseExit = CaptureExpressionNarrowingFrames()
         MergeBranchExpressionNarrowingFrames(thenExit)
         if anyInvalid ||

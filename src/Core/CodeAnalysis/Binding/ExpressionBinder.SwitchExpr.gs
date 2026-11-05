@@ -121,12 +121,13 @@ internal partial class ExpressionBinder {
                         Aliases HashSet[VariableSymbol]
                     )
                 ]? = nil
+                let beforeDefaultArm = CaptureExpressionNarrowingFrames()
                 let bindDefaultResult = func () BoundExpression {
                     let boundDefault = BindExpressionWithNarrowing(armSyntax.Result, nil, targetType, canBeVoid)
+                    TruncateBranchSiblingExpressions(beforeDefaultArm)
                     defaultExit = CaptureExpressionNarrowingFrames()
                     return boundDefault
                 }
-                let beforeDefaultArm = CaptureExpressionNarrowingFrames()
                 let result = if defaultIndex == syntax.Arms.Length - 1 {
                     bindDefaultResult()
                 } else {
@@ -220,6 +221,7 @@ internal partial class ExpressionBinder {
                 },
                 armSyntax.Result
             )
+            TruncateBranchSiblingExpressions(beforeArmResult)
             armExits.Add(CaptureExpressionNarrowingFrames())
             armExitFrames.Add(armExitFrame)
             armPatternVariables.Add(guardWhenTrue)

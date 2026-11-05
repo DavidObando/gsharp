@@ -768,6 +768,10 @@ func CheckDirectTargetTypedTupleConv(token Token) int32 ->
         let pair (float64, int32) = (token, g.Length)
         pair.Item2
     } : 0
+func CheckFalseArmPatternIsolation(o object, token Token) float64 {
+    let v = g != nil ? (!(o is string text) ? token : float64(text.Length)) : 0.0
+    return v
+}
 `)
             using let standardOut = StringWriter()
             using let standardError = StringWriter()
@@ -799,6 +803,7 @@ func CheckDirectTargetTypedTupleConv(token Token) int32 ->
             let consumerDiagnostics = standardOut.ToString() + standardError.ToString()
             Assert.Equal(9, consumerDiagnostics.Split("GS0158").Length - 1)
             Assert.DoesNotContain("GS0536", consumerDiagnostics)
+            Assert.DoesNotContain("GS0130", consumerDiagnostics)
         } finally {
             if Directory.Exists(outputDirectory) {
                 Directory.Delete(outputDirectory, recursive: true)
