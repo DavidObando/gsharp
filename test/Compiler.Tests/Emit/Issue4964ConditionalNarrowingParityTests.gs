@@ -10,6 +10,7 @@ import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import GSharp.Core.Tests
 import System
 import System.Collections.Generic
 import System.Diagnostics
@@ -745,13 +746,41 @@ public class Holder[T] {
         return 1
     }
 }
+
+public class InstanceResetHelper {
+    public init() {}
+    public func ResetInstanceNonNull(out value string) int32 {
+        value = "ok"
+        return 1
+    }
+    public func ResetInstanceNullable(out value string?) int32 {
+        value = nil
+        return 1
+    }
+}
 `)
+
+            using let obliviousFixture = CSharpFixture(`#nullable disable
+namespace Issue4969.ObliviousLib {
+    public class ObliviousReset {
+        public static int ResetStatic(out string value) {
+            value = null;
+            return 1;
+        }
+        public int ResetInstance(out string value) {
+            value = null;
+            return 1;
+        }
+    }
+}
+`, assemblyName: "ObliviousLib", deterministic: true)
 
             let consumerPath = Path.Combine(outputDirectory, "Consumer.gs")
             let consumerOut = Path.Combine(outputDirectory, "Consumer.dll")
             File.WriteAllText(consumerPath, `package Issue4969.CallbackConsumer
 import System.Collections.Generic
 import Issue4969.CallbackLib
+import Issue4969.ObliviousLib
 var g string? = "seed"
 func Consume(x float64, n int32) int32 -> n
 func Consume3(x float64, n int32, extra int32) int32 -> n + extra
@@ -808,6 +837,22 @@ func CheckImportedGenericNonNullHolderOutDischarges(dict Dictionary[string, stri
     var value = "seed"
     return dict.TryGetValue("missing", out value) ? 0 : (holder.Reset(out value), value.Length).Item2
 }
+func CheckImportedInstanceNonNullOutDischarges(dict Dictionary[string, string], helper InstanceResetHelper) int32 {
+    var value = "seed"
+    return dict.TryGetValue("missing", out value) ? 0 : (helper.ResetInstanceNonNull(out value), value.Length).Item2
+}
+func CheckImportedInstanceNullableOutDoesNotDischarge(dict Dictionary[string, string], helper InstanceResetHelper) int32 {
+    var value = "seed"
+    return dict.TryGetValue("missing", out value) ? 0 : (helper.ResetInstanceNullable(out value), value.Length).Item2
+}
+func CheckObliviousStaticOutDoesNotDischarge(dict Dictionary[string, string]) int32 {
+    var value = "seed"
+    return dict.TryGetValue("missing", out value) ? 0 : (ObliviousReset.ResetStatic(out value), value.Length).Item2
+}
+func CheckObliviousInstanceOutDoesNotDischarge(dict Dictionary[string, string], helper ObliviousReset) int32 {
+    var value = "seed"
+    return dict.TryGetValue("missing", out value) ? 0 : (helper.ResetInstance(out value), value.Length).Item2
+}
 func CheckSpeculativeLambdaReturnErrorAfterReboundSuppression() int32 ->
     CallbackPredicates.EvalSpeculative(() -> { return "badReturn" }, 1)
 `)
@@ -829,6 +874,7 @@ func CheckSpeculativeLambdaReturnErrorAfterReboundSuppression() int32 ->
                         "/target:library",
                         "/targetframework:net10.0",
                         "/reference:" + helperPath,
+                        "/reference:" + obliviousFixture.AssemblyPath,
                         consumerPath
                     }
                 )
@@ -839,7 +885,7 @@ func CheckSpeculativeLambdaReturnErrorAfterReboundSuppression() int32 ->
             Assert.Equal(0, helperExit)
             Assert.NotEqual(0, exitCode)
             let consumerDiagnostics = standardOut.ToString() + standardError.ToString()
-            Assert.Equal(11, consumerDiagnostics.Split("GS0158").Length - 1)
+            Assert.Equal(14, consumerDiagnostics.Split("GS0158").Length - 1)
             Assert.Contains("GS0155", consumerDiagnostics)
             Assert.DoesNotContain("GS0536", consumerDiagnostics)
             Assert.DoesNotContain("GS0130", consumerDiagnostics)
@@ -1080,10 +1126,16 @@ func CheckLambdaErrorPreservedAfterSiblingRebind(token NToken) bool ->
     !(gn == nil) ? ConsumeOverload2(token, (TakeAction((x int32) -> {
         let y int32 = "bad"
     }), gn).Item2) : false
+class CondA {}
+class CondB {}
+func TakeNoMatch(x int32, y string) int32 -> x
+func CheckFailedSpeculativeRebindRestoresSuppressedDiagnostic(token NToken) int32 ->
+    !(gn == nil) ? TakeNoMatch(gn!!, ConsumeOverload2(token, 1) ? CondA{} : CondB{}) : 0
 `)
         Assert.Contains("GS0156:this.n;GS0158:Length;GS0204:ConsumeOverloadWarn", throwingArmAndCtorFieldWriteDiag)
         Assert.Contains(":TakeStruct", throwingArmAndCtorFieldWriteDiag)
         Assert.Contains("GS0155:\"bad\"", throwingArmAndCtorFieldWriteDiag)
+        Assert.Contains("GS0536:!!", throwingArmAndCtorFieldWriteDiag)
 
         let deferredCoalesceAndSwitchDiag = DiagnoseSource(`package Issue4969.DeferredBranchyRetry
 interface I {}

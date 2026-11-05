@@ -1378,6 +1378,19 @@ internal partial class StatementBinder {
         }
     }
 
+    private func OutputTypeDischargesNullableWidening(paramType TypeSymbol?, underlying TypeSymbol) bool {
+        var pointee = paramType
+        if pointee is ByRefTypeSymbol byRefParam {
+            pointee = byRefParam.PointeeType
+        }
+        if pointee == nil ||
+            pointee is PlatformTypeSymbol ||
+            pointee.ReferenceNullability == ReferenceNullabilityKind.Platform {
+            return false
+        }
+        return AssignmentTypePreservesNarrowing(pointee, underlying)
+    }
+
     private func UserCallDischargesNullableWidening(
         parameters ImmutableArray[ParameterSymbol],
         arguments ImmutableArray[BoundExpression],
@@ -1392,7 +1405,7 @@ internal partial class StatementBinder {
             }
             if arguments[i] is BoundAddressOfExpression{IsReadOnly: false, Operand: BoundVariableExpression v} &&
                 object.ReferenceEquals(v.Variable, targetRoot) &&
-                AssignmentTypePreservesNarrowing(param.Type, underlying) &&
+                OutputTypeDischargesNullableWidening(param.Type, underlying) &&
                 !HasCompetingWritableReferenceArgument(arguments, i, targetRoot) {
                 return true
             }
@@ -1427,7 +1440,7 @@ internal partial class StatementBinder {
             }
             if arguments[i] is BoundAddressOfExpression{IsReadOnly: false, Operand: BoundVariableExpression v} &&
                 object.ReferenceEquals(v.Variable, targetRoot) &&
-                AssignmentTypePreservesNarrowing(paramType, underlying) &&
+                OutputTypeDischargesNullableWidening(paramType, underlying) &&
                 !HasCompetingWritableReferenceArgument(arguments, i, targetRoot) {
                 return true
             }

@@ -34,6 +34,9 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     private let cascadeSuppressed HashSet[Diagnostic] = HashSet[Diagnostic](ReferenceEqualityComparer.Instance)
     private let reboundSuppressed HashSet[Diagnostic] = HashSet[Diagnostic](ReferenceEqualityComparer.Instance)
     private let reboundDiagnostics HashSet[Diagnostic] = HashSet[Diagnostic](ReferenceEqualityComparer.Instance)
+    private let reboundTombstones Dictionary[Diagnostic, Diagnostic] = Dictionary[Diagnostic, Diagnostic](
+        ReferenceEqualityComparer.Instance
+    )
 
     // Issue #3887: nesting depth of member lookups performed on a receiver
     // whose type is already TypeSymbol.Error. See
@@ -47,6 +50,14 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
 
     internal func LeaveSiblingRebind() {
         siblingRebindDepth--
+    }
+
+    private func OnDiagnosticRemoved(removed Diagnostic) {
+        reboundDiagnostics.Remove(removed)
+        if reboundTombstones.Remove(removed, out var unsuppressed) {
+            reboundSuppressed.Remove(unsuppressed)
+            cascadeSuppressed.Remove(removed)
+        }
     }
 
     /// Gets the number of diagnostics currently held in the bag. Used together
@@ -73,7 +84,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         if count < diagnostics.Count {
             while diagnostics.Count > count {
                 let lastIndex = diagnostics.Count - 1
-                reboundDiagnostics.Remove(diagnostics[lastIndex])
+                OnDiagnosticRemoved(diagnostics[lastIndex])
                 diagnostics.RemoveAt(lastIndex)
             }
         }
@@ -84,6 +95,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         for var i = diagnostics.Count - 1; i >= start; i-- {
             let diagnostic = diagnostics[i]
             if !reboundDiagnostics.Contains(diagnostic) {
+                OnDiagnosticRemoved(diagnostic)
                 diagnostics.RemoveAt(i)
             }
         }
@@ -131,8 +143,12 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     }
 
     internal func RemoveDiagnosticsIn(owner TextLocation) {
-        for var i = diagnostics.Count - 1; i >= 0; i-- {
+        let existingCount = diagnostics.Count
+        for var i = existingCount - 1; i >= 0; i-- {
             let diagnostic = diagnostics[i]
+            if reboundTombstones.ContainsKey(diagnostic) {
+                continue
+            }
             if object.ReferenceEquals(diagnostic.Location.Text, owner.Text) &&
                 diagnostic
                 .Location
@@ -145,8 +161,19 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                 .Span
                 .End <= owner
                 .Span
-                .End {
-                reboundSuppressed.Add(diagnostic)
+                .End &&
+                reboundSuppressed
+                .Add(diagnostic) {
+                let tombstone = Diagnostic(diagnostic.Location, diagnostic.Id, diagnostic.Severity, diagnostic.Message)
+                reboundTombstones[tombstone] = diagnostic
+                cascadeSuppressed.Add(tombstone)
+                diagnostics.Add(tombstone)
+                if siblingRebindDepth > 0 {
+                    reboundDiagnostics.Add(tombstone)
+                }
+                for transaction in transactions {
+                    transaction.Add(tombstone)
+                }
             }
         }
     }
@@ -165,8 +192,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// this instance.
     /// @param diagnostics The diagnostics bag to copy from.
     func AddRange(diagnostics DiagnosticBag) {
-        reboundSuppressed.UnionWith(diagnostics.reboundSuppressed)
-        AddRange(diagnostics.diagnostics)
+        AddRange(diagnostics.Visible())
     }
 
     /// Adds a sequence of already-constructed diagnostics into this instance.
@@ -198,10 +224,10 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     internal func SuppressDuplicateDiagnosticsIn[T](owner TextLocation, bind() -> T) T {
         var owner = owner
         let existing = diagnostics.Where(
-            (diagnostic Diagnostic) -> !reboundSuppressed.Contains(diagnostic) && object.ReferenceEquals(
-                diagnostic.Location.Text,
-                owner.Text
+            (diagnostic Diagnostic) -> !cascadeSuppressed.Contains(diagnostic) && !reboundSuppressed.Contains(
+                diagnostic
             ) &&
+                object.ReferenceEquals(diagnostic.Location.Text, owner.Text) &&
                 diagnostic
                 .Location
                 .Span
@@ -224,7 +250,12 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param bind The analysis operation.
     /// @returns The operation result.
     internal func SuppressDuplicateDiagnostics[T](bind() -> T) T -> SuppressDuplicateDiagnostics(
-        diagnostics.Where((diagnostic Diagnostic) -> !reboundSuppressed.Contains(diagnostic)).ToList(),
+        diagnostics.Where(
+            (diagnostic Diagnostic) -> !cascadeSuppressed.Contains(diagnostic) && !reboundSuppressed.Contains(
+                diagnostic
+            )
+        )
+            .ToList(),
         bind
     )
 
@@ -333,7 +364,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         for var addedIndex = added.Count - 1; addedIndex >= 0; addedIndex-- {
             for var diagnosticIndex = diagnostics.Count - 1; diagnosticIndex >= 0; diagnosticIndex-- {
                 if object.ReferenceEquals(diagnostics[diagnosticIndex], added[addedIndex]) {
-                    reboundDiagnostics.Remove(diagnostics[diagnosticIndex])
+                    OnDiagnosticRemoved(diagnostics[diagnosticIndex])
                     diagnostics.RemoveAt(diagnosticIndex)
                     break
                 }
