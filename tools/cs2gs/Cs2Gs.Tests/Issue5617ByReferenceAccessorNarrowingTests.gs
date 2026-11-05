@@ -1258,6 +1258,30 @@ public class Demo
         }
         return s.Length + total + 2;
     }
+    public static int CoalesceAssignCovariantArrayInLoop(ref string? s, string[] strings)
+    {
+        if (s == null) return 0;
+        object[]? copy = null;
+        var i = 0;
+        while (i < 1)
+        {
+            copy ??= strings;
+            i++;
+        }
+        return s.Length + copy!.Length + 3;
+    }
+    static void Touch<T>() { }
+    public static int BareGenericStaticCallInLoop(ref string? s)
+    {
+        if (s == null) return 0;
+        var i = 0;
+        while (i < 1)
+        {
+            Touch<int>();
+            i++;
+        }
+        return s.Length + 4;
+    }
     public static int GuardInsideLoop(ref string? s, string text)
     {
         var total = 0;
@@ -1280,6 +1304,8 @@ public class Demo
         string? text = "abc";
         return ForEachCharToInt(ref text, "xy") + "," + WhileIntToLong(ref text) + "," +
             ArrayLengthLongToInt(ref text, 2L) + "," + CovariantArrayInLoop(ref text, new[] { "a" }) + "," +
+            CoalesceAssignCovariantArrayInLoop(ref text, new[] { "b" }) + "," +
+            BareGenericStaticCallInLoop(ref text) + "," +
             GuardInsideLoop(ref text, "z") + "," + OutsideLoop(ref text, 4);
     }
 }`)
@@ -1289,13 +1315,16 @@ public class Demo
         Assert.Contains("[int32(n)]uint8", printed)
         Assert.Contains("cast[[]object](strings)", printed)
         Assert.Contains("return s!!.Length + total + 2", printed)
+        Assert.Contains("return s!!.Length + copy!!.Length + 3", printed)
+        Assert.Contains("return s!!.Length + 4", printed)
         Assert.Contains("total += s.Length + 1", printed)
         Assert.Contains("return int64(s.Length) + wide", printed)
     }
 
     /// Issue #5692 (2): gsc's region scanner gives no origin to the variables of a deconstructing `for (a, b) in items`
     /// loop, so using a deconstructed variable (or an inferred copy of it) in the body removes a by-reference fact at
-    /// loop entry and after it. Unused deconstructed variables and an unused inferred `var` copy keep the fact.
+    /// loop entry and after it. Unused deconstructed variables, an unused inferred `var` copy, and a pure type test
+    /// keep the fact.
     @Fact
     func RefParameter_ReadAroundAForEachThatUsesADeconstructedLoopVariable_IsAsserted() {
         let printed = AssertRunsLikeCSharp(`
@@ -1342,13 +1371,24 @@ public class Demo
         }
         return s.Length + 3;
     }
+    public static int PureTypeTestOnly(ref string? s, (object, int)[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (a, b) in items)
+        {
+            if (a is string) total += 1;
+        }
+        return s.Length + total + 4;
+    }
     public static string Run()
     {
         string? text = "abc";
         var items = new[] { (1, 2) };
         return AfterLoop(ref text, items) + "," + InsideLoop(ref text, items) + "," +
             UsedThroughCopy(ref text, items) + "," + UnusedVariables(ref text, items) + "," +
-            UnusedCopyOnly(ref text, items);
+            UnusedCopyOnly(ref text, items) + "," +
+            PureTypeTestOnly(ref text, new (object, int)[] { ("x", 1) });
     }
 }`)
         Assert.Contains("return s!!.Length + total\n", printed.Replace("\r\n", "\n"))
@@ -1356,26 +1396,43 @@ public class Demo
         Assert.Contains("return s!!.Length + total + 2", printed)
         Assert.Contains("total += s.Length + 1", printed)
         Assert.Contains("return s.Length + 3", printed)
+        Assert.Contains("return s.Length + total + 4", printed)
         Assert.Equal(3, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5692 (3): gsc's region scanner cannot resolve the element origin of an untyped `for x in call()` loop
-    /// when an extension method of that name can bind (`"a,b".Split(',')`) or when the call is an unqualified static
-    /// class method (`Parts()`, emitted as a bare call that `$scope.TryLookupFunctions` does not resolve in a method
-    /// body), so reading a member of `x` in the body counts as a read on an untyped receiver (W5) and removes a
-    /// by-reference fact. Over a parameter slice `parts`, a qualified static call `Box.Parts()`, or an instance member
-    /// call `box.InstanceParts()` whose return type the scanner resolves, the fact stays.
+    /// when an extension method of that name can bind (`"a,b".Split(',')` or a source extension on `ShadowedBox`) or
+    /// when the call is an unqualified static class method (`Parts()`), so reading a member of `x` in the body counts
+    /// as a read on an untyped receiver (W5) and removes a by-reference fact. Over a parameter slice `parts`, a
+    /// qualified static call `Box.Parts()`, an instance member call `box.InstanceParts()` with no applicable extension
+    /// of that name, a source extension `word.WordParts()` or `values.Entries()`, or a pure string concatenation, the
+    /// fact stays.
     @Fact
     func RefParameter_ReadAroundAForEachOverACallWhoseLoopVariableIsRead_IsAsserted() {
         let printed = AssertRunsLikeCSharp(`
+namespace OtherNs
+{
+    public static class ShadowExtensions
+    {
+        public static void ShadowedParts(this ShadowedBox box, int n) { }
+    }
+}
+public sealed class Unrelated { }
 public static class WordExtensions
 {
     public static string[] WordParts(this string text) => new[] { text };
+    public static void WordParts(this Unrelated other) { }
+    public static void InstanceParts(this Unrelated other) { }
+    public static int[] Entries(this int[] values) => values;
 }
 public sealed class Box
 {
     public static string[] Parts() => new[] { "a", "b" };
     public string[] InstanceParts() => new[] { "c" };
+}
+public sealed class ShadowedBox
+{
+    public string[] ShadowedParts() => new[] { "e" };
 }
 public class Demo
 {
@@ -1405,6 +1462,13 @@ public class Demo
         foreach (var part in UnqualifiedParts()) total += part.Length;
         return s.Length + total + 3;
     }
+    public static int OverSourceShadowedMemberCall(ref string? s, ShadowedBox shadowed)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in shadowed.ShadowedParts()) total += part.Length;
+        return s.Length + total + 5;
+    }
     public static int OverParameterArray(ref string? s, string[] parts)
     {
         if (s == null) return 0;
@@ -1412,13 +1476,14 @@ public class Demo
         foreach (var part in parts) total += part.Length;
         return s.Length + total + 1;
     }
-    public static int OverResolvableMemberCalls(ref string? s, Box box, string word)
+    public static int OverResolvableMemberCalls(ref string? s, Box box, string word, int[] values)
     {
         if (s == null) return 0;
         var total = 0;
         foreach (var part in Box.Parts()) total += part.Length;
         foreach (var part in box.InstanceParts()) total += part.Length;
         foreach (var part in word.WordParts()) total += part.Length;
+        foreach (var entry in values.Entries()) total += entry;
         return s.Length + total + 2;
     }
     public static int OverPureStringConcatenation(ref string? s)
@@ -1436,26 +1501,28 @@ public class Demo
         string? text = "abc";
         return AfterCallCollection(ref text) + "," + InsideCallCollection(ref text) + "," +
             OverUnqualifiedStaticCall(ref text) + "," +
+            OverSourceShadowedMemberCall(ref text, new ShadowedBox()) + "," +
             OverParameterArray(ref text, new[] { "a", "b" }) + "," +
-            OverResolvableMemberCalls(ref text, new Box(), "hi") + "," +
+            OverResolvableMemberCalls(ref text, new Box(), "hi", new[] { 1 }) + "," +
             OverPureStringConcatenation(ref text);
     }
 }`)
         Assert.Contains("return s!!.Length + total\n", printed.Replace("\r\n", "\n"))
         Assert.Contains("total += s!!.Length", printed)
         Assert.Contains("return s!!.Length + total + 3", printed)
+        Assert.Contains("return s!!.Length + total + 5", printed)
         Assert.Contains("return s.Length + total + 1", printed)
         Assert.Contains("return s.Length + total + 2", printed)
         Assert.Contains("return s.Length + total + 4", printed)
-        Assert.Equal(3, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(4, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null
     /// when the loop has no emitted `break` (`RecordLoopExitFacts`, ADR-0213 R7 (f)). A loop with a `break` (targeting
-    /// it, a nested loop, a non-terminal switch break, or inside a lambda), a loop whose condition lowers to a hoisted
-    /// `break` guard, a loop in a function with a lowered `goto case`, or a loop whose condition runs an accessor that
-    /// can write by-reference storage does not get the loop-exit fact on main, so its read after the loop stays
-    /// asserted.
+    /// it, a nested loop, a non-terminal switch break, a lowered `goto case` to an empty arm, or inside a lambda), a
+    /// loop whose condition lowers to a hoisted `break` guard, a loop in a function with a lowered `goto case` or a
+    /// synthesized `forContinue` label, or a loop whose condition runs an accessor that can write by-reference storage
+    /// does not get the loop-exit fact on main, so its read after the loop stays asserted.
     @Fact
     func RefParameter_ReadAfterALoopWhoseExitConditionProvesNonNull_StaysBare() {
         let printed = AssertRunsLikeCSharp(`
@@ -1589,6 +1656,40 @@ public class Demo
         }
         return s.Length + 11;
     }
+    public static int WhileLoopAfterSynthesizedForContinueLabel(ref string? s, Box box)
+    {
+        for (var i = 0; i < 1; i++, i++)
+        {
+            try { continue; } catch (Exception) { }
+        }
+        s = null;
+        while (s == null)
+        {
+            box.F = 1;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 12;
+    }
+    public static int WhileLoopWithGotoCaseToEmptyArm(ref string? s, Box box, int k)
+    {
+        s = null;
+        while (s == null)
+        {
+            switch (k)
+            {
+                case 0:
+                    goto case 2;
+                case 1:
+                    box.F = 2;
+                    break;
+                case 2:
+                    break;
+            }
+            box.F = 1;
+            s = box.F > 0 ? "abc" : null;
+        }
+        return s.Length + 13;
+    }
     public static string Run()
     {
         string? text = "abc";
@@ -1600,7 +1701,9 @@ public class Demo
             WhileConditionHoistsOutPattern(ref text, 1) + "," +
             WhileLoopWithLambdaBreak(ref text, new Box()) + "," +
             WhileLoopWithNonTerminalSwitchBreak(ref text, new Box(), 0) + "," +
-            WhileLoopInSwitchGotoFunction(ref text, new Box(), 2);
+            WhileLoopInSwitchGotoFunction(ref text, new Box(), 2) + "," +
+            WhileLoopAfterSynthesizedForContinueLabel(ref text, new Box()) + "," +
+            WhileLoopWithGotoCaseToEmptyArm(ref text, new Box(), 0);
     }
 }`)
         Assert.Contains("return s.Length + 1\n", printed.Replace("\r\n", "\n"))
@@ -1614,7 +1717,9 @@ public class Demo
         Assert.Contains("return s!!.Length + 9", printed)
         Assert.Contains("return s!!.Length + 10", printed)
         Assert.Contains("return s!!.Length + 11", printed)
-        Assert.Equal(7, Regex.Matches(printed, `s!!`).Count)
+        Assert.Contains("return s!!.Length + 12", printed)
+        Assert.Contains("return s!!.Length + 13", printed)
+        Assert.Equal(9, Regex.Matches(printed, `s!!`).Count)
     }
 
     shared {

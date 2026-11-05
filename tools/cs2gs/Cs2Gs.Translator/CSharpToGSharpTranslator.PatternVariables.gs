@@ -1452,7 +1452,7 @@ partial class CSharpToGSharpTranslator {
                 loop
                 .SyntaxTree
                 .GetRoot()
-            if this.GetScopeGotoIndex(body).Jumps.Count > 0 {
+            if this.GetScopeGotoIndex(body).Jumps.Count > 0 || this.ScopeSynthesizesLoopContinueLabel(body) {
                 return false
             }
             return !body.DescendantNodes(
@@ -1461,6 +1461,52 @@ partial class CSharpToGSharpTranslator {
                 )
             )
                 .Any((node SyntaxNode) -> node is LabeledStatementSyntax)
+        }
+
+        private func ScopeSynthesizesLoopContinueLabel(body SyntaxNode) bool {
+            for node in body.DescendantNodes(
+                (child SyntaxNode) -> !(
+                    child is LocalFunctionStatementSyntax || child is AnonymousFunctionExpressionSyntax
+                )
+            ) {
+                if node is DoStatementSyntax doLoop && this.LoopConditionLowersOutOfHeader(doLoop, doLoop.Condition) &&
+                    BodyContainsOwnLoopContinue(doLoop.Statement) {
+                    return true
+                }
+                if node is ForStatementSyntax forLoop &&
+                    forLoop
+                    .Incrementors
+                    .Count > 0 &&
+                    BodyContainsOwnLoopContinue(forLoop.Statement) &&
+                    (
+                    (forLoop.Declaration?.Variables.Count ?? 0) > 1 ||
+                        forLoop
+                        .Initializers
+                        .Count > 1 ||
+                        forLoop
+                        .Incrementors
+                        .Count > 1 ||
+                        forLoop
+                        .Initializers
+                        .Concat(forLoop.Incrementors)
+                        .Any(
+                        (expr ExpressionSyntax) -> ClauseContainsAssignment(expr) ||
+                            this.ClauseRequiresOutPredeclaration(expr)
+                    ) ||
+                        this.ForConditionRequiresHoist(forLoop.Condition)
+                ) &&
+                    (
+                    this.ClauseRequiresOutPredeclaration(forLoop.Condition) ||
+                        forLoop
+                        .Initializers
+                        .Concat(forLoop.Incrementors)
+                        .Any(this.ClauseRequiresOutPredeclaration) ||
+                        OwnLoopContinueCrossesTryOrUsing(forLoop.Statement)
+                ) {
+                    return true
+                }
+            }
+            return false
         }
 
         private func LoopConditionLowersOutOfHeader(loop StatementSyntax, condition ExpressionSyntax) bool {
@@ -1506,6 +1552,14 @@ partial class CSharpToGSharpTranslator {
                     ) {
                         return true
                     }
+                } else if node is GotoStatementSyntax jump &&
+                    (jump.IsKind(SyntaxKind.GotoCaseStatement) || jump.IsKind(SyntaxKind.GotoDefaultStatement)) &&
+                    !this.IsAdjacentFallthroughGoto(jump) && this.ResolveGotoCaseOrDefaultTarget(
+                    jump
+                ) is {} targetSwitchLabel &&
+                    TargetArmIsEmptyBreak(targetSwitchLabel) &&
+                    !HasInterveningBreakTarget(jump) {
+                    return true
                 } else if node is WhileStatementSyntax nestedWhile && this.LoopConditionLowersOutOfHeader(
                     nestedWhile,
                     nestedWhile.Condition
