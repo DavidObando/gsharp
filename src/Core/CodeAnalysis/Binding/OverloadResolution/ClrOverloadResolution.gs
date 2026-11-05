@@ -4035,13 +4035,20 @@ internal shared class ClrOverloadResolution {
             return false
         }
         let bounds = Dictionary[string, Type](StringComparer.Ordinal)
+        let collectedBounds = ClrInferenceBounds()
         for var i = 0; i < argTypes.Count; i++ {
             let arg Type? = argTypes[i]
             if arg == nil {
                 continue
             }
             try {
-                if !UnifyForInference(parameters[i].ParameterType, arg, bounds) {
+                if !UnifyForInference(
+                    parameters[i].ParameterType,
+                    arg,
+                    bounds,
+                    ClrInferenceBoundKind.Lower,
+                    collectedBounds
+                ) {
                     return false
                 }
             } catch (ex Exception) when IsMetadataLoadFailure(ex) {

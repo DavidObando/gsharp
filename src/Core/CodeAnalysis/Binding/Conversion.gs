@@ -4911,7 +4911,7 @@ class Conversion {
             }
             switch source.ReferenceNullability {
                 case ReferenceNullabilityKind.Nullable {
-                    if target.ReferenceNullability != ReferenceNullabilityKind.Nullable {
+                    if target.ReferenceNullability == ReferenceNullabilityKind.NotNull {
                         return false
                     }
                 }
@@ -4931,7 +4931,14 @@ class Conversion {
                 let targetPositions = target.GetElementPositions()
                 return sourcePositions.Length == 1 &&
                     targetPositions.Length == 1 &&
-                    IsVarianceArgumentCompatible(sourcePositions[0], targetPositions[0], allowPlatformNilCheck: false)
+                    (
+                    HaveIdenticalTypeArgumentContracts(sourcePositions[0], targetPositions[0]) ||
+                        IsVarianceArgumentCompatible(
+                        sourcePositions[0],
+                        targetPositions[0],
+                        allowPlatformNilCheck: false
+                    )
+                )
             }
             // Classification already related nested arguments; only the nominal proof is added for this pair.
             let conversion = Classify(source, target)

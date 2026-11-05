@@ -2777,6 +2777,10 @@ Console.WriteLine("${ternary(Probe())} ${expression(Probe())} ${statement(Probe(
         public static string UpperAndLowerWithConstructorConstraint<T>(
             System.Collections.Generic.IComparer<T> comparer,
             T value) where T : new() => typeof(T).FullName ?? "";
+        public static R SelectAfterExactAndUpper<T, R>(
+            System.Collections.Generic.IList<T> items,
+            System.Collections.Generic.IComparer<T> comparer,
+            System.Func<T, R> selector) => selector(items[0]);
     }
 }`)
         let result = CompileAndRun(`import System
@@ -2785,6 +2789,8 @@ import Fixture4986
 Console.WriteLine(Probes.DoubleContravariantFirst(Probes.Nested, "x"))
 Console.WriteLine(Probes.DoubleContravariantSecond("x", Probes.Nested))
 Console.WriteLine(Probes.UpperAndLowerWithConstructorConstraint(Comparer[object].Default, "x"))
+let items = List[string](){"hello"}
+Console.WriteLine(Probes.SelectAfterExactAndUpper(items, Comparer[object].Default, x -> x.Length))
 `, fixture.AssemblyPath)
         Assert.Equal(
             "System.Object" +
@@ -2792,6 +2798,8 @@ Console.WriteLine(Probes.UpperAndLowerWithConstructorConstraint(Comparer[object]
                 "System.Object" +
                 Environment.NewLine +
                 "System.Object" +
+                Environment.NewLine +
+                "5" +
                 Environment.NewLine,
             result.Output
         )

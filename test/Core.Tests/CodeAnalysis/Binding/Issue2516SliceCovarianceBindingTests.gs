@@ -10,6 +10,9 @@ import GSharp.Core.CodeAnalysis.Symbols
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.IO
+import System.Reflection
+import System.Runtime.InteropServices
 import Xunit
 
 /// Issue #2516 conversion-matrix guards for source slices, imported CLR
@@ -135,9 +138,44 @@ open class Issue2516SliceCovarianceBindingTests {
                 allowPlatformNilCheck: false
             )
         )
+        Assert.True(
+            Conversion.IsVarianceArgumentCompatible(
+                NullableTypeSymbol.Get(TypeSymbol.String),
+                PlatformTypeSymbol.Get(TypeSymbol.Object),
+                allowPlatformNilCheck: false
+            )
+        )
+        let platformIntSlice = PlatformTypeSymbol.Get(SliceTypeSymbol.Get(TypeSymbol.Int32))
+        let nullableIntSlice = NullableTypeSymbol.Get(SliceTypeSymbol.Get(TypeSymbol.Int32))
+        Assert.True(
+            Conversion.IsVarianceArgumentCompatible(platformIntSlice, nullableIntSlice, allowPlatformNilCheck: false)
+        )
+    }
+
+    @Fact
+    func ClrAssignabilityByName_RejectsPointersAndGuardsRecursiveVarianceCycles() {
+        let intPointer = typeof(int32).MakePointerType()
+        let intPointerArray = intPointer.MakeArrayType()
+        Assert.False(ClrTypeUtilities.IsAssignableByName(typeof(object), intPointer))
+        Assert.False(ClrTypeUtilities.IsAssignableByName(typeof([]object), intPointerArray))
+
+        let runtimePaths = Directory.GetFiles(RuntimeEnvironment.GetRuntimeDirectory(), "*.dll")
+        let paths = List[string](runtimePaths)
+        paths.Add(typeof(Issue2516SliceCovarianceBindingTests).Assembly.Location)
+        using let mlc = MetadataLoadContext(PathAssemblyResolver(paths))
+        let mlcAssembly = mlc.LoadFromAssemblyPath(typeof(Issue2516SliceCovarianceBindingTests).Assembly.Location)
+        let mlcRight = mlcAssembly.GetType(typeof(RecursiveRight).FullName ?? "")
+        Assert.NotNull(mlcRight)
+        Assert.False(ClrTypeUtilities.IsAssignableByName(typeof(IRecursiveContra[RecursiveLeft]), mlcRight))
     }
 
     private interface ICovariant[out T] { }
+
+    private interface IRecursiveContra[in T] { }
+
+    private sealed class RecursiveLeft : IRecursiveContra[IRecursiveContra[RecursiveLeft]] { }
+
+    private sealed class RecursiveRight : IRecursiveContra[IRecursiveContra[RecursiveRight]] { }
 
     shared {
         private let EnumerableObject TypeSymbol = TypeSymbol.FromClrType(typeof(IEnumerable[object]))
