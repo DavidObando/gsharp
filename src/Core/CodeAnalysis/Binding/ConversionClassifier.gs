@@ -6769,7 +6769,7 @@ internal class ConversionClassifier {
             }
             if !(mapped is ImportedTypeSymbol{OpenDefinition: {} mappedOpen} mappedImported) ||
                 !(expected is ImportedTypeSymbol{OpenDefinition: {} expectedOpen} expectedImported) ||
-                mappedOpen != expectedOpen ||
+                !ClrTypeUtilities.AreSame(mappedOpen, expectedOpen) ||
                 mappedImported
                 .TypeArguments
                 .Length != expectedImported

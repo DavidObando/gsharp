@@ -1319,25 +1319,9 @@ class Conversion {
             if to?.ClrType.IsSameAs(typeof(object)) == true && from?.ClrType != nil {
                 return Conversion.Implicit
             }
-            // Symbolic elements do not change the reference representation of arrays and sequences.
-            if (from is SliceTypeSymbol or ArrayTypeSymbol or SequenceTypeSymbol or AsyncSequenceTypeSymbol) &&
-                to
-                ?.ClrType
-                .IsSameAs(typeof(object)) == true {
-                return Conversion.Implicit
-            }
-            // Issue #3303: a `map[K, V]` is unconditionally a CLR reference type
-            // (`System.Collections.Generic.Dictionary<K, V>`), but its `ClrType`
-            // is null when the key or value structurally references an in-scope
-            // type parameter (e.g. a `map[K, V]` field of a generic class) or a
-            // same-compilation struct, so the general CLR-backed widening rule
-            // above cannot fire. Widening such a reference to `object` is still a
-            // no-op at the IL level — the emitter's #1481 arm in
-            // MethodBodyEmitter.IsReferenceCompatible already recognizes exactly
-            // this shape. Without this, `Console.WriteLine(items)` and `object`-typed
-            // parameter/return positions reported GS0155/GS0159 for open maps
-            // while the monomorphic equivalent bound fine.
-            if from is MapTypeSymbol && (to == TypeSymbol.Object || to?.ClrType.IsSameAs(typeof(object)) == true) {
+            // Symbolic elements do not change the reference representation of reference-like types (#5529).
+            if IsReferenceLikeTarget(from) &&
+                (to == TypeSymbol.Object || to?.ClrType.IsSameAs(typeof(object)) == true) {
                 return Conversion.Implicit
             }
             // Issue #3748: a tuple is unconditionally a CLR value type
@@ -2009,10 +1993,9 @@ class Conversion {
                 )
             ) &&
                 (
-                TryGetConstructedGenericShape(to, out _, out _) || DeclarationBinder.TryGetRankOneNonSzArrayElementType(
-                    to,
-                    out _
-                )
+                TryGetConstructedGenericShape(to, out _, out _) ||
+                    to is FunctionTypeSymbol{ClrType: not nil} ||
+                    DeclarationBinder.TryGetRankOneNonSzArrayElementType(to, out _)
             ) {
                 return Conversion.None
             }
@@ -2591,6 +2574,18 @@ class Conversion {
                 return TryGetConstructedGenericShape(type, out definition, out arguments)
             }
             let isVoid = FunctionTypeSymbol.IsVoidReturn(function.ReturnType)
+            if !isVoid && (function.ReturnType is ByRefTypeSymbol or PointerTypeSymbol) {
+                definition = nil
+                arguments = ImmutableArray[TypeSymbol].Empty
+                return false
+            }
+            for var i = 0; i < function.Arity; i++ {
+                if function.ParameterTypes[i] is ByRefTypeSymbol or PointerTypeSymbol {
+                    definition = nil
+                    arguments = ImmutableArray[TypeSymbol].Empty
+                    return false
+                }
+            }
             // Source slots have no CLR type yet; the definition depends only on the arity and on a void result.
             let erased = ImmutableArray.CreateBuilder[TypeSymbol](function.Arity)
             for var i = 0; i < function.Arity; i++ {
@@ -3460,7 +3455,8 @@ class Conversion {
             nominalOnly bool = false
         ) bool {
             if from == nil ||
-                !TryGetConstructedGenericShape(to, out var targetOpen, out var targetArguments) ||
+                to == nil ||
+                !TryGetNaturalDelegateShape(to, out var targetOpen, out var targetArguments) ||
                 targetOpen == nil ||
                 targetOpen.IsValueType {
                 return false
@@ -5175,6 +5171,19 @@ class Conversion {
                 return a is NullableTypeSymbol aValue &&
                     b is NullableTypeSymbol bValue &&
                     AreTypeArgumentsEquivalent(aValue.UnderlyingType, bValue.UnderlyingType)
+            }
+            if (a is FunctionTypeSymbol || b is FunctionTypeSymbol) &&
+                TryGetNaturalDelegateShape(a, out var aDelegate, out var aDelegateArgs) &&
+                TryGetNaturalDelegateShape(b, out var bDelegate, out var bDelegateArgs) {
+                if !aDelegate.IsSameAs(bDelegate) || aDelegateArgs.Length != bDelegateArgs.Length {
+                    return false
+                }
+                for var i = 0; i < aDelegateArgs.Length; i++ {
+                    if !AreTypeArgumentsEquivalent(aDelegateArgs[i], bDelegateArgs[i]) {
+                        return false
+                    }
+                }
+                return true
             }
             // Nested generic arguments retain their symbolic shape through aliases
             // and annotation carriers instead of comparing erased CLR envelopes.

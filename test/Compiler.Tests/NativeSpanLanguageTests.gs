@@ -46,6 +46,50 @@ func Main() {
         Assert.Equal("Code\n", fixture.Run(assembly))
     }
 
+    @Fact
+    func SourceEnumSpanConversionsAndExtensionsPreserveElementIdentity() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`using System;
+namespace SpanOverloadContract;
+public static class Probe {
+    public static string OnlyObj(ReadOnlySpan<object> value) => "Object";
+    public static string OnlyInt(ReadOnlySpan<int> value) => "Int32";
+}`, "SpanOverloadContract")
+        let assembly = fixture.Compile(`package Preexisting
+import System
+enum Code { A = 1, B = 2 }
+func Kind(value System.ReadOnlySpan[Code]) string -> "Code"
+func Kind(value System.ReadOnlySpan[object]) string -> "Object"
+func Main() {
+    let view System.Span[Code] = []Code{Code.A, Code.B}
+    let view2 Span[Code] = []Code{Code.A, Code.B}
+    let view3 span[Code] = []Code{Code.A, Code.B}
+    Console.WriteLine(Kind(view))
+    Console.WriteLine(Kind(view2))
+    Console.WriteLine(Kind(view3))
+    Console.WriteLine(MemoryExtensions.IndexOf(view, Code.B))
+    Console.WriteLine(MemoryExtensions.IndexOf(view2, Code.B))
+    Console.WriteLine(MemoryExtensions.IndexOf(view3, Code.B))
+}`, "span-enum-overload-identity", true)
+        IlVerifier.Verify(assembly)
+        Assert.Equal("Code\nCode\nCode\n1\n1\n1\n", fixture.Run(assembly))
+        for rejectedCall in[]string{"Probe.OnlyObj(sp1)", "Probe.OnlyObj(sp2)", "Probe.OnlyInt(sp3)"} {
+            let (code, output) = fixture.TryCompile(`package PreexistingReject
+import System
+import SpanOverloadContract
+enum Code { A = 1 }
+struct Item { var X int32 }
+func Main() {
+    let sp1 System.Span[Code] = []Code{Code.A}
+    let sp2 Span[Item] = []Item{Item{X: 1}}
+    let sp3 Span[Code] = []Code{Code.A}
+    Console.WriteLine(` + rejectedCall + `)
+}`, "span-enum-overload-reject", true, "/reference:" + contract)
+            Assert.NotEqual(0, code)
+            Assert.Contains("GS0159", output, StringComparison.Ordinal)
+        }
+    }
+
     @Theory
     @InlineData("span[byte](data)")
     @InlineData("Registry.span[byte](data)")

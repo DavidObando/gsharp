@@ -2271,6 +2271,125 @@ class Program {
 `, "CS0121", line: 4, column: 25, length: 15, diagnostic: "GS0160")
     }
 
+    /// Issue #5559: when conversions alone do not separate two imported candidates, C# §12.6.4.3 prefers a
+    /// by-value parameter over an `in` parameter for an argument that omits `in`.
+    @Fact
+    func OmittedInArgument_PrefersByValueParameterOverInWhenConversionsCrossTie() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.B1(1, 1))
+    Console.Write(Calls.B3(() -> 1, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.B1(1, 1));
+        Console.Write(Calls.B3(() => 1, 1));
+    }
+}
+`, "OO")
+        Reject(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.SplitIn(1, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.SplitIn(1, 1));
+    }
+}
+`, "CS0121", line: 4, column: 25, length: 13, diagnostic: "GS0160")
+    }
+
+    /// Issue #5539: imported `System.Func` and `System.Action` over source elements convert to the equivalent or
+    /// variance-compatible arrow function type without allocating a new delegate.
+    @Fact
+    func ImportedFuncAndActionOverSourceElements_ConvertToArrowFunctions() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+open class Animal {
+    open func Tag() string -> "A"
+}
+class Dog : Animal {
+    override func Tag() string -> "D"
+}
+func F7(x Func[Dog]) () -> Dog -> x
+func F4(x Func[Dog]) () -> Animal -> x
+func A1(x Action[Animal]) (Dog) -> void -> x
+func Main() {
+    let dog = Dog()
+    let f Func[Dog] = () -> dog
+    var seen = ""
+    let a Action[Animal] = (pet Animal) -> { seen = pet.Tag() }
+    let f7 = F7(f)
+    let f4 = F4(f)
+    let a1 = A1(a)
+    a1(dog)
+    Console.Write(Object.ReferenceEquals(f7, f))
+    Console.Write(Object.ReferenceEquals(f4, f))
+    Console.Write(Object.ReferenceEquals(a1, a))
+    Console.Write(f7().Tag())
+    Console.Write(f4().Tag())
+    Console.Write(seen)
+}
+`, `using System;
+using FunctionControl;
+class Animal { public virtual string Tag() => "A"; }
+class Dog : Animal { public override string Tag() => "D"; }
+class Program {
+    static Func<Dog> F7(Func<Dog> x) => x;
+    static Func<Animal> F4(Func<Dog> x) => x;
+    static Action<Dog> A1(Action<Animal> x) => x;
+    static void Main() {
+        var dog = new Dog();
+        Func<Dog> f = () => dog;
+        var seen = "";
+        Action<Animal> a = pet => { seen = pet.Tag(); };
+        var f7 = F7(f);
+        var f4 = F4(f);
+        var a1 = A1(a);
+        a1(dog);
+        Console.Write(Object.ReferenceEquals(f7, f));
+        Console.Write(Object.ReferenceEquals(f4, f));
+        Console.Write(Object.ReferenceEquals(a1, a));
+        Console.Write(f7().Tag());
+        Console.Write(f4().Tag());
+        Console.Write(seen);
+    }
+}
+`, "TrueTrueTrueDDD")
+        Reject(fixture, `import System
+open class Animal {}
+class Dog : Animal {}
+func Bad(x Func[Animal]) () -> Dog -> x
+func Main() {}
+`, `using System;
+class Animal {}
+class Dog : Animal {}
+class Program {
+    static Func<Dog> Bad(Func<Animal> x) => x;
+    static void Main() {}
+}
+`, "CS0266", line: 4, column: 39, length: 1, diagnostic: "GS0156")
+        Reject(fixture, `import System
+enum Code { A = 1 }
+func Bad(x Func[Code]) () -> object -> x
+func Main() {}
+`, `using System;
+enum Code { A = 1 }
+class Program {
+    static Func<object> Bad(Func<Code> x) => x;
+    static void Main() {}
+}
+`, "CS0029", line: 3, column: 40, length: 1)
+    }
+
     @Fact
     func ImportedExtensionReceiver_SkipsFunctionValueThatNeedsAConversion() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
@@ -3007,6 +3126,12 @@ namespace FunctionControl {
         public static string PG(object o, string s) => "O";
         public static string Amb(in System.Func<long> f, int x) => "F";
         public static string Amb(in System.Func<int> o, long x) => "O";
+        public static string B1(in long f, int x) => "F";
+        public static string B1(int o, long x) => "O";
+        public static string B3(in System.Func<long> f, int x) => "F";
+        public static string B3(System.Func<int> o, long x) => "O";
+        public static string SplitIn(in long a, int b) => "F";
+        public static string SplitIn(int a, in long b) => "O";
         public static string Sig(System.Func<int, long> f, int x) => "F";
         public static string Sig(object o, long x) => Kinds.Of(o);
         public static string SigIn(in System.Func<int, long> f, int x) => "F";

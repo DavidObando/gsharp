@@ -4612,7 +4612,9 @@ internal partial class ExpressionBinder {
             // is produced and the raw value is pushed. Treating "a projection would
             // have been possible" as acceptance here would therefore accept exactly
             // the pairs that emit the invalid IL this check exists to stop.
-            return !Conversion.Classify(sourceType, targetType).Exists
+            return !Conversion.Classify(sourceType, targetType)
+                .Exists &&
+                !ConversionClassifier.HasUserDefinedImplicitConversionForTypes(sourceType, targetType)
         }
 
         /// Issue #3989 / #4006: whether [`type`](paramref) carries one of

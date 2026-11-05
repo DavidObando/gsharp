@@ -271,6 +271,69 @@ func Issue1631IdUse(n int32) int32 -> Issue1631IdF(n)
         Assert.Equal(TypeSymbol.Int32, selected!!.Parameters[0].Type)
     }
 
+    @Fact
+    func ImportedOmittedInArgument_PrefersByValueCandidateWhenConversionsCrossTie() {
+        let b1In = typeof(Issue1631ImportedInProbe).GetMethods().Single(
+            (m System.Reflection.MethodInfo) -> m.Name == "B1" && m.GetParameters()[0].IsIn
+        )
+        let b1Val = typeof(Issue1631ImportedInProbe).GetMethods().Single(
+            (m System.Reflection.MethodInfo) -> m.Name == "B1" && !m.GetParameters()[0].IsIn
+        )
+        let b1Res = GSharp
+            .Core
+            .CodeAnalysis
+            .Binding
+            .OverloadResolution
+            .ClrOverloadResolution
+            .Resolve([]System.Reflection.MethodInfo{b1In, b1Val}, []System.Type? {typeof(int32), typeof(int32)})
+        Assert.Equal(
+            GSharp.Core.CodeAnalysis.Binding.OverloadResolution.ClrOverloadResolution.ResolutionOutcome.Resolved,
+            b1Res.Outcome
+        )
+        Assert.Same(b1Val, b1Res.Best)
+
+        let split1 = typeof(Issue1631ImportedInProbe).GetMethods().Single(
+            (m System.Reflection.MethodInfo) -> m.Name == "Split" && m.GetParameters()[0].IsIn
+        )
+        let split2 = typeof(Issue1631ImportedInProbe).GetMethods().Single(
+            (m System.Reflection.MethodInfo) -> m.Name == "Split" && !m.GetParameters()[0].IsIn
+        )
+        let splitRes = GSharp
+            .Core
+            .CodeAnalysis
+            .Binding
+            .OverloadResolution
+            .ClrOverloadResolution
+            .Resolve([]System.Reflection.MethodInfo{split1, split2}, []System.Type? {typeof(int32), typeof(int32)})
+        Assert.Equal(
+            GSharp.Core.CodeAnalysis.Binding.OverloadResolution.ClrOverloadResolution.ResolutionOutcome.Ambiguous,
+            splitRes.Outcome
+        )
+    }
+
+    @Fact
+    func SourceEnumSpan_SelectsMatchingReadOnlySpanOverObjectOverload() {
+        const source = `
+package p
+import System
+enum Code { A = 1 }
+func Kind(value System.ReadOnlySpan[Code]) string -> "Code"
+func Kind(value System.ReadOnlySpan[object]) string -> "Object"
+func Use() string {
+    let view System.Span[Code] = []Code{Code.A}
+    let aliasView span[Code] = []Code{Code.A}
+    let idx = MemoryExtensions.IndexOf(view, Code.A) + MemoryExtensions.IndexOf(aliasView, Code.A)
+    return Kind(view) + idx.ToString()
+}
+`
+        let compilation = Compile(source)
+        let diagnostics = EmittedOracle.CompileDiagnostics(compilation)
+        Assert.DoesNotContain(diagnostics, (d Diagnostic) -> d.IsError)
+        let selected = FindCall(compilation, "Kind")
+        Assert.NotNull(selected)
+        Assert.Equal("System.ReadOnlySpan`1[Code]", selected!!.Parameters[0].Type.Name)
+    }
+
     private class CallCollector : BoundTreeWalker {
         private let callName string
 
@@ -309,5 +372,15 @@ func Issue1631IdUse(n int32) int32 -> Issue1631IdF(n)
             }
             return collector.Collected.FirstOrDefault()
         }
+    }
+
+    private shared class Issue1631ImportedInProbe {
+        func B1(in f int64, x int32) string -> "F"
+
+        func B1(o int32, x int64) string -> "O"
+
+        func Split(in a int64, b int32) string -> "F"
+
+        func Split(a int32, in b int64) string -> "O"
     }
 }

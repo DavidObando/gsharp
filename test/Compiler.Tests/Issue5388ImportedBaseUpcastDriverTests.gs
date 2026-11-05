@@ -1770,6 +1770,76 @@ class Program {
         Assert.Empty(RuntimeReferences(fixture.DirectoryPath))
     }
 
+    @Fact
+    func SourceElementFunctionDelegateAndChannel_UpcastToObjectAndCovariantContainers() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let source = `import System
+import System.Collections.Generic
+import System.Threading.Channels
+import UpcastControl
+class Item {}
+delegate Handler(x Item) Item;
+func F(x (Item) -> Item) object -> x
+func D(x Handler) object -> x
+func C(x chan[Item]) object -> x
+func BoxRef[T Item](x T) object -> x
+func UpChan(x IReadOnlyList[chan[Item]]) IReadOnlyList[object] -> x
+func UpFn(x IReadOnlyList[(Item) -> Item]) IReadOnlyList[object] -> x
+func UpDel(x IReadOnlyList[Handler]) IReadOnlyList[object] -> x
+func Main() {
+    let item = Item()
+    let fn (Item) -> Item = (x Item) -> x
+    let del Handler = (x Item) -> x
+    let ch chan[Item] = Channel.CreateUnbounded[Item]()
+    let chans IReadOnlyList[chan[Item]] = []chan[Item]{ch}
+    let fns IReadOnlyList[(Item) -> Item] = [](Item) -> Item{fn}
+    let dels IReadOnlyList[Handler] = []Handler{del}
+    Console.Write(Object.ReferenceEquals(F(fn), fn))
+    Console.Write(Object.ReferenceEquals(D(del), del))
+    Console.Write(Object.ReferenceEquals(C(ch), ch))
+    Console.Write(Object.ReferenceEquals(BoxRef(item), item))
+    Console.Write(Object.ReferenceEquals(UpChan(chans), chans))
+    Console.Write(Object.ReferenceEquals(UpFn(fns), fns))
+    Console.Write(Object.ReferenceEquals(UpDel(dels), dels))
+    Console.Write(Base[uint32].Read(Base[uint32]()))
+}
+`
+        let oracle = `using System;
+using System.Collections.Generic;
+using System.Threading.Channels;
+using UpcastControl;
+class Item {}
+delegate Item Handler(Item x);
+class Program {
+    static object F(Func<Item, Item> x) => x;
+    static object D(Handler x) => x;
+    static object C(Channel<Item> x) => x;
+    static object BoxRef<T>(T x) where T : Item => x;
+    static IReadOnlyList<object> UpChan(IReadOnlyList<Channel<Item>> x) => x;
+    static IReadOnlyList<object> UpFn(IReadOnlyList<Func<Item, Item>> x) => x;
+    static IReadOnlyList<object> UpDel(IReadOnlyList<Handler> x) => x;
+    static void Main() {
+        var item = new Item();
+        Func<Item, Item> fn = x => x;
+        Handler del = x => x;
+        Channel<Item> ch = Channel.CreateUnbounded<Item>();
+        IReadOnlyList<Channel<Item>> chans = new[] { ch };
+        IReadOnlyList<Func<Item, Item>> fns = new[] { fn };
+        IReadOnlyList<Handler> dels = new[] { del };
+        Console.Write(Object.ReferenceEquals(F(fn), fn));
+        Console.Write(Object.ReferenceEquals(D(del), del));
+        Console.Write(Object.ReferenceEquals(C(ch), ch));
+        Console.Write(Object.ReferenceEquals(BoxRef(item), item));
+        Console.Write(Object.ReferenceEquals(UpChan(chans), chans));
+        Console.Write(Object.ReferenceEquals(UpFn(fns), fns));
+        Console.Write(Object.ReferenceEquals(UpDel(dels), dels));
+        Console.Write(Base<uint>.Read(new Base<uint>()));
+    }
+}
+`
+        Check(fixture, source, oracle, "TrueTrueTrueTrueTrueTrueTrue1")
+    }
+
     private let MultiContract string = Contract + `
 namespace MultiControl {
     public interface ITag<T> {
