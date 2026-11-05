@@ -1258,9 +1258,16 @@ internal shared class ClrOverloadResolution {
                         parameters[i].ParameterType,
                         i,
                         bounds,
+                        collectedBounds,
                         methodGroupInference
                     ) {
-                        TryInferMethodGroupArgument(parameters[i].ParameterType, i, bounds, methodGroupInference)
+                        TryInferMethodGroupArgument(
+                            parameters[i].ParameterType,
+                            i,
+                            bounds,
+                            collectedBounds,
+                            methodGroupInference
+                        )
                     }
                 }
             }
@@ -4627,6 +4634,7 @@ internal shared class ClrOverloadResolution {
         delegateType Type,
         argumentIndex int32,
         bounds Dictionary[string, Type],
+        collectedBounds ClrInferenceBounds,
         methodGroupInference(int32, IReadOnlyList[Type]) -> (Parameters[]Type, Return Type)?
     ) bool {
         if !ClrLoadContext.TryGetDelegateSignature(delegateType, out var delegateParameters, out var delegateReturn) {
@@ -4658,7 +4666,6 @@ internal shared class ClrOverloadResolution {
             delegateReturn.ContainsGenericParameters {
             return false
         }
-        let inferred = Dictionary[string, Type](bounds, StringComparer.Ordinal)
         // Method-group input types select and validate the candidate; only its
         // return type contributes output-inference bounds.
         for var i = 0; i < closedInputs.Length; i++ {
@@ -4666,19 +4673,16 @@ internal shared class ClrOverloadResolution {
                 return false
             }
         }
-        if !UnifyForInference(delegateReturn, signature.Return, inferred) {
-            // Covariant return: the method may return a narrower reference
-            // type than the delegate expects.
-            if !TryCloseInferredType(delegateReturn, inferred, out var closedReturn) ||
-                closedReturn == nil ||
-                !IsVariantAssignable(target: closedReturn, source: signature.Return) {
-                return false
-            }
+        let inferred = Dictionary[string, Type](bounds, StringComparer.Ordinal)
+        let inferredCollectedBounds = collectedBounds.Clone()
+        if !TryInferMethodGroupReturn(delegateReturn, signature.Return, inferred, inferredCollectedBounds) {
+            return false
         }
         bounds.Clear()
         for pair in inferred {
             bounds.Add(pair.Key, pair.Value)
         }
+        collectedBounds.CopyFrom(inferredCollectedBounds)
         return true
     }
 
@@ -4686,6 +4690,7 @@ internal shared class ClrOverloadResolution {
         delegateType Type,
         argumentIndex int32,
         bounds Dictionary[string, Type],
+        collectedBounds ClrInferenceBounds,
         methodGroupInference(int32, IReadOnlyList[Type]) -> (Parameters[]Type, Return Type)?
     ) bool {
         if !ClrLoadContext.TryGetDelegateSignature(delegateType, out var delegateParameters, out var delegateReturn) {
@@ -4712,6 +4717,7 @@ internal shared class ClrOverloadResolution {
             return false
         }
         let inferred = Dictionary[string, Type](bounds, StringComparer.Ordinal)
+        let inferredCollectedBounds = collectedBounds.Clone()
         for var i = 0; i < delegateParameters.Length; i++ {
             if closedInputs[i] is {} closedInput {
                 if ClassifyImplicit(signature.Parameters[i], closedInput) == ImplicitConversionKind.None {
@@ -4719,25 +4725,34 @@ internal shared class ClrOverloadResolution {
                 }
                 continue
             }
-            if !UnifyForInference(delegateParameters[i], signature.Parameters[i], inferred) {
+            if !UnifyForInference(
+                delegateParameters[i],
+                signature.Parameters[i],
+                inferred,
+                ClrInferenceBoundKind.Lower,
+                inferredCollectedBounds
+            ) {
                 return false
             }
         }
         let outputBounds = Dictionary[string, Type](inferred, StringComparer.Ordinal)
-        if !TryInferMethodGroupReturn(delegateReturn, signature.Return, outputBounds) {
+        let outputCollectedBounds = inferredCollectedBounds.Clone()
+        if !TryInferMethodGroupReturn(delegateReturn, signature.Return, outputBounds, outputCollectedBounds) {
             return false
         }
         bounds.Clear()
         for pair in outputBounds {
             bounds.Add(pair.Key, pair.Value)
         }
+        collectedBounds.CopyFrom(outputCollectedBounds)
         return true
     }
 
     private func TryInferMethodGroupReturn(
         delegateReturn Type,
         methodReturn Type,
-        inferred Dictionary[string, Type]
+        inferred Dictionary[string, Type],
+        collectedBounds ClrInferenceBounds
     ) bool {
         if string.Equals(methodReturn.FullName, "System.Void", StringComparison.Ordinal) && !string.Equals(
             delegateReturn.FullName,
@@ -4747,7 +4762,20 @@ internal shared class ClrOverloadResolution {
             delegateReturn.ContainsGenericParameters {
             return false
         }
-        if UnifyForInference(delegateReturn, methodReturn, inferred) {
+        let returnBounds = Dictionary[string, Type](inferred, StringComparer.Ordinal)
+        let returnCollectedBounds = collectedBounds.Clone()
+        if UnifyForInference(
+            delegateReturn,
+            methodReturn,
+            returnBounds,
+            ClrInferenceBoundKind.Lower,
+            returnCollectedBounds
+        ) {
+            inferred.Clear()
+            for pair in returnBounds {
+                inferred.Add(pair.Key, pair.Value)
+            }
+            collectedBounds.CopyFrom(returnCollectedBounds)
             return true
         }
         return TryCloseInferredType(delegateReturn, inferred, out var closedReturn) &&
@@ -6459,11 +6487,17 @@ internal shared class ClrOverloadResolution {
         if methodGroupInference != nil && methodGroupArgumentCheck != nil {
             for var i = 0; i < argTypes.Count; i++ {
                 if methodGroupArgumentCheck(i) {
-                    if !TryGetTargetType(i, out var targetType) {
+                    if !TryGetTargetType(i, out var targetType) || targetType is not{} resolvedTarget {
                         return false
                     }
-                    if !TryInferSingleCandidateMethodGroupArgument(targetType!!, i, bounds, methodGroupInference) {
-                        TryInferMethodGroupArgument(targetType!!, i, bounds, methodGroupInference)
+                    if !TryInferSingleCandidateMethodGroupArgument(
+                        resolvedTarget,
+                        i,
+                        bounds,
+                        collectedBounds,
+                        methodGroupInference
+                    ) {
+                        TryInferMethodGroupArgument(resolvedTarget, i, bounds, collectedBounds, methodGroupInference)
                     }
                 }
             }
@@ -9284,6 +9318,31 @@ internal shared class ClrOverloadResolution {
             }
             if !list.Any((existing Type) -> ClrTypeUtilities.AreSame(existing, type)) {
                 list.Add(type)
+            }
+        }
+
+        func Clone() ClrInferenceBounds {
+            let copy = ClrInferenceBounds()
+            copy.CopyFrom(this)
+            return copy
+        }
+
+        func CopyFrom(other ClrInferenceBounds) {
+            Exact.Clear()
+            for pair in other.Exact {
+                Exact[pair.Key] = List[Type](pair.Value)
+            }
+            Lower.Clear()
+            for pair in other.Lower {
+                Lower[pair.Key] = List[Type](pair.Value)
+            }
+            Upper.Clear()
+            for pair in other.Upper {
+                Upper[pair.Key] = List[Type](pair.Value)
+            }
+            Sentinels.Clear()
+            for pair in other.Sentinels {
+                Sentinels[pair.Key] = pair.Value
             }
         }
     }

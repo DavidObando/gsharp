@@ -2784,6 +2784,11 @@ Console.WriteLine("${ternary(Probe())} ${expression(Probe())} ${statement(Probe(
         public static string JoinCovariantArrayLowerBounds<T>(
             System.Collections.Generic.IEnumerable<T> left,
             System.Collections.Generic.IEnumerable<T> right) => typeof(T).FullName ?? "";
+        public static System.Collections.Generic.IComparer<object> MakeObjectComparer() =>
+            System.Collections.Generic.Comparer<object>.Default;
+        public static string InferFromListAndComparerFactory<T>(
+            System.Collections.Generic.IList<T> items,
+            System.Func<System.Collections.Generic.IComparer<T>> factory) => typeof(T).FullName ?? "";
     }
 }`)
         let result = CompileAndRun(`import System
@@ -2798,6 +2803,7 @@ let left IEnumerable[[]string] = List[[]string]()
 let right IEnumerable[[]object] = List[[]object]()
 Console.WriteLine(Probes.JoinCovariantArrayLowerBounds(left, right))
 Console.WriteLine(Probes.JoinCovariantArrayLowerBounds(right, left))
+Console.WriteLine(Probes.InferFromListAndComparerFactory(items, Probes.MakeObjectComparer))
 `, fixture.AssemblyPath)
         Assert.Equal(
             "System.Object" +
@@ -2811,6 +2817,8 @@ Console.WriteLine(Probes.JoinCovariantArrayLowerBounds(right, left))
                 "System.Object[]" +
                 Environment.NewLine +
                 "System.Object[]" +
+                Environment.NewLine +
+                "System.String" +
                 Environment.NewLine,
             result.Output
         )
