@@ -886,6 +886,32 @@ namespace Demo
         Assert.Contains("RepeatedSafeNullableLocalConsumerWidens(p DelegateDeclarationSyntax?, c bool)", printed)
     }
 
+    /// Issue #5579: a parameter read through an inferred local (`var copy = node; return sinks.Accept(copy);`)
+    /// or through a conditional expression (`sinks.Accept(b ? node : node)`) into a slot that cannot widen
+    /// keeps the parameter at its declared non-null type and emits no throwing `!!`.
+    @Fact
+    func AParameterReadThroughALocalOrConditionalIntoAFixedSlot_IsPinnedAndDoesNotThrow() {
+        let compilation = CompileFiles("App", nil, ("Flow.cs", `
+namespace Demo
+{
+    public class Node { }
+    public class Sinks { public virtual string Accept(Node node) => "virtual"; }
+    public static class Flow
+    {
+        public static string ThroughLocal(Sinks sinks, Node node) { var copy = node; return sinks.Accept(copy); }
+        public static string ThroughConditional(Sinks sinks, Node node, bool b) => sinks.Accept(b ? node : node);
+        public static string Run() =>
+            ThroughLocal(new Sinks(), default(Node)!) + " " +
+            ThroughConditional(new Sinks(), default(Node)!, true);
+    }
+}`))
+        let printed = TranslateFile(compilation, "Flow.cs", []CSharpCompilation{compilation})
+        Assert.Equal("virtual virtual", CompileAndRun([]string{printed}, "Demo.Flow.Run()").Trim())
+        Assert.Contains("ThroughLocal(sinks Sinks, node Node) string", printed)
+        Assert.Contains("ThroughConditional(sinks Sinks, node Node, b bool) string", printed)
+        Assert.DoesNotContain("!!", printed)
+    }
+
     shared {
         private func TranslateBound(source(Path string, Source string)) string {
             let compilation = CompileFiles("Snippet", nil, source)

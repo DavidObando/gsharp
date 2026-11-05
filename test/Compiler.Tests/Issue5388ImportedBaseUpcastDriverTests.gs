@@ -1113,6 +1113,62 @@ class Program {
     }
 
     @Fact
+    func SourceConstructedBaseForwardGotoJoin_PreservesValidBaseMember() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
+        let source = `import System
+import UpcastControl
+open class Parent[T] { func Read() int32 -> 7 }
+class Child : Parent[int32] {}
+func Read(value object, flag bool) int32 {
+    if flag {
+        if value !is Parent[int32] { return 0 }
+        goto Joined
+    }
+    if value !is Child { return 0 }
+Joined:
+    return value.Read()
+}
+func Main() {
+    let value = Child()
+    Console.Write(Read(value, true))
+    Console.Write(Read(value, false))
+    Console.Write(Read(Parent[int32](), true))
+    Console.Write(Read(Parent[int32](), false))
+    let boxed object = value
+    Console.Write(Object.ReferenceEquals(boxed, value))
+    Console.Write(Base[uint32].Read(Base[uint32]()))
+}
+`
+        let oracle = `using System;
+using UpcastControl;
+class Parent<T> { public int Read() => 7; }
+class Child : Parent<int> {}
+class Program {
+    static int Read(object value, bool flag) {
+        if (flag) {
+            if (value is not Parent<int>) return 0;
+            goto Joined;
+        }
+        if (value is not Child) return 0;
+    Joined:
+        return ((Parent<int>)value).Read();
+    }
+    static void Main() {
+        var value = new Child();
+        Console.Write(Read(value, true));
+        Console.Write(Read(value, false));
+        Console.Write(Read(new Parent<int>(), true));
+        Console.Write(Read(new Parent<int>(), false));
+        object boxed = value;
+        Console.Write(Object.ReferenceEquals(boxed, value));
+        Console.Write(Base<uint>.Read(new Base<uint>()));
+    }
+}
+`
+        Check(fixture, source, oracle, "7770True1")
+    }
+
+    @Fact
     func SourceInterfaceJoin_PreservesInheritedClrContract() {
         using let fixture = CSharpFixture(Contract, assemblyName: "UpcastContract", deterministic: true)
         let source = `import System
