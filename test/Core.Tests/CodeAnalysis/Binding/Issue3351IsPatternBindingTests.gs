@@ -232,7 +232,6 @@ class Box[T](Value T) {
         get -> Value
     }
 }
-func Factory(seed int32) (int32) -> int32 -> (delta int32) -> seed + delta
 
 func Main() {
     let a = QualifiedCalls5267.Sub.Stamp(8).Value
@@ -242,7 +241,8 @@ func Main() {
     let e = QualifiedCalls5267.Sub.Box[int32]{Value: 11}.Value
     let f = QualifiedCalls5267.Sub.Box[int32](12)[0]
     let g = QualifiedCalls5267.Sub.Box[string]("ok")[0].Length
-    Console.Write(a + b + c + d + e + f + g)
+    let h = QualifiedCalls5267.Sub.Box[(int32) -> int32]((x int32) -> x + 5)[0](3)
+    Console.Write(a + b + c + d + e + f + g + h)
 }`
         Assert.Empty(Bind(source))
     }
@@ -311,6 +311,47 @@ class Outer {
     }
 }`
         Assert.Empty(Bind(attributeAliasSource))
+
+        let obsoleteTargetDiagnostics = Bind(`package Demo
+import System
+
+@Obsolete("old-interface", true)
+interface IOld {}
+
+@Obsolete("old-class", true)
+class OldClass {}
+
+type AliasI = IOld
+type AliasC = OldClass`).Where((d Diagnostic) -> d.Id == "GS0204").ToArray()
+        Assert.Equal(2, obsoleteTargetDiagnostics.Length)
+
+        const derivedFirstNestedBaseAliasSource = `package Demo
+import NestedInClass = Demo.ClassContainer.NestedBase
+import NestedInStruct = Demo.StructContainer.NestedStructBase
+
+type BaseFromClass = NestedInClass
+type BaseFromStruct = NestedInStruct
+
+class DerivedFromClass : BaseFromClass {
+    override func Value() int32 -> 10
+}
+
+class DerivedFromStruct : BaseFromStruct {
+    override func Value() int32 -> 20
+}
+
+class ClassContainer {
+    public open class NestedBase {
+        public open func Value() int32 -> 1
+    }
+}
+
+struct StructContainer {
+    public open class NestedStructBase {
+        public open func Value() int32 -> 2
+    }
+}`
+        Assert.Empty(Bind(derivedFirstNestedBaseAliasSource))
     }
 
     shared {

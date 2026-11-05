@@ -7159,6 +7159,7 @@ partial class Binder {
             // order.
             let declarationsByName = Dictionary[string, List[int32]](StringComparer.Ordinal)
             let declarationsBySymbol = Dictionary[StructSymbol, int32](ReferenceEqualityComparer.Instance)
+            let classAliasContainerIndices = HashSet[int32]()
             for var i = 0; i < declaredStructs.Count; i++ {
                 let name = declaredStructs[i].Symbol.Name
                 if !declarationsByName.TryGetValue(name, out var indices) {
@@ -7171,7 +7172,15 @@ partial class Binder {
             for aliasSymbol in declaredTypeAliases {
                 let aliasedStruct StructSymbol? = (aliasSymbol.Target as StructSymbol)?.Definition ??
                     (aliasSymbol.Target as StructSymbol)
-                if aliasedStruct != nil && declarationsBySymbol.TryGetValue(aliasedStruct, out var targetIndex) {
+                if aliasedStruct == nil || !aliasedStruct.IsClass {
+                    continue
+                }
+                var topLevelTarget StructSymbol = aliasedStruct
+                while topLevelTarget.ContainingType is StructSymbol enclosingStruct {
+                    topLevelTarget = enclosingStruct.Definition ?? enclosingStruct
+                }
+                if declarationsBySymbol.TryGetValue(topLevelTarget, out var targetIndex) {
+                    classAliasContainerIndices.Add(targetIndex)
                     if !declarationsByName.TryGetValue(aliasSymbol.Name, out var aliasIndices) {
                         aliasIndices = List[int32]()
                         declarationsByName.Add(aliasSymbol.Name, aliasIndices)
@@ -7235,7 +7244,7 @@ partial class Binder {
                 var classCandidateCount = 0
                 var soleClassCandidate = -1
                 for candidate in candidates {
-                    if !declaredStructs[candidate].Symbol.IsClass {
+                    if !declaredStructs[candidate].Symbol.IsClass && !classAliasContainerIndices.Contains(candidate) {
                         continue
                     }
                     classCandidateCount++
@@ -7305,6 +7314,21 @@ partial class Binder {
                     structSyntax.SyntaxTree,
                     () -> binder.declarations.BindStructDeclarationBody(structSyntax, owningPackage, structSymbol)
                 )
+            }
+            for declaredAlias in declaredTypeAliases {
+                if declaredAlias
+                    .Declaration
+                    ?.AliasedType
+                    .Identifier is {} aliasTargetIdentifier &&
+                    declaredAlias
+                    .Target
+                    .ClrType == nil {
+                    binder.ReportObsoleteUseIfApplicable(
+                        aliasTargetIdentifier.Location,
+                        declaredAlias.Target,
+                        declaredAlias.Target.Name
+                    )
+                }
             }
             binder.declarations.ReportExplicitLayoutReferenceOverlaps(
                 declaredStructs.Select(

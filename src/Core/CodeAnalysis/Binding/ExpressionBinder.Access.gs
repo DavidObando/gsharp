@@ -603,7 +603,7 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(remainder)
         }
         switch remainder {
-            case CallExpressionSyntax{Callee: {} callee} call when call.Identifier.IsMissing {
+            case CallExpressionSyntax{Callee: {} callee} call {
                 let target = BindQualifiedSourceTypeRemainder(callee, sourceType)
                 if target is BoundErrorExpression {
                     return target
