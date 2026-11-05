@@ -1314,11 +1314,10 @@ internal partial class ExpressionBinder {
                             tpField.Accessibility
                         )
                     }
-                    let tpFieldType = tpFieldDeclaringType.SubstituteMemberType(tpField.Type) ?? tpField.Type
                     let tpFieldConverted = conversions.BindConversion(
                         syntax.Value.Location,
-                        BindValue(tpFieldType),
-                        tpFieldType
+                        BindValue(tpField.Type),
+                        tpField.Type
                     )
                     return BoundFieldAssignmentExpression(
                         nil,
@@ -1355,11 +1354,10 @@ internal partial class ExpressionBinder {
                             tpProp.SetterAccessibility
                         )
                     }
-                    let tpPropType = tpPropDeclaringType.SubstituteMemberType(tpProp.Type) ?? tpProp.Type
                     let tpPropConverted = conversions.BindConversion(
                         syntax.Value.Location,
-                        BindValue(tpPropType),
-                        tpPropType
+                        BindValue(tpProp.Type),
+                        tpProp.Type
                     )
                     EnforceInitOnlyAssignment(tpProp, assignmentReceiver, syntax.EqualsToken.Location)
                     return BoundPropertyAssignmentExpression(
@@ -1446,6 +1444,7 @@ internal partial class ExpressionBinder {
                         BindValue(propertyType),
                         propertyType
                     )
+                    EnforceImportedInitOnlyAssignment(clrProperty, assignmentReceiver, syntax.EqualsToken.Location)
                     return BoundClrPropertyAssignmentExpression(
                         nil,
                         assignmentReceiver,
@@ -4450,11 +4449,10 @@ internal partial class ExpressionBinder {
                             tpField.Accessibility
                         )
                     }
-                    let tpFieldType = tpFieldDeclaringType.SubstituteMemberType(tpField.Type) ?? tpField.Type
                     let tpFieldConverted = conversions.BindConversion(
                         syntax.Value.Location,
-                        BindValue(tpFieldType),
-                        tpFieldType
+                        BindValue(tpField.Type),
+                        tpField.Type
                     )
                     return BoundFieldAssignmentExpression.WithExpressionReceiver(
                         nil,
@@ -4491,11 +4489,10 @@ internal partial class ExpressionBinder {
                             tpProp.SetterAccessibility
                         )
                     }
-                    let tpPropType = tpPropDeclaringType.SubstituteMemberType(tpProp.Type) ?? tpProp.Type
                     let tpPropConverted = conversions.BindConversion(
                         syntax.Value.Location,
-                        BindValue(tpPropType),
-                        tpPropType
+                        BindValue(tpProp.Type),
+                        tpProp.Type
                     )
                     EnforceInitOnlyAssignment(tpProp, receiver, syntax.EqualsToken.Location)
                     return BoundPropertyAssignmentExpression(
@@ -4582,6 +4579,7 @@ internal partial class ExpressionBinder {
                         BindValue(propertyType),
                         propertyType
                     )
+                    EnforceImportedInitOnlyAssignment(clrProperty, receiver, syntax.EqualsToken.Location)
                     return BoundClrPropertyAssignmentExpression(
                         nil,
                         receiver,
@@ -5275,6 +5273,29 @@ internal partial class ExpressionBinder {
         return captured
     }
 
+    private func CaptureSavedStorageReceiver(
+        storage BoundExpression,
+        statements ImmutableArray[BoundStatement].Builder
+    ) BoundExpression -> GSharp
+        .Core
+        .CodeAnalysis
+        .Lowering
+        .SideEffectSpiller
+        .CaptureRuntimeGenericStorageReceiver(
+        storage,
+        storage.Syntax,
+        statements,
+        func (role string, isReadOnly bool, storageType TypeSymbol) LocalVariableSymbol {
+            let local = LocalVariableSymbol(
+                "$$postfix$$$role$$${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}",
+                isReadOnly,
+                storageType
+            )
+            $scope.TryDeclareVariable(local)
+            return local
+        }
+    )
+
     private func TrySavePostfixReceiver(
         syntax EventSubscriptionExpressionSyntax,
         receiver BoundExpression,
@@ -5286,7 +5307,7 @@ internal partial class ExpressionBinder {
         if !syntax.IsIncrementDecrement ||
             receiver is BoundVariableExpression ||
             receiver is BoundDereferenceExpression &&
-            receiver.Operand is BoundVariableExpression {
+            (receiver.Operand is BoundVariableExpression || receiver.Operand is BoundConditionalAddressExpression) {
             return false
         }
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -5299,7 +5320,10 @@ internal partial class ExpressionBinder {
             }
             let pointer = BoundAddressOfExpression(receiver.Syntax, receiver)
             let saved = DeclareRangeTemp("receiverAddress", pointer.Type, pointer, statements)
-            savedReceiver = BoundDereferenceExpression(receiver.Syntax, BoundVariableExpression(nil, saved))
+            savedReceiver = CaptureSavedStorageReceiver(
+                BoundDereferenceExpression(receiver.Syntax, BoundVariableExpression(nil, saved)),
+                statements
+            )
         }
         prefix = statements.ToImmutable()
         return true

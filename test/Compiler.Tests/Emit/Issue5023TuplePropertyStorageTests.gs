@@ -792,14 +792,31 @@ open class BaseCell {
     }
 }
 class RefCell : BaseCell, ICell[object?] {
+    var OnGet Action?
     prop Count int32 {
-        get -> Total
+        get {
+            if OnGet != nil { OnGet!!() }
+            return Total
+        }
         set { Total = value }
     }
     prop Slot ref int32 -> Total
     prop Shadow int32 {
         get -> Total
         set { Total = value * 10 }
+    }
+}
+open class GenericBox[U] {
+    var Field U
+    prop Prop U {
+        get -> Field
+        set { Field = value }
+    }
+    func WriteNested[T GenericBox[[]U]](items [](T, int32), direct T, val []U) {
+        items[0].Item1.Field = val
+        items[0].Item1.Prop = val
+        direct.Field = val
+        direct.Prop = val
     }
 }
 struct ValueCell : ICell[object?] {
@@ -826,6 +843,7 @@ func GetRefCell[T RefCell](cell T) T {
 func IncrementSlot[T RefCell](cell T) {
     GetRefCell(cell).Slot++
 }
+func PostfixByInterface[T ICell[object?]](items [](T, int32)) int32 -> items[0].Item1.Count++
 async func SetByInterface[T ICell[object?]](items [](T, int32), replacement T) {
     items[0].Item1.Value = {
         SUSPEND
@@ -854,16 +872,25 @@ let refs = [](RefCell, int32){(oldRef, 0)}
 SetByInterface(refs, newRef).GetAwaiter().GetResult()
 GetCounter(newRef).Count++
 IncrementSlot(newRef)
-Console.WriteLine("${oldRef.Stored ?? "nil"} ${newRef.Stored ?? "nil"} ${newRef.Total} ${getCalls}")
+let postTarget = RefCell{Total: 10}
+let postReplacement = RefCell{Total: 99}
+let postRefs = [](RefCell, int32){(postTarget, 0)}
+postTarget.OnGet = () -> { postRefs[0] = (postReplacement, 0) }
+let postOld = PostfixByInterface(postRefs)
+Console.WriteLine("${oldRef.Stored ?? "nil"} ${newRef.Stored ?? "nil"} ${newRef.Total} ${getCalls} ${postOld} ${postTarget.Total} ${postReplacement.Total}")
 let values = [](ValueCell, int32){(ValueCell{}, 0)}
 SetByInterface(values, ValueCell{Stored: "r", Total: 10}).GetAwaiter().GetResult()
-Console.WriteLine("${values[0].Item1.Stored ?? "nil"} ${values[0].Item1.Total}")
+let postValOld = PostfixByInterface(values)
+Console.WriteLine("${values[0].Item1.Stored ?? "nil"} ${postValOld} ${values[0].Item1.Total}")
 let oldClass = RefCell{}
 let newClass = RefCell{}
 let classes = [](RefCell, int32){(oldClass, 0)}
 SetByClass(classes, newClass).GetAwaiter().GetResult()
 SetShadow(classes)
-Console.WriteLine("${oldClass.Stored ?? "nil"} ${newClass.Stored ?? "nil"} ${newClass.Total}")`.Replace(
+let nested = GenericBox[[]int32]{Field: []int32{}}
+let nestedItems = [](GenericBox[[]int32], int32){(nested, 0)}
+GenericBox[int32]{Field: 0}.WriteNested(nestedItems, nested, []int32{42})
+Console.WriteLine("${oldClass.Stored ?? "nil"} ${newClass.Stored ?? "nil"} ${newClass.Total} ${nested.Field[0]}")`.Replace(
             "SUSPEND",
             if suspending {
                 "await Task.Yield()"
@@ -871,7 +898,7 @@ Console.WriteLine("${oldClass.Stored ?? "nil"} ${newClass.Stored ?? "nil"} ${new
                 ""
             }
         )
-        Assert.Equal("v nil 4 2\nv 12\nc nil 70\n", CompileAndRun(source))
+        Assert.Equal("v nil 4 2 10 11 99\nv 12 13\nc nil 70 42\n", CompileAndRun(source))
     }
 
     @Theory
@@ -879,12 +906,18 @@ Console.WriteLine("${oldClass.Stored ?? "nil"} ${newClass.Stored ?? "nil"} ${new
     @InlineData("Base", "Secret", "GS0472")
     @InlineData("Base", "Locked", "GS0472")
     @InlineData("Derived", "ReadOnlyShadow", "GS0127")
+    @InlineData("ImportedInit5029.ImportedBase", "InitOnly", "GS0372")
     func ClassConstrainedTupleMemberWrite_EnforcesReadOnlyAndAccessibility(
         constraint string,
         member string,
         expectedDiagnostic string
     ) {
         using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace ImportedInit5029 {
+    public class ImportedBase {
+        public int InitOnly { get; init; }
+    }
+}`, "ImportedInit5029")
         let (code, output) = fixture.TryCompile(`package Test
 open class Base {
     let Frozen int32 = 1
@@ -903,9 +936,10 @@ class Derived : Base {
 func Mutate[T CONSTRAINT](items [](T, int32), direct T) {
     items[0].Item1.MEMBER = 2
     direct.MEMBER = 2
-}`.Replace("CONSTRAINT", constraint).Replace("MEMBER", member), "ClassConstrainedWrite5029", false)
+}`.Replace("CONSTRAINT", constraint).Replace("MEMBER", member), "ClassConstrainedWrite5029", false, "/r:" + contract)
         Assert.NotEqual(0, code)
         Assert.Contains(expectedDiagnostic, output)
+        Assert.Equal(3, output.Split(expectedDiagnostic).Length)
     }
 
     @Theory
