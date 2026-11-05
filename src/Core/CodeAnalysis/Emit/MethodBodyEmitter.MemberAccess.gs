@@ -40,7 +40,8 @@ internal partial class MethodBodyEmitter {
         }
         // Issue #2771: emitter-owned variable operations (notably `?.`
         // captures) bypass MoveNextBodyRewriter's bound-node substitution.
-        if this.asyncFieldMap != nil && this.asyncFieldMap.TryGetHoistedField(variable, out var hoistedField) {
+        if (this.asyncFieldMap != nil && this.asyncFieldMap.TryGetHoistedField(variable, out var hoistedField)) ||
+            (this.iteratorEmitCtx != nil && this.iteratorEmitCtx.FieldMap.TryGetValue(variable, out hoistedField)) {
             this.il.OpCode(ILOpCode.Ldarg_0)
             this.il.OpCode(ILOpCode.Ldfld)
             this.il.Token(this.ResolveCurrentStateMachineFieldToken(hoistedField!!))

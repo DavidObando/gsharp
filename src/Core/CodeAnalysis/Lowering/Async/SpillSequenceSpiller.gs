@@ -111,6 +111,31 @@ shared class SpillSequenceSpiller {
         }
     }
 
+    private class PatternOperandSubstituter : BoundTreeRewriter {
+        private let variable LocalVariableSymbol
+        private let replacement BoundExpression
+
+        init(variable LocalVariableSymbol, replacement BoundExpression) {
+            this.variable = variable
+            this.replacement = replacement
+        }
+
+        protected override func RewriteExpression(node BoundExpression) BoundExpression {
+            if node is BoundPatternOperandExpression operand && object.ReferenceEquals(operand.Variable, variable) {
+                return replacement
+            }
+            return base.RewriteExpression(node)
+        }
+
+        shared {
+            func Replace(
+                expression BoundExpression,
+                variable LocalVariableSymbol,
+                replacement BoundExpression
+            ) BoundExpression -> PatternOperandSubstituter(variable, replacement).RewriteExpression(expression)
+        }
+    }
+
     private class Spiller {
         // Reference-keyed "does this subtree contain an await" cache shared by every
         // HasAwait probe this Spiller instance makes. RewriteStatementToList/SpillExpression
@@ -333,6 +358,7 @@ shared class SpillSequenceSpiller {
             builder ImmutableArray[BoundStatement].Builder
         ) bool {
             var changed = false
+            var anyPatternHasAwait = false
             var discriminant = switchStatement.Discriminant
             if HasAwait(discriminant) {
                 let spilled = SpillExpression(discriminant)
@@ -342,6 +368,9 @@ shared class SpillSequenceSpiller {
             }
             let arms = ImmutableArray.CreateBuilder[BoundPatternSwitchArm](switchStatement.Arms.Length)
             for arm in switchStatement.Arms {
+                if arm.Pattern != nil && HasAwait(arm.Pattern) {
+                    anyPatternHasAwait = true
+                }
                 var guard_ BoundExpression? = arm.Guard
                 if guard_ != nil && HasAwait(guard_) {
                     guard_ = SpillSwitchGuard(guard_, "switch-statement")
@@ -363,6 +392,73 @@ shared class SpillSequenceSpiller {
                 changed |= bodyChanged
                 arms.Add(BoundPatternSwitchArm(arm.Syntax, arm.Pattern, guard_, body))
             }
+            let rewrittenArms = arms.MoveToImmutable()
+            if anyPatternHasAwait {
+                let locals = ImmutableArray.CreateBuilder[LocalVariableSymbol]()
+                let sideEffects = ImmutableArray.CreateBuilder[BoundStatement]()
+                if discriminant.Type == TypeSymbol.Never {
+                    sideEffects.Add(BoundExpressionStatement(nil, discriminant))
+                    FlushSideEffects(
+                        BoundSpillSequenceExpression(
+                            nil,
+                            locals.ToImmutable(),
+                            sideEffects.ToImmutable(),
+                            BoundLiteralExpression(nil, 0, TypeSymbol.Void)
+                        ),
+                        builder
+                    )
+                    return true
+                }
+                let discriminantInput = StoreOperand(discriminant, locals, sideEffects)
+                let endLabel = MakeLabel()
+                var defaultArm BoundPatternSwitchArm? = nil
+                for arm in rewrittenArms {
+                    if arm.IsDefault {
+                        defaultArm = arm
+                        continue
+                    }
+                    let nextArm = MakeLabel()
+                    EmitSpilledPatternTest(arm.Pattern!!, discriminantInput, locals, sideEffects, nextArm)
+                    if arm.Guard is {} armGuard {
+                        let spilledGuard = SpillExpression(armGuard)
+                        locals.AddRange(spilledGuard.Locals)
+                        sideEffects.AddRange(spilledGuard.SideEffects)
+                        sideEffects.Add(
+                            BoundConditionalGotoStatement(
+                                armGuard.Syntax,
+                                nextArm,
+                                spilledGuard.Value,
+                                jumpIfTrue: false
+                            )
+                        )
+                    }
+                    if arm.Body is BoundBlockStatement armBlock {
+                        sideEffects.AddRange(armBlock.Statements)
+                    } else {
+                        sideEffects.Add(arm.Body)
+                    }
+                    sideEffects.Add(BoundGotoStatement(nil, endLabel))
+                    sideEffects.Add(BoundLabelStatement(nil, nextArm))
+                }
+                if defaultArm != nil {
+                    if defaultArm.Body is BoundBlockStatement defaultBlock {
+                        sideEffects.AddRange(defaultBlock.Statements)
+                    } else {
+                        sideEffects.Add(defaultArm.Body)
+                    }
+                }
+                sideEffects.Add(BoundLabelStatement(nil, endLabel))
+                FlushSideEffects(
+                    BoundSpillSequenceExpression(
+                        nil,
+                        locals.ToImmutable(),
+                        sideEffects.ToImmutable(),
+                        BoundLiteralExpression(nil, 0, TypeSymbol.Void)
+                    ),
+                    builder
+                )
+                return true
+            }
             if !changed {
                 builder.Add(switchStatement)
                 return false
@@ -371,7 +467,7 @@ shared class SpillSequenceSpiller {
                 BoundPatternSwitchStatement(
                     switchStatement.Syntax,
                     discriminant,
-                    arms.MoveToImmutable(),
+                    rewrittenArms,
                     switchStatement.IsExhaustive
                 )
             )
@@ -996,13 +1092,7 @@ shared class SpillSequenceSpiller {
                     return SpillMapLiteral(mapLiteral)
                 }
                 case isExpr is BoundIsExpression {
-                    return SpillOneOperand(
-                        isExpr,
-                        isExpr.Expression,
-                        func (operand BoundExpression) BoundExpression {
-                            return BoundIsExpression(nil, operand, isExpr.Pattern)
-                        }
-                    )
+                    return SpillIs(isExpr)
                 }
                 case asExpr is BoundAsExpression {
                     return SpillOneOperand(
@@ -1741,10 +1831,14 @@ shared class SpillSequenceSpiller {
         /// they remain visible to the result-evaluation chain.
         private func SpillSwitch(switchExpr BoundSwitchExpression) BoundSpillSequenceExpression {
             let discriminantHasAwait = HasAwait(switchExpr.Discriminant)
+            var anyPatternHasAwait = false
             var anyGuardHasAwait = false
             var anyResultHasAwait = false
             let rewrittenArms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](switchExpr.Arms.Length)
             for arm in switchExpr.Arms {
+                if arm.Pattern != nil && HasAwait(arm.Pattern) {
+                    anyPatternHasAwait = true
+                }
                 var guard_ BoundExpression? = arm.Guard
                 if guard_ != nil && HasAwait(guard_) {
                     anyGuardHasAwait = true
@@ -1755,7 +1849,7 @@ shared class SpillSequenceSpiller {
                 }
                 rewrittenArms.Add(BoundSwitchExpressionArm(arm.Syntax, arm.Pattern, guard_, arm.Result))
             }
-            if !discriminantHasAwait && !anyGuardHasAwait && !anyResultHasAwait {
+            if !discriminantHasAwait && !anyPatternHasAwait && !anyGuardHasAwait && !anyResultHasAwait {
                 return Trivial(switchExpr)
             }
             let arms = rewrittenArms.MoveToImmutable()
@@ -1767,6 +1861,9 @@ shared class SpillSequenceSpiller {
                 locals.AddRange(spilledDiscriminant.Locals)
                 sideEffects.AddRange(spilledDiscriminant.SideEffects)
                 discriminant = spilledDiscriminant.Value
+            }
+            if anyPatternHasAwait {
+                return SpillSwitchWithPatternAwait(switchExpr, discriminant, arms, locals, sideEffects)
             }
             if !anyResultHasAwait {
                 // Only the discriminant needed spilling — no arm result has an
@@ -1867,6 +1964,436 @@ shared class SpillSequenceSpiller {
             cast[BoundExpression](BoundThrowExpression(nil, BoundLiteralExpression(nil, value: nil)))
         } else {
             cast[BoundExpression](BoundLiteralExpression(nil, 0, TypeSymbol.Void))
+        }
+
+        private func SpillIs(isExpr BoundIsExpression) BoundSpillSequenceExpression {
+            let expressionHasAwait = HasAwait(isExpr.Expression)
+            let patternHasAwait = HasAwait(isExpr.Pattern)
+            if !expressionHasAwait && !patternHasAwait {
+                return Trivial(isExpr)
+            }
+            if !patternHasAwait {
+                let spilledOperand = SpillExpression(isExpr.Expression)
+                return BoundSpillSequenceExpression(
+                    nil,
+                    spilledOperand.Locals,
+                    spilledOperand.SideEffects,
+                    BoundIsExpression(nil, spilledOperand.Value, isExpr.Pattern)
+                )
+            }
+            let locals = ImmutableArray.CreateBuilder[LocalVariableSymbol]()
+            let sideEffects = ImmutableArray.CreateBuilder[BoundStatement]()
+            var operand = isExpr.Expression
+            if expressionHasAwait {
+                let spilledOperand = SpillExpression(operand)
+                locals.AddRange(spilledOperand.Locals)
+                sideEffects.AddRange(spilledOperand.SideEffects)
+                operand = spilledOperand.Value
+            }
+            if operand.Type == TypeSymbol.Never {
+                sideEffects.Add(BoundExpressionStatement(nil, operand))
+                return BoundSpillSequenceExpression(
+                    nil,
+                    locals.ToImmutable(),
+                    sideEffects.ToImmutable(),
+                    BoundLiteralExpression(nil, false)
+                )
+            }
+            let input = StoreOperand(operand, locals, sideEffects)
+            let resultLocal = MakeSpillTemp(TypeSymbol.Bool)
+            let failLabel = MakeLabel()
+            let doneLabel = MakeLabel()
+            EmitSpilledPatternTest(isExpr.Pattern, input, locals, sideEffects, failLabel)
+            sideEffects.Add(
+                BoundExpressionStatement(
+                    nil,
+                    BoundAssignmentExpression(nil, resultLocal, BoundLiteralExpression(nil, true))
+                )
+            )
+            sideEffects.Add(BoundGotoStatement(nil, doneLabel))
+            sideEffects.Add(BoundLabelStatement(nil, failLabel))
+            sideEffects.Add(
+                BoundExpressionStatement(
+                    nil,
+                    BoundAssignmentExpression(nil, resultLocal, BoundLiteralExpression(nil, false))
+                )
+            )
+            sideEffects.Add(BoundLabelStatement(nil, doneLabel))
+            locals.Add(resultLocal)
+            return BoundSpillSequenceExpression(
+                nil,
+                locals.ToImmutable(),
+                sideEffects.ToImmutable(),
+                BoundVariableExpression(nil, resultLocal)
+            )
+        }
+
+        private func SpillSwitchWithPatternAwait(
+            switchExpr BoundSwitchExpression,
+            discriminant BoundExpression,
+            arms ImmutableArray[BoundSwitchExpressionArm],
+            locals ImmutableArray[LocalVariableSymbol].Builder,
+            sideEffects ImmutableArray[BoundStatement].Builder
+        ) BoundSpillSequenceExpression {
+            if discriminant.Type == TypeSymbol.Never {
+                sideEffects.Add(BoundExpressionStatement(nil, discriminant))
+                return BoundSpillSequenceExpression(
+                    nil,
+                    locals.ToImmutable(),
+                    sideEffects.ToImmutable(),
+                    NoValue(switchExpr.Type)
+                )
+            }
+            let discriminantInput = StoreOperand(discriminant, locals, sideEffects)
+            let resultLocal LocalVariableSymbol? = if switchExpr.Type == TypeSymbol.Void ||
+                switchExpr.Type == TypeSymbol.Never {
+                default(LocalVariableSymbol?)
+            } else {
+                MakeSpillTemp(switchExpr.Type)
+            }
+            let endLabel = MakeLabel()
+            var defaultArm BoundSwitchExpressionArm? = nil
+            for arm in arms {
+                if arm.IsDefault {
+                    defaultArm = arm
+                    continue
+                }
+                let nextArmLabel = MakeLabel()
+                EmitSpilledPatternTest(arm.Pattern!!, discriminantInput, locals, sideEffects, nextArmLabel)
+                if arm.Guard is {} armGuard {
+                    let spilledGuard = SpillExpression(armGuard)
+                    locals.AddRange(spilledGuard.Locals)
+                    sideEffects.AddRange(spilledGuard.SideEffects)
+                    sideEffects.Add(
+                        BoundConditionalGotoStatement(
+                            armGuard.Syntax,
+                            nextArmLabel,
+                            spilledGuard.Value,
+                            jumpIfTrue: false
+                        )
+                    )
+                }
+                EmitSpilledSwitchArmResult(arm.Result, resultLocal, locals, sideEffects)
+                sideEffects.Add(BoundGotoStatement(nil, endLabel))
+                sideEffects.Add(BoundLabelStatement(nil, nextArmLabel))
+            }
+            if defaultArm != nil {
+                EmitSpilledSwitchArmResult(defaultArm.Result, resultLocal, locals, sideEffects)
+            } else if switchExpr.Type != TypeSymbol.Void {
+                sideEffects.Add(
+                    BoundExpressionStatement(
+                        nil,
+                        BoundSwitchExpression(
+                            nil,
+                            discriminantInput,
+                            ImmutableArray[BoundSwitchExpressionArm].Empty,
+                            TypeSymbol.Never
+                        )
+                    )
+                )
+            }
+            sideEffects.Add(BoundLabelStatement(nil, endLabel))
+            if resultLocal == nil {
+                return BoundSpillSequenceExpression(
+                    nil,
+                    locals.ToImmutable(),
+                    sideEffects.ToImmutable(),
+                    NoValue(switchExpr.Type)
+                )
+            }
+            locals.Add(resultLocal)
+            return BoundSpillSequenceExpression(
+                nil,
+                locals.ToImmutable(),
+                sideEffects.ToImmutable(),
+                BoundVariableExpression(nil, resultLocal)
+            )
+        }
+
+        private func EmitSpilledSwitchArmResult(
+            result BoundExpression,
+            resultLocal LocalVariableSymbol?,
+            locals ImmutableArray[LocalVariableSymbol].Builder,
+            sideEffects ImmutableArray[BoundStatement].Builder
+        ) {
+            let spilledResult = SpillExpression(result)
+            locals.AddRange(spilledResult.Locals)
+            sideEffects.AddRange(spilledResult.SideEffects)
+            if resultLocal == nil || spilledResult.Value.Type == TypeSymbol.Never {
+                if !(spilledResult.Value is BoundLiteralExpression) {
+                    sideEffects.Add(BoundExpressionStatement(nil, spilledResult.Value))
+                }
+            } else {
+                sideEffects.Add(
+                    BoundExpressionStatement(nil, BoundAssignmentExpression(nil, resultLocal, spilledResult.Value))
+                )
+            }
+        }
+
+        // Issue #5696: lowers a pattern test against a stored input expression into
+        // statements that branch to failLabel on mismatch and fall through on match,
+        // spilling any await inside a pattern value in evaluation order.
+        private func EmitSpilledPatternTest(
+            pattern BoundPattern,
+            input BoundExpression,
+            locals ImmutableArray[LocalVariableSymbol].Builder,
+            sideEffects ImmutableArray[BoundStatement].Builder,
+            failLabel BoundLabel
+        ) {
+            if !HasAwait(pattern) {
+                let isMatch = BoundIsExpression(pattern.Syntax, input, pattern)
+                sideEffects.Add(BoundConditionalGotoStatement(pattern.Syntax, failLabel, isMatch, jumpIfTrue: false))
+                return
+            }
+            switch pattern {
+                case cp is BoundConstantPattern {
+                    if cp.Value is BoundConversionExpression conversion &&
+                        conversion.Type == cp.Type &&
+                        HasAwait(conversion.Expression) {
+                        let spilledInner = SpillExpression(conversion.Expression)
+                        locals.AddRange(spilledInner.Locals)
+                        sideEffects.AddRange(spilledInner.SideEffects)
+                        let convertedValue = BoundConversionExpression(
+                            conversion.Syntax,
+                            conversion.Type,
+                            spilledInner.Value,
+                            conversion.IsChecked
+                        )
+                        conversion.CopyImplicitConversionTo(convertedValue)
+                        let rebuiltCp = BoundConstantPattern(cp.Syntax, cp.Type, convertedValue)
+                        let isMatch = BoundIsExpression(cp.Syntax, input, rebuiltCp)
+                        sideEffects.Add(BoundConditionalGotoStatement(cp.Syntax, failLabel, isMatch, jumpIfTrue: false))
+                        return
+                    }
+                    let spilledValue = SpillExpression(cp.Value)
+                    locals.AddRange(spilledValue.Locals)
+                    sideEffects.AddRange(spilledValue.SideEffects)
+                    let rebuiltConstant = BoundConstantPattern(cp.Syntax, cp.Type, spilledValue.Value)
+                    let isConstantMatch = BoundIsExpression(cp.Syntax, input, rebuiltConstant)
+                    sideEffects.Add(
+                        BoundConditionalGotoStatement(cp.Syntax, failLabel, isConstantMatch, jumpIfTrue: false)
+                    )
+                }
+                case rp is BoundRelationalPattern {
+                    if rp.Test is {} test {
+                        let substitutedTest = PatternOperandSubstituter.Replace(test, rp.InputVariable!!, input)
+                        let spilledTest = SpillExpression(substitutedTest)
+                        locals.AddRange(spilledTest.Locals)
+                        sideEffects.AddRange(spilledTest.SideEffects)
+                        sideEffects.Add(
+                            BoundConditionalGotoStatement(rp.Syntax, failLabel, spilledTest.Value, jumpIfTrue: false)
+                        )
+                        return
+                    }
+                    let spilledValue = SpillExpression(rp.Value)
+                    locals.AddRange(spilledValue.Locals)
+                    sideEffects.AddRange(spilledValue.SideEffects)
+                    let rebuiltRp = BoundRelationalPattern(rp.Syntax, rp.Type, rp.Op, spilledValue.Value)
+                    let isMatch = BoundIsExpression(rp.Syntax, input, rebuiltRp)
+                    sideEffects.Add(BoundConditionalGotoStatement(rp.Syntax, failLabel, isMatch, jumpIfTrue: false))
+                }
+                case tp is BoundTypePattern {
+                    let headPattern = BoundTypePattern(
+                        tp.Syntax,
+                        tp.Type,
+                        tp.TargetType,
+                        tp.Variable,
+                        hasBinding: true,
+                        propertyPattern: nil
+                    )
+                    let isTypeMatch = BoundIsExpression(tp.Syntax, input, headPattern)
+                    sideEffects.Add(BoundConditionalGotoStatement(tp.Syntax, failLabel, isTypeMatch, jumpIfTrue: false))
+                    if tp.PropertyPattern is {} propertyPattern {
+                        EmitSpilledPatternTest(
+                            propertyPattern,
+                            BoundVariableExpression(nil, tp.Variable),
+                            locals,
+                            sideEffects,
+                            failLabel
+                        )
+                    }
+                }
+                case pp is BoundPropertyPattern {
+                    for field in pp.Fields {
+                        if !HasAwait(field.Pattern) {
+                            let singleFieldPattern = BoundPropertyPattern(
+                                pp.Syntax,
+                                pp.Type,
+                                ImmutableArray.Create(field)
+                            )
+                            let isFieldMatch = BoundIsExpression(field.Syntax, input, singleFieldPattern)
+                            sideEffects.Add(
+                                BoundConditionalGotoStatement(field.Syntax, failLabel, isFieldMatch, jumpIfTrue: false)
+                            )
+                            continue
+                        }
+                        let memberTemp = MakeSpillTemp(field.Type)
+                        locals.Add(memberTemp)
+                        let captureField = WithPropertyPatternFieldPattern(
+                            field,
+                            BoundDiscardPattern(field.Syntax, field.Type, memberTemp)
+                        )
+                        let capturePropertyPattern = BoundPropertyPattern(
+                            pp.Syntax,
+                            pp.Type,
+                            ImmutableArray.Create(captureField)
+                        )
+                        let isCaptured = BoundIsExpression(field.Syntax, input, capturePropertyPattern)
+                        sideEffects.Add(
+                            BoundConditionalGotoStatement(field.Syntax, failLabel, isCaptured, jumpIfTrue: false)
+                        )
+                        EmitSpilledPatternTest(
+                            field.Pattern,
+                            BoundVariableExpression(nil, memberTemp),
+                            locals,
+                            sideEffects,
+                            failLabel
+                        )
+                    }
+                }
+                case lp is BoundListPattern {
+                    EmitSpilledListPatternTest(lp, input, locals, sideEffects, failLabel)
+                }
+                case bp is BoundBinaryPattern {
+                    if bp.IsConjunction {
+                        let leftPattern = if bp.RightInputVariable is {} rightInput {
+                            MarkTypePatternBinding(bp.Left, rightInput)
+                        } else {
+                            bp.Left
+                        }
+                        EmitSpilledPatternTest(leftPattern, input, locals, sideEffects, failLabel)
+                        let rightInputExpr = if bp.RightInputVariable is {} narrowedInput {
+                            cast[BoundExpression](BoundVariableExpression(nil, narrowedInput))
+                        } else {
+                            input
+                        }
+                        EmitSpilledPatternTest(bp.Right, rightInputExpr, locals, sideEffects, failLabel)
+                        return
+                    }
+                    let matchLabel = MakeLabel()
+                    let tryRightLabel = MakeLabel()
+                    EmitSpilledPatternTest(bp.Left, input, locals, sideEffects, tryRightLabel)
+                    sideEffects.Add(BoundGotoStatement(nil, matchLabel))
+                    sideEffects.Add(BoundLabelStatement(nil, tryRightLabel))
+                    EmitSpilledPatternTest(bp.Right, input, locals, sideEffects, failLabel)
+                    sideEffects.Add(BoundLabelStatement(nil, matchLabel))
+                }
+                case np is BoundNotPattern {
+                    let notMatchedLabel = MakeLabel()
+                    EmitSpilledPatternTest(np.Pattern, input, locals, sideEffects, notMatchedLabel)
+                    sideEffects.Add(BoundGotoStatement(nil, failLabel))
+                    sideEffects.Add(BoundLabelStatement(nil, notMatchedLabel))
+                }
+                default {
+                    let isMatch = BoundIsExpression(pattern.Syntax, input, pattern)
+                    sideEffects.Add(
+                        BoundConditionalGotoStatement(pattern.Syntax, failLabel, isMatch, jumpIfTrue: false)
+                    )
+                }
+            }
+        }
+
+        private func EmitSpilledListPatternTest(
+            lp BoundListPattern,
+            input BoundExpression,
+            locals ImmutableArray[LocalVariableSymbol].Builder,
+            sideEffects ImmutableArray[BoundStatement].Builder,
+            failLabel BoundLabel
+        ) {
+            var sliceIndex = -1
+            for var i = 0; i < lp.Elements.Length; i++ {
+                if lp.Elements[i] is BoundSlicePattern {
+                    sliceIndex = i
+                    break
+                }
+            }
+            let BuildListStep = func (focusIndex int32, focusPattern BoundPattern?) BoundListPattern {
+                let stepElements = ImmutableArray.CreateBuilder[BoundPattern](lp.Elements.Length)
+                for var j = 0; j < lp.Elements.Length; j++ {
+                    if j == focusIndex && focusPattern != nil {
+                        stepElements.Add(focusPattern)
+                    } else if j == sliceIndex {
+                        stepElements.Add(BoundSlicePattern(nil, lp.Type, lp.ElementType, variable: nil, pattern: nil))
+                    } else {
+                        stepElements.Add(BoundDiscardPattern(nil, lp.ElementType))
+                    }
+                }
+                let stepInputVar = if lp.InputVariable == nil {
+                    default(LocalVariableSymbol?)
+                } else {
+                    LocalVariableSymbol("<list-pattern-input>", isReadOnly: true, lp.Type)
+                }
+                return BoundListPattern(
+                    lp.Syntax,
+                    lp.Type,
+                    stepElements.MoveToImmutable(),
+                    lp.ElementType,
+                    lp.LengthProperty,
+                    lp.IndexerProperty,
+                    stepInputVar
+                )
+            }
+            let lengthCheckPattern = BuildListStep(-1, nil)
+            let isLengthMatch = BoundIsExpression(lp.Syntax, input, lengthCheckPattern)
+            sideEffects.Add(BoundConditionalGotoStatement(lp.Syntax, failLabel, isLengthMatch, jumpIfTrue: false))
+            let EmitElementStep = func (index int32) {
+                let element = lp.Elements[index]
+                if !HasAwait(element) {
+                    let stepPattern = BuildListStep(index, element)
+                    let isElemMatch = BoundIsExpression(element.Syntax, input, stepPattern)
+                    sideEffects.Add(
+                        BoundConditionalGotoStatement(element.Syntax, failLabel, isElemMatch, jumpIfTrue: false)
+                    )
+                    return
+                }
+                let elemTemp = MakeSpillTemp(lp.ElementType)
+                locals.Add(elemTemp)
+                let captureStep = BuildListStep(index, BoundDiscardPattern(element.Syntax, lp.ElementType, elemTemp))
+                let isCaptured = BoundIsExpression(element.Syntax, input, captureStep)
+                sideEffects.Add(BoundConditionalGotoStatement(element.Syntax, failLabel, isCaptured, jumpIfTrue: false))
+                EmitSpilledPatternTest(element, BoundVariableExpression(nil, elemTemp), locals, sideEffects, failLabel)
+            }
+            if sliceIndex < 0 {
+                for var i = 0; i < lp.Elements.Length; i++ {
+                    EmitElementStep(i)
+                }
+                return
+            }
+            for var i = 0; i < sliceIndex; i++ {
+                EmitElementStep(i)
+            }
+            for var i = sliceIndex + 1; i < lp.Elements.Length; i++ {
+                EmitElementStep(i)
+            }
+            let slice = cast[BoundSlicePattern](lp.Elements[sliceIndex])
+            if slice.Variable == nil && slice.Pattern == nil {
+                return
+            }
+            if slice.Pattern == nil || !HasAwait(slice.Pattern) {
+                let sliceStep = BuildListStep(sliceIndex, slice)
+                let isSliceMatch = BoundIsExpression(slice.Syntax, input, sliceStep)
+                sideEffects.Add(BoundConditionalGotoStatement(slice.Syntax, failLabel, isSliceMatch, jumpIfTrue: false))
+                return
+            }
+            let sliceVar = slice.Variable ??
+                MakeSpillTemp(
+                if NativeSliceTypes.TryGetElement(lp.Type, out _, out _) {
+                    lp.Type
+                } else {
+                    SliceTypeSymbol.Get(lp.ElementType)
+                }
+            )
+            let captureSlice = BoundSlicePattern(slice.Syntax, slice.Type, slice.ElementType, sliceVar, pattern: nil)
+            let captureSliceStep = BuildListStep(sliceIndex, captureSlice)
+            let isSliceCaptured = BoundIsExpression(slice.Syntax, input, captureSliceStep)
+            sideEffects.Add(BoundConditionalGotoStatement(slice.Syntax, failLabel, isSliceCaptured, jumpIfTrue: false))
+            EmitSpilledPatternTest(
+                slice.Pattern!!,
+                BoundVariableExpression(nil, sliceVar),
+                locals,
+                sideEffects,
+                failLabel
+            )
         }
 
         /// Spills a null-conditional access (`?.`) expression (issue #1619
@@ -2914,7 +3441,67 @@ shared class SpillSequenceSpiller {
             )
         )
 
+        private func HasAwait(pattern BoundPattern) bool -> AsyncBoundTreeQueries.HasAwait(pattern, awaitMemo) ||
+            (
+            includeYieldInBlockExpressions && SpillSequenceSpiller.HasYieldInBlockExpression(pattern, yieldInBlockMemo)
+        ) ||
+            (
+            includeControlFlowInBlockExpressions && SpillSequenceSpiller.HasControlFlowInBlockExpression(
+                pattern,
+                controlFlowInBlockMemo
+            )
+        )
+
         shared {
+            private func MarkTypePatternBinding(
+                pattern BoundPattern,
+                target LocalVariableSymbol
+            ) BoundPattern -> switch pattern {
+                case tp is BoundTypePattern when object.ReferenceEquals(tp.Variable, target):
+                if tp.HasBinding {
+                    tp
+                } else {
+                    BoundTypePattern(
+                        tp.Syntax,
+                        tp.Type,
+                        tp.TargetType,
+                        tp.Variable,
+                        hasBinding: true,
+                        tp.PropertyPattern
+                    )
+                }
+                case BoundBinaryPattern{IsConjunction: true} bp:
+                BoundBinaryPattern(
+                    bp.Syntax,
+                    bp.Type,
+                    isConjunction: true,
+                    MarkTypePatternBinding(bp.Left, target),
+                    MarkTypePatternBinding(bp.Right, target),
+                    bp.RightInputVariable
+                )
+                default: pattern
+            }
+
+            private func WithPropertyPatternFieldPattern(
+                field BoundPropertyPatternField,
+                pattern BoundPattern
+            ) BoundPropertyPatternField -> if field.ClrMember != nil {
+                BoundPropertyPatternField(field.Syntax, field.ClrMember, field.Type, pattern)
+            } else if field.Property != nil {
+                BoundPropertyPatternField(field.Syntax, field.Property, field.DeclaringType, pattern)
+            } else {
+                BoundPropertyPatternField(
+                    field.Syntax,
+                    Invariant.Required(
+                        field.Field,
+                        "a property pattern field has one bound member",
+                        expression: "field.Field"
+                    ),
+                    field.DeclaringType,
+                    pattern
+                )
+            }
+
             private func IsRectangularArrayType(type TypeSymbol) bool -> type is RectangularArrayTypeSymbol ||
                 (type.ClrType is {IsArray: true} clrArray && (clrArray.GetArrayRank() > 1 || !clrArray.IsSZArray))
 
