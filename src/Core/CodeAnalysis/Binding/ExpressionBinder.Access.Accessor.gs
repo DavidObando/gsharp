@@ -474,7 +474,7 @@ internal partial class ExpressionBinder {
                 } else {
                     cast[BoundExpression](BoundErrorExpression(nil))
                 }
-            } else if TryBindSubmissionStaticMember(leftName, out var submissionHead) &&
+            } else if SubmissionBinding.TryBindStaticMember(this, leftName, out var submissionHead) &&
                 !(submissionHead is BoundErrorExpression) {
                 // ADR-0156 Phase 2: an accessor chain whose head names a
                 // top-level global (or function) of a prior interactive
@@ -3461,82 +3461,6 @@ internal partial class ExpressionBinder {
             return true
         }
         return false
-    }
-
-    /// ADR-0156 Phase 2: attempts to resolve an unqualified identifier
-    /// against the static members of a prior interactive submission's
-    /// `<Program>` container — a top-level global (static field)
-    /// or function (static method group). Submissions are consulted newest
-    /// first, so a redefinition in a later cell shadows earlier cells; the
-    /// first submission declaring the name wins outright (no ambiguity
-    /// diagnostics, mirroring the evaluator's scope-chain shadowing).
-    /// @param syntax The identifier syntax naming the prospective submission member.
-    /// @param result The bound submission-member access, when one is produced.
-    /// @returns `true` when a prior submission declared the member.
-    private func TryBindSubmissionStaticMember(
-        syntax NameExpressionSyntax,
-        @NotNullWhen(true) out result BoundExpression?
-    ) bool {
-        result = nil
-        let submissionImports SubmissionImports? = $scope.SubmissionImports
-        if submissionImports == nil {
-            return false
-        }
-        let name = syntax.IdentifierToken.ValueText
-        if !submissionImports.TryFindMemberContainer($scope.References!!, name, out var programType) {
-            return false
-        }
-        if programType == nil {
-            return false
-        }
-        let classSymbol = ImportedClassSymbol(programType, syntax, references: $scope.References)
-        result = BindAccessorStep(receiver: nil, classSymbol, syntax)
-        // Issue #3185: a prior-cell GLOBAL surfaces as a static-field read.
-        // Mark it addressable (and carry the source-side read-only flag) so
-        // member writes and mutating method calls through this receiver load
-        // the field's address (`ldsflda`) and mutate the stored global in
-        // place — never a silently-dropped struct copy — mirroring how a
-        // same-cell global (a static field of the current <Program>) behaves.
-        if result is BoundClrPropertyAccessExpression{Receiver: nil, Member: FieldInfo globalField} fieldRead &&
-            submissionImports
-            .TryFindGlobalVariable($scope.References!!, name, out _, out var declaredGlobal) {
-            // Issue #3308: the field read surfaces the global's CLR
-            // projection (e.g. `chan T` as imported `Channel[T]`), which
-            // strips the magic-symbol identity every channel/slice/array
-            // operation type-checks against. Reverse-project it, steered by
-            // the declaring submission's source-side type.
-            result = BoundClrPropertyAccessExpression(
-                fieldRead.Syntax,
-                receiver: nil,
-                fieldRead.Member,
-                SubmissionGlobalTypeProjection.ReverseProject(
-                    fieldRead.Type,
-                    globalField.FieldType,
-                    declaredGlobal?.Type,
-                    $scope.References!!
-                ),
-                fieldRead.StaticContainerType,
-                isAddressableStaticField: true,
-                isReadOnlySubmissionGlobal: declaredGlobal?.IsReadOnly == true
-            )
-        }
-        // Issue #3184: a prior-cell top-level FUNCTION referenced as a value
-        // (`let g = addOne`) surfaces as an imported CLR method group on the
-        // prior submission's <Program> container. Mirror the same-cell
-        // method-group rule (TryBindSingleMethodGroup binds a single
-        // non-generic candidate eagerly with its natural function type):
-        // resolve a single-candidate group to a delegate of its natural
-        // `FunctionTypeSymbol` so an untyped `let` infers a callable type.
-        // Overloaded/generic groups stay unresolved for target-typed
-        // conversion, exactly like their same-cell counterparts.
-        if result is BoundClrMethodGroupExpression{ResolvedMethod: nil} submissionGroup &&
-            submissionGroup
-            .Candidates
-            .Length == 1 &&
-            TryGetNaturalClrMethodGroupType(submissionGroup, out var naturalFunctionType) {
-            result = conversions.BindConversion(syntax.Location, submissionGroup, naturalFunctionType)
-        }
-        return true
     }
 
     private func BindUserTypeStaticMemberAccess(structSym StructSymbol, ne NameExpressionSyntax) BoundExpression {
