@@ -49,14 +49,27 @@ internal shared class RepositoryFileInventory {
         // Issue #4852: the top-level `out/` directory is the repository's build
         // output root (bin/obj/nupkgs/scratch tools). Whatever is tracked under
         // it (out/scratch/...) is a stray output, never a source or an app.
+        // Issue #4893: Python runs inside the migrated tree can write stray
+        // `__pycache__/*.pyc` bytecode files that are gitignored and not part
+        // of the repository mirror.
         return IsBuildOutputPath(relativePath) ||
+            IsPythonBytecodePath(relativePath) ||
             (segments.Length > 1 && segments[0].Equals("out", StringComparison.OrdinalIgnoreCase)) ||
             segments
             .Any(
             (segment string) -> segment.Equals(".git", StringComparison.OrdinalIgnoreCase) || segment.Equals(
                 "TestResults",
                 StringComparison.OrdinalIgnoreCase
-            )
+            ) ||
+                segment.Equals("__pycache__", StringComparison.OrdinalIgnoreCase)
+        )
+    }
+
+    internal func IsPythonBytecodePath(relativePath string) bool {
+        let extension = Path.GetExtension(relativePath)
+        return extension.Equals(".pyc", StringComparison.OrdinalIgnoreCase) || extension.Equals(
+            ".pyo",
+            StringComparison.OrdinalIgnoreCase
         )
     }
 

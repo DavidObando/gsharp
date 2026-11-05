@@ -1566,63 +1566,18 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func LoopContainsEmittedBreak(loop StatementSyntax) bool {
-            for node in loop.DescendantNodes(
+            return loop
+                .DescendantNodes(
                 (child SyntaxNode) -> !(
-                    (
-                        child is LocalFunctionStatementSyntax localFunction && this.IsLiftedLocalFunctionInRegion(
-                            localFunction
-                        )
-                    ) ||
+                    child is LocalFunctionStatementSyntax ||
+                        child is AnonymousFunctionExpressionSyntax ||
                         (child is ExpressionStatementSyntax exprStmt && this.IsDroppedExpressionStatement(exprStmt))
                 )
-            ) {
-                if node is BreakStatementSyntax breakStatement {
-                    if !(
-                        GetBreakTarget(breakStatement) is SwitchStatementSyntax &&
-                            IsRedundantSwitchSectionBreak(breakStatement)
-                    ) {
-                        return true
-                    }
-                } else if node is GotoStatementSyntax jump &&
-                    (jump.IsKind(SyntaxKind.GotoCaseStatement) || jump.IsKind(SyntaxKind.GotoDefaultStatement)) &&
-                    !this.IsAdjacentFallthroughGoto(jump) && this.ResolveGotoCaseOrDefaultTarget(
-                    jump
-                ) is {} targetSwitchLabel &&
-                    TargetArmIsEmptyBreak(targetSwitchLabel) &&
-                    !HasInterveningBreakTarget(jump) {
-                    return true
-                } else if node is WhileStatementSyntax nestedWhile && this.LoopConditionLowersOutOfHeader(
-                    nestedWhile,
-                    nestedWhile.Condition
-                ) {
-                    return true
-                } else if node is DoStatementSyntax nestedDo && this.LoopConditionLowersOutOfHeader(
-                    nestedDo,
-                    nestedDo.Condition
-                ) {
-                    return true
-                } else if node is ForStatementSyntax nestedFor &&
-                    nestedFor.Condition != nil &&
-                    this.LoopConditionLowersOutOfHeader(nestedFor, nestedFor.Condition!!) {
-                    return true
-                }
-            }
-            return false
-        }
-
-        private func IsLiftedLocalFunctionInRegion(localFunction LocalFunctionStatementSyntax) bool {
-            if this.context.GetDeclaredSymbol(localFunction) is not IMethodSymbol method {
-                return false
-            }
-            let original = method.OriginalDefinition
-            return this
-                .state
-                .LiftedStaticLocalFunctions
-                .ContainsKey(original) ||
-                this
-                .state
-                .LiftedRecursiveLocalFunctions
-                .ContainsKey(original)
+            )
+                .OfType[BreakStatementSyntax]()
+                .Any(
+                (breakStatement BreakStatementSyntax) -> object.ReferenceEquals(GetBreakTarget(breakStatement), loop)
+            )
         }
 
         shared {

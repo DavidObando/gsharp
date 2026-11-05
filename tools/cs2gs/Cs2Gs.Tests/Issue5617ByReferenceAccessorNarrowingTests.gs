@@ -1795,12 +1795,12 @@ public partial class Demo
         }
         return s.Length + 4;
     }
-    public static int WhileLoopWithBreak(ref string? s, Box box)
+    public static int WhileLoopWithBreak(ref string? s, Box box, Lazy<int> lazy)
     {
         while (s == null)
         {
             s = "abc";
-            if (box.F == 0) break;
+            if (lazy.Value > 0) break;
             s = box.F > 0 ? "abc" : null;
         }
         return s.Length + 5;
@@ -1984,7 +1984,7 @@ public partial class Demo
         string? text = "abc";
         return DoLoop(ref text, new Box()) + "," + DoLoopWithGuardAndForEach(ref text, new Box(), new[] { 1 }) + "," +
             WhileLoop(ref text, new Box()) + "," + ForLoop(ref text, new Box()) + "," +
-            WhileLoopWithBreak(ref text, new Box()) + "," +
+            WhileLoopWithBreak(ref text, new Box(), new Lazy<int>(() => 1)) + "," +
             WhileConditionRunsAccessor(ref text, new Lazy<int>(() => 1)) + "," +
             WhileLoopWithNestedBreak(ref text, new Box()) + "," +
             WhileConditionHoistsOutPattern(ref text, 1) + "," +
@@ -2006,19 +2006,19 @@ public partial class Demo
         Assert.Contains("return s.Length + 4", printed)
         Assert.Contains("return s!!.Length + 5", printed)
         Assert.Contains("return s!!.Length + 6", printed)
-        Assert.Contains("return s!!.Length + 7", printed)
+        Assert.Contains("return s.Length + 7", printed)
         Assert.Contains("return s!!.Length + 8", printed)
-        Assert.Contains("return s!!.Length + 9", printed)
-        Assert.Contains("return s!!.Length + 10", printed)
+        Assert.Contains("return s.Length + 9", printed)
+        Assert.Contains("return s.Length + 10", printed)
         Assert.Contains("return s!!.Length + 11", printed)
         Assert.Contains("return s!!.Length + 12", printed)
-        Assert.Contains("return s!!.Length + 13", printed)
+        Assert.Contains("return s.Length + 13", printed)
         Assert.Contains("return s!!.Length + 14", printed)
         Assert.Contains("return s!!.Length + 15", printed)
         Assert.Contains("return s!!.Length + 16", printed)
         Assert.Contains("return s!!.Length + 17", printed)
         Assert.Contains("return s!!.Length + 18", printed)
-        Assert.Equal(14, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(10, Regex.Matches(printed, `s!!`).Count)
     }
 
     shared {

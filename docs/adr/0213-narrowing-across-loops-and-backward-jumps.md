@@ -1282,11 +1282,13 @@ callable alias in force runs `ApplyLoopEntryLowerBound`; the decisions are those
   is bound under its entry state.
 - *Closure-assigned names.* They are computed on first use. `ApplyLoopEntryLowerBound` computes them
   before it decides, because until then the shared predicate assumes that every name is assigned.
-- *Exit state (R7 (f)).* Break states are not recorded, so the join of table 9 cannot be taken. A loop
-  without a `break` in its body, in a function without a user label, adds the facts of the header's false
-  state to the block after the loop, minus the facts that the condition itself can remove
-  (`RecordLoopExitFacts`). A loop with a `break` keeps today's exit. The row `g1`-with-`break` and the
-  join of break states wait for the slice that records them.
+- *Exit state (R7 (f), [#5460](https://github.com/DavidObando/gsharp/issues/5460)).* Each reachable `break` targeting a loop
+  records its narrowing state on the loop's `break` label (through pending cleanup transfers, rule J1), and
+  `RecordLoopExitFacts` takes the n-ary join `Jmp(break, header-false)` of table 9 (in a function without a user
+  label or `goto`), joining the reachable `break` states with the header's false state when the header exit is
+  reachable (minus the facts that the condition itself can remove) or with `Unreachable` for an unconditional loop
+  header (`while true`, `for { }`, `for init; ; post`, `do { ... } while true`), and pinning `g1_with_break` under
+  mutant M19.
 - *External callable aliases.* A function value that the region assigns, or that shares storage with one
   that it assigns, leaves the set at the loop entry; a region with a pointer write or an unknown syntax
   kind empties the set. The set is part of the entry state (section 13), so a loop entered with an alias and

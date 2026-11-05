@@ -145,6 +145,8 @@ namespace Native.Other {
             manifests,
             "--gsc",
             compiler,
+            "--config",
+            "Debug",
             "--translate-only",
             "--sdk-version",
             sdk!!.Version

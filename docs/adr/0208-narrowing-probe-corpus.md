@@ -274,4 +274,7 @@ d06 when another fact is in force at the loop entry; the row now gets the same r
 | m18 | `if skip { goto Inside }`; `if flag { return; if ({ Inside: var marker = 0; true }) { ... } } else { x = "other" }`; `x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
 | m19 | `var x string? = nil; x = "safe"; goto Done; let unused = () -> { Again: ...; if false { goto Again }; 0 }; x = nil; goto Done; Done: return x.Length` | accepted, prints `4` | accepted, prints `4` |
 
+## Issue #5460: joining `break` states at a loop exit (ADR-0213 table 9)
+
+[#5460](https://github.com/DavidObando/gsharp/issues/5460): `BindBreakStatement` records the narrowing state (with pending cleanup regions) onto the target loop's `break` label (`NarrowingFlow.RecordBreak`), and `RecordLoopExitFacts` takes the n-ary join `Jmp(break, header-false)` over all reachable `break` edges targeting that loop (after `ApplyExitedFinallyEffects`) and the loop's header-false exit state when reachable (`Unreachable` for an unconditional header such as `while true`, `for { }`, or `for init; ; post`). Corpus row `g1_with_break` in `Adr0208NarrowingCorpusTests` and the rows in `Issue5460LoopBreakExitJoinTests` pin the join and mutant M19.
 

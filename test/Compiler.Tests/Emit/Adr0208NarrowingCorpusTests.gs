@@ -211,6 +211,7 @@ open class Adr0208NarrowingCorpusTests {
                 "f5_iterator_assigns_global",
                 "f6_else_exit_hidden_member",
                 "g1_three_predecessor_goto",
+                "g1_with_break",
                 "g2_ref_param_aliases_element",
                 "g3_switch_failed_guard",
                 "g4_overload_ambiguity_after_join",
@@ -1361,6 +1362,28 @@ func Run(x object?, k int32) string {
     return x.Name
 }
 func Main() { Console.WriteLine(Run(Dog(), 0)) }`, "", "run", "a", "R6"}
+            yield[]object{"g1_with_break", `import System
+open class Animal {
+    var Name string = "a"
+}
+class Dog : Animal { }
+class Cat : Animal { }
+func Run(x object?, k int32) string {
+    while true {
+        if k == 0 {
+            if x !is Dog { return "" }
+            break
+        }
+        if k == 1 {
+            if x !is Cat { return "" }
+            break
+        }
+        if x !is Animal { return "" }
+        break
+    }
+    return x.Name
+}
+func Main() { Console.WriteLine(Run(Dog(), 0)) }`, "", "run", "a", "ADR-0213 section 13, table 9 (#5460)"}
             yield[]object{"g2_ref_param_aliases_element", `class C {
     var Value int32 = 1
 }
