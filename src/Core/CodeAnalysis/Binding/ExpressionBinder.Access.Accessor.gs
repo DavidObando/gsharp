@@ -4059,7 +4059,12 @@ internal partial class ExpressionBinder {
                 } else {
                     paramType
                 }
-                if slotSyntax == nil && expectedType != nil && expectedType != paramType {
+                if slotSyntax == nil &&
+                    !method!!
+                    .Parameters[i]
+                    .IsVariadic &&
+                    expectedType != nil &&
+                    expectedType != paramType {
                     permutedArgs = permutedArgs.SetItem(
                         i,
                         OverloadResolver.CreateOptionalUserDefaultArgument(method!!.Parameters[i], expectedType)

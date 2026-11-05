@@ -2025,6 +2025,7 @@ internal partial class OverloadResolver {
                 parameter.Type
             }
             if (i >= parameterSyntax.Length || parameterSyntax[i] == nil) &&
+                !parameter.IsVariadic &&
                 expectedType != nil &&
                 expectedType != parameter.Type {
                 boundArguments[i] = (argument = CreateOptionalUserDefaultArgument(parameter, expectedType))

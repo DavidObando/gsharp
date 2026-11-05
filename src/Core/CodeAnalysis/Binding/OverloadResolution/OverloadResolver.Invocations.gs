@@ -1365,6 +1365,9 @@ internal partial class OverloadResolver {
                 paramType
             }
             if (i >= permutedSyntax.Length || permutedSyntax[i] == nil) &&
+                !extension
+                .Parameters[i + 1]
+                .IsVariadic &&
                 expectedType != nil &&
                 expectedType != paramType {
                 permutedArguments = permutedArguments.SetItem(
@@ -1870,6 +1873,7 @@ internal partial class OverloadResolver {
                 paramType
             }
             if (i >= permutedSyntax.Length || permutedSyntax[i] == nil) &&
+                !parameter.IsVariadic &&
                 expectedType != nil &&
                 expectedType != paramType {
                 permutedArguments = permutedArguments.SetItem(

@@ -1149,8 +1149,10 @@ public class Implicit {}
 public class Explicit { public init() {} }
 public data class Record(Value int32) {
     public func MethodAccept[T](callback(() -> T)? = nil) int32 -> if callback == nil { this.Value } else { 0 }
+    public func MethodVariadic[T](items ...T) int32 -> items.Length
     shared {
         public func StaticAccept[T](callback(() -> T)? = nil) string -> if callback == nil { "static" } else { "called" }
+        public func StaticVariadic[T](items ...T) int32 -> items.Length
     }
 }
 
@@ -1167,7 +1169,7 @@ public class Control {}
 
 public func Invoke() string {
     let r = Record(42)
-    return "${Accept[string]()}|${AcceptNamed[string]()}|${AcceptWithSeed("seed")}|${"ext".ExtAccept[string]()}|${r.MethodAccept[string]()}|${Record.StaticAccept[string]()}"
+    return "${Accept[string]()}|${AcceptNamed[string]()}|${AcceptWithSeed("seed")}|${"ext".ExtAccept[string]()}|${r.MethodAccept[string]()}|${Record.StaticAccept[string]()}|${r.MethodVariadic[int32]()}|${Record.StaticVariadic[int32]()}"
 }`
         let tempDir = Directory.CreateTempSubdirectory("gs_5760_5761_5762_").FullName
         try {
@@ -1202,7 +1204,7 @@ public func Invoke() string {
             Assert.True(exit == 0, "${compileOut}${compileErr}")
             IlVerifier.Verify(outPath)
             let assembly = EmittedFixture.Load(outPath)
-            Assert.Equal("True|True|seed|ext|42|static", Adr0199RecordAbiWitness.Invoke(assembly, "Invoke"))
+            Assert.Equal("True|True|seed|ext|42|static|0|0", Adr0199RecordAbiWitness.Invoke(assembly, "Invoke"))
 
             using let peStream = File.OpenRead(outPath)
             using let pe = PEReader(peStream)
