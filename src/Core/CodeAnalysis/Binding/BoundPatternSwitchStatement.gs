@@ -40,6 +40,20 @@ class BoundPatternSwitchStatement : BoundStatement {
         get;
     }
 
+    /// Enumerates dispatch order: the default runs after all other patterns.
+    internal func GetDispatchArms() sequence[BoundPatternSwitchArm] {
+        for arm in Arms {
+            if !arm.IsDefault {
+                yield arm
+            }
+        }
+        for arm in Arms {
+            if arm.IsDefault {
+                yield arm
+            }
+        }
+    }
+
     /// Gets a value indicating whether closed-type analysis proved that the switch is exhaustive.
     prop IsExhaustive bool {
         get;
