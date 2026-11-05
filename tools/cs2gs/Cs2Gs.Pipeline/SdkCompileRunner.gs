@@ -1462,42 +1462,54 @@ class SdkCompileRunner {
         /// `.gsproj` makes it discoverable unconditionally.
         /// @param appRunDir The directory the `.gsproj` is written to.
         /// @param repoRoot The repository root containing the `.nugs` feed.
-        internal func WriteLocalNugetConfig(appRunDir string, repoRoot string?) {
-            WriteLocalNugetConfigFile(Path.Combine(appRunDir, "nuget.config"), repoRoot)
+        internal func WriteLocalNugetConfig(appRunDir string, repoRoot string?, globalPackagesOverride string? = nil) {
+            WriteLocalNugetConfigFile(Path.Combine(appRunDir, "nuget.config"), repoRoot, globalPackagesOverride)
         }
 
-        private func WriteLocalNugetConfigFile(path string, repoRoot string?) {
+        private func WriteLocalNugetConfigFile(path string, repoRoot string?, globalPackagesOverride string? = nil) {
             let localFeed string? = if string.IsNullOrEmpty(repoRoot) {
                 default(string?)
             } else {
                 Path.Combine(repoRoot, ".nugs")
             }
-            let sb = StringBuilder()
-            sb.Append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
-            sb.Append("<configuration>\n")
-            sb.Append("  <packageSources>\n")
-            sb.Append("    <clear />\n")
-            sb.Append(
-                "    <add key=\"NuGet official package source\" value=\"https://api.nuget.org/v3/index.json\" />\n"
+            let packageSources = XElement(
+                XName?("packageSources")!!,
+                XElement(XName?("clear")!!),
+                XElement(
+                    XName?("add")!!,
+                    XAttribute(XName?("key")!!, "NuGet official package source"),
+                    XAttribute(XName?("value")!!, "https://api.nuget.org/v3/index.json")
+                )
             )
             if !string.IsNullOrEmpty(localFeed) && Directory.Exists(localFeed) {
-                sb.Append("    <add key=\"Gsharp local packages\" value=\"").Append(localFeed).Append("\" />\n")
+                packageSources.Add(
+                    XElement(
+                        XName?("add")!!,
+                        XAttribute(XName?("key")!!, "Gsharp local packages"),
+                        XAttribute(XName?("value")!!, localFeed)
+                    )
+                )
             }
-            sb.Append("  </packageSources>\n")
+            let configuration = XElement(XName?("configuration")!!, packageSources)
             if string.IsNullOrEmpty(repoRoot) {
-                let globalPackages string? = ResolveNugetPackagesRoot()
+                let globalPackages string? = globalPackagesOverride ?? ResolveNugetPackagesRoot()
                 if !string.IsNullOrEmpty(globalPackages) && Directory.Exists(globalPackages) {
-                    sb.Append("  <fallbackPackageFolders>\n")
-                    sb.Append("    <clear />\n")
-                    sb.Append("    <add key=\"Global packages\" value=\"").Append(globalPackages).Append("\" />\n")
-                    sb.Append("  </fallbackPackageFolders>\n")
+                    configuration.Add(
+                        XElement(
+                            XName?("fallbackPackageFolders")!!,
+                            XElement(XName?("clear")!!),
+                            XElement(
+                                XName?("add")!!,
+                                XAttribute(XName?("key")!!, "Global packages"),
+                                XAttribute(XName?("value")!!, globalPackages)
+                            )
+                        )
+                    )
                 }
             }
-            sb.Append("  <disabledPackageSources>\n")
-            sb.Append("    <clear />\n")
-            sb.Append("  </disabledPackageSources>\n")
-            sb.Append("</configuration>\n")
-            File.WriteAllText(path, sb.ToString())
+            configuration.Add(XElement(XName?("disabledPackageSources")!!, XElement(XName?("clear")!!)))
+            let document = XDocument(XDeclaration("1.0", "utf-8", nil), configuration)
+            File.WriteAllText(path, document.Declaration!!.ToString() + "\n" + document.Root!!.ToString() + "\n")
         }
 
         private func AddOrUpgradePackage(

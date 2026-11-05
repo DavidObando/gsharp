@@ -548,7 +548,36 @@ System.IndexOutOfRangeException`)
                 GscInvoker.Resolve(nil, "Release", externalWorkDir, "0.5.7", nugetRoot)
             )
             Assert.Equal(Path.GetFullPath(sdk057), GscInvoker.ResolvePackagedCompiler(nil, nugetRoot, "0.5.7"))
-            Assert.Equal(Path.GetFullPath(sdk0510), GscInvoker.ResolvePackagedCompiler(nil, nugetRoot, "0.9.9"))
+            Assert.Equal(
+                Path.GetFullPath(sdk0510),
+                GscInvoker.ResolvePackagedCompiler(
+                    nil,
+                    nugetRoot,
+                    "0.9.9",
+                    func (_ string, _ string?) bool {
+                        return false
+                    }
+                )
+            )
+            let emptyNugetRoot = Path.Combine(testRoot, "empty-nuget-packages")
+            Directory.CreateDirectory(emptyNugetRoot)
+            let acquiredCompiler = GscInvoker.ResolvePackagedCompiler(
+                "0.5.7",
+                emptyNugetRoot,
+                "0.5.7",
+                func (version string, packagesRoot string?) bool {
+                    let target = Path.Combine(packagesRoot!!, "gsharp.net.sdk", version, "tools", "compiler", "gsc.dll")
+                    Directory.CreateDirectory(Path.GetDirectoryName(target)!!)
+                    File.WriteAllText(target, string.Empty)
+                    return true
+                }
+            )
+            Assert.Equal(
+                Path.GetFullPath(
+                    Path.Combine(emptyNugetRoot, "gsharp.net.sdk", "0.5.7", "tools", "compiler", "gsc.dll")
+                ),
+                acquiredCompiler
+            )
             Assert.Equal(
                 Path.GetFullPath(gsgen057),
                 GscInvoker.ResolveGsgenTool(nil, "Release", Path.GetDirectoryName(sdk057)!!)
@@ -569,9 +598,12 @@ System.IndexOutOfRangeException`)
                     "0.5.11-glocal+abcdef"
                 )
             )
-            SdkCompileRunner.WriteLocalNugetConfig(testRoot, nil)
+            let ampersandPackages = Path.Combine(testRoot, "A&B", "packages")
+            Directory.CreateDirectory(ampersandPackages)
+            SdkCompileRunner.WriteLocalNugetConfig(testRoot, nil, ampersandPackages)
             let nugetConfig = File.ReadAllText(Path.Combine(testRoot, "nuget.config"))
             Assert.DoesNotContain(".nugs", nugetConfig, StringComparison.Ordinal)
+            Assert.Contains("A&amp;B", nugetConfig, StringComparison.Ordinal)
         } finally {
             Directory.Delete(testRoot, recursive: true)
         }

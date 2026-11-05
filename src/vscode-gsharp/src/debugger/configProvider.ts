@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { selectRunnableProject } from '../commands/projectCommands';
 import { computeLaunchPaths, type ProjectMetadata } from '../utils/projectLayout';
 
@@ -29,7 +28,7 @@ export class GSharpDebugConfigurationProvider implements vscode.DebugConfigurati
     folder: vscode.WorkspaceFolder | undefined,
     config: vscode.DebugConfiguration,
     _token?: vscode.CancellationToken,
-  ): Promise<vscode.DebugConfiguration> {
+  ): Promise<vscode.DebugConfiguration | undefined> {
     // If the user explicitly chose 'gsharp' type, convert to 'coreclr'
     if (config.type === 'gsharp') {
       config.type = 'coreclr';
@@ -38,19 +37,18 @@ export class GSharpDebugConfigurationProvider implements vscode.DebugConfigurati
     // If no program is specified, try to auto-detect from the project layout.
     if (!config.program && folder) {
       const targetProject = await findPrimaryProject(folder);
-      if (targetProject) {
-        const { program, cwd } = computeLaunchPaths(
-          folder.uri.fsPath,
-          targetProject.projectPath,
-          targetProject.targetFramework,
-          targetProject.assemblyName,
-        );
-        config.program = program;
-        if (!config.cwd) {
-          config.cwd = cwd;
-        }
-      } else {
-        config.program = '${workspaceFolder}/bin/Debug/net10.0/${workspaceFolderBasename}.dll';
+      if (!targetProject) {
+        return undefined;
+      }
+      const { program, cwd } = computeLaunchPaths(
+        folder.uri.fsPath,
+        targetProject.projectPath,
+        targetProject.targetFramework,
+        targetProject.assemblyName,
+      );
+      config.program = program;
+      if (!config.cwd) {
+        config.cwd = cwd;
       }
     }
 
@@ -101,28 +99,23 @@ export class GSharpDebugConfigurationInitialProvider
     folder: vscode.WorkspaceFolder | undefined,
     _token?: vscode.CancellationToken,
   ): Promise<vscode.DebugConfiguration[]> {
-    const targetProject = folder ? await findPrimaryProject(folder) : undefined;
-    const projectName = targetProject
-      ? targetProject.projectName
-      : folder
-        ? path.basename(folder.uri.fsPath)
-        : 'GSharpApp';
-    const { program, cwd } =
-      folder && targetProject
-        ? computeLaunchPaths(
-            folder.uri.fsPath,
-            targetProject.projectPath,
-            targetProject.targetFramework,
-            targetProject.assemblyName,
-          )
-        : {
-            program: `\${workspaceFolder}/bin/Debug/net10.0/${projectName}.dll`,
-            cwd: '${workspaceFolder}',
-          };
+    if (!folder) {
+      return [];
+    }
+    const targetProject = await findPrimaryProject(folder);
+    if (!targetProject) {
+      return [];
+    }
+    const { program, cwd } = computeLaunchPaths(
+      folder.uri.fsPath,
+      targetProject.projectPath,
+      targetProject.targetFramework,
+      targetProject.assemblyName,
+    );
 
     return [
       {
-        name: `Launch ${projectName}`,
+        name: `Launch ${targetProject.projectName}`,
         type: 'coreclr',
         request: 'launch',
         preLaunchTask: 'dotnet: build',

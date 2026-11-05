@@ -47,7 +47,8 @@ export function registerProjectCommands(context: vscode.ExtensionContext) {
         return;
       }
 
-      const projectFiles = await vscode.workspace.findFiles('**/*.gsproj', '**/node_modules/**');
+      const pattern = new vscode.RelativePattern(workspaceFolder, '**/*.gsproj');
+      const projectFiles = await vscode.workspace.findFiles(pattern, '**/node_modules/**');
       if (projectFiles.length === 0) {
         vscode.window.showWarningMessage('No .gsproj file found in the workspace.');
         return;

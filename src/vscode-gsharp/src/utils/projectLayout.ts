@@ -49,23 +49,118 @@ function collectInheritedPropsFiles(projectDir: string): string[] {
   return files;
 }
 
+function extractConditionAttribute(attributes: string): string | undefined {
+  const match = /\bCondition\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(attributes);
+  if (!match) {
+    return undefined;
+  }
+  return match[1] ?? match[2];
+}
+
+function unquoteConditionAtom(token: string): string {
+  const trimmed = token.trim();
+  if (
+    (trimmed.startsWith("'") && trimmed.endsWith("'")) ||
+    (trimmed.startsWith('"') && trimmed.endsWith('"'))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function evaluateAtomicCondition(expr: string): boolean {
+  const trimmed = expr.trim();
+  if (!trimmed) {
+    return true;
+  }
+  if (trimmed.startsWith('!')) {
+    return !evaluateAtomicCondition(trimmed.slice(1));
+  }
+  const neqIndex = trimmed.indexOf('!=');
+  if (neqIndex >= 0) {
+    const left = unquoteConditionAtom(trimmed.slice(0, neqIndex));
+    const right = unquoteConditionAtom(trimmed.slice(neqIndex + 2));
+    return left.toLowerCase() !== right.toLowerCase();
+  }
+  const eqIndex = trimmed.indexOf('==');
+  if (eqIndex >= 0) {
+    const left = unquoteConditionAtom(trimmed.slice(0, eqIndex));
+    const right = unquoteConditionAtom(trimmed.slice(eqIndex + 2));
+    return left.toLowerCase() === right.toLowerCase();
+  }
+  const atom = unquoteConditionAtom(trimmed).toLowerCase();
+  if (atom === 'false' || atom === '0' || atom === '') {
+    return false;
+  }
+  return true;
+}
+
+function evaluateMsBuildCondition(
+  rawCondition: string | undefined,
+  props: ReadonlyMap<string, string>,
+): boolean {
+  if (rawCondition === undefined || !rawCondition.trim()) {
+    return true;
+  }
+  let expanded = resolveMsBuildVariables(rawCondition, props, '');
+  // Reduce innermost parenthesized groups when present.
+  while (/\([^()]*\)/.test(expanded)) {
+    expanded = expanded.replace(/\(([^()]*)\)/g, (_full, inner: string) =>
+      evaluateMsBuildCondition(inner, props) ? "'true'" : "'false'",
+    );
+  }
+  const orParts = expanded.split(/\s+or\s+/i);
+  return orParts.some((orPart) => {
+    const andParts = orPart.split(/\s+and\s+/i);
+    return andParts.every((andPart) => evaluateAtomicCondition(andPart));
+  });
+}
+
 function extractXmlProperties(xml: string, target: Map<string, string>): void {
   const stripped = xml.replace(/<!--[\s\S]*?-->/g, '');
-  const propPattern = /<([A-Za-z_][A-Za-z0-9_.-]*)\b[^>]*>([^<]*)<\/\1>/g;
+  const groupPattern = /<PropertyGroup\b([^>]*)>([\s\S]*?)<\/PropertyGroup>/gi;
+  let groupMatch: RegExpExecArray | null;
+  let matchedAnyGroup = false;
+  while ((groupMatch = groupPattern.exec(stripped)) !== null) {
+    matchedAnyGroup = true;
+    const groupCondition = extractConditionAttribute(groupMatch[1]);
+    if (!evaluateMsBuildCondition(groupCondition, target)) {
+      continue;
+    }
+    extractPropertiesFromBlock(groupMatch[2], target);
+  }
+  if (!matchedAnyGroup) {
+    extractPropertiesFromBlock(stripped, target);
+  }
+}
+
+function extractPropertiesFromBlock(blockXml: string, target: Map<string, string>): void {
+  const propPattern = /<([A-Za-z_][A-Za-z0-9_.-]*)\b([^>]*)>([^<]*)<\/\1>/g;
   let match: RegExpExecArray | null;
-  while ((match = propPattern.exec(stripped)) !== null) {
+  while ((match = propPattern.exec(blockXml)) !== null) {
     const key = match[1].toLowerCase();
-    const value = match[2].trim();
+    const propCondition = extractConditionAttribute(match[2]);
+    if (!evaluateMsBuildCondition(propCondition, target)) {
+      continue;
+    }
+    const value = resolveMsBuildVariables(match[3].trim(), target);
     if (value) {
       target.set(key, value);
     }
   }
 }
 
-function resolveMsBuildVariables(value: string, props: ReadonlyMap<string, string>): string {
+function resolveMsBuildVariables(
+  value: string,
+  props: ReadonlyMap<string, string>,
+  unresolvedFallback?: string,
+): string {
   return value.replace(/\$\(([A-Za-z_][A-Za-z0-9_.-]*)\)/g, (full, name: string) => {
     const replacement = props.get(name.toLowerCase());
-    return replacement !== undefined ? replacement : full;
+    if (replacement !== undefined) {
+      return replacement;
+    }
+    return unresolvedFallback !== undefined ? unresolvedFallback : full;
   });
 }
 
@@ -76,8 +171,10 @@ function resolveMsBuildVariables(value: string, props: ReadonlyMap<string, strin
 export function parseProjectMetadata(projectPath: string, projectXml?: string): ProjectMetadata {
   const projectName = path.basename(projectPath, '.gsproj');
   const props = new Map<string, string>([
+    ['configuration', 'Debug'],
     ['msbuildprojectname', projectName],
     ['msbuildprojectfile', path.basename(projectPath)],
+    ['msbuildprojectextension', path.extname(projectPath) || '.gsproj'],
   ]);
 
   let rawProjectXml = projectXml;

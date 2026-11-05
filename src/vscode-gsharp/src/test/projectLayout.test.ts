@@ -2,7 +2,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { registerProjectCommands } from '../commands/projectCommands';
-import { computeLaunchPaths } from '../utils/projectLayout';
+import {
+  GSharpDebugConfigurationInitialProvider,
+  GSharpDebugConfigurationProvider,
+} from '../debugger/configProvider';
+import { computeLaunchPaths, parseProjectMetadata } from '../utils/projectLayout';
 
 describe('computeLaunchPaths', () => {
   it('roots paths at the project subdirectory for a solution layout', () => {
@@ -61,7 +65,7 @@ describe('computeLaunchPaths', () => {
     fs.writeFileSync(
       appProj,
       [
-        '<Project Sdk="Gsharp.NET.Sdk/0.4.1150">',
+        '<Project Sdk="Gsharp.NET.Sdk/0.5.212">',
         '  <PropertyGroup>',
         '    <OutputType>Exe</OutputType>',
         '    <TargetFramework>net10.0</TargetFramework>',
@@ -78,6 +82,31 @@ describe('computeLaunchPaths', () => {
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }
+  });
+
+  it('evaluates MSBuild Condition attributes for Debug configuration (#5009)', () => {
+    const xml = [
+      '<Project Sdk="Gsharp.NET.Sdk/0.5.212">',
+      '  <PropertyGroup>',
+      '    <OutputType>Exe</OutputType>',
+      '    <OutputType Condition="\'$(Configuration)\' == \'Release\'">Library</OutputType>',
+      '    <AssemblyName Condition="\'$(Configuration)\' == \'Debug\'">Waikiki.Debug</AssemblyName>',
+      '    <AssemblyName Condition="\'$(Configuration)\' == \'Release\'">Waikiki.Release</AssemblyName>',
+      '  </PropertyGroup>',
+      '  <PropertyGroup Condition="\'$(Configuration)\' == \'Release\'">',
+      '    <TargetFramework>net8.0</TargetFramework>',
+      '  </PropertyGroup>',
+      '  <PropertyGroup Condition="\'$(Configuration)\' == \'Debug\'">',
+      '    <TargetFramework>net10.0</TargetFramework>',
+      '  </PropertyGroup>',
+      '</Project>',
+    ].join('\n');
+
+    const meta = parseProjectMetadata('/workspace/src/Waikiki.App/Waikiki.App.gsproj', xml);
+    expect(meta.isRunnable).toBe(true);
+    expect(meta.outputType).toBe('Exe');
+    expect(meta.assemblyName).toBe('Waikiki.Debug');
+    expect(meta.targetFramework).toBe('net10.0');
   });
 });
 
@@ -220,6 +249,37 @@ describe('gsharp.generateAssets (#5009)', () => {
         program: '${workspaceFolder}/src/Gui/bin/Debug/net10.0/GuiDesktop.dll',
         cwd: '${workspaceFolder}/src/Gui',
       });
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it('scopes project discovery to workspaceFolders[0] and aborts debug resolution when no runnable project is selected', async () => {
+    const ws = path.join(process.cwd(), `.fixture-5009-debug-${process.pid}`);
+    try {
+      const lib = writeProject(
+        path.join(ws, 'src', 'OnlyLib', 'OnlyLib.gsproj'),
+        '<Project Sdk="Gsharp.NET.Sdk"><PropertyGroup><OutputType>Library</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>',
+      );
+      const folder = { uri: { fsPath: ws } } as unknown as vscode.WorkspaceFolder;
+      let capturedInclude: unknown;
+      (vscode.workspace as { findFiles: unknown }).findFiles = async (include: unknown) => {
+        capturedInclude = include;
+        return [lib];
+      };
+
+      const provider = new GSharpDebugConfigurationProvider();
+      const resolved = await provider.resolveDebugConfiguration(folder, {
+        name: 'Launch',
+        type: 'gsharp',
+        request: 'launch',
+      });
+      expect(resolved).toBeUndefined();
+      expect((capturedInclude as { base: unknown }).base).toBe(folder);
+
+      const initialProvider = new GSharpDebugConfigurationInitialProvider();
+      const initialConfigs = await initialProvider.provideDebugConfigurations(folder);
+      expect(initialConfigs).toEqual([]);
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
     }
