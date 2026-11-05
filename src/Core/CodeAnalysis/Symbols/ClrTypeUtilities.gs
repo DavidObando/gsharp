@@ -1529,12 +1529,12 @@ shared class ClrTypeUtilities {
 
     private func AreSameFunctionPointers(self Type, other Type, selfMethod MethodBase?, otherMethod MethodBase?) bool {
         try {
+            if self.IsUnmanagedFunctionPointer != other.IsUnmanagedFunctionPointer {
+                return false
+            }
             let selfModified = !object.ReferenceEquals(self, self.UnderlyingSystemType)
             let otherModified = !object.ReferenceEquals(other, other.UnderlyingSystemType)
             if selfModified && otherModified {
-                if self.IsUnmanagedFunctionPointer != other.IsUnmanagedFunctionPointer {
-                    return false
-                }
                 let selfConventions = SafeGetFunctionPointerCallingConventions(self)
                 let otherConventions = SafeGetFunctionPointerCallingConventions(other)
                 let bothHaveConventionMetadata = (

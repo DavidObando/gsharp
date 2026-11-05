@@ -375,14 +375,21 @@ open class ClrTypeUtilitiesTests {
         let hostIntToIntPtr = typeof(OpenGenericIdentityFixture).GetMethod("AcceptFnPtrInt")!!
             .GetParameters()[0]
             .ParameterType
+        let hostManagedIntToIntPtr = typeof(OpenGenericIdentityFixture).GetMethod("AcceptManagedFnPtrInt")!!
+            .GetParameters()[0]
+            .ParameterType
         let hostIntToLongPtr = typeof(OpenGenericIdentityFixture).GetMethod("AcceptFnPtrLong")!!
             .GetParameters()[0]
             .ParameterType
         let mlcIntToIntPtr = mlcFixture.GetMethod("AcceptFnPtrInt")!!.GetParameters()[0].ParameterType
+        let mlcManagedIntToIntPtr = mlcFixture.GetMethod("AcceptManagedFnPtrInt")!!.GetParameters()[0].ParameterType
         let mlcIntToLongPtr = mlcFixture.GetMethod("AcceptFnPtrLong")!!.GetParameters()[0].ParameterType
         Assert.True(hostIntToIntPtr.IsFunctionPointer)
         Assert.Null(hostIntToIntPtr.FullName)
         Assert.True(ClrTypeInspector.IsSameAs(hostIntToIntPtr, mlcIntToIntPtr))
+        Assert.True(ClrTypeInspector.IsSameAs(hostManagedIntToIntPtr, mlcManagedIntToIntPtr))
+        Assert.False(ClrTypeInspector.IsSameAs(hostIntToIntPtr, hostManagedIntToIntPtr))
+        Assert.False(ClrTypeInspector.IsSameAs(hostIntToIntPtr, mlcManagedIntToIntPtr))
         Assert.False(ClrTypeInspector.IsSameAs(hostIntToIntPtr, hostIntToLongPtr))
         Assert.False(ClrTypeInspector.IsSameAs(hostIntToIntPtr, mlcIntToLongPtr))
         Assert.False(ClrTypeInspector.IsSameAs(hostIntToIntPtr, hostMethodParams[0]))
@@ -535,6 +542,10 @@ internal unsafe class OpenGenericIdentityFixture {
         }
 
         func AcceptFnPtrInt(callback unmanaged[Cdecl](int32) -> int32) {
+            let _ = callback
+        }
+
+        func AcceptManagedFnPtrInt(callback *func (int32) int32) {
             let _ = callback
         }
 
