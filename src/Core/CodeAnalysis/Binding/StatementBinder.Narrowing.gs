@@ -2045,8 +2045,7 @@ internal partial class StatementBinder {
         allowBoolCall bool = true,
         keepBoolCallInLogicalOps bool = true,
         shortCircuitInComposedOps bool = false,
-        header SyntaxNode? = nil,
-        filterBoolCallGlobalRoots bool = true
+        header SyntaxNode? = nil
     )(
         Then Dictionary[AccessPath, TypeSymbol]?,
         Else Dictionary[AccessPath, TypeSymbol]?,
@@ -2084,8 +2083,7 @@ internal partial class StatementBinder {
                     allowBoolCall,
                     keepBoolCallInLogicalOps,
                     shortCircuitInComposedOps,
-                    header,
-                    filterBoolCallGlobalRoots
+                    header
                 )
                 return (
                     MergeNarrowingFrames(prefixRefinements, innerThen),
@@ -2103,8 +2101,7 @@ internal partial class StatementBinder {
                     allowBoolCall,
                     keepBoolCallInLogicalOps,
                     shortCircuitInComposedOps,
-                    header,
-                    filterBoolCallGlobalRoots
+                    header
                 )
                 return (inElse, inThen, falseAliases, trueAliases)
             }
@@ -2117,8 +2114,7 @@ internal partial class StatementBinder {
                     keepBoolCallInLogicalOps,
                     keepBoolCallInLogicalOps,
                     shortCircuitInComposedOps,
-                    header,
-                    filterBoolCallGlobalRoots
+                    header
                 )
                 var leftThen = leftThenRaw
                 if leftThen != nil && leftThen.Count > 0 {
@@ -2136,8 +2132,7 @@ internal partial class StatementBinder {
                     keepBoolCallInLogicalOps,
                     keepBoolCallInLogicalOps,
                     shortCircuitInComposedOps,
-                    header,
-                    filterBoolCallGlobalRoots
+                    header
                 )
                 let (combinedThen, combinedElse) = CombineLogicalAndNarrowings(
                     leftThenRaw,
@@ -2157,8 +2152,7 @@ internal partial class StatementBinder {
                     keepBoolCallInLogicalOps,
                     keepBoolCallInLogicalOps,
                     shortCircuitInComposedOps,
-                    header,
-                    filterBoolCallGlobalRoots
+                    header
                 )
                 var leftElse = leftElseRaw
                 if leftElse != nil && leftElse.Count > 0 {
@@ -2176,8 +2170,7 @@ internal partial class StatementBinder {
                     keepBoolCallInLogicalOps,
                     keepBoolCallInLogicalOps,
                     shortCircuitInComposedOps,
-                    header,
-                    filterBoolCallGlobalRoots
+                    header
                 )
                 let (combinedThen, combinedElse) = CombineLogicalOrNarrowings(
                     leftThen,
@@ -2191,16 +2184,7 @@ internal partial class StatementBinder {
         }
         var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition, forShortCircuitOperand)
         if !forShortCircuitOperand && allowBoolCall {
-            var (boolThen, boolElse) = TryClassifyBoolCallNarrowing(condition, beforeAliases)
-            if boolThen != nil || boolElse != nil {
-                FilterBoolCallNarrowingAfterEffects(
-                    condition,
-                    beforeAliases,
-                    filterBoolCallGlobalRoots,
-                    ref boolThen,
-                    ref boolElse
-                )
-            }
+            let (boolThen, boolElse) = TryClassifyBoolCallNarrowing(condition, beforeAliases)
             thenNarrow = MergeNarrowingFrames(thenNarrow, boolThen)
             elseNarrow = MergeNarrowingFrames(elseNarrow, boolElse)
         }
@@ -2372,45 +2356,6 @@ internal partial class StatementBinder {
         }
         processed.Add(node)
         exitAliases[node] = HashSet[VariableSymbol](aliases)
-    }
-
-    private func FilterBoolCallNarrowingAfterEffects(
-        condition BoundExpression,
-        beforeAliases HashSet[VariableSymbol],
-        includeGlobalRoots bool,
-        ref thenNarrow Dictionary[AccessPath, TypeSymbol]?,
-        ref elseNarrow Dictionary[AccessPath, TypeSymbol]?
-    ) {
-        let collector = NewCollector(nil, beforeAliases)
-        collector.VisitExpression(condition)
-        if thenNarrow is {} thenFrame {
-            for entry in thenFrame.ToArray() {
-                if !collector.WritableReferenceRoots.Contains(entry.Key.Root) &&
-                    (
-                    MayBeMutatedByUnknownWrite(collector, entry.Key) ||
-                        (includeGlobalRoots && collector.MayMutateGlobalRoot(entry.Key.Root, entry.Value))
-                ) {
-                    thenFrame.Remove(entry.Key)
-                }
-            }
-            if thenFrame.Count == 0 {
-                thenNarrow = nil
-            }
-        }
-        if elseNarrow is {} elseFrame {
-            for entry in elseFrame.ToArray() {
-                if !collector.WritableReferenceRoots.Contains(entry.Key.Root) &&
-                    (
-                    MayBeMutatedByUnknownWrite(collector, entry.Key) ||
-                        (includeGlobalRoots && collector.MayMutateGlobalRoot(entry.Key.Root, entry.Value))
-                ) {
-                    elseFrame.Remove(entry.Key)
-                }
-            }
-            if elseFrame.Count == 0 {
-                elseNarrow = nil
-            }
-        }
     }
 
     // ADR-0208 R18 (#5545 shape 5): removes from [`state`](paramref) the facts of an earlier operand that the later
@@ -2745,8 +2690,7 @@ internal partial class StatementBinder {
             allowBoolCall: allowBoolCall,
             keepBoolCallInLogicalOps: allowBoolCall,
             shortCircuitInComposedOps: !allowBoolCall,
-            header: conditionSyntax,
-            filterBoolCallGlobalRoots: false
+            header: conditionSyntax
         )
         lastConditionWhenTrueAliases = whenTrueAliases
         lastConditionWhenFalseAliases = whenFalseAliases
@@ -2903,6 +2847,7 @@ internal partial class StatementBinder {
         } finally {
             let rebindKills = conditionKillJournal!!
             conditionKillJournal = outerJournal
+            let rebindExitFrames = CaptureNarrowingFramesSnapshot()
             let rebindRemovedAliases = HashSet[VariableSymbol](savedEntry.ExitAliases)
             rebindRemovedAliases.ExceptWith(externalCallableAliases)
             let rebindAddedAliases = HashSet[VariableSymbol](externalCallableAliases)
@@ -2910,7 +2855,8 @@ internal partial class StatementBinder {
             RestoreNarrowingFramesSnapshot(postFrames)
             for kill in rebindKills {
                 if IsOnNarrowingStack(kill.Frame) &&
-                    SavedFramesContainedFact(savedEntry.ExitFrames, kill.Frame, kill.Path) {
+                    SavedFramesContainedFact(savedEntry.ExitFrames, kill.Frame, kill.Path) &&
+                    !SavedFramesContainedFact(rebindExitFrames, kill.Frame, kill.Path) {
                     kill.Frame.Remove(kill.Path)
                     outerJournal?.Add(kill)
                 }

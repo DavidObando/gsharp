@@ -41,8 +41,7 @@ internal partial class StatementBinder {
             allowBoolCall: allowBoolCall,
             keepBoolCallInLogicalOps: allowBoolCall,
             shortCircuitInComposedOps: !allowBoolCall,
-            header: header,
-            filterBoolCallGlobalRoots: false
+            header: header
         )
         return (thenNarrow, elseNarrow)
     }

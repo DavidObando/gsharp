@@ -1129,6 +1129,38 @@ func Run3() int32 {
     return 0
 }
 Console.WriteLine(Run1(true) + Run2() + Run3())`, "GS0158@15:18 GS0158@24:18 GS0158@33:18", "reject", ""}
+            yield[]object{"r27_contextual_rebind_throwing_nested_branch_does_not_replay_restored_kill", `import System
+
+interface I { }
+class Dog : I { }
+class Cat : I { }
+class C { var Value int32 = 7 }
+class Holder { var Callback () -> void = func() { } }
+func Fail(h Holder) Exception {
+    h.Callback()
+    return InvalidOperationException()
+}
+func Consume(a I, b int32) int32 -> b
+func Run(flag bool, other bool) int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if x == nil { return 0 }
+    return Consume(if flag { other ? throw Fail(h) : Dog{} } else { Cat{} }, x.Value)
+}
+Console.WriteLine(Run(true, false))`, "", "run", "7"}
+            yield[]object{"r28_pure_bool_call_postcondition_narrows_captured_local", `import System
+
+func Run(input string?) int32 {
+    var s string? = input
+    let clear = func() { s = nil }
+    if !string.IsNullOrEmpty(s) {
+        return s.Length
+    }
+    clear()
+    return 0
+}
+Console.WriteLine(Run("hello"))`, "", "run", "5"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
