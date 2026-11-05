@@ -101,6 +101,39 @@ open class Issue2002ParenthesizedArrowAssignmentParserTests {
         Assert.Single(Descendants(tree.Root).OfType[LambdaExpressionSyntax]())
     }
 
+    @Fact
+    func InterpolatedString_InUnsafeContext_ParsesBarePointerArrowMemberAccessAndLambdaHeads() {
+        const unsafeSource = `package P
+unsafe {
+    let formatted = "${ptr->object:G}"
+    let aligned = "${ptr->field,4:X2}"
+    let withLambda = "${items.Select((x) -> x + 1)}"
+}`
+        let unsafeTree = SyntaxTree.Parse(unsafeSource)
+        Assert.Empty(unsafeTree.Diagnostics)
+        let interpolated = Descendants(unsafeTree.Root).OfType[InterpolatedStringExpressionSyntax]().ToArray()
+        Assert.Equal(3, interpolated.Length)
+        let firstAccessor = Assert.IsType[AccessorExpressionSyntax](interpolated[0].Segments[0].Expression)
+        Assert.Equal(SyntaxKind.RightArrowToken, firstAccessor.DotToken.Kind)
+        Assert.Equal("G", interpolated[0].Segments[0].Format)
+        let firstDeref = Assert.IsType[UnaryExpressionSyntax](firstAccessor.LeftPart)
+        Assert.Equal(SyntaxKind.StarToken, firstDeref.OperatorToken.Kind)
+        let secondAccessor = Assert.IsType[AccessorExpressionSyntax](interpolated[1].Segments[0].Expression)
+        Assert.Equal(SyntaxKind.RightArrowToken, secondAccessor.DotToken.Kind)
+        Assert.Equal(4, interpolated[1].Segments[0].Alignment)
+        Assert.Equal("X2", interpolated[1].Segments[0].Format)
+        Assert.Single(Descendants(interpolated[2].Segments[0].Expression!!).OfType[LambdaExpressionSyntax]())
+
+        const safeSource = `package P
+func run() {
+    let withBareLambda = "${items.Select(x -> x + 1)}"
+}`
+        let safeTree = SyntaxTree.Parse(safeSource)
+        Assert.Empty(safeTree.Diagnostics)
+        let safeInterpolated = Assert.Single(Descendants(safeTree.Root).OfType[InterpolatedStringExpressionSyntax]())
+        Assert.Single(Descendants(safeInterpolated.Segments[0].Expression!!).OfType[LambdaExpressionSyntax]())
+    }
+
     shared {
         private func Descendants(node SyntaxNode) sequence[SyntaxNode] {
             for child in node.GetChildren() {
