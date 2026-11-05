@@ -32,6 +32,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     // which overload/lookup path the binder commits to — and are filtered only
     // when diagnostics are READ.
     private let cascadeSuppressed HashSet[Diagnostic] = HashSet[Diagnostic](ReferenceEqualityComparer.Instance)
+    private let reboundSuppressed HashSet[Diagnostic] = HashSet[Diagnostic](ReferenceEqualityComparer.Instance)
 
     // Issue #3887: nesting depth of member lookups performed on a receiver
     // whose type is already TypeSymbol.Error. See
@@ -72,9 +73,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     internal func DrainSince(startCount int32, sink List[Diagnostic]) {
         let start = Math.Clamp(startCount, 0, diagnostics.Count)
         for var i = start; i < diagnostics.Count; i++ {
-            if !cascadeSuppressed.Contains(diagnostics[i]) {
-                sink.Add(diagnostics[i])
-            }
+            sink.Add(diagnostics[i])
         }
         TruncateTo(start)
     }
@@ -83,7 +82,8 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         let start = Math.Clamp(startCount, 0, diagnostics.Count)
         for var i = start; i < diagnostics.Count; i++ {
             let diagnostic = diagnostics[i]
-            if !cascadeSuppressed.Contains(diagnostic) && diagnostic.Severity == DiagnosticSeverity.Error {
+            if !cascadeSuppressed.Contains(diagnostic) && !reboundSuppressed.Contains(diagnostic) &&
+                diagnostic.Severity == DiagnosticSeverity.Error {
                 return true
             }
         }
@@ -106,7 +106,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                 .End <= owner
                 .Span
                 .End {
-                cascadeSuppressed.Add(diagnostic)
+                reboundSuppressed.Add(diagnostic)
             }
         }
     }
@@ -125,7 +125,8 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// this instance.
     /// @param diagnostics The diagnostics bag to copy from.
     func AddRange(diagnostics DiagnosticBag) {
-        AddRange(diagnostics.Visible())
+        reboundSuppressed.UnionWith(diagnostics.reboundSuppressed)
+        AddRange(diagnostics.diagnostics)
     }
 
     /// Adds a sequence of already-constructed diagnostics into this instance.
@@ -243,10 +244,10 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// (cref:SuppressMemberLookupCascadeIn{T}). The bag itself keeps
     /// those entries so (cref:Count) and (cref:TruncateTo) retain
     /// their exact meaning for the binder's speculative-rebind paths.
-    private func Visible() IEnumerable[Diagnostic] -> if cascadeSuppressed.Count == 0 {
+    private func Visible() IEnumerable[Diagnostic] -> if cascadeSuppressed.Count == 0 && reboundSuppressed.Count == 0 {
         cast[IEnumerable[Diagnostic]](diagnostics)
     } else {
-        diagnostics.Where((d Diagnostic) -> !cascadeSuppressed.Contains(d))
+        diagnostics.Where((d Diagnostic) -> !cascadeSuppressed.Contains(d) && !reboundSuppressed.Contains(d))
     }
 
     private func Add(diagnostic Diagnostic) {

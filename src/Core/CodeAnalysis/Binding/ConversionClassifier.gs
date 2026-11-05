@@ -84,19 +84,22 @@ internal class ConversionClassifier {
     private var tryGetReboundSibling((BoundExpression) -> BoundExpression?)?
     private var enterTupleConversion(() -> void)?
     private var leaveTupleConversion(() -> void)?
+    private var rebindTupleElement((BoundExpression, ExpressionSyntax) -> BoundExpression)?
 
     internal func SetExpressionNarrowingHooks(
         expressionNarrowingVersion() -> int32,
         onConversionBound(BoundExpression, BoundExpression, int32) -> void,
         tryGetReboundSibling(BoundExpression) -> BoundExpression?,
         enterTupleConversion() -> void,
-        leaveTupleConversion() -> void
+        leaveTupleConversion() -> void,
+        rebindTupleElement(BoundExpression, ExpressionSyntax) -> BoundExpression
     ) {
         this.expressionNarrowingVersion = expressionNarrowingVersion
         this.onConversionBound = onConversionBound
         this.tryGetReboundSibling = tryGetReboundSibling
         this.enterTupleConversion = enterTupleConversion
         this.leaveTupleConversion = leaveTupleConversion
+        this.rebindTupleElement = rebindTupleElement
     }
 
     internal func ResolveReboundSibling(expression BoundExpression) BoundExpression {
@@ -3779,7 +3782,11 @@ internal class ConversionClassifier {
                             elementSyntax
                         }
                         Diagnostics.RemoveDiagnosticsIn(unwrappedSyntax.Location)
-                        element = bindExpression(unwrappedSyntax)
+                        element = if rebindTupleElement != nil {
+                            rebindTupleElement!!(element, unwrappedSyntax)
+                        } else {
+                            bindExpression(unwrappedSyntax)
+                        }
                     }
                     let beforeVersion = expressionNarrowingVersion?.Invoke() ?? 0
                     let convertedElement = BindConversion(

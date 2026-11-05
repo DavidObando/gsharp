@@ -134,6 +134,9 @@ internal partial class ExpressionBinder {
     private var expressionExitSteps Dictionary[BoundExpression, int32] = Dictionary[BoundExpression, int32](
         ReferenceEqualityComparer.Instance
     )
+    private var expressionScopes Dictionary[BoundExpression, BoundScope] = Dictionary[BoundExpression, BoundScope](
+        ReferenceEqualityComparer.Instance
+    )
     private var expressionExitSnapshots Dictionary[
         BoundExpression,
         List[
@@ -213,6 +216,7 @@ internal partial class ExpressionBinder {
             Processed HashSet[BoundExpression],
             ExitAliases Dictionary[BoundExpression, HashSet[VariableSymbol]],
             ExitSteps Dictionary[BoundExpression, int32],
+            Scopes Dictionary[BoundExpression, BoundScope],
             ExitSnapshots Dictionary[
                 BoundExpression,
                 List[
@@ -253,6 +257,7 @@ internal partial class ExpressionBinder {
             Processed HashSet[BoundExpression],
             ExitAliases Dictionary[BoundExpression, HashSet[VariableSymbol]],
             ExitSteps Dictionary[BoundExpression, int32],
+            Scopes Dictionary[BoundExpression, BoundScope],
             ExitSnapshots Dictionary[
                 BoundExpression,
                 List[
@@ -523,6 +528,7 @@ internal partial class ExpressionBinder {
                 processedExpressionEffects,
                 expressionExitAliases,
                 expressionExitSteps,
+                expressionScopes,
                 expressionExitSnapshots,
                 boundSiblingExpressions,
                 reboundInvalidatedExpressions,
@@ -543,6 +549,7 @@ internal partial class ExpressionBinder {
         processedExpressionEffects = HashSet[BoundExpression](ReferenceEqualityComparer.Instance)
         expressionExitAliases = Dictionary[BoundExpression, HashSet[VariableSymbol]](ReferenceEqualityComparer.Instance)
         expressionExitSteps = Dictionary[BoundExpression, int32](ReferenceEqualityComparer.Instance)
+        expressionScopes = Dictionary[BoundExpression, BoundScope](ReferenceEqualityComparer.Instance)
         expressionExitSnapshots = Dictionary[
             BoundExpression,
             List[
@@ -580,6 +587,7 @@ internal partial class ExpressionBinder {
             savedProcessed,
             savedExitAliases,
             savedExitSteps,
+            savedScopes,
             savedExitSnapshots,
             savedSiblings,
             savedReboundSiblings,
@@ -592,6 +600,7 @@ internal partial class ExpressionBinder {
         processedExpressionEffects = savedProcessed
         expressionExitAliases = savedExitAliases
         expressionExitSteps = savedExitSteps
+        expressionScopes = savedScopes
         expressionExitSnapshots = savedExitSnapshots
         boundSiblingExpressions = savedSiblings
         reboundInvalidatedExpressions = savedReboundSiblings
@@ -640,6 +649,7 @@ internal partial class ExpressionBinder {
             processedExpressionEffects.Clear()
             expressionExitAliases.Clear()
             expressionExitSteps.Clear()
+            expressionScopes.Clear()
             expressionExitSnapshots.Clear()
             boundSiblingExpressions.Clear()
             reboundInvalidatedExpressions.Clear()
@@ -676,6 +686,7 @@ internal partial class ExpressionBinder {
             processedExpressionEffects.Clear()
             expressionExitAliases.Clear()
             expressionExitSteps.Clear()
+            expressionScopes.Clear()
             expressionExitSnapshots.Clear()
             boundSiblingExpressions.Clear()
             reboundInvalidatedExpressions.Clear()
@@ -724,7 +735,7 @@ internal partial class ExpressionBinder {
                 snapshot.Add((entry.Id, frame, entries, aliases))
             }
         }
-        if recordSiblingCount && (boundSiblingExpressions.Count > 0 || HasActiveNarrowingEntriesOrAliases()) {
+        if recordSiblingCount {
             snapshotSiblingCounts[snapshot] = boundSiblingExpressions.Count
         }
         return snapshot
@@ -1163,6 +1174,19 @@ internal partial class ExpressionBinder {
         return false
     }
 
+    internal func RebindInSavedScope(original BoundExpression, syntax ExpressionSyntax) BoundExpression {
+        if expressionScopes.TryGetValue(original, out var savedScope) {
+            let currentScope = $scope
+            $scope = savedScope
+            try {
+                return BindExpression(syntax)
+            } finally {
+                $scope = currentScope
+            }
+        }
+        return BindExpression(syntax)
+    }
+
     private func RebindInvalidatedSiblingsAfter(afterStep int32) {
         if boundSiblingExpressions.Count == 0 {
             return
@@ -1206,12 +1230,26 @@ internal partial class ExpressionBinder {
             for var i = toRebind.Count - 1; i >= 0; i-- {
                 let item = toRebind[i]
                 Diagnostics.RemoveDiagnosticsIn(item.Syntax.Location)
-                let rebound = if item.TargetType is {} itemTargetType {
-                    BindExpression(item.Syntax, itemTargetType)
-                } else {
-                    BindExpression(item.Syntax, item.CanBeVoid)
+                let currentScope = $scope
+                if expressionScopes.TryGetValue(item.Bound, out var itemScope) {
+                    $scope = itemScope
+                }
+                var rebound BoundExpression
+                try {
+                    rebound = if item.TargetType is {} itemTargetType {
+                        BindExpression(item.Syntax, itemTargetType)
+                    } else {
+                        BindExpression(item.Syntax, item.CanBeVoid)
+                    }
+                } finally {
+                    $scope = currentScope
                 }
                 expressionExitSteps[rebound] = item.ExitStep
+                expressionScopes[rebound] = if expressionScopes.TryGetValue(item.Bound, out var s) {
+                    s
+                } else {
+                    $scope
+                }
                 expressionExitSnapshots[rebound] = CaptureExpressionNarrowingFrames(recordSiblingCount: false)
                 boundSiblingExpressions.Add(
                     (item.Syntax, item.TargetType, item.CanBeVoid, item.EntryStep, item.ExitStep, rebound)
@@ -1305,6 +1343,7 @@ internal partial class ExpressionBinder {
                 InvalidateExpressionNarrowingFrames(result, entryAliases)
                 if hadNarrowingOrAliases || HasActiveNarrowingEntriesOrAliases() {
                     expressionExitSteps[result] = exitStep
+                    expressionScopes[result] = $scope
                     expressionExitSnapshots[result] = CaptureExpressionNarrowingFrames(recordSiblingCount: false)
                     if !isRebindingInvalidatedSiblings {
                         boundSiblingExpressions.Add((syntax, targetType, false, entryStep, exitStep, result))
@@ -1461,6 +1500,7 @@ internal partial class ExpressionBinder {
                 InvalidateExpressionNarrowingFrames(result, entryAliases)
                 if hadNarrowingOrAliases || HasActiveNarrowingEntriesOrAliases() {
                     expressionExitSteps[result] = exitStep
+                    expressionScopes[result] = $scope
                     expressionExitSnapshots[result] = CaptureExpressionNarrowingFrames(recordSiblingCount: false)
                     if !isRebindingInvalidatedSiblings {
                         boundSiblingExpressions.Add((syntax, nil, canBeVoid, entryStep, exitStep, result))

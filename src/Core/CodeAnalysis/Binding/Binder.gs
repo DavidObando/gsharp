@@ -616,7 +616,8 @@ partial class Binder {
             expressions.OnConversionBound(original, converted, beforeVersion),
             (expression BoundExpression) -> expressions.TryGetReboundSibling(expression),
             () -> expressions.EnterTupleConversion(),
-            () -> expressions.LeaveTupleConversion()
+            () -> expressions.LeaveTupleConversion(),
+            (original BoundExpression, syntax ExpressionSyntax) -> expressions.RebindInSavedScope(original, syntax)
         )
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor

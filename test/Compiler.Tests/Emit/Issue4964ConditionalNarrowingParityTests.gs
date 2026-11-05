@@ -777,9 +777,10 @@ func CheckDirectTargetTypedTupleConv(token Token) int32 ->
         let pair (float64, int32) = (token, g.Length)
         pair.Item2
     } : 0
-func CheckFalseArmPatternIsolation(o object, token Token) float64 {
+func CheckFalseArmPatternIsolation(o object, token Token, n int32?) float64 {
     let v = g != nil ? (!(o is string text) ? token : float64(text.Length)) : 0.0
-    return v
+    let p = g != nil ? (if let x = n { (token, x) } else { (0.0, 0) }) : (0.0, 0)
+    return v + p.Item1 + float64(p.Item2)
 }
 func CheckImportedNullableOutDoesNotDischarge(dict Dictionary[string, string]) int32 {
     var value = "seed"
