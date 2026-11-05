@@ -8310,7 +8310,7 @@ internal class MemberLookup {
                     )
                 }
             }
-            return FixSymbolicMethodTypeArguments(bounds, out requiresRecoveredInference)
+            return FixSymbolicMethodTypeArguments(openMethod, bounds, out requiresRecoveredInference)
         }
 
         /// The argument a top-level parameter contributes to method type-argument
@@ -8339,10 +8339,12 @@ internal class MemberLookup {
         }
 
         private func FixSymbolicMethodTypeArguments(
+            openMethod MethodInfo,
             bounds SymbolicInferenceBounds,
             out requiresRecoveredInference bool
         )[]TypeSymbol? {
             requiresRecoveredInference = false
+            let openTypeParameters = openMethod.GetGenericArguments()
             let result = [bounds.Arity]TypeSymbol?
             for var slot = 0; slot < bounds.Arity; slot++ {
                 let exact = bounds.Exact[slot]
@@ -8377,7 +8379,12 @@ internal class MemberLookup {
                     // candidate that could WIN — so the upper bound could
                     // validate a narrower answer without ever being allowed to
                     // replace it.
-                    fixedType = FindSymbolicInferenceCandidate(lower, upper)
+                    let openTypeParameter = if slot < openTypeParameters.Length {
+                        openTypeParameters[slot]
+                    } else {
+                        default(Type?)
+                    }
+                    fixedType = FindSymbolicInferenceCandidate(lower, upper, openTypeParameter)
                 } else {
                     if (bounds.AmbiguousProjection[slot]) {
                         result[slot] = SymbolicInferenceConflict
@@ -8440,7 +8447,8 @@ internal class MemberLookup {
         /// could confirm a narrower answer without ever being allowed to win.
         private func FindSymbolicInferenceCandidate(
             lower IReadOnlyList[TypeSymbol]?,
-            upper IReadOnlyList[TypeSymbol]?
+            upper IReadOnlyList[TypeSymbol]?,
+            openTypeParameter Type? = nil
         ) TypeSymbol? {
             // Issue #4133 (review finding): every bound is a candidate, including
             // a signature-equivalent duplicate — the merge branch just below
@@ -8462,12 +8470,12 @@ internal class MemberLookup {
                 if !SatisfiesSymbolicInferenceBounds(candidate, lower, upper) {
                     continue
                 }
-                if best == nil {
+                if best is not{} currentBest {
                     best = candidate
                     continue
                 }
-                if DeclarationBinder.TypeSignaturesEquivalent(best, candidate) {
-                    best = MergeRecoveredTypeArgument(best, candidate, allowBaseWidening: false)
+                if DeclarationBinder.TypeSignaturesEquivalent(currentBest, candidate) {
+                    best = MergeRecoveredTypeArgument(currentBest, candidate, allowBaseWidening: false)
                     continue
                 }
                 // Issue #4133 (review finding, hot-core translation guard):
@@ -8516,10 +8524,13 @@ internal class MemberLookup {
                 // non-nullable shape here because it is deterministic without
                 // needing flow-sensitive nullable warnings on the inferred type
                 // argument itself.
-                let strippedBest = StripReferenceNullableAnnotations(best!!)
+                let strippedBest = StripReferenceNullableAnnotations(currentBest)
                 let strippedCandidate = StripReferenceNullableAnnotations(candidate)
                 if (
-                    !object.ReferenceEquals(strippedBest, best) || !object.ReferenceEquals(strippedCandidate, candidate)
+                    !object.ReferenceEquals(strippedBest, currentBest) || !object.ReferenceEquals(
+                        strippedCandidate,
+                        candidate
+                    )
                 ) &&
                     DeclarationBinder.TypeSignaturesEquivalent(strippedBest, strippedCandidate) {
                     best = strippedBest
@@ -8537,8 +8548,27 @@ internal class MemberLookup {
                 // `best -> candidate` holds, so `candidate` (the upper bound)
                 // must replace `best` (the lower bound) — the direction the
                 // pre-fix code never took.
-                let candidateToBest = HasImplicitSymbolicConversion(candidate, best!!)
-                let bestToCandidate = HasImplicitSymbolicConversion(best!!, candidate)
+                if openTypeParameter != nil &&
+                    currentBest.ClrType is {} bestClr &&
+                    candidate.ClrType is {} candidateClr {
+                    let bestSatisfies = ClrOverloadResolution.CandidateMaySatisfyParameterConstraints(
+                        openTypeParameter,
+                        bestClr
+                    )
+                    let candidateSatisfies = ClrOverloadResolution.CandidateMaySatisfyParameterConstraints(
+                        openTypeParameter,
+                        candidateClr
+                    )
+                    if bestSatisfies && !candidateSatisfies {
+                        continue
+                    }
+                    if candidateSatisfies && !bestSatisfies {
+                        best = candidate
+                        continue
+                    }
+                }
+                let candidateToBest = CanPromoteSymbolicInferenceBound(candidate, currentBest)
+                let bestToCandidate = CanPromoteSymbolicInferenceBound(currentBest, candidate)
                 if bestToCandidate && !candidateToBest {
                     best = candidate
                 } else if candidateToBest && !bestToCandidate {
@@ -8601,8 +8631,17 @@ internal class MemberLookup {
             candidate TypeSymbol,
             lower IReadOnlyList[TypeSymbol]?,
             upper IReadOnlyList[TypeSymbol]?
-        ) bool -> (lower == nil || lower.All((bound TypeSymbol) -> HasImplicitSymbolicConversion(bound, candidate))) &&
-            (upper == nil || upper.All((bound TypeSymbol) -> HasImplicitSymbolicConversion(candidate, bound)))
+        ) bool -> (
+            lower == nil || lower.All((bound TypeSymbol) -> CanPromoteSymbolicInferenceBound(bound, candidate))
+        ) &&
+            (upper == nil || upper.All((bound TypeSymbol) -> CanPromoteSymbolicInferenceBound(candidate, bound)))
+
+        private func CanPromoteSymbolicInferenceBound(source TypeSymbol, target TypeSymbol) bool ->
+        HasImplicitSymbolicConversion(source, target) || Conversion.IsVarianceArgumentCompatible(
+            source,
+            target,
+            allowPlatformNilCheck: true
+        )
 
         /// Issue #4133 (review finding): only the STANDARD implicit conversions
         /// (identity, reference, boxing, numeric widening) participate in
@@ -8641,6 +8680,10 @@ internal class MemberLookup {
             if (!object.ReferenceEquals(strippedSource, source) || !object.ReferenceEquals(strippedTarget, target)) &&
                 DeclarationBinder.TypeSignaturesEquivalent(strippedSource, strippedTarget) {
                 return true
+            }
+            if source.ReferenceNullability == ReferenceNullabilityKind.Nullable &&
+                target.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                return false
             }
             return Conversion.ClassifyNonStructural(source, target).IsImplicit
         }
@@ -8726,10 +8769,16 @@ internal class MemberLookup {
                 return
             }
             var actualForHierarchyProjection = actual
-            while actualForHierarchyProjection is NullableTypeSymbol nullableProjectionActual &&
-                !NullableLifting
-                .IsAnyValueTypeNullable(nullableProjectionActual) {
-                actualForHierarchyProjection = nullableProjectionActual.UnderlyingType
+            while (
+                actualForHierarchyProjection is NullableTypeSymbol nullableProjectionActual &&
+                    !NullableLifting.IsAnyValueTypeNullable(nullableProjectionActual)
+            ) ||
+                actualForHierarchyProjection is PlatformTypeSymbol {
+                actualForHierarchyProjection = if actualForHierarchyProjection is PlatformTypeSymbol platformProjection {
+                    platformProjection.UnderlyingType
+                } else {
+                    (cast[NullableTypeSymbol](actualForHierarchyProjection)).UnderlyingType
+                }
             }
             let annotatedActualForProjection NullabilityAnnotatedTypeSymbol? = actualForHierarchyProjection as NullabilityAnnotatedTypeSymbol
             // A direct MVar match must observe the complete symbolic actual before
@@ -8755,8 +8804,15 @@ internal class MemberLookup {
             // CLR wrapper. Unify through it so a nullable reference receiver such as
             // IEnumerable<Choice>? still recovers TSource = Choice. Preserve real
             // Nullable<T> value shapes (including same-compilation enums/structs).
-            if actual is NullableTypeSymbol nullableActual && !NullableLifting.IsAnyValueTypeNullable(nullableActual) {
-                actual = nullableActual.UnderlyingType
+            while actual is PlatformTypeSymbol ||
+                (
+                actual is NullableTypeSymbol nullableActual && !NullableLifting.IsAnyValueTypeNullable(nullableActual)
+            ) {
+                actual = if actual is PlatformTypeSymbol platformActual {
+                    platformActual.UnderlyingType
+                } else {
+                    (cast[NullableTypeSymbol](actual)).UnderlyingType
+                }
             }
             // Issue #2839: the very same annotation arrives as a
             // NullabilityAnnotatedTypeSymbol — not a NullableTypeSymbol — when its
@@ -8872,13 +8928,7 @@ internal class MemberLookup {
                     .ElementTypes
                     .Length {
                     for var i = 0; i < openArgs.Length; i++ {
-                        UnifyForMethodTypeArgs(
-                            openArgs[i],
-                            tuple.ElementTypes[i],
-                            openMethod,
-                            bounds,
-                            SymbolicInferenceBoundKind.Exact
-                        )
+                        UnifyForMethodTypeArgs(openArgs[i], tuple.ElementTypes[i], openMethod, bounds, boundKind)
                     }
                     return
                 }
