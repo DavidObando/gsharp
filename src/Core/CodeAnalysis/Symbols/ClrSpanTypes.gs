@@ -60,7 +60,7 @@ internal shared class ClrSpanTypes {
         readOnly bool,
         @NotNullWhen(true) out definition Type?
     ) bool {
-        definition = references
+        let resolved = references
             .GetCoreType("System.Object")
             .Assembly
             .GetType(
@@ -71,11 +71,12 @@ internal shared class ClrSpanTypes {
             },
             throwOnError: false
         )
-        return definition != nil &&
-            definition.IsGenericTypeDefinition &&
-            definition.IsValueType &&
-            definition.IsByRefLike &&
-            definition
+        definition = resolved
+        return resolved != nil &&
+            resolved.IsGenericTypeDefinition &&
+            resolved.IsValueType &&
+            resolved.IsByRefLike &&
+            resolved
             .GetGenericArguments().Length == 1
     }
 }

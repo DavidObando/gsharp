@@ -35,7 +35,7 @@ open class GsharpTestProjectRunner {
     /// `.nugs` feed). When `null` it is discovered by
     /// walking up from this assembly's location.
     init(repoRoot string? = nil) {
-        this.RepoRoot = repoRoot ?? FindRepoRoot()
+        this.RepoRoot = repoRoot ?? TryFindRepoRoot()
     }
 
     /// Gets the resolved repository root.
@@ -58,7 +58,7 @@ open class GsharpTestProjectRunner {
         let sdk = if project.SdkVersion != nil {
             (FindNupkgForVersion(project.SdkVersion), project.SdkVersion!!)
         } else {
-            ResolveLocalSdkPackage(this.RepoRoot)
+            ResolveLocalSdkPackage(this.RepoRoot) ?? ResolveDefaultSdkPackage(this.RepoRoot)
         }
         if sdk == nil {
             return GsharpTestRunResult.Unavailable(
@@ -111,9 +111,15 @@ open class GsharpTestProjectRunner {
         // and MSBuild has no `--configfile` switch (that's a `dotnet restore`/
         // `dotnet nuget` only switch) - it fails hard with MSB1001. The
         // MSBuild-property form works for build/restore/test alike.
-        let repoNugetConfig = Path.Combine(this.RepoRoot!!, "nuget.config")
-        if File.Exists(repoNugetConfig) {
-            args.Add("-p:RestoreConfigFile=$repoNugetConfig")
+        if !string.IsNullOrEmpty(this.RepoRoot) {
+            let repoNugetConfig = Path.Combine(this.RepoRoot, "nuget.config")
+            if File.Exists(repoNugetConfig) {
+                args.Add("-p:RestoreConfigFile=$repoNugetConfig")
+            }
+        } else {
+            SdkCompileRunner.WriteLocalNugetConfig(workDir, nil)
+            let localNugetConfig = Path.Combine(workDir, "nuget.config")
+            args.Add("-p:RestoreConfigFile=$localNugetConfig")
         }
         // Bug #1752 (part 1): NuGet's shared global-packages folder keys its
         // extracted package cache on id+version alone, so a same-version
@@ -346,7 +352,10 @@ open class GsharpTestProjectRunner {
         /// @param repoRoot The repository root containing the `.nugs` feed.
         /// @param nupkgPath The source nupkg to stage.
         internal func EnsureInLocalFeed(repoRoot string?, nupkgPath string) {
-            let feed = Path.Combine(repoRoot!!, ".nugs")
+            if string.IsNullOrEmpty(repoRoot) {
+                return
+            }
+            let feed = Path.Combine(repoRoot, ".nugs")
             Directory.CreateDirectory(feed)
             CopyToFeed(feed, nupkgPath)
             // ADR-0207: Gsharp.NET.Sdk restores Gsharp.NET.Sdk.Compiler.<rid> of its exact version
@@ -411,6 +420,27 @@ open class GsharpTestProjectRunner {
             if !File.Exists(targetsPath) {
                 File.WriteAllText(targetsPath, Empty)
             }
+        }
+
+        private func ResolveDefaultSdkPackage(repoRoot string?)(NupkgPath string?, Version string)? {
+            if !string.IsNullOrEmpty(repoRoot) {
+                return nil
+            }
+            let version string? = SdkCompileRunner.ResolveExternalPackageVersion(SdkPackageId)
+            return if string.IsNullOrEmpty(version) {
+                default((NupkgPath string?, Version string)?)
+            } else {
+                (default(string?), version)
+            }
+        }
+
+        internal func TryFindRepoRoot() string? {
+            let configuredRoot string? = Environment.GetEnvironmentVariable(SourceRootEnvironmentVariable)
+            if !string.IsNullOrWhiteSpace(configuredRoot) {
+                return ResolveConfiguredSourceRoot(configuredRoot, Environment.CurrentDirectory)
+            }
+            let location = typeof(GsharpTestProjectRunner).Assembly.Location
+            return FindRepoRootAbove(Path.GetDirectoryName(location)) ?? FindRepoRootAbove(Environment.CurrentDirectory)
         }
 
         internal func FindRepoRoot() string? {

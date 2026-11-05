@@ -566,7 +566,8 @@ internal partial class DeclarationBinder {
                         argLocation(i),
                         syntheticParameter,
                         baseByRefStorage,
-                        baseByRefPointee
+                        baseByRefPointee,
+                        orderedArgs[i]
                     ) {
                         conversions.ReportByRefStorageMismatch(
                             argLocation(i),
@@ -859,7 +860,8 @@ internal partial class DeclarationBinder {
                     argLocation(i),
                     parameter,
                     addressedType!!,
-                    parameter.Type
+                    parameter.Type,
+                    argument
                 )
                 convertedArgs.Add(argument)
                 continue
@@ -1028,7 +1030,8 @@ internal partial class DeclarationBinder {
                         argLocation(i),
                         best.Parameters[i],
                         selectedAddressedType!!,
-                        bestParamTypes[i]
+                        bestParamTypes[i],
+                        boundArguments[i]
                     )
                 }
                 convertedArgs.Add(boundArguments[i])

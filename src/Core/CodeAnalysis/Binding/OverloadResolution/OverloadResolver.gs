@@ -119,6 +119,7 @@ internal partial class OverloadResolver {
     private let bindLambdaWithTarget((LambdaExpressionSyntax, FunctionTypeSymbol) -> BoundExpression)?
     private let bindUserTypeStaticCall((StructSymbol, CallExpressionSyntax) -> BoundExpression)?
     private let bindImportedClrStaticCall((Type, CallExpressionSyntax) -> BoundExpression)?
+    private let captureCallArgumentPrebindRollback((SyntaxNode) -> Action)?
 
     /// Initializes a new instance of the (cref:OverloadResolver)
     /// class.
@@ -264,7 +265,8 @@ internal partial class OverloadResolver {
         getCurrentFunction() -> FunctionSymbol?,
         bindLambdaWithTarget((LambdaExpressionSyntax, FunctionTypeSymbol) -> BoundExpression)? = nil,
         bindUserTypeStaticCall((StructSymbol, CallExpressionSyntax) -> BoundExpression)? = nil,
-        bindImportedClrStaticCall((Type, CallExpressionSyntax) -> BoundExpression)? = nil
+        bindImportedClrStaticCall((Type, CallExpressionSyntax) -> BoundExpression)? = nil,
+        captureCallArgumentPrebindRollback((SyntaxNode) -> Action)? = nil
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.memberLookup = memberLookup ?? throw ArgumentNullException("memberLookup")
@@ -307,6 +309,7 @@ internal partial class OverloadResolver {
         this.bindLambdaWithTarget = bindLambdaWithTarget
         this.bindUserTypeStaticCall = bindUserTypeStaticCall
         this.bindImportedClrStaticCall = bindImportedClrStaticCall
+        this.captureCallArgumentPrebindRollback = captureCallArgumentPrebindRollback
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics

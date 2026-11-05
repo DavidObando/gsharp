@@ -2308,6 +2308,30 @@ internal class ImportedMemberRefFactory {
                     typeArguments = ImmutableArray.Create[TypeSymbol](aseq.ElementType)
                     return true
                 }
+                case channel is ChannelTypeSymbol when channel.ClrType == nil || TypeSymbol.RequiresSymbolicProjection(
+                    channel.ElementType
+                ) {
+                    openDefinition = if channel.ClrType is {IsGenericType: true} channelClr {
+                        channelClr.GetGenericTypeDefinition()
+                    } else {
+                        ChannelTypeSymbol.OpenClrDefinition(channel.Direction)
+                    }
+                    typeArguments = ImmutableArray.Create[TypeSymbol](channel.ElementType)
+                    return true
+                }
+                case map_ is MapTypeSymbol when map_.ClrType == nil || TypeSymbol.RequiresSymbolicProjection(
+                    map_.KeyType
+                ) ||
+                    TypeSymbol
+                    .RequiresSymbolicProjection(map_.ValueType) {
+                    openDefinition = if map_.ClrType is {IsGenericType: true} mapClr {
+                        mapClr.GetGenericTypeDefinition()
+                    } else {
+                        typeof(System.Collections.Generic.Dictionary[_, _])
+                    }
+                    typeArguments = ImmutableArray.Create[TypeSymbol](map_.KeyType, map_.ValueType)
+                    return true
+                }
                 case nul is NullableTypeSymbol when nul.UnderlyingType is TypeParameterSymbol &&
                     (cast[TypeParameterSymbol](nul.UnderlyingType))
                     .HasValueTypeConstraint {

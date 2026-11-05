@@ -62,11 +62,25 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportIfExpressionMissingElse(syntax.IfKeyword.Location)
             return BoundErrorExpression(nil)
         }
-        // Issue #4961 / ADR-0201: the bindings, the guard, and the then-block
+        return bindDeferrableConditional(
+            syntax,
+            deferOnFailure,
+            () -> BindIfLetExpressionCore(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
+        )
+    }
+
+    private func BindIfLetExpressionCore(
+        syntax IfLetExpressionSyntax,
+        targetType TypeSymbol?,
+        canBeVoid bool,
+        deferOnFailure bool,
+        diagMark int32
+    ) BoundExpression {
+        // Issue #4961 / ADR-0201: the bindings, the guard, and the branches
         // are bound through the header helper the STATEMENT form shares, so
         // scoping (then-region only, never the else branch), progressive
         // narrowing, and the guard rules cannot drift between the forms.
-        let beforeConditional = CaptureExpressionNarrowingFrames()
+        let suppressionMark = Diagnostics.SuppressionCount
         let afterBindingInitializers = List[
             List[
                 (
@@ -95,14 +109,21 @@ internal partial class ExpressionBinder {
             Diagnostics,
             conversions,
             bindTypeClause,
-            (initializer ExpressionSyntax) -> BindExpression(initializer),
+            (initializer ExpressionSyntax) -> {
+                let initEntryAliases = GetCurrentExpressionCallableAliases()
+                let boundInit = BindExpression(initializer)
+                applyShortCircuitOperandEffects(initializer, boundInit, initEntryAliases)
+                return boundInit
+            },
             (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> {
                 afterBindingInitializers.Add(CaptureExpressionNarrowingFrames())
                 return DeclareIfLetLocal(identifier, isReadOnly, type)
             },
             (guardSyntax ExpressionSyntax) -> {
                 guardEntryAliases = GetCurrentExpressionCallableAliases()
-                return BindExpression(guardSyntax, TypeSymbol.Bool)
+                let boundGuard = BindExpression(guardSyntax, TypeSymbol.Bool)
+                applyShortCircuitOperandEffects(guardSyntax, boundGuard, guardEntryAliases!!)
+                return boundGuard
             },
             (boundGuard BoundExpression) -> {
                 let classified = ClassifyConditionalNarrowing(boundGuard, guardEntryAliases)
@@ -179,7 +200,6 @@ internal partial class ExpressionBinder {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
                 Diagnostics.RestoreSuppressionsTo(suppressionMark)
-                RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
             Diagnostics.ReportConditionalNoCommonResultType(
@@ -210,7 +230,6 @@ internal partial class ExpressionBinder {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
                 Diagnostics.RestoreSuppressionsTo(suppressionMark)
-                RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
             return BoundErrorExpression(nil)
@@ -218,17 +237,10 @@ internal partial class ExpressionBinder {
         return BoundConditionalExpression(nil, condition, convertedTrue, convertedFalse, resultType)
     }
 
-    /// Declares one ADR-0151 binding local. Routed through the same
-    /// `DeclarationBinder.BindVariableDeclaration` callback the statement
-    /// forms use, so duplicate-name reporting (GS0004) and the top-level
-    /// global-variable shaping behave identically on both surfaces.
     private func DeclareIfLetLocal(identifier SyntaxToken, isReadOnly bool, type TypeSymbol) VariableSymbol {
         if bindLocalVariable != nil {
             return bindLocalVariable(identifier, isReadOnly, type)
         }
-        // Defensive: an ExpressionBinder constructed without the declaration
-        // callback (no production path does this) still produces a usable
-        // symbol so binding can continue and report the real diagnostics.
         let fallback = LocalVariableSymbol(identifier.ValueText ?? "?", isReadOnly, type, declaringSyntax: identifier)
         $scope.TryDeclareVariable(fallback)
         return fallback
