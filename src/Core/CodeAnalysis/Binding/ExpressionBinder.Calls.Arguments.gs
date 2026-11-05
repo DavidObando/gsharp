@@ -3879,6 +3879,11 @@ internal partial class ExpressionBinder {
     ) ImmutableArray[BoundExpression] {
         var builder ImmutableArray[BoundExpression].Builder? = nil
         for var i = 0; i < arguments.Length; i++ {
+            let argument = conversions.ResolveReboundSibling(arguments[i])
+            if !object.ReferenceEquals(argument, arguments[i]) {
+                builder ??= arguments.ToBuilder()
+                builder!![i] = argument
+            }
             let parameterIndex = if parameterMapping.IsDefault {
                 i
             } else {
@@ -3887,7 +3892,6 @@ internal partial class ExpressionBinder {
             if parameterIndex >= parameters.Length || parameters[parameterIndex].ParameterType.IsByRef {
                 continue
             }
-            let argument = arguments[i]
             let targetType TypeSymbol? = MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(
                 constraintType,
                 method,

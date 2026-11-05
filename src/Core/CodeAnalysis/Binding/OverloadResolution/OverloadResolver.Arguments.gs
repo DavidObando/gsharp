@@ -107,7 +107,7 @@ internal partial class OverloadResolver {
                 if slot == paramsIndex {
                     paramsSourceIndices.Add(i)
                 } else {
-                    ordered[slot] = arguments[i]
+                    ordered[slot] = conversions.ResolveReboundSibling(arguments[i])
                 }
             }
             for sourceIndex in paramsSourceIndices {
@@ -152,7 +152,7 @@ internal partial class OverloadResolver {
         let arrayExpr = BoundArrayCreationExpression(callSyntax, sliceType, packed.MoveToImmutable())
         let result = ImmutableArray.CreateBuilder[BoundExpression](parameters.Length)
         for var i = 0; i < suppliedFixedCount; i++ {
-            result.Add(arguments[i])
+            result.Add(conversions.ResolveReboundSibling(arguments[i]))
         }
         for var i = suppliedFixedCount; i < fixedCount; i++ {
             result.Add(ConversionClassifier.CreateOptionalDefaultArgument(parameters[i]))
@@ -172,6 +172,7 @@ internal partial class OverloadResolver {
         sourceIndex int32,
         receiverArgCount int32
     ) BoundExpression {
+        let arg = conversions.ResolveReboundSibling(arg)
         let conversionSyntaxIndex = sourceIndex - receiverArgCount
         let location = if callSyntax != nil &&
             conversionSyntaxIndex >= 0 &&
@@ -391,6 +392,10 @@ internal partial class OverloadResolver {
         argumentSyntax ExpressionSyntax?,
         expectedType TypeSymbol?
     ) BoundExpression {
+        var argument = argument
+        if argument != nil {
+            argument = conversions.ResolveReboundSibling(argument)
+        }
         let targetUsable = expectedType != nil &&
             expectedType != TypeSymbol.Error &&
             expectedType != TypeSymbol.Void &&
@@ -504,6 +509,19 @@ internal partial class OverloadResolver {
         parameterNameAt(int32) -> string,
         parameterOffset int32 = 0
     ) ImmutableArray[BoundExpression] {
+        var parameterOrderedArguments = parameterOrderedArguments
+        var reboundBuilder ImmutableArray[BoundExpression].Builder? = nil
+        for var i = parameterOffset; i < parameterOrderedArguments.Length; i++ {
+            let arg = parameterOrderedArguments[i]
+            let resolved = conversions.ResolveReboundArgument(arg)
+            if !object.ReferenceEquals(resolved, arg) {
+                reboundBuilder ??= parameterOrderedArguments.ToBuilder()
+                reboundBuilder!![i] = resolved
+            }
+        }
+        if reboundBuilder != nil {
+            parameterOrderedArguments = reboundBuilder.ToImmutable()
+        }
         var hasNamedArgument = false
         for argument in sourceArguments {
             hasNamedArgument |= argument is NamedArgumentExpressionSyntax
@@ -1130,6 +1148,7 @@ internal partial class OverloadResolver {
             parameterName string,
             ref hasErrors bool
         ) BoundExpression {
+            let argument = conversions.ResolveReboundSibling(argument)
             let argType TypeSymbol? = argument.Type
             // Unknown/error argument, or an open (unsubstituted) element type whose
             // members are erased: leave the argument untouched. Open element types
@@ -1205,14 +1224,23 @@ internal partial class OverloadResolver {
             ref hasErrors bool
         ) ImmutableArray[BoundExpression] {
             let trailingCount = boundArguments.Length - fixedCount
-            let passThrough = trailingCount == 1 && Conversion.Classify(boundArguments[fixedCount].Type, carrierType)
+            let passThrough = trailingCount == 1 && Conversion.Classify(
+                conversions.ResolveReboundSibling(boundArguments[fixedCount]).Type,
+                carrierType
+            )
                 .IsImplicit
             let result = ImmutableArray.CreateBuilder[BoundExpression](fixedCount + 1)
             for var i = 0; i < fixedCount; i++ {
-                result.Add(boundArguments[i])
+                result.Add(conversions.ResolveReboundSibling(boundArguments[i]))
             }
             if passThrough {
-                result.Add(conversions.BindConversion(locationAt(fixedCount), boundArguments[fixedCount], carrierType))
+                result.Add(
+                    conversions.BindConversion(
+                        locationAt(fixedCount),
+                        conversions.ResolveReboundSibling(boundArguments[fixedCount]),
+                        carrierType
+                    )
+                )
                 return result.MoveToImmutable()
             }
             // ADR-0173: the elements are packed into a fresh array of the

@@ -83,6 +83,26 @@ shared class ExhaustivenessAnalyzer {
         return true
     }
 
+    internal func CoversAllVariants(
+        discriminantType TypeSymbol,
+        unguardedPatterns IEnumerable[BoundPattern?],
+        structs ImmutableArray[StructSymbol]
+    ) bool {
+        if !IsExhaustiveDiscriminant(discriminantType) {
+            return false
+        }
+        return !(
+            TryGetMissingVariants(
+                discriminantType,
+                unguardedPatterns,
+                structs,
+                out var discriminantDescription,
+                out _
+            ) &&
+                discriminantDescription != nil
+        )
+    }
+
     private func TryGetMissingVariants(
         discriminantType TypeSymbol,
         patterns IEnumerable[BoundPattern?],

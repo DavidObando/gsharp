@@ -79,6 +79,156 @@ internal class ConversionClassifier {
     private let bindNativeProtocolConversion(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression
     private let canConvertNativeProtocol(TypeSymbol, TypeSymbol) -> bool
     private let getCurrentFunction() -> FunctionSymbol?
+    private var expressionNarrowingVersion(() -> int32)?
+    private var onConversionBound((BoundExpression, BoundExpression, int32) -> void)?
+    private var tryGetReboundSibling((BoundExpression) -> BoundExpression?)?
+    private var enterTupleConversion(() -> void)?
+    private var leaveTupleConversion(() -> void)?
+    private var rebindTupleElement((BoundExpression, ExpressionSyntax) -> BoundExpression)?
+    private var bindConditionalRefParts(
+        (ExpressionSyntax, ExpressionSyntax, ExpressionSyntax) -> (
+            Condition BoundExpression,
+            WhenTrue BoundExpression,
+            WhenFalse BoundExpression
+        )
+    )?
+
+    internal func SetExpressionNarrowingHooks(
+        expressionNarrowingVersion() -> int32,
+        onConversionBound(BoundExpression, BoundExpression, int32) -> void,
+        tryGetReboundSibling(BoundExpression) -> BoundExpression?,
+        enterTupleConversion() -> void,
+        leaveTupleConversion() -> void,
+        rebindTupleElement(BoundExpression, ExpressionSyntax) -> BoundExpression,
+        bindConditionalRefParts(ExpressionSyntax, ExpressionSyntax, ExpressionSyntax) -> (
+            Condition BoundExpression,
+            WhenTrue BoundExpression,
+            WhenFalse BoundExpression
+        )
+    ) {
+        this.expressionNarrowingVersion = expressionNarrowingVersion
+        this.onConversionBound = onConversionBound
+        this.tryGetReboundSibling = tryGetReboundSibling
+        this.enterTupleConversion = enterTupleConversion
+        this.leaveTupleConversion = leaveTupleConversion
+        this.rebindTupleElement = rebindTupleElement
+        this.bindConditionalRefParts = bindConditionalRefParts
+    }
+
+    internal func ResolveReboundSibling(expression BoundExpression) BoundExpression {
+        if tryGetReboundSibling != nil && tryGetReboundSibling!!(expression) is {} reboundSibling {
+            return reboundSibling
+        }
+        if expression is BoundArrayCreationExpression arr {
+            var builder ImmutableArray[BoundExpression].Builder? = nil
+            for var i = 0; i < arr.Elements.Length; i++ {
+                let elem = arr.Elements[i]
+                let resolvedElem = ResolveReboundArgument(elem)
+                if !object.ReferenceEquals(resolvedElem, elem) {
+                    builder ??= arr.Elements.ToBuilder()
+                    builder!![i] = resolvedElem
+                }
+            }
+            if builder != nil {
+                return BoundArrayCreationExpression(arr.Syntax, arr.Type, builder.ToImmutable())
+            }
+        } else if expression is BoundConversionExpression conv && conv.Expression is BoundArrayCreationExpression {
+            let resolvedInner = ResolveReboundSibling(conv.Expression)
+            if !object.ReferenceEquals(resolvedInner, conv.Expression) {
+                return BindConversion(conv.Syntax?.Location ?? default(TextLocation), resolvedInner, conv.Type)
+            }
+        } else if expression is BoundClrConstructorCallExpression ctorCall &&
+            ctorCall
+            .Arguments
+            .Length == 1 &&
+            ctorCall.Arguments[0] is BoundArrayCreationExpression {
+            let resolvedInner = ResolveReboundSibling(ctorCall.Arguments[0])
+            if !object.ReferenceEquals(resolvedInner, ctorCall.Arguments[0]) {
+                return BoundClrConstructorCallExpression(
+                    ctorCall.Syntax,
+                    ctorCall.ClrType,
+                    ctorCall.Constructor,
+                    ImmutableArray.Create(resolvedInner),
+                    ctorCall.Type,
+                    ctorCall.ArgumentRefKinds
+                )
+            }
+        }
+        return expression
+    }
+
+    internal func ResolveReboundArgument(argument BoundExpression) BoundExpression {
+        if tryGetReboundSibling == nil {
+            return argument
+        }
+        if tryGetReboundSibling!!(argument) is {} directRebound {
+            if directRebound.Type == argument.Type || argument.Type == TypeSymbol.Error {
+                return directRebound
+            }
+            return BindConversion(directRebound.Syntax?.Location ?? default(TextLocation), directRebound, argument.Type)
+        }
+        if argument.ImplicitConversionOperand is {} origOperand &&
+            tryGetReboundSibling!!(origOperand) is {} reboundOperand {
+            return BindConversion(
+                reboundOperand.Syntax?.Location ?? default(TextLocation),
+                reboundOperand,
+                argument.Type
+            )
+        }
+        if argument is BoundConversionExpression conv &&
+            tryGetReboundSibling!!(conv.Expression) is {} reboundConvInner {
+            return BindConversion(
+                reboundConvInner.Syntax?.Location ?? conv.Syntax?.Location ?? default(TextLocation),
+                reboundConvInner,
+                conv.Type
+            )
+        }
+        if argument is BoundAddressOfExpression{IsReadOnly: true} addr {
+            let pointeeType = addr.Operand.Type
+            if tryGetReboundSibling!!(addr.Operand) is {} reboundAddrOp {
+                let convertedAddrOp = if reboundAddrOp.Type == pointeeType {
+                    reboundAddrOp
+                } else {
+                    BindConversion(reboundAddrOp.Syntax?.Location ?? default(TextLocation), reboundAddrOp, pointeeType)
+                }
+                return CreateImplicitInReference(convertedAddrOp, pointeeType)
+            }
+            if OverloadResolver.TryGetImplicitInSpilledValue(addr, out var spilled) && spilled != nil {
+                let resolvedSpilled = ResolveReboundArgument(spilled)
+                if !object.ReferenceEquals(resolvedSpilled, spilled) {
+                    return CreateImplicitInReference(resolvedSpilled, pointeeType)
+                }
+            }
+        }
+        return ResolveReboundSibling(argument)
+    }
+
+    internal func TryRefreshReboundArguments(
+        arguments ImmutableArray[BoundExpression],
+        out refreshed ImmutableArray[BoundExpression]
+    ) bool {
+        refreshed = arguments
+        if tryGetReboundSibling == nil {
+            return false
+        }
+        var builder ImmutableArray[BoundExpression].Builder? = nil
+        for var i = 0; i < arguments.Length; i++ {
+            let orig = arguments[i]
+            let reb = ResolveReboundSibling(orig)
+            if !object.ReferenceEquals(reb, orig) {
+                if reb is BoundErrorExpression || reb.Type == TypeSymbol.Error {
+                    return false
+                }
+                builder ??= arguments.ToBuilder()
+                builder!![i] = reb
+            }
+        }
+        if builder == nil {
+            return false
+        }
+        refreshed = builder.ToImmutable()
+        return true
+    }
 
     /// Initializes a new instance of the (cref:ConversionClassifier)
     /// class.
@@ -309,6 +459,11 @@ internal class ConversionClassifier {
         callParameter ParameterSymbol? = nil,
         trackNarrowing bool = true
     ) BoundExpression {
+        var expression = expression
+        if tryGetReboundSibling != nil && tryGetReboundSibling!!(expression) is {} reboundSibling {
+            expression = reboundSibling
+        }
+        let beforeVersion = expressionNarrowingVersion?.Invoke() ?? 0
         let result = BindConversionCore(
             diagnosticLocation,
             expression,
@@ -327,6 +482,7 @@ internal class ConversionClassifier {
             // implementation builds calls or chains through other conversions.
             result.ImplicitConversionOperand = expression
         }
+        onConversionBound?.Invoke(expression, result, beforeVersion)
         return result
     }
 
@@ -1345,6 +1501,9 @@ internal class ConversionClassifier {
                 parameterMapping[i]
             }
             var argument = arguments[i]
+            if tryGetReboundSibling != nil && tryGetReboundSibling!!(argument) is {} reboundSibling {
+                argument = reboundSibling
+            }
             // Issue #5635: a method type argument that inference reads from the argument at a bare type-parameter
             // slot can take the narrowed type of a narrowed read. The read is decided for the slot under the inferred
             // type arguments, with the slot's declared `?` applied, as `let t = s` is. The imported slot itself takes
@@ -2057,6 +2216,73 @@ internal class ConversionClassifier {
         expectedType TypeSymbol?,
         out converted BoundExpression
     ) bool {
+        var argument = argument
+        if tryGetReboundSibling != nil && tryGetReboundSibling!!(argument) is {} reboundSibling {
+            argument = reboundSibling
+        }
+        let beforeVersion = expressionNarrowingVersion?.Invoke() ?? 0
+        if TryApplyUserDefinedImplicitArgumentConversionCore(argument, expectedType, out converted) {
+            onConversionBound?.Invoke(argument, converted, beforeVersion)
+            return true
+        }
+        return false
+    }
+
+    func CanApplyUserDefinedImplicitArgumentConversion(argument BoundExpression?, expectedType TypeSymbol?) bool {
+        if argument == nil || expectedType == nil {
+            return false
+        }
+        if argument.Type is NullableTypeSymbol sourceNullable &&
+            TryResolveLiftedUserDefinedSymbolConversion(
+            sourceNullable,
+            expectedType,
+            allowExplicit: false,
+            out _,
+            out _
+        ) {
+            return true
+        }
+        if argument.Type != TypeSymbol.Error &&
+            TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var symbolicConvMethod) &&
+            BoundClrConversionCallExpression
+            .CanApplyImplicitClrConversion(argument.Type, expectedType, symbolicConvMethod!!) {
+            return true
+        }
+        if argument
+            .Type
+            ?.ClrType != nil &&
+            expectedType.ClrType != nil &&
+            argument.Type != TypeSymbol.Error &&
+            ClrOperatorResolution.TryResolveConversionForTypes(
+            argument.Type,
+            expectedType,
+            allowExplicit: false,
+            out var convMethod,
+            out _
+        ) &&
+            BoundClrConversionCallExpression.CanApplyImplicitClrConversion(argument.Type, expectedType, convMethod!!) {
+            return true
+        }
+        if argument.Type != nil &&
+            argument.Type != TypeSymbol.Error &&
+            TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var openConvMethod) &&
+            BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
+            argument.Type,
+            expectedType,
+            openConvMethod!!
+        ) {
+            return true
+        }
+        return argument.Type != nil &&
+            argument.Type != TypeSymbol.Error &&
+            TryResolveUserDefinedSymbolConversion(argument.Type, expectedType, allowExplicit: false, out _, out _)
+    }
+
+    private func TryApplyUserDefinedImplicitArgumentConversionCore(
+        argument BoundExpression,
+        expectedType TypeSymbol?,
+        out converted BoundExpression
+    ) bool {
         if argument.Type is NullableTypeSymbol sourceNullable &&
             TryResolveLiftedUserDefinedSymbolConversion(
             sourceNullable,
@@ -2647,29 +2873,19 @@ internal class ConversionClassifier {
         syntax ConditionalRefArgumentExpressionSyntax,
         outerModifier SyntaxToken?
     ) BoundExpression {
-        // Condition must be bool.
-        let condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
         // Inner-modifier matching (GS0251). The outer modifier text is `ref`,
         // `out`, `in`, or `&`. The bare `&` form (outerModifier == null) maps
         // to `ref`/`&` semantics; an inner `in`/`out` on a `&` operand is a
         // mismatch since `&` already denotes mutable byref.
         let outerText = outerModifier?.Text ?? "&"
-        if syntax.WhenTrueRefKindModifier != nil &&
-            !InnerModifierMatchesOuter(syntax.WhenTrueRefKindModifier.Text, outerText) {
-            Diagnostics.ReportConditionalRefArgumentInnerModifierMismatch(
-                syntax.WhenTrueRefKindModifier.Location,
-                outerText,
-                syntax.WhenTrueRefKindModifier.Text
-            )
+        if syntax.WhenTrueRefKindModifier is {} wtMod && !InnerModifierMatchesOuter(wtMod.Text, outerText) {
+            let _ = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
+            Diagnostics.ReportConditionalRefArgumentInnerModifierMismatch(wtMod.Location, outerText, wtMod.Text)
             return BoundErrorExpression(nil)
         }
-        if syntax.WhenFalseRefKindModifier != nil &&
-            !InnerModifierMatchesOuter(syntax.WhenFalseRefKindModifier.Text, outerText) {
-            Diagnostics.ReportConditionalRefArgumentInnerModifierMismatch(
-                syntax.WhenFalseRefKindModifier.Location,
-                outerText,
-                syntax.WhenFalseRefKindModifier.Text
-            )
+        if syntax.WhenFalseRefKindModifier is {} wfMod && !InnerModifierMatchesOuter(wfMod.Text, outerText) {
+            let _ = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
+            Diagnostics.ReportConditionalRefArgumentInnerModifierMismatch(wfMod.Location, outerText, wfMod.Text)
             return BoundErrorExpression(nil)
         }
         // Each branch must itself be a plain lvalue expression — not a nested
@@ -2677,15 +2893,24 @@ internal class ConversionClassifier {
         // explicitly reject the inline-declaration form here (GS0250) before
         // attempting to bind.
         if syntax.WhenTrue is RefArgumentExpressionSyntax wtRefArg && wtRefArg.IsInlineDeclaration {
+            let _ = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
             Diagnostics.ReportInlineDeclarationInConditionalRefBranch(wtRefArg.Location)
             return BoundErrorExpression(nil)
         }
         if syntax.WhenFalse is RefArgumentExpressionSyntax wfRefArg && wfRefArg.IsInlineDeclaration {
+            let _ = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
             Diagnostics.ReportInlineDeclarationInConditionalRefBranch(wfRefArg.Location)
             return BoundErrorExpression(nil)
         }
-        let whenTrue = bindExpression(syntax.WhenTrue)
-        let whenFalse = bindExpression(syntax.WhenFalse)
+        let (condition, whenTrue, whenFalse) = if bindConditionalRefParts != nil {
+            bindConditionalRefParts!!(syntax.Condition, syntax.WhenTrue, syntax.WhenFalse)
+        } else {
+            (
+                bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool),
+                bindExpression(syntax.WhenTrue),
+                bindExpression(syntax.WhenFalse)
+            )
+        }
         if whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression || condition is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }
@@ -3106,6 +3331,11 @@ internal class ConversionClassifier {
     ) ImmutableArray[BoundExpression] {
         var builder ImmutableArray[BoundExpression].Builder? = nil
         for var i = 0; i < arguments.Length; i++ {
+            let argument = ResolveReboundSibling(arguments[i])
+            if !object.ReferenceEquals(argument, arguments[i]) {
+                builder ??= arguments.ToBuilder()
+                builder!![i] = argument
+            }
             let paramIndex = if parameterMapping.IsDefault {
                 i
             } else {
@@ -3132,18 +3362,18 @@ internal class ConversionClassifier {
             } else {
                 default(TypeSymbol?)
             }
-            if paramIndex < parameters.Length && IsImplicitInClrArgument(arguments[i], parameters[paramIndex]) {
+            if paramIndex < parameters.Length && IsImplicitInClrArgument(argument, parameters[paramIndex]) {
                 let pointeeType = GetImplicitInClrPointeeType(
                     parameters[paramIndex],
                     paramIndex,
                     method,
                     receiverType,
                     symbolicMethodTypeArgs: default(ImmutableArray[TypeSymbol?]),
-                    arguments[i]
+                    argument
                 )
                 builder ??= arguments.ToBuilder()
                 builder!![i] = if TryRejectClrPlatformContainerArgument(
-                    arguments[i],
+                    argument,
                     parameters[paramIndex],
                     pointeeType,
                     location,
@@ -3151,19 +3381,19 @@ internal class ConversionClassifier {
                 ) {
                     rejectedArgument
                 } else {
-                    BindImplicitInArgument(location, arguments[i], pointeeType, parameter: nil)
+                    BindImplicitInArgument(location, argument, pointeeType, parameter: nil)
                 }
             } else if paramIndex < parameters.Length &&
                 (
-                Conversion.ContainsPlatformTypeInStructure(arguments[i].Type) || TypeSymbol.ContainsNullLiteralType(
-                    arguments[i].Type
+                Conversion.ContainsPlatformTypeInStructure(argument.Type) || TypeSymbol.ContainsNullLiteralType(
+                    argument.Type
                 ) ||
-                    arguments[i].Type is NullableTypeSymbol
+                    argument.Type is NullableTypeSymbol
             ) &&
                 parameterType != nil {
-                if Conversion.ContainsPlatformTypeInStructure(arguments[i].Type) &&
+                if Conversion.ContainsPlatformTypeInStructure(argument.Type) &&
                     TryRejectClrPlatformContainerArgument(
-                    arguments[i],
+                    argument,
                     parameters[paramIndex],
                     parameterType,
                     location,
@@ -3171,19 +3401,17 @@ internal class ConversionClassifier {
                 ) {
                     builder ??= arguments.ToBuilder()
                     builder!![i] = rejectedArgument
-                } else if (
-                    TypeSymbol.ContainsNullLiteralType(arguments[i].Type) || arguments[i].Type is NullableTypeSymbol
-                ) &&
+                } else if (TypeSymbol.ContainsNullLiteralType(argument.Type) || argument.Type is NullableTypeSymbol) &&
                     !Conversion
-                    .Classify(arguments[i].Type, parameterType).IsImplicit {
+                    .Classify(argument.Type, parameterType).IsImplicit {
                     builder ??= arguments.ToBuilder()
-                    builder!![i] = BindConversion(location, arguments[i], parameterType)
+                    builder!![i] = BindConversion(location, argument, parameterType)
                 } else if !parameters[paramIndex]
                     .ParameterType
                     .IsGenericParameter &&
-                    arguments[i].Type is PlatformTypeSymbol &&
+                    argument.Type is PlatformTypeSymbol &&
                     Conversion
-                    .Classify(arguments[i].Type, parameterType).RequiresPlatformNilCheck {
+                    .Classify(argument.Type, parameterType).RequiresPlatformNilCheck {
                     // ADR-0186 §4, #4451: a platform argument at a non-null
                     // parameter of a constrained call is a coercion point like
                     // any other. This path otherwise passes arguments
@@ -3191,7 +3419,7 @@ internal class ConversionClassifier {
                     // only the check and leaves the value's CLR shape alone.
                     builder ??= arguments.ToBuilder()
                     builder!![i] = PlatformCoercion.InsertCheck(
-                        arguments[i],
+                        argument,
                         location,
                         "a conversion to the non-null type '${parameterType.Name}'"
                     )
@@ -3504,7 +3732,13 @@ internal class ConversionClassifier {
     ) BoundExpression {
         let parameterType = methodOwner.SubstituteMemberType(method.Parameters[0].Type)
         let resultType = methodOwner.SubstituteMemberType(method.Type)
-        let operand = BindConversion(diagnosticLocation, expression, parameterType, allowExplicit: false)
+        let operand = BindConversion(
+            diagnosticLocation,
+            expression,
+            parameterType,
+            allowExplicit: false,
+            trackNarrowing: false
+        )
         let call = BoundCallExpression(nil, method, ImmutableArray.Create(operand), resultType){
             StaticGenericOwnerType = if !methodOwner
                 .TypeArguments
@@ -3517,7 +3751,7 @@ internal class ConversionClassifier {
                 default(StructSymbol?)
             }
         }
-        return BindConversion(diagnosticLocation, call, targetType, allowExplicit)
+        return BindConversion(diagnosticLocation, call, targetType, allowExplicit, trackNarrowing: false)
     }
 
     /// Issue #1256: lowers a non-identity implicit tuple-to-tuple conversion
@@ -3542,16 +3776,46 @@ internal class ConversionClassifier {
         // element type without introducing a temp or element accesses.
         if expression is BoundTupleLiteralExpression literalSource && literalSource.Elements.Length == arity {
             let convertedLiteralElements = ImmutableArray.CreateBuilder[BoundExpression](arity)
-            for var i = 0; i < arity; i++ {
-                convertedLiteralElements.Add(
-                    BindConversion(
+            var earlierElementChangedNarrowing = false
+            enterTupleConversion?.Invoke()
+            try {
+                for var i = 0; i < arity; i++ {
+                    var element = literalSource.Elements[i]
+                    let elementSyntax ExpressionSyntax? = if literalSource.Syntax is TupleLiteralExpressionSyntax tupleSyntax &&
+                        i < tupleSyntax
+                        .Elements
+                        .Count {
+                        tupleSyntax.Elements[i]
+                    } else {
+                        element.Syntax as ExpressionSyntax
+                    }
+                    if earlierElementChangedNarrowing && elementSyntax != nil {
+                        let unwrappedSyntax = if elementSyntax is NamedTupleElementSyntax named {
+                            named.Expression
+                        } else {
+                            elementSyntax
+                        }
+                        Diagnostics.RemoveDiagnosticsIn(unwrappedSyntax.Location)
+                        element = if rebindTupleElement != nil {
+                            rebindTupleElement!!(element, unwrappedSyntax)
+                        } else {
+                            bindExpression(unwrappedSyntax)
+                        }
+                    }
+                    let beforeVersion = expressionNarrowingVersion?.Invoke() ?? 0
+                    let convertedElement = BindConversion(
                         diagnosticLocation,
-                        literalSource.Elements[i],
+                        element,
                         targetTuple.ElementTypes[i],
-                        allowExplicit,
-                        trackNarrowing: false
+                        allowExplicit
                     )
-                )
+                    if (expressionNarrowingVersion?.Invoke() ?? 0) != beforeVersion {
+                        earlierElementChangedNarrowing = true
+                    }
+                    convertedLiteralElements.Add(convertedElement)
+                }
+            } finally {
+                leaveTupleConversion?.Invoke()
             }
             return BoundTupleLiteralExpression(expression.Syntax, targetTuple, convertedLiteralElements.ToImmutable())
         }

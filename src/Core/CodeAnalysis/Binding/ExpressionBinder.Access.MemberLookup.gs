@@ -753,7 +753,6 @@ internal partial class ExpressionBinder {
                         case sf is FieldInfo: ClrNullability.GetFieldTypeSymbol(sf)
                         default: TypeSymbol.Error
                     }
-                    staticType = NormalizeImportedSemanticAggregate(staticType, staticMember)
                     // Issue #1330: when the receiver is a generic type
                     // constructed over an in-scope generic type parameter
                     // (`Comparer[TResult].Default`), the closed CLR member type
@@ -771,6 +770,7 @@ internal partial class ExpressionBinder {
                         if symbolicMemberType != nil {
                             staticType = symbolicMemberType
                         }
+                        staticType = NormalizeImportedSemanticAggregate(staticType, staticMember)
                         if staticMember is FieldInfo symbolicLiteral && symbolicLiteral.IsLiteral {
                             let literalType = if classSymbol.ClassType.IsEnum {
                                 cast[TypeSymbol](classSymbol.SymbolicReceiver!!)
@@ -779,20 +779,25 @@ internal partial class ExpressionBinder {
                             }
                             return BoundLiteralExpression(nil, symbolicLiteral.GetRawConstantValue(), literalType)
                         }
-                        return BoundClrPropertyAccessExpression(
-                            nil,
-                            nil,
-                            staticMember,
-                            staticType,
-                            classSymbol.SymbolicReceiver
+                        return ConversionClassifier.AutoDereferenceRefReturn(
+                            BoundClrPropertyAccessExpression(
+                                nil,
+                                nil,
+                                staticMember,
+                                staticType,
+                                classSymbol.SymbolicReceiver
+                            )
                         )
                     }
+                    staticType = NormalizeImportedSemanticAggregate(staticType, staticMember)
                     // Literal (const) fields aren't real runtime fields, so
                     // inline their constant value rather than emit `ldsfld`.
                     if staticMember is FieldInfo literal && literal.IsLiteral {
                         return BoundLiteralExpression(nil, literal.GetRawConstantValue(), staticType)
                     }
-                    return BoundClrPropertyAccessExpression(nil, nil, staticMember, staticType)
+                    return ConversionClassifier.AutoDereferenceRefReturn(
+                        BoundClrPropertyAccessExpression(nil, nil, staticMember, staticType)
+                    )
                 } else if receiver != nil && TryGetUserInstanceMemberReceiverType(receiver, out var structSym) {
                     // ADR-0112 A3: this-first base-chain instance field walk via
                     // the canonical member-resolution layer, surfacing the
@@ -945,11 +950,13 @@ internal partial class ExpressionBinder {
                             CanAccessInternalsOf
                         )
                         if clrProp != nil && GetVisibleGetter(clrProp, fromDerivedType: true) != nil {
-                            return BoundClrPropertyAccessExpression(
-                                nil,
-                                receiver,
-                                clrProp,
-                                GetInheritedClrMemberType(receiver.Type, clrProp)
+                            return ConversionClassifier.AutoDereferenceRefReturn(
+                                BoundClrPropertyAccessExpression(
+                                    nil,
+                                    receiver,
+                                    clrProp,
+                                    GetInheritedClrMemberType(receiver.Type, clrProp)
+                                )
                             )
                         }
                         let clrFld FieldInfo? = ClrTypeUtilities.SafeGetInheritedInstanceField(
@@ -1063,11 +1070,13 @@ internal partial class ExpressionBinder {
                             receiver,
                             importedPropertyReceiver!!
                         )
-                        return BoundClrPropertyAccessExpression(
-                            nil,
-                            propertyReceiver,
-                            clrProp,
-                            GetInheritedClrMemberType(importedPropertyReceiver!!, clrProp)
+                        return ConversionClassifier.AutoDereferenceRefReturn(
+                            BoundClrPropertyAccessExpression(
+                                nil,
+                                propertyReceiver,
+                                clrProp,
+                                GetInheritedClrMemberType(importedPropertyReceiver!!, clrProp)
+                            )
                         )
                     }
                     for clrBaseIface in MemberLookup.GetTransitiveClrBaseInterfaces(ifaceSym) {
@@ -1668,41 +1677,45 @@ internal partial class ExpressionBinder {
             CultureInfo.InvariantCulture
         )
         let capture = LocalVariableSymbol(captureName, isReadOnly: true, type: underlying)
-        // Push a temp scope so the capture is in scope while we bind the
-        // indexed access against it.
-        $scope = BoundScope($scope)
-        $scope.TryDeclareVariable(capture)
-        let captureRef = BoundVariableExpression(nil, capture)
-        let whenNotNull = if syntax.Indices.Count > 1 || IsRectangularArrayType(captureRef.Type) {
-            BindRectangularIndexAgainstTarget(captureRef, syntax.Indices, syntax.Target.Location)
-        } else {
-            BindIndexAgainstTarget(captureRef, syntax.Index, syntax.Target.Location)
-        }
-        $scope = $scope.Pop()
-        if whenNotNull is BoundErrorExpression || whenNotNull.Type == TypeSymbol.Error {
-            return BoundErrorExpression(nil)
-        }
-        let resultType = if whenNotNull.Type is NullableTypeSymbol {
-            whenNotNull.Type
-        } else {
-            cast[TypeSymbol](NullableTypeSymbol.Get(whenNotNull.Type))
-        }
-        // Issue #1475: allocate the result slot for ANY value-type underlying
-        // recognised by symbol (user enum/struct, value-constrained type
-        // parameter, tuple), not only when `ClrType.IsValueType`. Mirrors the
-        // member-access `?.` path so `?[]` over a user value type also
-        // materialises `default(Nullable<T>)` on the nil branch instead of
-        // `ldnull`.
-        var resultSlot LocalVariableSymbol? = nil
-        if resultType is NullableTypeSymbol nullableResult && ReflectionMetadataEmitter.IsValueTypeSymbol(
-            nullableResult.UnderlyingType
-        ) {
-            let resultSlotName = "$$nres_" + binderCtx.NullConditionalCaptureCounter.ToString(
-                CultureInfo.InvariantCulture
-            )
-            resultSlot = LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType)
-        }
-        return BoundNullConditionalAccessExpression(nil, receiver, capture, whenNotNull, resultType, resultSlot)
+        return BindPossiblySkippedOperand(
+            () -> {
+                // Push a temp scope so the capture is in scope while we bind the
+                // indexed access against it.
+                $scope = BoundScope($scope)
+                $scope.TryDeclareVariable(capture)
+                let captureRef = BoundVariableExpression(nil, capture)
+                let whenNotNull = if syntax.Indices.Count > 1 || IsRectangularArrayType(captureRef.Type) {
+                    BindRectangularIndexAgainstTarget(captureRef, syntax.Indices, syntax.Target.Location)
+                } else {
+                    BindIndexAgainstTarget(captureRef, syntax.Index, syntax.Target.Location)
+                }
+                $scope = $scope.Pop()
+                if whenNotNull is BoundErrorExpression || whenNotNull.Type == TypeSymbol.Error {
+                    return BoundErrorExpression(nil)
+                }
+                let resultType = if whenNotNull.Type is NullableTypeSymbol {
+                    whenNotNull.Type
+                } else {
+                    cast[TypeSymbol](NullableTypeSymbol.Get(whenNotNull.Type))
+                }
+                // Issue #1475: allocate the result slot for ANY value-type underlying
+                // recognised by symbol (user enum/struct, value-constrained type
+                // parameter, tuple), not only when `ClrType.IsValueType`. Mirrors the
+                // member-access `?.` path so `?[]` over a user value type also
+                // materialises `default(Nullable<T>)` on the nil branch instead of
+                // `ldnull`.
+                var resultSlot LocalVariableSymbol? = nil
+                if resultType is NullableTypeSymbol nullableResult && ReflectionMetadataEmitter.IsValueTypeSymbol(
+                    nullableResult.UnderlyingType
+                ) {
+                    let resultSlotName = "$$nres_" + binderCtx.NullConditionalCaptureCounter.ToString(
+                        CultureInfo.InvariantCulture
+                    )
+                    resultSlot = LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType)
+                }
+                return BoundNullConditionalAccessExpression(nil, receiver, capture, whenNotNull, resultType, resultSlot)
+            }
+        )
     }
 
     private func BindIndexAgainstTarget(
@@ -2141,40 +2154,51 @@ internal partial class ExpressionBinder {
                 CultureInfo.InvariantCulture
             )
             let capture = LocalVariableSymbol(captureName, isReadOnly: true, type: underlying)
-            $scope = BoundScope($scope)
-            $scope.TryDeclareVariable(capture)
-            let captureRef = BoundVariableExpression(nil, capture)
-            let whenNotNull = BindIndexedWriteThroughChain(
-                chainBase: captureRef,
-                remainingChain: rightSyntax!!,
-                indexSyntax,
-                valueSyntax,
-                boundValueOverride,
-                compoundOperatorToken,
-                compoundRhsSyntax,
-                diagnosticLocation,
-                outerSyntax
+            return BindPossiblySkippedOperand(
+                () -> {
+                    $scope = BoundScope($scope)
+                    $scope.TryDeclareVariable(capture)
+                    let captureRef = BoundVariableExpression(nil, capture)
+                    let whenNotNull = BindIndexedWriteThroughChain(
+                        chainBase: captureRef,
+                        remainingChain: rightSyntax!!,
+                        indexSyntax,
+                        valueSyntax,
+                        boundValueOverride,
+                        compoundOperatorToken,
+                        compoundRhsSyntax,
+                        diagnosticLocation,
+                        outerSyntax
+                    )
+                    $scope = $scope.Pop()
+                    if whenNotNull is BoundErrorExpression {
+                        return whenNotNull
+                    }
+                    let resultType = if whenNotNull.Type is NullableTypeSymbol {
+                        whenNotNull.Type
+                    } else {
+                        cast[TypeSymbol](NullableTypeSymbol.Get(whenNotNull.Type))
+                    }
+                    var resultSlot LocalVariableSymbol? = nil
+                    if resultType is NullableTypeSymbol nullableResult &&
+                        nullableResult
+                        .UnderlyingType
+                        ?.ClrType is {IsValueType: true} {
+                        let resultSlotName = "$$nres_" + binderCtx.NullConditionalCaptureCounter.ToString(
+                            CultureInfo.InvariantCulture
+                        )
+                        resultSlot = LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType)
+                    }
+                    return BoundNullConditionalAccessExpression(
+                        nil,
+                        boundLeft,
+                        capture,
+                        whenNotNull,
+                        resultType,
+                        resultSlot
+                    )
+                }
             )
-            $scope = $scope.Pop()
-            if whenNotNull is BoundErrorExpression {
-                return whenNotNull
-            }
-            let resultType = if whenNotNull.Type is NullableTypeSymbol {
-                whenNotNull.Type
-            } else {
-                cast[TypeSymbol](NullableTypeSymbol.Get(whenNotNull.Type))
-            }
-            var resultSlot LocalVariableSymbol? = nil
-            if resultType is NullableTypeSymbol nullableResult &&
-                nullableResult
-                .UnderlyingType
-                ?.ClrType is {IsValueType: true} {
-                let resultSlotName = "$$nres_" + binderCtx.NullConditionalCaptureCounter.ToString(
-                    CultureInfo.InvariantCulture
-                )
-                resultSlot = LocalVariableSymbol(resultSlotName, isReadOnly: false, type: resultType)
-            }
-            return BoundNullConditionalAccessExpression(nil, boundLeft, capture, whenNotNull, resultType, resultSlot)
         }
         let boundReceiver = if chainBase == nil {
             BindExpression(remainingChain)
@@ -5965,17 +5989,26 @@ internal partial class ExpressionBinder {
                 if openMember == nil || openMemberType == nil {
                     return nil
                 }
+                let effectiveOpenType = if openMemberType.IsByRef {
+                    openMemberType.GetElementType() ?? openMemberType
+                } else {
+                    openMemberType
+                }
                 // ADR-0193 Phase 2: merged, as the instance-member readers are.
                 let mapped = MemberLookup.GetClrMemberValueTypeSymbol(
                     openMember,
                     symbolicReceiver.OpenDefinition,
                     symbolicReceiver.TypeArguments
                 )
-                return if TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.IsSameCompilationUserTypeTopLevel(
+                let unwrappedMapped = if mapped is ByRefTypeSymbol byRefMapped {
+                    byRefMapped.PointeeType
+                } else {
                     mapped
-                ) ||
-                    openMemberType.IsGenericParameter ||
-                    openMemberType.IsGenericType {
+                }
+                return if TypeSymbol.ContainsTypeParameter(unwrappedMapped) ||
+                    TypeSymbol.IsSameCompilationUserTypeTopLevel(unwrappedMapped) ||
+                    effectiveOpenType.IsGenericParameter ||
+                    effectiveOpenType.IsGenericType {
                     mapped
                 } else {
                     default(TypeSymbol?)

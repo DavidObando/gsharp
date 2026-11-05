@@ -1776,6 +1776,62 @@ internal partial class ExpressionBinder {
                 )
             }
         }
+        let initialArguments = boundArguments.ToImmutable()
+        let overloadDiagMark = Diagnostics.Count
+        var bound = TryBindClrConstructorAfterArguments(
+            clrType,
+            syntax,
+            inlineOutArguments,
+            argumentNames,
+            ctors,
+            symbolicCtorDelegateTargets,
+            boundArguments,
+            out result,
+            out noApplicableOverload,
+            out boundArgumentsOnFailure,
+            openGenericDefinition,
+            symbolicTypeArgs,
+            resultTypeOverride
+        )
+        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+            Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+            bound = TryBindClrConstructorAfterArguments(
+                clrType,
+                syntax,
+                inlineOutArguments,
+                argumentNames,
+                ctors,
+                symbolicCtorDelegateTargets,
+                refreshedArguments.ToBuilder(),
+                out result,
+                out noApplicableOverload,
+                out boundArgumentsOnFailure,
+                openGenericDefinition,
+                symbolicTypeArgs,
+                resultTypeOverride
+            )
+        }
+        return bound
+    }
+
+    private func TryBindClrConstructorAfterArguments(
+        clrType Type,
+        syntax CallExpressionSyntax,
+        inlineOutArguments List[int32],
+        argumentNames ImmutableArray[string],
+        ctors[]ConstructorInfo,
+        symbolicCtorDelegateTargets Dictionary[int32, TypeSymbol],
+        boundArguments ImmutableArray[BoundExpression].Builder,
+        @NotNullWhen(true) out result BoundExpression?,
+        out noApplicableOverload bool,
+        out boundArgumentsOnFailure ImmutableArray[BoundExpression],
+        openGenericDefinition Type? = nil,
+        symbolicTypeArgs ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
+        resultTypeOverride TypeSymbol? = nil
+    ) bool {
+        result = nil
+        noApplicableOverload = false
+        boundArgumentsOnFailure = default(ImmutableArray[BoundExpression])
         // Phase A (overload resolution): pick a constructor via the shared
         // "better function member" resolver. Ambiguity surfaces a hard
         // binder diagnostic and the call falls back to the surrounding
@@ -2629,9 +2685,7 @@ internal partial class ExpressionBinder {
             .None
     }
 
-    private func HasErrorDiagnosticSince(mark int32) bool -> Diagnostics.Skip(mark).Any(
-        (diagnostic Diagnostic) -> diagnostic.IsError
-    )
+    private func HasErrorDiagnosticSince(mark int32) bool -> Diagnostics.HasErrorSince(mark)
 
     /// Issue #5569: ends a call bind that (cref:BindLambdaWithCandidateTarget) can make speculative. When the call
     /// failed, the diagnostics of each discarded literal target bind are reported, as for a call with no other

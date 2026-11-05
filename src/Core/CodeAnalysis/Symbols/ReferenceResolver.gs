@@ -614,14 +614,9 @@ class ReferenceResolver : IDisposable {
             return true
         }
         if type.GetType() == typeof(object).GetType() {
-            try {
-                if MapClrTypeToReferences(type) is Type projected {
-                    lookupType = projected
-                    return true
-                }
-            } catch (InvalidOperationException) {
-                // The reference set does not declare the type (or one of its arguments).
-
+            if TryMapClrTypeToReferences(type, out var projected) {
+                lookupType = projected!!
+                return true
             }
         } else if !IsHostFallback(
             if type.IsConstructedGenericType {
@@ -633,6 +628,25 @@ class ReferenceResolver : IDisposable {
             return true
         }
         return !IsDownlevelTarget()
+    }
+
+    /// Issue #4928: projects [`hostType`](paramref) onto this resolver's
+    /// reference set, tolerating missing types, generic-construction mismatches, and
+    /// metadata-load failures.
+    /// @param hostType The CLR type to project.
+    /// @param projected The projected type on success.
+    /// @returns `true` when projection succeeded.
+    internal func TryMapClrTypeToReferences(hostType Type?, @NotNullWhen(true) out projected Type?) bool {
+        projected = nil
+        if hostType == nil {
+            return false
+        }
+        try {
+            projected = MapClrTypeToReferences(hostType)
+            return projected != nil
+        } catch (ex Exception) when IsProjectionFailure(ex) {
+            return false
+        }
     }
 
     // Issue #4924: TargetsDownlevelFramework, computed once per resolver (0 = not yet
@@ -824,11 +838,7 @@ class ReferenceResolver : IDisposable {
                 }
             }
             return metadataContext?.LoadFromAssemblyName(assemblySimpleName)?.GetType(fullName)
-        } catch (ex Exception) when ex is FileNotFoundException ||
-            ex is FileLoadException ||
-            ex is BadImageFormatException ||
-            ex is TypeLoadException ||
-            ex is ArgumentException {
+        } catch (ex Exception) when IsProjectionFailure(ex) {
             return nil
         }
     }
@@ -1972,6 +1982,10 @@ class ReferenceResolver : IDisposable {
                 return nil
             }
         }
+
+        internal func IsProjectionFailure(ex Exception) bool -> ClrTypeUtilities.IsMetadataLoadFailure(ex) ||
+            ex is ArgumentException ||
+            ex is InvalidOperationException
 
         private let ImageTypeNameIndexes ConcurrentDictionary[string, ReferenceTypeNameIndex] = ConcurrentDictionary[
             string,

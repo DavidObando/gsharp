@@ -355,10 +355,14 @@ partial class Binder {
                 "a parameter declaration",
                 AttributeTargets.Parameter
             ),
-            isolateExternalCallableAliases: () -> Statements.IsolateExternalCallableAliases(),
-            restoreExternalCallableAliases: (
-                saved HashSet[VariableSymbol]
-            ) -> Statements.RestoreExternalCallableAliases(saved),
+            isolateExternalCallableAliases: () -> {
+                Expressions.IsolateExpressionNarrowingFramesForNestedLambda()
+                return Statements.IsolateExternalCallableAliases()
+            },
+            restoreExternalCallableAliases: (saved HashSet[VariableSymbol]) -> {
+                Statements.RestoreExternalCallableAliases(saved)
+                Expressions.RestoreExpressionNarrowingFramesForNestedLambda()
+            },
             bindLocalVariable: (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> {
                 return Declarations.BindVariableDeclaration(identifier, isReadOnly, type)
             },
@@ -568,7 +572,57 @@ partial class Binder {
                 header StatementBinder.SwitchArmHeader
             ) -> Statements.ReapplySwitchArmHeaderEffects(valueSyntax, guardSyntax, header),
             bindAfterLaterArmTests: (bindLaterTests() -> void, fallsThrough bool, bind() -> BoundNode) ->
-            Statements.BindAfterLaterArmTests(bindLaterTests, fallsThrough, bind)
+            Statements.BindAfterLaterArmTests(bindLaterTests, fallsThrough, bind),
+            clearAssignedRoots: (
+                node BoundNode,
+                state Dictionary[AccessPath, TypeSymbol],
+                aliases IReadOnlyCollection[VariableSymbol]?
+            ) -> Statements.ClearAssignedRootsForConditionOperand(node, state, aliases),
+            evolveAliases: (expr BoundExpression, aliases HashSet[VariableSymbol]) ->
+            Statements.EvolveCallableAliases(expr, aliases),
+            applyExpressionEffects: (
+                bound BoundExpression,
+                state Dictionary[AccessPath, TypeSymbol],
+                beforeAliases HashSet[VariableSymbol],
+                alreadyProcessed HashSet[BoundExpression]?,
+                exitAliases Dictionary[BoundExpression, HashSet[VariableSymbol]]?,
+                commitProcessed bool
+            ) -> Statements.ApplyExpressionEffects(
+                bound,
+                state,
+                beforeAliases,
+                alreadyProcessed,
+                exitAliases,
+                commitProcessed
+            ),
+            recordExpressionNarrowingKill: (frame NarrowingFrame, path AccessPath, type TypeSymbol) ->
+            Statements.RecordExpressionNarrowingKill(frame, path, type),
+            getCallableAliases: () -> Statements.CaptureExternalCallableAliasesForExpression(),
+            setCallableAliases: (aliases HashSet[VariableSymbol]) ->
+            Statements.SetExternalCallableAliasesFromExpression(aliases),
+            dischargesNullableWidening: (bound BoundExpression, path AccessPath, widenedType TypeSymbol) ->
+            Statements.DischargesNullableWidening(bound, path, widenedType),
+            classifyConditionNonNullAssignments: (
+                condition BoundExpression,
+                aliases IReadOnlyCollection[VariableSymbol]?
+            ) -> Statements.TryClassifyConditionNonNullAssignments(condition, aliases)
+        )
+        Statements.SetSyncExpressionCallableAliases(
+            (aliases IReadOnlyCollection[VariableSymbol]) -> expressions.SyncActiveExpressionCallableAliases(aliases)
+        )
+        conversions.SetExpressionNarrowingHooks(
+            () -> expressions.ExpressionNarrowingVersion,
+            (original BoundExpression, converted BoundExpression, beforeVersion int32) ->
+            expressions.OnConversionBound(original, converted, beforeVersion),
+            (expression BoundExpression) -> expressions.TryGetReboundSibling(expression),
+            () -> expressions.EnterTupleConversion(),
+            () -> expressions.LeaveTupleConversion(),
+            (original BoundExpression, syntax ExpressionSyntax) -> expressions.RebindInSavedScope(original, syntax),
+            (
+                conditionSyntax ExpressionSyntax,
+                whenTrueSyntax ExpressionSyntax,
+                whenFalseSyntax ExpressionSyntax
+            ) -> expressions.BindConditionalRefParts(conditionSyntax, whenTrueSyntax, whenFalseSyntax)
         )
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor
