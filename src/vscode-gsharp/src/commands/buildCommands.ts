@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { DiagnosticsManager } from '../features/diagnostics';
 import { Logger } from '../utils/logger';
+import { selectRunnableProject } from './projectCommands';
 
 export function registerBuildCommands(
   context: vscode.ExtensionContext,
@@ -9,7 +10,7 @@ export function registerBuildCommands(
 ) {
   context.subscriptions.push(
     vscode.commands.registerCommand('gsharp.buildProject', async () => {
-      const projectFile = await findProjectFile();
+      const projectFile = await findProjectFile(false);
       if (!projectFile) {
         vscode.window.showWarningMessage('No .gsproj file found in the workspace.');
         return;
@@ -44,9 +45,11 @@ export function registerBuildCommands(
     }),
 
     vscode.commands.registerCommand('gsharp.runProject', async () => {
-      const projectFile = await findProjectFile();
+      const projectFile = await findProjectFile(true);
       if (!projectFile) {
-        vscode.window.showWarningMessage('No .gsproj file found in the workspace.');
+        vscode.window.showWarningMessage(
+          'No runnable .gsproj file (OutputType Exe or WinExe) found in the workspace.',
+        );
         return;
       }
 
@@ -65,10 +68,18 @@ export function registerBuildCommands(
   );
 }
 
-async function findProjectFile(): Promise<string | undefined> {
-  const files = await vscode.workspace.findFiles('**/*.gsproj', '**/node_modules/**', 1);
-  if (files.length > 0) {
-    return files[0].fsPath;
+async function findProjectFile(requireRunnable: boolean): Promise<string | undefined> {
+  const files = await vscode.workspace.findFiles('**/*.gsproj', '**/node_modules/**');
+  if (files.length === 0) {
+    return undefined;
   }
-  return undefined;
+  const workspaceFolderPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+  const runnable = await selectRunnableProject(
+    workspaceFolderPath,
+    files.map((f) => f.fsPath),
+  );
+  if (runnable) {
+    return runnable.projectPath;
+  }
+  return requireRunnable ? undefined : files[0].fsPath;
 }

@@ -261,13 +261,25 @@ class MatrixAndGraphTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0][-2:], ["--projects", ci.CS2GS])
 
     def test_selected_restore_and_build_use_one_graph_not_solution(self):
+        real_named_temporary_file = graphs.tempfile.NamedTemporaryFile
         for command in ("restore", "build"):
             captured = []
+            handles = []
+            filter_paths = []
+
+            def create_temp(*args, **kwargs):
+                handle = real_named_temporary_file(*args, **kwargs)
+                handles.append(handle)
+                return handle
 
             def capture(args, **kwargs):
                 self.assertEqual(args[:2], ["dotnet", command])
-                self.assertNotEqual(Path(args[2]).name, "GSharp.slnx")
-                filtered = json.loads(Path(args[2]).read_text())["solution"]
+                filter_path = Path(args[2])
+                filter_paths.append(filter_path)
+                self.assertNotEqual(filter_path.name, "GSharp.slnx")
+                self.assertEqual(len(handles), 1)
+                self.assertTrue(handles[0].closed)
+                filtered = json.loads(filter_path.read_text())["solution"]
                 self.assertEqual(filtered["path"], "GSharp.slnx")
                 captured.append(filtered["projects"])
                 if command == "build":
@@ -277,9 +289,25 @@ class MatrixAndGraphTests(unittest.TestCase):
                     self.assertIn("--locked-mode", args)
                 return subprocess.CompletedProcess(args, 0)
 
-            with patch.object(graphs.subprocess, "run", side_effect=capture):
+            with patch.object(graphs.tempfile, "NamedTemporaryFile", side_effect=create_temp), \
+                    patch.object(graphs.subprocess, "run", side_effect=capture):
                 graphs.run(command, f"{ci.CS2GS} {ci.GENERATOR}")
             self.assertEqual(captured, [sorted([ci.CS2GS, ci.GENERATOR])])
+            self.assertEqual(len(filter_paths), 1)
+            self.assertFalse(filter_paths[0].exists())
+
+        failed_paths = []
+
+        def fail_child(args, **kwargs):
+            failed_paths.append(Path(args[2]))
+            self.assertTrue(Path(args[2]).exists())
+            raise subprocess.CalledProcessError(1, args)
+
+        with patch.object(graphs.subprocess, "run", side_effect=fail_child):
+            with self.assertRaises(subprocess.CalledProcessError):
+                graphs.run("build", ci.CS2GS)
+        self.assertEqual(len(failed_paths), 1)
+        self.assertFalse(failed_paths[0].exists())
         with self.assertRaises(ValueError):
             graphs.run("build", "")
         with self.assertRaises(ValueError):

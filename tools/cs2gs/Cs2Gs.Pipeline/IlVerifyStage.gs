@@ -94,6 +94,15 @@ class IlVerifyStage : IMigrationStage {
         if result.Succeeded {
             return Task.FromResult(StageOutcome.Passed())
         }
+        let gsFile string? = if context.EmittedFiles.Count > 0 {
+            context.EmittedFiles[0].RelativeGsPath
+        } else {
+            default(string?)
+        }
+        if result.Status == IlVerifyStatus.Unavailable {
+            let setupArtifact = context.Triage.IlVerifyToolUnavailable(result.Output, gsFile)
+            return Task.FromResult(StageOutcome.Failed([]TriageArtifact{setupArtifact}))
+        }
         // Unsafe-IL allowance (#1933): the app opted into
         // CorpusApp.AllowUnsafeIl and ilverify actually parsed error(s) (as
         // opposed to a bare tool crash) — expected-unverifiable, not a gate.
@@ -114,11 +123,6 @@ class IlVerifyStage : IMigrationStage {
             if gatingErrors.Count == 0 {
                 return Task.FromResult(StageOutcome.Passed())
             }
-        }
-        let gsFile string? = if context.EmittedFiles.Count > 0 {
-            context.EmittedFiles[0].RelativeGsPath
-        } else {
-            default(string?)
         }
         let artifacts = List[TriageArtifact]()
         let seen = HashSet[string](StringComparer.Ordinal)

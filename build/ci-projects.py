@@ -18,12 +18,17 @@ def run(command, projects):
         raise ValueError(f"invalid project selection: {sorted(selected.difference(allowed))}")
     solution_filter = {"solution": {"path": "GSharp.slnx", "projects": sorted(selected)}}
     # A native solution filter retains dependency configurations from the solution.
-    with tempfile.NamedTemporaryFile(mode="w", dir=ROOT, prefix=".ci-projects-", suffix=".slnf") as handle:
+    # Close the temporary file before invoking dotnet so Windows does not hold an exclusive lock (#5085).
+    with tempfile.NamedTemporaryFile(
+            mode="w", dir=ROOT, prefix=".ci-projects-", suffix=".slnf", delete=False) as handle:
         json.dump(solution_filter, handle)
-        handle.flush()
+        filter_path = Path(handle.name)
+    try:
         args = ["--locked-mode"] if command == "restore" else [
             "--configuration", "Release", "--no-restore", "-graph"]
-        subprocess.run(["dotnet", command, handle.name, *args], cwd=ROOT, check=True)
+        subprocess.run(["dotnet", command, str(filter_path), *args], cwd=ROOT, check=True)
+    finally:
+        filter_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

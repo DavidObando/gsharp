@@ -416,9 +416,17 @@ System.IndexOutOfRangeException`)
 
     private class ScriptedIlVerifyRunner : IlVerifyRunner {
         private let run(int32, IReadOnlyList[string]) -> (Exit int32, Output string)
+        private let globalExecutable string?
+        private let runGlobal((string, IReadOnlyList[string]) -> (Exit int32, Output string))?
 
-        init(run(int32, IReadOnlyList[string]) -> (Exit int32, Output string)) {
+        init(
+            run(int32, IReadOnlyList[string]) -> (Exit int32, Output string),
+            globalExecutable string? = nil,
+            runGlobal((string, IReadOnlyList[string]) -> (Exit int32, Output string))? = nil
+        ) {
             this.run = run
+            this.globalExecutable = globalExecutable
+            this.runGlobal = runGlobal
         }
 
         prop Attempts int32 {
@@ -426,11 +434,146 @@ System.IndexOutOfRangeException`)
             private set;
         }
 
+        prop GlobalAttempts int32 {
+            get;
+            private set;
+        }
+
         override func EnsureToolAvailable() bool -> true
+
+        protected override func ResolveGlobalToolExecutable() string? -> this.globalExecutable
 
         protected override func RunDotnet(arguments IReadOnlyList[string])(Exit int32, Output string) {
             this.Attempts++
             return this.run(this.Attempts, arguments)
+        }
+
+        protected override func RunGlobalTool(executablePath string, arguments IReadOnlyList[string])(
+            Exit int32,
+            Output string
+        ) {
+            this.GlobalAttempts++
+            return if this.runGlobal != nil {
+                this.runGlobal(executablePath, arguments)
+            } else {
+                (1, "global ilverify not configured")
+            }
+        }
+    }
+
+    /// Issue #4956: when `dotnet tool run ilverify` fails because `ilverify`
+    /// is not in a local tool manifest, the runner falls back to a globally or
+    /// tool-path installed `ilverify` executable.
+    @Fact
+    func Verify_MissingManifestTool_FallsBackToGlobalIlVerifyExecutable() {
+        let assembly = FakeAssembly("missing-manifest-fallback")
+        let runner = ScriptedIlVerifyRunner(
+            func (_ int32, _ IReadOnlyList[string])(Exit int32, Output string) {
+                return (1, "Cannot find a tool in the manifest file that has a command named 'ilverify'.")
+            },
+            globalExecutable: "/tools/ilverify",
+            runGlobal: func (exe string, arguments IReadOnlyList[string])(Exit int32, Output string) {
+                Assert.Equal("/tools/ilverify", exe)
+                Assert.Equal(assembly, arguments[0])
+                Assert.DoesNotContain("tool", arguments)
+                return (0, "All Classes and Methods Verified.")
+            }
+        )
+        let result = runner.Verify(assembly)
+        Assert.Equal(IlVerifyStatus.Passed, result.Status)
+        Assert.True(result.Succeeded)
+        Assert.Equal(1, runner.Attempts)
+        Assert.Equal(1, runner.GlobalAttempts)
+        File.Delete(assembly)
+    }
+
+    /// Issue #4956: when neither a local manifest nor a global `ilverify`
+    /// executable is available, the stage reports `tool-setup-error`
+    /// (`ILVERIFY-UNAVAILABLE`) rather than misreporting a CIL-emission gap.
+    @Fact
+    async func ExecuteAsync_MissingLocalAndGlobalTool_ReportsToolSetupErrorNotCilEmitFailure() {
+        let outRoot = NewOutputRoot("ilverify-tool-missing")
+        let fakeAssembly = Path.Combine(outRoot, "App.dll")
+        File.WriteAllBytes(fakeAssembly, Array.Empty[uint8]())
+        let runner = ScriptedIlVerifyRunner(
+            func (_ int32, _ IReadOnlyList[string])(Exit int32, Output string) {
+                return (1, "Cannot find a tool in the manifest file that has a command named 'ilverify'.")
+            },
+            globalExecutable: nil
+        )
+        let stage = IlVerifyStage(runner)
+        let app = CorpusApp("corpus/Fake", "/fake/Fake.csproj", TargetKind.Exe)
+        let options = PipelineOptions{GscPath: "/fake/gsc.dll", OutputRoot: outRoot}
+        let context = StageExecutionContext(
+            app,
+            options,
+            GscInvoker(options.GscPath!!),
+            outRoot,
+            TriageBuilder("run_1", "2026-06-21T20:00:00Z", "0.2.0+abc", "corpus/Fake")
+        ){EmittedAssemblyPath = fakeAssembly}
+        let outcome = await stage.ExecuteAsync(context)
+        Assert.Equal(StageStatus.Failed, outcome.Status)
+        let artifact = Assert.Single(outcome.Artifacts)
+        Assert.Equal("tool-setup-error", artifact.Category)
+        Assert.Equal("ILVERIFY-UNAVAILABLE", artifact.Diagnostic!!.Id)
+        Assert.Equal("ToolSetup", artifact.OffendingCSharpConstruct!!.Kind)
+        Assert.DoesNotContain("cil-emit", artifact.SuggestedIssue!!.Labels)
+        Assert.Contains("setup problem", artifact.SuggestedIssue!!.Body, StringComparison.Ordinal)
+    }
+
+    /// Issue #4956: outside the G# source tree, `GscInvoker.Resolve` and
+    /// `SdkCompileRunner` resolve `gsc.dll`, `gsgen.dll`, and the SDK version
+    /// from the NuGet global-packages cache / tool metadata without requiring
+    /// `GSharp.slnx` or a `.nugs` directory.
+    @Fact
+    func OutsideRepoTree_ResolvesPackagedCompilerAndSdkWithoutNugsFeed() {
+        let testRoot = NewOutputRoot("issue4956-external-tool")
+        let nugetRoot = Path.Combine(testRoot, "nuget-packages")
+        let sdk056 = Path.Combine(nugetRoot, "gsharp.net.sdk", "0.5.6", "tools", "compiler", "gsc.dll")
+        let sdk057 = Path.Combine(nugetRoot, "gsharp.net.sdk", "0.5.7", "tools", "compiler", "gsc.dll")
+        let gsgen057 = Path.Combine(nugetRoot, "gsharp.net.sdk", "0.5.7", "tools", "gsgen", "gsgen.dll")
+        let sdk0510 = Path.Combine(nugetRoot, "gsharp.net.sdk", "0.5.10", "tools", "compiler", "gsc.dll")
+        Directory.CreateDirectory(Path.GetDirectoryName(sdk056)!!)
+        Directory.CreateDirectory(Path.GetDirectoryName(sdk057)!!)
+        Directory.CreateDirectory(Path.GetDirectoryName(gsgen057)!!)
+        Directory.CreateDirectory(Path.GetDirectoryName(sdk0510)!!)
+        File.WriteAllText(sdk056, string.Empty)
+        File.WriteAllText(sdk057, string.Empty)
+        File.WriteAllText(gsgen057, string.Empty)
+        File.WriteAllText(sdk0510, string.Empty)
+        let externalWorkDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+        try {
+            Assert.Equal(
+                Path.GetFullPath(sdk057),
+                GscInvoker.Resolve(nil, "Release", externalWorkDir, "0.5.7", nugetRoot)
+            )
+            Assert.Equal(Path.GetFullPath(sdk057), GscInvoker.ResolvePackagedCompiler(nil, nugetRoot, "0.5.7"))
+            Assert.Equal(Path.GetFullPath(sdk0510), GscInvoker.ResolvePackagedCompiler(nil, nugetRoot, "0.9.9"))
+            Assert.Equal(
+                Path.GetFullPath(gsgen057),
+                GscInvoker.ResolveGsgenTool(nil, "Release", Path.GetDirectoryName(sdk057)!!)
+            )
+            Assert.Equal(
+                "0.5.7",
+                SdkCompileRunner.ResolveToolPackageVersion(
+                    "/tools/.store/gsharp.cs2gs/0.5.7/gsharp.cs2gs/0.5.7/tools/net10.0/any/GSharp.Cs2Gs.Pipeline.dll",
+                    "0.5.7+abcdef"
+                )
+            )
+            Assert.Equal(
+                "0.5.10",
+                SdkCompileRunner.ResolveExternalPackageVersion(
+                    "Gsharp.NET.Sdk",
+                    nugetRoot,
+                    "/build/GSharp.Cs2Gs.Pipeline.dll",
+                    "0.5.11-glocal+abcdef"
+                )
+            )
+            SdkCompileRunner.WriteLocalNugetConfig(testRoot, nil)
+            let nugetConfig = File.ReadAllText(Path.Combine(testRoot, "nuget.config"))
+            Assert.DoesNotContain(".nugs", nugetConfig, StringComparison.Ordinal)
+        } finally {
+            Directory.Delete(testRoot, recursive: true)
         }
     }
 
