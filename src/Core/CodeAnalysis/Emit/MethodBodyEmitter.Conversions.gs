@@ -38,14 +38,9 @@ internal partial class MethodBodyEmitter {
         // for a value out of range on .NET 10 and on .NET 11, so `let a = unchecked(int8(300.5))` must not
         // depend on the runtime, and must give the same value as `const`. Outside explicit `unchecked`, the
         // binder reports GS0635 for a value out of range, so only an in-range value reaches a checked conversion.
-        if ConstantExpressionEvaluator.TryFoldFloatingConstantConversion(
-            conv,
-            out _,
-            out var folded,
-            out var inRange
-        ) &&
-            (inRange || !conv.IsChecked) {
-            this.EmitLiteral(BoundLiteralExpression(conv.Syntax, folded, conv.Type))
+        // A nullable target is a lift of the folded literal, which the nullable arms below emit.
+        if ConstantExpressionEvaluator.TryFoldFloatingConstantConversionToLiteral(conv, out var folded) {
+            this.EmitExpression(folded)
             return
         }
         if (

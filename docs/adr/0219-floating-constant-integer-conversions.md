@@ -40,8 +40,9 @@ The maintainer selected "Error unless unchecked" for #5767.
 
    This is the .NET 11 rule for unchecked run-time conversions, and Kotlin's rule for `Double.toInt()`.
 4. A conversion of a value that is not constant is a run-time conversion. GS0635 does not apply, and the result is the result of the target runtime.
-5. The rule applies to each conversion of a constant operand, not only to a `const` declaration. `let a = unchecked(int8(300.5))`, an argument, a return value, and a lambda body get `127`, the same value as `const a int8 = unchecked(int8(300.5))`. The emitter emits the folded value and does not emit a conversion opcode.
-6. The conversion binder reports GS0635, the evaluator folds a `const` declaration, and the emitter folds the other positions. Each uses `ConstantExpressionEvaluator.TryFoldFloatingConstantConversion` or `TryConvertFloatingConstant`, so they use the same range test and the same value.
+5. The rule applies to each conversion of a constant operand, not only to a `const` declaration. `let a = unchecked(int8(300.5))`, an argument, a return value, and a lambda body get `127`, the same value as `const a int8 = unchecked(int8(300.5))`. The emitter emits the folded value and does not emit a conversion opcode. An expression tree contains the folded value as a constant, not `Expression.Convert` of the operand.
+6. A conversion to `Nullable<T>` of one of these integer types, such as `cast[int8?](300.5)`, follows the same rule: GS0635 outside `unchecked`, and in `unchecked` the folded `T` value wrapped in `Nullable<T>`.
+7. The conversion binder reports GS0635, the evaluator folds a `const` declaration, and the emitter and the expression-tree lowerer fold the other positions. Each uses `ConstantExpressionEvaluator.TryFoldFloatingConstantConversion` or `TryConvertFloatingConstant`, so they use the same range test and the same value.
 
 `nint`, `nuint`, `decimal`, and enum targets are not in this decision. gsc does not fold a floating-point conversion to a native-width integer, and a `decimal` conversion that is out of range is not a constant.
 

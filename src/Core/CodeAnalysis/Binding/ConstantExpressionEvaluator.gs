@@ -508,7 +508,7 @@ internal shared class ConstantExpressionEvaluator {
         if operandType != TypeSymbol.Float64 && operandType != TypeSymbol.Float32 {
             return false
         }
-        let targetType = conversion.Type.ClrType
+        let targetType = GetFloatingConstantConversionTarget(conversion.Type).ClrType
         if targetType == nil || !IsIntegralConstantTarget(targetType) {
             return false
         }
@@ -522,6 +522,44 @@ internal shared class ConstantExpressionEvaluator {
             out converted,
             out inRange
         )
+    }
+
+    /// Replaces a bound conversion of a constant `float32` or `float64` operand to an integer type or `char`
+    /// with its folded value (#5767, ADR-0219). The emitter and the expression-tree lowerer use it, so the
+    /// conversion opcodes and `Expression.Convert` of the host or target runtime do not calculate the value.
+    /// For a `Nullable<T>` target, the result is a conversion of the folded `T` literal to the target, so the
+    /// normal nullable lift wraps the value.
+    /// @param conversion The bound conversion.
+    /// @param folded The folded literal, or the lift of the folded literal to a nullable target.
+    /// @returns `false` when the conversion is not a floating-point constant conversion to an integer type or
+    /// `char`, or when it is a checked conversion of a value out of range. That conversion throws at run time.
+    func TryFoldFloatingConstantConversionToLiteral(
+        conversion BoundConversionExpression,
+        @NotNullWhen(true) out folded BoundExpression?
+    ) bool {
+        folded = nil
+        if !TryFoldFloatingConstantConversion(conversion, out _, out var converted, out var inRange) ||
+            (!inRange && conversion.IsChecked) {
+            return false
+        }
+        let foldedType = GetFloatingConstantConversionTarget(conversion.Type)
+        let literal = BoundLiteralExpression(conversion.Syntax, converted, foldedType)
+        folded = if object.ReferenceEquals(foldedType, conversion.Type) {
+            literal
+        } else {
+            BoundConversionExpression(conversion.Syntax, conversion.Type, literal)
+        }
+        return true
+    }
+
+    /// Gets the integer type of a floating-point constant conversion: the underlying type of a nullable target,
+    /// or the target. The CLR type of a `Nullable<T>` symbol is not the integer type in each representation.
+    private func GetFloatingConstantConversionTarget(
+        type TypeSymbol
+    ) TypeSymbol -> if type is NullableTypeSymbol nullable {
+        nullable.UnderlyingType
+    } else {
+        type
     }
 
     private func TryGetIntegralBounds(

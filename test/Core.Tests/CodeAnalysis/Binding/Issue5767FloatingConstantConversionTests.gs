@@ -33,6 +33,7 @@ open class Issue5767FloatingConstantConversionTests {
     @InlineData("let a = checked(int8(300.5))\na")
     @InlineData("let a = unchecked(checked(int8(300.5)))\na")
     @InlineData("let a = Math.Abs(int32(1e10))\na")
+    @InlineData("let a = cast[int8?](300.5)\na")
     @InlineData("func F(x int8 = int8(300.5)) int8 {\n    return x\n}\nF()")
     @InlineData("let f = () -> int8(1e10)\nf()")
     @InlineData("class C {\n    shared {\n        let B int8 = int8(1e10)\n    }\n}\nC.B")
@@ -110,8 +111,35 @@ open class Issue5767FloatingConstantConversionTests {
     @InlineData("let a = unchecked(int32(float64.NaN))\na", "0")
     @InlineData("let a = checked(int8(100.7))\na", "100")
     @InlineData("let a = int8(-100.7)\na", "-100")
+    @InlineData("let a = unchecked(cast[int8?](300.5))\na", "127")
+    @InlineData("let a = unchecked(cast[uint16?](70000.0))\na", "65535")
+    @InlineData("let a int32? = cast[int32?](1.5)\na", "1")
+    @InlineData("func F() uint8? {\n    return unchecked(cast[uint8?](-1.5))\n}\nF()", "0")
     func ConstantOperandConversion_OutsideConstDeclaration_EmitsFoldedValue(source string, expected string) {
         let result = EmittedOracle.Evaluate(source)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(expected, result.ValueText)
+    }
+
+    /// An expression tree contains the folded value, not `Expression.Convert` of the constant. On .NET 10,
+    /// `Expression.Convert` gave 44 and 4464 for these rows.
+    @Theory
+    @InlineData("Expression[Func[int8]]", "() -> unchecked(int8(300.5))", "127")
+    @InlineData("Expression[Func[uint16?]]", "() -> unchecked(cast[uint16?](70000.0))", "65535")
+    @InlineData("Expression[Func[int32, int16]]", "(x int32) -> unchecked(int16(70000.0)) + int16(0 * x)", "32767")
+    func ConstantOperandConversion_InExpressionTree_ContainsFoldedValue(
+        treeType string,
+        lambda string,
+        expected string
+    ) {
+        let invoke = if treeType.Contains("int32,") {
+            "e.Compile()(1)"
+        } else {
+            "e.Compile()()"
+        }
+        let result = EmittedOracle.Evaluate(
+            "import System\nimport System.Linq.Expressions\n\nlet e " + treeType + " = " + lambda + "\n" + invoke
+        )
         Assert.Empty(result.Diagnostics)
         Assert.Equal(expected, result.ValueText)
     }
