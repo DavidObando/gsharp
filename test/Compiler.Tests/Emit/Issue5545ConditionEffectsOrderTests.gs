@@ -1036,6 +1036,28 @@ func Run(s string?, flag bool) int32 {
     return 0
 }
 Console.WriteLine(Run("hello", true))`, "", "run", "5"}
+            yield[]object{"r23_implicit_static_self_call_rebind_restores_prebind_narrowing", `import System
+import System.Reflection
+
+class Group {
+    prop Receiver object? { get; }
+    prop ResolvedMethod MethodInfo? { get; }
+    init(r object?, m MethodInfo?) {
+        Receiver = r
+        ResolvedMethod = m
+    }
+}
+shared class Helper {
+    func GetKinds(method MethodInfo, skipFirstParameter bool) int32 -> if skipFirstParameter { 2 } else { 1 }
+    func Check(g Group) int32 {
+        if g.ResolvedMethod != nil {
+            return GetKinds(g.ResolvedMethod, skipFirstParameter: g.Receiver != nil && g.ResolvedMethod.IsStatic)
+        }
+        return 0
+    }
+}
+let g = Group(Object(), typeof(string).GetMethod("IsNullOrEmpty"))
+Console.WriteLine(Helper.Check(g))`, "", "run", "2"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

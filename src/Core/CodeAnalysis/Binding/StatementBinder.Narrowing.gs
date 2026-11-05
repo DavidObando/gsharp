@@ -2375,6 +2375,21 @@ internal partial class StatementBinder {
         return false
     }
 
+    internal func CaptureCallArgumentPrebindRollback(callSyntax SyntaxNode) Action {
+        let savedFrames = CaptureNarrowingFramesSnapshot()
+        let savedAliases = CaptureExternalCallableAliases()
+        let savedJournalCount = conditionKillJournal?.Count ?? -1
+        return () -> {
+            RestoreNarrowingFramesSnapshot(savedFrames)
+            RestoreExternalCallableAliases(savedAliases)
+            let journal = conditionKillJournal
+            if savedJournalCount >= 0 && journal != nil && journal.Count > savedJournalCount {
+                journal.RemoveRange(savedJournalCount, journal.Count - savedJournalCount)
+            }
+            RemoveBranchyArgumentEntriesInSubtree(callSyntax)
+        }
+    }
+
     private func CaptureNarrowingFramesSnapshot()[](
         Frame NarrowingFrame,
         Entries Dictionary[AccessPath, TypeSymbol]

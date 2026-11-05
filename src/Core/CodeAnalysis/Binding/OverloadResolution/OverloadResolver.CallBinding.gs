@@ -319,6 +319,33 @@ internal partial class OverloadResolver {
         }
     }
 
+    private func InvokeUserTypeStaticCall(
+        owner StructSymbol,
+        syntax CallExpressionSyntax,
+        rollbackPrebind Action?,
+        prebindDiagMark int32
+    ) BoundExpression {
+        if rollbackPrebind != nil {
+            Diagnostics.TruncateTo(prebindDiagMark)
+            rollbackPrebind()
+        }
+        return bindUserTypeStaticCall!!(owner, syntax)
+    }
+
+    private func InvokeImportedClrStaticCall(
+        clrType Type,
+        syntax CallExpressionSyntax,
+        rollbackPrebind Action?,
+        prebindDiagMark int32
+    ) BoundExpression {
+        if rollbackPrebind != nil {
+            Diagnostics.TruncateTo(prebindDiagMark)
+            rollbackPrebind()
+        }
+        let bindImportedClrStaticCall = bindImportedClrStaticCall!!
+        return bindImportedClrStaticCall(clrType, syntax)
+    }
+
     /// The last-resort unqualified lookup of an inherited static method: the
     /// enclosing class (through `this`, or as the owner of a
     /// `shared` member or of the function literal being bound) inherits
@@ -326,11 +353,15 @@ internal partial class OverloadResolver {
     /// imported base.
     /// @param effThis The effective `this`, or `null` in a static context.
     /// @param syntax The unqualified call.
+    /// @param rollbackPrebind Optional callback that restores pre-bind narrowing/alias state before re-binding.
+    /// @param prebindDiagMark Diagnostic count before pre-binding arguments.
     /// @param result The bound static call when one was found.
     /// @returns `true` when a base declares a static method of that name.
     private func TryBindInheritedStaticCallAsLastResort(
         effThis ParameterSymbol?,
         syntax CallExpressionSyntax,
+        rollbackPrebind Action?,
+        prebindDiagMark int32,
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
@@ -344,10 +375,10 @@ internal partial class OverloadResolver {
             MemberQuery.InheritedStatic(MemberKinds.Method)
         )
             .IsDefaultOrEmpty {
-            result = bindUserTypeStaticCall!!(owner, syntax)
+            result = InvokeUserTypeStaticCall(owner, syntax, rollbackPrebind, prebindDiagMark)
             return true
         }
-        return TryBindInheritedImportedStaticCall(owner, syntax, out result)
+        return TryBindInheritedImportedStaticCall(owner, syntax, rollbackPrebind, prebindDiagMark, out result)
     }
 
     /// Binds an unqualified call to a static method a source class inherits
@@ -364,6 +395,8 @@ internal partial class OverloadResolver {
     private func TryBindInheritedImportedStaticCall(
         derived StructSymbol,
         syntax CallExpressionSyntax,
+        rollbackPrebind Action?,
+        prebindDiagMark int32,
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
@@ -371,8 +404,7 @@ internal partial class OverloadResolver {
             GetInheritedImportedStaticCallBase(derived, syntax.Identifier.ValueText) is not{} importedBase {
             return false
         }
-        let bindImportedClrStaticCall = bindImportedClrStaticCall!!
-        result = bindImportedClrStaticCall(importedBase, syntax)
+        result = InvokeImportedClrStaticCall(importedBase, syntax, rollbackPrebind, prebindDiagMark)
         return true
     }
 
@@ -955,6 +987,8 @@ internal partial class OverloadResolver {
         if !TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames) {
             return BoundErrorExpression(nil)
         }
+        let prebindDiagMark = Diagnostics.Count
+        let rollbackPrebind = captureCallArgumentPrebindRollback?(syntax)
         var boundArguments = ImmutableArray.CreateBuilder[BoundExpression]()
         // Issue #951: untyped arrow lambdas whose binding
         // is deferred until the callee's parameter types are known, so the
@@ -1077,7 +1111,12 @@ internal partial class OverloadResolver {
                 )
                 if !staticMethods.IsDefaultOrEmpty {
                     if bindUserTypeStaticCall != nil {
-                        return bindUserTypeStaticCall!!(initializerReceiverType, syntax)
+                        return InvokeUserTypeStaticCall(
+                            initializerReceiverType,
+                            syntax,
+                            rollbackPrebind,
+                            prebindDiagMark
+                        )
                     }
                     let staticMethod FunctionSymbol? = SelectInstanceOverloadOrReport(
                         staticMethods,
@@ -1139,7 +1178,12 @@ internal partial class OverloadResolver {
                         // static user call (full optional/variadic/generic
                         // fidelity via the shared static-call finalizer).
                         if bindUserTypeStaticCall != nil {
-                            return bindUserTypeStaticCall!!(implicitReceiverStruct, syntax)
+                            return InvokeUserTypeStaticCall(
+                                implicitReceiverStruct,
+                                syntax,
+                                rollbackPrebind,
+                                prebindDiagMark
+                            )
                         }
                         return BindImplicitStaticSelfCallFallback(
                             implicitMethod,
@@ -1294,7 +1338,7 @@ internal partial class OverloadResolver {
                     MemberQuery.Static(MemberKinds.Method)
                 )
                 if !implicitStaticStructOverloads.IsDefaultOrEmpty {
-                    return bindUserTypeStaticCall!!(implicitStaticStruct, syntax)
+                    return InvokeUserTypeStaticCall(implicitStaticStruct, syntax, rollbackPrebind, prebindDiagMark)
                 }
             }
             // Issue #1566 / #3527: reaching here with a non-null symbol means
@@ -1320,7 +1364,7 @@ internal partial class OverloadResolver {
                 // paths because lexical scope outranks imports.
                 if bindUserTypeStaticCall != nil &&
                     GetLexicallyEnclosingStaticCallOwner(syntax.Identifier.ValueText) is {} enclosingStruct {
-                    return bindUserTypeStaticCall!!(enclosingStruct, syntax)
+                    return InvokeUserTypeStaticCall(enclosingStruct, syntax, rollbackPrebind, prebindDiagMark)
                 }
                 // Issue #1201 (C# `using static`): an unqualified call may resolve
                 // to a `shared` (static) method of a type brought into scope by a
@@ -1354,7 +1398,7 @@ internal partial class OverloadResolver {
                         return BoundErrorExpression(nil)
                     }
                     if matchedStaticImport != nil {
-                        return bindUserTypeStaticCall!!(matchedStaticImport, syntax)
+                        return InvokeUserTypeStaticCall(matchedStaticImport, syntax, rollbackPrebind, prebindDiagMark)
                     }
                 }
                 // Issue #3334 / ADR-0134: an unqualified call may also resolve
@@ -1385,7 +1429,12 @@ internal partial class OverloadResolver {
                         return BoundErrorExpression(nil)
                     }
                     if matchedClrStaticImport != nil {
-                        return bindImportedClrStaticCall!!(matchedClrStaticImport, syntax)
+                        return InvokeImportedClrStaticCall(
+                            matchedClrStaticImport,
+                            syntax,
+                            rollbackPrebind,
+                            prebindDiagMark
+                        )
                     }
                 }
                 if SubmissionBinding.TryBindCall(this, syntax, out var submissionCall) {
@@ -1399,7 +1448,13 @@ internal partial class OverloadResolver {
                 // using-static import or any other earlier match still wins,
                 // so no call that bound before this lookup existed changes
                 // meaning; only calls that were errors start to bind.
-                if TryBindInheritedStaticCallAsLastResort(effThis, syntax, out var inheritedStaticCall) {
+                if TryBindInheritedStaticCallAsLastResort(
+                    effThis,
+                    syntax,
+                    rollbackPrebind,
+                    prebindDiagMark,
+                    out var inheritedStaticCall
+                ) {
                     return inheritedStaticCall!!
                 }
                 Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.ValueText)

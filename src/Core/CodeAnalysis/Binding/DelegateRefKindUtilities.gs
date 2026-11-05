@@ -125,10 +125,10 @@ internal shared class DelegateRefKindUtilities {
         group BoundClrMethodGroupExpression,
         out refKinds ImmutableArray[RefKind]
     ) bool {
-        if group.ResolvedMethod is {} resolvedMethod {
+        if group.ResolvedMethod != nil {
             refKinds = GetLogicalParameterRefKinds(
-                resolvedMethod,
-                skipFirstParameter: group.Receiver != nil && resolvedMethod.IsStatic
+                group.ResolvedMethod,
+                skipFirstParameter: group.Receiver != nil && group.ResolvedMethod.IsStatic
             )
             return true
         }

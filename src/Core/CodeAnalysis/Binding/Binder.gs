@@ -305,6 +305,9 @@ partial class Binder {
                     ImportedClassSymbol(clrType, ce, references: $scope.References),
                     ce
                 )
+            },
+            captureCallArgumentPrebindRollback: (syntax SyntaxNode) -> {
+                return Statements.CaptureCallArgumentPrebindRollback(syntax)
             }
         )
         patterns = PatternBinder(
