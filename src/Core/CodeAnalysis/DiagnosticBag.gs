@@ -33,7 +33,9 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     // when diagnostics are READ.
     private let cascadeSuppressed HashSet[Diagnostic] = HashSet[Diagnostic](ReferenceEqualityComparer.Instance)
     private let reboundSuppressed HashSet[Diagnostic] = HashSet[Diagnostic](ReferenceEqualityComparer.Instance)
-    private let reboundDiagnostics HashSet[Diagnostic] = HashSet[Diagnostic](ReferenceEqualityComparer.Instance)
+    private let reboundDiagnosticDepth Dictionary[Diagnostic, int32] = Dictionary[Diagnostic, int32](
+        ReferenceEqualityComparer.Instance
+    )
     private let reboundTombstones Dictionary[Diagnostic, Diagnostic] = Dictionary[Diagnostic, Diagnostic](
         ReferenceEqualityComparer.Instance
     )
@@ -53,7 +55,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     }
 
     private func OnDiagnosticRemoved(removed Diagnostic) {
-        reboundDiagnostics.Remove(removed)
+        reboundDiagnosticDepth.Remove(removed)
         if reboundTombstones.Remove(removed, out var unsuppressed) {
             reboundSuppressed.Remove(unsuppressed)
             cascadeSuppressed.Remove(removed)
@@ -94,7 +96,12 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         let start = Math.Clamp(startCount, 0, diagnostics.Count)
         for var i = diagnostics.Count - 1; i >= start; i-- {
             let diagnostic = diagnostics[i]
-            if !reboundDiagnostics.Contains(diagnostic) {
+            let depth = if reboundDiagnosticDepth.TryGetValue(diagnostic, out var recordedDepth) {
+                recordedDepth
+            } else {
+                0
+            }
+            if depth <= siblingRebindDepth {
                 OnDiagnosticRemoved(diagnostic)
                 diagnostics.RemoveAt(i)
             }
@@ -169,7 +176,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                 cascadeSuppressed.Add(tombstone)
                 diagnostics.Add(tombstone)
                 if siblingRebindDepth > 0 {
-                    reboundDiagnostics.Add(tombstone)
+                    reboundDiagnosticDepth[tombstone] = siblingRebindDepth
                 }
                 for transaction in transactions {
                     transaction.Add(tombstone)
@@ -342,7 +349,9 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         }
         if duplicateSuppressions.TryPeek(out var existing) {
             for var i = 0; i < existing.Count; i++ {
-                if AreEquivalent(existing[i], diagnostic) {
+                let candidate = existing[i]
+                if !cascadeSuppressed.Contains(candidate) && !reboundSuppressed.Contains(candidate) &&
+                    AreEquivalent(candidate, diagnostic) {
                     existing.RemoveAt(i)
                     return
                 }
@@ -350,7 +359,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         }
         diagnostics.Add(diagnostic)
         if siblingRebindDepth > 0 {
-            reboundDiagnostics.Add(diagnostic)
+            reboundDiagnosticDepth[diagnostic] = siblingRebindDepth
         }
         for transaction in transactions {
             transaction.Add(diagnostic)

@@ -1509,7 +1509,14 @@ internal partial class StatementBinder {
                 return false
             }
             let joined = ComputeIfJoinNonNull(ifStmt, entry: nil, externalCallableAliases)
-            return joined != nil && joined.ContainsKey(path)
+            let underlying = if widenedType is NullableTypeSymbol nullable {
+                nullable.UnderlyingType
+            } else {
+                widenedType
+            }
+            return joined != nil && joined.TryGetValue(path, out var joinedType) &&
+                !IsNullableWidening(path, joinedType) &&
+                AssignmentTypePreservesNarrowing(joinedType, underlying)
         }
         return false
     }

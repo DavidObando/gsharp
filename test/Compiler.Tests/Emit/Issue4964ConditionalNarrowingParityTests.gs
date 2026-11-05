@@ -897,6 +897,15 @@ func CheckSpeculativeLambdaReturnErrorAfterReboundSuppression() int32 ->
 
         let identityArgRebindRun = CompileAndRun(`import System
 var n int32? = 5
+var outerN int32? = 5
+struct OuterToken {
+    shared {
+        func operator implicit(t OuterToken) float64 {
+            outerN = nil
+            return 0.0
+        }
+    }
+}
 struct Token {
     shared {
         func operator implicit(t Token) float64 {
@@ -1003,6 +1012,10 @@ Console.WriteLine(!(n == nil) ? Box(token, n).HasValue : false)
 Console.WriteLine(RunOpenGenericRefresh[int32](5))
 n = 5
 Console.WriteLine(n != nil ? ConsumeWithOut(token, reader.Read(n, out var rOutUse), rOutUse) : false)
+n = 5
+outerN = 5
+let outerToken = OuterToken{}
+Console.WriteLine((outerN != nil && n != nil) ? Consume(outerToken, ConsumeOverload(token, n)) : false)
 `)
         Assert.Equal(
             string.Join(
@@ -1023,7 +1036,8 @@ Console.WriteLine(n != nil ? ConsumeWithOut(token, reader.Read(n, out var rOutUs
                 "False",
                 "False",
                 "False",
-                "True"
+                "True",
+                "False"
             ) +
                 Environment.NewLine,
             identityArgRebindRun.Output
@@ -1131,11 +1145,19 @@ class CondB {}
 func TakeNoMatch(x int32, y string) int32 -> x
 func CheckFailedSpeculativeRebindRestoresSuppressedDiagnostic(token NToken) int32 ->
     !(gn == nil) ? TakeNoMatch(gn!!, ConsumeOverload2(token, 1) ? CondA{} : CondB{}) : 0
+func CheckNestedScopeDuplicateSuppressionRebind(token NToken) int32 ->
+    TakeAction((x int32) -> {
+        let _ = !(gn == nil) ? ConsumeOverload2(token, ({
+            let badInner int32 = "badInner"
+            gn
+        })) : false
+    })
 `)
         Assert.Contains("GS0156:this.n;GS0158:Length;GS0204:ConsumeOverloadWarn", throwingArmAndCtorFieldWriteDiag)
         Assert.Contains(":TakeStruct", throwingArmAndCtorFieldWriteDiag)
         Assert.Contains("GS0155:\"bad\"", throwingArmAndCtorFieldWriteDiag)
         Assert.Contains("GS0536:!!", throwingArmAndCtorFieldWriteDiag)
+        Assert.Contains("GS0155:\"badInner\"", throwingArmAndCtorFieldWriteDiag)
 
         let deferredCoalesceAndSwitchDiag = DiagnoseSource(`package Issue4969.DeferredBranchyRetry
 interface I {}
@@ -1253,6 +1275,10 @@ func Check[T IComparer[int32]](comparer T, token Token) int32 -> !(n == nil) ? c
     )
     @InlineData(
         "return dict.TryGetValue(\"missing\", out value) ? 0 : (flag ? \"no\" : (value = \"ok\"), value.Length).Item2",
+        "GS0158:Length"
+    )
+    @InlineData(
+        "return dict.TryGetValue(\"missing\", out value) ? 0 : ({\n if dict.TryGetValue(\"other\", out value) || flag {\n } else {\n }\n value.Length\n})",
         "GS0158:Length"
     )
     @InlineData(
