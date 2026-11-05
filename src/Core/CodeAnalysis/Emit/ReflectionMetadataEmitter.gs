@@ -3066,15 +3066,15 @@ internal class ReflectionMetadataEmitter {
 
         }
         var entryHandle = default(MethodDefinitionHandle)
-        if this.emitCtx.Program.EntryPoint != nil {
+        if this.emitCtx.Program.EntryPoint is {} entryPoint {
             entryHandle = if this.EntryPointNeedsSeparateStub {
                 this.entryPointStubHandle
             } else {
                 (
                     if entryPointIsClassOwned {
-                        aggregateMethodHandles[this.emitCtx.Program.EntryPoint]
+                        aggregateMethodHandles[entryPoint]
                     } else {
-                        this.cache.FunctionHandles[this.emitCtx.Program.EntryPoint]
+                        this.cache.FunctionHandles[entryPoint]
                     }
                 )
             }
