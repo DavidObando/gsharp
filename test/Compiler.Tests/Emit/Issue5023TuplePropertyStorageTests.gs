@@ -383,6 +383,7 @@ class Owner {
     @InlineData("owner.Pick()", false)
     @InlineData("owner.Slot", false)
     @InlineData("TupleOpaque5023.External.Pick()", true)
+    @InlineData("TupleOpaque5023.External.Slot", true)
     @InlineData("owner.Pick()", true)
     @InlineData("owner.Slot", true)
     @InlineData("owner[0]", true)
@@ -411,6 +412,7 @@ class Owner {
     public static class External {
         public static Owner Current = new Owner();
         public static ref (Cell, int) Pick() => ref Current.Pick();
+        public static ref (Cell, int) Slot => ref Current.Pick();
     }
 }`, "TupleOpaque5023")
         for action in[]string{
@@ -767,6 +769,212 @@ Console.WriteLine(box.Value ?? "nil")`.Replace(
             }
         )
         Assert.Equal("v\nv\n", CompileAndRun(source))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func NativeConstrainedTuplePropertyWrite_PreservesRuntimeStorage(suspending bool) {
+        let source = `package Test
+import System
+import System.Threading.Tasks
+interface ICell[U] {
+    prop Value U { get; set }
+    prop Count int32 { get; set }
+}
+open class BaseCell {
+    var Stored object?
+    var Total int32
+    var Shadow int32 = 1
+    open prop Value object? {
+        get -> Stored
+        set { Stored = value }
+    }
+}
+class RefCell : BaseCell, ICell[object?] {
+    var OnGet Action?
+    prop Count int32 {
+        get {
+            if OnGet != nil { OnGet!!() }
+            return Total
+        }
+        set { Total = value }
+    }
+    prop Slot ref int32 -> Total
+    prop Shadow int32 {
+        get -> Total
+        set { Total = value * 10 }
+    }
+}
+open class GenericBox[U] {
+    var Field U
+    prop Prop U {
+        get -> Field
+        set { Field = value }
+    }
+    func WriteNested[T GenericBox[[]U]](items [](T, int32), direct T, val []U) {
+        items[0].Item1.Field = val
+        items[0].Item1.Prop = val
+        direct.Field = val
+        direct.Prop = val
+    }
+}
+struct ValueCell : ICell[object?] {
+    var Stored object?
+    var Total int32
+    prop Value object? {
+        get -> Stored
+        set { Stored = value }
+    }
+    prop Count int32 {
+        get -> Total
+        set { Total = value }
+    }
+}
+var getCalls = 0
+func GetCounter(counter ICell[object?]) ICell[object?] {
+    getCalls++
+    return counter
+}
+func GetRefCell[T RefCell](cell T) T {
+    getCalls++
+    return cell
+}
+func IncrementSlot[T RefCell](cell T) {
+    GetRefCell(cell).Slot++
+}
+func PostfixByInterface[T ICell[object?]](items [](T, int32)) int32 -> items[0].Item1.Count++
+func SetConditionalByInterface[T ICell[object?]](first T, second T, replacement T) {
+    var pick = false
+    var a = first
+    var b = second
+    (*&(pick ? a : b)).Value = {
+        pick = true
+        b = replacement
+        "cond"
+    }
+}
+func PostfixConditionalByInterface[T ICell[object?]](
+    first T,
+    second T,
+    replacement T,
+    armSwapHook (Action) -> void
+) int32 {
+    var pick = false
+    var a = first
+    var b = second
+    armSwapHook(() -> {
+        pick = true
+        b = replacement
+    })
+    return (*&(pick ? a : b)).Count++
+}
+async func SetByInterface[T ICell[object?]](items [](T, int32), replacement T) {
+    items[0].Item1.Value = {
+        SUSPEND
+        if items.Length > 0 { items[0] = (replacement, 0) }
+        "v"
+    }
+    items[0].Item1.Count += {
+        SUSPEND
+        2
+    }
+}
+async func SetByClass[T BaseCell](items [](T, int32), replacement T) {
+    items[0].Item1.Value = {
+        SUSPEND
+        if items.Length > 0 { items[0] = (replacement, 0) }
+        "c"
+    }
+    items[0].Item1.Total = 5
+}
+func SetShadow[T RefCell](items [](T, int32)) {
+    items[0].Item1.Shadow = 7
+}
+let oldRef = RefCell{}
+let newRef = RefCell{}
+let refs = [](RefCell, int32){(oldRef, 0)}
+SetByInterface(refs, newRef).GetAwaiter().GetResult()
+GetCounter(newRef).Count++
+IncrementSlot(newRef)
+let postTarget = RefCell{Total: 10}
+let postReplacement = RefCell{Total: 99}
+let postRefs = [](RefCell, int32){(postTarget, 0)}
+postTarget.OnGet = () -> { postRefs[0] = (postReplacement, 0) }
+let postOld = PostfixByInterface(postRefs)
+let condFirst = RefCell{Total: 1}
+let condSecond = RefCell{Total: 20}
+let condReplacement = RefCell{Total: 80}
+SetConditionalByInterface(condFirst, condSecond, condReplacement)
+let condPostOld = PostfixConditionalByInterface(
+    condFirst,
+    condSecond,
+    condReplacement,
+    (swap Action) -> { condSecond.OnGet = swap }
+)
+Console.WriteLine("${oldRef.Stored ?? "nil"} ${newRef.Stored ?? "nil"} ${newRef.Total} ${getCalls} ${postOld} ${postTarget.Total} ${postReplacement.Total} ${condSecond.Stored ?? "nil"} ${condReplacement.Stored ?? "nil"} ${condPostOld} ${condSecond.Total} ${condReplacement.Total}")
+let values = [](ValueCell, int32){(ValueCell{}, 0)}
+SetByInterface(values, ValueCell{Stored: "r", Total: 10}).GetAwaiter().GetResult()
+let postValOld = PostfixByInterface(values)
+Console.WriteLine("${values[0].Item1.Stored ?? "nil"} ${postValOld} ${values[0].Item1.Total}")
+let oldClass = RefCell{}
+let newClass = RefCell{}
+let classes = [](RefCell, int32){(oldClass, 0)}
+SetByClass(classes, newClass).GetAwaiter().GetResult()
+SetShadow(classes)
+let nested = GenericBox[[]int32]{Field: []int32{}}
+let nestedItems = [](GenericBox[[]int32], int32){(nested, 0)}
+GenericBox[int32]{Field: 0}.WriteNested(nestedItems, nested, []int32{42})
+Console.WriteLine("${oldClass.Stored ?? "nil"} ${newClass.Stored ?? "nil"} ${newClass.Total} ${nested.Field[0]}")`.Replace(
+            "SUSPEND",
+            if suspending {
+                "await Task.Yield()"
+            } else {
+                ""
+            }
+        )
+        Assert.Equal("v nil 4 2 10 11 99 cond nil 20 21 80\nv 12 13\nc nil 70 42\n", CompileAndRun(source))
+    }
+
+    @Theory
+    @InlineData("Base", "Frozen", "GS0127")
+    @InlineData("Base", "Secret", "GS0472")
+    @InlineData("Base", "Locked", "GS0472")
+    @InlineData("Derived", "ReadOnlyShadow", "GS0127")
+    @InlineData("ImportedInit5029.ImportedBase", "InitOnly", "GS0372")
+    func ClassConstrainedTupleMemberWrite_EnforcesReadOnlyAndAccessibility(
+        constraint string,
+        member string,
+        expectedDiagnostic string
+    ) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`namespace ImportedInit5029 {
+    public class ImportedBase {
+        public int InitOnly { get; init; }
+    }
+}`, "ImportedInit5029")
+        let (code, output) = fixture.TryCompile(`package Test
+open class Base {
+    let Frozen int32 = 1
+    private var Secret int32 = 1
+    var ReadOnlyShadow int32 = 1
+    prop Locked int32 {
+        get -> 1
+        private set { }
+    }
+}
+class Derived : Base {
+    prop ReadOnlyShadow int32 {
+        get -> 1
+    }
+}
+func Mutate[T CONSTRAINT](items [](T, int32), direct T) {
+    items[0].Item1.MEMBER = 2
+    direct.MEMBER = 2
+}`.Replace("CONSTRAINT", constraint).Replace("MEMBER", member), "ClassConstrainedWrite5029", false, "/r:" + contract)
+        Assert.NotEqual(0, code)
+        Assert.Contains(expectedDiagnostic, output)
+        Assert.Equal(3, output.Split(expectedDiagnostic).Length)
     }
 
     @Theory

@@ -830,6 +830,7 @@ internal partial class DeclarationBinder {
             // the CLR base for inherited members.
             structSymbol.SetImportedBaseType(importedBaseType)
         }
+        EnsureBaseStructBodyBound(baseClassSymbol)
         // Issue #4143: an attribute class's PRIMARY constructor parameters
         // are validated here, at the declaration, rather than left to fall
         // through to GS0584 at each use site (or GS9998 if nothing catches
@@ -2370,7 +2371,7 @@ internal partial class DeclarationBinder {
                     ) {
                         if !baseEvent!!.IsVirtual && !baseEvent!!.IsOverride {
                             Diagnostics.ReportOverrideOfSealedMethod(eventSyntax.Identifier.Location, eventName)
-                        } else if baseEvent!!.Type != handlerType {
+                        } else if !PropertyOverrideTypeConforms(structSymbol, baseEvent!!.Type, handlerType) {
                             Diagnostics.ReportOverrideSignatureMismatch(eventSyntax.Identifier.Location, eventName)
                         } else {
                             overriddenEvent = baseEvent

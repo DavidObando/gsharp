@@ -753,7 +753,6 @@ internal partial class ExpressionBinder {
                         case sf is FieldInfo: ClrNullability.GetFieldTypeSymbol(sf)
                         default: TypeSymbol.Error
                     }
-                    staticType = NormalizeImportedSemanticAggregate(staticType, staticMember)
                     // Issue #1330: when the receiver is a generic type
                     // constructed over an in-scope generic type parameter
                     // (`Comparer[TResult].Default`), the closed CLR member type
@@ -771,6 +770,7 @@ internal partial class ExpressionBinder {
                         if symbolicMemberType != nil {
                             staticType = symbolicMemberType
                         }
+                        staticType = NormalizeImportedSemanticAggregate(staticType, staticMember)
                         if staticMember is FieldInfo symbolicLiteral && symbolicLiteral.IsLiteral {
                             let literalType = if classSymbol.ClassType.IsEnum {
                                 cast[TypeSymbol](classSymbol.SymbolicReceiver!!)
@@ -779,20 +779,25 @@ internal partial class ExpressionBinder {
                             }
                             return BoundLiteralExpression(nil, symbolicLiteral.GetRawConstantValue(), literalType)
                         }
-                        return BoundClrPropertyAccessExpression(
-                            nil,
-                            nil,
-                            staticMember,
-                            staticType,
-                            classSymbol.SymbolicReceiver
+                        return ConversionClassifier.AutoDereferenceRefReturn(
+                            BoundClrPropertyAccessExpression(
+                                nil,
+                                nil,
+                                staticMember,
+                                staticType,
+                                classSymbol.SymbolicReceiver
+                            )
                         )
                     }
+                    staticType = NormalizeImportedSemanticAggregate(staticType, staticMember)
                     // Literal (const) fields aren't real runtime fields, so
                     // inline their constant value rather than emit `ldsfld`.
                     if staticMember is FieldInfo literal && literal.IsLiteral {
                         return BoundLiteralExpression(nil, literal.GetRawConstantValue(), staticType)
                     }
-                    return BoundClrPropertyAccessExpression(nil, nil, staticMember, staticType)
+                    return ConversionClassifier.AutoDereferenceRefReturn(
+                        BoundClrPropertyAccessExpression(nil, nil, staticMember, staticType)
+                    )
                 } else if receiver != nil && TryGetUserInstanceMemberReceiverType(receiver, out var structSym) {
                     // ADR-0112 A3: this-first base-chain instance field walk via
                     // the canonical member-resolution layer, surfacing the
@@ -945,11 +950,13 @@ internal partial class ExpressionBinder {
                             CanAccessInternalsOf
                         )
                         if clrProp != nil && GetVisibleGetter(clrProp, fromDerivedType: true) != nil {
-                            return BoundClrPropertyAccessExpression(
-                                nil,
-                                receiver,
-                                clrProp,
-                                GetInheritedClrMemberType(receiver.Type, clrProp)
+                            return ConversionClassifier.AutoDereferenceRefReturn(
+                                BoundClrPropertyAccessExpression(
+                                    nil,
+                                    receiver,
+                                    clrProp,
+                                    GetInheritedClrMemberType(receiver.Type, clrProp)
+                                )
                             )
                         }
                         let clrFld FieldInfo? = ClrTypeUtilities.SafeGetInheritedInstanceField(
@@ -1063,11 +1070,13 @@ internal partial class ExpressionBinder {
                             receiver,
                             importedPropertyReceiver!!
                         )
-                        return BoundClrPropertyAccessExpression(
-                            nil,
-                            propertyReceiver,
-                            clrProp,
-                            GetInheritedClrMemberType(importedPropertyReceiver!!, clrProp)
+                        return ConversionClassifier.AutoDereferenceRefReturn(
+                            BoundClrPropertyAccessExpression(
+                                nil,
+                                propertyReceiver,
+                                clrProp,
+                                GetInheritedClrMemberType(importedPropertyReceiver!!, clrProp)
+                            )
                         )
                     }
                     for clrBaseIface in MemberLookup.GetTransitiveClrBaseInterfaces(ifaceSym) {
@@ -5980,17 +5989,26 @@ internal partial class ExpressionBinder {
                 if openMember == nil || openMemberType == nil {
                     return nil
                 }
+                let effectiveOpenType = if openMemberType.IsByRef {
+                    openMemberType.GetElementType() ?? openMemberType
+                } else {
+                    openMemberType
+                }
                 // ADR-0193 Phase 2: merged, as the instance-member readers are.
                 let mapped = MemberLookup.GetClrMemberValueTypeSymbol(
                     openMember,
                     symbolicReceiver.OpenDefinition,
                     symbolicReceiver.TypeArguments
                 )
-                return if TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.IsSameCompilationUserTypeTopLevel(
+                let unwrappedMapped = if mapped is ByRefTypeSymbol byRefMapped {
+                    byRefMapped.PointeeType
+                } else {
                     mapped
-                ) ||
-                    openMemberType.IsGenericParameter ||
-                    openMemberType.IsGenericType {
+                }
+                return if TypeSymbol.ContainsTypeParameter(unwrappedMapped) ||
+                    TypeSymbol.IsSameCompilationUserTypeTopLevel(unwrappedMapped) ||
+                    effectiveOpenType.IsGenericParameter ||
+                    effectiveOpenType.IsGenericType {
                     mapped
                 } else {
                     default(TypeSymbol?)

@@ -262,7 +262,10 @@ internal partial class ExpressionBinder {
         }
         let pointer = BoundAddressOfExpression(receiver.Syntax, receiver)
         let location = DeclareRangeTemp("receiverAddress", pointer.Type, pointer, statements)
-        savedReceiver = BoundDereferenceExpression(receiver.Syntax, BoundVariableExpression(nil, location))
+        savedReceiver = CaptureSavedStorageReceiver(
+            BoundDereferenceExpression(receiver.Syntax, BoundVariableExpression(nil, location)),
+            statements
+        )
         prefix = statements.ToImmutable()
         return true
     }
