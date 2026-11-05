@@ -1728,7 +1728,7 @@ internal partial class StatementBinder {
         removedFacts Dictionary[AccessPath, TypeSymbol]? = nil,
         forShortCircuitOperand bool = false,
         allowBoolCall bool = true,
-        keepBoolCallInLogicalOps bool = false,
+        keepBoolCallInLogicalOps bool = true,
         shortCircuitInComposedOps bool = false,
         header SyntaxNode? = nil
     )(
@@ -2225,6 +2225,7 @@ internal partial class StatementBinder {
             activeConditionRemovedFacts,
             forShortCircuitOperand: true,
             allowBoolCall: false,
+            keepBoolCallInLogicalOps: false,
             header: leftSyntax
         )
         let rightAliases = if isAnd {
@@ -2232,7 +2233,13 @@ internal partial class StatementBinder {
         } else {
             whenFalseAliases
         }
+        let skippedAliases = if isAnd {
+            whenFalseAliases
+        } else {
+            whenTrueAliases
+        }
         RestoreExternalCallableAliases(rightAliases)
+        var completed = false
         try {
             let rightFrame = if isAnd {
                 thenNarrow
@@ -2242,9 +2249,23 @@ internal partial class StatementBinder {
             let boundRight = bindRight(boundLeft, rightFrame)
             RestoreExternalCallableAliases(rightAliases)
             ApplyTrailingConditionEffects(rightSyntax, boundRight)
+            let (_, _, rightWhenTrueAliases, rightWhenFalseAliases) = ComputeConditionNarrowingInOrder(
+                boundRight,
+                rightAliases,
+                activeConditionRemovedFacts,
+                forShortCircuitOperand: true,
+                allowBoolCall: false,
+                keepBoolCallInLogicalOps: false,
+                header: rightSyntax
+            )
+            let rightExitAliases = JoinAliases(rightWhenTrueAliases, rightWhenFalseAliases)
+            RestoreJoinedExternalCallableAliases(skippedAliases, rightExitAliases)
+            completed = true
             return (boundLeft, boundRight)
         } finally {
-            RestoreExternalCallableAliases(aliasesBeforeLeft)
+            if !completed {
+                RestoreExternalCallableAliases(aliasesBeforeLeft)
+            }
         }
     }
 

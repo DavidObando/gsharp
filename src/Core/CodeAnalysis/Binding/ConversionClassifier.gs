@@ -2697,18 +2697,16 @@ internal class ConversionClassifier {
             Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenFalse.Location, syntax.WhenFalse.ToString())
             return BoundErrorExpression(nil)
         }
-        // Branch types must match exactly — no implicit widening or nullable
-        // adjustment, since the resulting byref selects between slots whose
-        // physical type must agree.
-        if !object.ReferenceEquals(whenTrue.Type, whenFalse.Type) && !string.Equals(
-            whenTrue.Type?.Name,
-            whenFalse.Type?.Name,
-            StringComparison.Ordinal
-        ) {
+        // Branch types must match in physical storage — no implicit widening or
+        // value-nullable adjustment, since the resulting byref selects between
+        // slots whose physical type must agree.
+        let trueStorageType = ExpressionBinder.AddressedLeafStorageType(whenTrue)
+        let falseStorageType = ExpressionBinder.AddressedLeafStorageType(whenFalse)
+        if !ExpressionBinder.ConditionalStorageTypesMatch(trueStorageType, falseStorageType) {
             Diagnostics.ReportConditionalRefArgumentBranchTypeMismatch(
                 syntax.Location,
-                whenTrue.Type?.Name ?? "?",
-                whenFalse.Type?.Name ?? "?"
+                trueStorageType?.Name ?? "?",
+                falseStorageType?.Name ?? "?"
             )
             return BoundErrorExpression(nil)
         }
@@ -2727,15 +2725,16 @@ internal class ConversionClassifier {
                 return BoundErrorExpression(nil)
             }
         }
+        let mergedPointeeType = ExpressionBinder.MergeConditionalStorageType(trueStorageType, falseStorageType)
         return BoundConditionalAddressExpression(
             nil,
             condition,
             whenTrue,
             whenFalse,
             Invariant.Required(
-                whenTrue.Type,
+                mergedPointeeType,
                 "conditional ref branches have matching types",
-                expression: "whenTrue.Type"
+                expression: "mergedPointeeType"
             )
         )
     }
@@ -2835,7 +2834,7 @@ internal class ConversionClassifier {
                 let pointeeType = condAddr.PointeeType
                 if pointeeType == TypeSymbol.Error ||
                     expectedType == TypeSymbol.Error ||
-                    CheckByRefArgumentStorage(location, parameter, pointeeType, expectedType) {
+                    CheckByRefArgumentStorage(location, parameter, pointeeType, expectedType, condAddr) {
                     return argument
                 }
                 ReportByRefStorageMismatch(location, parameter.Name, expectedType, pointeeType)
@@ -2891,14 +2890,57 @@ internal class ConversionClassifier {
         location TextLocation,
         parameter ParameterSymbol,
         storageType TypeSymbol,
-        parameterType TypeSymbol
+        parameterType TypeSymbol,
+        argument BoundExpression? = nil
     ) bool {
-        if !ByRefStorageMatching.AreSameStorageType(
+        var storageNullable = false
+        var parameterNullable = false
+        var nestedMismatch = false
+        var mismatchStorageType = storageType
+        if argument is BoundConditionalAddressExpression condAddr {
+            let leaves = List[(ReadStorage TypeSymbol, WriteStorage TypeSymbol)]()
+            ExpressionBinder.CollectConditionalAddressLeafStorageTypes(condAddr, leaves)
+            for leaf in leaves {
+                if !ByRefStorageMatching.AreSameStorageType(
+                    leaf.ReadStorage,
+                    parameterType,
+                    out var branchStorageNullable,
+                    out _,
+                    out var branchNestedMismatch
+                ) ||
+                    !ByRefStorageMatching
+                    .AreSameStorageType(
+                    leaf.WriteStorage,
+                    parameterType,
+                    out _,
+                    out var branchParameterNullable,
+                    out var writeNestedMismatch
+                ) {
+                    return false
+                }
+                if (branchNestedMismatch || writeNestedMismatch) && !nestedMismatch {
+                    nestedMismatch = true
+                    mismatchStorageType = leaf.WriteStorage
+                }
+                if branchStorageNullable && parameter.RefKind != RefKind.Out && !nestedMismatch && !storageNullable {
+                    storageNullable = true
+                    mismatchStorageType = leaf.ReadStorage
+                }
+                if branchParameterNullable &&
+                    parameter.RefKind != RefKind.In &&
+                    !nestedMismatch &&
+                    !storageNullable &&
+                    !parameterNullable {
+                    parameterNullable = true
+                    mismatchStorageType = leaf.WriteStorage
+                }
+            }
+        } else if !ByRefStorageMatching.AreSameStorageType(
             storageType,
             parameterType,
-            out var storageNullable,
-            out var parameterNullable,
-            out var nestedMismatch
+            out storageNullable,
+            out parameterNullable,
+            out nestedMismatch
         ) {
             return false
         }
@@ -2928,7 +2970,7 @@ internal class ConversionClassifier {
                 refKindText,
                 parameter.Name,
                 parameterType,
-                storageType,
+                mismatchStorageType,
                 reason
             )
         }

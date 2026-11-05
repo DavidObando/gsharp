@@ -2540,6 +2540,12 @@ internal partial class ExpressionBinder {
             if right.ReferenceNullability == ReferenceNullabilityKind.Nullable {
                 return right
             }
+            if left.ReferenceNullability == ReferenceNullabilityKind.Platform {
+                return left
+            }
+            if right.ReferenceNullability == ReferenceNullabilityKind.Platform {
+                return right
+            }
             if left.ReferenceNullability == ReferenceNullabilityKind.NotNull {
                 return left
             }
@@ -2547,6 +2553,32 @@ internal partial class ExpressionBinder {
                 return right
             }
             return left
+        }
+
+        internal func CollectConditionalAddressLeafStorageTypes(
+            expression BoundExpression,
+            sink List[(ReadStorage TypeSymbol, WriteStorage TypeSymbol)]
+        ) {
+            var current = expression
+            while current is BoundBlockExpression block {
+                current = block.Expression
+            }
+            if current is BoundConditionalAddressExpression condAddr {
+                CollectConditionalAddressLeafStorageTypes(condAddr.WhenTrueOperand, sink)
+                CollectConditionalAddressLeafStorageTypes(condAddr.WhenFalseOperand, sink)
+                return
+            }
+            if current is BoundConditionalExpression conditional {
+                CollectConditionalAddressLeafStorageTypes(conditional.WhenTrue, sink)
+                CollectConditionalAddressLeafStorageTypes(conditional.WhenFalse, sink)
+                return
+            }
+            sink.Add(
+                (
+                    ReadStorage: AddressedLeafStorageType(current, useEffectiveNullability: true),
+                    WriteStorage: AddressedLeafStorageType(current, useEffectiveNullability: false)
+                )
+            )
         }
 
         internal func TryGetAddressedStorageType(
@@ -2571,7 +2603,10 @@ internal partial class ExpressionBinder {
             return true
         }
 
-        internal func AddressedLeafStorageType(current BoundExpression) TypeSymbol {
+        internal func AddressedLeafStorageType(
+            current BoundExpression,
+            useEffectiveNullability bool = true
+        ) TypeSymbol {
             switch current {
                 case bve is BoundVariableExpression {
                     let declaredType = bve.Variable.Type
@@ -2590,12 +2625,19 @@ internal partial class ExpressionBinder {
                     )
                     return if unboxesToValueType {
                         effectiveType
-                    } else {
+                    } else if useEffectiveNullability {
                         ApplyEffectiveReferenceNullability(declaredType, effectiveType)
+                    } else {
+                        declaredType
                     }
                 }
                 case fa is BoundFieldAccessExpression {
-                    return ApplyEffectiveReferenceNullability(fa.SubstitutedType ?? fa.Field.Type, fa.Type)
+                    let declaredFieldType = fa.SubstitutedType ?? fa.Field.Type
+                    return if useEffectiveNullability {
+                        ApplyEffectiveReferenceNullability(declaredFieldType, fa.Type)
+                    } else {
+                        declaredFieldType
+                    }
                 }
                 case BoundClrPropertyAccessExpression{Member: FieldInfo field} access {
                     let declaredFieldType = if access.Receiver != nil {
@@ -2605,7 +2647,11 @@ internal partial class ExpressionBinder {
                     } else {
                         ClrNullability.GetFieldTypeSymbol(field)
                     }
-                    return ApplyEffectiveReferenceNullability(declaredFieldType, access.Type)
+                    return if useEffectiveNullability {
+                        ApplyEffectiveReferenceNullability(declaredFieldType, access.Type)
+                    } else {
+                        declaredFieldType
+                    }
                 }
                 case addr is BoundConditionalAddressExpression {
                     return addr.PointeeType

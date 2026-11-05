@@ -839,6 +839,76 @@ func Run(flag bool, callback () -> bool) int32 {
     )
 }
 Console.WriteLine(Run(true, () -> true))`, "", "run", "9"}
+            yield[]object{"r12_short_circuit_argument_propagates_joined_callable_alias_exit", `import System
+
+class C { var Value int32 = 7 }
+func Take(a bool, b int32) int32 -> b
+func Run(flag bool, callback () -> bool) int32 {
+    var x C? = C{}
+    let clear () -> bool = func() bool {
+        x = nil
+        return true
+    }
+    var action () -> bool = callback
+    if x == nil { return 0 }
+    return Take(
+        (if flag {
+            action = clear
+            true
+        } else {
+            action = clear
+            true
+        }) && true,
+        if action() { x.Value } else { 0 }
+    )
+}
+Console.WriteLine(Run(true, () -> true))`, "GS0158@21:25", "reject", ""}
+            yield[]object{"r13_if_join_non_null_keeps_bool_call_inside_logical_and", `import System
+
+func Run(input string?, flag bool) int32 {
+    var s string? = input
+    if !string.IsNullOrEmpty(s) && flag {
+    } else {
+        s = "fallback"
+    }
+    return s.Length
+}
+Console.WriteLine(Run(nil, true))`, "", "run", "8"}
+            yield[]object{"r14_conditional_byref_validates_both_arms_for_nested_and_out_nullability", `import System
+import System.Collections.Generic
+
+func ReadList(in v List[string]) int32 -> v.Count
+func WriteOut(out v string?) { v = nil }
+func Run(flag bool) int32 {
+    var a List[string] = List[string]()
+    var b List[string?] = List[string?]()
+    var s string = "ok"
+    var t string? = "maybe"
+    let n = ReadList(in (flag ? a : b))
+    WriteOut(out (flag ? s : t))
+    return n
+}
+Console.WriteLine(Run(true))`, "GS0612@11:22 GS0612@12:14", "run", "0"}
+            yield[]object{"r15_conditional_address_preserves_platform_nullability_for_dereference", `import System
+
+@Oblivious
+class Legacy {
+    public var Text string
+    init() { }
+}
+func Run(flag bool) int32 {
+    let leg = Legacy()
+    var a = leg.Text
+    var b string = "ok"
+    let p = &(flag ? a : b)
+    try {
+        let s string = *p
+        return s.Length
+    } catch (NullReferenceException) {
+        return 42
+    }
+}
+Console.WriteLine(Run(true))`, "", "run", "42"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

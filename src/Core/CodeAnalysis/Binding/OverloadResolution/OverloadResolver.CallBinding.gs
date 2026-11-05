@@ -2264,7 +2264,8 @@ internal partial class OverloadResolver {
                             expectedType,
                             "a bound parameter has a target type",
                             expression: "expectedType"
-                        )
+                        ),
+                        condAddrArg
                     ) {
                         conversions.ReportByRefStorageMismatch(
                             Invariant.Required(
