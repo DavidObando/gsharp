@@ -285,6 +285,31 @@ let item Other.Renamed = Item{}`))
         Assert.Equal("GS0113", badPackageDiagnostic.Id)
         Assert.Equal("Type 'Other.Renamed' doesn't exist.", badPackageDiagnostic.Message)
         Assert.Equal("Other", badPackageDiagnostic.Location.Text!!.ToString(badPackageDiagnostic.Location.Span))
+
+        const attributeAliasSource = `package Demo
+import System
+type Mark = ObsoleteAttribute
+
+@Mark
+interface I {}
+
+@Mark
+enum E {
+    @Mark
+    A
+}
+
+class Outer {
+    @Mark
+    interface NestedInterface {}
+
+    @Mark
+    enum NestedEnum {
+        @Mark
+        B
+    }
+}`
+        Assert.Empty(Bind(attributeAliasSource))
     }
 
     shared {

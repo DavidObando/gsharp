@@ -454,6 +454,27 @@ class Box[T](Value T) {
 }
 type Renamed = Item
 type StampAlias = Stamp
+type Mark = ObsoleteAttribute
+
+@Mark
+interface IMarked {}
+
+@Mark
+enum MarkedEnum {
+    @Mark
+    First
+}
+
+class MarkedOuter {
+    @Mark
+    interface INestedMarked {}
+
+    @Mark
+    enum NestedMarkedEnum {
+        @Mark
+        Second
+    }
+}
 
 func Echo(value Repro.Count) Repro.OtherCount -> value
 func ReadThroughAliases() int32 {

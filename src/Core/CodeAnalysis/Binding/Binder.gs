@@ -7135,6 +7135,7 @@ partial class Binder {
                     declaredTypeAliases.Add(declaredAlias)
                 }
             }
+            binder.declarations.BindPendingShellAttributes()
             for (delegateSyntax, delegateSymbol) in declaredDelegates {
                 let owningPackage = packageByTree[delegateSyntax.SyntaxTree]
                 RunWithPackage(
