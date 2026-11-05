@@ -32,6 +32,7 @@ abstract class VariableSymbol : Symbol {
     /// Gets the variable's type.
     prop Type TypeSymbol {
         get;
+        internal set;
     }
 
     /// Gets the originating declaration syntax for this variable, or

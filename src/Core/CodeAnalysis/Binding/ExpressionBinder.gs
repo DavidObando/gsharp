@@ -604,16 +604,19 @@ internal partial class ExpressionBinder {
         }
     }
 
+    private let emptyCallableAliases HashSet[VariableSymbol] = HashSet[VariableSymbol]()
+
     internal func SyncActiveExpressionCallableAliases(aliases IReadOnlyCollection[VariableSymbol]) {
         for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
             let entry = expressionNarrowingFrames[i]
             if IsExpressionFrameActive(entry) {
-                expressionNarrowingFrames[i] = (
-                    entry.Id,
-                    entry.Frame,
-                    HashSet[VariableSymbol](aliases),
-                    entry.SavedStatementAliases
-                )
+                if aliases.Count == 0 && entry.Aliases.Count == 0 {
+                    continue
+                }
+                entry.Aliases.Clear()
+                for item in aliases {
+                    entry.Aliases.Add(item)
+                }
             }
         }
     }
@@ -622,7 +625,11 @@ internal partial class ExpressionBinder {
         for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
             let entry = expressionNarrowingFrames[i]
             if IsExpressionFrameActive(entry) {
-                return HashSet[VariableSymbol](entry.Aliases)
+                return if entry.Aliases.Count == 0 {
+                    emptyCallableAliases
+                } else {
+                    HashSet[VariableSymbol](entry.Aliases)
+                }
             }
         }
         return getCallableAliases()
@@ -647,7 +654,7 @@ internal partial class ExpressionBinder {
         let initialAliases = if aliases != nil {
             HashSet[VariableSymbol](aliases)
         } else {
-            GetCurrentExpressionCallableAliases()
+            HashSet[VariableSymbol](GetCurrentExpressionCallableAliases())
         }
         setCallableAliases(initialAliases)
         let pushed = if frame != nil && frame.Count > 0 {
@@ -708,15 +715,20 @@ internal partial class ExpressionBinder {
         for entry in expressionNarrowingFrames {
             if IsExpressionFrameActive(entry) {
                 let frame = entry.Frame
-                let entries = if frame != nil {
+                let entries = if frame != nil && frame.Count > 0 {
                     Dictionary[AccessPath, TypeSymbol](frame.Entries)
                 } else {
                     default(Dictionary[AccessPath, TypeSymbol]?)
                 }
-                snapshot.Add((entry.Id, frame, entries, HashSet[VariableSymbol](entry.Aliases)))
+                let aliases = if entry.Aliases.Count == 0 {
+                    emptyCallableAliases
+                } else {
+                    HashSet[VariableSymbol](entry.Aliases)
+                }
+                snapshot.Add((entry.Id, frame, entries, aliases))
             }
         }
-        if recordSiblingCount {
+        if recordSiblingCount && boundSiblingExpressions.Count > 0 {
             snapshotSiblingCounts[snapshot] = boundSiblingExpressions.Count
         }
         return snapshot
@@ -732,8 +744,15 @@ internal partial class ExpressionBinder {
             )
         ]?
     ) {
-        if snapshot != nil && snapshotSiblingCounts.TryGetValue(snapshot, out var siblingCount) &&
-            boundSiblingExpressions.Count > siblingCount {
+        if snapshot == nil || boundSiblingExpressions.Count == 0 {
+            return
+        }
+        let siblingCount = if snapshotSiblingCounts.TryGetValue(snapshot, out var recordedCount) {
+            recordedCount
+        } else {
+            0
+        }
+        if boundSiblingExpressions.Count > siblingCount {
             boundSiblingExpressions.RemoveRange(siblingCount, boundSiblingExpressions.Count - siblingCount)
         }
     }
@@ -759,20 +778,25 @@ internal partial class ExpressionBinder {
             if frame != nil && frame.Owner == nil {
                 continue
             }
-            if frame != nil && entries != nil {
+            if frame != nil {
                 frame.Clear()
-                for kv in entries {
-                    frame.Add(kv.Key, kv.Value)
+                if entries != nil {
+                    for kv in entries {
+                        frame.Add(kv.Key, kv.Value)
+                    }
                 }
             }
             for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
                 if expressionNarrowingFrames[i].Id == id {
-                    expressionNarrowingFrames[i] = (
-                        id,
-                        frame,
-                        HashSet[VariableSymbol](aliases),
-                        expressionNarrowingFrames[i].SavedStatementAliases
-                    )
+                    let currentAliases = expressionNarrowingFrames[i].Aliases
+                    if aliases.Count == 0 {
+                        currentAliases.Clear()
+                    } else {
+                        currentAliases.Clear()
+                        for item in aliases {
+                            currentAliases.Add(item)
+                        }
+                    }
                     break
                 }
             }
@@ -800,29 +824,38 @@ internal partial class ExpressionBinder {
             if frame != nil && frame.Owner == nil {
                 continue
             }
-            if frame != nil && branchEntries != nil {
-                for kv in frame.Entries.ToArray() {
-                    if !StatementBinder.IsNullableWidening(kv.Key, kv.Value) && !branchEntries.ContainsKey(kv.Key) {
-                        recordExpressionNarrowingKill(frame, kv.Key, kv.Value)
-                        frame.Remove(kv.Key)
+            if frame != nil {
+                if branchEntries != nil {
+                    for kv in frame.Entries.ToArray() {
+                        if !StatementBinder.IsNullableWidening(kv.Key, kv.Value) && !branchEntries.ContainsKey(kv.Key) {
+                            recordExpressionNarrowingKill(frame, kv.Key, kv.Value)
+                            frame.Remove(kv.Key)
+                        }
                     }
-                }
-                for bkv in branchEntries {
-                    if StatementBinder.IsNullableWidening(bkv.Key, bkv.Value) && !frame.ContainsKey(bkv.Key) {
-                        frame[bkv.Key] = bkv.Value
+                    for bkv in branchEntries {
+                        if StatementBinder.IsNullableWidening(bkv.Key, bkv.Value) && !frame.ContainsKey(bkv.Key) {
+                            frame[bkv.Key] = bkv.Value
+                        }
+                    }
+                } else if frame.Count > 0 {
+                    for kv in frame.Entries.ToArray() {
+                        if !StatementBinder.IsNullableWidening(kv.Key, kv.Value) {
+                            recordExpressionNarrowingKill(frame, kv.Key, kv.Value)
+                            frame.Remove(kv.Key)
+                        }
                     }
                 }
             }
             for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
                 if expressionNarrowingFrames[i].Id == id {
-                    let joinedAliases = HashSet[VariableSymbol](expressionNarrowingFrames[i].Aliases)
-                    joinedAliases.IntersectWith(branchAliases)
-                    expressionNarrowingFrames[i] = (
-                        id,
-                        frame,
-                        joinedAliases,
-                        expressionNarrowingFrames[i].SavedStatementAliases
-                    )
+                    let currentAliases = expressionNarrowingFrames[i].Aliases
+                    if currentAliases.Count > 0 {
+                        if branchAliases.Count == 0 {
+                            currentAliases.Clear()
+                        } else {
+                            currentAliases.IntersectWith(branchAliases)
+                        }
+                    }
                     break
                 }
             }
@@ -1185,7 +1218,11 @@ internal partial class ExpressionBinder {
         aliases HashSet[VariableSymbol]? = nil
     ) BoundExpression {
         exitFrame = nil
-        if frame == nil && aliases == nil {
+        if (frame == nil || frame.Count == 0) && (aliases == nil || HasActiveExpressionNarrowings()) {
+            if aliases != nil {
+                SyncActiveExpressionCallableAliases(aliases)
+                setCallableAliases(aliases)
+            }
             return if targetType == nil {
                 BindExpression(syntax, canBeVoid)
             } else {

@@ -1124,7 +1124,11 @@ internal partial class ExpressionBinder {
         aliases HashSet[VariableSymbol]? = nil
     ) BoundExpression {
         exitFrame = nil
-        if narrowing == nil && aliases == nil {
+        if (narrowing == nil || narrowing.Count == 0) && (aliases == nil || HasActiveExpressionNarrowings()) {
+            if aliases != nil {
+                SyncActiveExpressionCallableAliases(aliases)
+                setCallableAliases(aliases)
+            }
             return bind()
         }
         let pushed = PushExpressionNarrowingFrame(narrowing, aliases)

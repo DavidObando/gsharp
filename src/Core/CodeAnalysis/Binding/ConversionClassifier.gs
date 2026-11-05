@@ -3702,7 +3702,15 @@ internal class ConversionClassifier {
             try {
                 for var i = 0; i < arity; i++ {
                     var element = literalSource.Elements[i]
-                    if earlierElementChangedNarrowing && element.Syntax is ExpressionSyntax elementSyntax {
+                    let elementSyntax ExpressionSyntax? = if literalSource.Syntax is TupleLiteralExpressionSyntax tupleSyntax &&
+                        i < tupleSyntax
+                        .Elements
+                        .Count {
+                        tupleSyntax.Elements[i]
+                    } else {
+                        element.Syntax as ExpressionSyntax
+                    }
+                    if earlierElementChangedNarrowing && elementSyntax != nil {
                         let unwrappedSyntax = if elementSyntax is NamedTupleElementSyntax named {
                             named.Expression
                         } else {

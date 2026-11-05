@@ -828,8 +828,24 @@ delegate VariadicDelegate(x float64, values ...bool) bool;
 struct VariadicSink {
     func Use(x float64, values ...bool) bool -> values[0]
 }
+struct Reader {
+    func Read(x int32, out r int32) bool {
+        r = x
+        return true
+    }
+    func Read(x int32?, out r string) bool {
+        r = "null"
+        return false
+    }
+}
+func TryRead(out r int32) bool {
+    r = 42
+    return true
+}
 let token = Token{}
 let sink = VariadicSink{}
+let reader = Reader{}
+let o object = "hi"
 let del VariadicDelegate = (x float64, values ...bool) -> values[0]
 Console.WriteLine(n != nil ? Consume(token, n > 0) : false)
 n = 5
@@ -845,9 +861,32 @@ n = 5
 Console.WriteLine(n != nil ? sink.Use(token, n > 0) : false)
 n = 5
 Console.WriteLine(n != nil ? del(token, n > 0) : false)
+n = 5
+Console.WriteLine(n != nil ? Consume(token, reader.Read(n, out var rCall)) : false)
+n = 5
+let tupleOutOverload (float64, bool) = if n != nil { (token, reader.Read(n, out var rTup)) } else { (0.0, false) }
+Console.WriteLine(tupleOutOverload.Item2)
+n = 5
+Console.WriteLine(n != nil ? Consume(token, o is string p1 && TryRead(out var resCall) && p1.Length + resCall == 44) : false)
+n = 5
+let tuplePatternOut (float64, bool) = if n != nil { (token, o is string p2 && TryRead(out var resTup) && p2.Length + resTup == 44) } else { (0.0, false) }
+Console.WriteLine(tuplePatternOut.Item2)
 `)
         Assert.Equal(
-            string.Join(Environment.NewLine, "False", "False", "False", "False", "False", "False", "False") +
+            string.Join(
+                Environment.NewLine,
+                "False",
+                "False",
+                "False",
+                "False",
+                "False",
+                "False",
+                "False",
+                "False",
+                "False",
+                "True",
+                "True"
+            ) +
                 Environment.NewLine,
             identityArgRebindRun.Output
         )
@@ -1170,9 +1209,15 @@ func f() int32 {
     func Left_Associated_Arithmetic_Chain_In_Narrowed_Arm_Scales_Linearly() {
         let buildChainSource = func (terms int32) string {
             let chain = string.Join(" + ", Enumerable.Repeat("F()", terms))
+            var nested = "1"
+            let nestedDepth = terms / 2
+            for var i = 0; i < nestedDepth; i++ {
+                nested = "flag ? (" + nested + ") : 0"
+            }
             return (`package Issue4969.ChainScaling
 func F() int32 -> 1
 func Compute(s string?, n int32?) int32 -> s != nil ? (n != nil ? (` + chain + ` + s.Length + n) : 0) : 0
+func NestedConditionals(flag bool) int32 -> ` + nested + `
 `)
         }
         // Warm up compilation pipeline.
