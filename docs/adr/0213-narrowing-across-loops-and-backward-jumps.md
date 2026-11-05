@@ -490,7 +490,14 @@ The rules, each an instance of the construct table and of the lower bound:
   is proposed as a construct-table change under ADR-0208 section 8, with
   the rows above as its proof obligations and its own corpus rows and
   mutants, and it applies to the straight-line read of the same member
-  too, because the kill is the shared predicate's.
+  too, because the kill is the shared predicate's. Follow-up [#5549](https://github.com/DavidObando/gsharp/issues/5549)
+  adopts the resolved-member exemption (`RunsUserCodeOnMemberRead` in `StatementBinder.NarrowingLoops.gs`)
+  with the proof obligations of this table: a member read is exempt when its receiver resolves at the
+  region's entry scope with no type-test fact on the receiver inside the region (`HasTypeTestOnReceiver`
+  and `HasEntryMemberTypeTest`) and the resolved member is on the R16/R17 stable imported accessor list
+  (`IsStableClrAccessor`) or is a field, tuple element, enum member, array/slice `Length`, or auto property
+  (`!SourcePropertyRunsUserCode`) of a type that cannot have a subclass (a value type or a class that is
+  neither `open` nor `sealed`).
 - **W6 Closed kind list.** A syntax kind the walker does not list sets
   `ContainsUnknownKind`, and a region with that flag is bound from
   `NarrowingState.Empty`: every fact is removed. This is stronger than the
@@ -1295,13 +1302,19 @@ callable alias in force runs `ApplyLoopEntryLowerBound`; the decisions are those
   no fact also applies the lower bound ([#5461](https://github.com/DavidObando/gsharp/issues/5461)).
   Otherwise `var g = cb` reassigned to a closure later in the body kept `g` external, and a fact proven
   in the body survived the call `g()` (corpus rows `d01` to `d06`).
-- *R16 in loops (documented cost of row R7 (e)).* ADR-0208 R16 keeps a fact across a read of a stable imported
-  getter (`string.Length`) and a field read is no call, in straight-line code. The walker sees only syntax, so it
-  cannot tell them from a user getter, and Q7 (decided) allows no exemption: the corpus row
-  `t09_5231_string_length_in_a_loop_R16_loop_is_stricter` (`x.Value + s.Length` with a closure-assigned `x`) is
-  rejected in a loop. A resolved-member exemption (a plain-name receiver resolved at the entry scope whose member is
-  on the R16 list, or a field of a class whose hierarchy cannot hide it) is a later slice; it would accept q5c, q5d
-  would stay rejected, and it needs its own rows and mutants.
+- *R16 in loops (documented cost of row R7 (e), resolved by #5549).* ADR-0208 R16 keeps a fact across a read of a stable imported
+  getter (`string.Length`) and a field read is no call, in straight-line code. In slice L1 (#5459), Q7 allowed no
+  exemption, so corpus rows `t09_5231_string_length_in_a_loop_R16_loop_is_stricter` (`x.Value + s.Length` with a
+  closure-assigned `x`), `q5c` (`StringBuilder.Length`), and `a09` (`g.Value` on a non-`open` class) were rejected in
+  a loop. Follow-up [#5549](https://github.com/DavidObando/gsharp/issues/5549) (`RunsUserCodeOnMemberRead` in
+  `StatementBinder.NarrowingLoops.gs`) exempts a member read from W5 when its receiver resolves at the region's entry
+  scope without a type test on the receiver inside the region (`HasTypeTestOnReceiver`, `HasEntryMemberTypeTest`) and
+  the member is either on the R16/R17 stable imported accessor list (`IsStableClrAccessor`) or a field, tuple element,
+  enum member, array/slice `Length`, or auto property (`!SourcePropertyRunsUserCode`) of a type whose hierarchy cannot
+  have a subclass (a value type or a class that is neither `open` nor `sealed`, or a sealed CLR class). Under #5549,
+  `q5c`, `t09`, and `a09` are accepted, while `q5d` (a type test in the loop selects a hiding getter), a type test on a
+  `List[int32]` receiver selecting a hiding `Count` getter, a field on an `open` or `sealed` class, and an unlisted
+  imported getter (`Lazy<int>.Value`) stay rejected (`Issue5549LoopMemberReadExemptionTests`).
 - *Switch arms and hidden `continue` (#5629, #5642).* The walker classifies a case or arm test with R19
   (`PatternTestRunsUserCode`) in a loop as `if x is P` is classified outside one. #5642's back-edge seeds for a
   `continue` inside a `switch`, `try` or `fixed` are not needed, because the lower bound counts every write of the

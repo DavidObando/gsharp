@@ -3842,6 +3842,198 @@ func KeepRefAcrossMethodGroup(ref item C?) int32 {
 func Main() { }`,
                 "GS0155@29:27 GS0155@39:23"
             )
+            Add("stable-getters-and-non-hideable-fields-keep-closure-and-global-facts (W5, #5549)", `package T
+import System
+import System.Collections.Generic
+import System.Text
+class C { var Value int32 = 1 }
+class Box {
+    var Value int32 = 2
+    prop Auto int32 { get; set; }
+}
+struct Point { var X int32 }
+var g C? = C{}
+func Run(s string, sb StringBuilder, list List[int32], box Box, pt Point) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil || g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + x.Value + g.Value + s.Length + sb.Length + list.Count + box.Value + box.Auto + pt.X
+    }
+    clear()
+    return total
+}
+func Main() { }`, "")
+            Add("open-and-sealed-hierarchy-class-fields-remove-closure-and-global-facts (W5, #5549)", `package T
+import System
+class C { var Value int32 = 1 }
+open class OpenBox { var Value int32 = 2 }
+sealed class SealedBox { var Value int32 = 3 }
+var g C? = C{}
+func RunOpen(b OpenBox) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil || g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + x.Value + g.Value + b.Value
+    }
+    clear()
+    return total
+}
+func RunSealed(b SealedBox) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + x.Value + b.Value
+    }
+    clear()
+    return total
+}
+func Main() { }`, "GS0158@13:27 GS0158@13:37 GS0158@24:27")
+            Add("type-test-on-stable-getter-receiver-disables-exemption (W5, #5549)", `package T
+import System
+import System.Collections.Generic
+class C { var Value int32 = 1 }
+class DerivedList : List[int32] {
+    var Clear () -> void = func() { }
+    prop Count int32 {
+        get {
+            Clear()
+            return 0
+        }
+    }
+}
+func Run(items List[int32]) int32 {
+    var x C? = C{}
+    let clear = func() { x = nil }
+    if x == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + x.Value
+        if items is DerivedList {
+            total = total + items.Count
+        }
+    }
+    clear()
+    return total
+}
+func Main() { }`, "GS0158@20:27")
+            Add("dereference-unary-and-enum-extension-operators-remove-facts (W4, #5549)", `package T
+import System
+class C { var Value int32 = 1 }
+interface ITag { }
+struct Token : ITag {
+    var N int32
+    var Value int32
+}
+func (t Token) operator -() int32 {
+    g = nil
+    return -t.N
+}
+func (t Token) operator ==(o object?) bool {
+    g = nil
+    return false
+}
+func (t Token) operator !=(o object?) bool -> true
+func (n int32) operator ==(o object?) bool {
+    g = nil
+    return false
+}
+func (n int32) operator !=(o object?) bool -> true
+enum Tag {
+    A = 1,
+    B = 2
+}
+func (t Tag) operator -() int32 {
+    g = nil
+    return 0
+}
+func (t Tag) operator ==(o object?) bool {
+    g = nil
+    return false
+}
+func (t Tag) operator !=(o object?) bool -> true
+class Holder {
+    var Kind Tag = Tag.A
+    var N int32 = 1
+    let Item ITag = Token{N: 1}
+}
+var g C? = C{}
+func RunDeref(h managed[Token]) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + g.Value + -(*h)
+    }
+    return total
+}
+func RunEnumUnary() int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + g.Value + -Tag.A
+    }
+    return total
+}
+func RunNestedEnumUnary() int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + g.Value + -(~Tag.A) + -(Tag.A | Tag.B)
+    }
+    return total
+}
+func RunNullableWrapperValueUnary(p Token?) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + g.Value + -p.Value
+    }
+    return total
+}
+func RunEnumNil(holder Holder) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + g.Value
+        if holder.Kind == nil { total = total + 1 }
+    }
+    return total
+}
+func RunIntNil(holder Holder) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + g.Value
+        if holder.N == nil { total = total + 1 }
+    }
+    return total
+}
+func RunNarrowedMemberNil(holder Holder) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + g.Value
+        if holder.Item is Token {
+            if holder.Item == nil { total = total + 1 }
+        }
+    }
+    return total
+}
+func RunEntryNarrowedMemberNil(holder Holder) int32 {
+    if g == nil || holder.Item !is Token { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total = total + g.Value
+        if holder.Item == nil { total = total + 1 }
+    }
+    return total
+}
+func Main() { }`, "GS0158@46:27 GS0158@54:27 GS0158@62:27 GS0158@70:27 GS0158@78:27 GS0158@87:27 GS0158@96:27 GS0158@107:27")
             return rows
         }
     }

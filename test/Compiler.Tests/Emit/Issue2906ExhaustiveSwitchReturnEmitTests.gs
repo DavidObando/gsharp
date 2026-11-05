@@ -269,7 +269,7 @@ func F(x Expr) int32 {
     }
     return 0
 }
-public var result = F(nil)
+public var result = F(default(Expr))
 result`)
         }
 

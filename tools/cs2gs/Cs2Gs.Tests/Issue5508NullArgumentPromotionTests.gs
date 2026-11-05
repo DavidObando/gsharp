@@ -67,6 +67,8 @@ import Xunit
 /// | 38 | `get => stored` / `get { return stored; }` / `Node Value => stored` behind a widened store | getter asserts `stored!!` | getter and property widen |
 /// | 39 | `record Entry(Node Item)` + `new Entry(null!)` + `Read(Entry e) => e.Item` | `e.Item!!` throws | `Read` widens |
 /// | 40 | emitted-reference `record Key(string Value) : IKey`; a consumer forwards a widened parameter into `new Key(p)` | no bridge | bridged: the fixed property keeps the parameter non-null |
+/// | 42 | unreachable `return null;` after a `[DoesNotReturn]` helper into a non-nullable class return (`SpillSequenceSpiller`) | `return nil` (GS0155) | `return default(BoundSpillSequenceExpression)` |
+/// | 43 | reachable `return null;` and `return null!;` into a non-nullable class return in hand-authored code | `return nil` (GS0155) | unchanged: `return nil` (GS0155) |
 /// | 9 | `Parent = parent;` into a `virtual` property | `Parent Node` | unchanged: overrides keep the base type |
 open class Issue5508NullArgumentPromotionTests {
     private const FrameSource string = `
@@ -185,7 +187,9 @@ namespace Demo
     /// Row 7: a virtual member does not own a signature its overrides share.
     @Fact
     func VirtualMethodParameter_IsNotPromoted() {
-        let printed = TranslateEnabled(("Walker.cs", `
+        let printed = TranslateEnabled(
+            "the virtual parameter keeps its non-null signature, so the hand-authored `Depth(null!)` stays `Depth(nil)`, which is GS0154 since #4316 (widening across a virtual hierarchy is #5524)",
+            ("Walker.cs", `
 namespace Demo
 {
     public class Node { }
@@ -194,7 +198,8 @@ namespace Demo
         public virtual int Depth(Node parent) => parent.GetHashCode();
         public int Run() => Depth(null!);
     }
-}`))
+}`)
+        )
         Assert.DoesNotContain("parent Node?", printed[0])
     }
 
@@ -202,7 +207,9 @@ namespace Demo
     /// that stores into it is pinned non-null too, so no `node!!` throws on the null C# stores.
     @Fact
     func PromotedParameter_StoredIntoVirtualProperty_DoesNotPromoteProperty() {
-        let printed = TranslateEnabled(("Holder.cs", `
+        let printed = TranslateEnabled(
+            "the virtual property pins `node` non-null (#5574), so the hand-authored `Holder(null!)` stays `Holder(nil)`, which is GS0154 since #4316",
+            ("Holder.cs", `
 namespace Demo
 {
     public class Node { }
@@ -212,7 +219,8 @@ namespace Demo
         public virtual Node Stored { get; }
         public static Holder Make() => new Holder(null!);
     }
-}`))
+}`)
+        )
         Assert.DoesNotContain("node Node?", printed[0])
         Assert.DoesNotContain("node!!", printed[0])
         Assert.DoesNotContain("Stored Node?", printed[0].Replace("  ", " "))
@@ -992,7 +1000,9 @@ namespace Demo
     /// locals from it and asserts their later reads), so the member stays `Node` and nothing asserts.
     @Fact
     func DeconstructedLocalOfPromotedPositionalMember_IsAssertedOnDereference() {
-        let printed = TranslateEnabled(("Entry.cs", `
+        let printed = TranslateEnabled(
+            "the deconstruction pins `Item` non-null (#5574), so the hand-authored `Entry(null!, 0)` stays `Entry(nil, 0)`, which is GS0154 since #4316",
+            ("Entry.cs", `
 namespace Demo
 {
     public class Node { }
@@ -1021,9 +1031,148 @@ namespace Demo
         }
         private static int Take(Node node) => node.GetHashCode();
     }
-}`))
+}`)
+        )
         Assert.DoesNotContain("Item Node?", printed[0])
         Assert.DoesNotContain("Take(item!!)", printed[0])
+    }
+
+    /// Issue #4316 (SpillSequenceSpiller.cs:1087): an unreachable `return null;`
+    /// after a `[DoesNotReturn]` helper has `NullableFlowState.NotNull` in
+    /// Roslyn, so C# reports no CS8603 and the return slot stays non-nullable.
+    /// `TranslateNullLiteral` emits `default(T)` so #4316's gsc accepts it.
+    @Fact
+    func UnreachableReturnNull_AfterDoesNotReturn_EmitsDefaultOfDeclaredType() {
+        let printed = TranslateEnabled(("Spiller.cs", `
+using System;
+using System.Diagnostics.CodeAnalysis;
+namespace Demo
+{
+    public sealed class BoundSpillSequenceExpression { }
+    public static class EmitDiagnosticException
+    {
+        [DoesNotReturn]
+        public static void Throw(string message) => throw new InvalidOperationException(message);
+    }
+    public static class SpillSequenceSpiller
+    {
+        public static BoundSpillSequenceExpression SpillExpression(int kind)
+        {
+            switch (kind)
+            {
+                case 0:
+                    return new BoundSpillSequenceExpression();
+                default:
+                    EmitDiagnosticException.Throw("unhandled");
+                    return null;
+            }
+        }
+    }
+}`))
+        Assert.Contains("func SpillExpression(kind int32) BoundSpillSequenceExpression", printed[0])
+        Assert.DoesNotContain("BoundSpillSequenceExpression?", printed[0])
+        Assert.Contains("return default(BoundSpillSequenceExpression)", printed[0])
+        Assert.DoesNotContain("return nil", printed[0])
+    }
+
+    /// Issue #4316 (Issue2523Fixtures.cs:322): a suppressed `return null!;` or
+    /// `=> null!;` into a return slot that stays non-nullable emits `default(T)`
+    /// so the non-nullable return signature compiles under #4316's gsc, while a
+    /// reachable unsuppressed `return null;` in hand-authored code stays `return nil`
+    /// and is rejected with GS0155.
+    @Fact
+    func SuppressedReturnNull_EmitsDefaultWhileUnsuppressedReturnNull_StaysNil() {
+        let suppressed = TranslateEnabled(("Stubs.cs", `
+using System;
+using System.Threading.Tasks;
+namespace Demo
+{
+    public interface IChain<out TEntity, out TProperty> { }
+    public sealed class BoundSpillSequenceExpression { }
+    public sealed class Wrapped
+    {
+        public static int Calls;
+        public string Value { get; }
+        public Wrapped(string? s) { Calls++; Value = s ?? "<null>"; }
+        public static implicit operator Wrapped(string? s) => new Wrapped(s);
+    }
+    public sealed class TupleHolder
+    {
+        public (BoundSpillSequenceExpression, int) Prop => (null!, 1);
+        public (BoundSpillSequenceExpression, int) this[int i] => (null!, i);
+    }
+    public static class QueryExtensions
+    {
+        public static IChain<TEntity, TProperty> Include<TEntity, TProperty>() => null!;
+        public static BoundSpillSequenceExpression Forgiven(int kind)
+        {
+            if (kind == 0)
+            {
+                return new BoundSpillSequenceExpression();
+            }
+            return null!;
+        }
+        public static BoundSpillSequenceExpression Conditional(bool c) =>
+            c ? new BoundSpillSequenceExpression() : null!;
+        public static BoundSpillSequenceExpression Switched(int i) =>
+            i switch { 0 => new BoundSpillSequenceExpression(), _ => null! };
+        public static BoundSpillSequenceExpression Coalesced(BoundSpillSequenceExpression? x) =>
+            x ?? null!;
+        public static Wrapped ConvertedConditional(bool c) => c ? null! : "x";
+        public static BoundSpillSequenceExpression Lambdas()
+        {
+            Func<BoundSpillSequenceExpression> f = () => null!;
+            Func<BoundSpillSequenceExpression> g = () => { return null!; };
+            Func<(BoundSpillSequenceExpression, int)> h = () => (null!, 1);
+            Func<ValueTask<BoundSpillSequenceExpression>> vt = async () =>
+            {
+                await Task.Yield();
+                return null!;
+            };
+            _ = vt;
+            return f() ?? g() ?? h().Item1;
+        }
+        public static (BoundSpillSequenceExpression, int) TupleForgiven() => (null!, 1);
+        public static (BoundSpillSequenceExpression, int)? NullableTupleForgiven() => (null!, 1);
+        public static ((BoundSpillSequenceExpression, int)?, int) NestedNullableTupleForgiven() => ((null!, 1), 2);
+        public static BoundSpillSequenceExpression? NullableReturn() => null!;
+    }
+}`))
+        Assert.Contains("-> default(IChain[TEntity, TProperty])", suppressed[0])
+        Assert.Contains("return default(BoundSpillSequenceExpression)", suppressed[0])
+        Assert.Contains("() -> default(BoundSpillSequenceExpression)", suppressed[0])
+        Assert.Contains("(default(BoundSpillSequenceExpression), 1)", suppressed[0])
+        Assert.Contains("((default(BoundSpillSequenceExpression), 1), 2)", suppressed[0])
+        Assert.Contains("(default(BoundSpillSequenceExpression), i)", suppressed[0])
+        Assert.DoesNotContain("default(Wrapped)", suppressed[0])
+        Assert.Contains("func NullableReturn() BoundSpillSequenceExpression? -> nil", suppressed[0])
+
+        let plain = TranslateEnabled(
+            "Round-trip only: reachable unsuppressed `return null` and property tuple assignment `(null!, 1)` in hand-authored code stay `nil` so gsc rejects the non-null sink with GS0155 (#4316).",
+            ("Spiller.cs", `
+namespace Demo
+{
+    public sealed class BoundSpillSequenceExpression { }
+    public static class SpillSequenceSpiller
+    {
+        public static (BoundSpillSequenceExpression, int) Stored { get; set; }
+        public static BoundSpillSequenceExpression Plain(int kind)
+        {
+            Stored = (null!, 1);
+            if (kind == 0)
+            {
+                return new BoundSpillSequenceExpression();
+            }
+            return null;
+        }
+    }
+}`)
+        )
+        Assert.Contains("Stored = (nil, 1)", plain[0])
+        Assert.Contains("return nil", plain[0])
+        Assert.DoesNotContain("default(BoundSpillSequenceExpression)", plain[0])
+        let ex = Assert.ThrowsAny[Exception](() -> TranslationTestValidation.AssertBinds(plain[0]))
+        Assert.Contains("Cannot convert type 'nil' to 'BoundSpillSequenceExpression'.", ex.Message)
     }
 
     /// Row 40. Issue #5574: `p` forwards into a parameter that its interface property fixes, so `p`

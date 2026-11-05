@@ -950,6 +950,13 @@ internal partial class ExpressionBinder {
                     )
                     return BoundErrorExpression(nil)
                 }
+                if bound.Type is TupleTypeSymbol{HasNilElement: true} {
+                    bound = conversions.BindConversion(
+                        segmentExpression.Location,
+                        bound,
+                        TupleTypeSymbol.ResolveNilElements(bound.Type)
+                    )
+                }
                 if bound.Type is StructSymbol{IsRefStruct: true} structType && structType.TryGetMethod(
                     "ToString",
                     out _
@@ -1542,9 +1549,16 @@ internal partial class ExpressionBinder {
                 "an interpolation segment has an expression",
                 expression: "segment.Expression"
             )
-            let bound = BindExpression(segmentExpression)
+            var bound = BindExpression(segmentExpression)
             if bound is BoundErrorExpression {
                 return false
+            }
+            if bound.Type is TupleTypeSymbol{HasNilElement: true} {
+                bound = conversions.BindConversion(
+                    segmentExpression.Location,
+                    bound,
+                    TupleTypeSymbol.ResolveNilElements(bound.Type)
+                )
             }
             let index = values.Count
             values.Add(bound)
@@ -1683,6 +1697,13 @@ internal partial class ExpressionBinder {
                 BindExpression(member.Value, memberType)
             }
             if memberType == nil {
+                if value is not BoundErrorExpression && value.Type is TupleTypeSymbol{HasNilElement: true} {
+                    value = conversions.BindConversion(
+                        member.Value.Location,
+                        value,
+                        TupleTypeSymbol.ResolveNilElements(value.Type)
+                    )
+                }
                 let materializedMemberType = TypeSymbol.MaterializeNeverFunctionReturns(value.Type)
                 if !object.ReferenceEquals(materializedMemberType, value.Type) {
                     value = conversions.BindConversion(member.Value.Location, value, materializedMemberType)

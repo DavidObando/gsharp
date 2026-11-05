@@ -1707,6 +1707,13 @@ internal partial class StatementBinder {
             return bindCoalescingStatement(syntax, coalescing)
         }
         var expression = bindExpression(syntax.Expression, true)
+        if expression.Type == TypeSymbol.Null || expression.Type is TupleTypeSymbol{HasNilElement: true} {
+            expression = conversions.BindConversion(
+                syntax.Expression.Location,
+                expression,
+                TupleTypeSymbol.ResolveNilElements(expression.Type)
+            )
+        }
         let materializedType = TypeSymbol.MaterializeNeverFunctionReturns(expression.Type)
         if !object.ReferenceEquals(materializedType, expression.Type) {
             expression = conversions.BindConversion(syntax.Expression.Location, expression, materializedType)
