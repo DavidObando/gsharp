@@ -252,6 +252,9 @@ struct Pair {
 class SliceHolder {
     var Frames slice[Pair]
 }
+struct SliceRow {
+    var Frames slice[Pair]
+}
 var owners = 0
 var indices = 0
 var index = 0
@@ -265,6 +268,10 @@ func ChangeHolder() int32 {
 }
 func ReplaceSlice(ref s slice[Pair], replacement slice[Pair]) int32 {
     s = replacement
+    return 0
+}
+func ReplaceRows(ref rows []SliceRow, replacement []SliceRow) int32 {
+    rows = replacement
     return 0
 }
 async func RunHolderSet(h SliceHolder, ch chan[int32]) {
@@ -341,11 +348,23 @@ let parkedReplacement = []Pair{Pair{}}
 holderTarget.Frames = slice[Pair].FromArray(parkedReplacement)
 holderCh <- 41
 pendingHolder.GetAwaiter().GetResult()
-Console.WriteLine("go:${afterGo}:${storage[0].Left.Item}:${reseatStorage[0].Left.Item}:${parkedReplacement[0].Left.Item}:${owners}:${indices}:${blockIdxCalls}:${holder.Frames[0].Left.Item}")`
+let rowBacking = []Pair{Pair{}}
+let rowReplacementBacking = []Pair{Pair{}}
+var rows = []SliceRow{SliceRow{Frames: slice[Pair].FromArray(rowBacking)}}
+let replacementRows = []SliceRow{SliceRow{Frames: slice[Pair].FromArray(rowReplacementBacking)}}
+rows[0].Frames[ReplaceRows(ref rows, replacementRows), false].Left.Item = 43
+var badRowIdxCalls = 0
+try {
+    rows[99].Frames[{ badRowIdxCalls++ 0 }, false].Left.Item = 47
+} catch (error IndexOutOfRangeException) {
+}
+Console.WriteLine("go:${afterGo}:${storage[0].Left.Item}:${reseatStorage[0].Left.Item}:${parkedReplacement[0].Left.Item}:${rowBacking[0].Left.Item}:${rowReplacementBacking[0].Left.Item}:${badRowIdxCalls}:${owners}:${indices}:${blockIdxCalls}:${holder.Frames[0].Left.Item}")`
         let dll = fixture.Compile(source, "channel_parameter_store", true)
         VerifyStrict(dll)
         Assert.Equal(
-            Encoding.UTF8.GetBytes("10\nFalse\n10:55:88:0\nFalse:1:1\n25:1:1\nbounds:2:2\ngo:27:41:37:0:3:3:1:0\n"),
+            Encoding.UTF8.GetBytes(
+                "10\nFalse\n10:55:88:0\nFalse:1:1\n25:1:1\nbounds:2:2\ngo:27:41:37:0:43:0:0:3:3:1:0\n"
+            ),
             Encoding.UTF8.GetBytes(fixture.Run(dll))
         )
     }

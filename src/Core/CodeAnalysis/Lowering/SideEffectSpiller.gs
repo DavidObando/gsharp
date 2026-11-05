@@ -493,7 +493,9 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         }
         let clrIndex = cast[BoundClrIndexExpression](current)
         let receiverLocation = if IsInPlaceStorageWriteReceiver(clrIndex.Target) {
-            this.SpillStorageReceiverParts(clrIndex.Target, statements, captureComponents)
+            let captured = this.SpillStorageReceiverParts(clrIndex.Target, statements, captureComponents: true)
+            this.ProbeStorageReceiver(captured, statements)
+            captured
         } else {
             this.MaybeSpill(
                 clrIndex.Target,
