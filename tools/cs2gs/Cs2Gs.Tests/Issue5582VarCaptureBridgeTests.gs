@@ -53,7 +53,8 @@ namespace Demo
         public static string And(Node s) => s is (var c and _) ? new Sink().Take(c) : "none";
         public static string Typed(object? o) => o is Node and var c ? new Sink().Take(c) : "none";
         public static string Run() =>
-            Is(null!) + " " + Arm(null!) + " " + Case(null!) + " " + And(null!) + " " + Typed(new Node());
+            Is(default(Node)!) + " " + Arm(default(Node)!) + " " + Case(default(Node)!) + " " + And(default(Node)!) +
+            " " + Typed(new Node());
     }
 }`)
         Assert.Contains("case var c: Sink().Take(c)\n", printed)
@@ -93,7 +94,7 @@ namespace Demo
         public static string NestedIs(Holder h) => h is { Inner: { Child: var c } } ? new Sink().Take(c) : "none";
         public static string NestedArm(Holder h) => h switch { { Inner: { Child: var c } } => new Sink().Take(c), _ => "none" };
         public static string TypedArm(Holder h) => h switch { Holder { Child: var c } => new Sink().Take(c) };
-        static Holder Make() => new Holder(null!, new Holder(null!, null));
+        static Holder Make() => new Holder(default(Node)!, new Holder(default(Node)!, null));
         public static string Run() =>
             Is(Make()) + " " + Arm(Make()) + " " + Case(Make()) + " " + NestedIs(Make()) + " " + NestedArm(Make()) + " " +
             TypedArm(Make());
@@ -521,7 +522,7 @@ namespace Demo
     public static class P
     {
         private static Dictionary<string, int>? cache;
-        static Box<T> Wrap<T>(T value) => new Box<T>(value, null!);
+        static Box<T> Wrap<T>(T value) => new Box<T>(value, default(Node)!);
         static string Arm() => Wrap(Volatile.Read(ref cache!)) switch { { Child: var c } => new Sink().Take(c), _ => "none" };
         public static string Run() => Arm();
     }
@@ -550,7 +551,7 @@ namespace Demo
             Id(Volatile.Read(ref cache!) ?? fallback) is var c ? new Sink().Take(c) : "none";
         static string Switched(Bag fallback) =>
             Id(Volatile.Read(ref cache!) switch { _ => fallback }) is var d ? new Sink().Take(d) : "none";
-        public static string Run() => Coalesce(null!) + " " + Switched(null!);
+        public static string Run() => Coalesce(default(Bag)!) + " " + Switched(default(Bag)!);
     }
 }`)
         Assert.Contains("Sink().Take(c)", printed)
@@ -579,15 +580,15 @@ namespace Demo
         private static Node? cache;
         static T Id<T>(T x) => x;
         static U Second<T, U>(T first, U second) => second;
-        static Node Name<T>(T x) => new Holder(null!).Child;
+        static Node Name<T>(T x) => new Holder(default(Node)!).Child;
         static T Keep<T, U>(System.Func<T, U> f, T x) => x;
         static T Pick<T>(T? ignored, T value) where T : class => value;
         static string PairIs() =>
-            Id(Second(Volatile.Read(ref cache!), new Holder(null!).Child)) is var c ? new Sink().Take(c) : "none";
+            Id(Second(Volatile.Read(ref cache!), new Holder(default(Node)!).Child)) is var c ? new Sink().Take(c) : "none";
         static string NameIs() => Name(Volatile.Read(ref cache!)) is var d ? new Sink().Take(d) : "none";
         static string KeepIs() =>
-            Keep((Node _) => Volatile.Read(ref cache!), new Holder(null!).Child) is var k ? new Sink().Take(k) : "none";
-        static string PickIs() => Pick(Volatile.Read(ref cache!), new Holder(null!).Child) is var q ? new Sink().Take(q) : "none";
+            Keep((Node _) => Volatile.Read(ref cache!), new Holder(default(Node)!).Child) is var k ? new Sink().Take(k) : "none";
+        static string PickIs() => Pick(Volatile.Read(ref cache!), new Holder(default(Node)!).Child) is var q ? new Sink().Take(q) : "none";
         public static string Run() => PairIs() + " " + NameIs() + " " + KeepIs() + " " + PickIs();
     }
 }`)
@@ -682,9 +683,10 @@ namespace Demo
                 case var k: return Take(k);
             }
         }
-        public static string Run() => Is(new Holder(), null!) + " " + Arm(new Holder(), null!) + " " +
-            Case(new Holder(), null!) + " " + SuppressedIs(null!) + " " + SuppressedArm(null!) + " " +
-            AllowIs(new Holder(), null!) + " " + AllowArm(new Holder(), null!) + " " + AllowCase(new Holder(), null!);
+        public static string Run() => Is(new Holder(), default(Node)!) + " " + Arm(new Holder(), default(Node)!) + " " +
+            Case(new Holder(), default(Node)!) + " " + SuppressedIs(default(Node)!) + " " +
+            SuppressedArm(default(Node)!) + " " + AllowIs(new Holder(), default(Node)!) + " " +
+            AllowArm(new Holder(), default(Node)!) + " " + AllowCase(new Holder(), default(Node)!);
     }
 }`)
         Assert.Contains("var Value Node?", printed)

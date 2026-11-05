@@ -117,7 +117,7 @@ class TypeParameterSymbol : TypeSymbol {
     /// boxing and `callvirt` decisions in the emitter, and a dependent
     /// bound supplies no such type. Merging the slots is #4027's defect shape;
     /// this property answers only the reference-ness half, and exactly one
-    /// consumer reads it (`Conversion.IsNilAssignableWithoutNullableWrapper`).
+    /// consumer reads it (`NullabilityImportRule`).
     ///
     /// Terminated by VISITED-SYMBOL cycle detection, not by a depth
     /// limit (review of PR #4088). A semantic depth cap answers "no" for a

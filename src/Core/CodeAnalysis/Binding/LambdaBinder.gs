@@ -2515,6 +2515,14 @@ internal class LambdaBinder {
         }
         if returnType == TypeSymbol.Void || returnType == TypeSymbol.Error {
             var discardedTrailing = trailing
+            if discardedTrailing.Type == TypeSymbol.Null ||
+                discardedTrailing.Type is TupleTypeSymbol{HasNilElement: true} {
+                discardedTrailing = conversions.BindConversion(
+                    syntax.Body.Location,
+                    discardedTrailing,
+                    TupleTypeSymbol.ResolveNilElements(discardedTrailing.Type)
+                )
+            }
             let materializedTrailingType = TypeSymbol.MaterializeNeverFunctionReturns(discardedTrailing.Type)
             if !object.ReferenceEquals(materializedTrailingType, discardedTrailing.Type) {
                 discardedTrailing = conversions.BindConversion(
@@ -4201,6 +4209,8 @@ internal class LambdaBinder {
             if targetFunctionType == nil && !hasExplicitReturn && !trailingIsAssignment {
                 return if neverBlockTail {
                     TypeSymbol.Void
+                } else if trailingType != TypeSymbol.Null {
+                    TupleTypeSymbol.ResolveNilElements(trailingType)
                 } else {
                     trailingType
                 }
@@ -4285,11 +4295,26 @@ internal class LambdaBinder {
             if candidates.Count == 0 {
                 return TypeSymbol.Void
             }
-            var result TypeSymbol? = candidates[0]
-            for var i = 1; i < candidates.Count; i++ {
-                result = ComputeLambdaCommonType(result, candidates[i])
-                if result == TypeSymbol.Error {
-                    return TypeSymbol.Error
+            let significant = List[TypeSymbol](candidates.Count)
+            var hasNullCandidate = false
+            for candidate in candidates {
+                if candidate == TypeSymbol.Null {
+                    hasNullCandidate = true
+                } else if candidate != TypeSymbol.Never {
+                    significant.Add(candidate)
+                }
+            }
+            var result TypeSymbol? = ExpressionBinder.JoinTupleArmsWithNilElements(significant)
+            if result != nil && hasNullCandidate && !(result is NullableTypeSymbol || result is PlatformTypeSymbol) {
+                result = NullableTypeSymbol.Get(result)
+            }
+            if result == nil {
+                result = candidates[0]
+                for var i = 1; i < candidates.Count; i++ {
+                    result = ComputeLambdaCommonType(result, candidates[i])
+                    if result == TypeSymbol.Error {
+                        return TypeSymbol.Error
+                    }
                 }
             }
             // Issue #4965 (ADR-0202): a block body every return of which never
@@ -4298,7 +4323,12 @@ internal class LambdaBinder {
             if result == TypeSymbol.Never && (syntax.Body is BlockExpressionSyntax || isAsync) {
                 return TypeSymbol.Void
             }
-            return result ?? TypeSymbol.Error
+            let resolvedResult = result ?? TypeSymbol.Error
+            return if resolvedResult != TypeSymbol.Null {
+                TupleTypeSymbol.ResolveNilElements(resolvedResult)
+            } else {
+                resolvedResult
+            }
         }
 
         // Issue #2152: recognizes every bound-node shape the binder uses to
@@ -4368,7 +4398,7 @@ internal class LambdaBinder {
                 // statement order.
                 return MemberLookup.MergeInferredTypeArgument(left, right)
             }
-            return nil
+            return ExpressionBinder.JoinTupleArmsWithNilElements([]TypeSymbol{left, right})
         }
 
         // ADR-0076 / issue #716: strips a Task / Task<T> wrap from a target
