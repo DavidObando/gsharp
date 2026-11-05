@@ -5,6 +5,7 @@
 package GSharp.Compiler.Tests.Emit
 
 import GSharp.Compiler.Tests
+import System.IO
 import Xunit
 
 /// Issue #5696: `SpillSequenceSpiller` lowers `await` expressions inside
@@ -239,7 +240,18 @@ Console.Write("${eq}|${neq}|${gt}|${gtn}|${Trace.Events}")
 
     @Fact
     func MutatingValueTypePropertyPatternAndMutatedListPattern_PreserveSingleCaptureAndShapeCheck() {
-        const source = `import System
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "MutatingPatterns.ref.dll")
+        let implementation = fixture.CompileCSharpWithReference(`namespace MutatingPatterns {
+public struct ImportedIndexable {
+    public int N;
+    public int Count => 1;
+    public int Next => ++N;
+    public int this[int index] => ++N;
+}
+}`, "MutatingPatterns", reference)
+        const source = `import MutatingPatterns
+import System
 import System.Collections.Generic
 import System.Threading.Tasks
 struct Counter {
@@ -266,6 +278,8 @@ async func GrowAndReturnOne(items List[int32]) Task[int32] {
 }
 async func CheckStruct(c Counter) Task[bool] -> c is { Next: == await One(), N: 1 }
 async func CheckStructOr(c Counter) Task[bool] -> c is { Next: == await Two(), N: 1 } or { N: 0 }
+async func CheckImportedStruct(c ImportedIndexable) Task[bool] -> c is { Next: == await One(), N: 1 }
+async func CheckImportedIndexableOr(c ImportedIndexable) Task[bool] -> c is [== await Two()] or { N: 0 }
 async func CheckListExact() Task[bool] {
     let items = List[int32]()
     items.Add(1)
@@ -281,10 +295,18 @@ async func CheckListSlice() Task[bool] {
 func Bit(b bool) string -> if b { "1" } else { "0" }
 let s1 = Bit(CheckStruct(Counter{N: 0}).Result)
 let s2 = Bit(CheckStructOr(Counter{N: 0}).Result)
+let s3 = Bit(CheckImportedStruct(ImportedIndexable{N: 0}).Result)
+let s4 = Bit(CheckImportedIndexableOr(ImportedIndexable{N: 0}).Result)
 let l1 = Bit(CheckListExact().Result)
 let l2 = Bit(CheckListSlice().Result)
-Console.Write("${s1}${s2}|${l1}${l2}")
+Console.Write("${s1}${s2}${s3}${s4}|${l1}${l2}")
 `
-        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(source, "11|11", "5696")
+        Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(
+            source,
+            "1111|11",
+            "5696",
+            reference,
+            implementation
+        )
     }
 }

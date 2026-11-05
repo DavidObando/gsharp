@@ -2318,6 +2318,11 @@ shared class SpillSequenceSpiller {
             sideEffects ImmutableArray[BoundStatement].Builder,
             failLabel BoundLabel
         ) {
+            let receiver = if lp.IndexerProperty != nil {
+                StoreOperand(input, locals, sideEffects)
+            } else {
+                input
+            }
             var sliceIndex = -1
             for var i = 0; i < lp.Elements.Length; i++ {
                 if lp.Elements[i] is BoundSlicePattern {
@@ -2333,13 +2338,13 @@ shared class SpillSequenceSpiller {
                 )
                 BoundClrPropertyAccessExpression(
                     lp.Syntax,
-                    input,
+                    receiver,
                     lengthProperty,
                     TypeSymbol.Int32,
                     staticContainerType: nil
                 )
             } else {
-                BoundLenExpression(lp.Syntax, input)
+                BoundLenExpression(lp.Syntax, receiver)
             }
             let lengthInput = StoreOperand(lengthExpr, locals, sideEffects)
             if sliceIndex < 0 {
@@ -2381,7 +2386,7 @@ shared class SpillSequenceSpiller {
                             element.Syntax,
                             BoundClrIndexExpression(
                                 element.Syntax,
-                                input,
+                                receiver,
                                 indexerProperty,
                                 ImmutableArray.Create(indexExpr),
                                 ByRefTypeSymbol.Get(lp.ElementType),
@@ -2392,7 +2397,7 @@ shared class SpillSequenceSpiller {
                     } else {
                         BoundClrIndexExpression(
                             element.Syntax,
-                            input,
+                            receiver,
                             indexerProperty,
                             ImmutableArray.Create(indexExpr),
                             lp.ElementType,
@@ -2401,7 +2406,7 @@ shared class SpillSequenceSpiller {
                         )
                     }
                 } else {
-                    BoundIndexExpression(element.Syntax, input, ImmutableArray.Create(indexExpr), lp.ElementType)
+                    BoundIndexExpression(element.Syntax, receiver, ImmutableArray.Create(indexExpr), lp.ElementType)
                 }
                 let elemInput = StoreOperand(rawElementExpr, locals, sideEffects)
                 EmitSpilledPatternTest(element, elemInput, locals, sideEffects, failLabel)
@@ -2449,7 +2454,7 @@ shared class SpillSequenceSpiller {
                     let sliceEnd = BoundBinaryExpression(nil, lengthInput, subOp, BoundLiteralExpression(nil, suffix))
                     let subsliceCall = BoundImportedInstanceCallExpression(
                         slice.Syntax,
-                        input,
+                        receiver,
                         subslice,
                         lp.Type,
                         ImmutableArray.Create[BoundExpression](BoundLiteralExpression(nil, prefix), sliceEnd)
