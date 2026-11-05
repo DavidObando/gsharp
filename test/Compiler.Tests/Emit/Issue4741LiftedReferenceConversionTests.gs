@@ -656,6 +656,7 @@ func Convert[T](value Wrapper[T]?) ` + "$result" + ` -> ` + "$result" + `(value)
     @InlineData("shared-object-initializer", "GS0155", "(7,49,7,64)")
     @InlineData("instance-object-initializer", "GS0155", "(8,45,8,60)")
     @InlineData("local-object-initializer", "GS0155", "(6,28,6,43)")
+    @InlineData("lambda-init-object-initializer", "GS0155", "(7,50,7,54)")
     @InlineData("local-initializer", "GS0155", "(6,25,6,40)")
     @InlineData("argument", "GS0154", "(7,19,7,34)")
     @InlineData("explicit-cast", "GS0155", "(6,19,6,34)")
@@ -682,6 +683,10 @@ public class Style {
     public Length FontSize { get; set; }
     public Length? OptionalFontSize { get; set; }
 }
+public class Text {
+    public Length FontSize { get; init; }
+    public Length? OptionalFontSize { get; init; }
+}
 public struct GenericNullableValueBox<T> where T : struct {
     public T? Value;
     public static implicit operator GenericNullableValueBox<T>(T? value) => new GenericNullableValueBox<T> { Value = value };
@@ -690,6 +695,17 @@ public struct GenericNullableValueBox<T> where T : struct {
             let validAssemblyPath = Path.Combine(directory, "Valid5587.dll")
             File.WriteAllText(validSourcePath, `package Valid5587
 import Fixture5587
+import System
+
+struct SourceLength {
+    var Value float64
+    func operator implicit(value float64) SourceLength -> SourceLength{Value: value}
+}
+
+class SourceText {
+    prop FontSize SourceLength { get; init; }
+    prop OptionalFontSize SourceLength? { get; init; }
+}
 
 class Theme {
     shared {
@@ -709,7 +725,17 @@ func Run() string {
     let hasEmpty = Theme.EmptyStyle.OptionalFontSize == nil
     let wrappedPresent = WrapGeneric[int32](19)
     let wrappedEmpty = WrapGeneric[int32](nil)
-    return "${Theme.ButtonStyle.FontSize.Value},${Theme.ButtonStyle.OptionalFontSize!!.Value},${instance.InstanceStyle.FontSize.Value},${localStyle.OptionalFontSize!!.Value},${hasEmpty},${wrappedPresent.Value!!},${wrappedEmpty.Value == nil}"
+    let size float64? = 12.0
+    let emptySize float64? = nil
+    let createText Func[Text] = () -> Text{FontSize: size!!, OptionalFontSize: size}
+    let createEmptyText Func[Text] = () -> Text{OptionalFontSize: emptySize}
+    let createSourceText Func[SourceText] = () -> SourceText{FontSize: size!!, OptionalFontSize: size}
+    let createEmptySourceText Func[SourceText] = () -> SourceText{OptionalFontSize: emptySize}
+    let text = createText()
+    let emptyText = createEmptyText()
+    let sourceText = createSourceText()
+    let emptySourceText = createEmptySourceText()
+    return "${Theme.ButtonStyle.FontSize.Value},${Theme.ButtonStyle.OptionalFontSize!!.Value},${instance.InstanceStyle.FontSize.Value},${localStyle.OptionalFontSize!!.Value},${hasEmpty},${wrappedPresent.Value!!},${wrappedEmpty.Value == nil},${text.FontSize.Value},${text.OptionalFontSize!!.Value},${emptyText.OptionalFontSize == nil},${sourceText.FontSize.Value},${sourceText.OptionalFontSize!!.Value},${emptySourceText.OptionalFontSize == nil}"
 }`)
             let validCompilation = CompileGSharp(validSourcePath, validAssemblyPath, fixturePath)
             Assert.True(validCompilation.Exit == 0, validCompilation.Diagnostics)
@@ -722,7 +748,7 @@ func Run() string {
                 nil,
                 nil
             )
-            Assert.Equal("14,14,14,14,True,19,True", actual)
+            Assert.Equal("14,14,14,14,True,19,True,12,12,True,12,12,True", actual)
             let invalidBody = switch sink {
                 case "shared-object-initializer": `class Theme {
     shared {
@@ -739,6 +765,12 @@ func Run() string {
                 case "local-object-initializer": `func Build() Style {
     let Button = ActionButton{FontSize: 14}
     return Style{FontSize: Button.FontSize}
+}`
+                case "lambda-init-object-initializer": `import System
+func Build() Func[Text] {
+    let size float64? = 12.0
+    let create Func[Text] = () -> Text{FontSize: size}
+    return create
 }`
                 case "local-initializer": `func Build() Length {
     let Button = ActionButton{FontSize: 14}
@@ -773,6 +805,42 @@ import Fixture5587
             let error = Assert.Single(errors)
             Assert.Contains(expectedDiagnostic, error, StringComparison.Ordinal)
             Assert.Contains(expectedLocation, error, StringComparison.Ordinal)
+            if sink == "lambda-init-object-initializer" {
+                let invalidSourceOnlyPath = Path.Combine(directory, "InvalidSource5777.gs")
+                let invalidSourceOnlyAssemblyPath = Path.Combine(directory, "InvalidSource5777.dll")
+                File.WriteAllText(invalidSourceOnlyPath, `package InvalidSource5777
+import System
+
+struct SourceLength {
+    var Value float64
+    func operator implicit(value float64) SourceLength -> SourceLength{Value: value}
+}
+
+class SourceText {
+    prop FontSize SourceLength { get; init; }
+}
+
+func Build() Func[SourceText] {
+    let size float64? = 12.0
+    let create Func[SourceText] = () -> SourceText{FontSize: size}
+    return create
+}`)
+                let invalidSourceOnlyCompilation = CompileGSharp(
+                    invalidSourceOnlyPath,
+                    invalidSourceOnlyAssemblyPath,
+                    fixturePath
+                )
+                Assert.NotEqual(0, invalidSourceOnlyCompilation.Exit)
+                Assert.DoesNotContain("GS9998", invalidSourceOnlyCompilation.Diagnostics, StringComparison.Ordinal)
+                let sourceErrors = invalidSourceOnlyCompilation
+                    .Diagnostics
+                    .Split('\n')
+                    .Where((line string) -> line.Contains(": error ", StringComparison.Ordinal))
+                    .ToArray()
+                let sourceError = Assert.Single(sourceErrors)
+                Assert.Contains("GS0155", sourceError, StringComparison.Ordinal)
+                Assert.Contains("(15,62,15,66)", sourceError, StringComparison.Ordinal)
+            }
         } finally {
             Directory.Delete(directory, recursive: true)
         }
