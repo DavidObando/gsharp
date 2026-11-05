@@ -126,6 +126,9 @@ internal partial class StatementBinder {
             // an unconditional exit (`return`/`throw`/`break`/`continue`).
             if elseNarrow != nil && elseNarrow.Count > 0 {
                 binderCtx.PendingEarlyExitFrames[result] = elseNarrow
+                if removedFacts != nil && removedFacts.Count > 0 {
+                    earlyExitRemovedFacts[result] = Dictionary[AccessPath, TypeSymbol](removedFacts)
+                }
             }
             // ADR-0166: the same early-exit rule leaks pattern variables into
             // the statements that follow the `if` — `if !(x is T t) { return }`
@@ -219,6 +222,9 @@ internal partial class StatementBinder {
         let inner = BoundIfStatement(syntax, initCondition, initThen, initElse)
         if initElseNarrow != nil && initElseNarrow.Count > 0 {
             binderCtx.PendingEarlyExitFrames[inner] = initElseNarrow
+            if initRemovedFacts != nil && initRemovedFacts.Count > 0 {
+                earlyExitRemovedFacts[inner] = Dictionary[AccessPath, TypeSymbol](initRemovedFacts)
+            }
         }
         let initResult = BoundBlockStatement(
             syntax,
@@ -1016,9 +1022,6 @@ internal partial class StatementBinder {
         let after = HashSet[VariableSymbol](collector.DefinitelyExternalFunctionValues)
         if collector.MayMutateAnyRootViaPointer {
             after.Clear()
-        }
-        if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
-            after.RemoveWhere(NamesClosureAssignedStorage)
         }
         RemoveCollectorFilterAffectedAliases(after, operand.Syntax ?? header, collector)
         return after
