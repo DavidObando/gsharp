@@ -3954,7 +3954,9 @@ internal class ConversionClassifier {
                         }
                         if earlierElementChangedNarrowing {
                             Diagnostics.RemoveDiagnosticsIn(unwrappedSyntax.Location)
-                            element = if rebindTupleElement != nil {
+                            element = if !allowExplicit && ContainsNestedLambdaSyntax(unwrappedSyntax) {
+                                bindExpressionWithTargetType(unwrappedSyntax, targetTuple.ElementTypes[i])
+                            } else if rebindTupleElement != nil {
                                 rebindTupleElement!!(element, unwrappedSyntax)
                             } else {
                                 bindExpression(unwrappedSyntax)

@@ -217,6 +217,17 @@ func TakeNullableDelegate(f (() -> string)?) string -> if f != nil { f() } else 
             yield Row("nullable-tuple-return-lambda-element", `func Run() {
     let make () -> (() -> string, int32)? = () -> (() -> Maybe(), 0)
 }`, "Maybe()")
+            yield Row("tuple-conversion-after-narrowing-invalidation", `struct Token {
+    shared {
+        func operator implicit(t Token) float64 -> 1.0
+    }
+}
+var guardedGlobal string? = "ok"
+func Run(token Token) {
+    if guardedGlobal != nil {
+        let t (float64, () -> string) = (token, () -> Maybe())
+    }
+}`, "Maybe()")
             yield Row("outer-lambda-tuple-element-capturing-param", `func Run() {
     let f (string?) -> (() -> string, int32) = (x string?) -> (() -> x, 0)
 }`, "x")

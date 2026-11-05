@@ -1411,6 +1411,26 @@ internal partial class ExpressionBinder {
     }
 
     private func BindExpressionWithTargetTypeCore(syntax ExpressionSyntax, targetType TypeSymbol) BoundExpression {
+        if IsNestedLambdaExpression(syntax) {
+            if lambdaSyntaxScopes.TryGetValue(syntax, out var savedLambdaScope) &&
+                IsStrictDescendantScope(savedLambdaScope, $scope) {
+                let outerScope = $scope
+                $scope = savedLambdaScope
+                try {
+                    return BindExpressionWithTargetTypeCoreInCurrentScope(syntax, targetType)
+                } finally {
+                    $scope = outerScope
+                }
+            }
+            lambdaSyntaxScopes[syntax] = $scope
+        }
+        return BindExpressionWithTargetTypeCoreInCurrentScope(syntax, targetType)
+    }
+
+    private func BindExpressionWithTargetTypeCoreInCurrentScope(
+        syntax ExpressionSyntax,
+        targetType TypeSymbol
+    ) BoundExpression {
         // Issue #3355: parentheses do not erase the expected type of a
         // general block expression or its trailing value.
         if syntax is ParenthesizedExpressionSyntax parenthesized {
@@ -1426,20 +1446,6 @@ internal partial class ExpressionBinder {
             return BindStackAllocExpression(stackAlloc, targetType)
         }
         if syntax is LambdaExpressionSyntax {
-            if lambdaSyntaxScopes.TryGetValue(syntax, out var savedLambdaScope) &&
-                IsStrictDescendantScope(savedLambdaScope, $scope) {
-                let outerScope = $scope
-                $scope = savedLambdaScope
-                try {
-                    if TryBindLambdaExpressionWithTargetType(syntax, targetType, out var reboundTargetTypedLambda) {
-                        return ConvertTargetTypedValue(syntax, reboundTargetTypedLambda!!, targetType)
-                    }
-                    return ConvertTargetTypedValue(syntax, BindExpression(syntax), targetType)
-                } finally {
-                    $scope = outerScope
-                }
-            }
-            lambdaSyntaxScopes[syntax] = $scope
             if TryBindLambdaExpressionWithTargetType(syntax, targetType, out var targetTypedLambda) {
                 return ConvertTargetTypedValue(syntax, targetTypedLambda!!, targetType)
             }
@@ -1592,7 +1598,7 @@ internal partial class ExpressionBinder {
             PushExpressionNarrowingFrame(nil)
         }
         try {
-            if syntax is LambdaExpressionSyntax {
+            if IsNestedLambdaExpression(syntax) {
                 lambdaSyntaxScopes[syntax] = $scope
             }
             expressionBindStep++
