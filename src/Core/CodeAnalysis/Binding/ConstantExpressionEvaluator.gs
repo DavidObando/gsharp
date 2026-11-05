@@ -370,7 +370,7 @@ internal shared class ConstantExpressionEvaluator {
             return false
         }
         if value == nil {
-            if runtimeType.IsValueType && Nullable.GetUnderlyingType(runtimeType) == nil {
+            if runtimeType.IsValueType && !NullableLifting.IsValueTypeNullableClr(runtimeType) {
                 return false
             }
             built = Expression.Constant(nil, runtimeType)

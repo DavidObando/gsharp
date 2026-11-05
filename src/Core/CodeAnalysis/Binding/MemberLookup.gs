@@ -3896,7 +3896,7 @@ internal class MemberLookup {
                     if erasedUnderlying == nil {
                         return false
                     }
-                    if !erasedUnderlying.IsValueType || Nullable.GetUnderlyingType(erasedUnderlying) != nil {
+                    if !erasedUnderlying.IsValueType || NullableLifting.IsValueTypeNullableClr(erasedUnderlying) {
                         erased = erasedUnderlying
                         return true
                     }
