@@ -50,16 +50,22 @@ internal partial class StatementBinder {
 
     private func BindIfStatement(syntax IfStatementSyntax) BoundStatement {
         if syntax.Initializer == nil {
+            let conditionEntryAliases = CaptureExternalCallableAliases()
             let condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
+            RestoreExternalCallableAliases(conditionEntryAliases)
             let removedFacts = ApplyConditionEffectsToNarrowings(syntax.Condition, condition)
-            testAliasesAt = AliasesAtTests(ApplyHeaderCallableEffects(condition), syntax.Condition, condition)
+            let (aliasesAt, callableWhenTrue, callableWhenFalse) = AliasesAtTests(
+                ApplyHeaderCallableEffects(condition),
+                syntax.Condition,
+                condition
+            )
+            testAliasesAt = aliasesAt
             let (thenNarrow, elseNarrow) = ClassifyIfConditionNarrowing(condition, removedFacts)
             testAliasesAt = nil
             // ADR-0166: pattern variables are in scope in the branch their
             // match dominates: when-true in the then-branch, when-false in the
             // else-branch (`if !(x is T t) { ... } else { use(t) }`).
             let (patternThen, patternElse) = PatternVariables.Classify(condition)
-            let callableEntry = CaptureExternalCallableAliases()
             let shadowFlow = ShadowBegin(condition)
             let joinEntry = binderCtx.Narrowing
             let joinExits = List[NarrowingState]()
@@ -68,6 +74,7 @@ internal partial class StatementBinder {
             } else {
                 BeginThenBranchConditionKills()
             }
+            RestoreExternalCallableAliases(callableWhenTrue)
             let thenStatement = BindWithPatternVariables(
                 patternThen,
                 () -> {
@@ -83,7 +90,7 @@ internal partial class StatementBinder {
             AddBranchExits(joinExits, thenStatement)
             ShadowAddBranch(shadowFlow, thenNarrow, thenStatement)
             let callableThenExit = CaptureExternalCallableAliases()
-            RestoreExternalCallableAliases(callableEntry)
+            RestoreExternalCallableAliases(callableWhenFalse)
             ShadowBeginBranch(shadowFlow)
             let elseStatement = if syntax.ElseClause == nil {
                 default(BoundStatement?)
@@ -106,7 +113,7 @@ internal partial class StatementBinder {
             }
             ShadowAddBranch(shadowFlow, elseNarrow, elseStatement)
             let callableElseExit = if syntax.ElseClause == nil {
-                callableEntry
+                callableWhenFalse
             } else {
                 CaptureExternalCallableAliases()
             }
@@ -143,13 +150,19 @@ internal partial class StatementBinder {
             ApplyInitializerEffectsToNarrowings(syntax.Initializer!!, initStatement)
             UpdateExternalCallableAliases(initStatement, initializerAliasesAtEntry)
         }
+        let initConditionEntryAliases = CaptureExternalCallableAliases()
         let initCondition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
+        RestoreExternalCallableAliases(initConditionEntryAliases)
         let initRemovedFacts = ApplyConditionEffectsToNarrowings(syntax.Condition, initCondition)
-        testAliasesAt = AliasesAtTests(ApplyHeaderCallableEffects(initCondition), syntax.Condition, initCondition)
+        let (initAliasesAt, initCallableWhenTrue, initCallableWhenFalse) = AliasesAtTests(
+            ApplyHeaderCallableEffects(initCondition),
+            syntax.Condition,
+            initCondition
+        )
+        testAliasesAt = initAliasesAt
         let (initThenNarrow, initElseNarrow) = ClassifyIfConditionNarrowing(initCondition, initRemovedFacts)
         testAliasesAt = nil
         let (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition)
-        let initCallableEntry = CaptureExternalCallableAliases()
         let initShadowFlow = ShadowBegin(initCondition, initStatement)
         let initJoinEntry = binderCtx.Narrowing
         let initJoinExits = List[NarrowingState]()
@@ -158,6 +171,7 @@ internal partial class StatementBinder {
         } else {
             BeginThenBranchConditionKills()
         }
+        RestoreExternalCallableAliases(initCallableWhenTrue)
         let initThen = BindWithPatternVariables(
             initPatternThen,
             () -> {
@@ -173,7 +187,7 @@ internal partial class StatementBinder {
         AddBranchExits(initJoinExits, initThen)
         ShadowAddBranch(initShadowFlow, initThenNarrow, initThen)
         let initCallableThenExit = CaptureExternalCallableAliases()
-        RestoreExternalCallableAliases(initCallableEntry)
+        RestoreExternalCallableAliases(initCallableWhenFalse)
         ShadowBeginBranch(initShadowFlow)
         let initElse = if syntax.ElseClause == nil {
             default(BoundStatement?)
@@ -196,7 +210,7 @@ internal partial class StatementBinder {
         }
         ShadowAddBranch(initShadowFlow, initElseNarrow, initElse)
         let initCallableElseExit = if syntax.ElseClause == nil {
-            initCallableEntry
+            initCallableWhenFalse
         } else {
             CaptureExternalCallableAliases()
         }
@@ -254,8 +268,10 @@ internal partial class StatementBinder {
         // an `if` condition: fold its callable effects into the alias state
         // before the branches are bound, then join the branch exits, exactly as
         // BindIfStatement does.
-        var callableEntry = CaptureExternalCallableAliases()
+        let callableEntry = CaptureExternalCallableAliases()
         var callableThenExit = callableEntry
+        var callableWhenFalse HashSet[VariableSymbol]? = nil
+        var clauseEntryAliases = callableEntry
         // The else-branch starts from the state before the header: the guard's facts hold only in the then-branch.
         let elseEntry = binderCtx.Narrowing
         var outerConditionKills = conditionKillJournal
@@ -270,9 +286,9 @@ internal partial class StatementBinder {
             conversions,
             bindTypeClause,
             (initializer ExpressionSyntax) -> {
+                clauseEntryAliases = CaptureExternalCallableAliases()
                 let bound = bindExpression(initializer, false)
-                ApplyHeaderCallableEffects(bound)
-                header.Add((initializer, bound))
+                RestoreExternalCallableAliases(clauseEntryAliases)
                 return bound
             },
             (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> bindLocalVariable(
@@ -281,8 +297,21 @@ internal partial class StatementBinder {
                 type
             ),
             (guardSyntax ExpressionSyntax) -> {
+                let guardEntryAliases = CaptureExternalCallableAliases()
                 let bound = bindExpressionWithTargetType(guardSyntax, TypeSymbol.Bool)
-                testAliasesAt = AliasesAtTests(ApplyHeaderCallableEffects(bound), guardSyntax, bound)
+                RestoreExternalCallableAliases(guardEntryAliases)
+                let (aliasesAt, guardWhenTrue, guardWhenFalse) = AliasesAtTests(
+                    ApplyHeaderCallableEffects(bound),
+                    guardSyntax,
+                    bound
+                )
+                testAliasesAt = aliasesAt
+                RestoreExternalCallableAliases(guardWhenTrue)
+                callableWhenFalse = if callableWhenFalse == nil {
+                    guardWhenFalse
+                } else {
+                    JoinAliases(callableWhenFalse, guardWhenFalse)
+                }
                 header.Add((guardSyntax, bound))
                 return bound
             },
@@ -292,19 +321,34 @@ internal partial class StatementBinder {
                 return guardThen
             },
             () -> {
-                callableEntry = CaptureExternalCallableAliases()
                 if syntax.ElseClause != nil {
                     outerConditionKills = BeginThenBranchConditionKills()
                     thenKillsStarted = true
                 }
                 let then = BindStatementWithNarrowing(syntax.ThenStatement, nil)
                 callableThenExit = CaptureExternalCallableAliases()
-                RestoreExternalCallableAliases(callableEntry)
+                RestoreExternalCallableAliases(callableWhenFalse ?? callableEntry)
                 return then
             },
-            syntax.ThenStatement
+            syntax.ThenStatement,
+            (clauseSyntax IfLetBindingClauseSyntax, bound IfLetBindingSupport.BoundIfLetBinding) -> {
+                RestoreExternalCallableAliases(clauseEntryAliases)
+                let (_, initWhenTrue, initWhenFalse) = AliasesAtTests(
+                    ApplyHeaderCallableEffects(bound.Initializer),
+                    clauseSyntax,
+                    bound.Initializer
+                )
+                RestoreExternalCallableAliases(initWhenTrue)
+                callableWhenFalse = if callableWhenFalse == nil {
+                    initWhenFalse
+                } else {
+                    JoinAliases(callableWhenFalse, initWhenFalse)
+                }
+                header.Add((clauseSyntax.Initializer, bound.Initializer))
+            }
         )
         testAliasesAt = nil
+        let callableElseEntry = callableWhenFalse ?? callableEntry
         // ADR-0208 R18: as for an `if` statement, the else-branch is bound without the facts that the conditions in
         // the then-branch removed. The header runs on the else path too, so a fact that it can remove stays removed.
         let restoredConditionKills = if thenKillsStarted {
@@ -323,7 +367,7 @@ internal partial class StatementBinder {
             EndThenBranchConditionKills(restoredConditionKills)
         }
         let callableElseExit = if syntax.ElseClause == nil {
-            callableEntry
+            callableElseEntry
         } else {
             CaptureExternalCallableAliases()
         }
@@ -828,10 +872,10 @@ internal partial class StatementBinder {
         return nil
     }
 
-    /// ADR-0208 R18 (#5534): a pattern runs after its operand is read, and a getter with user code in a property
+    /// ADR-0208 R18 (#5534, #5606): a pattern runs after its operand is read, and a getter with user code in a property
     /// sub-pattern can change the tested path (`x is Dog { P: 1 }` where `P` sets `x = nil`). Such a test proves
     /// nothing about the value a branch reads, so it narrows neither branch. The one statement rule
-    /// (cref:StatementKillsPath) decides, applied to the effects of the test, which include a call in a constant
+    /// (cref:StatementKillsPath) decides, applied to the effects of the pattern, which include a call in a constant
     /// pattern (`x is Read(h)`).
     private func TestMayRemoveItsOperandFact(
         isExpr BoundIsExpression,
@@ -845,7 +889,7 @@ internal partial class StatementBinder {
         if RunsNoCode(pattern) {
             return false
         }
-        return EffectsMayRemoveFactOf(isExpr.Expression, isExpr, isExpr, callableAliases)
+        return EffectsMayRemoveFactOf(isExpr.Expression, isExpr.Pattern, isExpr, callableAliases)
     }
 
     /// The one rule of (cref:TestMayRemoveItsOperandFact): whether the effects of [`effects`](paramref) can remove
@@ -853,7 +897,7 @@ internal partial class StatementBinder {
     /// (cref:StatementKillsPath). A switch arm's test and guard use it too (#5629).
     private func EffectsMayRemoveFactOf(
         operand BoundExpression,
-        effects BoundExpression,
+        effects BoundNode,
         test BoundIsExpression?,
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     ) bool {
@@ -864,7 +908,7 @@ internal partial class StatementBinder {
             return false
         }
         CompilationMeasurements.Count("narrowing.pattern-effect-walks")
-        if effects.Syntax is {} anchor {
+        if (effects.Syntax ?? test?.Syntax) is {} anchor {
             EnsureClosureAssignedNames(anchor)
         }
         var aliases IReadOnlyCollection[VariableSymbol] = callableAliases ?? externalCallableAliases
@@ -881,28 +925,31 @@ internal partial class StatementBinder {
         )
     }
 
-    /// ADR-0208 R18 (#5534): the callable aliases at each operand of a condition, when its header effects removed
-    /// some or it assigns a variable; otherwise `nil`, and the aliases after the condition apply. A test reads the
-    /// aliases at its own evaluation point, not after the whole condition: a later reassignment (`(x is action()) &&
-    /// (action = f) ...`) does not change it, and an earlier one to an external callable (`(action = callback) is
-    /// {} a && (x is action())`) does. One walk in evaluation order visits each operand once.
-    private func AliasesAtTests(
-        removed HashSet[VariableSymbol]?,
-        header SyntaxNode,
-        condition BoundExpression
-    ) Dictionary[BoundExpression, HashSet[VariableSymbol]]? {
+    /// ADR-0208 R18 (#5534, #5606): the callable aliases at each operand of a condition, when its header effects
+    /// removed some or it assigns a variable (otherwise `nil`), and the aliases after the condition when it is true
+    /// and when it is false. A test reads the aliases at its own evaluation point, not after the whole condition: a
+    /// later reassignment (`(x is action()) && (action = f) ...`) does not change it, and an earlier one to an
+    /// external callable (`(action = callback) is {} a && (x is action())`) does. One walk in evaluation order visits
+    /// each operand once.
+    private func AliasesAtTests(removed HashSet[VariableSymbol]?, header SyntaxNode, condition BoundExpression)(
+        AtTests Dictionary[BoundExpression, HashSet[VariableSymbol]]?,
+        WhenTrue HashSet[VariableSymbol],
+        WhenFalse HashSet[VariableSymbol]
+    ) {
         if (removed == nil || removed.Count == 0) && !header.DescendantNodesAndSelf().Any(
-            (node SyntaxNode) -> node is AssignmentExpressionSyntax
+            (node SyntaxNode) -> node is AssignmentExpressionSyntax or BlockExpressionSyntax
         ) {
-            return nil
+            let current = CaptureExternalCallableAliases()
+            return (nil, current, HashSet[VariableSymbol](current))
         }
+        EnsureClosureAssignedNames(header)
         let entry = HashSet[VariableSymbol](externalCallableAliases)
         if removed != nil {
             entry.UnionWith(removed)
         }
         let aliasesAt = Dictionary[BoundExpression, HashSet[VariableSymbol]]()
-        WalkTestAliases(condition, entry, aliasesAt)
-        return aliasesAt
+        let (whenTrue, whenFalse) = WalkTestAliases(condition, entry, aliasesAt, header)
+        return (aliasesAt, whenTrue, whenFalse)
     }
 
     // Records the aliases before each operand and returns the aliases after [`expression`](paramref) when it is true
@@ -911,33 +958,34 @@ internal partial class StatementBinder {
     private func WalkTestAliases(
         expression BoundExpression,
         before HashSet[VariableSymbol],
-        aliasesAt Dictionary[BoundExpression, HashSet[VariableSymbol]]
+        aliasesAt Dictionary[BoundExpression, HashSet[VariableSymbol]],
+        header SyntaxNode? = nil
     )(WhenTrue HashSet[VariableSymbol], WhenFalse HashSet[VariableSymbol]) {
         switch expression {
             case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
                 {
-                    let (leftTrue, leftFalse) = WalkTestAliases(binary.Left, before, aliasesAt)
-                    let (rightTrue, rightFalse) = WalkTestAliases(binary.Right, leftTrue, aliasesAt)
+                    let (leftTrue, leftFalse) = WalkTestAliases(binary.Left, before, aliasesAt, header)
+                    let (rightTrue, rightFalse) = WalkTestAliases(binary.Right, leftTrue, aliasesAt, header)
                     return (rightTrue, JoinAliases(leftFalse, rightFalse))
                 }
             }
             case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
                 {
-                    let (leftTrue, leftFalse) = WalkTestAliases(binary.Left, before, aliasesAt)
-                    let (rightTrue, rightFalse) = WalkTestAliases(binary.Right, leftFalse, aliasesAt)
+                    let (leftTrue, leftFalse) = WalkTestAliases(binary.Left, before, aliasesAt, header)
+                    let (rightTrue, rightFalse) = WalkTestAliases(binary.Right, leftFalse, aliasesAt, header)
                     return (JoinAliases(leftTrue, rightTrue), rightFalse)
                 }
             }
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
                 {
-                    let (operandTrue, operandFalse) = WalkTestAliases(unary.Operand, before, aliasesAt)
+                    let (operandTrue, operandFalse) = WalkTestAliases(unary.Operand, before, aliasesAt, header)
                     return (operandFalse, operandTrue)
                 }
             }
             default {
                 {
                     aliasesAt[expression] = before
-                    let after = AliasesAfter(expression, before)
+                    let after = AliasesAfter(expression, before, header)
                     return (after, after)
                 }
             }
@@ -955,7 +1003,11 @@ internal partial class StatementBinder {
 
     // The aliases after [`operand`](paramref) on every path, from the aliases before it. An assignment of an external
     // callable adds the alias.
-    private func AliasesAfter(operand BoundExpression, before HashSet[VariableSymbol]) HashSet[VariableSymbol] {
+    private func AliasesAfter(
+        operand BoundExpression,
+        before HashSet[VariableSymbol],
+        header SyntaxNode? = nil
+    ) HashSet[VariableSymbol] {
         if ContainsUserLabel(operand) {
             return HashSet[VariableSymbol]()
         }
@@ -968,6 +1020,7 @@ internal partial class StatementBinder {
         if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
             after.RemoveWhere(NamesClosureAssignedStorage)
         }
+        RemoveCollectorFilterAffectedAliases(after, operand.Syntax ?? header, collector)
         return after
     }
 
