@@ -383,6 +383,7 @@ class Owner {
     @InlineData("owner.Pick()", false)
     @InlineData("owner.Slot", false)
     @InlineData("TupleOpaque5023.External.Pick()", true)
+    @InlineData("TupleOpaque5023.External.Slot", true)
     @InlineData("owner.Pick()", true)
     @InlineData("owner.Slot", true)
     @InlineData("owner[0]", true)
@@ -411,6 +412,7 @@ class Owner {
     public static class External {
         public static Owner Current = new Owner();
         public static ref (Cell, int) Pick() => ref Current.Pick();
+        public static ref (Cell, int) Slot => ref Current.Pick();
     }
 }`, "TupleOpaque5023")
         for action in[]string{
@@ -767,6 +769,85 @@ Console.WriteLine(box.Value ?? "nil")`.Replace(
             }
         )
         Assert.Equal("v\nv\n", CompileAndRun(source))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func NativeConstrainedTuplePropertyWrite_PreservesRuntimeStorage(suspending bool) {
+        let source = `package Test
+import System
+import System.Threading.Tasks
+interface ICell[U] {
+    prop Value U { get; set }
+    prop Count int32 { get; set }
+}
+open class BaseCell {
+    var Stored object?
+    var Total int32
+    open prop Value object? {
+        get -> Stored
+        set { Stored = value }
+    }
+}
+class RefCell : BaseCell, ICell[object?] {
+    prop Count int32 {
+        get -> Total
+        set { Total = value }
+    }
+}
+struct ValueCell : ICell[object?] {
+    var Stored object?
+    var Total int32
+    prop Value object? {
+        get -> Stored
+        set { Stored = value }
+    }
+    prop Count int32 {
+        get -> Total
+        set { Total = value }
+    }
+}
+async func SetByInterface[T ICell[object?]](items [](T, int32), replacement T) {
+    items[0].Item1.Value = {
+        SUSPEND
+        if items.Length > 0 { items[0] = (replacement, 0) }
+        "v"
+    }
+    items[0].Item1.Count += {
+        SUSPEND
+        2
+    }
+}
+async func SetByClass[T BaseCell](items [](T, int32), replacement T) {
+    items[0].Item1.Value = {
+        SUSPEND
+        if items.Length > 0 { items[0] = (replacement, 0) }
+        "c"
+    }
+    items[0].Item1.Total = 5
+}
+let oldRef = RefCell{}
+let newRef = RefCell{}
+let refs = [](RefCell, int32){(oldRef, 0)}
+SetByInterface(refs, newRef).GetAwaiter().GetResult()
+Console.WriteLine("${oldRef.Stored ?? "nil"} ${newRef.Stored ?? "nil"} ${newRef.Total}")
+let values = [](ValueCell, int32){(ValueCell{}, 0)}
+SetByInterface(values, ValueCell{Stored: "r", Total: 10}).GetAwaiter().GetResult()
+Console.WriteLine("${values[0].Item1.Stored ?? "nil"} ${values[0].Item1.Total}")
+let oldClass = RefCell{}
+let newClass = RefCell{}
+let classes = [](RefCell, int32){(oldClass, 0)}
+SetByClass(classes, newClass).GetAwaiter().GetResult()
+Console.WriteLine("${oldClass.Stored ?? "nil"} ${newClass.Stored ?? "nil"} ${newClass.Total}")`.Replace(
+            "SUSPEND",
+            if suspending {
+                "await Task.Yield()"
+            } else {
+                ""
+            }
+        )
+        Assert.Equal("v nil 2\nv 12\nc nil 5\n", CompileAndRun(source))
     }
 
     @Theory

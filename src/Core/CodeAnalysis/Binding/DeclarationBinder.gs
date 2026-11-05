@@ -552,29 +552,31 @@ internal partial class DeclarationBinder {
     /// base-clause loop.
     internal func DetectClassInheritanceCycles(classSymbols IEnumerable[StructSymbol]) {
         let acyclic = HashSet[StructSymbol]()
-        for start in classSymbols {
-            if start.BaseClass == nil || acyclic.Contains(start) {
+        for start in classSymbols.Concat(nestedStructShells.Values.Where((s StructSymbol) -> s.IsClass)) {
+            let startDef = start.Definition ?? start
+            if startDef.BaseClass == nil || acyclic.Contains(startDef) {
                 continue
             }
             let path = List[StructSymbol]()
             let onPath = HashSet[StructSymbol]()
-            var current StructSymbol? = start
+            var current StructSymbol? = startDef
             while current != nil {
-                if onPath.Contains(current) {
-                    let baseLocation = GetBaseClauseLocation(current)
-                    Diagnostics.ReportClassInheritanceCycle(baseLocation, current.Name)
+                let currentDef = current.Definition ?? current
+                if onPath.Contains(currentDef) {
+                    let baseLocation = GetBaseClauseLocation(currentDef)
+                    Diagnostics.ReportClassInheritanceCycle(baseLocation, currentDef.Name)
                     // Break the back-edge so subsequent base-chain walks (member
                     // lookup, the emitter, etc.) terminate. Binding already
                     // failed, so the program will not be emitted.
-                    current.SetBaseClass(nil)
+                    currentDef.SetBaseClass(nil)
                     break
                 }
-                if acyclic.Contains(current) {
+                if acyclic.Contains(currentDef) {
                     break
                 }
-                path.Add(current)
-                onPath.Add(current)
-                current = current.BaseClass
+                path.Add(currentDef)
+                onPath.Add(currentDef)
+                current = currentDef.BaseClass
             }
             for node in path {
                 acyclic.Add(node)

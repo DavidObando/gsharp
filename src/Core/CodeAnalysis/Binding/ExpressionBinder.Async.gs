@@ -833,6 +833,21 @@ internal partial class ExpressionBinder {
                         return compoundResult
                     }
                 }
+                if boundReceiver.Type is TypeParameterSymbol{
+                    InterfaceConstraint: InterfaceSymbol compoundInterfaceConstraint
+                } {
+                    let compoundResult BoundExpression? = TryBindInterfaceCompoundAssignment(
+                        compoundInterfaceConstraint,
+                        boundReceiver,
+                        eventName,
+                        eventNameSyntax,
+                        syntax,
+                        baseOpSyntaxKind
+                    )
+                    if compoundResult != nil {
+                        return compoundResult
+                    }
+                }
                 if isEventCapableOperator && boundReceiver.Type is InterfaceSymbol eventInterface {
                     eventInfo = MemberLookup.GetInterfaceImportedBaseInstanceEvent(
                         eventInterface,

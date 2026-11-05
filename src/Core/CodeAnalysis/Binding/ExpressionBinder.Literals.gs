@@ -3639,19 +3639,25 @@ internal partial class ExpressionBinder {
                     continue
                 }
             }
-            if tp.InterfaceConstraint is InterfaceSymbol interfaceConstraint &&
-                !interfaceConstraint.IsGenericDefinition &&
-                interfaceConstraint
-                .TypeArguments
-                .IsDefaultOrEmpty &&
-                TypeMemberModel
-                .TryGetProperty(interfaceConstraint, memberName, out var ifaceProp, out _) {
-                if !ifaceProp!!.HasSetter {
+            if tp.InterfaceConstraint is InterfaceSymbol interfaceConstraint && TypeMemberModel.TryGetPropertyWithOwner(
+                interfaceConstraint,
+                memberName,
+                out var ifacePropCandidate,
+                out var ifaceOwner
+            ) {
+                let ifaceProp = ifacePropCandidate!!
+                if !ifaceProp.HasSetter {
                     Diagnostics.ReportCannotAssign(initSyntax.FieldIdentifier.Location, memberName)
                     let _ = BindExpression(initSyntax.Value)
                     continue
                 }
-                let ifacePropConverted = BindExpression(initSyntax.Value, ifaceProp!!.Type)
+                let effectiveInterface = Invariant.Required(
+                    ifaceOwner as InterfaceSymbol,
+                    "an interface property has an effective interface owner",
+                    expression: "ifaceOwner as InterfaceSymbol"
+                )
+                let propertyType = effectiveInterface.SubstituteMemberType(ifaceProp.Type)
+                let ifacePropConverted = BindExpression(initSyntax.Value, propertyType)
                 statements.Add(
                     BoundExpressionStatement(
                         initSyntax,
@@ -3659,8 +3665,14 @@ internal partial class ExpressionBinder {
                             initSyntax,
                             receiverExpr,
                             nil,
-                            ifaceProp!!,
-                            ifacePropConverted
+                            ifaceProp,
+                            ifacePropConverted,
+                            if object.ReferenceEquals(propertyType, ifaceProp.Type) {
+                                default(TypeSymbol?)
+                            } else {
+                                propertyType
+                            },
+                            effectiveInterface
                         )
                     )
                 )

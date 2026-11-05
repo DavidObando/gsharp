@@ -3090,8 +3090,13 @@ internal partial class DeclarationBinder {
             derived StructSymbol,
             baseProperty PropertySymbol,
             overrideType TypeSymbol
+        ) bool -> PropertyOverrideTypeConforms(derived, baseProperty.Type, overrideType)
+
+        internal func PropertyOverrideTypeConforms(
+            derived StructSymbol,
+            baseType TypeSymbol,
+            overrideType TypeSymbol
         ) bool {
-            let baseType = baseProperty.Type
             if object.ReferenceEquals(baseType, TypeSymbol.Error) || object.ReferenceEquals(
                 overrideType,
                 TypeSymbol.Error

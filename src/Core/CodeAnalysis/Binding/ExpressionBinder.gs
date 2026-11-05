@@ -1906,11 +1906,13 @@ internal partial class ExpressionBinder {
         }
         switch member {
             case clrProp is PropertyInfo when GetVisibleGetter(clrProp, fromDerivedType: true) != nil {
-                bound = BoundClrPropertyAccessExpression(
-                    nil,
-                    receiver,
-                    clrProp,
-                    GetInheritedClrMemberType(receiver!!.Type, clrProp)
+                bound = ConversionClassifier.AutoDereferenceRefReturn(
+                    BoundClrPropertyAccessExpression(
+                        nil,
+                        receiver,
+                        clrProp,
+                        GetInheritedClrMemberType(receiver!!.Type, clrProp)
+                    )
                 )
                 return true
             }
