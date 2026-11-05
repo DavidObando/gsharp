@@ -482,8 +482,45 @@ internal class ConversionClassifier {
             // implementation builds calls or chains through other conversions.
             result.ImplicitConversionOperand = expression
         }
+        if !object.ReferenceEquals(result, expression) {
+            // An identity conversion returns its operand. Its conversion was checked where it was bound,
+            // in its own checked or unchecked context.
+            ReportOutOfRangeFloatingConstantConversion(diagnosticLocation, result)
+        }
         onConversionBound?.Invoke(expression, result, beforeVersion)
         return result
+    }
+
+    /// Reports GS0635 when a constant floating-point value that is NaN or out of range converts to an
+    /// integer type outside an explicit `unchecked` context (#5767, ADR-0219). C# reports CS0221 here.
+    /// The value is folded with the rule of (cref:ConstantExpressionEvaluator.TryConvertFloatingConstant)
+    /// in every context, so the compiler that runs on .NET 10 and on .NET 11 emits the same constant.
+    /// @param location The conversion location.
+    /// @param result The bound conversion.
+    private func ReportOutOfRangeFloatingConstantConversion(location TextLocation, result BoundExpression) {
+        if binderCtx.IsUncheckedContext || result is not BoundConversionExpression || result.Type.ClrType == nil {
+            return
+        }
+        let operand = cast[BoundConversionExpression](result).Expression
+        if operand.Type != TypeSymbol.Float64 && operand.Type != TypeSymbol.Float32 {
+            return
+        }
+        if ConstantExpressionEvaluator.TryEvaluate(operand, out var value) &&
+            value != nil &&
+            ConstantExpressionEvaluator
+            .TryConvertFloatingConstant(
+            Convert.ToDouble(value, CultureInfo.InvariantCulture),
+            result.Type.ClrType!!,
+            out _,
+            out var inRange
+        ) &&
+            !inRange {
+            Diagnostics.ReportConstantFloatingConversionOutOfRange(
+                location,
+                Convert.ToString(value, CultureInfo.InvariantCulture)!!,
+                result.Type
+            )
+        }
     }
 
     /// Replaces a narrowed member read with its declared read when the conversion to [`target`](paramref)

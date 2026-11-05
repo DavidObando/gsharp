@@ -705,6 +705,14 @@ These complement the existing top-level statement diagnostics in the main table 
 | --- | --- | --- | --- |
 | GS0634 | Error | An executable (`/target:exe`, `<OutputType>Exe</OutputType>`) has no entry point: no `Main` function and no top-level statements. Mirrors C# CS5001. When a function differs from `Main` only in case, such as Go-style `func main()`, the message adds "Did you mean 'Main'?" and the diagnostic is on that function. | Rename `func main()` to `func Main()`, write top-level statements, or set `<OutputType>Library</OutputType>`. A test project gets an empty generated entry point from the SDK; set `<GenerateProgramFile>false</GenerateProgramFile>` if it declares its own. |
 
+## Constant floating-point conversion diagnostics (GS0635)
+
+gsc folds a constant `float32` or `float64` value that converts to an integer type or `char`. A value in range truncates toward zero. Run-time conversions of a value that is NaN or out of range give different results on .NET 10 and .NET 11, so such a constant needs an explicit `unchecked` context. See [ADR-0219](adr/0219-floating-constant-integer-conversions.md) and issue #5767.
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0635 | Error | A constant floating-point value that is NaN or out of the range of the target integer type converts outside an explicit `unchecked(...)` expression or `unchecked { }` block, for example `const a int8 = int8(300.5)`. The default context and `checked` both report it. Mirrors C# CS0221. | Correct the value, or write `unchecked(int8(300.5))` to accept the saturated value: the nearest bound of the type (`127` here), or `0` for NaN. |
+
 ## Field declaration diagnostics (GS0288)
 
 See [ADR-0067](adr/0067-fields-require-var-keyword.md). Field declarations inside class/struct bodies must use `var` or `let`.

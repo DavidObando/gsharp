@@ -3642,7 +3642,7 @@ internal partial class DeclarationBinder {
             this.binderCtx.CurrentTypeParameters = nil
         }
         try {
-            using let _ = binderCtx.PushCheckedContext(false)
+            using let _ = binderCtx.PushDefaultCheckedContext()
             using let _ = PushStaticMemberScope(structSymbol)
             action()
         } finally {

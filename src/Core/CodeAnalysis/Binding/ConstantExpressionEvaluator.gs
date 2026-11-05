@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.Binding
 
 import System
 import System.Diagnostics.CodeAnalysis
+import System.Globalization
 import System.Linq.Expressions
 import System.Reflection
 import GSharp.Core.CodeAnalysis.Symbols
@@ -421,6 +422,25 @@ internal shared class ConstantExpressionEvaluator {
             converted = source
             return true
         }
+        if IsFloatingRuntimeType(source.Type) && IsIntegralConstantTarget(targetType) {
+            // #5767: do not let the JIT of the host runtime convert the value. The result of
+            // Expression.Convert for an out-of-range value changed in .NET 11.
+            converted = nil
+            if !TryInvoke(source, out var operand) || operand == nil {
+                return false
+            }
+            if !TryConvertFloatingConstant(
+                Convert.ToDouble(operand, CultureInfo.InvariantCulture),
+                targetType,
+                out var value,
+                out var inRange
+            ) ||
+                (isChecked && !inRange) {
+                return false
+            }
+            converted = Expression.Constant(value, targetType)
+            return true
+        }
         converted = if isChecked {
             Expression.ConvertChecked(source, targetType)
         } else {
@@ -428,6 +448,134 @@ internal shared class ConstantExpressionEvaluator {
         }
         return true
     }
+
+    /// Converts a floating-point constant to an integer type with the G# constant rule (#5767, ADR-0219).
+    /// The result does not depend on the runtime that hosts gsc. A value in range truncates toward zero.
+    /// A value out of range saturates at the bounds of the type, and NaN converts to 0. The .NET 11 runtime
+    /// uses the same rule for unchecked conversions.
+    /// @param value The constant value.
+    /// @param targetType The integer or `char` runtime type.
+    /// @param converted The converted value, boxed as [`targetType`](paramref).
+    /// @param inRange `false` when [`value`](paramref) is NaN or out of the range of the type.
+    /// @returns `false` when [`targetType`](paramref) is not a fixed-width integer type or `char`.
+    func TryConvertFloatingConstant(
+        value float64,
+        targetType Type,
+        @NotNullWhen(true) out converted object?,
+        out inRange bool
+    ) bool {
+        converted = nil
+        inRange = false
+        if !TryGetIntegralBounds(targetType, out var typeCode, out var lower, out var upperExclusive) {
+            return false
+        }
+        let truncated = Math.Truncate(value)
+        inRange = !float64.IsNaN(value) && truncated >= lower && truncated < upperExclusive
+        converted = if inRange && lower < 0.0 {
+            Convert.ChangeType(int64(truncated), typeCode, CultureInfo.InvariantCulture)
+        } else if inRange {
+            Convert.ChangeType(uint64(truncated), typeCode, CultureInfo.InvariantCulture)
+        } else if float64.IsNaN(value) {
+            Convert.ChangeType(0, typeCode, CultureInfo.InvariantCulture)
+        } else if value < 0.0 {
+            GetIntegralMinimum(typeCode)
+        } else {
+            GetIntegralMaximum(typeCode)
+        }
+        return true
+    }
+
+    private func TryGetIntegralBounds(
+        type Type,
+        out typeCode TypeCode,
+        out lower float64,
+        out upperExclusive float64
+    ) bool {
+        lower = 0.0
+        upperExclusive = 0.0
+        typeCode = if type.IsSameAs(typeof(int8)) {
+            TypeCode.SByte
+        } else if type.IsSameAs(typeof(uint8)) {
+            TypeCode.Byte
+        } else if type.IsSameAs(typeof(int16)) {
+            TypeCode.Int16
+        } else if type.IsSameAs(typeof(uint16)) {
+            TypeCode.UInt16
+        } else if type.IsSameAs(typeof(char)) {
+            TypeCode.Char
+        } else if type.IsSameAs(typeof(int32)) {
+            TypeCode.Int32
+        } else if type.IsSameAs(typeof(uint32)) {
+            TypeCode.UInt32
+        } else if type.IsSameAs(typeof(int64)) {
+            TypeCode.Int64
+        } else if type.IsSameAs(typeof(uint64)) {
+            TypeCode.UInt64
+        } else {
+            TypeCode.Empty
+        }
+        // Each bound is a power of two, so it is exact as a float64.
+        switch typeCode {
+            case TypeCode.SByte {
+                lower = -128.0
+                upperExclusive = 128.0
+            }
+            case TypeCode.Byte {
+                upperExclusive = 256.0
+            }
+            case TypeCode.Int16 {
+                lower = -32768.0
+                upperExclusive = 32768.0
+            }
+            case TypeCode.UInt16, TypeCode.Char {
+                upperExclusive = 65536.0
+            }
+            case TypeCode.Int32 {
+                lower = -2147483648.0
+                upperExclusive = 2147483648.0
+            }
+            case TypeCode.UInt32 {
+                upperExclusive = 4294967296.0
+            }
+            case TypeCode.Int64 {
+                lower = -9223372036854775808.0
+                upperExclusive = 9223372036854775808.0
+            }
+            case TypeCode.UInt64 {
+                upperExclusive = 18446744073709551616.0
+            }
+            default {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func GetIntegralMinimum(typeCode TypeCode) object -> switch typeCode {
+        case TypeCode.SByte: int8.MinValue
+        case TypeCode.Int16: int16.MinValue
+        case TypeCode.Int32: int32.MinValue
+        case TypeCode.Int64: int64.MinValue
+        default: Convert.ChangeType(0, typeCode, CultureInfo.InvariantCulture)
+    }
+
+    private func GetIntegralMaximum(typeCode TypeCode) object -> switch typeCode {
+        case TypeCode.SByte: int8.MaxValue
+        case TypeCode.Byte: uint8.MaxValue
+        case TypeCode.Int16: int16.MaxValue
+        case TypeCode.UInt16: uint16.MaxValue
+        case TypeCode.Char: char.MaxValue
+        case TypeCode.Int32: int32.MaxValue
+        case TypeCode.UInt32: uint32.MaxValue
+        case TypeCode.Int64: int64.MaxValue
+        default: uint64.MaxValue
+    }
+
+    private func IsIntegralConstantTarget(type Type) bool -> TryGetIntegralBounds(type, out _, out _, out _)
+
+    private func IsFloatingRuntimeType(type Type) bool -> type.IsSameAs(typeof(float64)) || type.IsSameAs(
+        typeof(float32)
+    )
 
     private func TryInvoke(expression Expression, out value object?) bool {
         let boxed = if expression.Type.IsSameAs(typeof(object)) {
