@@ -2484,12 +2484,19 @@ public struct ExtPair
     public int X;
     public int Y;
 }
+public record RecordPoint(int X, int Y);
 public static class PairExtensions
 {
     public static void Deconstruct(this ExtPair p, out int x, out int y)
     {
         x = p.X;
         y = p.Y;
+    }
+    public static void Deconstruct(this RecordPoint p, out int x, out int y, out int sum)
+    {
+        x = p.X;
+        y = p.Y;
+        sum = p.X + p.Y;
     }
 }
 public class Demo
@@ -2518,20 +2525,29 @@ public class Demo
         foreach (var (_, _) in items) total += 1;
         return s.Length + total + 1;
     }
+    public static int LoopRecordExtensionDiscards(ref string? s, RecordPoint[] points)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (_, _, _) in points) total += 1;
+        return s.Length + total + 2;
+    }
     public static string Run()
     {
         string? text = "abc";
         var p = new Pair { A = 2, B = 3 };
         var items = new[] { p, new Pair { A = 4, B = 5 } };
         return StraightLine(ref text, p, new Box<string>("hi", 6), new ExtPair { X = 7, Y = 8 }) + "," +
-            LoopItems(ref text, items) + "," + LoopDiscards(ref text, items);
+            LoopItems(ref text, items) + "," + LoopDiscards(ref text, items) + "," +
+            LoopRecordExtensionDiscards(ref text, new[] { new RecordPoint(1, 2) });
     }
 }`)
         Assert.Contains("return s.Length + a + b + x + y + text!!.Length + count + ex + ey", printed)
         Assert.Contains("total += a + b + s!!.Length", printed)
         Assert.Contains("return s!!.Length + total\n", printed.Replace("\r\n", "\n"))
         Assert.Contains("return s!!.Length + total + 1", printed)
-        Assert.Equal(3, Regex.Matches(printed, `s!!`).Count)
+        Assert.Contains("return s!!.Length + total + 2", printed)
+        Assert.Equal(4, Regex.Matches(printed, `s!!`).Count)
     }
 
     shared {

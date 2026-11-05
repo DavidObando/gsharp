@@ -5936,19 +5936,12 @@ internal partial class StatementBinder {
                 aggregate.Fields.Cast[Symbol]().ToImmutableArray()
             }
             if syntax.Identifiers.Count != members.Length {
-                if TryBindSourceDeconstruct(
+                if TryBindDeconstruct(
                     initializer,
                     syntax.Identifiers,
                     syntax.OpenParenToken.Location,
                     isReadOnly,
                     out var dataExtensionStatements
-                ) ||
-                    TryBindImportedDeconstruct(
-                    initializer,
-                    syntax.Identifiers,
-                    syntax.OpenParenToken.Location,
-                    isReadOnly,
-                    out dataExtensionStatements
                 ) {
                     return BoundBlockStatement(syntax, dataExtensionStatements)
                 }
@@ -5998,16 +5991,7 @@ internal partial class StatementBinder {
             }
             return BoundBlockStatement(syntax, statements.ToImmutable())
         }
-        if TryBindSourceDeconstruct(
-            initializer,
-            syntax.Identifiers,
-            syntax.OpenParenToken.Location,
-            isReadOnly,
-            out var sourceDeconstructStatements
-        ) {
-            return BoundBlockStatement(syntax, sourceDeconstructStatements)
-        }
-        if TryBindImportedDeconstruct(
+        if TryBindDeconstruct(
             initializer,
             syntax.Identifiers,
             syntax.OpenParenToken.Location,
@@ -6121,19 +6105,12 @@ internal partial class StatementBinder {
                 aggregate.Fields.Cast[Symbol]().ToImmutableArray()
             }
             if identifiers.Count != members.Length {
-                if TryBindSourceDeconstruct(
+                if TryBindDeconstruct(
                     elementAccessBase,
                     identifiers,
                     openParenLocation,
                     isReadOnly: true,
                     out var dataExtensionStatements
-                ) ||
-                    TryBindImportedDeconstruct(
-                    elementAccessBase,
-                    identifiers,
-                    openParenLocation,
-                    isReadOnly: true,
-                    out dataExtensionStatements
                 ) {
                     return dataExtensionStatements
                 }
@@ -6171,16 +6148,7 @@ internal partial class StatementBinder {
             }
             return statements.ToImmutable()
         }
-        if TryBindSourceDeconstruct(
-            elementAccessBase,
-            identifiers,
-            openParenLocation,
-            isReadOnly: true,
-            out var sourceDeconstructStatements
-        ) {
-            return sourceDeconstructStatements
-        }
-        if TryBindImportedDeconstruct(
+        if TryBindDeconstruct(
             elementAccessBase,
             identifiers,
             openParenLocation,
@@ -6196,7 +6164,229 @@ internal partial class StatementBinder {
         return ImmutableArray[BoundStatement].Empty
     }
 
-    private func TryBindSourceDeconstruct(
+    private func TryBindDeconstruct(
+        receiver BoundExpression,
+        identifiers GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[SyntaxToken],
+        location TextLocation,
+        isReadOnly bool,
+        out statements ImmutableArray[BoundStatement]
+    ) bool {
+        return TryBindSourceInstanceDeconstruct(receiver, identifiers, location, isReadOnly, out statements) ||
+            TryBindImportedDeconstruct(
+            receiver,
+            identifiers,
+            location,
+            isReadOnly,
+            out statements,
+            includeInstance: true,
+            includeExtensions: false
+        ) ||
+            TryBindSourceExtensionDeconstruct(receiver, identifiers, location, isReadOnly, out statements) ||
+            TryBindImportedDeconstruct(
+            receiver,
+            identifiers,
+            location,
+            isReadOnly,
+            out statements,
+            includeInstance: false,
+            includeExtensions: true
+        )
+    }
+
+    private func TryBindSourceInstanceDeconstruct(
+        receiver BoundExpression,
+        identifiers GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[SyntaxToken],
+        location TextLocation,
+        isReadOnly bool,
+        out statements ImmutableArray[BoundStatement]
+    ) bool {
+        statements = default(ImmutableArray[BoundStatement])
+        let receiverType = receiver.Type
+        if receiverType == nil ||
+            receiverType == TypeSymbol.Error ||
+            receiverType.ReferenceNullability == ReferenceNullabilityKind.Nullable ||
+            NullableLifting.IsAnyValueTypeNullable(receiverType.StripToBareShape() as NullableTypeSymbol) {
+            return false
+        }
+        let bareReceiverType = if receiverType is NullabilityAnnotatedTypeSymbol annotated {
+            annotated.BaseType
+        } else {
+            receiverType
+        }
+        let instanceMatches = List[(Method FunctionSymbol, DeclaringInterface InterfaceSymbol?)]()
+        let rootIface = (bareReceiverType as InterfaceSymbol) ??
+            (bareReceiverType as TypeParameterSymbol)?.InterfaceConstraint
+        if rootIface != nil {
+            for iface in rootIface.SelfAndAllBaseInterfaces() {
+                iface.EnsureMembersResolved()
+                for candidate in iface.Methods {
+                    if candidate.Name == "Deconstruct" &&
+                        IsMatchingSourceInstanceDeconstruct(candidate, identifiers.Count, bareReceiverType, iface) {
+                        AddUniqueInterfaceDeconstructMatch(instanceMatches, candidate, iface)
+                    }
+                }
+            }
+            if bareReceiverType is InterfaceSymbol && AccessibilityChecker.IsAccessible(
+                Accessibility.Private,
+                rootIface.Definition ?? rootIface,
+                getCurrentFunction()
+            ) {
+                for candidate in rootIface.GetPrivateMethods("Deconstruct") {
+                    if IsMatchingSourceInstanceDeconstruct(candidate, identifiers.Count, bareReceiverType, rootIface) {
+                        AddUniqueInterfaceDeconstructMatch(instanceMatches, candidate, rootIface)
+                    }
+                }
+            }
+        } else {
+            let instanceOverloads = MemberLookup.CollectSourceInstanceMethods(bareReceiverType, "Deconstruct")
+            for candidate in instanceOverloads {
+                if IsMatchingSourceInstanceDeconstruct(
+                    candidate,
+                    identifiers.Count,
+                    bareReceiverType,
+                    candidate.ReceiverType
+                ) {
+                    instanceMatches.Add((candidate, default(InterfaceSymbol?)))
+                }
+            }
+            if instanceMatches.Count == 0 {
+                let structRecv = (bareReceiverType as StructSymbol) ??
+                    (bareReceiverType as TypeParameterSymbol)?.ClassConstraint as StructSymbol
+                if structRecv != nil {
+                    let seenInterfaces = HashSet[InterfaceSymbol]()
+                    for current in structRecv.GetHierarchy() {
+                        for iface in current.Interfaces {
+                            if iface == nil {
+                                continue
+                            }
+                            for baseIface in iface.SelfAndAllBaseInterfaces() {
+                                if !seenInterfaces.Add(baseIface) {
+                                    continue
+                                }
+                                baseIface.EnsureMembersResolved()
+                                for candidate in baseIface.Methods {
+                                    if candidate.Name == "Deconstruct" && InterfaceSymbol.HasDefaultBody(candidate) &&
+                                        IsMatchingSourceInstanceDeconstruct(
+                                        candidate,
+                                        identifiers.Count,
+                                        bareReceiverType,
+                                        baseIface
+                                    ) {
+                                        AddUniqueInterfaceDeconstructMatch(instanceMatches, candidate, baseIface)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if instanceMatches.Count == 0 {
+            return false
+        }
+        if instanceMatches.Count > 1 && instanceMatches[0].Method.ReceiverType is StructSymbol firstOwner {
+            let mostDerived = List[(Method FunctionSymbol, DeclaringInterface InterfaceSymbol?)]()
+            for match in instanceMatches {
+                if object.ReferenceEquals(match.Method.ReceiverType, firstOwner) {
+                    mostDerived.Add(match)
+                }
+            }
+            if mostDerived.Count > 0 {
+                instanceMatches.Clear()
+                instanceMatches.AddRange(mostDerived)
+            }
+        }
+        if instanceMatches.Count > 1 {
+            let signatures = [instanceMatches.Count]string
+            for var i = 0; i < signatures.Length; i++ {
+                signatures[i] = Binder.FormatOverloadSignature(instanceMatches[i].Method)
+            }
+            Diagnostics.ReportAmbiguousOverload(location, "Deconstruct", instanceMatches.Count, signatures)
+            DeclareErrorTypedLocals(identifiers)
+            statements = ImmutableArray[BoundStatement].Empty
+            return true
+        }
+        let selected = instanceMatches[0]
+        let method = selected.Method
+        let substitution = OverloadResolver.TryBuildReceiverSubstitution(bareReceiverType)
+        let parameterOffset = if method.ExplicitReceiverParameter == nil {
+            0
+        } else {
+            1
+        }
+        let arguments = ImmutableArray.CreateBuilder[BoundExpression](identifiers.Count)
+        let declarations = ImmutableArray.CreateBuilder[BoundStatement](identifiers.Count)
+        for var i = 0; i < identifiers.Count; i++ {
+            var elementType = method.Parameters[i + parameterOffset].Type
+            if substitution != nil {
+                elementType = Binder.SubstituteType(
+                    elementType,
+                    substitution,
+                    $scope.References!!.MapClrTypeToReferences
+                )
+            }
+            if elementType is ByRefTypeSymbol byRef {
+                elementType = byRef.PointeeType
+            }
+            let temp = LocalVariableSymbol(
+                "<deconstruct${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
+                isReadOnly: false,
+                elementType
+            )
+            $scope.TryDeclareVariable(temp)
+            arguments.Add(BoundAddressOfExpression(nil, BoundVariableExpression(nil, temp)))
+            if !IsDiscard(identifiers[i]) {
+                let variable = bindLocalVariable(identifiers[i], isReadOnly, elementType)
+                declarations.Add(BoundVariableDeclaration(identifiers[i], variable, BoundVariableExpression(nil, temp)))
+            }
+        }
+        var declaringInterface = selected.DeclaringInterface
+        if declaringInterface != nil && substitution != nil {
+            declaringInterface = Binder.SubstituteType(
+                declaringInterface,
+                substitution,
+                $scope.References!!.MapClrTypeToReferences
+            ) as InterfaceSymbol ??
+                declaringInterface
+        }
+        var callReceiver = receiver
+        if declaringInterface != nil && bareReceiverType is StructSymbol && callReceiver.Type != declaringInterface {
+            callReceiver = conversions.BindConversion(location, callReceiver, declaringInterface)
+        }
+        let constrainedTp = bareReceiverType as TypeParameterSymbol
+        let call = BoundUserInstanceCallExpression(
+            nil,
+            callReceiver,
+            method,
+            arguments.MoveToImmutable(),
+            nil,
+            constrainedTp,
+            declaringInterface ?? constrainedTp?.InterfaceConstraint
+        )
+        let result = ImmutableArray.CreateBuilder[BoundStatement](declarations.Count + 1)
+        result.Add(BoundExpressionStatement(nil, call))
+        result.AddRange(declarations)
+        statements = result.ToImmutable()
+        return true
+    }
+
+    private func AddUniqueInterfaceDeconstructMatch(
+        matches List[(Method FunctionSymbol, DeclaringInterface InterfaceSymbol?)],
+        candidate FunctionSymbol,
+        declaringInterface InterfaceSymbol
+    ) {
+        for existing in matches {
+            if object.ReferenceEquals(existing.Method, candidate) || BoundScope.FunctionSignaturesEqual(
+                existing.Method,
+                candidate
+            ) {
+                return
+            }
+        }
+        matches.Add((candidate, declaringInterface))
+    }
+
+    private func TryBindSourceExtensionDeconstruct(
         receiver BoundExpression,
         identifiers GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[SyntaxToken],
         location TextLocation,
@@ -6207,140 +6397,6 @@ internal partial class StatementBinder {
         let receiverType = receiver.Type
         if receiverType == nil || receiverType == TypeSymbol.Error {
             return false
-        }
-        if receiverType.ReferenceNullability != ReferenceNullabilityKind.Nullable &&
-            !NullableLifting
-            .IsAnyValueTypeNullable(receiverType.StripToBareShape() as NullableTypeSymbol) {
-            let bareReceiverType = if receiverType is NullabilityAnnotatedTypeSymbol annotated {
-                annotated.BaseType
-            } else {
-                receiverType
-            }
-            var instanceOverloads = MemberLookup.CollectSourceInstanceMethods(bareReceiverType, "Deconstruct")
-            if bareReceiverType is InterfaceSymbol ifaceRecv && AccessibilityChecker.IsAccessible(
-                Accessibility.Private,
-                ifaceRecv.Definition ?? ifaceRecv,
-                getCurrentFunction()
-            ) {
-                let privateOverloads = ifaceRecv.GetPrivateMethods("Deconstruct")
-                if !privateOverloads.IsDefaultOrEmpty {
-                    instanceOverloads = instanceOverloads.AddRange(privateOverloads)
-                }
-            }
-            let instanceMatches = List[FunctionSymbol]()
-            for candidate in instanceOverloads {
-                if IsMatchingSourceInstanceDeconstruct(candidate, identifiers.Count, bareReceiverType) {
-                    instanceMatches.Add(candidate)
-                }
-            }
-            if instanceMatches.Count == 0 {
-                let structRecv = (bareReceiverType as StructSymbol) ??
-                    (bareReceiverType as TypeParameterSymbol)?.ClassConstraint as StructSymbol
-                if structRecv != nil {
-                    for current in structRecv.GetHierarchy() {
-                        for iface in current.Interfaces {
-                            if iface == nil {
-                                continue
-                            }
-                            let ifaceCandidates = TypeMemberModel.GetMethods(
-                                iface,
-                                "Deconstruct",
-                                MemberQuery.Instance(MemberKinds.Method)
-                            )
-                            for candidate in ifaceCandidates {
-                                if InterfaceSymbol.HasDefaultBody(candidate) &&
-                                    IsMatchingSourceInstanceDeconstruct(
-                                    candidate,
-                                    identifiers.Count,
-                                    bareReceiverType
-                                ) {
-                                    instanceMatches.Add(candidate)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if instanceMatches.Count > 0 {
-                if instanceMatches.Count > 1 && instanceMatches[0].ReceiverType is StructSymbol firstOwner {
-                    let mostDerived = List[FunctionSymbol]()
-                    for match in instanceMatches {
-                        if object.ReferenceEquals(match.ReceiverType, firstOwner) {
-                            mostDerived.Add(match)
-                        }
-                    }
-                    if mostDerived.Count > 0 {
-                        instanceMatches.Clear()
-                        instanceMatches.AddRange(mostDerived)
-                    }
-                }
-                if instanceMatches.Count > 1 {
-                    let signatures = [instanceMatches.Count]string
-                    for var i = 0; i < signatures.Length; i++ {
-                        signatures[i] = Binder.FormatOverloadSignature(instanceMatches[i])
-                    }
-                    Diagnostics.ReportAmbiguousOverload(location, "Deconstruct", instanceMatches.Count, signatures)
-                    DeclareErrorTypedLocals(identifiers)
-                    statements = ImmutableArray[BoundStatement].Empty
-                    return true
-                }
-                let method = instanceMatches[0]
-                let substitution = OverloadResolver.TryBuildReceiverSubstitution(bareReceiverType)
-                let parameterOffset = if method.ExplicitReceiverParameter == nil {
-                    0
-                } else {
-                    1
-                }
-                let arguments = ImmutableArray.CreateBuilder[BoundExpression](identifiers.Count)
-                let declarations = ImmutableArray.CreateBuilder[BoundStatement](identifiers.Count)
-                for var i = 0; i < identifiers.Count; i++ {
-                    var elementType = method.Parameters[i + parameterOffset].Type
-                    if substitution != nil {
-                        elementType = Binder.SubstituteType(
-                            elementType,
-                            substitution,
-                            $scope.References!!.MapClrTypeToReferences
-                        )
-                    }
-                    if elementType is ByRefTypeSymbol byRef {
-                        elementType = byRef.PointeeType
-                    }
-                    let temp = LocalVariableSymbol(
-                        "<deconstruct${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
-                        isReadOnly: false,
-                        elementType
-                    )
-                    $scope.TryDeclareVariable(temp)
-                    arguments.Add(BoundAddressOfExpression(nil, BoundVariableExpression(nil, temp)))
-                    if !IsDiscard(identifiers[i]) {
-                        let variable = bindLocalVariable(identifiers[i], isReadOnly, elementType)
-                        declarations.Add(
-                            BoundVariableDeclaration(identifiers[i], variable, BoundVariableExpression(nil, temp))
-                        )
-                    }
-                }
-                var callReceiver = receiver
-                if method.ReceiverType is InterfaceSymbol methodInterface &&
-                    bareReceiverType is StructSymbol &&
-                    callReceiver.Type != methodInterface {
-                    callReceiver = conversions.BindConversion(location, callReceiver, methodInterface)
-                }
-                let constrainedTp = bareReceiverType as TypeParameterSymbol
-                let call = BoundUserInstanceCallExpression(
-                    nil,
-                    callReceiver,
-                    method,
-                    arguments.MoveToImmutable(),
-                    nil,
-                    constrainedTp,
-                    constrainedTp?.InterfaceConstraint
-                )
-                let result = ImmutableArray.CreateBuilder[BoundStatement](declarations.Count + 1)
-                result.Add(BoundExpressionStatement(nil, call))
-                result.AddRange(declarations)
-                statements = result.ToImmutable()
-                return true
-            }
         }
         let extensionOverloads = $scope.TryLookupExtensionFunctions(receiverType, "Deconstruct")
         if extensionOverloads.IsDefaultOrEmpty {
@@ -6477,8 +6533,10 @@ internal partial class StatementBinder {
     private func IsMatchingSourceInstanceDeconstruct(
         candidate FunctionSymbol,
         outCount int32,
-        receiverType TypeSymbol
+        receiverType TypeSymbol,
+        declaringType TypeSymbol?
     ) bool {
+        let effectiveDeclaringType = declaringType ?? candidate.ReceiverType
         if candidate.Type != TypeSymbol.Void ||
             candidate.IsAsync ||
             candidate.IsSuspending ||
@@ -6487,12 +6545,12 @@ internal partial class StatementBinder {
             .IsDefaultOrEmpty {
             return false
         }
-        if !AccessibilityChecker.IsAccessible(candidate.Accessibility, candidate.ReceiverType, getCurrentFunction()) {
+        if !AccessibilityChecker.IsAccessible(candidate.Accessibility, effectiveDeclaringType, getCurrentFunction()) {
             return false
         }
-        if candidate.ReceiverType != nil && AccessibilityChecker.ViolatesProtectedReceiverRule(
+        if effectiveDeclaringType != nil && AccessibilityChecker.ViolatesProtectedReceiverRule(
             candidate.Accessibility,
-            candidate.ReceiverType,
+            effectiveDeclaringType,
             receiverType,
             getCurrentFunction()
         ) {
@@ -6580,7 +6638,8 @@ internal partial class StatementBinder {
                 }
             }
             for tp in candidate.TypeParameters {
-                if !inferred.TryGetValue(tp, out var typeArg) || !Binder.SatisfiesConstraint(typeArg, tp, inferred) {
+                if !inferred.TryGetValue(tp, out var typeArg) || TypeSymbol.IsByRefLike(typeArg) ||
+                    !Binder.SatisfiesConstraint(typeArg, tp, inferred) {
                     return false
                 }
             }
@@ -6610,7 +6669,9 @@ internal partial class StatementBinder {
         identifiers GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[SyntaxToken],
         location TextLocation,
         isReadOnly bool,
-        out statements ImmutableArray[BoundStatement]
+        out statements ImmutableArray[BoundStatement],
+        includeInstance bool = true,
+        includeExtensions bool = true
     ) bool {
         statements = default(ImmutableArray[BoundStatement])
         var receiverClrType Type? = receiver.Type?.ClrType
@@ -6634,9 +6695,13 @@ internal partial class StatementBinder {
         }
         let probes = MemberLookup(binderCtx).CollectImportedMethodProbes(
             staticClassType: nil,
-            receiverClrType,
+            if includeInstance {
+                receiverClrType
+            } else {
+                default(Type?)
+            },
             "Deconstruct",
-            includeExtensions: true
+            includeExtensions: includeExtensions
         )
         for probe in probes {
             let receiverOffset = probe.ReceiverParameterOffset

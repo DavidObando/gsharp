@@ -154,6 +154,22 @@ class Box[T] {
 interface IBox[T] {
     func Deconstruct(out value T, out count int32);
 }
+interface IDerivedBox : IBox[string] { }
+interface IDimBase {
+    func Deconstruct(out a int32, out b int32) {
+        a = 10
+        b = 20
+    }
+}
+interface IDimDerived : IDimBase { }
+interface IDimGeneric[T] {
+    func Deconstruct(out value T, out count int32) {
+        value = default(T)
+        count = 15
+    }
+}
+class DimImpl : IDimDerived { }
+class DimGenericImpl : IDimGeneric[int32] { }
 class BoxImpl[T] : IBox[T] {
     var Item T
     var Tag int32
@@ -162,17 +178,32 @@ class BoxImpl[T] : IBox[T] {
         count = Tag
     }
 }
-func Run(box Box[string], items []Box[string], iface IBox[string]) string {
+class DerivedBoxImpl : IDerivedBox {
+    var Item string
+    var Tag int32
+    func Deconstruct(out value string, out count int32) {
+        value = Item
+        count = Tag
+    }
+}
+func Constrained[T IDerivedBox](item T) string {
+    let (v, n) = item
+    return "${v}:${n}"
+}
+func Run(box Box[string], items []Box[string], iface IBox[string], derived DerivedBoxImpl, dim DimImpl, dimGen DimGenericImpl) string {
     let (head, headCount) = box
     var sum = headCount
     for (text, n) in items {
         sum += text.Length + n
     }
     let (ifaceText, ifaceCount) = iface
-    return "${head}:${sum}:${ifaceText}:${ifaceCount}"
+    let (d1, d2) = dim
+    let (g1, g2) = dimGen
+    return "${head}:${sum}:${ifaceText}:${ifaceCount}:${Constrained(derived)}:${d1 + d2 + g1 + g2}"
 }
-Console.WriteLine(Run(Box[string]{Value: "hi", Count: 2}, []Box[string]{Box[string]{Value: "abc", Count: 4}}, BoxImpl[string]{Item: "ok", Tag: 9}))`, "", "run", "hi:9:ok:9"}
+Console.WriteLine(Run(Box[string]{Value: "hi", Count: 2}, []Box[string]{Box[string]{Value: "abc", Count: 4}}, BoxImpl[string]{Item: "ok", Tag: 9}, DerivedBoxImpl{Item: "tp", Tag: 5}, DimImpl{}, DimGenericImpl{}))`, "", "run", "hi:9:ok:9:tp:5:45"}
             yield[]object{"source_extension_deconstruct", `import System
+import System.Collections.Generic
 struct Pair {
     var A int32
     var B int32
@@ -195,7 +226,11 @@ func (pt Point) Deconstruct(out x int32, out y int32, out sum int32) {
     y = pt.Y
     sum = pt.X + pt.Y
 }
-func Run(p Pair, items []Pair, h Holder[string], pt Point) string {
+func (kv KeyValuePair[int32, int32]) Deconstruct(out k int32, out v int32) {
+    k = -100
+    v = -200
+}
+func Run(p Pair, items []Pair, h Holder[string], pt Point, kv KeyValuePair[int32, int32]) string {
     let (a, b) = p
     var total = a + b
     for (x, y) in items {
@@ -203,9 +238,20 @@ func Run(p Pair, items []Pair, h Holder[string], pt Point) string {
     }
     let (text, w) = h
     let (px, py, psum) = pt
-    return "${total}:${text}:${w}:${px + py + psum}"
+    let (k, v) = kv
+    return "${total}:${text}:${w}:${px + py + psum}:${k + v}"
 }
-Console.WriteLine(Run(Pair{A: 2, B: 3}, []Pair{Pair{A: 4, B: 5}}, Holder[string]{Item: "ext", Weight: 7}, Point(6, 8)))`, "", "run", "14:ext:7:28"}
+Console.WriteLine(Run(Pair{A: 2, B: 3}, []Pair{Pair{A: 4, B: 5}}, Holder[string]{Item: "ext", Weight: 7}, Point(6, 8), KeyValuePair[int32, int32](10, 20)))`, "", "run", "14:ext:7:28:30"}
+            yield[]object{"byref_like_receiver_rejected_by_generic_extension_deconstruct", `import System
+func (p T) Deconstruct[T](out a int32, out b int32) {
+    a = 1
+    b = 2
+}
+func Run(s Span[int32]) int32 {
+    let (a, b) = s
+    return 0
+}
+Console.WriteLine(Run(Span[int32].Empty))`, "GS0164@7:9", "reject", ""}
             yield[]object{"overloaded_deconstruct_selects_matching_arity", `import System
 struct Multi {
     var A int32

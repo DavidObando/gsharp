@@ -5981,7 +5981,13 @@ partial class CSharpToGSharpTranslator {
             if element is INamedTypeSymbol{IsTupleType: true} {
                 return false
             }
-            if element is INamedTypeSymbol{IsRecord: true} record && this.IsSourceSymbol(record) {
+            if element is INamedTypeSymbol{IsRecord: true} record && this.IsSourceSymbol(record) &&
+                this
+                .context
+                .SemanticModel
+                .GetDeconstructionInfo(forEach)
+                .Method
+                ?.IsImplicitlyDeclared == true {
                 let elements = this.DeconstructionElements(forEach.Variable)
                 return elements == nil || elements.Any(
                     (target Microsoft.CodeAnalysis.SyntaxNode) -> !this.IsDiscardTarget(target)
