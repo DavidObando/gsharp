@@ -655,7 +655,7 @@ partial class Binder {
                                 // ADR-0118 / issue #944: an indexer member has the
                                 // CLR name `Item` but is not accessible by bare name —
                                 // it is reached only through `this[i]` index access.
-                                if prop.IsIndexer {
+                                if prop.IsIndexer || prop.HasExplicitInterfaceClause {
                                     continue
                                 }
                                 // Issue #1240: a parameter named like an instance

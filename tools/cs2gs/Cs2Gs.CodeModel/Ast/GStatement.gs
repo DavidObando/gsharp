@@ -167,12 +167,19 @@ class LocalDeclarationStatement : GStatement {
 class ExpressionStatement : GStatement {
     /// Initializes a new instance of the (cref:ExpressionStatement) class.
     /// @param expression The expression.
-    init(expression GExpression) {
+    /// @param isVoid Whether the expression evaluates to `void`.
+    init(expression GExpression, isVoid bool = false) {
         Expression = expression
+        IsVoid = isVoid
     }
 
     /// Gets the expression.
     prop Expression GExpression {
+        get;
+    }
+
+    /// Gets a value indicating whether the expression evaluates to `void`.
+    prop IsVoid bool {
         get;
     }
 }
@@ -272,10 +279,12 @@ class AssignmentStatement : GStatement {
     /// @param target The assignment target.
     /// @param value The assigned value.
     /// @param op The assignment operator (defaults to `=`).
-    init(target GExpression, value GExpression, op string = "=") {
+    /// @param isVoid Whether the assignment evaluates to `void` (such as an event subscription).
+    init(target GExpression, value GExpression, op string = "=", isVoid bool = false) {
         Target = target
         Value = value
         Operator = op
+        IsVoid = isVoid
     }
 
     /// Gets the assignment target.
@@ -290,6 +299,11 @@ class AssignmentStatement : GStatement {
 
     /// Gets the assignment operator.
     prop Operator string {
+        get;
+    }
+
+    /// Gets a value indicating whether the assignment evaluates to `void`.
+    prop IsVoid bool {
         get;
     }
 }

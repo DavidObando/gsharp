@@ -87,16 +87,71 @@ func Main() {
 
 open data class Node(Id int32)
 
-data class Leaf(Id int32) : Node(Id)`
+data class Leaf(Id int32) : Node(Id)
+
+data class LeafPair(Id int32, Extra int32) : Node(Id)
+
+open data class TupleBase(Pair (X int32, Y int32))
+
+data class TupleDerived(Pair (Left int32, Right int32), Extra int32) : TupleBase(Pair)
+
+open class ProtBase {
+    protected prop Value int32 { get; set; }
+    init(v int32) {
+        Value = v
+    }
+}
+
+data class ProtDerived(Value int32, Extra int32) : ProtBase(Value)
+
+open class ProtGenericBase[T] {
+    protected prop Value T { get; set; }
+    init(v T) {
+        Value = v
+    }
+}
+
+data class ProtGenericDerived[T](Value T, Extra int32) : ProtGenericBase[T](Value)
+
+open class RefBase {
+    private var slot int32
+    prop RefVal ref int32 { get { return ref slot } }
+    init(v int32) {
+        slot = v
+    }
+}
+
+data class ReusesRefVal(RefVal int32, Extra int32) : RefBase(RefVal)`
         const source = `package i2866d
 import i2866lib4
+
+data class ConsumerItem(Tag int32)
+
+func UnpackGeneric[U](item ProtGenericDerived[U]) (U, int32) {
+    let (v, e) = item
+    return (v, e)
+}
 
 func Main() {
     let a Node = Node(1)
     let b Node = Leaf(1)
-    System.Console.WriteLine((a == b).ToString())
+    let lit = LeafPair{Id: 3, Extra: 4}
+    let copied = lit.copy(Id: 5, Extra: 6)
+    let (cid, cextra) = copied.copy(Id: 7)
+    let td = TupleDerived((Left: 10, Right: 20), 30)
+    let (pair, textra) = td
+    let (pv, pe) = ProtDerived(11, 22)
+    let gd = ProtGenericDerived[ConsumerItem](ConsumerItem(44), 55)
+    let (gv, ge) = gd
+    let (ugv, uge) = UnpackGeneric(gd)
+    let refLit = ReusesRefVal{RefVal: 88, Extra: 99}
+    let (rv, re) = refLit
+    System.Console.WriteLine((a == b).ToString() + "|" + cid.ToString() + ":" + cextra.ToString() + "|" + pair.Left.ToString() + ":" + pair.Right.ToString() + ":" + textra.ToString() + "|" + pv.ToString() + ":" + pe.ToString() + "|" + gv.Tag.ToString() + ":" + ge.ToString() + ":" + ugv.Tag.ToString() + ":" + uge.ToString() + "|" + rv.ToString() + ":" + re.ToString())
 }`
-        Assert.Equal("False${Environment.NewLine}", CompileAndRun(source, library, "i2866lib4"))
+        Assert.Equal(
+            "False|7:6|10:20:30|11:22|44:55:44:55|88:99${Environment.NewLine}",
+            CompileAndRun(source, library, "i2866lib4")
+        )
     }
 
     @Fact

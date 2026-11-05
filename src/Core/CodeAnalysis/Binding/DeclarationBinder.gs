@@ -147,6 +147,9 @@ internal partial class DeclarationBinder {
         StructDeclarationSyntax,
         StructSymbol
     ]()
+    private let nestedStructPackages Dictionary[StructSymbol, PackageSymbol] = Dictionary[StructSymbol, PackageSymbol]()
+    private let boundStructBodies HashSet[StructSymbol] = HashSet[StructSymbol]()
+    private let boundNestedTypeContainers HashSet[StructSymbol] = HashSet[StructSymbol]()
 
     private let nestedInterfaceShells Dictionary[InterfaceDeclarationSyntax, InterfaceSymbol] = Dictionary[
         InterfaceDeclarationSyntax,
@@ -654,6 +657,7 @@ internal partial class DeclarationBinder {
         if !$scope.TryDeclareTypeAlias(name, structSymbol) {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name)
         }
+        nestedStructPackages[structSymbol] = $package
         return structSymbol
     }
 

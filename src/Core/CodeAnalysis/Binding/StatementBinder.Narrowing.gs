@@ -5000,6 +5000,21 @@ internal partial class StatementBinder {
             let tempName = "<data${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
             let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, receiverType)
             $scope.TryDeclareVariable(tempVar)
+            if RequiresSynthesizedDeconstructCall(aggregate, members) {
+                return BoundBlockStatement(
+                    syntax,
+                    BindDataDeconstructCallStatements(
+                        syntax,
+                        BoundVariableExpression(nil, tempVar),
+                        receiverType,
+                        aggregate,
+                        members,
+                        syntax.Identifiers,
+                        isReadOnly,
+                        BoundVariableDeclaration(syntax, tempVar, initializer)
+                    )
+                )
+            }
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
             statements.Add(BoundVariableDeclaration(syntax, tempVar, initializer))
             for var i = 0; i < syntax.Identifiers.Count; i++ {
@@ -5008,7 +5023,7 @@ internal partial class StatementBinder {
                     continue
                 }
                 let member = members[i]
-                let memberType = GetDeconstructionMemberType(receiverType, member, $scope.References)
+                let memberType = GetDeconstructionMemberType(receiverType, aggregate, i, member, $scope.References)
                 let elemVar = bindLocalVariable(idTok, isReadOnly, memberType)
                 let access = BindDeconstructionMemberAccess(
                     BoundVariableExpression(nil, tempVar),
@@ -5142,13 +5157,24 @@ internal partial class StatementBinder {
                 DeclareErrorTypedLocals(identifiers)
                 return ImmutableArray[BoundStatement].Empty
             }
+            if RequiresSynthesizedDeconstructCall(aggregate, members) {
+                return BindDataDeconstructCallStatements(
+                    nil,
+                    elementAccessBase,
+                    elementType,
+                    aggregate,
+                    members,
+                    identifiers,
+                    isReadOnly: true
+                )
+            }
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
             for var i = 0; i < identifiers.Count; i++ {
                 if IsDiscard(identifiers[i]) {
                     continue
                 }
                 let member = members[i]
-                let memberType = GetDeconstructionMemberType(elementType, member, $scope.References)
+                let memberType = GetDeconstructionMemberType(elementType, aggregate, i, member, $scope.References)
                 let elemVar = bindLocalVariable(identifiers[i], true, memberType)
                 let access = BindDeconstructionMemberAccess(elementAccessBase, aggregate, member, memberType)
                 // LanguageServer fix: see the matching comment in the tuple
@@ -5454,6 +5480,73 @@ internal partial class StatementBinder {
             structType = importedAggregate
         }
         return structType != nil && (structType.IsData || structType.IsInline)
+    }
+
+    private func RequiresSynthesizedDeconstructCall(aggregate StructSymbol, members ImmutableArray[Symbol]) bool {
+        if !aggregate.IsData {
+            return false
+        }
+        for member in members {
+            if member is PropertySymbol prop && !aggregate.Properties.Contains(prop) &&
+                prop.GetterAccessibility != Accessibility.Public {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func BindDataDeconstructCallStatements(
+        syntax SyntaxNode?,
+        receiver BoundExpression,
+        receiverType TypeSymbol,
+        aggregate StructSymbol,
+        members ImmutableArray[Symbol],
+        identifiers GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[SyntaxToken],
+        isReadOnly bool,
+        prefixStatement BoundStatement? = nil
+    ) ImmutableArray[BoundStatement] {
+        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+        if prefixStatement != nil {
+            statements.Add(prefixStatement)
+        }
+        if aggregate.ClrType != nil &&
+            TryBindImportedDeconstruct(
+            receiver,
+            identifiers,
+            syntax?.Location ?? default(TextLocation),
+            isReadOnly,
+            out var importedStatements
+        ) {
+            statements.AddRange(importedStatements)
+            return statements.ToImmutable()
+        }
+        let arguments = ImmutableArray.CreateBuilder[BoundExpression](members.Length)
+        let declarations = ImmutableArray.CreateBuilder[BoundStatement](members.Length)
+        for var i = 0; i < identifiers.Count; i++ {
+            let memberType = GetDeconstructionMemberType(receiverType, aggregate, i, members[i], $scope.References)
+            let temp = LocalVariableSymbol(
+                "<deconstruct${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
+                isReadOnly: false,
+                memberType
+            )
+            $scope.TryDeclareVariable(temp)
+            arguments.Add(BoundAddressOfExpression(nil, BoundVariableExpression(nil, temp)))
+            if !IsDiscard(identifiers[i]) {
+                let elemVar = bindLocalVariable(identifiers[i], isReadOnly, memberType)
+                declarations.Add(
+                    BoundVariableDeclaration(syntax ?? identifiers[i], elemVar, BoundVariableExpression(nil, temp))
+                )
+            }
+        }
+        let call = BoundUserInstanceCallExpression(
+            nil,
+            receiver,
+            aggregate.DataDeconstruct,
+            arguments.MoveToImmutable()
+        )
+        statements.Add(BoundExpressionStatement(nil, call))
+        statements.AddRange(declarations)
+        return statements.ToImmutable()
     }
 
     shared {
@@ -6710,6 +6803,61 @@ internal partial class StatementBinder {
 
         private func GetDeconstructionMemberType(
             receiverType TypeSymbol,
+            aggregate StructSymbol,
+            index int32,
+            member Symbol,
+            references ReferenceResolver?
+        ) TypeSymbol {
+            let memberType = GetDeconstructionMemberType(receiverType, member, references)
+            if aggregate.IsData &&
+                aggregate.HasPrimaryConstructor &&
+                index >= 0 &&
+                index < aggregate
+                .PrimaryConstructorParameters
+                .Length {
+                if aggregate.ClrType is not{} aggregateClrType {
+                    let positionalType = aggregate.PrimaryConstructorParameters[index].Type
+                    return if TypeMemberModel.PositionalTypeSatisfiedByInheritedGetter(memberType, positionalType) {
+                        positionalType
+                    } else {
+                        memberType
+                    }
+                }
+                if member is PropertySymbol{ImportedMember: PropertyInfo importedProperty} && !ClrTypeUtilities.AreSame(
+                    importedProperty.DeclaringType,
+                    aggregateClrType
+                ) {
+                    let positionalType = if receiverType is ImportedTypeSymbol{
+                        TypeArguments: {IsDefaultOrEmpty: false}
+                    } &&
+                        ImportedTypeSymbol.FindPrimaryConstructor(
+                        aggregateClrType,
+                        aggregate.PrimaryConstructorParameters
+                    ) is {} primaryCtor {
+                        ImportedTypeSymbol.NormalizeSemanticAggregate(
+                            MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, primaryCtor, index),
+                            importedProperty.PropertyType,
+                            references
+                        )
+                    } else {
+                        ImportedTypeSymbol.NormalizeSemanticAggregate(
+                            aggregate.PrimaryConstructorParameters[index].Type,
+                            importedProperty.PropertyType,
+                            references
+                        )
+                    }
+                    return if TypeMemberModel.PositionalTypeSatisfiedByInheritedGetter(memberType, positionalType) {
+                        positionalType
+                    } else {
+                        memberType
+                    }
+                }
+            }
+            return memberType
+        }
+
+        private func GetDeconstructionMemberType(
+            receiverType TypeSymbol,
             member Symbol,
             references ReferenceResolver?
         ) TypeSymbol -> switch member {
@@ -6722,7 +6870,8 @@ internal partial class StatementBinder {
             } else {
                 field.Type
             }
-            case property is PropertySymbol: if property.ImportedMember is PropertyInfo importedProperty {
+            case property is PropertySymbol: if receiverType is not StructSymbol{ClrType: nil} &&
+                property.ImportedMember is PropertyInfo importedProperty {
                 let projected = MemberLookup.GetClrPropertyTypeSymbol(receiverType, importedProperty)
                 let pointee = if projected is ByRefTypeSymbol byRefProperty {
                     byRefProperty.PointeeType
