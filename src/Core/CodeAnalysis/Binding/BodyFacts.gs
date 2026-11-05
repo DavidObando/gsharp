@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Lowering
+import GSharp.Core.CodeAnalysis.Syntax
 import System.Runtime.CompilerServices
 
 /// Issue #5131: facts about one bound body, computed once per body object.
@@ -23,6 +24,17 @@ internal shared class BodyFacts {
         prop Found bool {
             get;
             private set;
+        }
+
+        public override func VisitStatement(node BoundStatement?) {
+            if Found || node == nil {
+                return
+            }
+            if node.Syntax is YieldStatementSyntax {
+                Found = true
+                return
+            }
+            base.VisitStatement(node)
         }
 
         protected override func VisitYieldStatement(node BoundYieldStatement) {
@@ -55,6 +67,18 @@ internal shared class BodyFacts {
             CompilationMeasurements.Count("bodyfacts.yield-walks")
             slots.ContainsYield = detector.Found
             return detector.Found
+        }
+    }
+
+    /// Preserves iterator classification across a lowering rewrite that may prune
+    /// dead constant-switch arms containing `yield` statements (#5044).
+    func PreserveContainsYield(source BoundStatement, target BoundStatement) {
+        if object.ReferenceEquals(source, target) || !ContainsYield(source) {
+            return
+        }
+        let slots = Entries.GetValue(target, CreateSlots)
+        lock slots {
+            slots.ContainsYield = true
         }
     }
 
