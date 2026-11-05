@@ -5975,7 +5975,7 @@ partial class CSharpToGSharpTranslator {
         /// cs2gs emits only the names of a deconstructing loop (`for (a, b) in items`; the target types are dropped,
         /// #5700), so its prelude is what gsc does for the element type. gsc reads the elements of a tuple without
         /// code, reads the members of a G# `data` type (a record of this compilation, through its positional
-        /// properties) except a discard, and calls an imported `Deconstruct`.
+        /// properties) except a discard, and calls a `Deconstruct` method.
         private func DeconstructingForEachRunsUserCode(forEach ForEachVariableStatementSyntax) bool {
             let element = this.context.SemanticModel.GetForEachStatementInfo(forEach).ElementType
             if element is INamedTypeSymbol{IsTupleType: true} {

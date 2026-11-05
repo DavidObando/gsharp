@@ -2447,6 +2447,93 @@ public partial class Demo
         Assert.Equal(19, Regex.Matches(printed, `s!!`).Count)
     }
 
+    /// Issue #5693: a C# struct or class with a source-declared `Deconstruct` method (instance or extension)
+    /// translates to G# that compiles and runs for `var (a, b) = p`, `(a, b) = p`, and `foreach (var (a, b) in items)`,
+    /// and a deconstructing `foreach` over it asserts a narrowed by-reference parameter while a straight-line
+    /// deconstruction keeps it bare (amendment A3).
+    @Fact
+    func SourceDeconstruct_InDeclarationAssignmentAndForEach_CompilesAndMatchesNarrowing() {
+        let printed = AssertRunsLikeCSharp(`
+public struct Pair
+{
+    public int A;
+    public int B;
+    public void Deconstruct(out int a, out int b)
+    {
+        a = A;
+        b = B;
+    }
+}
+public sealed class Box<T> where T : notnull
+{
+    public T Value;
+    public int Count;
+    public Box(T value, int count)
+    {
+        Value = value;
+        Count = count;
+    }
+    public void Deconstruct(out T value, out int count)
+    {
+        value = Value;
+        count = Count;
+    }
+}
+public struct ExtPair
+{
+    public int X;
+    public int Y;
+}
+public static class PairExtensions
+{
+    public static void Deconstruct(this ExtPair p, out int x, out int y)
+    {
+        x = p.X;
+        y = p.Y;
+    }
+}
+public class Demo
+{
+    public static int StraightLine(ref string? s, Pair p, Box<string> box, ExtPair ep)
+    {
+        if (s == null) return 0;
+        var (a, b) = p;
+        int x, y;
+        (x, y) = p;
+        var (text, count) = box;
+        var (ex, ey) = ep;
+        return s.Length + a + b + x + y + text.Length + count + ex + ey;
+    }
+    public static int LoopItems(ref string? s, Pair[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (a, b) in items) total += a + b + s.Length;
+        return s.Length + total;
+    }
+    public static int LoopDiscards(ref string? s, Pair[] items)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var (_, _) in items) total += 1;
+        return s.Length + total + 1;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        var p = new Pair { A = 2, B = 3 };
+        var items = new[] { p, new Pair { A = 4, B = 5 } };
+        return StraightLine(ref text, p, new Box<string>("hi", 6), new ExtPair { X = 7, Y = 8 }) + "," +
+            LoopItems(ref text, items) + "," + LoopDiscards(ref text, items);
+    }
+}`)
+        Assert.Contains("return s.Length + a + b + x + y + text!!.Length + count + ex + ey", printed)
+        Assert.Contains("total += a + b + s!!.Length", printed)
+        Assert.Contains("return s!!.Length + total\n", printed.Replace("\r\n", "\n"))
+        Assert.Contains("return s!!.Length + total + 1", printed)
+        Assert.Equal(3, Regex.Matches(printed, `s!!`).Count)
+    }
+
     shared {
         /// Runs `Demo.Run()` of the C# and of its translation and compares the output. [`library`](paramref) is C#
         /// that both reference as a prebuilt assembly (`Lib5617`), so its types are imported in the G#.
