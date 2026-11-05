@@ -9,6 +9,7 @@ import GSharp.Core.CodeAnalysis.Binding.OverloadResolution
 import GSharp.Core.CodeAnalysis.Symbols
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import Xunit
 
 /// Issue #2516 conversion-matrix guards for source slices, imported CLR
@@ -70,6 +71,69 @@ open class Issue2516SliceCovarianceBindingTests {
         Assert.Equal(
             ClrOverloadResolution.ImplicitConversionKind.None,
             ClrOverloadResolution.ClassifyImplicit(typeof(ICovariant[object]), typeof([]string))
+        )
+    }
+
+    @Fact
+    func VariantArrayArgument_PreservesOuterPlatformAndAnnotatedElementNullability() {
+        let nonNullStringSlice = SliceTypeSymbol.Get(TypeSymbol.String)
+        let platformStringSlice = PlatformTypeSymbol.Get(nonNullStringSlice)
+        let nonNullObjectSlice = SliceTypeSymbol.Get(TypeSymbol.Object)
+        let nullableObjectSlice = NullableTypeSymbol.Get(nonNullObjectSlice)
+        Assert.False(
+            Conversion.IsVarianceArgumentCompatible(
+                platformStringSlice,
+                nonNullObjectSlice,
+                allowPlatformNilCheck: false
+            )
+        )
+        Assert.True(
+            Conversion.IsVarianceArgumentCompatible(
+                platformStringSlice,
+                nonNullObjectSlice,
+                allowPlatformNilCheck: true
+            )
+        )
+        Assert.True(
+            Conversion.IsVarianceArgumentCompatible(
+                platformStringSlice,
+                nullableObjectSlice,
+                allowPlatformNilCheck: false
+            )
+        )
+
+        let nullableStringsArray = NullabilityAnnotatedTypeSymbol(
+            TypeSymbol.FromClrType(typeof([]string)),
+            ImmutableArray.Create[uint8](uint8(1), uint8(2))
+        )
+        let nonNullObjectsArray = NullabilityAnnotatedTypeSymbol(
+            TypeSymbol.FromClrType(typeof([]object)),
+            ImmutableArray.Create[uint8](uint8(1), uint8(1))
+        )
+        let nullableObjectsArray = NullabilityAnnotatedTypeSymbol(
+            TypeSymbol.FromClrType(typeof([]object)),
+            ImmutableArray.Create[uint8](uint8(1), uint8(2))
+        )
+        Assert.False(
+            Conversion.IsVarianceArgumentCompatible(
+                nullableStringsArray,
+                nonNullObjectsArray,
+                allowPlatformNilCheck: false
+            )
+        )
+        Assert.False(
+            Conversion.IsVarianceArgumentCompatible(
+                nullableStringsArray,
+                nonNullObjectSlice,
+                allowPlatformNilCheck: false
+            )
+        )
+        Assert.True(
+            Conversion.IsVarianceArgumentCompatible(
+                nullableStringsArray,
+                nullableObjectsArray,
+                allowPlatformNilCheck: false
+            )
         )
     }
 

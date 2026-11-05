@@ -8595,7 +8595,12 @@ internal class MemberLookup {
             (
             upper == nil || upper.All(
                 (bound TypeSymbol) -> HasImplicitSymbolicConversion(candidate, bound) ||
-                    Conversion.IsVarianceArgumentCompatible(candidate, bound, allowPlatformNilCheck: true)
+                    Conversion
+                    .IsVarianceArgumentCompatible(
+                    candidate.StripToBareShape(),
+                    bound.StripToBareShape(),
+                    allowPlatformNilCheck: true
+                )
             )
         )
 

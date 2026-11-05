@@ -2762,6 +2762,41 @@ Console.WriteLine("${ternary(Probe())} ${expression(Probe())} ${statement(Probe(
         Assert.Equal("99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine, result.Output)
     }
 
+    @Fact
+    func Nested_Contravariant_And_Upper_Lower_Bounds_Fix_To_Common_Target() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public static class Probes {
+        public static System.Collections.Generic.IComparer<System.Collections.Generic.IComparer<object>> Nested =>
+            System.Collections.Generic.Comparer<System.Collections.Generic.IComparer<object>>.Default;
+        public static string DoubleContravariantFirst<T>(
+            System.Collections.Generic.IComparer<System.Collections.Generic.IComparer<T>> comparer,
+            T value) => typeof(T).FullName ?? "";
+        public static string DoubleContravariantSecond<T>(
+            T value,
+            System.Collections.Generic.IComparer<System.Collections.Generic.IComparer<T>> comparer) => typeof(T).FullName ?? "";
+        public static string UpperAndLowerWithConstructorConstraint<T>(
+            System.Collections.Generic.IComparer<T> comparer,
+            T value) where T : new() => typeof(T).FullName ?? "";
+    }
+}`)
+        let result = CompileAndRun(`import System
+import System.Collections.Generic
+import Fixture4986
+Console.WriteLine(Probes.DoubleContravariantFirst(Probes.Nested, "x"))
+Console.WriteLine(Probes.DoubleContravariantSecond("x", Probes.Nested))
+Console.WriteLine(Probes.UpperAndLowerWithConstructorConstraint(Comparer[object].Default, "x"))
+`, fixture.AssemblyPath)
+        Assert.Equal(
+            "System.Object" +
+                Environment.NewLine +
+                "System.Object" +
+                Environment.NewLine +
+                "System.Object" +
+                Environment.NewLine,
+            result.Output
+        )
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)

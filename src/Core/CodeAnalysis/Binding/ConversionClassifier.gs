@@ -1809,11 +1809,17 @@ internal class ConversionClassifier {
                         methodSlot ??
                         GetClrParameterTargetType(argument.Type, parameters[paramIndex])
                     let rejectionTargetType = substituted ??
-                        TrySubstituteParameterTypeFromMethodTypeArgs(
-                        method,
-                        paramIndex,
-                        symbolicMethodTypeArgs,
-                        allowConcreteSymbolic: true
+                        (
+                        if method != nil && !symbolicMethodTypeArgs.IsDefaultOrEmpty {
+                            MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(
+                                receiverType,
+                                method,
+                                paramIndex,
+                                symbolicMethodTypeArgs
+                            )
+                        } else {
+                            default(TypeSymbol?)
+                        }
                     ) ??
                         targetType
                     // Issue #2142 (follow-up to #2130/#2139): a lambda/arrow

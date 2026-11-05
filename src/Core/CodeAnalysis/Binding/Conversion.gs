@@ -4909,13 +4909,29 @@ class Conversion {
             if !IsReferenceTypeArgument(source) || !IsReferenceTypeArgument(target) {
                 return false
             }
-            if !(source is NullableTypeSymbol && !(target is NullableTypeSymbol)) &&
-                (allowPlatformNilCheck || !TryClassifyPlatformTypeArgumentMismatch(source, target, out _)) &&
-                OneDimensionalArrayElement(source.StripToBareShape()) is {} sourceElement &&
-                OneDimensionalArrayElement(target.StripToBareShape()) is {} targetElement &&
-                !IsRejectedFixedArrayShapeMismatch(source.StripToBareShape(), target.StripToBareShape()) &&
-                IsVarianceArgumentCompatible(sourceElement, targetElement, allowPlatformNilCheck: false) {
-                return true
+            switch source.ReferenceNullability {
+                case ReferenceNullabilityKind.Nullable {
+                    if target.ReferenceNullability != ReferenceNullabilityKind.Nullable {
+                        return false
+                    }
+                }
+                case ReferenceNullabilityKind.Platform {
+                    if !allowPlatformNilCheck && target.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                        return false
+                    }
+                }
+                default { }
+            }
+            let bareSource = source.StripToBareShape()
+            let bareTarget = target.StripToBareShape()
+            if OneDimensionalArrayElement(bareSource) != nil &&
+                OneDimensionalArrayElement(bareTarget) != nil &&
+                !IsRejectedFixedArrayShapeMismatch(bareSource, bareTarget) {
+                let sourcePositions = source.GetElementPositions()
+                let targetPositions = target.GetElementPositions()
+                return sourcePositions.Length == 1 &&
+                    targetPositions.Length == 1 &&
+                    IsVarianceArgumentCompatible(sourcePositions[0], targetPositions[0], allowPlatformNilCheck: false)
             }
             // Classification already related nested arguments; only the nominal proof is added for this pair.
             let conversion = Classify(source, target)
