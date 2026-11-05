@@ -627,8 +627,26 @@ func RunIdentityOverload(token Token) int32 {
     }
     return g.Length
 }
+func Clear() int32 {
+    g = nil
+    return 1
+}
+func RunForInitBreakSkipsHeaderMutatingCall() int32 {
+    outer: while true {
+        if g == nil {
+            return 0
+        }
+        for var i = 0 + ({
+            break outer
+            0
+        }); Clear() > 0; {
+        }
+        return 0
+    }
+    return g.Length
+}
 var g string? = "ok"
-Console.WriteLine(RunIdentityOverload(Token{Value: 1}))`, "", "run", "2"}
+Console.WriteLine("${RunIdentityOverload(Token{Value: 1})}|${RunForInitBreakSkipsHeaderMutatingCall()}")`, "", "run", "2|2"}
             yield[]object{"control10_variadic_named_indirect_base_and_member_collection_breaks", `import System
 import System.Collections.Generic
 struct Token {
@@ -966,8 +984,56 @@ func RunMapInsertion(key Key) int32 {
     }
     return g.Length
 }
+func RunTypedPropertyPattern(obj object) int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let matched = obj is PatternTarget { P: 0 + ({
+            break
+            0
+        }) }
+        return 0
+    }
+    return g.Length
+}
+func RunListPatternSliceAfterSuffix(xs []int32) int32 {
+    while true {
+        if g == nil {
+            return 0
+        }
+        let matched = xs is [..[0 + ({
+            break
+            0
+        })], Clear()]
+        return 0
+    }
+    return g.Length
+}
+func RunForInitBreakSkipsHeaderAliasAssign(cb () -> int32) int32 {
+    var s string? = "ok"
+    var f () -> int32 = func () int32 {
+        s = nil
+        return 1
+    }
+    outer: while true {
+        if s == nil {
+            return 0
+        }
+        for var i = f() + ({
+            break outer
+            0
+        }); ({
+            f = cb
+            false
+        }); {
+        }
+        return 0
+    }
+    return s.Length
+}
 var g string? = "ok"
-Console.WriteLine(RunPatternGetter(PatternTarget{}) + RunDataStructCtor() + RunForAssignmentInit(() -> 0) + RunMapInsertion(Key{}))`, "GS0158@38:14 GS0158@51:14 GS0158@69:14 GS0158@82:14", "reject", ""}
+Console.WriteLine(RunPatternGetter(PatternTarget{}) + RunDataStructCtor() + RunForAssignmentInit(() -> 0) + RunMapInsertion(Key{}) + RunTypedPropertyPattern(PatternTarget{}) + RunListPatternSliceAfterSuffix([]int32{1, 2}) + RunForInitBreakSkipsHeaderAliasAssign(() -> 0))`, "GS0158@38:14 GS0158@51:14 GS0158@69:14 GS0158@82:14 GS0158@95:14 GS0158@108:14 GS0158@130:14", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

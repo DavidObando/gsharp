@@ -877,8 +877,11 @@ internal partial class StatementBinder {
                     )
                 )
                 for element in listPattern.Elements {
+                    if element is BoundSlicePattern {
+                        continue
+                    }
                     if object.ReferenceEquals(element, child) {
-                        if element is not BoundSlicePattern && PatternReadsInput(element) {
+                        if PatternReadsInput(element) {
                             prefixes.Add(
                                 (
                                     BoundListPattern(
@@ -904,7 +907,7 @@ internal partial class StatementBinder {
                                 )
                             )
                         }
-                        break
+                        return prefixes
                     }
                     prefixes.Add(
                         (
@@ -912,6 +915,28 @@ internal partial class StatementBinder {
                                 listPattern.Syntax,
                                 listPattern.Type,
                                 ImmutableArray.Create(element),
+                                listPattern.ElementType,
+                                nil,
+                                listPattern.IndexerProperty,
+                                listPattern.InputVariable
+                            ),
+                            default(bool?)
+                        )
+                    )
+                }
+                for element in listPattern.Elements {
+                    if element is not BoundSlicePattern {
+                        continue
+                    }
+                    if object.ReferenceEquals(element, child) {
+                        return prefixes
+                    }
+                    prefixes.Add(
+                        (
+                            BoundListPattern(
+                                listPattern.Syntax,
+                                listPattern.Type,
+                                ImmutableArray.Create[BoundPattern](element),
                                 listPattern.ElementType,
                                 nil,
                                 listPattern.IndexerProperty,
@@ -934,7 +959,13 @@ internal partial class StatementBinder {
                         prefixes.Add((s, default(bool?)))
                     }
                 }
-                if blockStmt.Syntax is WhileStatementSyntax or ForConditionStatementSyntax or ForClauseStatementSyntax {
+                let childIsForInitializer = blockStmt.Syntax is ForClauseStatementSyntax forSyntax &&
+                    forSyntax.Initializer != nil &&
+                    object.ReferenceEquals(child.Syntax, forSyntax.Initializer)
+                if !childIsForInitializer &&
+                    blockStmt.Syntax is WhileStatementSyntax or
+                    ForConditionStatementSyntax or
+                    ForClauseStatementSyntax {
                     for s in blockStmt.Statements {
                         if s is BoundConditionalGotoStatement condGoto && !object.ReferenceEquals(condGoto, child) {
                             prefixes.Add((condGoto.Condition, default(bool?)))
