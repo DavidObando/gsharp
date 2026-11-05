@@ -79,6 +79,17 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         TruncateTo(start)
     }
 
+    internal func HasErrorSince(startCount int32) bool {
+        let start = Math.Clamp(startCount, 0, diagnostics.Count)
+        for var i = start; i < diagnostics.Count; i++ {
+            let diagnostic = diagnostics[i]
+            if !cascadeSuppressed.Contains(diagnostic) && diagnostic.Severity == DiagnosticSeverity.Error {
+                return true
+            }
+        }
+        return false
+    }
+
     internal func RemoveDiagnosticsIn(owner TextLocation) {
         for var i = diagnostics.Count - 1; i >= 0; i-- {
             let diagnostic = diagnostics[i]

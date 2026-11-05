@@ -481,7 +481,7 @@ internal partial class ExpressionBinder {
     internal prop ExpressionNarrowingVersion int32 -> expressionNarrowingVersion
 
     internal func EnterTupleConversion() {
-        tupleConversionExitSnapshots.Push(CaptureExpressionNarrowingFrames(recordSiblingCount: false))
+        tupleConversionExitSnapshots.Push(CaptureExpressionNarrowingFrames())
         tupleConversionDepth++
     }
 
@@ -724,7 +724,7 @@ internal partial class ExpressionBinder {
                 snapshot.Add((entry.Id, frame, entries, aliases))
             }
         }
-        if recordSiblingCount && boundSiblingExpressions.Count > 0 {
+        if recordSiblingCount && (boundSiblingExpressions.Count > 0 || HasActiveNarrowingEntriesOrAliases()) {
             snapshotSiblingCounts[snapshot] = boundSiblingExpressions.Count
         }
         return snapshot
@@ -743,13 +743,9 @@ internal partial class ExpressionBinder {
         if snapshot == nil || boundSiblingExpressions.Count == 0 {
             return
         }
-        let siblingCount = if snapshotSiblingCounts.TryGetValue(snapshot, out var recordedCount) {
-            recordedCount
-        } else {
-            0
-        }
-        if boundSiblingExpressions.Count > siblingCount {
-            boundSiblingExpressions.RemoveRange(siblingCount, boundSiblingExpressions.Count - siblingCount)
+        if snapshotSiblingCounts.TryGetValue(snapshot, out var recordedCount) &&
+            boundSiblingExpressions.Count > recordedCount {
+            boundSiblingExpressions.RemoveRange(recordedCount, boundSiblingExpressions.Count - recordedCount)
         }
     }
 

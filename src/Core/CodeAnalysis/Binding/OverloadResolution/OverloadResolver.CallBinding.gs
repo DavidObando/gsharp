@@ -1020,7 +1020,7 @@ internal partial class OverloadResolver {
                 refreshedArguments.ToBuilder(),
                 deferredArrowLambdas
             )
-            if !(retryResult is BoundErrorExpression) && Diagnostics.Count == retryDiagMark {
+            if !(retryResult is BoundErrorExpression) && !Diagnostics.HasErrorSince(retryDiagMark) {
                 result = retryResult
             } else {
                 Diagnostics.TruncateTo(overloadDiagMark)

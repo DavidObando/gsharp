@@ -905,6 +905,47 @@ internal partial class OverloadResolver {
             boundArgument ??= BindOverloadArgumentValue(argument)
             boundArgumentsBuilder.Add(boundArgument!!)
         }
+        let initialArguments = boundArgumentsBuilder.ToImmutable()
+        let overloadDiagMark = Diagnostics.Count
+        var result = BindExplicitConstructorCallAfterArguments(
+            syntax,
+            classType,
+            argumentNames,
+            inlineOutArgumentIndices,
+            ctorOverloads,
+            boundArgumentsBuilder
+        )
+        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+            let savedDiagnostics = List[Diagnostic]()
+            Diagnostics.DrainSince(overloadDiagMark, savedDiagnostics)
+            let retryDiagMark = Diagnostics.Count
+            let retryResult = BindExplicitConstructorCallAfterArguments(
+                syntax,
+                classType,
+                argumentNames,
+                inlineOutArgumentIndices,
+                ctorOverloads,
+                refreshedArguments.ToBuilder()
+            )
+            if !(retryResult is BoundErrorExpression) && !Diagnostics.HasErrorSince(retryDiagMark) {
+                result = retryResult
+            } else {
+                Diagnostics.TruncateTo(overloadDiagMark)
+                Diagnostics.AddRange(savedDiagnostics)
+            }
+        }
+        return result
+    }
+
+    private func BindExplicitConstructorCallAfterArguments(
+        syntax CallExpressionSyntax,
+        classType StructSymbol,
+        argumentNames ImmutableArray[string],
+        inlineOutArgumentIndices ImmutableArray[int32],
+        ctorOverloads ImmutableArray[ConstructorSymbol],
+        boundArgumentsBuilder ImmutableArray[BoundExpression].Builder
+    ) BoundExpression {
+        var ctorOverloads = ctorOverloads
         if !inlineOutArgumentIndices.IsDefaultOrEmpty && ctorOverloads.Length > 1 {
             let hasFailedExplicitInlineOutType = inlineOutArgumentIndices.Any(
                 (index int32) -> (

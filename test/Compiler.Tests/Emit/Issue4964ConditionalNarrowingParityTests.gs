@@ -861,9 +861,19 @@ func TryRead(out r int32) bool {
 }
 func ConsumeOverload(x float64, v int32) bool -> true
 func ConsumeOverload(x float64, v int32?) bool -> v != nil
+func ConsumeWithTuple(pair (float64, int32), x float64, b bool) bool -> b
 func Id[T](x float64, v T) T -> v
 func OuterOverload(v int32) bool -> true
 func OuterOverload(v int32?) bool -> v != nil
+class Box {
+    let HasValue bool
+    init(x float64, v int32) {
+        HasValue = true
+    }
+    init(x float64, v int32?) {
+        HasValue = v != nil
+    }
+}
 let token = Token{}
 let sink = VariadicSink{}
 let reader = Reader{}
@@ -897,6 +907,10 @@ n = 5
 Console.WriteLine(!(n == nil) ? ConsumeOverload(token, n) : false)
 n = 5
 Console.WriteLine(!(n == nil) ? OuterOverload(Id(token, n)) : false)
+n = 5
+Console.WriteLine(n != nil ? ConsumeWithTuple((1, 2), token, n > 0) : false)
+n = 5
+Console.WriteLine(!(n == nil) ? Box(token, n).HasValue : false)
 `)
         Assert.Equal(
             string.Join(
@@ -912,6 +926,8 @@ Console.WriteLine(!(n == nil) ? OuterOverload(Id(token, n)) : false)
                 "False",
                 "True",
                 "True",
+                "False",
+                "False",
                 "False",
                 "False"
             ) +
@@ -980,10 +996,15 @@ struct NToken {
 }
 func ConsumeOverload2(x float64, v int32) bool -> true
 func ConsumeOverload2(x float64, v int32?) bool -> v != nil
+func ConsumeOverloadWarn(x float64, v int32) bool -> true
+@Obsolete("nullable overload warning")
+func ConsumeOverloadWarn(x float64, v int32?) bool -> v != nil
 func CheckOverloadRetryWithSuppressedAssertion(token NToken) bool ->
     !(gn == nil) ? ConsumeOverload2(token, (gn!!, gn).Item2) : false
+func CheckOverloadRetryRetainsWarning(token NToken) bool ->
+    !(gn == nil) ? ConsumeOverloadWarn(token, gn) : false
 `)
-        Assert.Equal("GS0156:this.n;GS0158:Length", throwingArmAndCtorFieldWriteDiag)
+        Assert.Equal("GS0156:this.n;GS0158:Length;GS0204:ConsumeOverloadWarn", throwingArmAndCtorFieldWriteDiag)
 
         let deferredCoalesceAndSwitchDiag = DiagnoseSource(`package Issue4969.DeferredBranchyRetry
 interface I {}

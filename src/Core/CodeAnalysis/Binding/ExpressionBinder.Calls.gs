@@ -1776,6 +1776,73 @@ internal partial class ExpressionBinder {
                 )
             }
         }
+        let initialArguments = boundArguments.ToImmutable()
+        let overloadDiagMark = Diagnostics.Count
+        var bound = TryBindClrConstructorAfterArguments(
+            clrType,
+            syntax,
+            inlineOutArguments,
+            argumentNames,
+            ctors,
+            symbolicCtorDelegateTargets,
+            boundArguments,
+            out result,
+            out noApplicableOverload,
+            out boundArgumentsOnFailure,
+            openGenericDefinition,
+            symbolicTypeArgs,
+            resultTypeOverride
+        )
+        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+            let savedDiagnostics = List[Diagnostic]()
+            Diagnostics.DrainSince(overloadDiagMark, savedDiagnostics)
+            let retryDiagMark = Diagnostics.Count
+            let retryBound = TryBindClrConstructorAfterArguments(
+                clrType,
+                syntax,
+                inlineOutArguments,
+                argumentNames,
+                ctors,
+                symbolicCtorDelegateTargets,
+                refreshedArguments.ToBuilder(),
+                out var retryResult,
+                out var retryNoApplicable,
+                out var retryFailureArgs,
+                openGenericDefinition,
+                symbolicTypeArgs,
+                resultTypeOverride
+            )
+            if retryBound && !(retryResult is BoundErrorExpression) && !Diagnostics.HasErrorSince(retryDiagMark) {
+                bound = retryBound
+                result = retryResult
+                noApplicableOverload = retryNoApplicable
+                boundArgumentsOnFailure = retryFailureArgs
+            } else {
+                Diagnostics.TruncateTo(overloadDiagMark)
+                Diagnostics.AddRange(savedDiagnostics)
+            }
+        }
+        return bound
+    }
+
+    private func TryBindClrConstructorAfterArguments(
+        clrType Type,
+        syntax CallExpressionSyntax,
+        inlineOutArguments List[int32],
+        argumentNames ImmutableArray[string],
+        ctors[]ConstructorInfo,
+        symbolicCtorDelegateTargets Dictionary[int32, TypeSymbol],
+        boundArguments ImmutableArray[BoundExpression].Builder,
+        @NotNullWhen(true) out result BoundExpression?,
+        out noApplicableOverload bool,
+        out boundArgumentsOnFailure ImmutableArray[BoundExpression],
+        openGenericDefinition Type? = nil,
+        symbolicTypeArgs ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol]),
+        resultTypeOverride TypeSymbol? = nil
+    ) bool {
+        result = nil
+        noApplicableOverload = false
+        boundArgumentsOnFailure = default(ImmutableArray[BoundExpression])
         // Phase A (overload resolution): pick a constructor via the shared
         // "better function member" resolver. Ambiguity surfaces a hard
         // binder diagnostic and the call falls back to the surrounding

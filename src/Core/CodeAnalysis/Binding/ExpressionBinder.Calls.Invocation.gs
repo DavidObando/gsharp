@@ -1886,7 +1886,7 @@ internal partial class ExpressionBinder {
                 receiverSyntax,
                 receiverStart
             )
-            if !(retryResult is BoundErrorExpression) && Diagnostics.Count == retryDiagMark {
+            if !(retryResult is BoundErrorExpression) && !Diagnostics.HasErrorSince(retryDiagMark) {
                 result = retryResult
             } else {
                 Diagnostics.TruncateTo(overloadDiagMark)
