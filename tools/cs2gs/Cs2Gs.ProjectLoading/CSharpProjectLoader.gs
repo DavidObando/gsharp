@@ -13,6 +13,7 @@ import Microsoft.CodeAnalysis.Text
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.Globalization
 import System.IO
 import System.IO.Enumeration
 import System.Linq
@@ -738,6 +739,10 @@ shared class CSharpProjectLoader {
         let properties = Dictionary[string, string](StringComparer.OrdinalIgnoreCase)
         properties["Configuration"] = effectiveConfig
         properties["MSBuildProjectDirectory"] = projectDir
+        properties["MSBuildProjectFullPath"] = fullProjectPath
+        properties["MSBuildProjectName"] = Path.GetFileNameWithoutExtension(fullProjectPath)
+        properties["MSBuildProjectFile"] = Path.GetFileName(fullProjectPath)
+        properties["MSBuildProjectExtension"] = Path.GetExtension(fullProjectPath)
         let customItems = Dictionary[string, List[string]](StringComparer.OrdinalIgnoreCase)
         let visitedFiles = HashSet[string](StringComparer.OrdinalIgnoreCase)
         visitedFiles.Add(fullProjectPath)
@@ -745,12 +750,95 @@ shared class CSharpProjectLoader {
             let document = XDocument.Load(fullProjectPath)
             let root = document.Root
             if root != nil {
+                let directoryBuildProps = FindFileInAncestorDirectories(projectDir, "Directory.Build.props")
+                if !string.IsNullOrEmpty(directoryBuildProps) {
+                    EvaluateImportedXmlFile(
+                        directoryBuildProps,
+                        projectDir,
+                        properties,
+                        customItems,
+                        paths,
+                        visitedFiles
+                    )
+                }
                 EvaluateXmlProjectContainer(root, projectDir, projectDir, properties, customItems, paths, visitedFiles)
+                var importDirectoryTargets = true
+                if properties.TryGetValue("ImportDirectoryBuildTargets", out var importTargetsProp) && string.Equals(
+                    importTargetsProp.Trim(),
+                    "false",
+                    StringComparison.OrdinalIgnoreCase
+                ) {
+                    importDirectoryTargets = false
+                }
+                if importDirectoryTargets {
+                    let directoryBuildTargets = FindFileInAncestorDirectories(projectDir, "Directory.Build.targets")
+                    if !string.IsNullOrEmpty(directoryBuildTargets) {
+                        EvaluateImportedXmlFile(
+                            directoryBuildTargets,
+                            projectDir,
+                            properties,
+                            customItems,
+                            paths,
+                            visitedFiles
+                        )
+                    }
+                }
             }
         } catch (ex Exception) when ex is IOException || ex is XmlException || ex is UnauthorizedAccessException {
             return paths
         }
         return paths
+    }
+
+    private func FindFileInAncestorDirectories(startDir string?, fileName string) string? {
+        if string.IsNullOrWhiteSpace(startDir) || string.IsNullOrWhiteSpace(fileName) {
+            return nil
+        }
+        var current string? = Path.GetFullPath(startDir)
+        while !string.IsNullOrEmpty(current) {
+            let candidate = Path.Combine(current, fileName)
+            if File.Exists(candidate) {
+                return Path.GetFullPath(candidate)
+            }
+            let parent = Directory.GetParent(current)?.FullName
+            if string.IsNullOrEmpty(parent) || string.Equals(parent, current, StringComparison.OrdinalIgnoreCase) {
+                break
+            }
+            current = parent
+        }
+        return nil
+    }
+
+    private func EvaluateImportedXmlFile(
+        importPath string,
+        rootProjectDir string,
+        properties Dictionary[string, string],
+        customItems Dictionary[string, List[string]],
+        projectReferences List[string],
+        visitedFiles HashSet[string]
+    ) {
+        let fullImportPath = Path.GetFullPath(importPath)
+        if !File.Exists(fullImportPath) || !visitedFiles.Add(fullImportPath) {
+            return
+        }
+        let importDir string? = Path.GetDirectoryName(fullImportPath)
+        if string.IsNullOrEmpty(importDir) {
+            return
+        }
+        try {
+            let importedDoc = XDocument.Load(fullImportPath)
+            if importedDoc.Root != nil {
+                EvaluateXmlProjectContainer(
+                    importedDoc.Root!!,
+                    rootProjectDir,
+                    importDir,
+                    properties,
+                    customItems,
+                    projectReferences,
+                    visitedFiles
+                )
+            }
+        } catch (ex Exception) when ex is IOException || ex is XmlException || ex is UnauthorizedAccessException { }
     }
 
     private func EvaluateXmlProjectContainer(
@@ -1276,6 +1364,44 @@ shared class CSharpProjectLoader {
                 openAt = result.IndexOf("@(", closeAt + 1, StringComparison.Ordinal)
             }
         }
+        result = ExpandGetPathOfFileAbove(result, currentFileDir)
+        return result
+    }
+
+    private func ExpandGetPathOfFileAbove(input string, currentFileDir string) string {
+        let marker = "$$([MSBuild]::GetPathOfFileAbove("
+        var result = input
+        var openIdx = result.IndexOf(marker, StringComparison.OrdinalIgnoreCase)
+        while openIdx >= 0 {
+            let argsStart = openIdx + marker.Length
+            let closeParen = result.IndexOf(')', argsStart)
+            if closeParen < 0 || closeParen + 1 >= result.Length || result[closeParen + 1] != ')' {
+                break
+            }
+            let rawArgs = result.Substring(argsStart, closeParen - argsStart)
+            let parts = rawArgs.Split(',', StringSplitOptions.RemoveEmptyEntries)
+            var resolved = string.Empty
+            if parts.Length >= 1 {
+                let fileName = parts[0].Trim().Trim('\'', '"')
+                let startDir = if parts.Length >= 2 {
+                    let argDir = parts[1]
+                        .Trim()
+                        .Trim('\'', '"')
+                        .Replace('\\', Path.DirectorySeparatorChar)
+                        .Replace('/', Path.DirectorySeparatorChar)
+                    if Path.IsPathRooted(argDir) {
+                        Path.GetFullPath(argDir)
+                    } else {
+                        Path.GetFullPath(Path.Combine(currentFileDir, argDir))
+                    }
+                } else {
+                    Directory.GetParent(currentFileDir)?.FullName ?? string.Empty
+                }
+                resolved = FindFileInAncestorDirectories(startDir, fileName) ?? string.Empty
+            }
+            result = result.Substring(0, openIdx) + resolved + result.Substring(closeParen + 2)
+            openIdx = result.IndexOf(marker, StringComparison.OrdinalIgnoreCase)
+        }
         return result
     }
 
@@ -1332,6 +1458,26 @@ shared class CSharpProjectLoader {
                     i += 2
                     continue
                 }
+                if expanded[i] == '<' && expanded[i + 1] == '=' {
+                    tokens.Add(("<=", "<="))
+                    i += 2
+                    continue
+                }
+                if expanded[i] == '>' && expanded[i + 1] == '=' {
+                    tokens.Add((">=", ">="))
+                    i += 2
+                    continue
+                }
+            }
+            if expanded[i] == '<' {
+                tokens.Add(("<", "<"))
+                i += 1
+                continue
+            }
+            if expanded[i] == '>' {
+                tokens.Add((">", ">"))
+                i += 1
+                continue
             }
             if expanded[i] == '(' {
                 tokens.Add(("(", "("))
@@ -1345,6 +1491,11 @@ shared class CSharpProjectLoader {
             }
             if expanded[i] == '!' {
                 tokens.Add(("!", "!"))
+                i += 1
+                continue
+            }
+            if expanded[i] == '=' {
+                tokens.Add(("=", "="))
                 i += 1
                 continue
             }
@@ -1368,9 +1519,16 @@ shared class CSharpProjectLoader {
                 expanded[i] != ')' &&
                 expanded[i] != '!' &&
                 expanded[i] != '=' &&
+                expanded[i] != '<' &&
+                expanded[i] != '>' &&
                 expanded[i] != '\'' &&
                 expanded[i] != '"' {
                 i += 1
+            }
+            if i == start {
+                tokens.Add(("unknown", expanded.Substring(i, 1)))
+                i += 1
+                continue
             }
             let word = expanded.Substring(start, i - start)
             if string.Equals(word, "and", StringComparison.OrdinalIgnoreCase) {
@@ -1425,24 +1583,77 @@ shared class CSharpProjectLoader {
             return inner
         }
         let left = ParseConditionOperand(tokens, ref index, baseDir)
-        if index < tokens.Count && (tokens[index].Item1 == "==" || tokens[index].Item1 == "!=") {
+        if index < tokens.Count &&
+            (
+            tokens[index].Item1 == "==" ||
+                tokens[index].Item1 == "!=" ||
+                tokens[index].Item1 == "<" ||
+                tokens[index].Item1 == "<=" ||
+                tokens[index].Item1 == ">" ||
+                tokens[index].Item1 == ">="
+        ) {
             let op = tokens[index].Item1
             index += 1
             let right = ParseConditionOperand(tokens, ref index, baseDir)
             if left.Contains("$$(", StringComparison.Ordinal) || right.Contains("$$(", StringComparison.Ordinal) {
                 return false
             }
-            return if op == "==" {
-                string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
-            } else {
-                !string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
-            }
+            return EvaluateComparisonOperator(op, left, right)
         }
         if string.Equals(left, "true", StringComparison.OrdinalIgnoreCase) {
             return true
         }
         if string.Equals(left, "false", StringComparison.OrdinalIgnoreCase) {
             return false
+        }
+        return false
+    }
+
+    private func EvaluateComparisonOperator(op string, left string, right string) bool {
+        if op == "==" {
+            if decimal.TryParse(left, NumberStyles.Float, CultureInfo.InvariantCulture, out var leftEqNum) &&
+                decimal.TryParse(right, NumberStyles.Float, CultureInfo.InvariantCulture, out var rightEqNum) {
+                return leftEqNum == rightEqNum
+            }
+            return string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+        }
+        if op == "!=" {
+            if decimal.TryParse(left, NumberStyles.Float, CultureInfo.InvariantCulture, out var leftNeqNum) &&
+                decimal.TryParse(right, NumberStyles.Float, CultureInfo.InvariantCulture, out var rightNeqNum) {
+                return leftNeqNum != rightNeqNum
+            }
+            return !string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+        }
+        if decimal.TryParse(left, NumberStyles.Float, CultureInfo.InvariantCulture, out var leftNum) &&
+            decimal
+            .TryParse(right, NumberStyles.Float, CultureInfo.InvariantCulture, out var rightNum) {
+            return if op == "<" {
+                leftNum < rightNum
+            } else if op == "<=" {
+                leftNum <= rightNum
+            } else if op == ">" {
+                leftNum > rightNum
+            } else if op == ">=" {
+                leftNum >= rightNum
+            } else {
+                false
+            }
+        }
+        if Version.TryParse(left, out var leftVer) && Version.TryParse(right, out var rightVer) &&
+            leftVer != nil &&
+            rightVer != nil {
+            let cmp = leftVer.CompareTo(rightVer)
+            return if op == "<" {
+                cmp < 0
+            } else if op == "<=" {
+                cmp <= 0
+            } else if op == ">" {
+                cmp > 0
+            } else if op == ">=" {
+                cmp >= 0
+            } else {
+                false
+            }
         }
         return false
     }

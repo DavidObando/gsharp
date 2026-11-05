@@ -922,6 +922,38 @@ public static class Consumer
             Assert.Equal(StageStatus.Failed, consumerGeneratedOutcome.Status)
             let generatedArtifact = Assert.Single(consumerGeneratedOutcome.Artifacts)
             Assert.Equal("compile-error", generatedArtifact.Category)
+
+            // Review finding (`PRRT_kwDOCzQNb86z32fc`): producer errors anchored to
+            // `.targets`, `.gsproj`, or `gsgen` carrying an authoritative `[project]`
+            // suffix must be recognized as referenced-project diagnostics before the
+            // `.gs` file-extension restriction runs.
+            let producerTargetsDiag = GscDiagnostic(
+                "GS9209",
+                "producer targets error [${Path.GetFullPath(colocatedModelsProject)}]",
+                "error",
+                Path.Combine(colocatedDir, "Gsharp.NET.Sdk.targets"),
+                10,
+                5
+            )
+            Assert.True(CompileStage.IsReferencedProjectDiagnostic(colocatedContext, producerTargetsDiag))
+            let producerTargetsOutcome = CompileStage.BuildFailureOutcome(
+                colocatedContext,
+                []GscDiagnostic{producerTargetsDiag},
+                "synthetic"
+            )
+            Assert.Equal(StageStatus.Failed, producerTargetsOutcome.Status)
+            Assert.Equal("dependency-blocked", producerTargetsOutcome.FailureCategory)
+            Assert.Empty(producerTargetsOutcome.Artifacts)
+
+            let ownTargetsDiag = GscDiagnostic(
+                "GS9209",
+                "consumer targets error [${Path.GetFullPath(colocatedConsumerProject)}]",
+                "error",
+                Path.Combine(colocatedDir, "Gsharp.NET.Sdk.targets"),
+                10,
+                5
+            )
+            Assert.False(CompileStage.IsReferencedProjectDiagnostic(colocatedContext, ownTargetsDiag))
         } finally {
             Directory.Delete(mirrorRoot, recursive: true)
         }
@@ -1635,6 +1667,76 @@ public static class Consumer
                 []CorpusApp{app}
             )
             Assert.True(case4jResult.Succeeded)
+
+            // Case 4k (`PRRT_kwDOCzQNb86z32en`): when `Consumer.csproj` declares a
+            // nonexistent `ProjectReference` that is removed by an implicit
+            // `Directory.Build.targets` import, `ReadActiveProjectReferencePaths`
+            // must evaluate `Directory.Build.targets` and not synthesize a bogus
+            // `CS2GS0001` missing-file error.
+            let dirBuildTargets = Path.Combine(corpusRoot, "Directory.Build.targets")
+            File.WriteAllText(
+                dirBuildTargets,
+                "<Project>\n" +
+                    "  <ItemGroup>\n" +
+                    "    <ProjectReference Remove=\"../Missing/RemovedByTargets.csproj\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            File.WriteAllText(
+                consumerProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <ItemGroup>\n" +
+                    "    <ProjectReference Include=\"../Models/Models.csproj\" />\n" +
+                    "    <ProjectReference Include=\"../Missing/RemovedByTargets.csproj\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            let case4kOptions = PipelineOptions{
+                GscPath: compiler,
+                Config: "Release",
+                OutputRoot: Path.Combine(corpusRoot, "runs-case4k"),
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true
+            }
+            let case4kResult = await MigrationPipeline(case4kOptions, []IMigrationStage{TranslateStage()}).RunAsync(
+                []CorpusApp{app}
+            )
+            File.Delete(dirBuildTargets)
+            Assert.True(case4kResult.Succeeded)
+
+            // Case 4l (`PRRT_kwDOCzQNb86z32fB`): relational operators `'10' >= '9'`
+            // and `'1' <= '2'` (and negated `'9' >= '10'` / `'2' <= '1'`) in MSBuild
+            // conditions must evaluate without hanging or producing empty-token loops.
+            File.WriteAllText(
+                consumerProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <ItemGroup Condition=\"'10' &gt;= '9' And '1' &lt;= '2'\">\n" +
+                    "    <ProjectReference Include=\"../Models/Models.csproj\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "  <ItemGroup Condition=\"'9' &gt;= '10' Or '2' &lt;= '1'\">\n" +
+                    "    <ProjectReference Include=\"../Missing/NeverIncluded.csproj\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            let case4lOptions = PipelineOptions{
+                GscPath: compiler,
+                Config: "Release",
+                OutputRoot: Path.Combine(corpusRoot, "runs-case4l"),
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true
+            }
+            let case4lResult = await MigrationPipeline(case4lOptions, []IMigrationStage{TranslateStage()}).RunAsync(
+                []CorpusApp{app}
+            )
+            Assert.True(case4lResult.Succeeded)
         } finally {
             Directory.Delete(corpusRoot, recursive: true)
         }

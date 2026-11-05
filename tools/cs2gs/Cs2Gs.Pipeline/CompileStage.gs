@@ -457,16 +457,19 @@ class CompileStage : IMigrationStage {
 
         internal func IsReferencedProjectDiagnostic(context StageExecutionContext, diagnostic GscDiagnostic) bool {
             let activeReferences = ActiveCompileReferencePaths(context)
-            if activeReferences.Count == 0 || string.IsNullOrEmpty(diagnostic.File) {
-                return false
-            }
-            if !Path.GetExtension(diagnostic.File).Equals(".gs", StringComparison.OrdinalIgnoreCase) {
+            if activeReferences.Count == 0 {
                 return false
             }
             if IsDiagnosticFromReferencedProjectSuffix(context, diagnostic) {
                 return true
             }
             if IsDiagnosticFromOwnProjectSuffix(context, diagnostic) {
+                return false
+            }
+            if string.IsNullOrEmpty(diagnostic.File) {
+                return false
+            }
+            if !Path.GetExtension(diagnostic.File).Equals(".gs", StringComparison.OrdinalIgnoreCase) {
                 return false
             }
             let exactFile = MatchExactEmittedFile(context.EmittedFiles, diagnostic.File, context.ProjectOutputDir)
