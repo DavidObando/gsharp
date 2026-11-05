@@ -263,6 +263,13 @@ func ChangeHolder() int32 {
     holder = SliceHolder{Frames: slice[Pair].FromArray(replacement)}
     return 0
 }
+func ReplaceSlice(ref s slice[Pair], replacement slice[Pair]) int32 {
+    s = replacement
+    return 0
+}
+async func RunHolderSet(h SliceHolder, ch chan[int32]) {
+    h.Frames[0, false].Left.Item = <-ch
+}
 func Owner() slice[Pair] {
     owners++
     return frames
@@ -324,11 +331,21 @@ scope {
 let afterGo = storage[0].Left.Item
 holder = SliceHolder{Frames: slice[Pair].FromArray(storage)}
 holder.Frames[ChangeHolder(), false].Left.Item = 31
-Console.WriteLine("go:${afterGo}:${storage[0].Left.Item}:${owners}:${indices}:${blockIdxCalls}:${holder.Frames[0].Left.Item}")`
+let reseatStorage = []Pair{Pair{Left: Cell{Item: 1}}}
+var reseated = slice[Pair]{Pair{}}
+reseated[ReplaceSlice(ref reseated, slice[Pair].FromArray(reseatStorage)), false].Left.Item = 37
+let holderCh = chan[int32](0)
+let holderTarget = SliceHolder{Frames: slice[Pair].FromArray(storage)}
+let pendingHolder = RunHolderSet(holderTarget, holderCh)
+let parkedReplacement = []Pair{Pair{}}
+holderTarget.Frames = slice[Pair].FromArray(parkedReplacement)
+holderCh <- 41
+pendingHolder.GetAwaiter().GetResult()
+Console.WriteLine("go:${afterGo}:${storage[0].Left.Item}:${reseatStorage[0].Left.Item}:${parkedReplacement[0].Left.Item}:${owners}:${indices}:${blockIdxCalls}:${holder.Frames[0].Left.Item}")`
         let dll = fixture.Compile(source, "channel_parameter_store", true)
         VerifyStrict(dll)
         Assert.Equal(
-            Encoding.UTF8.GetBytes("10\nFalse\n10:55:88:0\nFalse:1:1\n25:1:1\nbounds:2:2\ngo:27:31:3:3:1:0\n"),
+            Encoding.UTF8.GetBytes("10\nFalse\n10:55:88:0\nFalse:1:1\n25:1:1\nbounds:2:2\ngo:27:41:37:0:3:3:1:0\n"),
             Encoding.UTF8.GetBytes(fixture.Run(dll))
         )
     }
