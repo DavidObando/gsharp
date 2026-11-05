@@ -6316,8 +6316,16 @@ internal partial class StatementBinder {
         }
         let arguments = ImmutableArray.CreateBuilder[BoundExpression](identifiers.Count)
         let declarations = ImmutableArray.CreateBuilder[BoundStatement](identifiers.Count)
+        let receiverScoped = HasFunctionLocalEscapeScope(receiver) ||
+            (
+            method.ThisParameter?.IsUnscopedRefReceiver == true && !Binder.IsReferenceTypeForConstraint(
+                receiver.Type
+            ) &&
+                HasFunctionLocalRefScope(receiver)
+        )
         for var i = 0; i < identifiers.Count; i++ {
-            var elementType = method.Parameters[i + parameterOffset].Type
+            let parameter = method.Parameters[i + parameterOffset]
+            var elementType = parameter.Type
             if substitution != nil {
                 elementType = Binder.SubstituteType(
                     elementType,
@@ -6328,15 +6336,20 @@ internal partial class StatementBinder {
             if elementType is ByRefTypeSymbol byRef {
                 elementType = byRef.PointeeType
             }
+            let outputScoped = TypeSymbol.IsByRefLike(elementType) && (receiverScoped || parameter.IsScoped)
             let temp = LocalVariableSymbol(
                 "<deconstruct${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
                 isReadOnly: false,
                 elementType
             )
+            temp.IsScoped = outputScoped
             $scope.TryDeclareVariable(temp)
             arguments.Add(BoundAddressOfExpression(nil, BoundVariableExpression(nil, temp)))
             if !IsDiscard(identifiers[i]) {
                 let variable = bindLocalVariable(identifiers[i], isReadOnly, elementType)
+                if outputScoped && variable is LocalVariableSymbol localVariable {
+                    localVariable.IsScoped = true
+                }
                 declarations.Add(BoundVariableDeclaration(identifiers[i], variable, BoundVariableExpression(nil, temp)))
             }
         }
@@ -6438,13 +6451,21 @@ internal partial class StatementBinder {
                     if object.ReferenceEquals(current.Method, other.Method) {
                         continue
                     }
-                    if other.ReceiverParamType != current.ReceiverParamType && Conversion.Classify(
-                        other.ReceiverParamType,
-                        current.ReceiverParamType
+                    let numericComparison = ClrOverloadResolution.CompareNumericConversionTargets(
+                        NullableLifting.GetEffectiveClrType(other.ReceiverParamType),
+                        NullableLifting.GetEffectiveClrType(current.ReceiverParamType),
+                        receiverType.ClrType
                     )
-                        .IsImplicit &&
-                        !Conversion
-                        .Classify(current.ReceiverParamType, other.ReceiverParamType).IsImplicit {
+                    if numericComparison < 0 ||
+                        (
+                        numericComparison == 0 &&
+                            other.ReceiverParamType != current.ReceiverParamType &&
+                            Conversion
+                            .Classify(other.ReceiverParamType, current.ReceiverParamType)
+                            .IsImplicit &&
+                            !Conversion
+                            .Classify(current.ReceiverParamType, other.ReceiverParamType).IsImplicit
+                    ) {
                         dominated = true
                         break
                     }
@@ -6487,9 +6508,16 @@ internal partial class StatementBinder {
         let selected = survivors[0]
         let arguments = ImmutableArray.CreateBuilder[BoundExpression](identifiers.Count + 1)
         let declarations = ImmutableArray.CreateBuilder[BoundStatement](identifiers.Count)
-        arguments.Add(conversions.BindConversion(location, receiver, selected.ReceiverParamType))
+        let convertedReceiver = conversions.BindConversion(location, receiver, selected.ReceiverParamType)
+        arguments.Add(convertedReceiver)
+        let receiverScoped = !selected
+            .Method
+            .Parameters[0]
+            .IsScoped &&
+            (HasFunctionLocalEscapeScope(receiver) || HasFunctionLocalEscapeScope(convertedReceiver))
         for var i = 0; i < identifiers.Count; i++ {
-            var elementType = selected.Method.Parameters[i + 1].Type
+            let parameter = selected.Method.Parameters[i + 1]
+            var elementType = parameter.Type
             if selected.Substitution != nil {
                 elementType = Binder.SubstituteType(
                     elementType,
@@ -6500,15 +6528,20 @@ internal partial class StatementBinder {
             if elementType is ByRefTypeSymbol byRef {
                 elementType = byRef.PointeeType
             }
+            let outputScoped = TypeSymbol.IsByRefLike(elementType) && (receiverScoped || parameter.IsScoped)
             let temp = LocalVariableSymbol(
                 "<deconstruct${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
                 isReadOnly: false,
                 elementType
             )
+            temp.IsScoped = outputScoped
             $scope.TryDeclareVariable(temp)
             arguments.Add(BoundAddressOfExpression(nil, BoundVariableExpression(nil, temp)))
             if !IsDiscard(identifiers[i]) {
                 let variable = bindLocalVariable(identifiers[i], isReadOnly, elementType)
+                if outputScoped && variable is LocalVariableSymbol localVariable {
+                    localVariable.IsScoped = true
+                }
                 declarations.Add(BoundVariableDeclaration(identifiers[i], variable, BoundVariableExpression(nil, temp)))
             }
         }
@@ -6795,6 +6828,8 @@ internal partial class StatementBinder {
                 )
                 refKinds.Add(RefKind.None)
             }
+            let receiverScoped = (receiverOffset == 0 || !RefCapabilities.IsScoped(parameters[0])) &&
+                HasFunctionLocalEscapeScope(receiver)
             for var i = 0; i < identifiers.Count; i++ {
                 // Issue #3705 (family 2): the extension-`Deconstruct` arm used a
                 // bare `FromClrType`, so a synthesised deconstruction local took
@@ -6820,16 +6855,22 @@ internal partial class StatementBinder {
                 } else {
                     parameterType
                 }
+                let outputScoped = TypeSymbol.IsByRefLike(elementType) &&
+                    (receiverScoped || RefCapabilities.IsScoped(parameters[i + receiverOffset]))
                 let temp = LocalVariableSymbol(
                     "<deconstruct${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
                     isReadOnly: false,
                     elementType
                 )
+                temp.IsScoped = outputScoped
                 $scope.TryDeclareVariable(temp)
                 arguments.Add(BoundAddressOfExpression(nil, BoundVariableExpression(nil, temp)))
                 refKinds.Add(RefKind.Out)
                 if !IsDiscard(identifiers[i]) {
                     let variable = bindLocalVariable(identifiers[i], isReadOnly, elementType)
+                    if outputScoped && variable is LocalVariableSymbol localVariable {
+                        localVariable.IsScoped = true
+                    }
                     declarations.Add(BoundVariableDeclaration(nil, variable, BoundVariableExpression(nil, temp)))
                 }
             }

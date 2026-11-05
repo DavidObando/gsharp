@@ -230,18 +230,27 @@ func (kv KeyValuePair[int32, int32]) Deconstruct(out k int32, out v int32) {
     k = -100
     v = -200
 }
-func Run(p Pair, items []Pair, h Holder[string], pt Point, kv KeyValuePair[int32, int32]) string {
-    let (a, b) = p
-    var total = a + b
+func (n int32) Deconstruct(out a int32, out b int32) {
+    a = n
+    b = 1
+}
+func (n uint32) Deconstruct(out a int32, out b int32) {
+    a = int32(n)
+    b = 2
+}
+func Run(p Pair, items []Pair, h Holder[string], pt Point, kv KeyValuePair[int32, int32], b uint8) string {
+    let (a, b1) = p
+    var total = a + b1
     for (x, y) in items {
         total += x + y
     }
     let (text, w) = h
     let (px, py, psum) = pt
     let (k, v) = kv
-    return "${total}:${text}:${w}:${px + py + psum}:${k + v}"
+    let (na, nb) = b
+    return "${total}:${text}:${w}:${px + py + psum}:${k + v}:${na + nb}"
 }
-Console.WriteLine(Run(Pair{A: 2, B: 3}, []Pair{Pair{A: 4, B: 5}}, Holder[string]{Item: "ext", Weight: 7}, Point(6, 8), KeyValuePair[int32, int32](10, 20)))`, "", "run", "14:ext:7:28:30"}
+Console.WriteLine(Run(Pair{A: 2, B: 3}, []Pair{Pair{A: 4, B: 5}}, Holder[string]{Item: "ext", Weight: 7}, Point(6, 8), KeyValuePair[int32, int32](10, 20), uint8(5)))`, "", "run", "14:ext:7:28:30:6"}
             yield[]object{"byref_like_receiver_rejected_by_generic_extension_deconstruct", `import System
 func (p T) Deconstruct[T](out a int32, out b int32) {
     a = 1
@@ -252,6 +261,27 @@ func Run(s Span[int32]) int32 {
     return 0
 }
 Console.WriteLine(Run(Span[int32].Empty))`, "GS0164@7:9", "reject", ""}
+            yield[]object{"scoped_receiver_deconstruct_output_cannot_escape", `import System
+ref struct SpanPair {
+    var S Span[int32]
+    func Deconstruct(out s Span[int32], out n int32) {
+        s = S
+        n = S.Length
+    }
+}
+func (s Span[int32]) Deconstruct(out head Span[int32], out len int32) {
+    head = s
+    len = s.Length
+}
+func LeakInstance(scoped p SpanPair) Span[int32] {
+    let (s, _) = p
+    return s
+}
+func LeakExtension(scoped s Span[int32]) Span[int32] {
+    let (head, _) = s
+    return head
+}
+Console.WriteLine(0)`, "GS0219@15:12 GS0219@19:12", "reject", ""}
             yield[]object{"overloaded_deconstruct_selects_matching_arity", `import System
 struct Multi {
     var A int32
