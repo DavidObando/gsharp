@@ -1600,6 +1600,12 @@ internal class LambdaBinder {
         // `bodyStatements` is the single list every body-statement,
         // including this prelude, is collected into below.
         bodyStatements.AddRange(destructuringPrelude)
+        if (returnType == TypeSymbol.Void || returnType == TypeSymbol.Error) && boundBody is BoundBlockExpression {
+            let materializedBodyType = TypeSymbol.MaterializeNeverFunctionReturns(boundBody.Type)
+            if !object.ReferenceEquals(materializedBodyType, boundBody.Type) {
+                boundBody = conversions.BindConversion(syntax.Body.Location, boundBody, materializedBodyType)
+            }
+        }
         if boundBody is BoundBlockExpression blockExpr && syntax.Body is BlockExpressionSyntax {
             // Block body — emit the prefix statements, then either a return-
             // statement on the trailing expression (when the lambda returns a
@@ -1825,7 +1831,11 @@ internal class LambdaBinder {
             ErasedFunctionLiteralAdapterRewriter(
                 replacementMap,
                 nestedSubstitution,
-                adapterResultType
+                adapterResultType,
+                conversions,
+                Diagnostics,
+                literal.Syntax?.Location ?? default(TextLocation),
+                FindUnpackedCleanupResultLocal(literal.Body)
             ).RewriteStatement(literal.Body)
         )
         if adapterPrefix.Count > 0 {
@@ -2512,6 +2522,18 @@ internal class LambdaBinder {
                     discardedTrailing,
                     TupleTypeSymbol.ResolveNilElements(discardedTrailing.Type)
                 )
+            }
+            let materializedTrailingType = TypeSymbol.MaterializeNeverFunctionReturns(discardedTrailing.Type)
+            if !object.ReferenceEquals(materializedTrailingType, discardedTrailing.Type) {
+                discardedTrailing = conversions.BindConversion(
+                    syntax.Body.Location,
+                    discardedTrailing,
+                    materializedTrailingType
+                )
+            }
+            if discardedTrailing.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(discardedTrailing.Type) {
+                Diagnostics.ReportExpressionMustHaveValue(syntax.Body.Location)
+                discardedTrailing = BoundErrorExpression(syntax.Body)
             }
             bodyStatements.Add(BoundExpressionStatement(syntax.Body, discardedTrailing))
             if returnType == TypeSymbol.Void {
@@ -3329,15 +3351,66 @@ internal class LambdaBinder {
         private let replacementMap Dictionary[VariableSymbol, BoundExpression]
         private let nestedSubstitution Dictionary[VariableSymbol, VariableSymbol]
         private let adapterReturnType TypeSymbol
+        private let conversions ConversionClassifier
+        private let diagnostics DiagnosticBag
+        private let defaultLocation TextLocation
+        private let unpackedCleanupResultLocal LocalVariableSymbol?
 
         init(
             replacementMap Dictionary[VariableSymbol, BoundExpression],
             nestedSubstitution Dictionary[VariableSymbol, VariableSymbol],
-            adapterReturnType TypeSymbol
+            adapterReturnType TypeSymbol,
+            conversions ConversionClassifier,
+            diagnostics DiagnosticBag,
+            defaultLocation TextLocation,
+            unpackedCleanupResultLocal LocalVariableSymbol?
         ) {
             this.replacementMap = replacementMap
             this.nestedSubstitution = nestedSubstitution
             this.adapterReturnType = adapterReturnType
+            this.conversions = conversions
+            this.diagnostics = diagnostics
+            this.defaultLocation = defaultLocation
+            this.unpackedCleanupResultLocal = unpackedCleanupResultLocal
+        }
+
+        protected override func RewriteVariableDeclaration(node BoundVariableDeclaration) BoundStatement {
+            let rewritten = cast[BoundVariableDeclaration](base.RewriteVariableDeclaration(node))
+            if this.unpackedCleanupResultLocal is {} unpackedLocal && object.ReferenceEquals(
+                rewritten.Variable,
+                unpackedLocal
+            ) &&
+                rewritten.Initializer is {} initializer &&
+                TypeSymbol
+                .ContainsNeverType(unpackedLocal.Type) {
+                let targetLocalType = if this.adapterReturnType == TypeSymbol.Void {
+                    TypeSymbol.MaterializeNeverFunctionReturns(unpackedLocal.Type)
+                } else if this.adapterReturnType is NullableTypeSymbol nullableAdapterReturn &&
+                    !(unpackedLocal.Type is NullableTypeSymbol) {
+                    nullableAdapterReturn.UnderlyingType
+                } else {
+                    this.adapterReturnType
+                }
+                let convertedInitializer = this.conversions.BindConversion(
+                    rewritten.Syntax?.Location ?? this.defaultLocation,
+                    initializer,
+                    targetLocalType
+                )
+                let replacedLocal = LocalVariableSymbol(
+                    unpackedLocal.Name,
+                    unpackedLocal.IsReadOnly,
+                    convertedInitializer.Type,
+                    unpackedLocal.DeclaringSyntax
+                )
+                this.replacementMap[unpackedLocal] = BoundVariableExpression(nil, replacedLocal)
+                return BoundVariableDeclaration(
+                    rewritten.Syntax,
+                    replacedLocal,
+                    convertedInitializer,
+                    rewritten.ConstantValue
+                )
+            }
+            return rewritten
         }
 
         protected override func RewriteVariableExpression(node BoundVariableExpression) BoundExpression {
@@ -3413,10 +3486,25 @@ internal class LambdaBinder {
             // evaluate the expression for its side effects, then `return;`. A
             // bare `return <value>;` against a void method is invalid IL.
             if this.adapterReturnType == TypeSymbol.Void {
+                var discardedExpression = expression
+                let materializedType = TypeSymbol.MaterializeNeverFunctionReturns(discardedExpression.Type)
+                if !object.ReferenceEquals(materializedType, discardedExpression.Type) {
+                    discardedExpression = this.conversions.BindConversion(
+                        rewritten.Syntax?.Location ?? this.defaultLocation,
+                        discardedExpression,
+                        materializedType
+                    )
+                }
+                if discardedExpression.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(
+                    discardedExpression.Type
+                ) {
+                    this.diagnostics.ReportExpressionMustHaveValue(rewritten.Syntax?.Location ?? this.defaultLocation)
+                    discardedExpression = BoundErrorExpression(rewritten.Syntax)
+                }
                 return BoundBlockStatement(
                     rewritten.Syntax,
                     ImmutableArray.Create[BoundStatement](
-                        BoundExpressionStatement(rewritten.Syntax, expression),
+                        BoundExpressionStatement(rewritten.Syntax, discardedExpression),
                         BoundReturnStatement(rewritten.Syntax, expression: nil)
                     )
                 )
@@ -3424,6 +3512,16 @@ internal class LambdaBinder {
             // A bottom-typed return never reaches the target slot.
             if expression.Type == this.adapterReturnType || expression.Type == TypeSymbol.Never {
                 return rewritten
+            }
+            if TypeSymbol.ContainsNeverType(expression.Type) {
+                return BoundReturnStatement(
+                    nil,
+                    this.conversions.BindConversion(
+                        rewritten.Syntax?.Location ?? this.defaultLocation,
+                        expression,
+                        this.adapterReturnType
+                    )
+                )
             }
             return BoundReturnStatement(nil, BoundConversionExpression(nil, this.adapterReturnType, expression))
         }
@@ -4107,7 +4205,7 @@ internal class LambdaBinder {
             // exactly as `() -> { throw e }` (a throw statement) already is.
             // An expression body `() -> throw e` keeps its `() -> never` type,
             // which adapts to any delegate signature (issue #2716).
-            let neverBlockTail = trailingType == TypeSymbol.Never && syntax.Body is BlockExpressionSyntax
+            let neverBlockTail = trailingType == TypeSymbol.Never && (syntax.Body is BlockExpressionSyntax || isAsync)
             if targetFunctionType == nil && !hasExplicitReturn && !trailingIsAssignment {
                 return if neverBlockTail {
                     TypeSymbol.Void
@@ -4222,7 +4320,7 @@ internal class LambdaBinder {
             // Issue #4965 (ADR-0202): a block body every return of which never
             // completes (`() -> { return { throw e } }`) has no value type
             // either; see `neverBlockTail` above.
-            if result == TypeSymbol.Never && syntax.Body is BlockExpressionSyntax {
+            if result == TypeSymbol.Never && (syntax.Body is BlockExpressionSyntax || isAsync) {
                 return TypeSymbol.Void
             }
             let resolvedResult = result ?? TypeSymbol.Error
@@ -4384,6 +4482,42 @@ internal class LambdaBinder {
                 NestedCaptureCollector(sink).RewriteStatement(body)
             }
             return sink
+        }
+
+        private func FindUnpackedCleanupResultLocal(body BoundBlockStatement) LocalVariableSymbol? {
+            let statements = body.Statements
+            if statements.Length == 0 {
+                return nil
+            }
+            if statements[^1] is BoundReturnStatement{Expression: {} returnExpression} &&
+                UnwrapConversions(returnExpression) is BoundVariableExpression{
+                Variable: LocalVariableSymbol returnLocal
+            } &&
+                returnLocal
+                .Name
+                .StartsWith("<blockResult", StringComparison.Ordinal) {
+                return returnLocal
+            }
+            if statements.Length >= 2 &&
+                statements[^1] is BoundReturnStatement{Expression: nil} &&
+                statements[^2] is BoundExpressionStatement{Expression: {} discardedExpression} &&
+                UnwrapConversions(discardedExpression) is BoundVariableExpression{
+                Variable: LocalVariableSymbol discardedLocal
+            } &&
+                discardedLocal
+                .Name
+                .StartsWith("<blockResult", StringComparison.Ordinal) {
+                return discardedLocal
+            }
+            return nil
+        }
+
+        private func UnwrapConversions(expression BoundExpression) BoundExpression {
+            var current = expression
+            while current is BoundConversionExpression conversion {
+                current = conversion.Expression
+            }
+            return current
         }
 
         /// Issue #1940: scans a generic local function's parameter types, return type, and body for any

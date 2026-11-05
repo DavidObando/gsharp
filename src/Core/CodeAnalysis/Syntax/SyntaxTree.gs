@@ -178,16 +178,19 @@ open class SyntaxTree {
             let tokens = List[SyntaxToken]()
             let syntaxTree = SyntaxTree(text)
             let lexer = Lexer(syntaxTree)
-            var root CompilationUnitSyntax? = nil
             while true {
                 let token = lexer.Lex()
                 if token.Kind == SyntaxKind.EndOfFileToken {
-                    root = CompilationUnitSyntax(syntaxTree, ImmutableArray[MemberSyntax].Empty, token)
+                    let root = CompilationUnitSyntax(syntaxTree, ImmutableArray[MemberSyntax].Empty, token)
+                    syntaxTree.SetParseResult(
+                        root,
+                        lexer.Diagnostics.ToImmutableArray(),
+                        ImmutableArray[SyntaxToken].Empty
+                    )
                     break
                 }
                 tokens.Add(token)
             }
-            syntaxTree.SetParseResult(root!!, lexer.Diagnostics.ToImmutableArray(), ImmutableArray[SyntaxToken].Empty)
             diagnostics = syntaxTree.Diagnostics
             return tokens.ToImmutableArray()
         }

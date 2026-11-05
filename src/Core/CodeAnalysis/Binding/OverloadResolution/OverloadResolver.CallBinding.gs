@@ -2735,7 +2735,7 @@ internal partial class OverloadResolver {
                         )
                     )
                         .IsImplicit &&
-                        !(structuralArgumentType is FunctionTypeSymbol)
+                        (!(structuralArgumentType is FunctionTypeSymbol) || TypeSymbol.ContainsNeverType(argument.Type))
                 )
             ) {
                 // Issue #2335 (audit follow-up): every OTHER implicit

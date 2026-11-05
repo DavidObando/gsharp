@@ -249,4 +249,25 @@ class PipelineOptions {
     /// flattening would erase it from the migrated assembly (GS0157 at every
     /// cross-project use site).
     internal prop ProjectsReferencedByOtherApps IReadOnlyCollection[string]?
+
+    /// Gets or sets the absolute project paths that failed the Translate stage
+    /// in this run (issue #4767).
+    internal prop InvalidTranslatedProjectPaths ISet[string]?
+
+    /// Gets or sets the absolute project paths that failed the Compile stage
+    /// in this run (issue #4767).
+    internal prop InvalidCompiledProjectPaths ISet[string]?
+
+    /// Gets or sets the normalized absolute emitted `.gs` file paths owned by
+    /// each project in this run (or hydrated from validation manifests during
+    /// `validate`), keyed by normalized source or generated project path.
+    internal prop ProjectEmittedGsPaths IDictionary[string, IReadOnlyCollection[string]]?
+
+    /// Gets or sets cached translation-validity outcomes for unselected
+    /// referenced projects (issue #4767).
+    internal prop ValidatedReferencedProjects IDictionary[string, bool]?
+
+    /// Gets or sets the MSBuild-evaluated transitive compile `ProjectReference`
+    /// paths keyed by referencing project path (issue #4767).
+    internal prop EvaluatedProjectReferences IReadOnlyDictionary[string, IReadOnlyList[string]]?
 }

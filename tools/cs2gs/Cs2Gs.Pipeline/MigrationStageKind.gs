@@ -22,7 +22,8 @@ enum TriageCategory {
     CompileError,
     IlVerifyFailure,
     TestParityFailure,
-    PipelineCrash
+    PipelineCrash,
+    DependencyBlocked
 }
 
 /// The outcome of a single stage for a single corpus app.

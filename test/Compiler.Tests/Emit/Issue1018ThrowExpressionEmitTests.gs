@@ -207,6 +207,152 @@ Console.WriteLine("done")`
     }
 
     @Fact
+    func ThrowOnlyLambda_TargetlessAndGenericInference_EmitAndRun() {
+        // Issues #4994, #5003: targetless throw-expression lambdas materialize
+        // as void delegates (`Action` / `Action<...>`), and generic calls with
+        // both a `never` operand and a concrete operand infer the concrete type.
+        let source = `package P
+
+import System
+
+func Choose[T](a T, b T) T -> a
+
+let f = () -> throw Exception("zero")
+let g = (x int32) -> throw Exception("arg:${x}")
+let nested = () -> (() -> throw Exception("nested"))
+let voidAdapted Action = (() -> (() -> throw Exception("void-adapted")))
+let assertedCond = (() -> {
+    if true { return () -> throw Exception("asserted-cond") }
+    return nil
+})()!!
+let nestedCleanupTup = () -> ({
+    defer Console.WriteLine("cleanup-in-tup")
+    () -> throw Exception("tup-cleanup-lam")
+}, 12)
+let tup = (() -> throw Exception("tup"), 7)
+let cleanupChosen = Choose({
+    defer Console.WriteLine("cleanup-choose")
+    () -> throw Exception("cleanup-lam")
+}, () -> 42)
+
+voidAdapted()
+try {
+    assertedCond()
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+let (cleanupFn, cleanupNum) = nestedCleanupTup()
+try {
+    cleanupFn()
+} catch (e Exception) {
+    Console.WriteLine("${e.Message}:${cleanupNum}")
+}
+try {
+    (() -> throw Exception("null-cond"))?()
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+try {
+    (() -> throw Exception("null-cond-invoke"))?.Invoke()
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+let nullableTupFn = () -> {
+    if false { return nil }
+    return (() -> throw Exception("nullable-tup"), 19)
+}
+let (nullableTupLam, nullableTupNum) = nullableTupFn()!!
+try {
+    nullableTupLam()
+} catch (e Exception) {
+    Console.WriteLine("${e.Message}:${nullableTupNum}")
+}
+let nullableCleanupFn = () -> {
+    if false { return nil }
+    defer Console.WriteLine("nullable-cleanup")
+    () -> throw Exception("nullable-cleanup-lam")
+}
+try {
+    nullableCleanupFn()!!()
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+if let boundFn = (() -> {
+    if true { return () -> throw Exception("if-let-fn") }
+    return nil
+})() {
+    try {
+        boundFn()
+    } catch (e Exception) {
+        Console.WriteLine(e.Message)
+    }
+}
+try {
+    Console.WriteLine(cleanupChosen())
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+try {
+    f()
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+try {
+    g(42)
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+try {
+    nested()()
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+try {
+    tup.Item1()
+} catch (e Exception) {
+    Console.WriteLine("${e.Message}:${tup.Item2}")
+}
+try {
+    Console.WriteLine(Choose(1, throw Exception("choose-r")))
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+try {
+    Console.WriteLine(Choose(throw Exception("choose-l"), 1))
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}`
+        let output = CompileAndRun(source)
+        Assert.Equal(
+            "cleanup-choose${Environment.NewLine}asserted-cond${Environment.NewLine}cleanup-in-tup${Environment.NewLine}tup-cleanup-lam:12${Environment.NewLine}null-cond${Environment.NewLine}null-cond-invoke${Environment.NewLine}nullable-tup:19${Environment.NewLine}nullable-cleanup${Environment.NewLine}nullable-cleanup-lam${Environment.NewLine}if-let-fn${Environment.NewLine}cleanup-lam${Environment.NewLine}zero${Environment.NewLine}arg:42${Environment.NewLine}nested${Environment.NewLine}tup:7${Environment.NewLine}choose-r${Environment.NewLine}choose-l${Environment.NewLine}",
+            output
+        )
+    }
+
+    @Theory
+    @InlineData("Id(throw Exception(\"x\"))", "GS0151")
+    @InlineData("Id((1, throw Exception(\"x\")))", "GS0151")
+    @InlineData("let t = (1, throw Exception(\"x\"))", "GS0124")
+    @InlineData("(() -> throw Exception(\"a\"), throw Exception(\"b\"))", "GS0124")
+    @InlineData("let t (int32, int32) = (() -> (1, throw Exception(\"x\")))()", "GS0124")
+    @InlineData("(() -> (1, throw Exception(\"x\")))?()", "GS0124")
+    func ThrowExpression_UninferrableType_ReportsDiagnosticWithoutCrash(statement string, expectedId string) {
+        let source = `package P
+
+import System
+
+func Id[T](x T) T -> x
+
+func main() {
+    ` + statement + `
+}`
+        let (exitCode, _, diagnostics) = CompileExpectingFailure(source)
+        Assert.NotEqual(0, exitCode)
+        Assert.Contains(expectedId, diagnostics)
+        Assert.DoesNotContain("GS9998", diagnostics)
+    }
+
+    @Fact
     func ThrowExpression_InArgumentPosition() {
         let source = `package P
 

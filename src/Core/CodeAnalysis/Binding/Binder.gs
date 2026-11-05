@@ -930,16 +930,23 @@ partial class Binder {
             } else {
                 Expressions.BindExpression(member.Value, declaredType)
             }
-            if declaredType == nil &&
-                value is not BoundErrorExpression &&
-                value.Type is TupleTypeSymbol{HasNilElement: true} {
-                value = Conversions.BindConversion(
-                    member.Value.Location,
-                    value,
-                    TupleTypeSymbol.ResolveNilElements(value.Type)
-                )
+            if declaredType == nil {
+                if value is not BoundErrorExpression && value.Type is TupleTypeSymbol{HasNilElement: true} {
+                    value = Conversions.BindConversion(
+                        member.Value.Location,
+                        value,
+                        TupleTypeSymbol.ResolveNilElements(value.Type)
+                    )
+                }
+                let materializedFieldType = TypeSymbol.MaterializeNeverFunctionReturns(value.Type)
+                if !object.ReferenceEquals(materializedFieldType, value.Type) {
+                    value = Conversions.BindConversion(member.Value.Location, value, materializedFieldType)
+                }
             }
-            if value is BoundErrorExpression || value.Type == TypeSymbol.Null || value.Type == TypeSymbol.Void {
+            if value is BoundErrorExpression ||
+                value.Type == TypeSymbol.Null ||
+                value.Type == TypeSymbol.Void ||
+                (declaredType == nil && TypeSymbol.ContainsNeverType(value.Type)) {
                 if declaredType == nil {
                     Diagnostics.ReportRichAnonymousFieldInference(
                         member.Identifier.Location,

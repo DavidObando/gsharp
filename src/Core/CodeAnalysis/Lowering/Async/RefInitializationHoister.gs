@@ -278,6 +278,10 @@ shared class RefInitializationHoister {
             if !forceCapture && RefInitializationHoister.IsTriviallyRepeatable(expression) {
                 return expression
             }
+            if expression.Type == TypeSymbol.Never {
+                prelude.Add(BoundExpressionStatement(nil, expression))
+                return BoundThrowExpression(nil, BoundLiteralExpression(nil, value: nil))
+            }
             let temp = LocalVariableSymbol("<refTmp>__${tempCounter++}", isReadOnly: false, expression.Type)
             prelude.Add(BoundVariableDeclaration(nil, temp, expression))
             return BoundVariableExpression(nil, temp)
