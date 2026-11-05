@@ -2378,6 +2378,19 @@ class Program {
 }
 `, "CS0266", line: 4, column: 39, length: 1, diagnostic: "GS0156")
         Reject(fixture, `import System
+open class Animal {}
+class Dog : Animal {}
+func Bad(x Action[Dog]) (object) -> void -> x
+func Main() {}
+`, `using System;
+class Animal {}
+class Dog : Animal {}
+class Program {
+    static Action<object> Bad(Action<Dog> x) => x;
+    static void Main() {}
+}
+`, "CS0266", line: 4, column: 45, length: 1, diagnostic: "GS0156")
+        Reject(fixture, `import System
 enum Code { A = 1 }
 func Bad(x Func[Code]) () -> object -> x
 func Main() {}

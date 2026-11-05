@@ -1997,7 +1997,13 @@ class Conversion {
                     to is FunctionTypeSymbol{ClrType: not nil} ||
                     DeclarationBinder.TryGetRankOneNonSzArrayElementType(to, out _)
             ) {
-                return Conversion.None
+                return if to is FunctionTypeSymbol &&
+                    allowExplicitReference &&
+                    HasCheckedReferenceConversion(from, to) {
+                    Conversion.Explicit
+                } else {
+                    Conversion.None
+                }
             }
             if from?.ClrType != nil &&
                 to?.ClrType != nil &&

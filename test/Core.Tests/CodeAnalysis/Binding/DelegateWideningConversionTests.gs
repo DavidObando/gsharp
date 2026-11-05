@@ -110,6 +110,10 @@ open class DelegateWideningConversionTests {
         let arrowAnimal = FunctionTypeSymbol.Get(ImmutableArray[TypeSymbol].Empty, animal)
         let arrowVoidDog = FunctionTypeSymbol.Get(ImmutableArray.Create[TypeSymbol](dog), TypeSymbol.Void)
         let arrowVoidAnimal = FunctionTypeSymbol.Get(ImmutableArray.Create[TypeSymbol](animal), TypeSymbol.Void)
+        let arrowVoidObject = FunctionTypeSymbol.Get(
+            ImmutableArray.Create[TypeSymbol](TypeSymbol.Object),
+            TypeSymbol.Void
+        )
         Assert.True(Conversion.Classify(funcDog, arrowDog).IsImplicit)
         Assert.True(Conversion.Classify(funcDog, arrowAnimal).IsImplicit)
         Assert.True(Conversion.Classify(actionAnimal, arrowVoidDog).IsImplicit)
@@ -118,6 +122,9 @@ open class DelegateWideningConversionTests {
         Assert.True(Conversion.ReusesFunctionValueDelegate(actionAnimal, arrowVoidDog))
         Assert.False(Conversion.Classify(funcAnimal, arrowDog).IsImplicit)
         Assert.False(Conversion.Classify(actionDog, arrowVoidAnimal).IsImplicit)
+        let downcastToObject = Conversion.Classify(actionDog, arrowVoidObject)
+        Assert.True(downcastToObject.Exists)
+        Assert.False(downcastToObject.IsImplicit)
     }
 
     shared {
