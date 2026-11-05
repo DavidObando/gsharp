@@ -1544,12 +1544,8 @@ internal partial class MethodBodyEmitter {
             )
             if init.FieldDeclaringType != nil {
                 fieldHandle = this.ResolveStructLiteralFieldToken(literal, init)
-            } else if isGeneric || literal.StructType.ClrType != nil {
-                fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField, literal.Type)
-            } else if this.outer.cache.StructFieldDefs.TryGetValue(initField, out var defHandle) {
-                fieldHandle = defHandle
             } else {
-                throw InvalidOperationException("Struct field '${initField.Name}' has no emitted FieldDef.")
+                fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField, literal.Type)
             }
             this.il.LoadLocalAddress(slot)
             this.EmitExpression(init.Value)

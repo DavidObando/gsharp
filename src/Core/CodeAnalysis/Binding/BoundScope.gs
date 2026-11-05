@@ -991,6 +991,9 @@ partial class BoundScope {
         var match TypeSymbol? = nil
         let seen = HashSet[TypeSymbol]()
         for pair in EnumerateTypeAliasesInChain() {
+            if TryGetAliasDeclaringPackageInChain(pair.Key, out _) {
+                continue
+            }
             let candidate = TypeDefinition(pair.Value)
             if !seen.Add(candidate) {
                 continue
@@ -1114,8 +1117,8 @@ partial class BoundScope {
         let arity = GetTypeAliasArity(target)
         let key = MangleArity(name, arity)
         if !TypeAliasVisible(key) {
-            AddTypeAlias(key, target)
             RegisterAliasDeclaringPackage(key, declaringPackageName)
+            AddTypeAlias(key, target)
             return true
         }
         // Issue #1080 / #2342: a name clash on the simple (arity-bearing) key is
@@ -1138,8 +1141,16 @@ partial class BoundScope {
         } else {
             default(TypeSymbol?)
         }
-        let targetEnclosing TypeSymbol? = TypeContainingType(target)
-        let existingEnclosing TypeSymbol? = TypeContainingType(existing)
+        let targetEnclosing TypeSymbol? = if declaringPackageName != nil {
+            default(TypeSymbol?)
+        } else {
+            TypeContainingType(target)
+        }
+        let existingEnclosing TypeSymbol? = if TryGetAliasDeclaringPackageInChain(key, out _) {
+            default(TypeSymbol?)
+        } else {
+            TypeContainingType(existing)
+        }
         if IsSameDeclarationScope(existing, target, key, declaringPackageName) {
             return false
         }
@@ -1160,8 +1171,8 @@ partial class BoundScope {
                 // duplicate (e.g. three-plus same-named packages colliding).
                 return false
             }
-            AddTypeAlias(packageQualifiedKey, target)
             RegisterAliasDeclaringPackage(packageQualifiedKey, declaringPackageName)
+            AddTypeAlias(packageQualifiedKey, target)
             return true
         }
         // Prefer the top-level type as the owner of the simple key. If a nested
@@ -1181,12 +1192,12 @@ partial class BoundScope {
             // TypeContainingType's StructSymbol/EnumSymbol/InterfaceSymbol type
             // patterns — a null `existing` always falls through to `_ => null`
             // (type patterns never match null) — so existing is non-null here.
-            AddTypeAlias(existingQualifiedKey, existing!!)
             if TryGetAliasDeclaringPackageInChain(key, out var carriedOverPackage) {
                 RegisterAliasDeclaringPackage(existingQualifiedKey, carriedOverPackage)
             }
-            SetTypeAliasOverride(key, target)
+            AddTypeAlias(existingQualifiedKey, existing!!)
             RegisterAliasDeclaringPackage(key, declaringPackageName)
+            SetTypeAliasOverride(key, target)
             return true
         }
         // The incoming type is nested and clashes with a differently-scoped type
@@ -1197,8 +1208,8 @@ partial class BoundScope {
         if TypeAliasVisible(qualifiedKey) {
             return false
         }
-        AddTypeAlias(qualifiedKey, target)
         RegisterAliasDeclaringPackage(qualifiedKey, declaringPackageName)
+        AddTypeAlias(qualifiedKey, target)
         return true
     }
 
@@ -1210,13 +1221,20 @@ partial class BoundScope {
     /// @param key The composite storage key.
     /// @param target The underlying type.
     /// @returns Whether the alias was declared (false if the key was already taken).
-    func TryRedeclareTypeAlias(key string?, target TypeSymbol) bool {
+    func TryRedeclareTypeAlias(key string?, target TypeSymbol) bool -> TryRedeclareTypeAlias(
+        key,
+        target,
+        declaringPackageName: nil
+    )
+
+    internal func TryRedeclareTypeAlias(key string?, target TypeSymbol, declaringPackageName string?) bool {
         if key == nil {
             return false
         }
         if TypeAliasVisible(key) {
             return false
         }
+        RegisterAliasDeclaringPackage(key, declaringPackageName)
         AddTypeAlias(key, target)
         return true
     }
@@ -2063,7 +2081,7 @@ partial class BoundScope {
             ImmutableDictionary[string, TypeSymbol].Empty
         }
         aliasCandidatesByArity = aliasCandidatesByArity.SetItem(nameWithArity, byArity.SetItem(key, target))
-        if TypeContainingType(target) is {} owner {
+        if !TryGetAliasDeclaringPackageInChain(key, out _) && TypeContainingType(target) is {} owner {
             let nestedKey = (TypeDefinition(owner), name.Substring(name.LastIndexOf('.') + 1))
             let nested = if nestedAliasCandidates.TryGetValue(nestedKey, out var existing) {
                 existing
@@ -2172,10 +2190,21 @@ partial class BoundScope {
     /// (the caller is declaring a real symbol, not a plain alias).
     private func RegisterAliasDeclaringPackage(key string, declaringPackageName string?) {
         if declaringPackageName == nil {
+            aliasDeclaringPackages?.Remove(key)
             return
         }
         aliasDeclaringPackages ??= ImmutableDictionary.CreateBuilder[string, string]()
         aliasDeclaringPackages!![key] = declaringPackageName
+    }
+
+    internal func GetAliasDeclaringPackages() ImmutableDictionary[string, string] {
+        var result = Parent?.GetAliasDeclaringPackages() ?? ImmutableDictionary[string, string].Empty
+        if aliasDeclaringPackages != nil {
+            for pair in aliasDeclaringPackages!! {
+                result = result.SetItem(pair.Key, pair.Value)
+            }
+        }
+        return result
     }
 
     /// Issue #2342 follow-up: looks up the recorded alias-declaring-package
@@ -2666,8 +2695,12 @@ partial class BoundScope {
         aliases ImmutableArray[KeyValuePair[string, TypeSymbol]]
     ) ImmutableArray[TSymbol] {
         let builder = ImmutableArray.CreateBuilder[TSymbol]()
+        let seen = HashSet[TSymbol](ReferenceEqualityComparer.Instance)
         for pair in aliases {
-            if pair.Value is TSymbol typed {
+            if TryGetAliasDeclaringPackageInChain(pair.Key, out _) {
+                continue
+            }
+            if pair.Value is TSymbol typed && seen.Add(typed) {
                 builder.Add(typed)
             }
         }
@@ -2696,8 +2729,16 @@ partial class BoundScope {
         key string,
         targetDeclaringPackageOverride string?
     ) bool {
-        let existingEnclosing TypeSymbol? = TypeContainingType(existing)
-        let targetEnclosing TypeSymbol? = TypeContainingType(target)
+        let existingEnclosing TypeSymbol? = if TryGetAliasDeclaringPackageInChain(key, out _) {
+            default(TypeSymbol?)
+        } else {
+            TypeContainingType(existing)
+        }
+        let targetEnclosing TypeSymbol? = if targetDeclaringPackageOverride != nil {
+            default(TypeSymbol?)
+        } else {
+            TypeContainingType(target)
+        }
         if existingEnclosing == nil && targetEnclosing == nil {
             let existingPackage = if TryGetAliasDeclaringPackageInChain(key, out var existingOverride) {
                 existingOverride!!

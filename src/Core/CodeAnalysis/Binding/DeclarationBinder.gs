@@ -253,15 +253,7 @@ internal partial class DeclarationBinder {
             "a type alias declaration",
             AttributeTargets.Class
         )
-        if !$scope.TryDeclareTypeAlias(
-            name,
-            aliasedType,
-            if $package == nil {
-                default(string?)
-            } else {
-                $package.Name
-            }
-        ) {
+        if !$scope.TryDeclareTypeAlias(name, aliasedType, $package?.Name ?? string.Empty) {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name)
             return nil
         }

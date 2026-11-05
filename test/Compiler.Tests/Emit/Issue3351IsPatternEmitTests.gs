@@ -443,7 +443,26 @@ type OtherCount = int32
 type Label = string
 type Builder = StringBuilder
 
+class Item {
+    var Value int32 = 17
+}
+data struct Stamp(Value int32)
+class Box[T](Value T) {
+    prop this[index int32] T {
+        get -> Value
+    }
+}
+type Renamed = Item
+type StampAlias = Stamp
+
 func Echo(value Repro.Count) Repro.OtherCount -> value
+func ReadThroughAliases() int32 {
+    let direct Renamed = Item{}
+    let qualified Repro.Renamed = Renamed{Value: 23}
+    let stamped Repro.StampAlias = StampAlias(5)
+    let indexed = Repro.Box[int32](19)[0] + Repro.Box[int32]{Value: 13}[0].CompareTo(0)
+    return direct.Value + qualified.Value + stamped.Value + indexed
+}
 let n NamespaceAlias.Count = 41
 Console.WriteLine(Echo(n) + 1)
 let text Repro.Label = "alias"
@@ -452,11 +471,14 @@ let value object = "alias"
 Console.WriteLine(value is Repro.Label)
 let builder Repro.Builder = StringBuilder()
 builder.Append("ok")
-Console.WriteLine(builder.ToString())`
+Console.WriteLine(builder.ToString())
+let item Renamed = Item{}
+Console.WriteLine(item.Value)
+Console.WriteLine(ReadThroughAliases())`
         let result = CompileAndRun(Source)
         Assert.Equal(
             Encoding.UTF8.GetBytes(
-                "42${Environment.NewLine}alias${Environment.NewLine}True${Environment.NewLine}ok${Environment.NewLine}"
+                "42${Environment.NewLine}alias${Environment.NewLine}True${Environment.NewLine}ok${Environment.NewLine}17${Environment.NewLine}65${Environment.NewLine}"
             ),
             Encoding.UTF8.GetBytes(result.Stdout)
         )

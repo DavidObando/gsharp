@@ -219,6 +219,74 @@ let typeMatch = value is string`)
         Assert.Empty(diagnostics)
     }
 
+    @Fact
+    func PackageQualifiedSourceConstruction_TrailingMemberAndIndexAccess_BindsWithoutGS0157() {
+        const source = `package QualifiedCalls5267.Sub
+import System
+
+data struct Stamp(Value int32) {
+    func Twice() int32 -> Value * 2
+}
+class Box[T](Value T) {
+    prop this[index int32] T {
+        get -> Value
+    }
+}
+
+func Main() {
+    let a = QualifiedCalls5267.Sub.Stamp(8).Value
+    let b = QualifiedCalls5267.Sub.Stamp{Value: 9}.Value
+    let c = QualifiedCalls5267.Sub.Stamp(8).Twice()
+    let d = QualifiedCalls5267.Sub.Box[int32](10).Value
+    let e = QualifiedCalls5267.Sub.Box[int32]{Value: 11}.Value
+    let f = QualifiedCalls5267.Sub.Box[int32](12)[0]
+    let g = QualifiedCalls5267.Sub.Box[string]("ok")[0].Length
+    Console.Write(a + b + c + d + e + f + g)
+}`
+        Assert.Empty(Bind(source))
+    }
+
+    @Fact
+    func DeclaredTypeAlias_TargetingSameCompilationSourceTypes_BindsAndPreservesPackageQualification() {
+        const validSource = `package Demo
+open class Item {
+    var Value int32 = 3
+}
+struct Payload {
+    var Count int32
+}
+interface IReader {
+    func Read() int32;
+}
+enum Mode { Fast, Safe }
+delegate Step(x int32) int32;
+
+type Renamed = Item
+type ForwardClass = LaterItem
+type PayloadAlias = Payload
+type ReaderAlias = IReader
+type ModeAlias = Mode
+type StepAlias = Step
+
+class LaterItem : Item {}
+
+func Use(r Renamed, f Demo.ForwardClass, p PayloadAlias, rdr ReaderAlias, m ModeAlias, s StepAlias) int32 {
+    let local Renamed = Item{}
+    let viaAlias Demo.Renamed = Renamed{}
+    return r.Value + f.Value + local.Value + viaAlias.Value + p.Count + rdr.Read() + s(1)
+}
+let item Renamed = Item{}`
+        Assert.Empty(Bind(validSource))
+
+        let badPackageDiagnostic = Assert.Single(Bind(`package Demo
+class Item {}
+type Renamed = Item
+let item Other.Renamed = Item{}`))
+        Assert.Equal("GS0113", badPackageDiagnostic.Id)
+        Assert.Equal("Type 'Other.Renamed' doesn't exist.", badPackageDiagnostic.Message)
+        Assert.Equal("Other", badPackageDiagnostic.Location.Text!!.ToString(badPackageDiagnostic.Location.Span))
+    }
+
     shared {
         private func Bind(source string) ImmutableArray[Diagnostic] {
             let tree = SyntaxTree.Parse(SourceText.From(source))

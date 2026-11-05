@@ -6970,25 +6970,6 @@ partial class Binder {
             for import_ in importDeclarations {
                 binder.BindImport(import_)
             }
-            let typeAliasDeclarations = syntaxTrees.SelectMany((st SyntaxTree) -> st.Root.Members.AsEnumerable())
-                .OfType[TypeAliasDeclarationSyntax]()
-            let declaredTypeAliases = ImmutableArray.CreateBuilder[TypeAliasSymbol]()
-            for typeAlias in typeAliasDeclarations {
-                let owningPackage = packageByTree[typeAlias.SyntaxTree]
-                binder.declarations.ValidateTopLevelProtected(typeAlias.AccessibilityModifier)
-                var aliasSymbol TypeAliasSymbol? = nil
-                RunWithPackage(
-                    owningPackage,
-                    typeAlias.SyntaxTree,
-                    () -> {
-                        aliasSymbol = binder.declarations.BindTypeAliasDeclaration(typeAlias, owningPackage)
-                    }
-                )
-                let declaredAlias = aliasSymbol
-                if declaredAlias != nil {
-                    declaredTypeAliases.Add(declaredAlias)
-                }
-            }
             // Declare named delegate type-name shells before other type bodies so
             // their members can reference delegates. Signatures are bound after all
             // interface/enum/struct shells exist, making delegate constraints,
@@ -7134,6 +7115,26 @@ partial class Binder {
                     syntheticDeclToSymbol[structSyntax] = declaredStruct
                 }
             }
+            // Issue #5358: bind declared type aliases after all type shells exist.
+            let typeAliasDeclarations = syntaxTrees.SelectMany((st SyntaxTree) -> st.Root.Members.AsEnumerable())
+                .OfType[TypeAliasDeclarationSyntax]()
+            let declaredTypeAliases = ImmutableArray.CreateBuilder[TypeAliasSymbol]()
+            for typeAlias in typeAliasDeclarations {
+                let owningPackage = packageByTree[typeAlias.SyntaxTree]
+                binder.declarations.ValidateTopLevelProtected(typeAlias.AccessibilityModifier)
+                var aliasSymbol TypeAliasSymbol? = nil
+                RunWithPackage(
+                    owningPackage,
+                    typeAlias.SyntaxTree,
+                    () -> {
+                        aliasSymbol = binder.declarations.BindTypeAliasDeclaration(typeAlias, owningPackage)
+                    }
+                )
+                let declaredAlias = aliasSymbol
+                if declaredAlias != nil {
+                    declaredTypeAliases.Add(declaredAlias)
+                }
+            }
             for (delegateSyntax, delegateSymbol) in declaredDelegates {
                 let owningPackage = packageByTree[delegateSyntax.SyntaxTree]
                 RunWithPackage(
@@ -7156,6 +7157,7 @@ partial class Binder {
             // base classes before their derived classes, independent of tree/source
             // order.
             let declarationsByName = Dictionary[string, List[int32]](StringComparer.Ordinal)
+            let declarationsBySymbol = Dictionary[StructSymbol, int32](ReferenceEqualityComparer.Instance)
             for var i = 0; i < declaredStructs.Count; i++ {
                 let name = declaredStructs[i].Symbol.Name
                 if !declarationsByName.TryGetValue(name, out var indices) {
@@ -7163,6 +7165,20 @@ partial class Binder {
                     declarationsByName.Add(name, indices)
                 }
                 indices.Add(i)
+                declarationsBySymbol[declaredStructs[i].Symbol] = i
+            }
+            for aliasSymbol in declaredTypeAliases {
+                let aliasedStruct StructSymbol? = (aliasSymbol.Target as StructSymbol)?.Definition ??
+                    (aliasSymbol.Target as StructSymbol)
+                if aliasedStruct != nil && declarationsBySymbol.TryGetValue(aliasedStruct, out var targetIndex) {
+                    if !declarationsByName.TryGetValue(aliasSymbol.Name, out var aliasIndices) {
+                        aliasIndices = List[int32]()
+                        declarationsByName.Add(aliasSymbol.Name, aliasIndices)
+                    }
+                    if !aliasIndices.Contains(targetIndex) {
+                        aliasIndices.Add(targetIndex)
+                    }
+                }
             }
             let bindingState = [declaredStructs.Count]uint8
             let bindingOrder = List[int32](declaredStructs.Count)
@@ -7628,6 +7644,7 @@ partial class Binder {
             )
             result.PreprocessorSymbols = preprocessorSymbols ?? ImmutableHashSet[string].Empty
             result.DeclaredTypeAliases = declaredTypeAliases.ToImmutable()
+            result.AliasDeclaringPackages = binder.$scope.GetAliasDeclaringPackages()
             result.AssemblyAttributes = boundAssemblyAttributes
             result.ModuleAttributes = boundModuleAttributes
             // Issue #2224: anonymous-class literals (`object { let ... }`) bound
@@ -7679,6 +7696,7 @@ partial class Binder {
                 ){
                     PreprocessorSymbols = result.PreprocessorSymbols,
                     DeclaredTypeAliases = result.DeclaredTypeAliases,
+                    AliasDeclaringPackages = result.AliasDeclaringPackages,
                     FriendAssemblies = result.FriendAssemblies,
                     AssemblyAttributes = result.AssemblyAttributes,
                     ModuleAttributes = result.ModuleAttributes,
@@ -11315,7 +11333,9 @@ partial class Binder {
                 )
             }
             for alias in globalScope.TypeAliases {
-                scope_.TryRedeclareTypeAlias(alias.Key, alias.Value)
+                var declaringPackage string? = nil
+                globalScope?.AliasDeclaringPackages.TryGetValue(alias.Key, out declaringPackage)
+                scope_.TryRedeclareTypeAlias(alias.Key, alias.Value, declaringPackage)
             }
             for f in globalScope.Functions {
                 scope_.TryDeclareFunction(f)

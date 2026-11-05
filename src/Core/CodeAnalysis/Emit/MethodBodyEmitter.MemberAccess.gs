@@ -438,7 +438,16 @@ internal partial class MethodBodyEmitter {
             fieldHandle = this.outer.userTokens.ResolveFieldToken(fieldContainer, fa.Field)
         } else if fa.Receiver?.Type is StructSymbol receiverStruct {
             fieldHandle = this.outer.userTokens.ResolveFieldToken(receiverStruct, fa.Field)
-        } else if this.outer.cache.StructFieldDefs.TryGetValue(fa.Field, out var defHandle) {
+        } else if this
+            .outer
+            .cache
+            .StructFieldDefs
+            .TryGetValue(fa.Field, out var defHandle) ||
+            this
+            .outer
+            .cache
+            .DeclaredFieldDefs
+            .TryGetValue(fa.Field, out defHandle) {
             fieldHandle = defHandle
         } else {
             throw InvalidOperationException("Struct field '${fa.Field.Name}' has no emitted FieldDef.")
@@ -533,7 +542,16 @@ internal partial class MethodBodyEmitter {
             fieldHandle = this.outer.userTokens.ResolveFieldToken(fieldContainer, fas.Field)
         } else if fas.Receiver?.Type is StructSymbol receiverStruct {
             fieldHandle = this.outer.userTokens.ResolveFieldToken(receiverStruct, fas.Field)
-        } else if this.outer.cache.StructFieldDefs.TryGetValue(fas.Field, out var defHandle) {
+        } else if this
+            .outer
+            .cache
+            .StructFieldDefs
+            .TryGetValue(fas.Field, out var defHandle) ||
+            this
+            .outer
+            .cache
+            .DeclaredFieldDefs
+            .TryGetValue(fas.Field, out defHandle) {
             fieldHandle = defHandle
         } else {
             throw InvalidOperationException("Struct field '${fas.Field.Name}' has no emitted FieldDef.")
@@ -1958,7 +1976,16 @@ internal partial class MethodBodyEmitter {
         if fieldContainer != nil {
             return this.outer.userTokens.ResolveFieldToken(fieldContainer, fa.Field)
         }
-        if this.outer.cache.StructFieldDefs.TryGetValue(fa.Field, out var defHandle) {
+        if this
+            .outer
+            .cache
+            .StructFieldDefs
+            .TryGetValue(fa.Field, out var defHandle) ||
+            this
+            .outer
+            .cache
+            .DeclaredFieldDefs
+            .TryGetValue(fa.Field, out defHandle) {
             return defHandle
         }
         throw InvalidOperationException("Cannot take address of field '${fa.Field.Name}': no emitted FieldDef.")
