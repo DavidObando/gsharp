@@ -1871,10 +1871,8 @@ internal partial class ExpressionBinder {
             receiverStart
         )
         if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
-            let savedDiagnostics = List[Diagnostic]()
-            Diagnostics.DrainSince(overloadDiagMark, savedDiagnostics)
-            let retryDiagMark = Diagnostics.Count
-            let retryResult = BindAccessorCallCore(
+            Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+            result = BindAccessorCallCore(
                 receiver,
                 classSymbol,
                 methodName,
@@ -1886,12 +1884,6 @@ internal partial class ExpressionBinder {
                 receiverSyntax,
                 receiverStart
             )
-            if !(retryResult is BoundErrorExpression) && !Diagnostics.HasErrorSince(retryDiagMark) {
-                result = retryResult
-            } else {
-                Diagnostics.TruncateTo(overloadDiagMark)
-                Diagnostics.AddRange(savedDiagnostics)
-            }
         }
         return result
     }

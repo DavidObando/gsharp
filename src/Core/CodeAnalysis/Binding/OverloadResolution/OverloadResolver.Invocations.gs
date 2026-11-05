@@ -1358,7 +1358,6 @@ internal partial class OverloadResolver {
             )
         )
         for var i = 0; i < permutedArguments.Length; i++ {
-            let permutedArgument = conversions.ResolveReboundSibling(permutedArguments[i])
             let paramType = extension.Parameters[i + 1].Type
             let expectedType = if substitution != nil {
                 substituteType(paramType, substitution)
@@ -1376,6 +1375,7 @@ internal partial class OverloadResolver {
                     CreateOptionalUserDefaultArgument(extension.Parameters[i + 1], expectedType)
                 )
             }
+            let permutedArgument = conversions.ResolveReboundSibling(permutedArguments[i])
             if substitution != nil && TypeSymbol.ContainsTypeParameter(paramType) {
                 if paramType is FunctionTypeSymbol openFunctionParameter &&
                     tryGetFunctionLiteral(permutedArgument, out var functionLiteralArgument) {

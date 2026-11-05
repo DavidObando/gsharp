@@ -3606,10 +3606,8 @@ internal partial class ExpressionBinder {
             deferredStaticLambdaIndices
         )
         if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
-            let savedDiagnostics = List[Diagnostic]()
-            Diagnostics.DrainSince(overloadDiagMark, savedDiagnostics)
-            let retryDiagMark = Diagnostics.Count
-            let retryResult = BindUserTypeStaticCallAfterArguments(
+            Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+            result = BindUserTypeStaticCallAfterArguments(
                 ownerType,
                 structSym,
                 ifaceSym,
@@ -3619,12 +3617,6 @@ internal partial class ExpressionBinder {
                 refreshedArguments,
                 deferredStaticLambdaIndices
             )
-            if !(retryResult is BoundErrorExpression) && !Diagnostics.HasErrorSince(retryDiagMark) {
-                result = retryResult
-            } else {
-                Diagnostics.TruncateTo(overloadDiagMark)
-                Diagnostics.AddRange(savedDiagnostics)
-            }
         }
         return result
     }

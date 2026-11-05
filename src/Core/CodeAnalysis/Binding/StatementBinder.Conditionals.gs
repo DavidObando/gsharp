@@ -1092,9 +1092,7 @@ internal partial class StatementBinder {
         block BoundBlockExpression,
         before HashSet[VariableSymbol],
         header SyntaxNode? = nil
-    ) HashSet[
-        VariableSymbol
-    ] {
+    ) HashSet[VariableSymbol] {
         if block.Statements.IsDefaultOrEmpty {
             return before
         }

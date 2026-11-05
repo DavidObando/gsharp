@@ -1794,10 +1794,8 @@ internal partial class ExpressionBinder {
             resultTypeOverride
         )
         if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
-            let savedDiagnostics = List[Diagnostic]()
-            Diagnostics.DrainSince(overloadDiagMark, savedDiagnostics)
-            let retryDiagMark = Diagnostics.Count
-            let retryBound = TryBindClrConstructorAfterArguments(
+            Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+            bound = TryBindClrConstructorAfterArguments(
                 clrType,
                 syntax,
                 inlineOutArguments,
@@ -1805,22 +1803,13 @@ internal partial class ExpressionBinder {
                 ctors,
                 symbolicCtorDelegateTargets,
                 refreshedArguments.ToBuilder(),
-                out var retryResult,
-                out var retryNoApplicable,
-                out var retryFailureArgs,
+                out result,
+                out noApplicableOverload,
+                out boundArgumentsOnFailure,
                 openGenericDefinition,
                 symbolicTypeArgs,
                 resultTypeOverride
             )
-            if retryBound && !(retryResult is BoundErrorExpression) && !Diagnostics.HasErrorSince(retryDiagMark) {
-                bound = retryBound
-                result = retryResult
-                noApplicableOverload = retryNoApplicable
-                boundArgumentsOnFailure = retryFailureArgs
-            } else {
-                Diagnostics.TruncateTo(overloadDiagMark)
-                Diagnostics.AddRange(savedDiagnostics)
-            }
         }
         return bound
     }

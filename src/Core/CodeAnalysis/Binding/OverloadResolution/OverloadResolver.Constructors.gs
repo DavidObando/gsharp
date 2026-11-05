@@ -916,10 +916,8 @@ internal partial class OverloadResolver {
             boundArgumentsBuilder
         )
         if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
-            let savedDiagnostics = List[Diagnostic]()
-            Diagnostics.DrainSince(overloadDiagMark, savedDiagnostics)
-            let retryDiagMark = Diagnostics.Count
-            let retryResult = BindExplicitConstructorCallAfterArguments(
+            Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+            result = BindExplicitConstructorCallAfterArguments(
                 syntax,
                 classType,
                 argumentNames,
@@ -927,12 +925,6 @@ internal partial class OverloadResolver {
                 ctorOverloads,
                 refreshedArguments.ToBuilder()
             )
-            if !(retryResult is BoundErrorExpression) && !Diagnostics.HasErrorSince(retryDiagMark) {
-                result = retryResult
-            } else {
-                Diagnostics.TruncateTo(overloadDiagMark)
-                Diagnostics.AddRange(savedDiagnostics)
-            }
         }
         return result
     }

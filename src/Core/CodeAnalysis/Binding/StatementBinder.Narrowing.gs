@@ -1382,6 +1382,8 @@ internal partial class StatementBinder {
                 return ClrCallDischargesNullableWidening(
                     impCall.Function.Method,
                     impCall.Arguments,
+                    impCall.StaticContainerType,
+                    impCall.TypeArgumentSymbols,
                     targetRoot,
                     underlying
                 )
@@ -1390,6 +1392,8 @@ internal partial class StatementBinder {
                 return ClrCallDischargesNullableWidening(
                     impInstCall.Method,
                     impInstCall.Arguments,
+                    impInstCall.ConstrainedInterfaceType ?? impInstCall.Receiver.Type,
+                    impInstCall.TypeArgumentSymbols,
                     targetRoot,
                     underlying
                 )
@@ -1398,6 +1402,8 @@ internal partial class StatementBinder {
                 return ClrCallDischargesNullableWidening(
                     clrStaticCall.Method,
                     clrStaticCall.Arguments,
+                    nil,
+                    default(ImmutableArray[TypeSymbol?]),
                     targetRoot,
                     underlying
                 )
@@ -1433,6 +1439,8 @@ internal partial class StatementBinder {
     private func ClrCallDischargesNullableWidening(
         method MethodInfo,
         arguments ImmutableArray[BoundExpression],
+        receiverType TypeSymbol?,
+        methodTypeArguments ImmutableArray[TypeSymbol?],
         targetRoot VariableSymbol,
         underlying TypeSymbol
     ) bool {
@@ -1442,7 +1450,17 @@ internal partial class StatementBinder {
             if RefCapabilities.GetParameterRefKind(param) != RefKind.Out || HasClrNullabilityContract(param) {
                 continue
             }
-            let paramType = ClrNullability.GetParameterTypeSymbol(param)
+            let paramType = MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(
+                receiverType,
+                method,
+                i,
+                methodTypeArguments
+            ) ??
+                if receiverType != nil {
+                MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, i)
+            } else {
+                ClrNullability.GetParameterTypeSymbol(param)
+            }
             if arguments[i] is BoundAddressOfExpression{IsReadOnly: false, Operand: BoundVariableExpression v} &&
                 object.ReferenceEquals(v.Variable, targetRoot) &&
                 AssignmentTypePreservesNarrowing(paramType, underlying) &&

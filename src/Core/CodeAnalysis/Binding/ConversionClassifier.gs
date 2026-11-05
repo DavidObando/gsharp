@@ -85,6 +85,13 @@ internal class ConversionClassifier {
     private var enterTupleConversion(() -> void)?
     private var leaveTupleConversion(() -> void)?
     private var rebindTupleElement((BoundExpression, ExpressionSyntax) -> BoundExpression)?
+    private var bindConditionalRefParts(
+        (ExpressionSyntax, ExpressionSyntax, ExpressionSyntax) -> (
+            Condition BoundExpression,
+            WhenTrue BoundExpression,
+            WhenFalse BoundExpression
+        )
+    )?
 
     internal func SetExpressionNarrowingHooks(
         expressionNarrowingVersion() -> int32,
@@ -92,7 +99,12 @@ internal class ConversionClassifier {
         tryGetReboundSibling(BoundExpression) -> BoundExpression?,
         enterTupleConversion() -> void,
         leaveTupleConversion() -> void,
-        rebindTupleElement(BoundExpression, ExpressionSyntax) -> BoundExpression
+        rebindTupleElement(BoundExpression, ExpressionSyntax) -> BoundExpression,
+        bindConditionalRefParts(ExpressionSyntax, ExpressionSyntax, ExpressionSyntax) -> (
+            Condition BoundExpression,
+            WhenTrue BoundExpression,
+            WhenFalse BoundExpression
+        )
     ) {
         this.expressionNarrowingVersion = expressionNarrowingVersion
         this.onConversionBound = onConversionBound
@@ -100,6 +112,7 @@ internal class ConversionClassifier {
         this.enterTupleConversion = enterTupleConversion
         this.leaveTupleConversion = leaveTupleConversion
         this.rebindTupleElement = rebindTupleElement
+        this.bindConditionalRefParts = bindConditionalRefParts
     }
 
     internal func ResolveReboundSibling(expression BoundExpression) BoundExpression {
@@ -2858,29 +2871,19 @@ internal class ConversionClassifier {
         syntax ConditionalRefArgumentExpressionSyntax,
         outerModifier SyntaxToken?
     ) BoundExpression {
-        // Condition must be bool.
-        let condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
         // Inner-modifier matching (GS0251). The outer modifier text is `ref`,
         // `out`, `in`, or `&`. The bare `&` form (outerModifier == null) maps
         // to `ref`/`&` semantics; an inner `in`/`out` on a `&` operand is a
         // mismatch since `&` already denotes mutable byref.
         let outerText = outerModifier?.Text ?? "&"
-        if syntax.WhenTrueRefKindModifier != nil &&
-            !InnerModifierMatchesOuter(syntax.WhenTrueRefKindModifier.Text, outerText) {
-            Diagnostics.ReportConditionalRefArgumentInnerModifierMismatch(
-                syntax.WhenTrueRefKindModifier.Location,
-                outerText,
-                syntax.WhenTrueRefKindModifier.Text
-            )
+        if syntax.WhenTrueRefKindModifier is {} wtMod && !InnerModifierMatchesOuter(wtMod.Text, outerText) {
+            let _ = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
+            Diagnostics.ReportConditionalRefArgumentInnerModifierMismatch(wtMod.Location, outerText, wtMod.Text)
             return BoundErrorExpression(nil)
         }
-        if syntax.WhenFalseRefKindModifier != nil &&
-            !InnerModifierMatchesOuter(syntax.WhenFalseRefKindModifier.Text, outerText) {
-            Diagnostics.ReportConditionalRefArgumentInnerModifierMismatch(
-                syntax.WhenFalseRefKindModifier.Location,
-                outerText,
-                syntax.WhenFalseRefKindModifier.Text
-            )
+        if syntax.WhenFalseRefKindModifier is {} wfMod && !InnerModifierMatchesOuter(wfMod.Text, outerText) {
+            let _ = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
+            Diagnostics.ReportConditionalRefArgumentInnerModifierMismatch(wfMod.Location, outerText, wfMod.Text)
             return BoundErrorExpression(nil)
         }
         // Each branch must itself be a plain lvalue expression — not a nested
@@ -2888,15 +2891,24 @@ internal class ConversionClassifier {
         // explicitly reject the inline-declaration form here (GS0250) before
         // attempting to bind.
         if syntax.WhenTrue is RefArgumentExpressionSyntax wtRefArg && wtRefArg.IsInlineDeclaration {
+            let _ = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
             Diagnostics.ReportInlineDeclarationInConditionalRefBranch(wtRefArg.Location)
             return BoundErrorExpression(nil)
         }
         if syntax.WhenFalse is RefArgumentExpressionSyntax wfRefArg && wfRefArg.IsInlineDeclaration {
+            let _ = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
             Diagnostics.ReportInlineDeclarationInConditionalRefBranch(wfRefArg.Location)
             return BoundErrorExpression(nil)
         }
-        let whenTrue = bindExpression(syntax.WhenTrue)
-        let whenFalse = bindExpression(syntax.WhenFalse)
+        let (condition, whenTrue, whenFalse) = if bindConditionalRefParts != nil {
+            bindConditionalRefParts!!(syntax.Condition, syntax.WhenTrue, syntax.WhenFalse)
+        } else {
+            (
+                bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool),
+                bindExpression(syntax.WhenTrue),
+                bindExpression(syntax.WhenFalse)
+            )
+        }
         if whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression || condition is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }

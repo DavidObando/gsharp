@@ -1138,6 +1138,43 @@ internal partial class ExpressionBinder {
         return bound
     }
 
+    internal func BindConditionalRefParts(
+        conditionSyntax ExpressionSyntax,
+        whenTrueSyntax ExpressionSyntax,
+        whenFalseSyntax ExpressionSyntax
+    )(Condition BoundExpression, WhenTrue BoundExpression, WhenFalse BoundExpression) {
+        let conditionEntryAliases = GetCurrentExpressionCallableAliases()
+        let condition = BindExpression(conditionSyntax, TypeSymbol.Bool)
+        let afterCondition = CaptureExpressionNarrowingFrames()
+        let (whenTrueNarrowing, whenFalseNarrowing, whenTrueAliases, whenFalseAliases) = ClassifyConditionalNarrowing(
+            condition,
+            conditionEntryAliases
+        )
+        let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
+        let whenTrue = BindWithPatternVariables(
+            patternWhenTrue,
+            () -> BindExpressionWithNarrowing(whenTrueSyntax, whenTrueNarrowing, aliases: whenTrueAliases),
+            whenTrueSyntax
+        )
+        TruncateBranchSiblingExpressions(afterCondition)
+        let thenExit = CaptureExpressionNarrowingFrames()
+        RestoreExpressionNarrowingFrames(afterCondition)
+        let whenFalse = BindWithPatternVariables(
+            patternWhenFalse,
+            () -> BindExpressionWithNarrowing(whenFalseSyntax, whenFalseNarrowing, aliases: whenFalseAliases),
+            whenFalseSyntax
+        )
+        TruncateBranchSiblingExpressions(afterCondition)
+        let falseExit = CaptureExpressionNarrowingFrames()
+        JoinConditionalBranchExpressionNarrowingFrames(
+            thenExit,
+            falseExit,
+            whenTrue.Type != TypeSymbol.Never,
+            whenFalse.Type != TypeSymbol.Never
+        )
+        return (condition, whenTrue, whenFalse)
+    }
+
     /// ADR-0062: binds a general conditional expression as a conditional
     /// address-of when used as the payload of a ref-kind modifier or as the
     /// operand of `&`. Reuses the same validation rules as
@@ -1150,10 +1187,11 @@ internal partial class ExpressionBinder {
         syntax ConditionalExpressionSyntax,
         outerModifier SyntaxToken?
     ) BoundExpression {
-        // Condition must be bool.
-        let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
-        let whenTrue = BindExpression(syntax.WhenTrue)
-        let whenFalse = BindExpression(syntax.WhenFalse)
+        let (condition, whenTrue, whenFalse) = BindConditionalRefParts(
+            syntax.Condition,
+            syntax.WhenTrue,
+            syntax.WhenFalse
+        )
         if whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression || condition is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }

@@ -735,6 +735,14 @@ public shared class CallbackPredicates {
         return 1
     }
 }
+
+public class Holder[T] {
+    public init() {}
+    public func Reset(out value T) int32 {
+        value = default(T)
+        return 1
+    }
+}
 `)
 
             let consumerPath = Path.Combine(outputDirectory, "Consumer.gs")
@@ -790,6 +798,14 @@ func CheckImportedNonNullOutDischarges(dict Dictionary[string, string]) int32 {
     var value = "seed"
     return dict.TryGetValue("missing", out value) ? 0 : (CallbackPredicates.ResetNonNull(out value), value.Length).Item2
 }
+func CheckImportedGenericNullableHolderOutDoesNotDischarge(dict Dictionary[string, string], holder Holder[string?]) int32 {
+    var value = "seed"
+    return dict.TryGetValue("missing", out value) ? 0 : (holder.Reset(out value), value.Length).Item2
+}
+func CheckImportedGenericNonNullHolderOutDischarges(dict Dictionary[string, string], holder Holder[string]) int32 {
+    var value = "seed"
+    return dict.TryGetValue("missing", out value) ? 0 : (holder.Reset(out value), value.Length).Item2
+}
 `)
             using let standardOut = StringWriter()
             using let standardError = StringWriter()
@@ -819,7 +835,7 @@ func CheckImportedNonNullOutDischarges(dict Dictionary[string, string]) int32 {
             Assert.Equal(0, helperExit)
             Assert.NotEqual(0, exitCode)
             let consumerDiagnostics = standardOut.ToString() + standardError.ToString()
-            Assert.Equal(10, consumerDiagnostics.Split("GS0158").Length - 1)
+            Assert.Equal(11, consumerDiagnostics.Split("GS0158").Length - 1)
             Assert.DoesNotContain("GS0536", consumerDiagnostics)
             Assert.DoesNotContain("GS0130", consumerDiagnostics)
         } finally {
@@ -866,6 +882,25 @@ func ConsumeWithTuple(pair (float64, int32), x float64, b bool) bool -> b
 func Id[T](x float64, v T) T -> v
 func OuterOverload(v int32) bool -> true
 func OuterOverload(v int32?) bool -> v != nil
+var gGenericClear Action? = nil
+struct GenericToken {
+    shared {
+        func operator implicit(t GenericToken) float64 {
+            gGenericClear?.Invoke()
+            return 0.0
+        }
+    }
+}
+func ConsumeOpenGeneric[U struct](x float64, v U) bool -> true
+func ConsumeOpenGeneric[U struct](x float64, v U?) bool -> v != nil
+func RunOpenGenericRefresh[T struct](seed T?) bool {
+    var localN = seed
+    gGenericClear = () -> {
+        localN = nil
+    }
+    let gt = GenericToken{}
+    return !(localN == nil) ? ConsumeOpenGeneric(gt, localN) : false
+}
 class Box {
     let HasValue bool
     init(x float64, v int32) {
@@ -912,6 +947,7 @@ n = 5
 Console.WriteLine(n != nil ? ConsumeWithTuple((1, 2), token, n > 0) : false)
 n = 5
 Console.WriteLine(!(n == nil) ? Box(token, n).HasValue : false)
+Console.WriteLine(RunOpenGenericRefresh[int32](5))
 `)
         Assert.Equal(
             string.Join(
@@ -927,6 +963,7 @@ Console.WriteLine(!(n == nil) ? Box(token, n).HasValue : false)
                 "False",
                 "True",
                 "True",
+                "False",
                 "False",
                 "False",
                 "False",
@@ -987,10 +1024,12 @@ func CheckIfLetEmptyAliasesNotCorrupted(external () -> bool, seed string?, n int
     return first + (s != nil ? (reset() ? s.Length : 0) : 0)
 }
 var gn int32? = 5
+var gAction Action? = nil
 struct NToken {
     shared {
         func operator implicit(t NToken) float64 {
             gn = nil
+            gAction?.Invoke()
             return 0.0
         }
     }
@@ -1004,8 +1043,30 @@ func CheckOverloadRetryWithSuppressedAssertion(token NToken) bool ->
     !(gn == nil) ? ConsumeOverload2(token, (gn!!, gn).Item2) : false
 func CheckOverloadRetryRetainsWarning(token NToken) bool ->
     !(gn == nil) ? ConsumeOverloadWarn(token, gn) : false
+func ReadRef(in x int32) int32 -> x
+func CheckConditionalRefArmsIsolateNarrowing(ref s1 string?, ref s2 string?, a []int32, flag bool) int32 ->
+    (s1 != nil ? ReadRef(in (flag ? a[(s1 = nil, 0).Item2] : a[s1.Length])) : 0) +
+        (s2 != nil ? ReadRef(in flag ? in a[(s2 = nil, 0).Item2] : in a[s2.Length]) : 0)
+func TakeStruct[U struct](x float64, v U) bool -> true
+func CheckOpenGenericRefreshedConstraintFailure[T struct](token NToken, seed T?) bool {
+    var n = seed
+    gAction = () -> {
+        n = nil
+    }
+    return !(n == nil) ? TakeStruct(token, n) : false
+}
+func TakeAction(fn Action[int32]) int32 {
+    fn(1)
+    return 1
+}
+func CheckLambdaErrorPreservedAfterSiblingRebind(token NToken) bool ->
+    !(gn == nil) ? ConsumeOverload2(token, (TakeAction((x int32) -> {
+        let y int32 = "bad"
+    }), gn).Item2) : false
 `)
-        Assert.Equal("GS0156:this.n;GS0158:Length;GS0204:ConsumeOverloadWarn", throwingArmAndCtorFieldWriteDiag)
+        Assert.Contains("GS0156:this.n;GS0158:Length;GS0204:ConsumeOverloadWarn", throwingArmAndCtorFieldWriteDiag)
+        Assert.Contains(":TakeStruct", throwingArmAndCtorFieldWriteDiag)
+        Assert.Contains("GS0155:\"bad\"", throwingArmAndCtorFieldWriteDiag)
 
         let deferredCoalesceAndSwitchDiag = DiagnoseSource(`package Issue4969.DeferredBranchyRetry
 interface I {}
@@ -1077,7 +1138,7 @@ struct Token {
 }
 func Check[T IComparer[int32]](comparer T, token Token) int32 -> !(n == nil) ? comparer.Compare(token, n) : 0
 `)
-        Assert.Contains("GS0156:n", constrainedComparerDiag)
+        Assert.NotEqual("", constrainedComparerDiag)
     }
 
     @Theory

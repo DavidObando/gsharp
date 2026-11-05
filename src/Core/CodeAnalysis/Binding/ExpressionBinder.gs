@@ -1175,16 +1175,21 @@ internal partial class ExpressionBinder {
     }
 
     internal func RebindInSavedScope(original BoundExpression, syntax ExpressionSyntax) BoundExpression {
-        if expressionScopes.TryGetValue(original, out var savedScope) {
-            let currentScope = $scope
-            $scope = savedScope
-            try {
-                return BindExpression(syntax)
-            } finally {
-                $scope = currentScope
+        Diagnostics.EnterSiblingRebind()
+        try {
+            if expressionScopes.TryGetValue(original, out var savedScope) {
+                let currentScope = $scope
+                $scope = savedScope
+                try {
+                    return BindExpression(syntax)
+                } finally {
+                    $scope = currentScope
+                }
             }
+            return BindExpression(syntax)
+        } finally {
+            Diagnostics.LeaveSiblingRebind()
         }
-        return BindExpression(syntax)
     }
 
     private func RebindInvalidatedSiblingsAfter(afterStep int32) {
@@ -1226,6 +1231,7 @@ internal partial class ExpressionBinder {
         }
         let savedRebinding = isRebindingInvalidatedSiblings
         isRebindingInvalidatedSiblings = true
+        Diagnostics.EnterSiblingRebind()
         try {
             for var i = toRebind.Count - 1; i >= 0; i-- {
                 let item = toRebind[i]
@@ -1257,6 +1263,7 @@ internal partial class ExpressionBinder {
                 reboundInvalidatedExpressions[item.Bound] = rebound
             }
         } finally {
+            Diagnostics.LeaveSiblingRebind()
             isRebindingInvalidatedSiblings = savedRebinding
         }
     }
