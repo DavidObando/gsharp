@@ -407,9 +407,13 @@ internal class ConversionClassifier {
         if type != nil && type != TypeSymbol.Error && type != TypeSymbol.Void && !TypeSymbol.ContainsNeverType(type) &&
             TypeSymbol
             .ContainsNeverType(expression.Type) {
-            if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out _) && !(type is TupleTypeSymbol) {
+            if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out _) &&
+                !(type.StripToBareShape() is TupleTypeSymbol) {
                 let materialized = TypeSymbol.MaterializeNeverFunctionReturns(expression.Type)
-                if !object.ReferenceEquals(materialized, expression.Type) {
+                if !object.ReferenceEquals(materialized, expression.Type) && !object.ReferenceEquals(
+                    materialized,
+                    type
+                ) {
                     expression = BindConversion(
                         diagnosticLocation,
                         expression,
@@ -420,6 +424,9 @@ internal class ConversionClassifier {
                     )
                 }
             }
+            if expression is BoundDefaultExpression neverDefault {
+                return BoundDefaultExpression(neverDefault.Syntax, type)
+            }
             if expression is BoundConversionExpression neverConversion {
                 return BindConversion(
                     diagnosticLocation,
@@ -429,6 +436,18 @@ internal class ConversionClassifier {
                     callParameter,
                     trackNarrowing
                 )
+            }
+            if expression.Type is TupleTypeSymbol &&
+                type is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol targetTuple} {
+                let convertedTuple = BindConversion(
+                    diagnosticLocation,
+                    expression,
+                    targetTuple,
+                    allowExplicit,
+                    callParameter,
+                    trackNarrowing
+                )
+                return BoundConversionExpression(nil, type, convertedTuple, binderCtx.IsCheckedContext)
             }
             if expression is BoundUnaryExpression neverAssertion &&
                 neverAssertion

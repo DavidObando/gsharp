@@ -1014,6 +1014,20 @@ class Conversion {
                             return Conversion.Explicit
                         }
                     }
+                    if fromUnderlying is TupleTypeSymbol &&
+                        toUnderlying is TupleTypeSymbol &&
+                        TypeSymbol
+                        .ContainsNeverType(fromUnderlying) {
+                        let underlyingTupleConversion = ClassifyCore(
+                            fromUnderlying,
+                            toUnderlying,
+                            allowStructuralProjection: false,
+                            allowExplicitReference
+                        )
+                        if underlyingTupleConversion.Exists && underlyingTupleConversion.IsImplicit {
+                            return Conversion.Implicit
+                        }
+                    }
                     // Issue #2229: lifted boxing — `T? → U?` where `T` is a value
                     // type and `U` is reference-like (e.g. `int32? → object?`) is
                     // implicit whenever the bare `T → U` boxing conversion is

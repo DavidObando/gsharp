@@ -3377,6 +3377,9 @@ internal class LambdaBinder {
                 .ContainsNeverType(unpackedLocal.Type) {
                 let targetLocalType = if this.adapterReturnType == TypeSymbol.Void {
                     TypeSymbol.MaterializeNeverFunctionReturns(unpackedLocal.Type)
+                } else if this.adapterReturnType is NullableTypeSymbol nullableAdapterReturn &&
+                    !(unpackedLocal.Type is NullableTypeSymbol) {
+                    nullableAdapterReturn.UnderlyingType
                 } else {
                     this.adapterReturnType
                 }
@@ -4456,8 +4459,9 @@ internal class LambdaBinder {
             if statements.Length == 0 {
                 return nil
             }
-            if statements[^1] is BoundReturnStatement{
-                Expression: BoundVariableExpression{Variable: LocalVariableSymbol returnLocal}
+            if statements[^1] is BoundReturnStatement{Expression: {} returnExpression} &&
+                UnwrapConversions(returnExpression) is BoundVariableExpression{
+                Variable: LocalVariableSymbol returnLocal
             } &&
                 returnLocal
                 .Name
@@ -4466,8 +4470,9 @@ internal class LambdaBinder {
             }
             if statements.Length >= 2 &&
                 statements[^1] is BoundReturnStatement{Expression: nil} &&
-                statements[^2] is BoundExpressionStatement{
-                Expression: BoundVariableExpression{Variable: LocalVariableSymbol discardedLocal}
+                statements[^2] is BoundExpressionStatement{Expression: {} discardedExpression} &&
+                UnwrapConversions(discardedExpression) is BoundVariableExpression{
+                Variable: LocalVariableSymbol discardedLocal
             } &&
                 discardedLocal
                 .Name
@@ -4475,6 +4480,14 @@ internal class LambdaBinder {
                 return discardedLocal
             }
             return nil
+        }
+
+        private func UnwrapConversions(expression BoundExpression) BoundExpression {
+            var current = expression
+            while current is BoundConversionExpression conversion {
+                current = conversion.Expression
+            }
+            return current
         }
 
         /// Issue #1940: scans a generic local function's parameter types, return type, and body for any

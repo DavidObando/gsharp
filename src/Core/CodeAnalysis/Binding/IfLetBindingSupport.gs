@@ -73,6 +73,21 @@ internal shared class IfLetBindingSupport {
             }
         }
         var initializerExpr = bindExpression(binding.Initializer)
+        if declaredUnderlying == nil {
+            let materializedInitializerType = TypeSymbol.MaterializeNeverFunctionReturns(initializerExpr.Type)
+            if !object.ReferenceEquals(materializedInitializerType, initializerExpr.Type) {
+                initializerExpr = conversions.BindConversion(
+                    binding.Initializer.Location,
+                    initializerExpr,
+                    materializedInitializerType
+                )
+            }
+            if TypeSymbol.ContainsNeverType(initializerExpr.Type) {
+                diagnostics.ReportExpressionMustHaveValue(binding.Initializer.Location)
+                let errorVar = declareLocal(binding.Identifier, true, TypeSymbol.Error)
+                return BoundIfLetBinding(errorVar, nil, initializerExpr)
+            }
+        }
         let initializerType = initializerExpr.Type
         if initializerType == TypeSymbol.Error {
             let errorVar = declareLocal(binding.Identifier, true, declaredUnderlying ?? TypeSymbol.Error)

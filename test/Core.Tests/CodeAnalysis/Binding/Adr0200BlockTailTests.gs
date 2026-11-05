@@ -859,6 +859,15 @@ let nestedCleanupTup = () -> ({
     defer Console.WriteLine("cleanup-in-tup")
     () -> throw Exception("tup-cleanup-lam")
 }, 12)
+let nullableTupFn = () -> {
+    if false { return nil }
+    return (() -> throw Exception("nullable-tup"), 19)
+}
+let nullableCleanupFn = () -> {
+    if false { return nil }
+    defer Console.WriteLine("nullable-cleanup")
+    () -> throw Exception("nullable-cleanup-lam")
+}
 let swFirst = switch 2 { case 1: () -> throw Exception("sw-first") default: () -> 42 }
 try { f() } catch (e Exception) { Console.WriteLine(e.Message) }
 f = () -> Console.WriteLine("reassigned")
@@ -873,15 +882,26 @@ try { deconFn() } catch (e Exception) { Console.WriteLine("${e.Message}:${deconV
 try { anon.F() } catch (e Exception) { Console.WriteLine("${e.Message}:${anon.N}") }
 try { (() -> throw Exception("direct"))() } catch (e Exception) { Console.WriteLine(e.Message) }
 try { (() -> throw Exception("null-cond-direct"))?() } catch (e Exception) { Console.WriteLine(e.Message) }
+try { (() -> throw Exception("null-cond-invoke"))?.Invoke() } catch (e Exception) { Console.WriteLine(e.Message) }
 try { ((n int32) -> throw Exception("direct:${n}"))(4) } catch (e Exception) { Console.WriteLine(e.Message) }
 try { asyncFn().GetAwaiter().GetResult() } catch (e Exception) { Console.WriteLine(e.Message) }
 try { Console.WriteLine(typedFunc()) } catch (e Exception) { Console.WriteLine(e.Message) }
 try { typedAction() } catch (e Exception) { Console.WriteLine(e.Message) }
 try { assertedCond() } catch (e Exception) { Console.WriteLine(e.Message) }
+if let boundFn = (() -> {
+    if true { return () -> throw Exception("if-let-fn") }
+    return nil
+})() {
+    try { boundFn() } catch (e Exception) { Console.WriteLine(e.Message) }
+}
+let (nullableTupLam, nullableTupNum) = nullableTupFn()!!
+try { nullableTupLam() } catch (e Exception) { Console.WriteLine("${e.Message}:${nullableTupNum}") }
+let unwrappedCleanupFn = nullableCleanupFn()!!
+try { unwrappedCleanupFn() } catch (e Exception) { Console.WriteLine(e.Message) }
 let (cleanupFn, cleanupNum) = nestedCleanupTup()
 try { cleanupFn() } catch (e Exception) { Console.WriteLine("${e.Message}:${cleanupNum}") }
 voidAdaptedNested()
-Console.WriteLine(swFirst())`, "zero\nreassigned\narg:7\nif-f\nsw-1\nnested\ncond-t\ntup:9\ndecon:5\nanon:3\ndirect\nnull-cond-direct\ndirect:4\nasync\nfunc\naction\nasserted-cond\ncleanup-in-tup\ntup-cleanup-lam:12\n42\n")
+Console.WriteLine(swFirst())`, "zero\nreassigned\narg:7\nif-f\nsw-1\nnested\ncond-t\ntup:9\ndecon:5\nanon:3\ndirect\nnull-cond-direct\nnull-cond-invoke\ndirect:4\nasync\nfunc\naction\nasserted-cond\nif-let-fn\nnullable-tup:19\nnullable-cleanup\nnullable-cleanup-lam\ncleanup-in-tup\ntup-cleanup-lam:12\n42\n")
     }
 
     // Issue #5003: a `never` operand in a generic call or composite yields to

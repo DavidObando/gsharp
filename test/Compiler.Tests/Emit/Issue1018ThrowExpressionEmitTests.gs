@@ -253,6 +253,41 @@ try {
     Console.WriteLine(e.Message)
 }
 try {
+    (() -> throw Exception("null-cond-invoke"))?.Invoke()
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+let nullableTupFn = () -> {
+    if false { return nil }
+    return (() -> throw Exception("nullable-tup"), 19)
+}
+let (nullableTupLam, nullableTupNum) = nullableTupFn()!!
+try {
+    nullableTupLam()
+} catch (e Exception) {
+    Console.WriteLine("${e.Message}:${nullableTupNum}")
+}
+let nullableCleanupFn = () -> {
+    if false { return nil }
+    defer Console.WriteLine("nullable-cleanup")
+    () -> throw Exception("nullable-cleanup-lam")
+}
+try {
+    nullableCleanupFn()!!()
+} catch (e Exception) {
+    Console.WriteLine(e.Message)
+}
+if let boundFn = (() -> {
+    if true { return () -> throw Exception("if-let-fn") }
+    return nil
+})() {
+    try {
+        boundFn()
+    } catch (e Exception) {
+        Console.WriteLine(e.Message)
+    }
+}
+try {
     Console.WriteLine(cleanupChosen())
 } catch (e Exception) {
     Console.WriteLine(e.Message)
@@ -289,7 +324,7 @@ try {
 }`
         let output = CompileAndRun(source)
         Assert.Equal(
-            "cleanup-choose${Environment.NewLine}asserted-cond${Environment.NewLine}cleanup-in-tup${Environment.NewLine}tup-cleanup-lam:12${Environment.NewLine}null-cond${Environment.NewLine}cleanup-lam${Environment.NewLine}zero${Environment.NewLine}arg:42${Environment.NewLine}nested${Environment.NewLine}tup:7${Environment.NewLine}choose-r${Environment.NewLine}choose-l${Environment.NewLine}",
+            "cleanup-choose${Environment.NewLine}asserted-cond${Environment.NewLine}cleanup-in-tup${Environment.NewLine}tup-cleanup-lam:12${Environment.NewLine}null-cond${Environment.NewLine}null-cond-invoke${Environment.NewLine}nullable-tup:19${Environment.NewLine}nullable-cleanup${Environment.NewLine}nullable-cleanup-lam${Environment.NewLine}if-let-fn${Environment.NewLine}cleanup-lam${Environment.NewLine}zero${Environment.NewLine}arg:42${Environment.NewLine}nested${Environment.NewLine}tup:7${Environment.NewLine}choose-r${Environment.NewLine}choose-l${Environment.NewLine}",
             output
         )
     }
