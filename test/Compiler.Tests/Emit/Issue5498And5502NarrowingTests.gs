@@ -331,6 +331,165 @@ After:
     return x.Value
 }
 func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@27:14", "reject", ""}
+            yield[]object{"review_switch_failed_guard_carries_alias_invalidation_to_default", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) bool {
+    h.Callback()
+    return false
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    switch 0 {
+        case _ when Wrapper(h) { return 0 }
+        default { }
+    }
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@24:14", "reject", ""}
+            yield[]object{"review_primary_constructor_literal_invalidates_alias_after_arguments", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Touch(h Holder) int32 {
+    h.Callback()
+    return 1
+}
+struct Box(H Holder, F () -> void) {
+    var Extra int32 = Touch(H)
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    {
+        let b = Box(h, (action = callback))
+        if b.Extra == 0 { return 0 }
+    }
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@27:14", "reject", ""}
+            yield[]object{"review_constant_pattern_equals_invalidates_alias_after_pattern_value", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+class EqBox {
+    var H Holder
+    override func Equals(obj object?) bool {
+        H.Callback()
+        return true
+    }
+    override func GetHashCode() int32 -> 0
+}
+func Run(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    let o object = EqBox{H: h}
+    {
+        if o is (action = callback) { }
+    }
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@28:14", "reject", ""}
+            yield[]object{"review_for_range_invalidates_alias_after_collection_and_loop_body", `import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Seq(h Holder) sequence[int32] {
+    h.Callback()
+    yield 1
+    h.Callback()
+}
+func RunCollection(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    let items = Seq(h)
+    for item in ({
+        action = callback
+        items
+    }) {
+    }
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+func RunBody(callback () -> void) int32 {
+    var x C? = C{}
+    var action = callback
+    let h = Holder{}
+    h.Callback = func() { action = func() { x = nil } }
+    let items = Seq(h)
+    for item in items {
+        action = callback
+    }
+    if x == nil { return 0 }
+    action()
+    return x.Value
+}
+func Main() { Console.WriteLine(RunCollection(func() { }) + RunBody(func() { })) }`, "GS0158@28:14 GS0158@41:14", "reject", ""}
+            yield[]object{"review_early_exit_out_retest_is_pattern_survives_nested_if_in_then", `import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    var Callback () -> void
+}
+func Wrapper(h Holder) bool {
+    h.Callback()
+    return false
+}
+func TryGet(out x C?) bool {
+    x = C{}
+    return true
+}
+func Run(stop bool) int32 {
+    var x C? = C{}
+    var y C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = C{} }
+    if x == nil || y == nil { return 0 }
+    if !TryGet(out x) || Wrapper(h) || x !is {} {
+        if stop {
+            return -1
+        }
+        return 0
+    }
+    return x.Value + y.Value
+}
+func Main() { Console.WriteLine(Run(false)) }`, "GS0612@23:16", "run", "2"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

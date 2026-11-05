@@ -23,6 +23,11 @@ import System.Threading
 internal partial class StatementBinder {
     private let externalCallableAliases HashSet[VariableSymbol] = HashSet[VariableSymbol]()
     private let lastEarlyExitLifts List[(Path AccessPath, Type TypeSymbol)] = List[(Path AccessPath, Type TypeSymbol)]()
+    private let earlyExitRemovedFacts Dictionary[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]] = Dictionary[
+        BoundIfStatement,
+        Dictionary[AccessPath, TypeSymbol]
+    ]()
+    private var lastEarlyExitRemovedFacts Dictionary[AccessPath, TypeSymbol]? = nil
     // Issue #5128: effect summary of the statement bound last. Invalidation
     // and the callable alias update read the same summary, so the bound tree of
     // a statement is walked once. A summary is valid only for the node and the
@@ -253,7 +258,7 @@ internal partial class StatementBinder {
                 inOrderElse = ComputeConditionNarrowingInOrder(
                     ifStatement.Condition,
                     HashSet[VariableSymbol](initialAliases),
-                    conditionRemovedFacts
+                    lastEarlyExitRemovedFacts
                 ).Else
                 computedInOrderElse = true
             }
@@ -675,6 +680,7 @@ internal partial class StatementBinder {
     private func ApplyEarlyExitNarrowings(statement BoundStatement?, persistentFrame NarrowingFrame) {
         var statement = statement
         lastEarlyExitLifts.Clear()
+        lastEarlyExitRemovedFacts = nil
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
             labeledBlock
@@ -684,6 +690,8 @@ internal partial class StatementBinder {
             statement = labeledBlock.Statements[1]
         }
         if statement is BoundIfStatement ifStmt {
+            earlyExitRemovedFacts.TryGetValue(ifStmt, out var removedFacts)
+            earlyExitRemovedFacts.Remove(ifStmt)
             if !binderCtx.PendingEarlyExitFrames.TryGetValue(ifStmt, out var elseFrame) {
                 return
             }
@@ -698,6 +706,7 @@ internal partial class StatementBinder {
             if ifStmt.ElseStatement != nil && ContainsUserLabel(ifStmt.ElseStatement) {
                 return
             }
+            lastEarlyExitRemovedFacts = removedFacts
             for kv in elseFrame {
                 SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value)
                 lastEarlyExitLifts.Add((kv.Key, kv.Value))
@@ -1960,7 +1969,7 @@ internal partial class StatementBinder {
         return if removedFacts.Count == 0 {
             default(Dictionary[AccessPath, TypeSymbol]?)
         } else {
-            removedFacts
+            Dictionary[AccessPath, TypeSymbol](removedFacts)
         }
     }
 
@@ -2844,12 +2853,12 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitConstantPattern(node BoundConstantPattern) {
+            base.VisitConstantPattern(node)
             // ADR-0208 R19 (#5593): the test can call the input's `Equals`, which can be user code. It is a plain
             // method call, so it does not write by-reference storage (R12, amendment A3).
             if StatementBinder.ConstantPatternRunsUserCode(node) {
                 MarkMayMutateGlobalRoots(writesReferenceStorage: false)
             }
-            base.VisitConstantPattern(node)
         }
 
         protected open override func VisitListPattern(node BoundListPattern) {
@@ -2950,8 +2959,23 @@ internal partial class StatementBinder {
             if node.CopySource != nil {
                 VisitExpression(node.CopySource)
             }
+            let consumed = HashSet[BoundFieldInitializer]()
+            if node.CallsPrimaryConstructor || !node.StructType.PrimaryConstructorParameters.IsDefaultOrEmpty {
+                for parameter in node.StructType.PrimaryConstructorParameters {
+                    if node.GetPrimaryArgument(parameter.Name) is {} primaryArgument {
+                        consumed.Add(primaryArgument)
+                        VisitExpression(primaryArgument.Value)
+                    }
+                }
+            }
+            if StatementBinder.ConstructionRunsUserCode(node.StructType) {
+                normalCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+                allEntryCallableState.InvalidateClosureAssigned(isClosureAssigned, tryAssignedVariables)
+            }
             for initializer in node.Initializers {
-                VisitExpression(initializer.Value)
+                if !consumed.Contains(initializer) {
+                    VisitExpression(initializer.Value)
+                }
                 if initializer.Property is {} property && StatementBinder.SourcePropertyRunsUserCode(
                     property,
                     receiverType: nil
@@ -3168,37 +3192,52 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitForRangeStatement(node BoundForRangeStatement) {
+            VisitExpression(node.Collection)
             // ADR-0208 R11 (#5170): lowering adds GetEnumerator, MoveNext and Current calls, and an
             // iterator body runs inside them. Indexed iteration runs no user code.
-            if node.IterationKind != ForRangeKind.Indexed {
+            let runsUserCode = node.IterationKind != ForRangeKind.Indexed
+            if runsUserCode {
                 MarkMayMutateGlobalRoots()
             }
-            VisitExpression(node.Collection)
-            VisitPossiblySkippedBody(node.Body)
+            VisitPossiblySkippedBody(node.Body, runsUserCode)
         }
 
         protected open override func VisitAwaitForRangeStatement(node BoundAwaitForRangeStatement) {
-            MarkMayMutateGlobalRoots()
             VisitExpression(node.Stream)
-            VisitPossiblySkippedBody(node.Body)
+            MarkMayMutateGlobalRoots()
+            VisitPossiblySkippedBody(node.Body, iterationRunsUserCode: true)
         }
 
         protected open override func VisitPatternSwitchStatement(node BoundPatternSwitchStatement) {
             VisitExpression(node.Discriminant)
             let branchStart = CaptureCallableState()
-            var joined(Normal CallableAliasState, AllEntry CallableAliasState)? = if node.IsExhaustive {
-                nil
-            } else {
-                CloneCallableState(branchStart)
-            }
-            for arm in node.Arms {
-                RestoreCallableState(branchStart)
+            var dispatchState = CloneCallableState(branchStart)
+            var canMiss = !node.IsExhaustive
+            var joined(Normal CallableAliasState, AllEntry CallableAliasState)? = nil
+            for arm in node.GetDispatchArms() {
+                RestoreCallableState(dispatchState)
                 VisitPattern(arm.Pattern)
+                let patternFailure = CaptureCallableState()
                 VisitExpression(arm.Guard)
+                let guardFailure = CaptureCallableState()
                 VisitStatement(arm.Body)
                 if !StatementBinder.EndsInUnconditionalExit(arm.Body, gotoExits: false) {
                     joined = JoinCallableStates(joined, CaptureCallableState())
                 }
+                if arm.IsCatchAll {
+                    canMiss = false
+                } else {
+                    dispatchState = if arm.Guard == nil {
+                        patternFailure
+                    } else if arm.PatternMatchesAllInputs {
+                        guardFailure
+                    } else {
+                        JoinCallableStates(patternFailure, guardFailure)
+                    }
+                }
+            }
+            if canMiss {
+                joined = JoinCallableStates(joined, dispatchState)
             }
             RestoreCallableState(joined ?? branchStart)
         }
@@ -3387,12 +3426,15 @@ internal partial class StatementBinder {
             return false
         }
 
-        private func VisitPossiblySkippedBody(body BoundStatement) {
+        private func VisitPossiblySkippedBody(body BoundStatement, iterationRunsUserCode bool = false) {
             let entry = CaptureCallableState()
             var previous = entry
             while true {
                 RestoreCallableState(previous)
                 VisitStatement(body)
+                if iterationRunsUserCode {
+                    MarkMayMutateGlobalRoots()
+                }
                 MergeCallableState(previous)
                 let joined = CaptureCallableState()
                 if CallableStatesEqual(previous, joined) {

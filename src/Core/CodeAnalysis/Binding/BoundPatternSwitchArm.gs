@@ -43,4 +43,10 @@ class BoundPatternSwitchArm : BoundNode {
     /// Gets a value indicating whether this is the default arm.
     @MemberNotNullWhen(false, "Pattern")
     prop IsDefault bool -> Pattern == nil
+
+    /// Gets whether this arm matches every input without a guard.
+    internal prop IsCatchAll bool -> Guard == nil && PatternMatchesAllInputs
+
+    /// Gets whether every input reaches this arm's guard or body.
+    internal prop PatternMatchesAllInputs bool -> BoundSwitchExpressionArm.MatchesAllInputs(Pattern)
 }
