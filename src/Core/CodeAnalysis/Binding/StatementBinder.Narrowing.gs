@@ -2488,7 +2488,7 @@ internal partial class StatementBinder {
                     if part.Value is {} hole && hole.Type != TypeSymbol.String && !TypeSymbol.IsLegalPointeeType(
                         hole.Type
                     ) {
-                        MarkRunsEscapedClosure()
+                        MarkMayMutateGlobalRoots(writesReferenceStorage: false)
                         nodeRunsEscapedClosure = true
                         break
                     }
