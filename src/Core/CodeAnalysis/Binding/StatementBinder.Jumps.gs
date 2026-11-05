@@ -144,8 +144,6 @@ internal partial class StatementBinder {
             narrowedAtSource,
             narrowingFrameIndices,
             externalCallableAliases,
-            activeFinallyClauses.ToImmutableArray(),
-            activeCleanupStatements.ToImmutableArray(),
             activeCleanupRegions.ToImmutableArray()
         )
     }

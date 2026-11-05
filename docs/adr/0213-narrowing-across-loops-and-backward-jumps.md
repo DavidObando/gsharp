@@ -1,9 +1,13 @@
 # ADR-0213: Loop and backward-jump narrowing from a syntactic region lower bound
 
-- **Status**: Accepted (maintainer decision on PR
+- **Status**: Implemented (maintainer decision on PR
   [#5302](https://github.com/DavidObando/gsharp/pull/5302), 2026-10-24; the
   nine questions of section 23 were decided as recommended on the same
-  day)
+  day; slices L0–L3 implemented in PRs
+  [#5342](https://github.com/DavidObando/gsharp/pull/5342),
+  [#5459](https://github.com/DavidObando/gsharp/pull/5459), and
+  [#5720](https://github.com/DavidObando/gsharp/pull/5720) and issue
+  [#5319](https://github.com/DavidObando/gsharp/issues/5319))
 - **Date**: 2026-10-24 (accepted 2026-10-24)
 - **Phase**: Compiler architecture (study roadmap item M1b, second half;
   implementation is tracked under
@@ -1460,6 +1464,73 @@ section 16. The pin-move PR restructures these sites (section 18). After the cla
 merge of main that changed the `MemberLookup` sites, Core, Core.Tests, gsc, LanguageServer,
 Compiler.Tests, Cs2Gs.Translator and the Oahu cells give the same diagnostics with the candidate as with the main
 compiler.
+
+### 20c. Findings of slices L2 and L3
+
+**Slice L2** (PR [#5720](https://github.com/DavidObando/gsharp/pull/5720), issues
+[#5318](https://github.com/DavidObando/gsharp/issues/5318) and
+[#5671](https://github.com/DavidObando/gsharp/issues/5671)) consumed `BackwardJumpSpans` in
+`EnterBackwardJumpSpanIfFirstStatement` and `DefineUserLabel` and deleted the deferred backward-`goto`
+proof machinery.
+
+- *One shared `Lower(S, R)` helper (`ApplyRegionLowerBoundCore`).* Loops (`ApplyLoopEntryLowerBound`) and
+  backward-jump spans (`ApplySpanEntryLowerBound` at `span.FirstStatement` and `ApplySpanLabelLowerBound`
+  at each participant label) call the same `ApplyRegionLowerBoundCore(effects, regionNode)` in
+  `StatementBinder.NarrowingLoops.gs`.
+- *External callable aliases in backward-jump spans ([#5671](https://github.com/DavidObando/gsharp/issues/5671)).*
+  Because `ApplyRegionLowerBoundCore` runs whenever `HasAnyActiveNarrowings() || externalCallableAliases.Count > 0`
+  and removes any variable in `externalCallableAliases` that the region assigns, shares storage with, or can
+  mutate through a closure, a function value initialized from an external callback (`var g = cb`) and reassigned
+  inside a backward-`goto` span (`g = h`) loses its external classification at the span's first statement and
+  participant labels even when no narrowing fact is in force before the label (corpus rows `m02`–`m05`).
+- *Forward `goto` flow and rule J6 (`NarrowingFlow`).* Replaced `GotoNarrowingSnapshot.gs` with
+  `NarrowingFlow.gs` (`RecordJump`, `TakeJumps`, `PeekJumps`, `HasPendingJumps`, `Clear`, `Clone`,
+  `Restore`). `BindGotoStatement` records a jump state only for reachable forward `goto` statements
+  (sections 10–11, rules J4, J7, J8). `JoinPendingForwardJumpsIntoNode` and `JoinPendingForwardJumpsIntoRegion`
+  join pending forward jumps targeting labels inside a loop or backward-jump span into the region's entry
+  state `S` before the header or first statement is bound (rule J6).
+- *Deletions and retained helpers.* Deleted `GotoNarrowingSnapshot.gs`, `BackwardGotoNarrowingState`,
+  `BackwardGotoNarrowingAccess`, `BackwardGotoNarrowingCapture`, `BackwardGotoNarrowingEdge`,
+  `BackwardGotoNarrowingUseKind`, `NarrowedBranchValue`, `TrackBackwardGotoNarrowingUse` and all its call
+  sites across `ExpressionBinder*`, `ConversionClassifier`, and `OverloadResolver*`,
+  `narrowingProofGenerations`, `ReportUnsafeBackwardGotoNarrowings`, `ActivateDeferredReachableGotoEdges`,
+  `DeferredUnreachableGotoEdges`, `ReachableUserLabels`, `PotentialReachabilityLabel`,
+  `AddUpstreamLabelDependencies`, `NarrowingProofDependsOn`, and `FinalizeNestedUserLabelNarrowings`.
+  `AssignmentPreservesNarrowing`, `IsDefinitelyNonNullValue`, `FunctionReturnsDefinitelyNonNull`, and
+  `IsDefinitelyNonNullSyntax` remain because `CreateFinallyFlowSummary`, `ApplyExitedFinallyEffects`, and
+  `BindOrdinaryVariableDeclaration` (`HasDefinitelyNonNullValue`) still use them.
+- *Ordering with #5301 (row R6).* Slice L2 landed before PR
+  [#5732](https://github.com/DavidObando/gsharp/pull/5732) (issue
+  [#5301](https://github.com/DavidObando/gsharp/issues/5301)), which then removed the function-wide
+  `#4285`/`#4290` `FunctionContainsUserGotoOrLabel` suppressions in `ApplyEarlyExitNarrowings`,
+  `ApplyIfJoinNarrowings`, `StatementBinder.NarrowingExits` (`JoinExitsEnabled`), and
+  `BindGuardLetStatementInBlock` while clearing running branch state at user labels inside branches.
+- *Measurements.* Zero diagnostic differences across `Core`, `Core.Tests`, `gsc`, `LanguageServer`,
+  `Compiler.Tests`, `Cs2Gs.Translator`, and the 12 compiling Oahu cells; the 17 re-expected
+  `BackwardGoto_*` rows of `Issue4519GotoAssignmentNarrowingTests` matched section 16 R8 (b), (a'), and (c),
+  and corpus rows `q1`, `q2`, `q6`, `q10`, `q11`, `e15`, `e18`, `cC`, and `m01`–`m05` landed with their
+  ADR-0154 witnesses.
+
+**Slice L3** (issue [#5319](https://github.com/DavidObando/gsharp/issues/5319)) completed the cleanup and
+documentation updates:
+
+- Deleted the slice-L0 `.loops` comparison report from `NarrowingComparison.gs`,
+  `StatementBinder.NarrowingLoops.gs`, and `StatementBinder.Loops.gs` (`LoopsEnabled`, `loopLines`,
+  `path + ".loops"`, `ReportLoopKill`, `ReportLoopSummary`, `ReportSpan`, `ReportLoopExitGain`,
+  `TryRegisterSpanFunction`, `CountSpan`, `FindBangSitesAfter`, `CollectBangSites`, and
+  `ReportBackwardJumpSpan`), while retaining the section 15 `CompilationMeasurements` counters
+  (`narrowing.region-walks`, `narrowing.region-nodes`, `narrowing.region-facts-killed`,
+  `narrowing.region-member-reads`, `narrowing.region-member-reads-with-live-facts`, and `narrowing.spans`
+  counted directly in `GetEnclosingBackwardJumpSpan`).
+- Retired the `narrowing.loop-rebinds` counter name from the test suite (`Adr0208LoopRebindCounterTests`,
+  `Adr0213LoopEntryTests`) and deleted the remaining unreferenced helpers in `StatementBinder.Narrowing.gs`
+  (`HasActiveNarrowings`, `IsRepresentationPreservingJoin`, `RemoveByRoots`, `ClrPropertyReadRunsUserCode`),
+  `StatementBinder.Loops.gs` (`BindLabeledForRange`), and `NarrowingFlow.gs` / `StatementBinder.Jumps.gs`
+  (`NarrowingJumpState.ActiveFinallyClauses` and `ActiveCleanupStatements`). `AssignedRootsCollector`
+  remains for straight-line, `if`-join, and `finally` effect collection (tracked under ADR-0208
+  [#5130](https://github.com/DavidObando/gsharp/issues/5130)).
+- Updated ADR-0069 (`#2943` and `#4989` addenda), `website/docs/ref/spec.md`,
+  `website/docs/tour/control-flow.md`, and `docs/adr/0208-narrowing-probe-corpus.md`.
 
 ### 21. Mutation-evidence plan (ADR-0154)
 
