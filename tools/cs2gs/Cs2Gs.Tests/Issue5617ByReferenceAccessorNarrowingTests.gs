@@ -1493,6 +1493,7 @@ public class Demo
         foreach (var (a, b) in items) total += s.Length + 1;
         return s.Length + total;
     }
+    static void Touch(ref int value) { }
     public static int UnusedCopyOnly(ref string? s, (int, int)[] items)
     {
         if (s == null) return 0;
@@ -1501,6 +1502,7 @@ public class Demo
             _ = a;
             var copy = a;
             _ = copy;
+            Demo.Touch(ref copy);
             var unusedPair = (a, b);
             _ = unusedPair;
             int typedCopy = b;
@@ -1609,10 +1611,20 @@ public sealed class DisposableBox : System.IDisposable
     public void Dispose() { }
     public string[] ConstrainedParts() => new[] { "z" };
 }
+public sealed class ChildA
+{
+    public string Child = "x";
+}
+public sealed class ChildB
+{
+    public int Child = 1;
+}
 public sealed class MixedBox
 {
     public string[] MixedParts() => new[] { "x" };
     public int[] MixedParts(int n) => new[] { 1 };
+    public ChildA[] MixedChildren() => new[] { new ChildA() };
+    public ChildB[] MixedChildren(int n) => new[] { new ChildB() };
     public Box MixedSelf() => new Box();
     public Unrelated MixedSelf(int n) => new Unrelated();
 }
@@ -1756,6 +1768,13 @@ public class Demo
         var total = 0;
         foreach (var part in mixed.MixedSelf().InstanceParts()) total += part.Length;
         return s.Length + total + 12;
+    }
+    public static int OverMixedChainedFieldOverloads(ref string? s, MixedBox mixed)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in mixed.MixedChildren()) total += part.Child.Length;
+        return s.Length + total + 20;
     }
     public static int OverConstrainedExtensionConflict(ref string? s, DisposableBox dbox)
     {
@@ -1906,6 +1925,7 @@ public class Demo
             TypeTestedCopyReceiverCall(ref text, new Box()) + "," +
             OverMixedReturnOverloads(ref text, new MixedBox()) + "," +
             OverMixedChainedReceiverOverloads(ref text, new MixedBox()) + "," +
+            OverMixedChainedFieldOverloads(ref text, new MixedBox()) + "," +
             OverConstrainedExtensionConflict(ref text, new DisposableBox()) + "," +
             ExplicitGenericLocalReceiverCall(ref text, stack) + "," +
             MemberTypeTestInvalidatesMemberReceiverCall(ref text, new Holder()) + "," +
@@ -1952,6 +1972,7 @@ namespace OtherNs
         Assert.Contains("return s!!.Length + 14", printed)
         Assert.Contains("return s!!.Length + total + 11", printed)
         Assert.Contains("return s!!.Length + total + 12", printed)
+        Assert.Contains("return s!!.Length + total + 20", printed)
         Assert.Contains("return s!!.Length + total + 13", printed)
         Assert.Contains("return s!!.Length + 17", printed)
         Assert.Contains("return s!!.Length + 18", printed)
@@ -1961,7 +1982,7 @@ namespace OtherNs
         Assert.Contains("return s.Length + total + 1", printed)
         Assert.Contains("return s.Length + total + 2", printed)
         Assert.Contains("return s.Length + total + 4", printed)
-        Assert.Equal(15, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(16, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null
@@ -1979,11 +2000,16 @@ public sealed class Box
 {
     public int F;
     public bool Again() => false;
+    public static bool AgainNamed(bool repeat) => repeat;
 }
 public sealed class Holder
 {
     public object? Tag = "t";
     public Box Child = new Box();
+}
+public sealed class HidingHolder
+{
+    public new Func<int> GetHashCode = () => 0;
 }
 public partial class Demo
 {
@@ -2226,6 +2252,52 @@ public partial class Demo
         }
         return s.Length + 20;
     }
+    public static int WhileConditionWithDelegateInvoke(ref string? s, Func<bool> callback, bool direct)
+    {
+        s = null;
+        while ((direct ? callback() : callback.Invoke()) || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 21;
+    }
+    public static int WhileConditionWithTestedHidingFieldReceiver(ref string? s, object o)
+    {
+        s = null;
+        while ((o is HidingHolder && o.GetHashCode() < 0) || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 22;
+    }
+    public static int WhileConditionWithConditionalFieldRead(ref string? s, Box a, Box b, bool flag)
+    {
+        s = null;
+        while ((flag ? a : b).F < 0 || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 23;
+    }
+    public static int WhileConditionWithObjectNilComparison(ref string? s, object? probe)
+    {
+        s = null;
+        while (probe == null || s == null)
+        {
+            probe = new object();
+            s = "abc";
+        }
+        return s.Length + 24;
+    }
+    public static int WhileConditionWithNamedArgumentCall(ref string? s)
+    {
+        s = null;
+        while (Box.AgainNamed(repeat: false) || s == null)
+        {
+            s = "abc";
+        }
+        return s.Length + 25;
+    }
     public static string Run()
     {
         string? text = "abc";
@@ -2246,7 +2318,12 @@ public partial class Demo
             WhileConditionCoalesceAssignNumeric(ref text) + "," +
             WhileConditionRelationalPatternConversion(ref text, 3) + "," +
             WhileConditionWithMemberTypeTestAndMemberCall(ref text, new Holder()) + "," +
-            WhileConditionWithNullConditionalReceiver(ref text, new Box(), new Box(), true);
+            WhileConditionWithNullConditionalReceiver(ref text, new Box(), new Box(), true) + "," +
+            WhileConditionWithDelegateInvoke(ref text, () => false, true) + "," +
+            WhileConditionWithTestedHidingFieldReceiver(ref text, new HidingHolder()) + "," +
+            WhileConditionWithConditionalFieldRead(ref text, new Box(), new Box(), true) + "," +
+            WhileConditionWithObjectNilComparison(ref text, null) + "," +
+            WhileConditionWithNamedArgumentCall(ref text);
     }
 }`)
         Assert.Contains("return s.Length + 1\n", printed.Replace("\r\n", "\n"))
@@ -2269,7 +2346,12 @@ public partial class Demo
         Assert.Contains("return s!!.Length + 18", printed)
         Assert.Contains("return s!!.Length + 19", printed)
         Assert.Contains("return s!!.Length + 20", printed)
-        Assert.Equal(12, Regex.Matches(printed, `s!!`).Count)
+        Assert.Contains("return s!!.Length + 21", printed)
+        Assert.Contains("return s!!.Length + 22", printed)
+        Assert.Contains("return s!!.Length + 23", printed)
+        Assert.Contains("return s!!.Length + 24", printed)
+        Assert.Contains("return s!!.Length + 25", printed)
+        Assert.Equal(17, Regex.Matches(printed, `s!!`).Count)
     }
 
     shared {
