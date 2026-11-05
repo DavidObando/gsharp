@@ -4967,27 +4967,8 @@ internal shared class ClrOverloadResolution {
         return true
     }
 
-    private func IsClrVarianceReferenceType(type Type?) bool {
-        if type == nil || type.IsValueType {
-            return false
-        }
-        if !type.IsGenericParameter {
-            return true
-        }
-        if (type.GenericParameterAttributes & GenericParameterAttributes.ReferenceTypeConstraint) != 0 {
-            return true
-        }
-        for constraint in type.GetGenericParameterConstraints() {
-            if !constraint.IsInterface && !constraint.IsValueType && !string.Equals(
-                constraint.FullName,
-                "System.Object",
-                StringComparison.Ordinal
-            ) {
-                return true
-            }
-        }
-        return false
-    }
+    private func IsClrVarianceReferenceType(type Type?) bool ->
+    ClrTypeUtilities.IsReferenceTypeForVariance(type)
 
     /// Substitutes inferred method-type-parameter [`bounds`](paramref) into
     /// [`type`](paramref), succeeding only when the result is fully closed

@@ -167,7 +167,51 @@ open class Issue2516SliceCovarianceBindingTests {
         let mlcRight = mlcAssembly.GetType(typeof(RecursiveRight).FullName ?? "")
         Assert.NotNull(mlcRight)
         Assert.False(ClrTypeUtilities.IsAssignableByName(typeof(IRecursiveContra[RecursiveLeft]), mlcRight))
+
+        let flags = BindingFlags.NonPublic | BindingFlags.Instance
+        let unconstrained = typeof(Issue2516SliceCovarianceBindingTests)
+            .GetMethod(nameof(UnconstrainedGenericArray), flags)
+            ?.GetGenericArguments()[0]
+            .MakeArrayType()
+        let structConstrained = typeof(Issue2516SliceCovarianceBindingTests)
+            .GetMethod(nameof(StructConstrainedGenericArray), flags)
+            ?.GetGenericArguments()[0]
+            .MakeArrayType()
+        let classConstrained = typeof(Issue2516SliceCovarianceBindingTests)
+            .GetMethod(nameof(ClassConstrainedGenericArray), flags)
+            ?.GetGenericArguments()[0]
+            .MakeArrayType()
+        let baseClassConstrained = typeof(Issue2516SliceCovarianceBindingTests)
+            .GetMethod(nameof(BaseClassConstrainedGenericArray), flags)
+            ?.GetGenericArguments()[0]
+            .MakeArrayType()
+        let dependentClassConstrained = typeof(Issue2516SliceCovarianceBindingTests)
+            .GetMethod(nameof(DependentClassConstrainedGenericArray), flags)
+            ?.GetGenericArguments()[0]
+            .MakeArrayType()
+        let dependentBaseClassConstrained = typeof(Issue2516SliceCovarianceBindingTests)
+            .GetMethod(nameof(DependentBaseClassConstrainedGenericArray), flags)
+            ?.GetGenericArguments()[0]
+            .MakeArrayType()
+        Assert.False(ClrTypeUtilities.IsAssignableByName(typeof([]object), unconstrained))
+        Assert.False(ClrTypeUtilities.IsAssignableByName(typeof([]object), structConstrained))
+        Assert.True(ClrTypeUtilities.IsAssignableByName(typeof([]object), classConstrained))
+        Assert.True(ClrTypeUtilities.IsAssignableByName(typeof([]object), baseClassConstrained))
+        Assert.True(ClrTypeUtilities.IsAssignableByName(typeof([]object), dependentClassConstrained))
+        Assert.True(ClrTypeUtilities.IsAssignableByName(typeof([]object), dependentBaseClassConstrained))
     }
+
+    private func UnconstrainedGenericArray[T]() { }
+
+    private func StructConstrainedGenericArray[T struct]() { }
+
+    private func ClassConstrainedGenericArray[T class]() { }
+
+    private func BaseClassConstrainedGenericArray[T Exception]() { }
+
+    private func DependentClassConstrainedGenericArray[T U, U class]() { }
+
+    private func DependentBaseClassConstrainedGenericArray[T U, U Exception]() { }
 
     private interface ICovariant[out T] { }
 

@@ -2789,6 +2789,11 @@ Console.WriteLine("${ternary(Probe())} ${expression(Probe())} ${statement(Probe(
         public static string InferFromListAndComparerFactory<T>(
             System.Collections.Generic.IList<T> items,
             System.Func<System.Collections.Generic.IComparer<T>> factory) => typeof(T).FullName ?? "";
+#nullable enable
+        public static T EchoJoinedBounds<T>(
+            System.Collections.Generic.IEnumerable<T> items,
+            System.Collections.Generic.IComparer<T> comparer) => default!;
+#nullable restore
     }
 }`)
         let result = CompileAndRun(`import System
@@ -2822,6 +2827,18 @@ Console.WriteLine(Probes.InferFromListAndComparerFactory(items, Probes.MakeObjec
                 Environment.NewLine,
             result.Output
         )
+        let nullableRefMismatch = Compile(`import System.Collections.Generic
+import Fixture4986
+func mismatchRef(items IEnumerable[string?], comparer IComparer[object]) object ->
+    Probes.EchoJoinedBounds(items, comparer)
+`, fixture.AssemblyPath)
+        Assert.NotEqual(0, nullableRefMismatch.ExitCode)
+        let nullableElementMismatch = Compile(`import System.Collections.Generic
+import Fixture4986
+func mismatch(items IEnumerable[[]string?], comparer IComparer[[]object]) []object ->
+    Probes.EchoJoinedBounds(items, comparer)
+`, fixture.AssemblyPath)
+        Assert.NotEqual(0, nullableElementMismatch.ExitCode)
     }
 
     @Theory

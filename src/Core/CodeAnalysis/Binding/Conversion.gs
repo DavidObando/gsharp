@@ -4933,11 +4933,7 @@ class Conversion {
                     targetPositions.Length == 1 &&
                     (
                     HaveIdenticalTypeArgumentContracts(sourcePositions[0], targetPositions[0]) ||
-                        IsVarianceArgumentCompatible(
-                        sourcePositions[0],
-                        targetPositions[0],
-                        allowPlatformNilCheck: false
-                    )
+                        IsVarianceArgumentCompatible(sourcePositions[0], targetPositions[0], allowPlatformNilCheck)
                 )
             }
             // Classification already related nested arguments; only the nominal proof is added for this pair.

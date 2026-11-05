@@ -8601,8 +8601,8 @@ internal class MemberLookup {
 
         private func CanPromoteSymbolicInferenceBound(source TypeSymbol, target TypeSymbol) bool ->
         HasImplicitSymbolicConversion(source, target) || Conversion.IsVarianceArgumentCompatible(
-            source.StripToBareShape(),
-            target.StripToBareShape(),
+            source,
+            target,
             allowPlatformNilCheck: true
         )
 
@@ -8643,6 +8643,10 @@ internal class MemberLookup {
             if (!object.ReferenceEquals(strippedSource, source) || !object.ReferenceEquals(strippedTarget, target)) &&
                 DeclarationBinder.TypeSignaturesEquivalent(strippedSource, strippedTarget) {
                 return true
+            }
+            if source.ReferenceNullability == ReferenceNullabilityKind.Nullable &&
+                target.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                return false
             }
             return Conversion.ClassifyNonStructural(source, target).IsImplicit
         }
