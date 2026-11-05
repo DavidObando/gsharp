@@ -2685,9 +2685,7 @@ internal partial class ExpressionBinder {
             .None
     }
 
-    private func HasErrorDiagnosticSince(mark int32) bool -> Diagnostics.Skip(mark).Any(
-        (diagnostic Diagnostic) -> diagnostic.IsError
-    )
+    private func HasErrorDiagnosticSince(mark int32) bool -> Diagnostics.HasErrorSince(mark)
 
     /// Issue #5569: ends a call bind that (cref:BindLambdaWithCandidateTarget) can make speculative. When the call
     /// failed, the diagnostics of each discarded literal target bind are reported, as for a call with no other

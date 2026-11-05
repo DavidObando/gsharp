@@ -1284,9 +1284,7 @@ internal partial class OverloadResolver {
                 expression: "bindLambdaWithTarget"
             )(lambda, target)
             let converted = conversions.BindConversion(lambda.Location, bound, parameterType)
-            return !(converted is BoundErrorExpression) && !Diagnostics.Skip(diagnosticMark).Any(
-                (diagnostic Diagnostic) -> diagnostic.IsError
-            )
+            return !(converted is BoundErrorExpression) && !Diagnostics.HasErrorSince(diagnosticMark)
         } finally {
             Diagnostics.TruncateTo(diagnosticMark)
         }

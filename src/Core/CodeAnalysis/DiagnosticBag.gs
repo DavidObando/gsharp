@@ -95,9 +95,27 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     internal func DrainSince(startCount int32, sink List[Diagnostic]) {
         let start = Math.Clamp(startCount, 0, diagnostics.Count)
         for var i = start; i < diagnostics.Count; i++ {
-            sink.Add(diagnostics[i])
+            let diagnostic = diagnostics[i]
+            if !cascadeSuppressed.Contains(diagnostic) && !reboundSuppressed.Contains(diagnostic) {
+                sink.Add(diagnostic)
+            }
         }
         TruncateTo(start)
+    }
+
+    internal func VisibleSince(startCount int32) ImmutableArray[Diagnostic] {
+        let start = Math.Clamp(startCount, 0, diagnostics.Count)
+        if start >= diagnostics.Count {
+            return ImmutableArray[Diagnostic].Empty
+        }
+        let builder = ImmutableArray.CreateBuilder[Diagnostic](diagnostics.Count - start)
+        for var i = start; i < diagnostics.Count; i++ {
+            let diagnostic = diagnostics[i]
+            if !cascadeSuppressed.Contains(diagnostic) && !reboundSuppressed.Contains(diagnostic) {
+                builder.Add(diagnostic)
+            }
+        }
+        return builder.ToImmutable()
     }
 
     internal func HasErrorSince(startCount int32) bool {

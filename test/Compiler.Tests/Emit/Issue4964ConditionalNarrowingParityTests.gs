@@ -734,6 +734,8 @@ public shared class CallbackPredicates {
         value = "ok"
         return 1
     }
+    public func EvalSpeculative(fn Func[int64], x int32) int32 -> int32(fn()) + x
+    public func EvalSpeculative(s string, x int64) int32 -> s.Length + int32(x)
 }
 
 public class Holder[T] {
@@ -806,6 +808,8 @@ func CheckImportedGenericNonNullHolderOutDischarges(dict Dictionary[string, stri
     var value = "seed"
     return dict.TryGetValue("missing", out value) ? 0 : (holder.Reset(out value), value.Length).Item2
 }
+func CheckSpeculativeLambdaReturnErrorAfterReboundSuppression() int32 ->
+    CallbackPredicates.EvalSpeculative(() -> { return "badReturn" }, 1)
 `)
             using let standardOut = StringWriter()
             using let standardError = StringWriter()
@@ -836,6 +840,7 @@ func CheckImportedGenericNonNullHolderOutDischarges(dict Dictionary[string, stri
             Assert.NotEqual(0, exitCode)
             let consumerDiagnostics = standardOut.ToString() + standardError.ToString()
             Assert.Equal(11, consumerDiagnostics.Split("GS0158").Length - 1)
+            Assert.Contains("GS0155", consumerDiagnostics)
             Assert.DoesNotContain("GS0536", consumerDiagnostics)
             Assert.DoesNotContain("GS0130", consumerDiagnostics)
         } finally {

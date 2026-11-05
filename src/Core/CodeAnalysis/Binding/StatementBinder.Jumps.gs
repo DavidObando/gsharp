@@ -1121,7 +1121,7 @@ internal partial class StatementBinder {
             bindTarget ?? (() -> bindExpressionWithTargetType(value, targetType))
         )
         HoldDeferredReturnConversion(deferredReturns, value.Location, targetTyped, targetType)
-        let targetDiagnostics = Diagnostics.Skip(beforeValue.DiagnosticCount).ToImmutableArray()
+        let targetDiagnostics = Diagnostics.VisibleSince(beforeValue.DiagnosticCount)
         let afterTarget = CaptureSpeculativeBindState()
         let targetPassLabels = Dictionary[string, BoundLabel](binderCtx.UserLabels)
         RestoreSpeculativeBindState(beforeValue)
@@ -1136,7 +1136,7 @@ internal partial class StatementBinder {
         } finally {
             retriedValueUserLabels = outerRetriedLabels
         }
-        let naturalDiagnostics = Diagnostics.Skip(beforeValue.DiagnosticCount).ToImmutableArray()
+        let naturalDiagnostics = Diagnostics.VisibleSince(beforeValue.DiagnosticCount)
         let naturalCounter = binderCtx.SyntheticLocalCounter
         let naturalFailed = naturalDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError)
         Diagnostics.TruncateTo(beforeValue.DiagnosticCount)
@@ -1162,7 +1162,7 @@ internal partial class StatementBinder {
     ) {
         let mark = Diagnostics.Count
         let converted = conversions.BindConversion(location, value, targetType)
-        deferredReturns.HoldConversion(value, converted, Diagnostics.Skip(mark).ToImmutableArray())
+        deferredReturns.HoldConversion(value, converted, Diagnostics.VisibleSince(mark))
         Diagnostics.TruncateTo(mark)
     }
 
