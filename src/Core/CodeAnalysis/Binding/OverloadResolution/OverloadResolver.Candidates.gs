@@ -959,66 +959,14 @@ internal partial class OverloadResolver {
     /// model does not carry enough structure to rank those sub-kinds
     /// separately, but they still rank strictly better than the numeric/
     /// delegate special cases ranked worse below.
-    private func ClassifyUserArgumentConversionKind(argType TypeSymbol?, paramType TypeSymbol?) ClrOverloadResolution
-        .ImplicitConversionKind {
-        if argType == nil || paramType == nil {
-            return ClrOverloadResolution.ImplicitConversionKind.None
-        }
-        // Issue #3501: constructed imported generics over user type arguments
-        // (`ImmutableArray[Loc]`) are freshly allocated per construction, so
-        // reference equality misses the identity case and the argument ranked
-        // as a mere reference conversion — making a same-typed normal-form
-        // slot tie with a params-expanded sibling (spurious GS0266).
-        if argType == paramType || DeclarationBinder.TypeSignaturesEquivalent(argType, paramType) {
-            return ClrOverloadResolution.ImplicitConversionKind.Identity
-        }
-        if Conversion.Classify(argType, paramType).IsStructuralProjection {
-            return if conversions.HasUserDefinedImplicitConversion(argType, paramType) {
-                ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit
-            } else {
-                ClrOverloadResolution.ImplicitConversionKind.StructuralProjection
-            }
-        }
-        if !IsNumericPrimitive(argType) &&
-            !IsNumericPrimitive(paramType) &&
-            conversions
-            .HasUserDefinedImplicitConversion(argType, paramType) {
-            return ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit
-        }
-        if paramType is NullableTypeSymbol nullableParam && argType == nullableParam.UnderlyingType {
-            // Issue #2146: `T -> T?` is a genuine value-type nullable WRAP only
-            // when the underlying is a value type. For a REFERENCE-type nullable
-            // (e.g. `Type -> Type?`) the wrap carries no runtime cost — it is a
-            // reference conversion (a nullability annotation) — and ranking it as
-            // NullableWrap (worse than Reference) would make an unrelated
-            // `object` reference upcast spuriously win. Classify it as Reference
-            // so the reference "better conversion target" tie-break (below, in
-            // CompareUserConversions) correctly prefers the more-derived `T?`
-            // target over `object`.
-            if NullableLifting.IsValueTypeNullable(nullableParam) {
-                return ClrOverloadResolution.ImplicitConversionKind.NullableWrap
-            }
-            return ClrOverloadResolution.ImplicitConversionKind.Reference
-        }
-        let argClr = argType.ClrType
-        let paramClr = paramType.ClrType
-        if argClr?.FullName is string argFullName &&
-            paramClr?.FullName is string paramFullName &&
-            NumericWideningLattice.IsNumericPrimitive(argFullName) && NumericWideningLattice.IsNumericPrimitive(
-            paramFullName
-        ) &&
-            NumericWideningLattice.IsWidening(argClr, paramClr) {
-            return ClrOverloadResolution.ImplicitConversionKind.NumericWidening
-        }
-        // ponytail: object vs. an implemented interface (e.g. f(object) vs.
-        // f(IInterface) for a class arg) both fold into Reference here, so
-        // they tie and report GS0266 where C# would prefer the interface.
-        // Pre-existing ceiling (parity with the old linear score), not a
-        // #1631 regression. Upgrade path: split Reference into sub-kinds
-        // (exact-interface-satisfaction vs. base-class/object upcast) sharing
-        // more of Conversion.Classify's structure, if this surfaces in practice.
-        return ClrOverloadResolution.ImplicitConversionKind.Reference
-    }
+    private func ClassifyUserArgumentConversionKind(
+        argType TypeSymbol?,
+        paramType TypeSymbol?
+    ) ClrOverloadResolution.ImplicitConversionKind -> ClassifyUserArgumentConversionKindCore(
+        conversions,
+        argType,
+        paramType
+    )
 
     /// Issue #1154: convertibility-aware applicability. Returns
     /// `true` when every positional argument actually supplied
@@ -1827,6 +1775,61 @@ internal partial class OverloadResolver {
         /// conversion target" rule (C# §7.5.3.4), reusing the exact CLR-path
         /// helper rather than reimplementing the numeric/signed-vs-unsigned
         /// lattice a second time.
+        internal func CompareExtensionReceiverConversions(
+            conversions ConversionClassifier,
+            source TypeSymbol,
+            paramA TypeSymbol,
+            paramB TypeSymbol
+        ) int32 {
+            let ka = ClassifyUserArgumentConversionKindCore(conversions, source, paramA)
+            let kb = ClassifyUserArgumentConversionKindCore(conversions, source, paramB)
+            return CompareUserConversions(ka, paramA, tailA: false, kb, paramB, tailB: false, source)
+        }
+
+        private func ClassifyUserArgumentConversionKindCore(
+            conversions ConversionClassifier,
+            argType TypeSymbol?,
+            paramType TypeSymbol?
+        ) ClrOverloadResolution
+            .ImplicitConversionKind {
+            if argType == nil || paramType == nil {
+                return ClrOverloadResolution.ImplicitConversionKind.None
+            }
+            if argType == paramType || DeclarationBinder.TypeSignaturesEquivalent(argType, paramType) {
+                return ClrOverloadResolution.ImplicitConversionKind.Identity
+            }
+            if Conversion.Classify(argType, paramType).IsStructuralProjection {
+                return if conversions.HasUserDefinedImplicitConversion(argType, paramType) {
+                    ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit
+                } else {
+                    ClrOverloadResolution.ImplicitConversionKind.StructuralProjection
+                }
+            }
+            if !IsNumericPrimitive(argType) &&
+                !IsNumericPrimitive(paramType) &&
+                conversions
+                .HasUserDefinedImplicitConversion(argType, paramType) {
+                return ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit
+            }
+            if paramType is NullableTypeSymbol nullableParam && argType == nullableParam.UnderlyingType {
+                if NullableLifting.IsValueTypeNullable(nullableParam) {
+                    return ClrOverloadResolution.ImplicitConversionKind.NullableWrap
+                }
+                return ClrOverloadResolution.ImplicitConversionKind.Reference
+            }
+            let argClr = argType.ClrType
+            let paramClr = paramType.ClrType
+            if argClr?.FullName is string argFullName &&
+                paramClr?.FullName is string paramFullName &&
+                NumericWideningLattice.IsNumericPrimitive(argFullName) && NumericWideningLattice.IsNumericPrimitive(
+                paramFullName
+            ) &&
+                NumericWideningLattice.IsWidening(argClr, paramClr) {
+                return ClrOverloadResolution.ImplicitConversionKind.NumericWidening
+            }
+            return ClrOverloadResolution.ImplicitConversionKind.Reference
+        }
+
         private func CompareUserConversions(
             ka ClrOverloadResolution.ImplicitConversionKind,
             paramA TypeSymbol?,

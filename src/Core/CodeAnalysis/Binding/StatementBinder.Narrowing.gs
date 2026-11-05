@@ -6437,23 +6437,6 @@ internal partial class StatementBinder {
         }
         var survivors = extensionMatches
         if survivors.Count > 1 {
-            let identityMatches = List[
-                (
-                    Method FunctionSymbol,
-                    Substitution Dictionary[TypeParameterSymbol, TypeSymbol]?,
-                    ReceiverParamType TypeSymbol
-                )
-            ]()
-            for current in survivors {
-                if current.ReceiverParamType == receiverType {
-                    identityMatches.Add(current)
-                }
-            }
-            if identityMatches.Count > 0 && identityMatches.Count < survivors.Count {
-                survivors = identityMatches
-            }
-        }
-        if survivors.Count > 1 {
             let dominatedFiltered = List[
                 (
                     Method FunctionSymbol,
@@ -6467,21 +6450,12 @@ internal partial class StatementBinder {
                     if object.ReferenceEquals(current.Method, other.Method) {
                         continue
                     }
-                    let numericComparison = ClrOverloadResolution.CompareNumericConversionTargets(
-                        NullableLifting.GetEffectiveClrType(other.ReceiverParamType),
-                        NullableLifting.GetEffectiveClrType(current.ReceiverParamType),
-                        receiverType.ClrType
-                    )
-                    if numericComparison < 0 ||
-                        (
-                        numericComparison == 0 &&
-                            other.ReceiverParamType != current.ReceiverParamType &&
-                            Conversion
-                            .Classify(other.ReceiverParamType, current.ReceiverParamType)
-                            .IsImplicit &&
-                            !Conversion
-                            .Classify(current.ReceiverParamType, other.ReceiverParamType).IsImplicit
-                    ) {
+                    if OverloadResolver.CompareExtensionReceiverConversions(
+                        conversions,
+                        receiverType,
+                        other.ReceiverParamType,
+                        current.ReceiverParamType
+                    ) < 0 {
                         dominated = true
                         break
                     }

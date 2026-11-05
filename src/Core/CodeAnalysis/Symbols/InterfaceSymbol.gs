@@ -1056,6 +1056,12 @@ class InterfaceSymbol : TypeSymbol {
                 }
             )
             substMethod.ReturnRefKind = m.ReturnRefKind
+            if !m.Attributes.IsDefaultOrEmpty {
+                substMethod.SetAttributes(m.Attributes)
+            }
+            if m.ThisParameter?.IsUnscopedRefReceiver == true && substMethod.ThisParameter != nil {
+                substMethod.ThisParameter.IsUnscopedRefReceiver = true
+            }
             if isStatic {
                 substMethod.IsStatic = true
                 substMethod.StaticOwnerType = instance
