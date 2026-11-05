@@ -75,6 +75,92 @@ open class Issue5545ConditionEffectsOrderTests {
         }
     }
 
+    @Fact
+    func ImportedReadOnlyField_ConditionalInArgument_RejectsNarrowedStorageMismatch() {
+        let tempDir = Directory.CreateTempSubdirectory("gs_5545_lib_").FullName
+        try {
+            let libSrc = Path.Combine(tempDir, "BoxLib.gs")
+            let libDll = Path.Combine(tempDir, "BoxLib.dll")
+            File.WriteAllText(libSrc, `package BoxPkg
+public class Box {
+    public let Value object
+    public init(v object) {
+        Value = v
+    }
+}`)
+            let libArgs = List[string]{
+                "/out:" + libDll,
+                "/target:library",
+                "/targetframework:net10.0",
+                "/nowarn:GS9100"
+            }
+            for reference in TrustedPlatformAssemblies() {
+                libArgs.Add("/reference:" + reference)
+            }
+            libArgs.Add(libSrc)
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            using let libOut = StringWriter()
+            using let libErr = StringWriter()
+            Console.SetOut(libOut)
+            Console.SetError(libErr)
+            try {
+                Program.Main(libArgs.ToArray())
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            Assert.True(File.Exists(libDll), "BoxLib must compile:\n" + libOut.ToString() + libErr.ToString())
+
+            let appSrc = Path.Combine(tempDir, "App.gs")
+            let appDll = Path.Combine(tempDir, "App.dll")
+            File.WriteAllText(appSrc, `import System
+import BoxPkg
+
+class Dog {}
+func Read(in d Dog) int32 -> 1
+func Run() int32 {
+    let box = Box(Dog())
+    var dog = Dog()
+    return Read(in ((box.Value is Dog) ? box.Value : dog))
+}
+Console.WriteLine(Run())`)
+            let appArgs = List[string]{
+                "/out:" + appDll,
+                "/target:exe",
+                "/targetframework:net10.0",
+                "/nowarn:GS9100",
+                "/reference:" + libDll
+            }
+            for reference in TrustedPlatformAssemblies() {
+                appArgs.Add("/reference:" + reference)
+            }
+            appArgs.Add(appSrc)
+            using let appOut = StringWriter()
+            using let appErr = StringWriter()
+            Console.SetOut(appOut)
+            Console.SetError(appErr)
+            try {
+                Program.Main(appArgs.ToArray())
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            let log = appOut.ToString() + appErr.ToString()
+            let actualDiagnostics = string.Join(
+                " ",
+                Regex
+                    .Matches(log, `\((\d+),(\d+),\d+,\d+\): (?:error|warning) (GS\d+)`)
+                    .Select((m Match) -> m.Groups[3].Value + "@" + m.Groups[1].Value + ":" + m.Groups[2].Value)
+                    .Where((d string) -> !d.StartsWith("GS9100", StringComparison.Ordinal))
+            )
+            Assert.Equal("GS0260@9:21", actualDiagnostics)
+            Assert.False(File.Exists(appDll), "App must not compile:\n" + log)
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     shared {
         private const RunTimeout int32 = 30000
 
@@ -608,6 +694,33 @@ func Run() int32 {
     h.Callback = func() { x = nil }
     if x == nil { return 0 }
     return Consume(if x.Value > 0 && Check(h) { Dog() } else { Cat() })
+}
+Console.WriteLine(Run())`, "", "run", "1"}
+            yield[]object{"r04_nested_conditional_address_mismatched_storage_rejected", `import System
+
+open class Pet {}
+class Dog : Pet {}
+func Run() int32 {
+    var pet Pet = Dog()
+    var dog Dog = Dog()
+    let p = &((pet is Dog) ? (true ? pet : pet) : dog)
+    return 1
+}
+Console.WriteLine(Run())`, "GS0260@8:15", "reject", ""}
+            yield[]object{"r05_block_argument_rebind_preserves_prefix_local_narrowing", `import System
+
+class C { var Value int32 = 1 }
+interface IAnimal { func Speak() int32; }
+open class Pet {}
+class Dog : Pet, IAnimal { func Speak() int32 -> 1 }
+class Cat : Pet, IAnimal { func Speak() int32 -> 2 }
+func Consume(a IAnimal) int32 -> a.Speak()
+func Run() int32 {
+    return Consume({
+        var x C? = nil
+        x = C{}
+        if x.Value > 0 { Dog() } else { Cat() }
+    })
 }
 Console.WriteLine(Run())`, "", "run", "1"}
         }

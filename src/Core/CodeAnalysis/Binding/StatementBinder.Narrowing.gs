@@ -40,8 +40,11 @@ internal partial class StatementBinder {
     private var conditionKillJournal List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?
     private let branchyArgumentEntries Dictionary[
         SyntaxNode,
-        (Frames[]Dictionary[AccessPath, TypeSymbol], Aliases HashSet[VariableSymbol])
-    ] = Dictionary[SyntaxNode, (Frames[]Dictionary[AccessPath, TypeSymbol], Aliases HashSet[VariableSymbol])]()
+        (Frames[](Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol]), Aliases HashSet[VariableSymbol])
+    ] = Dictionary[
+        SyntaxNode,
+        (Frames[](Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol]), Aliases HashSet[VariableSymbol])
+    ]()
 
     internal func IsolateExternalCallableAliases() HashSet[VariableSymbol] {
         let saved = HashSet[VariableSymbol](externalCallableAliases)
@@ -2241,23 +2244,14 @@ internal partial class StatementBinder {
         bind() -> BoundExpression
     ) BoundExpression {
         if deferOnFailure {
-            branchyArgumentEntries[syntax] = (
-                binderCtx
-                    .NarrowedVariables
-                    .Select((frame NarrowingFrame) -> Dictionary[AccessPath, TypeSymbol](frame))
-                    .ToArray(),
-                CaptureExternalCallableAliases()
-            )
+            branchyArgumentEntries[syntax] = (CaptureNarrowingFramesSnapshot(), CaptureExternalCallableAliases())
             return bind()
         }
         if !branchyArgumentEntries.TryGetValue(syntax, out var savedEntry) {
             return bind()
         }
-        branchyArgumentEntries.Remove(syntax)
-        let postFrames = binderCtx
-            .NarrowedVariables
-            .Select((frame NarrowingFrame) -> Dictionary[AccessPath, TypeSymbol](frame))
-            .ToArray()
+        RemoveBranchyArgumentEntriesInSubtree(syntax)
+        let postFrames = CaptureNarrowingFramesSnapshot()
         let postAliases = CaptureExternalCallableAliases()
         RestoreNarrowingFramesSnapshot(savedEntry.Frames)
         RestoreExternalCallableAliases(savedEntry.Aliases)
@@ -2283,12 +2277,50 @@ internal partial class StatementBinder {
         return result
     }
 
-    private func RestoreNarrowingFramesSnapshot(snapshot[]Dictionary[AccessPath, TypeSymbol]) {
+    private func CaptureNarrowingFramesSnapshot()[](
+        Frame NarrowingFrame,
+        Entries Dictionary[AccessPath, TypeSymbol]
+    ) -> binderCtx
+        .NarrowedVariables
+        .Select((frame NarrowingFrame) -> (Frame: frame, Entries: Dictionary[AccessPath, TypeSymbol](frame)))
+        .ToArray()
+
+    private func RemoveBranchyArgumentEntriesInSubtree(root SyntaxNode) {
+        branchyArgumentEntries.Remove(root)
+        var toRemove List[SyntaxNode]? = nil
+        for key in branchyArgumentEntries.Keys {
+            if object.ReferenceEquals(key.SyntaxTree, root.SyntaxTree) &&
+                key
+                .Span
+                .Start >= root
+                .Span
+                .Start &&
+                key
+                .Span
+                .End <= root
+                .Span
+                .End {
+                (toRemove ??= List[SyntaxNode]()).Add(key)
+            }
+        }
+        if toRemove != nil {
+            for key in toRemove {
+                branchyArgumentEntries.Remove(key)
+            }
+        }
+    }
+
+    private func RestoreNarrowingFramesSnapshot(
+        snapshot[](Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol])
+    ) {
         let count = Math.Min(snapshot.Length, binderCtx.NarrowedVariables.Count)
         for var i = 0; i < count; i++ {
             let frame = binderCtx.NarrowedVariables[i]
+            if !object.ReferenceEquals(frame, snapshot[i].Frame) {
+                continue
+            }
             frame.Clear()
-            for entry in snapshot[i] {
+            for entry in snapshot[i].Entries {
                 frame[entry.Key] = entry.Value
             }
         }

@@ -2505,11 +2505,7 @@ internal partial class ExpressionBinder {
             if expression is BoundConditionalExpression conditional {
                 return IsLvalue(conditional.WhenTrue) &&
                     IsLvalue(conditional.WhenFalse) &&
-                    conditional
-                    .WhenTrue
-                    .Type == conditional
-                    .WhenFalse
-                    .Type
+                    TryGetAddressedStorageType(conditional, out _)
             }
             return switch expression {
                 case field is BoundFieldAccessExpression: IsAddressableFieldReceiver(field.Receiver)
@@ -2524,6 +2520,81 @@ internal partial class ExpressionBinder {
 
         private func IsAddressableFieldReceiver(receiver BoundExpression?) bool -> receiver == nil ||
             Binder.IsReferenceTypeForConstraint(receiver.Type) || IsLvalue(receiver)
+
+        internal func ConditionalStorageTypesMatch(left TypeSymbol?, right TypeSymbol?) bool -> object.ReferenceEquals(
+            left,
+            right
+        ) ||
+            string.Equals(left?.Name, right?.Name, StringComparison.Ordinal)
+
+        internal func TryGetAddressedStorageType(
+            expression BoundExpression,
+            @NotNullWhen(true) out storageType TypeSymbol?
+        ) bool {
+            var current = expression
+            while current is BoundBlockExpression block {
+                current = block.Expression
+            }
+            if current is BoundConditionalExpression conditional {
+                if !TryGetAddressedStorageType(conditional.WhenTrue, out var nestedTrue) ||
+                    !TryGetAddressedStorageType(conditional.WhenFalse, out var nestedFalse) ||
+                    !ConditionalStorageTypesMatch(nestedTrue, nestedFalse) {
+                    storageType = nil
+                    return false
+                }
+                storageType = nestedTrue
+                return true
+            }
+            storageType = AddressedLeafStorageType(current)
+            return true
+        }
+
+        internal func AddressedLeafStorageType(current BoundExpression) TypeSymbol {
+            switch current {
+                case bve is BoundVariableExpression {
+                    let declaredType = bve.Variable.Type
+                    let effectiveType = bve.Type
+                    let unboxesToValueType = bve.NarrowedType != nil && !ReflectionMetadataEmitter.IsValueTypeSymbol(
+                        declaredType
+                    ) &&
+                        declaredType
+                        ?.ClrType
+                        ?.IsValueType != true &&
+                        (
+                        ReflectionMetadataEmitter.IsValueTypeSymbol(effectiveType) ||
+                            effectiveType
+                            ?.ClrType
+                            ?.IsValueType == true
+                    )
+                    return if unboxesToValueType {
+                        effectiveType
+                    } else {
+                        declaredType
+                    }
+                }
+                case fa is BoundFieldAccessExpression {
+                    return fa.SubstitutedType ?? fa.Field.Type
+                }
+                case BoundClrPropertyAccessExpression{Member: FieldInfo field} access {
+                    if access.Receiver != nil {
+                        return MemberLookup.GetClrFieldTypeSymbol(
+                            access.StaticContainerType ?? access.Receiver.Type,
+                            field
+                        )
+                    }
+                    if access.StaticContainerType != nil {
+                        return MemberLookup.GetClrFieldTypeSymbol(access.StaticContainerType, field)
+                    }
+                    return ClrNullability.GetFieldTypeSymbol(field)
+                }
+                case addr is BoundConditionalAddressExpression {
+                    return addr.PointeeType
+                }
+                default {
+                    return current.Type
+                }
+            }
+        }
 
         internal func TryGetReadOnlyAddressTarget(
             expression BoundExpression,

@@ -7,10 +7,10 @@ package GSharp.Core.CodeAnalysis.Binding
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.Diagnostics.CodeAnalysis
 import System.Linq
 import System.Reflection
 import System.Text
-import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Lowering
 import GSharp.Core.CodeAnalysis.Lowering.Async
 import GSharp.Core.CodeAnalysis.Symbols
@@ -1170,23 +1170,21 @@ internal partial class ExpressionBinder {
         if whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression || condition is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }
-        if !IsLvalue(whenTrue) {
+        if !IsLvalueIgnoringConditionalTypeMatch(whenTrue) {
             Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenTrue.Location, syntax.WhenTrue.ToString())
             return BoundErrorExpression(nil)
         }
-        if !IsLvalue(whenFalse) {
+        if !IsLvalueIgnoringConditionalTypeMatch(whenFalse) {
             Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenFalse.Location, syntax.WhenFalse.ToString())
             return BoundErrorExpression(nil)
         }
         // Branch storage types must match — no implicit widening, since the
         // resulting byref selects between slots whose physical type must agree.
-        let trueStorageType = AddressedStorageType(whenTrue)
-        let falseStorageType = AddressedStorageType(whenFalse)
-        if !object.ReferenceEquals(trueStorageType, falseStorageType) && !string.Equals(
-            trueStorageType?.Name,
-            falseStorageType?.Name,
-            StringComparison.Ordinal
-        ) {
+        if !TryResolveConditionalAddressStorageType(whenTrue, syntax.WhenTrue.Location, out var trueStorageType) ||
+            !TryResolveConditionalAddressStorageType(whenFalse, syntax.WhenFalse.Location, out var falseStorageType) {
+            return BoundErrorExpression(nil)
+        }
+        if !ConditionalStorageTypesMatch(trueStorageType, falseStorageType) {
             Diagnostics.ReportConditionalRefArgumentBranchTypeMismatch(
                 syntax.Location,
                 trueStorageType?.Name ?? "?",
@@ -1215,40 +1213,47 @@ internal partial class ExpressionBinder {
         )
     }
 
-    private func AddressedStorageType(expression BoundExpression) TypeSymbol {
+    private func IsLvalueIgnoringConditionalTypeMatch(expression BoundExpression) bool {
+        if expression is BoundBlockExpression block {
+            return IsLvalueIgnoringConditionalTypeMatch(block.Expression)
+        }
+        if expression is BoundConditionalExpression conditional {
+            return IsLvalueIgnoringConditionalTypeMatch(conditional.WhenTrue) &&
+                IsLvalueIgnoringConditionalTypeMatch(conditional.WhenFalse)
+        }
+        return IsLvalue(expression)
+    }
+
+    private func TryResolveConditionalAddressStorageType(
+        expression BoundExpression,
+        location TextLocation,
+        @NotNullWhen(true) out storageType TypeSymbol?
+    ) bool {
         var current = expression
         while current is BoundBlockExpression block {
             current = block.Expression
         }
-        switch current {
-            case bve is BoundVariableExpression {
-                let declaredType = bve.Variable.Type
-                let effectiveType = bve.Type
-                let unboxesToValueType = bve.NarrowedType != nil && !ReflectionMetadataEmitter.IsValueTypeSymbol(
-                    declaredType
-                ) &&
-                    declaredType
-                    ?.ClrType
-                    ?.IsValueType != true &&
-                    (
-                    ReflectionMetadataEmitter.IsValueTypeSymbol(effectiveType) ||
-                        effectiveType
-                        ?.ClrType
-                        ?.IsValueType == true
+        if current is BoundConditionalExpression conditional {
+            let condLocation = conditional.Syntax?.Location ?? location
+            if !TryResolveConditionalAddressStorageType(conditional.WhenTrue, condLocation, out var nestedTrue) ||
+                !TryResolveConditionalAddressStorageType(conditional.WhenFalse, condLocation, out var nestedFalse) {
+                storageType = nil
+                return false
+            }
+            if !ConditionalStorageTypesMatch(nestedTrue, nestedFalse) {
+                Diagnostics.ReportConditionalRefArgumentBranchTypeMismatch(
+                    condLocation,
+                    nestedTrue?.Name ?? "?",
+                    nestedFalse?.Name ?? "?"
                 )
-                return if unboxesToValueType {
-                    effectiveType
-                } else {
-                    declaredType
-                }
+                storageType = nil
+                return false
             }
-            case fa is BoundFieldAccessExpression {
-                return fa.SubstitutedType ?? fa.Field.Type
-            }
-            default {
-                return current.Type
-            }
+            storageType = nestedTrue
+            return true
         }
+        storageType = AddressedLeafStorageType(current)
+        return true
     }
 
     private func BindAwaitExpression(syntax AwaitExpressionSyntax) BoundExpression {
