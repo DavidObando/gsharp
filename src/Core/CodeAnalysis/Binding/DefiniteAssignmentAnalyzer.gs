@@ -556,10 +556,11 @@ internal shared class DefiniteAssignmentAnalyzer {
                             methodExitLabel
                         )
                     }
-                    let (whenTrue, whenFalse) = ClassifyConditionAssignments(
+                    let (whenTrue, _, whenFalse, _) = ClassifyConditionAssignments(
                         conditionalGoto.Condition,
                         beforeCondition,
                         pointerAliases,
+                        nil,
                         tracked,
                         ExpressionFlowContext(outParams, function, methodExitLabel)
                     )
@@ -700,88 +701,144 @@ internal shared class DefiniteAssignmentAnalyzer {
         condition BoundExpression,
         assigned HashSet[VariableSymbol],
         pointerAliases Dictionary[VariableSymbol, VariableSymbol],
+        diagnostics DiagnosticBag?,
         tracked HashSet[VariableSymbol],
-        flowContext ExpressionFlowContext
-    )(WhenTrue HashSet[VariableSymbol], WhenFalse HashSet[VariableSymbol]) {
+        flowContext ExpressionFlowContext?
+    )(
+        WhenTrueAssigned HashSet[VariableSymbol],
+        WhenTrueAliases Dictionary[VariableSymbol, VariableSymbol],
+        WhenFalseAssigned HashSet[VariableSymbol],
+        WhenFalseAliases Dictionary[VariableSymbol, VariableSymbol]
+    ) {
         switch condition {
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
                 {
-                    let (whenTrue, whenFalse) = ClassifyConditionAssignments(
+                    let (whenTrueAssigned, whenTrueAliases, whenFalseAssigned, whenFalseAliases) =
+                    ClassifyConditionAssignments(
                         unary.Operand,
                         assigned,
                         pointerAliases,
+                        diagnostics,
                         tracked,
                         flowContext
                     )
-                    return (whenFalse, whenTrue)
+                    return (whenFalseAssigned, whenFalseAliases, whenTrueAssigned, whenTrueAliases)
                 }
             }
             case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
                 {
-                    let (leftTrue, leftFalse) = ClassifyConditionAssignments(
+                    let (leftTrueAssigned, leftTrueAliases, leftFalseAssigned, leftFalseAliases) =
+                    ClassifyConditionAssignments(
                         binary.Left,
                         assigned,
                         pointerAliases,
+                        diagnostics,
                         tracked,
                         flowContext
                     )
-                    let (rightTrue, rightFalse) = ClassifyConditionAssignments(
+                    let (rightTrueAssigned, rightTrueAliases, rightFalseAssigned, rightFalseAliases) =
+                    ClassifyConditionAssignments(
                         binary.Right,
-                        leftTrue,
-                        pointerAliases,
+                        leftTrueAssigned,
+                        leftTrueAliases,
+                        diagnostics,
                         tracked,
                         flowContext
                     )
-                    return (rightTrue, Intersect(leftFalse, rightFalse))
+                    let whenFalseAssigned = HashSet[VariableSymbol]()
+                    let whenFalseAliases = Dictionary[VariableSymbol, VariableSymbol]()
+                    MergeConditionalFlow(
+                        whenFalseAssigned,
+                        whenFalseAliases,
+                        []HashSet[VariableSymbol]{leftFalseAssigned, rightFalseAssigned},
+                        []Dictionary[VariableSymbol, VariableSymbol]{leftFalseAliases, rightFalseAliases}
+                    )
+                    return (rightTrueAssigned, rightTrueAliases, whenFalseAssigned, whenFalseAliases)
                 }
             }
             case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
                 {
-                    let (leftTrue, leftFalse) = ClassifyConditionAssignments(
+                    let (leftTrueAssigned, leftTrueAliases, leftFalseAssigned, leftFalseAliases) =
+                    ClassifyConditionAssignments(
                         binary.Left,
                         assigned,
                         pointerAliases,
+                        diagnostics,
                         tracked,
                         flowContext
                     )
-                    let (rightTrue, rightFalse) = ClassifyConditionAssignments(
+                    let (rightTrueAssigned, rightTrueAliases, rightFalseAssigned, rightFalseAliases) =
+                    ClassifyConditionAssignments(
                         binary.Right,
-                        leftFalse,
-                        pointerAliases,
+                        leftFalseAssigned,
+                        leftFalseAliases,
+                        diagnostics,
                         tracked,
                         flowContext
                     )
-                    return (Intersect(leftTrue, rightTrue), rightFalse)
+                    let whenTrueAssigned = HashSet[VariableSymbol]()
+                    let whenTrueAliases = Dictionary[VariableSymbol, VariableSymbol]()
+                    MergeConditionalFlow(
+                        whenTrueAssigned,
+                        whenTrueAliases,
+                        []HashSet[VariableSymbol]{leftTrueAssigned, rightTrueAssigned},
+                        []Dictionary[VariableSymbol, VariableSymbol]{leftTrueAliases, rightTrueAliases}
+                    )
+                    return (whenTrueAssigned, whenTrueAliases, rightFalseAssigned, rightFalseAliases)
                 }
             }
             case isExpression is BoundIsExpression {
                 {
                     let afterOperand = HashSet[VariableSymbol](assigned)
                     let operandAliases = Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
-                    ProcessExpression(isExpression.Expression, afterOperand, nil, operandAliases, tracked, flowContext)
-                    let (whenMatched, _, whenFailed, _) = ProcessPattern(
-                        isExpression.Pattern,
+                    ProcessExpression(
+                        isExpression.Expression,
                         afterOperand,
+                        diagnostics,
                         operandAliases,
-                        nil,
                         tracked,
                         flowContext
                     )
-                    return (whenMatched, whenFailed)
+                    let (whenMatchedAssigned, whenMatchedAliases, whenFailedAssigned, whenFailedAliases) =
+                    ProcessPattern(
+                        isExpression.Pattern,
+                        afterOperand,
+                        operandAliases,
+                        diagnostics,
+                        tracked,
+                        flowContext
+                    )
+                    let constantMatch = BoundSwitchExpressionArm.GetConstantMatch(isExpression.Pattern)
+                    if constantMatch == true {
+                        return (
+                            whenMatchedAssigned,
+                            whenMatchedAliases,
+                            HashSet[VariableSymbol](whenMatchedAssigned),
+                            Dictionary[VariableSymbol, VariableSymbol](whenMatchedAliases)
+                        )
+                    }
+                    if constantMatch == false {
+                        return (
+                            HashSet[VariableSymbol](whenFailedAssigned),
+                            Dictionary[VariableSymbol, VariableSymbol](whenFailedAliases),
+                            whenFailedAssigned,
+                            whenFailedAliases
+                        )
+                    }
+                    return (whenMatchedAssigned, whenMatchedAliases, whenFailedAssigned, whenFailedAliases)
                 }
             }
             default {
                 {
-                    let after = HashSet[VariableSymbol](assigned)
-                    ProcessExpression(
-                        condition,
-                        after,
-                        nil,
-                        Dictionary[VariableSymbol, VariableSymbol](pointerAliases),
-                        tracked,
-                        flowContext
+                    let afterAssigned = HashSet[VariableSymbol](assigned)
+                    let afterAliases = Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
+                    ProcessExpression(condition, afterAssigned, diagnostics, afterAliases, tracked, flowContext)
+                    return (
+                        afterAssigned,
+                        afterAliases,
+                        HashSet[VariableSymbol](afterAssigned),
+                        Dictionary[VariableSymbol, VariableSymbol](afterAliases)
                     )
-                    return (after, after)
                 }
             }
         }
@@ -1584,12 +1641,20 @@ internal shared class DefiniteAssignmentAnalyzer {
                 }
             }
             case bin is BoundBinaryExpression when(
-                bin
-                    .Op
-                    .Kind is BoundBinaryOperatorKind.LogicalAnd or
-                    BoundBinaryOperatorKind.LogicalOr or
-                    BoundBinaryOperatorKind.NullCoalesce
+                bin.Op.Kind is BoundBinaryOperatorKind.LogicalAnd or BoundBinaryOperatorKind.LogicalOr
             ) {
+                {
+                    let (whenTrueAssigned, whenTrueAliases, whenFalseAssigned, whenFalseAliases) =
+                    ClassifyConditionAssignments(bin, assigned, pointerAliases, diagnostics, tracked, flowContext)
+                    MergeConditionalFlow(
+                        assigned,
+                        pointerAliases,
+                        []HashSet[VariableSymbol]{whenTrueAssigned, whenFalseAssigned},
+                        []Dictionary[VariableSymbol, VariableSymbol]{whenTrueAliases, whenFalseAliases}
+                    )
+                }
+            }
+            case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.NullCoalesce {
                 {
                     ProcessExpression(bin.Left, assigned, diagnostics, pointerAliases, tracked, flowContext)
                     let rightAssigned = HashSet[VariableSymbol](assigned)
@@ -1603,16 +1668,15 @@ internal shared class DefiniteAssignmentAnalyzer {
             }
             case conditional is BoundConditionalExpression {
                 {
-                    ProcessExpression(
+                    let (whenTrueAssigned, whenTrueAliases, whenFalseAssigned, whenFalseAliases) =
+                    ClassifyConditionAssignments(
                         conditional.Condition,
                         assigned,
-                        diagnostics,
                         pointerAliases,
+                        diagnostics,
                         tracked,
                         flowContext
                     )
-                    let whenTrueAssigned = HashSet[VariableSymbol](assigned)
-                    let whenTrueAliases = Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
                     ProcessExpression(
                         conditional.WhenTrue,
                         whenTrueAssigned,
@@ -1621,8 +1685,6 @@ internal shared class DefiniteAssignmentAnalyzer {
                         tracked,
                         flowContext
                     )
-                    let whenFalseAssigned = HashSet[VariableSymbol](assigned)
-                    let whenFalseAliases = Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
                     ProcessExpression(
                         conditional.WhenFalse,
                         whenFalseAssigned,
@@ -1641,16 +1703,15 @@ internal shared class DefiniteAssignmentAnalyzer {
             }
             case conditionalAddress is BoundConditionalAddressExpression {
                 {
-                    ProcessExpression(
+                    let (whenTrueAssigned, whenTrueAliases, whenFalseAssigned, whenFalseAliases) =
+                    ClassifyConditionAssignments(
                         conditionalAddress.Condition,
                         assigned,
-                        diagnostics,
                         pointerAliases,
+                        diagnostics,
                         tracked,
                         flowContext
                     )
-                    let whenTrueAssigned = HashSet[VariableSymbol](assigned)
-                    let whenTrueAliases = Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
                     ProcessExpression(
                         conditionalAddress.WhenTrueOperand,
                         whenTrueAssigned,
@@ -1659,8 +1720,6 @@ internal shared class DefiniteAssignmentAnalyzer {
                         tracked,
                         flowContext
                     )
-                    let whenFalseAssigned = HashSet[VariableSymbol](assigned)
-                    let whenFalseAliases = Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
                     ProcessExpression(
                         conditionalAddress.WhenFalseOperand,
                         whenFalseAssigned,
@@ -1882,12 +1941,15 @@ internal shared class DefiniteAssignmentAnalyzer {
                 ProcessExpression(constant.Value, matchedAssigned, diagnostics, matchedAliases, tracked, flowContext)
                 if BoundConstantPattern.ClassifyTest(constant.Type, constant.Value) == ConstantPatternTestKind
                     .BoxedFloatEquals {
-                    return (
-                        matchedAssigned,
-                        matchedAliases,
-                        HashSet[VariableSymbol](assigned),
-                        Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
+                    let whenFailedAssigned = HashSet[VariableSymbol]()
+                    let whenFailedAliases = Dictionary[VariableSymbol, VariableSymbol]()
+                    MergeConditionalFlow(
+                        whenFailedAssigned,
+                        whenFailedAliases,
+                        []HashSet[VariableSymbol]{assigned, matchedAssigned},
+                        []Dictionary[VariableSymbol, VariableSymbol]{pointerAliases, matchedAliases}
                     )
+                    return (matchedAssigned, matchedAliases, whenFailedAssigned, whenFailedAliases)
                 }
                 return (
                     matchedAssigned,
@@ -1984,8 +2046,11 @@ internal shared class DefiniteAssignmentAnalyzer {
                 if typePattern.HasBinding {
                     matchedAssigned.Add(typePattern.Variable)
                 }
+                let whenFailedAssigned = HashSet[VariableSymbol](assigned)
+                let whenFailedAliases = Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
                 if typePattern.PropertyPattern != nil {
-                    let (propMatchedAssigned, propMatchedAliases, _, _) = ProcessPattern(
+                    let (propMatchedAssigned, propMatchedAliases, propFailedAssigned, propFailedAliases) =
+                    ProcessPattern(
                         typePattern.PropertyPattern,
                         matchedAssigned,
                         matchedAliases,
@@ -1995,13 +2060,16 @@ internal shared class DefiniteAssignmentAnalyzer {
                     )
                     matchedAssigned = propMatchedAssigned
                     matchedAliases = propMatchedAliases
+                    if BoundSwitchExpressionArm.GetConstantMatch(typePattern.PropertyPattern) != true {
+                        MergeConditionalFlow(
+                            whenFailedAssigned,
+                            whenFailedAliases,
+                            []HashSet[VariableSymbol]{assigned, propFailedAssigned},
+                            []Dictionary[VariableSymbol, VariableSymbol]{pointerAliases, propFailedAliases}
+                        )
+                    }
                 }
-                return (
-                    matchedAssigned,
-                    matchedAliases,
-                    HashSet[VariableSymbol](assigned),
-                    Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
-                )
+                return (matchedAssigned, matchedAliases, whenFailedAssigned, whenFailedAliases)
             }
             case propertyPattern is BoundPropertyPattern {
                 var matchedAssigned = HashSet[VariableSymbol](assigned)
@@ -2040,6 +2108,27 @@ internal shared class DefiniteAssignmentAnalyzer {
             case listPattern is BoundListPattern {
                 var matchedAssigned = HashSet[VariableSymbol](assigned)
                 var matchedAliases = Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
+                let failedAssigned = List[HashSet[VariableSymbol]](listPattern.Elements.Length + 1)
+                failedAssigned.Add(HashSet[VariableSymbol](assigned))
+                let failedAliases = List[Dictionary[VariableSymbol, VariableSymbol]](listPattern.Elements.Length + 1)
+                failedAliases.Add(Dictionary[VariableSymbol, VariableSymbol](pointerAliases))
+                let ProcessElement = func (element BoundPattern) {
+                    let (elemMatchedAssigned, elemMatchedAliases, elemFailedAssigned, elemFailedAliases) =
+                    ProcessPattern(element, matchedAssigned, matchedAliases, diagnostics, tracked, flowContext)
+                    let canFail = if element is BoundSlicePattern sliceElement {
+                        sliceElement.Pattern != nil && BoundSwitchExpressionArm.GetConstantMatch(
+                            sliceElement.Pattern
+                        ) != true
+                    } else {
+                        BoundSwitchExpressionArm.GetConstantMatch(element) != true
+                    }
+                    if canFail {
+                        failedAssigned.Add(elemFailedAssigned)
+                        failedAliases.Add(elemFailedAliases)
+                    }
+                    matchedAssigned = elemMatchedAssigned
+                    matchedAliases = elemMatchedAliases
+                }
                 var sliceIndex = -1
                 for var i = 0; i < listPattern.Elements.Length; i++ {
                     if listPattern.Elements[i] is BoundSlicePattern {
@@ -2049,59 +2138,21 @@ internal shared class DefiniteAssignmentAnalyzer {
                 }
                 if sliceIndex < 0 {
                     for element in listPattern.Elements {
-                        let (elemMatchedAssigned, elemMatchedAliases, _, _) = ProcessPattern(
-                            element,
-                            matchedAssigned,
-                            matchedAliases,
-                            diagnostics,
-                            tracked,
-                            flowContext
-                        )
-                        matchedAssigned = elemMatchedAssigned
-                        matchedAliases = elemMatchedAliases
+                        ProcessElement(element)
                     }
                 } else {
                     for var i = 0; i < sliceIndex; i++ {
-                        let (elemMatchedAssigned, elemMatchedAliases, _, _) = ProcessPattern(
-                            listPattern.Elements[i],
-                            matchedAssigned,
-                            matchedAliases,
-                            diagnostics,
-                            tracked,
-                            flowContext
-                        )
-                        matchedAssigned = elemMatchedAssigned
-                        matchedAliases = elemMatchedAliases
+                        ProcessElement(listPattern.Elements[i])
                     }
                     for var i = sliceIndex + 1; i < listPattern.Elements.Length; i++ {
-                        let (elemMatchedAssigned, elemMatchedAliases, _, _) = ProcessPattern(
-                            listPattern.Elements[i],
-                            matchedAssigned,
-                            matchedAliases,
-                            diagnostics,
-                            tracked,
-                            flowContext
-                        )
-                        matchedAssigned = elemMatchedAssigned
-                        matchedAliases = elemMatchedAliases
+                        ProcessElement(listPattern.Elements[i])
                     }
-                    let (sliceMatchedAssigned, sliceMatchedAliases, _, _) = ProcessPattern(
-                        listPattern.Elements[sliceIndex],
-                        matchedAssigned,
-                        matchedAliases,
-                        diagnostics,
-                        tracked,
-                        flowContext
-                    )
-                    matchedAssigned = sliceMatchedAssigned
-                    matchedAliases = sliceMatchedAliases
+                    ProcessElement(listPattern.Elements[sliceIndex])
                 }
-                return (
-                    matchedAssigned,
-                    matchedAliases,
-                    HashSet[VariableSymbol](assigned),
-                    Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
-                )
+                let whenFailedAssigned = HashSet[VariableSymbol]()
+                let whenFailedAliases = Dictionary[VariableSymbol, VariableSymbol]()
+                MergeConditionalFlow(whenFailedAssigned, whenFailedAliases, failedAssigned, failedAliases)
+                return (matchedAssigned, matchedAliases, whenFailedAssigned, whenFailedAliases)
             }
             case slicePattern is BoundSlicePattern {
                 var matchedAssigned = HashSet[VariableSymbol](assigned)
@@ -2109,8 +2160,10 @@ internal shared class DefiniteAssignmentAnalyzer {
                 if slicePattern.Variable != nil {
                     matchedAssigned.Add(slicePattern.Variable)
                 }
+                var whenFailedAssigned = HashSet[VariableSymbol](assigned)
+                var whenFailedAliases = Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
                 if slicePattern.Pattern != nil {
-                    let (subMatchedAssigned, subMatchedAliases, _, _) = ProcessPattern(
+                    let (subMatchedAssigned, subMatchedAliases, subFailedAssigned, subFailedAliases) = ProcessPattern(
                         slicePattern.Pattern,
                         matchedAssigned,
                         matchedAliases,
@@ -2120,13 +2173,10 @@ internal shared class DefiniteAssignmentAnalyzer {
                     )
                     matchedAssigned = subMatchedAssigned
                     matchedAliases = subMatchedAliases
+                    whenFailedAssigned = subFailedAssigned
+                    whenFailedAliases = subFailedAliases
                 }
-                return (
-                    matchedAssigned,
-                    matchedAliases,
-                    HashSet[VariableSymbol](assigned),
-                    Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
-                )
+                return (matchedAssigned, matchedAliases, whenFailedAssigned, whenFailedAliases)
             }
             default {
                 return (

@@ -1088,12 +1088,17 @@ func VoidSwitch(x int32, out a int32) {
         case Match(out a, 80): Console.Write("")
     }
 }
+func UseRef(ref a int32) bool {
+    a++
+    return true
+}
 func IsBranches(x int32, out a int32, out b int32) int32 {
-    if x is (1 and Match(out a, 90)) {
+    if (x is (1 and Match(out a, 90))) && UseRef(ref a) {
     } else {
         a = 91
     }
-    if x is (1 or Match(out b, 95)) {
+    if !(x is (1 or Match(out b, 94))) && UseRef(ref b) {
+    } else {
         b = 96
     }
     return a + b
@@ -1160,6 +1165,46 @@ func F(xs []int32, out a int32) int32 {
     }
     *p = 1
 }`, "GS0238", 8, 5)
+        AssertDiagnostic(`func IdFloat(v float64) float64 -> v
+func F(x object?, out a int32) {
+    var b = 0
+    var p = &a
+    switch x {
+        case IdFloat({ p = &b 1.0 }) {
+            a = 1
+            return
+        }
+        default {}
+    }
+    *p = 1
+}`, "GS0238", 12, 5)
+        AssertDiagnostic(`class Box(Prop int32)
+func IdInt(v int32) int32 -> v
+func F(x object?, out a int32) {
+    var b = 0
+    var p = &a
+    switch x {
+        case Box{ Prop: IdInt({ p = &b 1 }) } {
+            a = 1
+            return
+        }
+        default {}
+    }
+    *p = 1
+}`, "GS0238", 13, 5)
+        AssertDiagnostic(`func IdInt(v int32) int32 -> v
+func F(xs []int32, out a int32) {
+    var b = 0
+    var p = &a
+    switch xs {
+        case [.. [IdInt({ p = &b 1 })]] {
+            a = 1
+            return
+        }
+        default {}
+    }
+    *p = 1
+}`, "GS0238", 12, 5)
     }
 
     @Fact
@@ -1216,10 +1261,19 @@ Console.WriteLine(StmtFallthroughReturn(9))`, "42\n43\n44\n45\n46\n47\n49\n48\n5
         private func AssertDiagnostic(source string, id string, line int32, column int32) {
             let result = EmittedOracle.Evaluate(source)
             let matches = result.Diagnostics.Where((d Diagnostic) -> d.Id == id).ToList()
-            Assert.NotEmpty(matches)
-            Assert.Contains(
-                matches,
-                (d Diagnostic) -> d.Location.StartLine + 1 == line && d.Location.StartCharacter + 1 == column
+            let all = string.Join(
+                "; ",
+                result.Diagnostics.Select(
+                    (
+                        d Diagnostic
+                    ) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}: ${d.Message}"
+                )
+            )
+            Assert.True(
+                matches.Any(
+                    (d Diagnostic) -> d.Location.StartLine + 1 == line && d.Location.StartCharacter + 1 == column
+                ),
+                "Expected $id@$line:$column, Actual: $all"
             )
         }
     }

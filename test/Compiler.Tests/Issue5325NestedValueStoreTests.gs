@@ -302,6 +302,11 @@ frames = slice[Pair].FromArray(storage)
 index = 0
 scope {
     go frames[0].Bump()
+    frames = slice[Pair]{Pair{}}
+}
+frames = slice[Pair].FromArray(storage)
+index = 0
+scope {
     go Owner()[Index()].Left.Bump()
     frames = slice[Pair]{Pair{}}
     index = 99
