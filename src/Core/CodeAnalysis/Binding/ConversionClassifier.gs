@@ -498,19 +498,12 @@ internal class ConversionClassifier {
     /// @param location The conversion location.
     /// @param result The bound conversion.
     private func ReportOutOfRangeFloatingConstantConversion(location TextLocation, result BoundExpression) {
-        if binderCtx.IsUncheckedContext || result is not BoundConversionExpression || result.Type.ClrType == nil {
+        if binderCtx.IsUncheckedContext || result is not BoundConversionExpression {
             return
         }
-        let operand = cast[BoundConversionExpression](result).Expression
-        if operand.Type != TypeSymbol.Float64 && operand.Type != TypeSymbol.Float32 {
-            return
-        }
-        if ConstantExpressionEvaluator.TryEvaluate(operand, out var value) &&
-            value != nil &&
-            ConstantExpressionEvaluator
-            .TryConvertFloatingConstant(
-            Convert.ToDouble(value, CultureInfo.InvariantCulture),
-            result.Type.ClrType!!,
+        if ConstantExpressionEvaluator.TryFoldFloatingConstantConversion(
+            cast[BoundConversionExpression](result),
+            out var value,
             out _,
             out var inRange
         ) &&

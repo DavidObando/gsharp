@@ -97,6 +97,25 @@ open class Issue5767FloatingConstantConversionTests {
         Assert.Equal(expected, result.ValueText)
     }
 
+    /// A conversion of a constant operand outside a `const` declaration emits the folded value, not a
+    /// conversion opcode. On .NET 10, `conv.i1`, `conv.u2`, `conv.u1`, and `conv.i2` gave 44, 4464, 255, and
+    /// 4464 for these rows.
+    @Theory
+    @InlineData("let a = unchecked(int8(300.5))\na", "127")
+    @InlineData("var a = unchecked(uint16(70000.0))\na", "65535")
+    @InlineData("func F() int8 {\n    return unchecked(int8(300.5))\n}\nF()", "127")
+    @InlineData("let f = () -> unchecked(uint8(-1.5))\nf()", "0")
+    @InlineData("Math.Abs(unchecked(int16(70000.0)))", "32767")
+    @InlineData("const big = 300.5\nlet a = unchecked(int8(big + 1.0))\na", "127")
+    @InlineData("let a = unchecked(int32(float64.NaN))\na", "0")
+    @InlineData("let a = checked(int8(100.7))\na", "100")
+    @InlineData("let a = int8(-100.7)\na", "-100")
+    func ConstantOperandConversion_OutsideConstDeclaration_EmitsFoldedValue(source string, expected string) {
+        let result = EmittedOracle.Evaluate(source)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(expected, result.ValueText)
+    }
+
     @Fact
     func UncheckedBlock_SuppressesGS0635() {
         let result = EmittedOracle.Evaluate(

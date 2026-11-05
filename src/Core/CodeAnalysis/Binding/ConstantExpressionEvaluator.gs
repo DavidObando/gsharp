@@ -485,6 +485,45 @@ internal shared class ConstantExpressionEvaluator {
         return true
     }
 
+    /// Folds a bound conversion of a constant `float32` or `float64` operand to a fixed-width integer type or
+    /// `char` with (cref:TryConvertFloatingConstant) (#5767, ADR-0219). The binder uses it to report GS0635,
+    /// and the emitter uses it to emit the folded value, so each conversion of a constant operand has the same
+    /// value in each position and on each host runtime. The target type is tested before the operand is
+    /// evaluated, so a conversion to another type does not compile an expression tree.
+    /// @param conversion The bound conversion.
+    /// @param operandValue The constant operand value, boxed as `float32` or `float64`.
+    /// @param converted The converted value, boxed as the runtime type of the target.
+    /// @param inRange `false` when the operand value is NaN or out of the range of the target type.
+    /// @returns `true` when the operand is a floating-point constant and the target is an integer type or `char`.
+    func TryFoldFloatingConstantConversion(
+        conversion BoundConversionExpression,
+        @NotNullWhen(true) out operandValue object?,
+        @NotNullWhen(true) out converted object?,
+        out inRange bool
+    ) bool {
+        operandValue = nil
+        converted = nil
+        inRange = false
+        let operandType = conversion.Expression.Type
+        if operandType != TypeSymbol.Float64 && operandType != TypeSymbol.Float32 {
+            return false
+        }
+        let targetType = conversion.Type.ClrType
+        if targetType == nil || !IsIntegralConstantTarget(targetType) {
+            return false
+        }
+        if !TryEvaluate(conversion.Expression, out var value) || value == nil {
+            return false
+        }
+        operandValue = value
+        return TryConvertFloatingConstant(
+            Convert.ToDouble(value, CultureInfo.InvariantCulture),
+            targetType,
+            out converted,
+            out inRange
+        )
+    }
+
     private func TryGetIntegralBounds(
         type Type,
         out typeCode TypeCode,
