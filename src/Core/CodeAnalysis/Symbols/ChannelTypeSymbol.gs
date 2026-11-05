@@ -237,7 +237,7 @@ class ChannelTypeSymbol : TypeSymbol {
         }
 
         private func MakeClrType(elementType TypeSymbol, direction ChannelDirection) Type? {
-            if TypeSymbol.ContainsTypeParameter(elementType) || elementType.ClrType == nil {
+            if elementType.ClrType == nil {
                 return nil
             }
             let elementClrType Type? = NullableTypeSymbol.GetEffectiveClrType(elementType)
