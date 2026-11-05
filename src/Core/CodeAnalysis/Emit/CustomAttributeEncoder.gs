@@ -199,6 +199,9 @@ internal class CustomAttributeEncoder {
 
     func EmitIsReadOnlyAttributeOnParameter(paramHandle ParameterHandle) {
         let ctorRef = this.wellKnown.GetIsReadOnlyAttributeCtorRef()
+        if ctorRef.IsNil {
+            return
+        }
         let valueBlob = BlobBuilder()
         valueBlob.WriteUInt16(0x0001)
         valueBlob.WriteUInt16(0)

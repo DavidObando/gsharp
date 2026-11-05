@@ -2366,14 +2366,10 @@ internal class LambdaBinder {
     /// is local to the enclosing function" rule and C#'s prohibition on
     /// cross-frame `goto` flow. Pair with (cref:RestoreNestedFrame).
     ///
-    /// Issue #4285: also recomputes
+    /// Issue #4285 / ADR-0213: also recomputes
     /// (cref:BinderContext.FunctionContainsUserGotoOrLabel) for
-    /// [`bodySyntax`](paramref) — the nested body has its own
-    /// goto/label namespace, so whether IT contains a goto/label is a
-    /// separate question from whether the ENCLOSING function does, and must
-    /// be answered fresh for the narrowing-lift guard in
-    /// (cref:StatementBinder.ApplyEarlyExitNarrowings) to apply
-    /// correctly while the nested body is bound.
+    /// [`bodySyntax`](paramref) because the nested body has its own
+    /// `goto`/label namespace.
     /// @param bodySyntax The nested function-literal or arrow-lambda body being entered.
     private func EnterNestedFrame(bodySyntax SyntaxNode) NestedFrameState {
         let saved = NestedFrameState(binderCtx, isolateExternalCallableAliases())
@@ -2431,9 +2427,7 @@ internal class LambdaBinder {
         this.binderCtx.CurrentFallthroughTarget = saved.FallthroughTarget
         this.binderCtx.CurrentFallthroughAnchor = saved.FallthroughAnchor
         restoreExternalCallableAliases(saved.ExternalCallableAliases)
-        // Issue #4285: restore the ENCLOSING function's goto/label flag now
-        // that the nested body's own bind session (and its own guard checks
-        // in ApplyEarlyExitNarrowings) has finished.
+        // Issue #4285 / ADR-0213: restore the enclosing function's goto/label flag.
         this.binderCtx.FunctionContainsUserGotoOrLabel = saved.FunctionContainsUserGotoOrLabel
     }
 

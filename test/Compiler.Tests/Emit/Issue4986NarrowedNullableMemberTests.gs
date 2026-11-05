@@ -2562,18 +2562,21 @@ func pick(n int32?) int32 -> n != nil ? n.GetValueOrDefault(Thing.Name().Length)
         Assert.True(Regex.IsMatch(result.Output, `\(3,27,3,38\): error GS0158: [^\n]*GetHashCode`), result.Output)
     }
 
-    /// The storage read is an ordinary `Nullable<T>.Value` property access, so
-    /// it also works inside an expression-tree lambda, where the narrowed
-    /// unwrap itself is rejected (#4974).
+    /// Both the `Nullable<T>.Value` storage fallback and a narrowed struct's
+    /// own `Value` member work inside an expression-tree lambda (#4986, #4974).
     @Fact
     func Storage_Read_Works_In_An_Expression_Tree() {
         let result = CompileAndRun(`import System
 import System.Linq.Expressions
+struct Box {
+    var Value int32
+}
 let e Expression[Func[int32?, int32]] = (v int32?) -> v != nil ? v.Value + 1 : 0
 let h Expression[Func[int32?, bool]] = (v int32?) -> if v != nil { v.HasValue } else { false }
-Console.WriteLine("${e.Compile()(4)} ${e.Compile()(nil)} ${h.Compile()(1)} ${h.Compile()(nil)}")
+let b Expression[Func[Box?, int32]] = (x Box?) -> x != nil ? x.Value + 1 : 0
+Console.WriteLine("${e.Compile()(4)} ${e.Compile()(nil)} ${h.Compile()(1)} ${h.Compile()(nil)} ${b.Compile()(Box{Value: 6})} ${b.Compile()(nil)}")
 `)
-        Assert.Equal("5 0 True False" + Environment.NewLine, result.Output)
+        Assert.Equal("5 0 True False 7 0" + Environment.NewLine, result.Output)
     }
 
     @Theory

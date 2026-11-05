@@ -188,6 +188,18 @@ read in loops that call), of which 5 are `GS0532` cascades; 0 errors in
 Core.Tests and gsc. This is the whole measured cost of the conservative
 call rule on the compiler's own source.
 
+**Final outcome under [ADR-0213](0213-narrowing-across-loops-and-backward-jumps.md) (slices L0–L3, [#5342](https://github.com/DavidObando/gsharp/pull/5342), [#5459](https://github.com/DavidObando/gsharp/pull/5459), [#5720](https://github.com/DavidObando/gsharp/pull/5720), [#5319](https://github.com/DavidObando/gsharp/issues/5319)).** Amendment A3 ([#5298](https://github.com/DavidObando/gsharp/pull/5298)) preserves by-reference parameter narrowings across plain calls (`BinderContext.gs:906-923` keeps its fact), decided Question 4 preserves narrowings across reassignments from in-scope `TypePattern` variables (`ExpressionBinder.Assignments.gs:5435-5494` and `CSharpToGSharpTranslator.Deconstruction.gs:111-125` keep their facts), and `MemberLookup.gs` was restructured on `main`:
+
+| Input | Loops with live facts (L1) | Facts removed at entry | Backward-jump spans (L2) | Second loop binds (`narrowing.loop-rebinds`) | Diagnostic difference vs. `main` |
+| --- | --- | --- | --- | --- | --- |
+| `Core` | 1494 | 59 | 0 | 0 (was 62; counter retired in L3) | 0 |
+| `Core.Tests` | 30 | 0 | 0 | 0 | 0 |
+| `gsc` | 4 | 0 | 0 | 0 | 0 |
+| `LanguageServer` | — | — | 0 | 0 | 0 |
+| `Compiler.Tests` | — | — | 0 | 0 | 0 |
+| `Cs2Gs.Translator` | 335 | 9 | 0 | 0 | 0 |
+| Oahu (12 compiling cells) | 50 | 6 | 0 | 0 (was 7) | 0 |
+
 ## ADR-0213 slice L1: rows that change or join
 
 Slice L1 of [ADR-0213](0213-narrowing-across-loops-and-backward-jumps.md) changes four rows of this
@@ -238,4 +250,28 @@ d06 when another fact is in force at the loop entry; the row now gets the same r
 | m03 | as m02 without a write to `g` inside the span; `h()` after the span | accepted, prints `2` | accepted, prints `2` |
 | m04 | as m02 with `g = Other` (a named function) inside the span | accepted, prints `2` | rejected (`GS0158`) |
 | m05 | `while count < 2 { if x != nil { g(); total += x.Value }; Inside: count++; i++ }; g = h; if i < 2 { goto Inside }` | accepted, prints `2` | rejected (`GS0158`) |
+
+## ADR-0208 row R6 (#5301): early-exit guard lifts and `if`/`block`/`switch` joins in functions with `goto` or user labels
+
+[ADR-0208](0208-narrowing-as-flow-state-with-a-query.md) section 16 row R6 and [ADR-0213](0213-narrowing-across-loops-and-backward-jumps.md) section 3d ([#5301](https://github.com/DavidObando/gsharp/issues/5301), part of [#5130](https://github.com/DavidObando/gsharp/issues/5130)): now that slice L2 binds backward-jump spans under `Lower(S, span)` at `span.FirstStatement` and at participant labels (`q2`) and joins forward jumps from outside a loop into the loop's entry state `S` under rule J6 (`q6`), the function-wide `#4285`/`#4290` `FunctionContainsUserGotoOrLabel` suppressions in `ApplyEarlyExitNarrowings`, `ApplyIfJoinNarrowings`, `StatementBinder.NarrowingExits` (`JoinExitsEnabled`), and `BindGuardLetStatementInBlock` are removed. Forward jumps join at their target labels (`JoinForwardJumpsAtLabel`), and `ProcessBranchStatement` clears running branch state at user labels so a `goto` into the middle of an `if` branch cannot lift an assignment that preceded the label.
+
+| Probe | Shape | Result before R6 | Result now |
+| --- | --- | --- | --- |
+| e5 | `if s == nil { s = "a" }`; `if c { goto done }`; `done: return s.Length` | rejected (`GS0158`) | accepted, prints `1` (R6) |
+| g1 | three paths to `Done:` proving `Dog`, `Cat` and `Animal` through `!is` guards and `goto`; `return x.Name` | rejected (`GS0158`) | accepted, prints `a` (R6) |
+| m06 | `guard let p = b.Pet else { return "" }`; `if b.Pet !is Dog { return "" }`; `{ if s == nil { return "" } }`; `if skip { goto Done }`; `Done: return b.Pet.Bark() + "-" + p.Name + "-" + s.Length.ToString()` | rejected (`GS0158`, `GS0159`) | accepted, prints `woof-rex-2` (R6) |
+| m07 | `if cond { goto SkipAssign }`; `if flag { x = "hello"; SkipAssign: Console.WriteLine("reached") } else { x = "world" }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m08 | `if cond { goto InsideElse }`; `if x == nil { return 0 } else { InsideElse: Console.WriteLine("reached") }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m09 | `if cond { goto InsideSwitch }`; `if flag { x = "a"; switch k { case 1 { InsideSwitch: ... } default { } } } else { x = "b" }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m10 | `if cond { goto AfterDefer }`; `if flag { x = "a"; defer ...; AfterDefer: ... } else { x = "b" }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m11 | `if skip { goto Inside }`; `if x == nil \|\| ({ Inside: var marker = 0; false }) { return 0 }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m12 | `if skip { goto Inside }`; `if x != nil && ({ Inside: var marker = 0; true }) { ... } else { x = "fallback" }`; `return x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m13 | nested `finally` with `for { break }; x = "safe"` before outer `goto Done`; `Done: return x.Length` | accepted, prints `4` | accepted, prints `4` |
+| m14 | `if skip { goto Inside }`; `if ({ g = cb; Inside: true }) { x = "safe"; g() } else { x = "other" }`; `x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m15 | `if skip { goto Inside }`; `if flag { switch k { case 1 { g = cb; Inside: ... } default { g = cb } }; x = "safe"; g() } else { x = "other" }`; `x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m16 | `if skip { goto Inside }`; `if flag { try { g = cb; Inside: ... } finally { ... }; x = "safe"; g() } else { x = "other" }`; `x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m17 | `if skip { goto L }`; `g = cb`; `L: if flag { x = "safe"; g() } else { x = "other" }`; `x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m18 | `if skip { goto Inside }`; `if flag { return; if ({ Inside: var marker = 0; true }) { ... } } else { x = "other" }`; `x.Length` | rejected (`GS0158`) | rejected (`GS0158`, R6 soundness) |
+| m19 | `var x string? = nil; x = "safe"; goto Done; let unused = () -> { Again: ...; if false { goto Again }; 0 }; x = nil; goto Done; Done: return x.Length` | accepted, prints `4` | accepted, prints `4` |
+
 

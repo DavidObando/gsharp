@@ -303,7 +303,7 @@ internal partial class StatementBinder {
             $scope.GetDeclaredStructs(),
             Diagnostics
         )
-        let result = BoundPatternSwitchStatement(nil, discriminant, boundArms, isExhaustive)
+        let result = BoundPatternSwitchStatement(syntax, discriminant, boundArms, isExhaustive)
         let shadowBreaks = binderCtx.UsedBreakLabels.Contains(switchBreakLabel)
         // ADR-0069 addendum / issue #712: park the merged narrowing on the
         // bound switch so the enclosing block walker can lift it. Only do
@@ -858,12 +858,16 @@ internal partial class StatementBinder {
     /// `throw;` in a lambda.
     /// @param syntax The nested function's block body.
     /// @returns The bound body.
-    internal func BindNestedFunctionBody(syntax BlockStatementSyntax) BoundStatement {
+    internal func BindNestedFunctionBody(syntax BlockStatementSyntax) BoundStatement -> BindNestedFunctionBody(
+        () -> BindBlockStatement(syntax)
+    )
+
+    internal func BindNestedFunctionBody[T](bind() -> T) T {
         let inheritedFallthrough = currentStatementListFallsThrough
         let inheritedReachabilityGeneration = internalReachabilityGeneration
         currentStatementListFallsThrough = true
         try {
-            return OutsideExceptionHandlers(() -> BindBlockStatement(syntax))
+            return OutsideExceptionHandlers(bind)
         } finally {
             currentStatementListFallsThrough = inheritedFallthrough
             internalReachabilityGeneration = inheritedReachabilityGeneration

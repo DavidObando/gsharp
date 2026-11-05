@@ -17,7 +17,7 @@ import System.Globalization
 import GSharp.Core.CodeAnalysis.Compilation
 
 /// Bound scope.
-class BoundScope {
+partial class BoundScope {
     private var symbols ImmutableDictionary[string, Symbol].Builder?
     private var symbolKeys ImmutableArray[string].Builder?
     private var functions ImmutableDictionary[string, ImmutableArray[FunctionSymbol].Builder].Builder?
@@ -35,10 +35,6 @@ class BoundScope {
     ] =
     ImmutableDictionary[(Owner TypeSymbol, Name string), ImmutableDictionary[string, TypeSymbol]].Empty
     private var sourcePackagePrefixes ImmutableDictionary[string, bool].Builder?
-
-    // ADR-0156 Phase 2: registered on the root scope of an interactive
-    // submission's scope chain; exposed via SubmissionImports.
-    private var submissionImports SubmissionImports?
 
     private var typeAliasKeys ImmutableArray[string].Builder?
     private var extensionFunctions ImmutableArray[FunctionSymbol].Builder?
@@ -97,7 +93,10 @@ class BoundScope {
     private var structSnapshot AliasDerivedSnapshot[ImmutableArray[StructSymbol]]?
 
     /// Creates a worker boundary over canonical declarations. Synthesis remains coordinator-owned.
-    internal func CreateIndependentBodyScope() BoundScope -> BoundScope(this){independentBodyRoot = true}
+    internal func CreateIndependentBodyScope() BoundScope -> BoundScope(this){
+        independentBodyRoot = true,
+        bindingServices = BindingServices(){BodyBindingOptions = GetBindingServices().BodyBindingOptions}
+    }
 
     private prop SynthesisParent BoundScope? {
         get {
@@ -189,11 +188,6 @@ class BoundScope {
     prop PreprocessorSymbols ImmutableHashSet[string] {
         get;
     }
-
-    /// Gets the interactive submission import set (ADR-0156 Phase 2) visible
-    /// from this scope, walking the parent chain to the root scope it was
-    /// registered on; `null` for ordinary compilations.
-    prop SubmissionImports SubmissionImports? -> submissionImports ?? Parent?.SubmissionImports
 
     /// Returns the enclosing scope, for a pop that pairs with an earlier
     /// `scope = new BoundScope(scope)` push.
@@ -577,7 +571,7 @@ class BoundScope {
     /// @param name The unqualified identifier.
     /// @returns Whether ordinary lookup must take precedence over a native alias.
     func HasImportedTypeName(name string) bool {
-        if SubmissionImports is {} submissions && submissions.TryResolveType(References!!, name, -1, out _) {
+        if SubmissionBinding.HasTypeName(this, name) {
             return true
         }
         for import_ in EnumerateImports() {
@@ -627,13 +621,7 @@ class BoundScope {
         // ADR-0156 Phase 2: a generic type declared by a prior interactive
         // submission resolves over that submission's emitted assembly,
         // newest submission first (see TryLookupImportedClass).
-        if SubmissionImports is {} submissionImports && submissionImports.TryResolveType(
-            References!!,
-            name,
-            arity,
-            out var submissionType
-        ) {
-            type = submissionType
+        if SubmissionBinding.TryLookupGenericClass(this, name, arity, out type) {
             return true
         }
         let mangled = name + "`" + arity.ToString()
@@ -710,15 +698,7 @@ class BoundScope {
         }
         // ADR-0156 Phase 2: preserve prior-submission precedence, but reject
         // its lone-open-generic fallback at a non-generic use site.
-        if SubmissionImports is {} submissionImports && submissionImports.TryResolveType(
-            References!!,
-            name,
-            preferredArity,
-            out var submissionType
-        ) &&
-            !submissionType!!
-            .IsGenericTypeDefinition {
-            importedClass = ImportedClassSymbol(submissionType!!, declaration, references: References)
+        if SubmissionBinding.TryLookupClassByArity(this, name, preferredArity, declaration, out importedClass) {
             return true
         }
         if TryResolveImportedTypeAlias(name, preferredArity, out var aliasedType) {
@@ -1616,11 +1596,6 @@ class BoundScope {
     /// #255).
     /// @returns The named delegate types in declaration order.
     func GetDeclaredDelegates() ImmutableArray[DelegateTypeSymbol] -> GetDeclaredTypeSymbols[DelegateTypeSymbol]()
-
-    /// Registers the interactive submission import set (ADR-0156 Phase 2) on
-    /// this (root) scope; exposed to child scopes via (cref:SubmissionImports).
-    /// @param imports The submission import set; may be `null`.
-    internal func SetSubmissionImports(imports SubmissionImports?) -> submissionImports = imports
 
     /// Records a package declared by the source compilation.
     /// @param packageName The package's dotted name.
