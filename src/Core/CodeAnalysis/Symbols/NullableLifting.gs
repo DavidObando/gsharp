@@ -240,24 +240,15 @@ shared class NullableLifting {
     )
 
     /// Returns the underlying type of a constructed CLR `Nullable<T>`.
-    /// Uses (cref:Nullable.GetUnderlyingType(Type)) for runtime types and
-    /// a metadata-name fallback for types owned by a
-    /// (cref:System.Reflection.MetadataLoadContext).
+    /// The test uses only metadata: the generic type definition must be `System.Nullable`1`.
+    /// Use this method for all CLR types, because it is correct for runtime types, `TypeBuilder` types,
+    /// and (cref:System.Reflection.MetadataLoadContext) types.
     /// @param type CLR type to inspect.
     /// @returns The underlying `T`, or `null`.
     internal func GetValueTypeNullableUnderlyingClr(type Type?) Type? {
-        if type == nil {
-            return nil
-        }
-        try {
-            if Nullable.GetUnderlyingType(type.UnderlyingSystemType) != nil {
-                return type.GetGenericArguments()[0]
-            }
-        } catch (ArgumentException) {
-            // MetadataLoadContext types cannot be passed to runtime Nullable APIs.
-
-        }
-        if !type.IsGenericType || type.IsGenericTypeDefinition {
+        // Do not call Nullable.GetUnderlyingType. For a MetadataLoadContext type, it returns null on
+        // .NET 10 and throws NotSupportedException on .NET 11 (#5768).
+        if type == nil || !type.IsGenericType || type.IsGenericTypeDefinition {
             return nil
         }
         try {

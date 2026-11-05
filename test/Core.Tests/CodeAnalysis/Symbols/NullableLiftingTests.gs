@@ -7,6 +7,8 @@ package GSharp.Core.Tests.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Symbols
 import System
 import System.Collections.Immutable
+import System.Reflection
+import System.Reflection.Emit
 import Xunit
 
 /// PR N-1 / bug-overview §6.1: the (cref:NullableLifting) facade
@@ -52,6 +54,42 @@ open class NullableLiftingTests {
     @Fact
     func IsValueTypeNullableClr_Returns_False_For_Null_Argument() {
         Assert.False(NullableLifting.IsValueTypeNullableClr(nil))
+    }
+
+    /// Imported types come from a MetadataLoadContext. The probe must use metadata only (#5768).
+    /// A runtime Nullable probe gives null for these types on .NET 10 and throws on .NET 11.
+    @Fact
+    func GetValueTypeNullableUnderlyingClr_Uses_Metadata_For_MetadataLoadContext_Types() {
+        using let context = MetadataLoadContext(
+            PathAssemblyResolver(ReferenceResolver.HostTrustedPlatformAssemblyPaths())
+        )
+        let core = context.CoreAssembly!!
+        let int32Type = core.GetType("System.Int32", true)!!
+        let nullableDefinition = core.GetType("System.Nullable`1", true)!!
+        let listDefinition = core.GetType("System.Collections.Generic.List`1", true)!!
+        Assert.Same(
+            int32Type,
+            NullableLifting.GetValueTypeNullableUnderlyingClr(nullableDefinition.MakeGenericType(int32Type))
+        )
+        Assert.Null(NullableLifting.GetValueTypeNullableUnderlyingClr(int32Type))
+        Assert.Null(NullableLifting.GetValueTypeNullableUnderlyingClr(nullableDefinition))
+        Assert.Null(NullableLifting.GetValueTypeNullableUnderlyingClr(listDefinition.MakeGenericType(int32Type)))
+    }
+
+    /// A same-compilation value type is a TypeBuilder while binding runs (#4184, #5768).
+    @Fact
+    func GetValueTypeNullableUnderlyingClr_Returns_TypeBuilder_Argument_Of_Nullable() {
+        let module = AssemblyBuilder.DefineDynamicAssembly(
+            AssemblyName("NullableLifting5768"),
+            AssemblyBuilderAccess.Run
+        )
+            .DefineDynamicModule("NullableLifting5768")
+        let builder = module.DefineType("Value5768", TypeAttributes.Public | TypeAttributes.Sealed, typeof(ValueType))
+        Assert.Same(
+            builder,
+            NullableLifting.GetValueTypeNullableUnderlyingClr(typeof(Nullable[_]).MakeGenericType(builder))
+        )
+        Assert.Null(NullableLifting.GetValueTypeNullableUnderlyingClr(builder))
     }
 
     @Fact
