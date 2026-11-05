@@ -53,8 +53,16 @@ internal partial class StatementBinder {
         originatingSyntax SyntaxNode,
         labelName string?
     ) BoundStatement {
+        let aliasesBeforeLower = CaptureExternalCallableAliases()
         let lowerBound = bindExpressionWithTargetType(syntax.LowerBound, TypeSymbol.Int32)
+        RestoreExternalCallableAliases(aliasesBeforeLower)
+        ApplyTrailingConditionEffects(syntax.LowerBound, lowerBound)
+        RestoreExternalCallableAliases(AliasesAfter(lowerBound, aliasesBeforeLower, syntax.LowerBound))
+        let aliasesBeforeUpper = CaptureExternalCallableAliases()
         let upperBound = bindExpressionWithTargetType(syntax.UpperBound, TypeSymbol.Int32)
+        RestoreExternalCallableAliases(aliasesBeforeUpper)
+        ApplyTrailingConditionEffects(syntax.UpperBound, upperBound)
+        RestoreExternalCallableAliases(AliasesAfter(upperBound, aliasesBeforeUpper, syntax.UpperBound))
         $scope = BoundScope($scope)
         let variable = bindLocalVariable(syntax.Identifier, false, TypeSymbol.Int32)
         let body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel)
@@ -585,7 +593,8 @@ internal partial class StatementBinder {
                     "a bound for-clause initializer has initializer syntax",
                     expression: "syntax.Initializer"
                 ),
-                init
+                init,
+                aliasesAtEntry: externalCallableAliasesAtInitEntry
             )
             if binderCtx.NarrowedVariables.Count > 0 {
                 ApplyAssignmentNarrowing(init, binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1])
@@ -674,14 +683,32 @@ internal partial class StatementBinder {
                 // label scope under the lower bound of the loop (ADR-0213 section 6, I6).
                 $scope = BoundScope(headerParentScope)
                 try {
-                    boundCondition = if conditionSyntax == nil {
-                        default(BoundExpression?)
+                    var loopNarrow Dictionary[AccessPath, TypeSymbol]? = nil
+                    if conditionSyntax == nil {
+                        boundCondition = nil
                     } else {
-                        bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool)
+                        let aliasesBeforeCondition = CaptureExternalCallableAliases()
+                        let bound = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool)
+                        RestoreExternalCallableAliases(aliasesBeforeCondition)
+                        ApplyTrailingConditionEffects(conditionSyntax, bound)
+                        EnsureClosureAssignedNames(conditionSyntax)
+                        let (thenNarrow, _, condWhenTrueAliases, _) = ComputeConditionNarrowingInOrder(
+                            bound,
+                            aliasesBeforeCondition,
+                            forShortCircuitOperand: false,
+                            allowBoolCall: true,
+                            keepBoolCallInLogicalOps: true,
+                            shortCircuitInComposedOps: false,
+                            header: conditionSyntax
+                        )
+                        loopNarrow = thenNarrow
+                        RestoreExternalCallableAliases(condWhenTrueAliases)
+                        boundCondition = bound
                     }
-                    ApplyHeaderCallableEffects(boundCondition)
                     let postFrameIndex = binderCtx.NarrowedVariables.Count
                     let postAliasesAtEntry = externalCallableAliases.ToImmutableArray()
+                    let postEntryFrames = CaptureNarrowingFramesSnapshot()
+                    let postEntryAliases = CaptureExternalCallableAliases()
                     boundPost = if postSyntax == nil {
                         default(BoundStatement?)
                     } else {
@@ -689,12 +716,14 @@ internal partial class StatementBinder {
                     }
                     if boundPost != nil {
                         boundStatementEntries[boundPost] = (postFrameIndex, postAliasesAtEntry)
+                        RestoreNarrowingFramesSnapshot(postEntryFrames)
+                        RestoreExternalCallableAliases(postEntryAliases)
                     }
                     let (patternWhenTrue, _) = PatternVariables.Classify(boundCondition)
                     let boundBody = PatternVariables.BindInScope(
                         binderCtx,
                         patternWhenTrue,
-                        () -> BindConditionedLoopBodyCore(boundCondition, bodySyntax),
+                        () -> BindConditionedLoopBodyWithNarrowing(loopNarrow, bodySyntax),
                         bodySyntax
                     )
                     return boundBody
@@ -716,6 +745,13 @@ internal partial class StatementBinder {
         } else {
             ComputeConditionNarrowing(condition).Then
         }
+        return BindConditionedLoopBodyWithNarrowing(loopNarrow, bodySyntax)
+    }
+
+    private func BindConditionedLoopBodyWithNarrowing(
+        loopNarrow Dictionary[AccessPath, TypeSymbol]?,
+        bodySyntax StatementSyntax
+    ) BoundStatement {
         if loopNarrow == nil {
             return Invariant.Required(
                 BindStatement(bodySyntax),
@@ -850,7 +886,7 @@ internal partial class StatementBinder {
                 conversions,
                 bindTypeClause,
                 (syntax ExpressionSyntax) -> {
-                    return bindExpression(syntax, false)
+                    return BindInitializerWithEffects(syntax)
                 },
                 (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> {
                     let initializerScope = $scope

@@ -171,20 +171,15 @@ shared class IteratorRewriter {
         // Issue #806: compare via FullName so the check survives the
         // BuildTask MetadataLoadContext path (host-process `typeof()` is
         // not reference-equal to types loaded into a separate context).
-        if type is ImportedTypeSymbol imported &&
+        if type is ImportedTypeSymbol{OpenDefinition: {} openDefinition} imported &&
             !imported
             .TypeArguments
             .IsDefaultOrEmpty &&
-            imported.OpenDefinition != nil &&
             (
-            imported
-                .OpenDefinition
-                .FullName == "System.Collections.Generic.IEnumerable`1" ||
-                imported
-                .OpenDefinition
-                .FullName == "System.Collections.Generic.IEnumerator`1"
+            openDefinition.FullName == "System.Collections.Generic.IEnumerable`1" ||
+                openDefinition.FullName == "System.Collections.Generic.IEnumerator`1"
         ) {
-            returnsEnumerable = imported.OpenDefinition.FullName == "System.Collections.Generic.IEnumerable`1"
+            returnsEnumerable = openDefinition.FullName == "System.Collections.Generic.IEnumerable`1"
             return imported.TypeArguments[0]
         }
         let clr Type? = type?.ClrType

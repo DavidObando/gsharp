@@ -41,21 +41,20 @@ internal partial class ExpressionBinder {
         // front so nested sub-expressions bind with normal semantics.
         let deferOnFailure = targetType == nil && binderCtx.DeferTargetlessConditional
         this.binderCtx.DeferTargetlessConditional = false
+        return bindDeferrableConditional(
+            syntax,
+            deferOnFailure,
+            () -> BindSwitchExpressionCore(syntax, targetType, canBeVoid, deferOnFailure)
+        )
+    }
+
+    private func BindSwitchExpressionCore(
+        syntax SwitchExpressionSyntax,
+        targetType TypeSymbol?,
+        canBeVoid bool,
+        deferOnFailure bool
+    ) BoundExpression {
         let suppressionMark = Diagnostics.SuppressionCount
-        let beforeSwitch = if deferOnFailure {
-            CaptureExpressionNarrowingFrames()
-        } else {
-            default(
-                List[
-                    (
-                        Id int32,
-                        Frame NarrowingFrame?,
-                        Entries Dictionary[AccessPath, TypeSymbol]?,
-                        Aliases HashSet[VariableSymbol]
-                    )
-                ]?
-            )
-        }
         var discriminant = BindExpression(syntax.Expression)
         if discriminant.Type is TupleTypeSymbol{HasNilElement: true} unresolvedDiscriminantTuple {
             discriminant = conversions.BindConversion(
@@ -361,7 +360,6 @@ internal partial class ExpressionBinder {
         if anyArmFailed && deferOnFailure {
             Diagnostics.TruncateTo(diagMark)
             Diagnostics.RestoreSuppressionsTo(suppressionMark)
-            RestoreExpressionNarrowingFrames(beforeSwitch)
             return BoundErrorExpression(syntax)
         }
         ExhaustivenessAnalyzer.AnalyzeSwitchExpression(

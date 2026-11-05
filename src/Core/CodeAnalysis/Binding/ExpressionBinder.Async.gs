@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Binding
 import System
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.Diagnostics.CodeAnalysis
 import System.Linq
 import System.Reflection
 import System.Text
@@ -1160,6 +1161,7 @@ internal partial class ExpressionBinder {
     )(Condition BoundExpression, WhenTrue BoundExpression, WhenFalse BoundExpression) {
         let conditionEntryAliases = GetCurrentExpressionCallableAliases()
         let condition = BindExpression(conditionSyntax, TypeSymbol.Bool)
+        applyShortCircuitOperandEffects(conditionSyntax, condition, conditionEntryAliases)
         let afterCondition = CaptureExpressionNarrowingFrames()
         let (whenTrueNarrowing, whenFalseNarrowing, whenTrueAliases, whenFalseAliases) = ClassifyConditionalNarrowing(
             condition,
@@ -1195,55 +1197,6 @@ internal partial class ExpressionBinder {
             case unwrap is BoundUnaryExpression when unwrap.IsNarrowingUnwrap {
                 return UnwrapTerminalLvalueStorage(unwrap.Operand)
             }
-            case variable is BoundVariableExpression when variable.NarrowedType != nil {
-                let raw = BoundVariableExpression(variable.Syntax, variable.Variable)
-                raw.AnchorSyntax(variable.Syntax)
-                return raw
-            }
-            case field is BoundFieldAccessExpression when field.NarrowedType != nil {
-                let raw = if field.InterfaceType != nil {
-                    BoundFieldAccessExpression(field.Syntax, field.Field, field.InterfaceType)
-                } else {
-                    BoundFieldAccessExpression(
-                        field.Syntax,
-                        field.Receiver,
-                        field.StructType,
-                        field.Field,
-                        field.SubstitutedType,
-                        narrowedType: nil
-                    )
-                }
-                raw.AnchorSyntax(field.Syntax)
-                return raw
-            }
-            case clrField is BoundClrPropertyAccessExpression when clrField.Member is FieldInfo fieldInfo {
-                let receiverType = clrField.StaticContainerType ??
-                    clrField.ConstrainedInterfaceType ??
-                    clrField
-                    .Receiver
-                    ?.Type
-                let declaredType = if receiverType != nil {
-                    MemberLookup.GetClrFieldTypeSymbol(receiverType, fieldInfo)
-                } else {
-                    ClrNullability.GetFieldTypeSymbol(fieldInfo)
-                }
-                if declaredType != clrField.Type {
-                    let raw = BoundClrPropertyAccessExpression(
-                        clrField.Syntax,
-                        clrField.Receiver,
-                        clrField.Member,
-                        declaredType,
-                        clrField.StaticContainerType,
-                        clrField.ConstrainedReceiverTypeParameter,
-                        clrField.ConstrainedInterfaceType,
-                        clrField.IsAddressableStaticField,
-                        clrField.IsReadOnlySubmissionGlobal
-                    )
-                    raw.AnchorSyntax(clrField.Syntax)
-                    return raw
-                }
-                return clrField
-            }
             case block is BoundBlockExpression {
                 let inner = UnwrapTerminalLvalueStorage(block.Expression)
                 if !object.ReferenceEquals(inner, block.Expression) {
@@ -1268,56 +1221,142 @@ internal partial class ExpressionBinder {
     private func BindConditionalAddressFromGeneral(
         syntax ConditionalExpressionSyntax,
         outerModifier SyntaxToken?
+    ) BoundExpression -> BindConditionalAddressCore(
+        syntax.Condition,
+        syntax.WhenTrue,
+        syntax.WhenFalse,
+        syntax.Location,
+        outerModifier
+    )
+
+    internal func BindConditionalAddressCore(
+        conditionSyntax ExpressionSyntax,
+        whenTrueSyntax ExpressionSyntax,
+        whenFalseSyntax ExpressionSyntax,
+        location TextLocation,
+        outerModifier SyntaxToken?
     ) BoundExpression {
-        let (condition, whenTrue, whenFalse) = BindConditionalRefParts(
-            syntax.Condition,
-            syntax.WhenTrue,
-            syntax.WhenFalse
-        )
+        let (condition, whenTrue, whenFalse) = BindConditionalRefParts(conditionSyntax, whenTrueSyntax, whenFalseSyntax)
         if whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression || condition is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }
-        if !IsLvalue(whenTrue) {
-            Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenTrue.Location, syntax.WhenTrue.ToString())
+        if !IsLvalueIgnoringConditionalTypeMatch(whenTrue) {
+            Diagnostics.ReportCannotTakeAddressOfNonLvalue(whenTrueSyntax.Location, whenTrueSyntax.ToString())
             return BoundErrorExpression(nil)
         }
-        if !IsLvalue(whenFalse) {
-            Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenFalse.Location, syntax.WhenFalse.ToString())
+        if !IsLvalueIgnoringConditionalTypeMatch(whenFalse) {
+            Diagnostics.ReportCannotTakeAddressOfNonLvalue(whenFalseSyntax.Location, whenFalseSyntax.ToString())
             return BoundErrorExpression(nil)
         }
-        // Branch types must match exactly — no implicit widening, since the
+        // Branch storage types must match — no implicit widening, since the
         // resulting byref selects between slots whose physical type must agree.
-        if !object.ReferenceEquals(whenTrue.Type, whenFalse.Type) && !string.Equals(
-            whenTrue.Type?.Name,
-            whenFalse.Type?.Name,
-            StringComparison.Ordinal
+        let standaloneAddress = outerModifier == nil
+        let outerText = outerModifier?.Text ?? "&"
+        let useEffectiveNullability = outerText == "in"
+        if !TryResolveConditionalAddressStorageType(
+            whenTrue,
+            whenTrueSyntax.Location,
+            standaloneAddress,
+            useEffectiveNullability,
+            out var trueStorageType
+        ) ||
+            !TryResolveConditionalAddressStorageType(
+            whenFalse,
+            whenFalseSyntax.Location,
+            standaloneAddress,
+            useEffectiveNullability,
+            out var falseStorageType
+        ) {
+            return BoundErrorExpression(nil)
+        }
+        if !ConditionalStorageTypesMatch(
+            trueStorageType,
+            falseStorageType,
+            requireExactNullability: standaloneAddress
         ) {
             Diagnostics.ReportConditionalRefArgumentBranchTypeMismatch(
-                syntax.Location,
-                whenTrue.Type?.Name ?? "?",
-                whenFalse.Type?.Name ?? "?"
+                location,
+                trueStorageType?.Name ?? "?",
+                falseStorageType?.Name ?? "?"
             )
             return BoundErrorExpression(nil)
         }
-        let outerText = outerModifier?.Text ?? "&"
         let requiresWritable = outerText == "ref" || outerText == "out" || outerText == "&"
         if requiresWritable {
             if RefCapabilities.IsReadOnlyStorage(whenTrue) {
-                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenTrue.Location, syntax.WhenTrue.ToString())
+                Diagnostics.ReportCannotTakeAddressOfConstant(whenTrueSyntax.Location, whenTrueSyntax.ToString())
                 return BoundErrorExpression(nil)
             }
             if RefCapabilities.IsReadOnlyStorage(whenFalse) {
-                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenFalse.Location, syntax.WhenFalse.ToString())
+                Diagnostics.ReportCannotTakeAddressOfConstant(whenFalseSyntax.Location, whenFalseSyntax.ToString())
                 return BoundErrorExpression(nil)
             }
         }
+        let mergedStorageType = MergeConditionalStorageType(trueStorageType, falseStorageType)
         return BoundConditionalAddressExpression(
             nil,
             condition,
             whenTrue,
             whenFalse,
-            Invariant.Required(whenTrue.Type, "a bound lvalue has a type", expression: "whenTrue.Type")
+            Invariant.Required(mergedStorageType, "a bound lvalue has a storage type", expression: "mergedStorageType")
         )
+    }
+
+    private func IsLvalueIgnoringConditionalTypeMatch(expression BoundExpression) bool {
+        if expression is BoundBlockExpression block {
+            return IsLvalueIgnoringConditionalTypeMatch(block.Expression)
+        }
+        if expression is BoundConditionalExpression conditional {
+            return IsLvalueIgnoringConditionalTypeMatch(conditional.WhenTrue) &&
+                IsLvalueIgnoringConditionalTypeMatch(conditional.WhenFalse)
+        }
+        return IsLvalue(expression)
+    }
+
+    private func TryResolveConditionalAddressStorageType(
+        expression BoundExpression,
+        location TextLocation,
+        standaloneAddress bool,
+        useEffectiveNullability bool,
+        @NotNullWhen(true) out storageType TypeSymbol?
+    ) bool {
+        var current = expression
+        while current is BoundBlockExpression block {
+            current = block.Expression
+        }
+        if current is BoundConditionalExpression conditional {
+            let condLocation = conditional.Syntax?.Location ?? location
+            if !TryResolveConditionalAddressStorageType(
+                conditional.WhenTrue,
+                condLocation,
+                standaloneAddress,
+                useEffectiveNullability,
+                out var nestedTrue
+            ) ||
+                !TryResolveConditionalAddressStorageType(
+                conditional.WhenFalse,
+                condLocation,
+                standaloneAddress,
+                useEffectiveNullability,
+                out var nestedFalse
+            ) {
+                storageType = nil
+                return false
+            }
+            if !ConditionalStorageTypesMatch(nestedTrue, nestedFalse, requireExactNullability: standaloneAddress) {
+                Diagnostics.ReportConditionalRefArgumentBranchTypeMismatch(
+                    condLocation,
+                    nestedTrue?.Name ?? "?",
+                    nestedFalse?.Name ?? "?"
+                )
+                storageType = nil
+                return false
+            }
+            storageType = MergeConditionalStorageType(nestedTrue, nestedFalse)
+            return true
+        }
+        storageType = AddressedLeafStorageType(current, useEffectiveNullability: useEffectiveNullability)
+        return true
     }
 
     private func BindAwaitExpression(syntax AwaitExpressionSyntax) BoundExpression {

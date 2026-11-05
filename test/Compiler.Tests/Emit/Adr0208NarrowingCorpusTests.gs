@@ -6398,7 +6398,7 @@ func Run() int32 {
     }
     return 2
 }
-Console.WriteLine(Run())`, "GS0159@43:18", "reject", "", "R18"}
+Console.WriteLine(Run())`, "", "run", "7", "R18"}
             yield[]object{"w19_5534_nullable_value_is_not_restored_by_a_stale_type_test_R18", `import System
 import System.Collections.Generic
 import System.Text
@@ -6442,7 +6442,7 @@ func Run() int32 {
     }
     return 2
 }
-Console.WriteLine(Run())`, "GS0156@40:16", "reject", "", "R18"}
+Console.WriteLine(Run())`, "", "run", "2", "R18"}
             yield[]object{"w20_5534_condition_in_the_then_branch_does_not_reach_the_else_branch_R18", `import System
 import System.Collections.Generic
 import System.Text
