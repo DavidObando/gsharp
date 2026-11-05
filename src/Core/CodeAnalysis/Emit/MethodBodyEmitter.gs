@@ -455,6 +455,12 @@ internal partial class MethodBodyEmitter {
         )
     }
 
+    internal func RecordVisibleSequencePoint(syntax SyntaxNode?) {
+        if syntax != nil {
+            this.RecordSequencePoint(syntax)
+        }
+    }
+
     private func RecordSequencePoint(syntax SyntaxNode?) {
         if this.recordLocalSequencePoint is {} recordLocalSequencePoint {
             if this.il.Offset != this.lastSequencePointIlOffset {
