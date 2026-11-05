@@ -280,6 +280,14 @@ shared class ClrTypeUtilities {
             GenericArgumentsAreAssignable(target, source) {
             return true
         }
+        if target.IsArray && source.IsArray && target.GetArrayRank() == source.GetArrayRank() &&
+            target.IsSZArray == source.IsSZArray &&
+            target.GetElementType() is {IsValueType: false} targetElement && source.GetElementType() is {
+            IsValueType: false
+        } sourceElement &&
+            IsAssignableByName(targetElement, sourceElement) {
+            return true
+        }
         // Same-context fast path covers inheritance / interfaces.
         if object.ReferenceEquals(target.Assembly, source.Assembly) || target.GetType() == source.GetType() {
             try {
@@ -314,7 +322,20 @@ shared class ClrTypeUtilities {
         // generalizes the dedicated #570 slice-to-interface arm so ALL CLR
         // reference upcasts work across reflection contexts.
         if target.IsInterface {
-            return ImplementsInterfaceByName(source, target)
+            if ImplementsInterfaceByName(source, target) {
+                return true
+            }
+            if target.IsGenericType && !target.IsGenericTypeDefinition {
+                let targetDefinition = target.GetGenericTypeDefinition()
+                for iface in SafeGetInterfaces(source) {
+                    if iface.IsGenericType &&
+                        AreSame(targetDefinition, iface.GetGenericTypeDefinition()) &&
+                        GenericArgumentsAreAssignable(target, iface) {
+                        return true
+                    }
+                }
+            }
+            return false
         }
         // Base-class walk: check if source derives from target by comparing
         // base type full names up the chain.

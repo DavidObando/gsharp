@@ -8592,7 +8592,12 @@ internal class MemberLookup {
             lower IReadOnlyList[TypeSymbol]?,
             upper IReadOnlyList[TypeSymbol]?
         ) bool -> (lower == nil || lower.All((bound TypeSymbol) -> HasImplicitSymbolicConversion(bound, candidate))) &&
-            (upper == nil || upper.All((bound TypeSymbol) -> HasImplicitSymbolicConversion(candidate, bound)))
+            (
+            upper == nil || upper.All(
+                (bound TypeSymbol) -> HasImplicitSymbolicConversion(candidate, bound) ||
+                    Conversion.IsVarianceArgumentCompatible(candidate, bound, allowPlatformNilCheck: true)
+            )
+        )
 
         /// Issue #4133 (review finding): only the STANDARD implicit conversions
         /// (identity, reference, boxing, numeric widening) participate in
@@ -8716,10 +8721,16 @@ internal class MemberLookup {
                 return
             }
             var actualForHierarchyProjection = actual
-            while actualForHierarchyProjection is NullableTypeSymbol nullableProjectionActual &&
-                !NullableLifting
-                .IsAnyValueTypeNullable(nullableProjectionActual) {
-                actualForHierarchyProjection = nullableProjectionActual.UnderlyingType
+            while (
+                actualForHierarchyProjection is NullableTypeSymbol nullableProjectionActual &&
+                    !NullableLifting.IsAnyValueTypeNullable(nullableProjectionActual)
+            ) ||
+                actualForHierarchyProjection is PlatformTypeSymbol {
+                actualForHierarchyProjection = if actualForHierarchyProjection is PlatformTypeSymbol platformProjection {
+                    platformProjection.UnderlyingType
+                } else {
+                    (cast[NullableTypeSymbol](actualForHierarchyProjection)).UnderlyingType
+                }
             }
             let annotatedActualForProjection NullabilityAnnotatedTypeSymbol? = actualForHierarchyProjection as NullabilityAnnotatedTypeSymbol
             // A direct MVar match must observe the complete symbolic actual before
@@ -8745,8 +8756,15 @@ internal class MemberLookup {
             // CLR wrapper. Unify through it so a nullable reference receiver such as
             // IEnumerable<Choice>? still recovers TSource = Choice. Preserve real
             // Nullable<T> value shapes (including same-compilation enums/structs).
-            if actual is NullableTypeSymbol nullableActual && !NullableLifting.IsAnyValueTypeNullable(nullableActual) {
-                actual = nullableActual.UnderlyingType
+            while actual is PlatformTypeSymbol ||
+                (
+                actual is NullableTypeSymbol nullableActual && !NullableLifting.IsAnyValueTypeNullable(nullableActual)
+            ) {
+                actual = if actual is PlatformTypeSymbol platformActual {
+                    platformActual.UnderlyingType
+                } else {
+                    (cast[NullableTypeSymbol](actual)).UnderlyingType
+                }
             }
             // Issue #2839: the very same annotation arrives as a
             // NullabilityAnnotatedTypeSymbol — not a NullableTypeSymbol — when its
@@ -8862,13 +8880,7 @@ internal class MemberLookup {
                     .ElementTypes
                     .Length {
                     for var i = 0; i < openArgs.Length; i++ {
-                        UnifyForMethodTypeArgs(
-                            openArgs[i],
-                            tuple.ElementTypes[i],
-                            openMethod,
-                            bounds,
-                            SymbolicInferenceBoundKind.Exact
-                        )
+                        UnifyForMethodTypeArgs(openArgs[i], tuple.ElementTypes[i], openMethod, bounds, boundKind)
                     }
                     return
                 }

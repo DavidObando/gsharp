@@ -2497,6 +2497,17 @@ class Conversion {
                 ) {
                     return true
                 }
+                if OneDimensionalArrayElement(sourceShape) is {} sourceArrayElement &&
+                    OneDimensionalArrayElement(targetShape) is {} targetArrayElement &&
+                    !IsRejectedFixedArrayShapeMismatch(sourceShape, targetShape) &&
+                    IsVariantArgumentRelated(
+                    sourceArrayElement,
+                    targetArrayElement,
+                    nominalOnly: true,
+                    allowPlatformNilCheck: false
+                ) {
+                    return true
+                }
                 if OneDimensionalArrayElement(sourceShape) is {} sourceElement &&
                     ArrayElementConvertsToInterfaceSymbolically(sourceElement, targetShape, nominalOnly: true) {
                     return true
@@ -4890,13 +4901,21 @@ class Conversion {
             return (type is FunctionTypeSymbol or DelegateTypeSymbol) || ClrTypeUtilities.IsDelegateType(type?.ClrType)
         }
 
-        private func IsVarianceArgumentCompatible(
+        internal func IsVarianceArgumentCompatible(
             source TypeSymbol,
             target TypeSymbol,
             allowPlatformNilCheck bool
         ) bool {
             if !IsReferenceTypeArgument(source) || !IsReferenceTypeArgument(target) {
                 return false
+            }
+            if !(source is NullableTypeSymbol && !(target is NullableTypeSymbol)) &&
+                (allowPlatformNilCheck || !TryClassifyPlatformTypeArgumentMismatch(source, target, out _)) &&
+                OneDimensionalArrayElement(source.StripToBareShape()) is {} sourceElement &&
+                OneDimensionalArrayElement(target.StripToBareShape()) is {} targetElement &&
+                !IsRejectedFixedArrayShapeMismatch(source.StripToBareShape(), target.StripToBareShape()) &&
+                IsVarianceArgumentCompatible(sourceElement, targetElement, allowPlatformNilCheck: false) {
+                return true
             }
             // Classification already related nested arguments; only the nominal proof is added for this pair.
             let conversion = Classify(source, target)

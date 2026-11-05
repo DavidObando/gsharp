@@ -1232,6 +1232,7 @@ internal shared class ClrOverloadResolution {
         }
         let typeParams = openMethod.GetGenericArguments()
         let bounds = Dictionary[string, Type](StringComparer.Ordinal)
+        let upperBounds = HashSet[string](StringComparer.Ordinal)
         for var i = 0; i < argTypes.Count; i++ {
             let arg Type? = argTypes[i]
             if arg == nil {
@@ -1240,7 +1241,7 @@ internal shared class ClrOverloadResolution {
             // Unify the parameter against the argument; soft-fail (skip this
             // arg) when shapes don't line up, hard-fail only on a true
             // bound-conflict for a method type parameter.
-            if !UnifyForInference(parameters[i].ParameterType, arg, bounds) {
+            if !UnifyForInference(parameters[i].ParameterType, arg, bounds, upperBounds) {
                 return false
             }
         }
@@ -3519,20 +3520,31 @@ internal shared class ClrOverloadResolution {
         // Other components remain symbolic here and are checked by the caller.
         let componentParameters = component.Select((i int32) -> parameters[i]).ToArray()
         for candidate in GetReceiverInferenceCarriers(definition) {
-            let equations = Dictionary[Type, Type]()
+            let preEquations = Dictionary[Type, Type]()
             for var i = 0; i < parameters.Length; i++ {
                 if parameters[i] != arguments[i] {
-                    equations[parameters[i]] = arguments[i]
+                    preEquations[parameters[i]] = arguments[i]
                 }
             }
+            let equations = Dictionary[Type, Type](preEquations)
             equations[parameters[index]] = candidate
             try {
-                if !CollectExtensionReceiverConstructorEquations(parameters, index, upperBounds, slots, equations) {
+                if !CollectExtensionReceiverConstructorEquations(
+                    parameters,
+                    index,
+                    upperBounds,
+                    slots,
+                    equations,
+                    preEquations,
+                    choices
+                ) {
                     continue
                 }
+                var defaultedSlot = false
                 for var i = 0; i < slots.Length; i++ {
                     if ResolveExtensionReceiverEquations(slots[i], equations) == slots[i] {
                         equations[slots[i]] = sourceArguments[i]
+                        defaultedSlot = true
                     }
                 }
                 let possible = component.Select((i int32) -> ResolveExtensionReceiverEquations(arguments[i], equations))
@@ -3547,6 +3559,19 @@ internal shared class ClrOverloadResolution {
                     .ToList()
                 for var i = 0; i < parameters.Length; i++ {
                     for constraint in parameters[i].GetGenericParameterConstraints() {
+                        let preSource = ResolveExtensionReceiverEquations(parameters[i], preEquations)
+                        let preTarget = ResolveExtensionReceiverEquations(constraint, preEquations)
+                        if defaultedSlot &&
+                            MentionsGenericParameter(preTarget, parameters[index]) &&
+                            !choices.ContainsKey((preSource, preTarget)) &&
+                            preTarget.IsGenericType &&
+                            !preSource.ContainsGenericParameters &&
+                            GetExtensionReceiverGenericShapes(
+                            preSource,
+                            preTarget.GetGenericTypeDefinition()
+                        ).Count > 1 {
+                            continue
+                        }
                         terms.Add(
                             (
                                 ResolveExtensionReceiverEquations(parameters[i], equations),
@@ -3643,7 +3668,9 @@ internal shared class ClrOverloadResolution {
         index int32,
         upperBounds IReadOnlyList[Type],
         slots[]Type,
-        equations Dictionary[Type, Type]
+        equations Dictionary[Type, Type],
+        preEquations IReadOnlyDictionary[Type, Type],
+        choices IReadOnlyDictionary[(Type, Type), Type]
     ) bool {
         let constraints = List[(Type, Type)]()
         for parameter in parameters {
@@ -3657,6 +3684,8 @@ internal shared class ClrOverloadResolution {
             let count = equations.Count
             let constraintCount = constraints.Count
             for var i = 0; i < constraints.Count; i++ {
+                let preSource = ResolveExtensionReceiverEquations(constraints[i].Item1, preEquations)
+                let preTarget = ResolveExtensionReceiverEquations(constraints[i].Item2, preEquations)
                 let source = ResolveExtensionReceiverEquations(constraints[i].Item1, equations)
                 let target = ResolveExtensionReceiverEquations(constraints[i].Item2, equations)
                 if source.IsGenericParameter {
@@ -3672,7 +3701,12 @@ internal shared class ClrOverloadResolution {
                     continue
                 }
                 if target.IsGenericType {
-                    let shapes = GetExtensionReceiverGenericShapes(source, target.GetGenericTypeDefinition())
+                    let shapes = if choices.TryGetValue((preSource, preTarget), out var selectedShape) ||
+                        choices.TryGetValue((source, target), out selectedShape) {
+                        List[Type](){selectedShape}
+                    } else {
+                        GetExtensionReceiverGenericShapes(source, target.GetGenericTypeDefinition())
+                    }
                     if shapes.Count == 1 {
                         let sources = shapes[0].GetGenericArguments()
                         let targets = target.GetGenericArguments()
@@ -4836,34 +4870,50 @@ internal shared class ClrOverloadResolution {
             var compatible bool
             switch variance {
                 case GenericParameterAttributes.Covariant {
+                    let sourceSymbol = TypeSymbol.FromClrTypeWithoutNullability(
+                        sourceArgument,
+                        NullabilityFreeReason.IdentityComparison
+                    )
+                    let targetSymbol = TypeSymbol.FromClrTypeWithoutNullability(
+                        targetArgument,
+                        NullabilityFreeReason.IdentityComparison
+                    )
                     compatible = IsClrVarianceReferenceType(sourceArgument) &&
                         IsClrVarianceReferenceType(targetArgument) &&
-                        Conversion
-                        .ClassifyNonStructural(
-                        TypeSymbol.FromClrTypeWithoutNullability(
-                            sourceArgument,
-                            NullabilityFreeReason.IdentityComparison
-                        ),
-                        TypeSymbol.FromClrTypeWithoutNullability(
-                            targetArgument,
-                            NullabilityFreeReason.IdentityComparison
+                        (
+                        Conversion.ClassifyNonStructural(sourceSymbol, targetSymbol) is {
+                            Exists: true,
+                            IsImplicit: true
+                        } ||
+                            Conversion.IsVarianceArgumentCompatible(
+                            sourceSymbol,
+                            targetSymbol,
+                            allowPlatformNilCheck: true
                         )
-                    ) is {Exists: true, IsImplicit: true}
+                    )
                 }
                 case GenericParameterAttributes.Contravariant {
+                    let sourceSymbol = TypeSymbol.FromClrTypeWithoutNullability(
+                        sourceArgument,
+                        NullabilityFreeReason.IdentityComparison
+                    )
+                    let targetSymbol = TypeSymbol.FromClrTypeWithoutNullability(
+                        targetArgument,
+                        NullabilityFreeReason.IdentityComparison
+                    )
                     compatible = IsClrVarianceReferenceType(sourceArgument) &&
                         IsClrVarianceReferenceType(targetArgument) &&
-                        Conversion
-                        .ClassifyNonStructural(
-                        TypeSymbol.FromClrTypeWithoutNullability(
-                            targetArgument,
-                            NullabilityFreeReason.IdentityComparison
-                        ),
-                        TypeSymbol.FromClrTypeWithoutNullability(
-                            sourceArgument,
-                            NullabilityFreeReason.IdentityComparison
+                        (
+                        Conversion.ClassifyNonStructural(targetSymbol, sourceSymbol) is {
+                            Exists: true,
+                            IsImplicit: true
+                        } ||
+                            Conversion.IsVarianceArgumentCompatible(
+                            targetSymbol,
+                            sourceSymbol,
+                            allowPlatformNilCheck: true
                         )
-                    ) is {Exists: true, IsImplicit: true}
+                    )
                 }
                 default {
                     compatible = false
@@ -6359,6 +6409,7 @@ internal shared class ClrOverloadResolution {
         let hasNamed = HasAnyNamedArgument(names)
         let typeParams = openMethod.GetGenericArguments()
         let bounds = Dictionary[string, Type](StringComparer.Ordinal)
+        let upperBounds = HashSet[string](StringComparer.Ordinal)
         var mapping[]?int32 = nil
         if hasNamed && !TryBuildNamedArgumentMapping(parameters, argTypes.Count, names, isExpanded: true, out mapping) {
             return false
@@ -6388,7 +6439,7 @@ internal shared class ClrOverloadResolution {
             if !TryGetTargetType(i, out var targetType) {
                 return false
             }
-            if !UnifyForInference(targetType, argTypes[i], bounds) {
+            if !UnifyForInference(targetType, argTypes[i], bounds, upperBounds) {
                 return false
             }
         }
@@ -9163,23 +9214,64 @@ internal shared class ClrOverloadResolution {
             ClrTypeUtilities.AreSame(target.GetGenericTypeDefinition(), source.GetGenericTypeDefinition()) &&
             OpenExtensionReceiverStandardShapeMayApply(source, target, tupleElementConversions: false) &&
             IsVariantAssignable(target, source)
-        default: false
+        default: target.IsGenericType &&
+            source.IsGenericType &&
+            target
+            .GetGenericTypeDefinition()
+            .FullName
+            ?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) ==
+        true && ClrTypeUtilities.AreSame(target.GetGenericTypeDefinition(), source.GetGenericTypeDefinition()) &&
+            target
+            .GetGenericArguments()
+            .Zip(
+            source.GetGenericArguments(),
+            (targetElement Type, sourceElement Type) -> IsInferenceBoundPromotion(targetElement, sourceElement)
+        )
+            .All((promoted bool) -> promoted)
     }
 
     private func UnifyUpperBoundForInference(
         parameterType Type,
         argumentType Type,
-        bounds Dictionary[string, Type]
+        bounds Dictionary[string, Type],
+        upperBounds HashSet[string]? = nil
     ) bool {
         if !parameterType.IsGenericParameter {
-            return UnifyForInference(parameterType, argumentType, bounds)
+            if parameterType.IsArray {
+                if argumentType.IsArray && parameterType.GetArrayRank() == argumentType.GetArrayRank() &&
+                    parameterType.IsSZArray == argumentType.IsSZArray &&
+                    parameterType.GetElementType() is {} parameterElement &&
+                    argumentType.GetElementType() is {} argumentElement {
+                    return if !parameterElement.IsValueType && !argumentElement.IsValueType {
+                        UnifyUpperBoundForInference(parameterElement, argumentElement, bounds, upperBounds)
+                    } else {
+                        UnifyForInference(parameterElement, argumentElement, bounds, upperBounds)
+                    }
+                }
+                return true
+            }
+            return UnifyForInference(parameterType, argumentType, bounds, upperBounds)
         }
         if !bounds.TryGetValue(parameterType.Name, out var existing) {
             bounds[parameterType.Name] = argumentType
+            if !argumentType.IsValueType {
+                upperBounds?.Add(parameterType.Name)
+            }
             return true
         }
         if ClrTypeUtilities.AreSame(existing, argumentType) {
             return true
+        }
+        let existingIsUpper = upperBounds == nil || upperBounds.Contains(parameterType.Name)
+        if !existingIsUpper {
+            if existing.IsValueType && !argumentType.IsValueType {
+                if IsInferenceBoundPromotion(argumentType, existing) {
+                    bounds[parameterType.Name] = argumentType
+                    return true
+                }
+                return false
+            }
+            return IsExtensionReceiverBoundPromotion(argumentType, existing)
         }
         try {
             // A type still being defined cannot answer `IsAssignableFrom`; leave it to the
@@ -9199,14 +9291,19 @@ internal shared class ClrOverloadResolution {
             // Cross-context types are compared by the shared classifier below.
 
         }
-        if IsInferenceBoundPromotion(existing, argumentType) {
+        if IsExtensionReceiverBoundPromotion(existing, argumentType) {
             bounds[parameterType.Name] = argumentType
             return true
         }
-        return IsInferenceBoundPromotion(argumentType, existing)
+        return IsExtensionReceiverBoundPromotion(argumentType, existing)
     }
 
-    private func UnifyForInference(parameterType Type?, argumentType Type?, bounds Dictionary[string, Type]) bool {
+    private func UnifyForInference(
+        parameterType Type?,
+        argumentType Type?,
+        bounds Dictionary[string, Type],
+        upperBounds HashSet[string]? = nil
+    ) bool {
         if parameterType == nil || argumentType == nil || object.ReferenceEquals(argumentType, NeverArgumentType) {
             return true
         }
@@ -9216,7 +9313,23 @@ internal shared class ClrOverloadResolution {
         if parameterType.IsGenericParameter {
             if bounds.TryGetValue(parameterType.Name, out var existing) {
                 if ClrTypeUtilities.AreSame(existing, argumentType) {
+                    upperBounds?.Remove(parameterType.Name)
                     return true
+                }
+                if upperBounds != nil && upperBounds.Contains(parameterType.Name) {
+                    if argumentType.IsValueType && !existing.IsValueType {
+                        if IsInferenceBoundPromotion(existing, argumentType) {
+                            upperBounds.Remove(parameterType.Name)
+                            return true
+                        }
+                        return false
+                    }
+                    if IsExtensionReceiverBoundPromotion(existing, argumentType) {
+                        bounds[parameterType.Name] = argumentType
+                        upperBounds.Remove(parameterType.Name)
+                        return true
+                    }
+                    return false
                 }
                 // Issue #661: when one bound is T and the other is Nullable<T>
                 // (where T is any value type, including enums), promote to
@@ -9292,18 +9405,24 @@ internal shared class ClrOverloadResolution {
                 } else {
                     argumentType
                 },
-                bounds
+                bounds,
+                upperBounds
             )
         }
         if parameterType.IsPointer {
             if argumentType.IsPointer {
-                return UnifyForInference(parameterType.GetElementType(), argumentType.GetElementType(), bounds)
+                return UnifyForInference(
+                    parameterType.GetElementType(),
+                    argumentType.GetElementType(),
+                    bounds,
+                    upperBounds
+                )
             }
             return true
         }
         if parameterType.IsArray {
             if argumentType.IsArray {
-                UnifyForInference(parameterType.GetElementType(), argumentType.GetElementType(), bounds)
+                UnifyForInference(parameterType.GetElementType(), argumentType.GetElementType(), bounds, upperBounds)
             }
             // If the argument isn't an array, the classifier will reject the
             // candidate later; inference itself doesn't fail.
@@ -9324,7 +9443,12 @@ internal shared class ClrOverloadResolution {
                 return true
             }
             for var i = 0; i < parameterDelegateParameters.Length; i++ {
-                if !UnifyUpperBoundForInference(parameterDelegateParameters[i], argumentDelegateParameters[i], bounds) {
+                if !UnifyUpperBoundForInference(
+                    parameterDelegateParameters[i],
+                    argumentDelegateParameters[i],
+                    bounds,
+                    upperBounds
+                ) {
                     return false
                 }
             }
@@ -9344,7 +9468,7 @@ internal shared class ClrOverloadResolution {
                 parameterDelegateReturn.ContainsGenericParameters {
                 return false
             }
-            return UnifyForInference(parameterDelegateReturn, argumentDelegateReturn, bounds)
+            return UnifyForInference(parameterDelegateReturn, argumentDelegateReturn, bounds, upperBounds)
         }
         if parameterType.IsGenericType && !parameterType.IsGenericTypeDefinition {
             let openDef = parameterType.GetGenericTypeDefinition()
@@ -9359,7 +9483,7 @@ internal shared class ClrOverloadResolution {
             if string.Equals(openDef.FullName, "System.Linq.Expressions.Expression`1", StringComparison.Ordinal) &&
                 paramArgs.Length == 1 &&
                 ClrTypeUtilities.IsDelegateType(argumentType) {
-                return UnifyForInference(paramArgs[0], argumentType, bounds)
+                return UnifyForInference(paramArgs[0], argumentType, bounds, upperBounds)
             }
             // Find the argument type (or any of its base types or interfaces)
             // matching the parameter's open generic definition. Walk class
@@ -9383,21 +9507,23 @@ internal shared class ClrOverloadResolution {
             if matched == nil &&
                 paramArgs.Length == 1 &&
                 TryGetChannelViewElement(openDef, argumentType, out var channelElement) {
-                return UnifyForInference(paramArgs[0], channelElement, bounds)
+                return UnifyForInference(paramArgs[0], channelElement, bounds, upperBounds)
             }
             if matched != nil {
                 let matchedArgs = matched.GetGenericArguments()
                 let genericParameters = openDef.GetGenericArguments()
                 for var i = 0; i < paramArgs.Length && i < matchedArgs.Length; i++ {
-                    let variance = if i < genericParameters.Length {
+                    let variance = if paramArgs[i].IsValueType || matchedArgs[i].IsValueType {
+                        GenericParameterAttributes.None
+                    } else if i < genericParameters.Length {
                         genericParameters[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
                     } else {
                         GenericParameterAttributes.None
                     }
                     let unified = if variance == GenericParameterAttributes.Contravariant {
-                        UnifyUpperBoundForInference(paramArgs[i], matchedArgs[i], bounds)
+                        UnifyUpperBoundForInference(paramArgs[i], matchedArgs[i], bounds, upperBounds)
                     } else {
-                        UnifyForInference(paramArgs[i], matchedArgs[i], bounds)
+                        UnifyForInference(paramArgs[i], matchedArgs[i], bounds, upperBounds)
                     }
                     if !unified {
                         return false
