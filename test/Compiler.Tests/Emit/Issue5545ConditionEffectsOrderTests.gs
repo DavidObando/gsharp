@@ -1092,6 +1092,43 @@ func Run(flag bool, callback () -> bool) int32 {
     return x.Value
 }
 Console.WriteLine(Run(true, () -> true))`, "GS0158@18:14", "reject", ""}
+            yield[]object{"r26_while_bool_call_with_callback_effect_does_not_narrow_captured_local", `import System
+import System.Diagnostics.CodeAnalysis
+
+class C { var Value int32 = 1 }
+class Holder { var Callback () -> void = func() { } }
+func Present(@NotNullWhen(true) value C?, h Holder) bool {
+    h.Callback()
+    return value != nil
+}
+func Run1(flag bool) int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    while Present(x, h) && flag {
+        return x.Value
+    }
+    return 0
+}
+func Run2() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    while Present(x, h) {
+        return x.Value
+    }
+    return 0
+}
+func Run3() int32 {
+    var x C? = C{}
+    let h = Holder{}
+    h.Callback = func() { x = nil }
+    if Present(x, h) {
+        return x.Value
+    }
+    return 0
+}
+Console.WriteLine(Run1(true) + Run2() + Run3())`, "GS0158@15:18 GS0158@24:18 GS0158@33:18", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

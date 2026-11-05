@@ -1732,7 +1732,7 @@ internal partial class StatementBinder {
         keepBoolCallInLogicalOps bool = true,
         shortCircuitInComposedOps bool = false,
         header SyntaxNode? = nil,
-        filterBoolCallAfterEffects bool = true
+        filterBoolCallGlobalRoots bool = true
     )(
         Then Dictionary[AccessPath, TypeSymbol]?,
         Else Dictionary[AccessPath, TypeSymbol]?,
@@ -1754,7 +1754,7 @@ internal partial class StatementBinder {
                     keepBoolCallInLogicalOps,
                     shortCircuitInComposedOps,
                     header,
-                    filterBoolCallAfterEffects
+                    filterBoolCallGlobalRoots
                 )
                 return (inElse, inThen, falseAliases, trueAliases)
             }
@@ -1768,7 +1768,7 @@ internal partial class StatementBinder {
                     keepBoolCallInLogicalOps,
                     shortCircuitInComposedOps,
                     header,
-                    filterBoolCallAfterEffects
+                    filterBoolCallGlobalRoots
                 )
                 if leftThen != nil && leftThen.Count > 0 {
                     leftThen = Dictionary[AccessPath, TypeSymbol](leftThen)
@@ -1786,7 +1786,7 @@ internal partial class StatementBinder {
                     keepBoolCallInLogicalOps,
                     shortCircuitInComposedOps,
                     header,
-                    filterBoolCallAfterEffects
+                    filterBoolCallGlobalRoots
                 )
                 let combinedThen = MergeNarrowingFrames(leftThen, rightThen)
                 return (combinedThen, nil, rightTrueAliases, JoinAliases(leftFalseAliases, rightFalseAliases))
@@ -1801,7 +1801,7 @@ internal partial class StatementBinder {
                     keepBoolCallInLogicalOps,
                     shortCircuitInComposedOps,
                     header,
-                    filterBoolCallAfterEffects
+                    filterBoolCallGlobalRoots
                 )
                 if leftElse != nil && leftElse.Count > 0 {
                     leftElse = Dictionary[AccessPath, TypeSymbol](leftElse)
@@ -1819,7 +1819,7 @@ internal partial class StatementBinder {
                     keepBoolCallInLogicalOps,
                     shortCircuitInComposedOps,
                     header,
-                    filterBoolCallAfterEffects
+                    filterBoolCallGlobalRoots
                 )
                 let combinedThen = IntersectNarrowingFrames(leftThen, rightThen)
                 let combinedElse = MergeNarrowingFrames(leftElse, rightElse)
@@ -1829,8 +1829,14 @@ internal partial class StatementBinder {
         var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition, forShortCircuitOperand)
         if !forShortCircuitOperand && allowBoolCall && thenNarrow == nil && elseNarrow == nil {
             thenNarrow, elseNarrow = TryClassifyBoolCallNarrowing(condition)
-            if filterBoolCallAfterEffects && (thenNarrow != nil || elseNarrow != nil) {
-                FilterBoolCallNarrowingAfterEffects(condition, beforeAliases, ref thenNarrow, ref elseNarrow)
+            if thenNarrow != nil || elseNarrow != nil {
+                FilterBoolCallNarrowingAfterEffects(
+                    condition,
+                    beforeAliases,
+                    filterBoolCallGlobalRoots,
+                    ref thenNarrow,
+                    ref elseNarrow
+                )
             }
         }
         let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition, removedFacts, beforeAliases)
@@ -1843,6 +1849,7 @@ internal partial class StatementBinder {
     private func FilterBoolCallNarrowingAfterEffects(
         condition BoundExpression,
         beforeAliases HashSet[VariableSymbol],
+        includeGlobalRoots bool,
         ref thenNarrow Dictionary[AccessPath, TypeSymbol]?,
         ref elseNarrow Dictionary[AccessPath, TypeSymbol]?
     ) {
@@ -1852,10 +1859,8 @@ internal partial class StatementBinder {
             for entry in thenFrame.ToArray() {
                 if !collector.WritableReferenceRoots.Contains(entry.Key.Root) &&
                     (
-                    MayBeMutatedByUnknownWrite(collector, entry.Key) || collector.MayMutateGlobalRoot(
-                        entry.Key.Root,
-                        entry.Value
-                    )
+                    MayBeMutatedByUnknownWrite(collector, entry.Key) ||
+                        (includeGlobalRoots && collector.MayMutateGlobalRoot(entry.Key.Root, entry.Value))
                 ) {
                     thenFrame.Remove(entry.Key)
                 }
@@ -1868,10 +1873,8 @@ internal partial class StatementBinder {
             for entry in elseFrame.ToArray() {
                 if !collector.WritableReferenceRoots.Contains(entry.Key.Root) &&
                     (
-                    MayBeMutatedByUnknownWrite(collector, entry.Key) || collector.MayMutateGlobalRoot(
-                        entry.Key.Root,
-                        entry.Value
-                    )
+                    MayBeMutatedByUnknownWrite(collector, entry.Key) ||
+                        (includeGlobalRoots && collector.MayMutateGlobalRoot(entry.Key.Root, entry.Value))
                 ) {
                     elseFrame.Remove(entry.Key)
                 }
@@ -2198,7 +2201,7 @@ internal partial class StatementBinder {
             keepBoolCallInLogicalOps: false,
             shortCircuitInComposedOps: !allowBoolCall,
             header: conditionSyntax,
-            filterBoolCallAfterEffects: false
+            filterBoolCallGlobalRoots: false
         )
         lastConditionWhenTrueAliases = whenTrueAliases
         lastConditionWhenFalseAliases = whenFalseAliases

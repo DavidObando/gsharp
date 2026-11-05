@@ -699,8 +699,7 @@ internal partial class StatementBinder {
                             allowBoolCall: true,
                             keepBoolCallInLogicalOps: true,
                             shortCircuitInComposedOps: false,
-                            header: conditionSyntax,
-                            filterBoolCallAfterEffects: false
+                            header: conditionSyntax
                         )
                         loopNarrow = thenNarrow
                         RestoreExternalCallableAliases(condWhenTrueAliases)
