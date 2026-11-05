@@ -5870,6 +5870,7 @@ internal partial class StatementBinder {
                     syntax.Initializer is ConditionalExpressionSyntax ||
                     syntax.Initializer is SwitchExpressionSyntax ||
                     syntax.Initializer is BlockExpressionSyntax ||
+                    syntax.Initializer is TupleLiteralExpressionSyntax ||
                     IsNullCoalescingExpression(syntax.Initializer)
             ) {
                 // Issue #1158: when a typed local is initialised with an

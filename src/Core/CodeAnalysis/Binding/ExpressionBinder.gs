@@ -1446,8 +1446,8 @@ internal partial class ExpressionBinder {
             return ConvertTargetTypedValue(syntax, BindExpression(syntax), targetType)
         }
         if syntax is TupleLiteralExpressionSyntax tupleLiteral &&
-            targetType.StripToBareShape() is TupleTypeSymbol targetTuple &&
-            targetTuple
+            TryGetTargetTupleType(targetType, out var targetTuple) &&
+            targetTuple!!
             .ElementTypes
             .Length == tupleLiteral
             .Elements
@@ -1515,6 +1515,28 @@ internal partial class ExpressionBinder {
             value.AnchorSyntax(syntax)
         }
         return conversions.BindConversion(syntax.Location, value, targetType)
+    }
+
+    private func TryGetTargetTupleType(type TypeSymbol?, @NotNullWhen(true) out tupleType TupleTypeSymbol?) bool {
+        tupleType = nil
+        var current = type
+        while true {
+            if current is NullableTypeSymbol nullable {
+                current = nullable.UnderlyingType
+                continue
+            }
+            if current is PlatformTypeSymbol platform {
+                current = platform.UnderlyingType
+                continue
+            }
+            if current is NullabilityAnnotatedTypeSymbol annotated {
+                current = annotated.BaseType
+                continue
+            }
+            break
+        }
+        tupleType = current as TupleTypeSymbol
+        return tupleType != nil
     }
 
     private func IsStrictDescendantScope(candidate BoundScope?, ancestor BoundScope?) bool {

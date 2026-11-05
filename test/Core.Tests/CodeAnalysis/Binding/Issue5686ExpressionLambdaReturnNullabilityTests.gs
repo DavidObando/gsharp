@@ -190,6 +190,15 @@ func TakeNullableDelegate(f (() -> string)?) string -> if f != nil { f() } else 
             yield Row("nested-tuple-element", `func Run() {
     let t ((() -> string, int32), int32) = ((() -> Maybe(), 1), 2)
 }`, "Maybe()")
+            yield Row("conditional-tuple-element", `func Run(c bool) {
+    let t (() -> string, int32) = (c ? (() -> Maybe()) : (() -> "ok"), 0)
+}`, "Maybe()")
+            yield Row("nullable-tuple-local-lambda-element", `func Run() {
+    let t (() -> string, int32)? = (() -> Maybe(), 0)
+}`, "Maybe()")
+            yield Row("nullable-tuple-return-lambda-element", `func Run() {
+    let make () -> (() -> string, int32)? = () -> (() -> Maybe(), 0)
+}`, "Maybe()")
             yield Row("outer-lambda-tuple-element-capturing-param", `func Run() {
     let f (string?) -> (() -> string, int32) = (x string?) -> (() -> x, 0)
 }`, "x")

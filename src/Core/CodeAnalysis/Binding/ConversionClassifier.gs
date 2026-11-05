@@ -1428,7 +1428,27 @@ internal class ConversionClassifier {
             if type is TupleTypeSymbol targetTuple && sourceTuple.Arity == targetTuple.Arity {
                 return BindTupleConversion(diagnosticLocation, expression, sourceTuple, targetTuple, allowExplicit)
             }
-            if sourceTuple.HasNilElement {
+            if type is NullableTypeSymbol nullableTarget &&
+                nullableTarget.UnderlyingType is TupleTypeSymbol innerTargetTuple &&
+                innerTargetTuple.Arity == sourceTuple.Arity &&
+                (
+                !object.ReferenceEquals(sourceTuple.WithoutNames(), innerTargetTuple.WithoutNames()) ||
+                    (
+                    expression is BoundTupleLiteralExpression nullableTupleLiteral &&
+                        ContainsTupleFunctionLiteral(nullableTupleLiteral)
+                )
+            ) {
+                expression = BindTupleConversion(
+                    diagnosticLocation,
+                    expression,
+                    sourceTuple,
+                    innerTargetTuple,
+                    allowExplicit
+                )
+                if expression is BoundErrorExpression {
+                    return expression
+                }
+            } else if sourceTuple.HasNilElement {
                 let targetTuple = if type is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol innerTarget} &&
                     innerTarget.Arity == sourceTuple.Arity {
                     innerTarget
@@ -3833,14 +3853,63 @@ internal class ConversionClassifier {
 
     private func ContainsTupleFunctionLiteral(tuple BoundTupleLiteralExpression) bool {
         for element in tuple.Elements {
-            if element is BoundFunctionLiteralExpression {
-                return true
-            }
-            if element is BoundTupleLiteralExpression nestedTuple && ContainsTupleFunctionLiteral(nestedTuple) {
+            if ContainsResultFunctionLiteral(element) {
                 return true
             }
         }
         return false
+    }
+
+    private func ContainsResultFunctionLiteral(expression BoundExpression?) bool {
+        return switch expression {
+            case nil: false
+            case _ is BoundFunctionLiteralExpression: true
+            case tuple is BoundTupleLiteralExpression: ContainsTupleFunctionLiteral(tuple)
+            case conditional is BoundConditionalExpression: ContainsResultFunctionLiteral(conditional.WhenTrue) ||
+                ContainsResultFunctionLiteral(conditional.WhenFalse)
+            case switchExpr is BoundSwitchExpression: switchExpr.Arms.Any(
+                (arm BoundSwitchExpressionArm) -> ContainsResultFunctionLiteral(arm.Result)
+            )
+            case block is BoundBlockExpression: ContainsResultFunctionLiteral(block.Expression)
+            case binary is BoundBinaryExpression: ContainsResultFunctionLiteral(binary.Left) ||
+                ContainsResultFunctionLiteral(binary.Right)
+            case conv is BoundConversionExpression: ContainsResultFunctionLiteral(conv.Expression)
+            default: false
+        }
+    }
+
+    private func ContainsNestedLambdaSyntax(syntax ExpressionSyntax) bool {
+        var syntax = syntax
+        while syntax is ParenthesizedExpressionSyntax parenthesized {
+            syntax = parenthesized.Expression
+        }
+        return switch syntax {
+            case _ is LambdaExpressionSyntax: true
+            case BlockExpressionSyntax{Expression: {} tail}: ContainsNestedLambdaSyntax(tail)
+            case conditional is ConditionalExpressionSyntax: ContainsNestedLambdaSyntax(conditional.WhenTrue) ||
+                ContainsNestedLambdaSyntax(conditional.WhenFalse)
+            case ifExpression is IfExpressionSyntax: ContainsNestedLambdaSyntax(ifExpression.ThenBlock) ||
+                (ifExpression.ElseExpression != nil && ContainsNestedLambdaSyntax(ifExpression.ElseExpression))
+            case ifLetExpression is IfLetExpressionSyntax: ContainsNestedLambdaSyntax(ifLetExpression.ThenBlock) ||
+                (ifLetExpression.ElseExpression != nil && ContainsNestedLambdaSyntax(ifLetExpression.ElseExpression))
+            case switchExpression is SwitchExpressionSyntax: switchExpression.Arms.Any(
+                (arm SwitchExpressionArmSyntax) -> ContainsNestedLambdaSyntax(arm.Result)
+            )
+            case binary is BinaryExpressionSyntax when binary
+                .OperatorToken
+                .Kind == SyntaxKind.QuestionQuestionToken: ContainsNestedLambdaSyntax(binary.Left) ||
+                ContainsNestedLambdaSyntax(binary.Right)
+            case tupleLiteral is TupleLiteralExpressionSyntax: tupleLiteral.Elements.Any(
+                (element ExpressionSyntax) -> ContainsNestedLambdaSyntax(
+                    if element is NamedTupleElementSyntax named {
+                        named.Expression
+                    } else {
+                        element
+                    }
+                )
+            )
+            default: false
+        }
     }
 
     /// Issue #1256: lowers a non-identity implicit tuple-to-tuple conversion
@@ -3891,7 +3960,8 @@ internal class ConversionClassifier {
                             } else {
                                 bindExpression(unwrappedSyntax)
                             }
-                        } else if !allowExplicit && OverloadResolver.GetLambdaArgumentSyntax(unwrappedSyntax) != nil &&
+                        } else if !allowExplicit &&
+                            ContainsNestedLambdaSyntax(unwrappedSyntax) &&
                             !object
                             .ReferenceEquals(element.Type, targetTuple.ElementTypes[i]) {
                             Diagnostics.RemoveDiagnosticsIn(unwrappedSyntax.Location)
