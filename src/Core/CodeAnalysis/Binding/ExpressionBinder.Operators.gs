@@ -1066,9 +1066,24 @@ internal partial class ExpressionBinder {
         if value.Type == TypeSymbol.Void || value.Type == TypeSymbol.Never || value.Type == TypeSymbol.Error {
             return value
         }
+        var discarded = value
+        let materialized = TypeSymbol.MaterializeNeverFunctionReturns(discarded.Type)
+        if !object.ReferenceEquals(materialized, discarded.Type) {
+            discarded = conversions.BindConversion(
+                discarded.Syntax?.Location ?? default(TextLocation),
+                discarded,
+                materialized
+            )
+        }
+        if TypeSymbol.ContainsNeverType(discarded.Type) {
+            if discarded.Syntax is {} syntax {
+                Diagnostics.ReportExpressionMustHaveValue(syntax.Location)
+            }
+            return BoundErrorExpression(nil)
+        }
         return BoundBlockExpression(
             nil,
-            ImmutableArray.Create[BoundStatement](BoundExpressionStatement(nil, value)),
+            ImmutableArray.Create[BoundStatement](BoundExpressionStatement(nil, discarded)),
             BoundLiteralExpression(nil, value: 0, TypeSymbol.Void)
         )
     }
@@ -1196,6 +1211,14 @@ internal partial class ExpressionBinder {
             // Cleanup replaces a tail with a result-local read. Diagnose an
             // unresolved value before that replacement hides its defaults.
             if value.Type == TypeSymbol.Error && ReportUnresolvedBareDefaults(value) {
+                value = BoundErrorExpression(nil)
+            }
+            if value.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(
+                TypeSymbol.MaterializeNeverFunctionReturns(value.Type)
+            ) {
+                if (valueSyntax ?? value.Syntax) is {} syntax {
+                    Diagnostics.ReportExpressionMustHaveValue(syntax.Location)
+                }
                 value = BoundErrorExpression(nil)
             }
             boundExpression = value

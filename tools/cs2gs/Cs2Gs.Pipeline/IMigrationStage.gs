@@ -69,6 +69,7 @@ class StageExecutionContext {
         BuildOnlyPackageReferences = List[DeclaredPackageReference]()
         PackageReferences = List[DeclaredProjectItem]()
         ProjectReferences = List[DeclaredProjectItem]()
+        EvaluatedProjectReferencePaths = List[string]()
         GeneratedFriendAssemblies = HashSet[string](StringComparer.Ordinal)
         AllowedTestFailures = List[string]()
         StaleTestAllowListEntries = List[string]()
@@ -208,6 +209,16 @@ class StageExecutionContext {
         get;
     }
 
+    /// Gets the MSBuild-evaluated active compile `ProjectReference` paths for
+    /// the current configuration/target framework (issue #4767).
+    prop EvaluatedProjectReferencePaths List[string] {
+        get;
+    }
+
+    /// Gets or sets a value indicating whether (cref:EvaluatedProjectReferencePaths)
+    /// was populated from an MSBuild-evaluated project graph.
+    prop EvaluatedProjectReferencesResolved bool
+
     /// Gets friend assemblies contributed by generated C# sources, including
     /// SDK-generated `InternalsVisibleTo` items.
     prop GeneratedFriendAssemblies ISet[string] {
@@ -298,9 +309,10 @@ class EmittedGsFile {
 /// The result of running one stage: a pass/fail status and any triage artifacts
 /// produced (ADR-0115 §C/§D).
 class StageOutcome {
-    private init(status StageStatus, artifacts IReadOnlyList[TriageArtifact]) {
+    private init(status StageStatus, artifacts IReadOnlyList[TriageArtifact], failureCategory string? = nil) {
         this.Status = status
         this.Artifacts = artifacts ?? Array.Empty[TriageArtifact]()
+        this.FailureCategory = failureCategory
     }
 
     /// Gets the stage status.
@@ -310,6 +322,13 @@ class StageOutcome {
 
     /// Gets the triage artifacts the stage produced (empty on success).
     prop Artifacts IReadOnlyList[TriageArtifact] {
+        get;
+    }
+
+    /// Gets the explicit failure category when the stage failed without
+    /// consumer-owned triage artifacts (for example `dependency-blocked`,
+    /// issue #4767), or `null` when derived from (cref:Artifacts).
+    prop FailureCategory string? {
         get;
     }
 
@@ -332,5 +351,15 @@ class StageOutcome {
         /// @param artifacts The triage artifacts that describe the failure.
         /// @returns A failing (cref:StageOutcome).
         func Failed(artifacts IReadOnlyList[TriageArtifact]) StageOutcome -> StageOutcome(StageStatus.Failed, artifacts)
+
+        /// Creates a failing outcome for a consumer blocked by an invalid required
+        /// referenced producer project (issue #4767). Emits no consumer triage
+        /// artifacts so producer-owned gaps are not duplicated against consumers.
+        /// @returns A dependency-blocked failing (cref:StageOutcome).
+        func DependencyBlocked() StageOutcome -> StageOutcome(
+            StageStatus.Failed,
+            Array.Empty[TriageArtifact](),
+            TriageSerialization.CategoryName(TriageCategory.DependencyBlocked)
+        )
     }
 }

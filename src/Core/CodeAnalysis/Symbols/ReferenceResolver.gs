@@ -708,7 +708,9 @@ class ReferenceResolver : IDisposable {
         if object.ReferenceEquals(hostType, ClrOverloadResolution.InlineOutVarArgumentType) || object.ReferenceEquals(
             hostType,
             ClrOverloadResolution.DefaultLiteralArgumentType
-        ) {
+        ) ||
+            object
+            .ReferenceEquals(hostType, ClrOverloadResolution.NeverArgumentType) {
             throw InvalidOperationException(
                 "Internal compiler error: the overload-resolution sentinel '${hostType.FullName}' escaped the " +
                     "binder and reached type projection. An inline `out var`/`out let`/`out _` or `default` argument " +

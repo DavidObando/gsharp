@@ -51,7 +51,8 @@ class LoadedCSharpProject {
         additionalFiles IReadOnlyList[string]? = nil,
         projectPath string? = nil,
         isTestProject bool = false,
-        evaluatedProjectReferencePaths IReadOnlyList[string]? = nil
+        evaluatedProjectReferencePaths IReadOnlyList[string]? = nil,
+        referencedWorkspaceLoadErrors IReadOnlyList[Diagnostic]? = nil
     ) {
         this.Compilation = compilation
         this.Documents = documents
@@ -64,6 +65,7 @@ class LoadedCSharpProject {
         this.ProjectPath = projectPath
         this.IsTestProject = isTestProject
         this.EvaluatedProjectReferencePaths = evaluatedProjectReferencePaths
+        this.ReferencedWorkspaceLoadErrors = referencedWorkspaceLoadErrors ?? ImmutableArray[Diagnostic].Empty
     }
 
     /// Gets the bound C# compilation.
@@ -136,6 +138,16 @@ class LoadedCSharpProject {
         get;
     }
 
+    /// Gets the MSBuild workspace load-failure diagnostics reported on
+    /// transitively referenced projects while opening this project.
+    prop ReferencedWorkspaceLoadErrors IReadOnlyList[Diagnostic] {
+        get;
+    }
+
+    /// Gets a value indicating whether any transitively referenced project
+    /// reported an MSBuild workspace load failure while opening this project.
+    prop ReferencedWorkspaceLoadFailed bool -> this.ReferencedWorkspaceLoadErrors.Count > 0
+
     /// Returns a copy of this loaded project with [`evaluatedProjectReferencePaths`](paramref)
     /// attached.
     /// @param evaluatedProjectReferencePaths The MSBuild-evaluated transitive compile `ProjectReference` paths.
@@ -153,7 +165,8 @@ class LoadedCSharpProject {
         this.AdditionalFiles,
         this.ProjectPath,
         this.IsTestProject,
-        evaluatedProjectReferencePaths
+        evaluatedProjectReferencePaths,
+        this.ReferencedWorkspaceLoadErrors
     )
 
     /// Gets the subset of (cref:LoadDiagnostics) with

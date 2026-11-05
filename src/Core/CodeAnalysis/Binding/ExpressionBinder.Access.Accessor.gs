@@ -1335,6 +1335,7 @@ internal partial class ExpressionBinder {
         receiver BoundExpression,
         rightPart ExpressionSyntax
     ) BoundExpression {
+        var receiver = receiver
         if rightPart is UnaryExpressionSyntax unary && unary.OperatorToken.Kind == SyntaxKind.BangBangToken {
             let liftedOperand = BindNullConditionalAccessExpressionCore(receiver, unary.Operand)
             if liftedOperand is BoundErrorExpression {
@@ -1354,6 +1355,18 @@ internal partial class ExpressionBinder {
                 return BoundErrorExpression(nil)
             }
             return BoundUnaryExpression(nil, assertionOperator, liftedOperand, binderCtx.IsCheckedContext)
+        }
+        let materializedReceiverType = TypeSymbol.MaterializeNeverFunctionReturns(receiver.Type)
+        if !object.ReferenceEquals(materializedReceiverType, receiver.Type) {
+            receiver = conversions.BindConversion(
+                receiver.Syntax?.Location ?? rightPart.Location,
+                receiver,
+                materializedReceiverType
+            )
+        }
+        if receiver.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(receiver.Type) {
+            Diagnostics.ReportExpressionMustHaveValue(receiver.Syntax?.Location ?? rightPart.Location)
+            return BoundErrorExpression(nil)
         }
         let receiverType = receiver.Type
         var underlying TypeSymbol

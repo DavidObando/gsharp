@@ -973,12 +973,21 @@ partial class Binder {
             } else {
                 BindTypeClause(member.TypeClause)
             }
-            let value = if declaredType == nil {
+            var value = if declaredType == nil {
                 Expressions.BindExpression(member.Value)
             } else {
                 Expressions.BindExpression(member.Value, declaredType)
             }
-            if value is BoundErrorExpression || value.Type == TypeSymbol.Null || value.Type == TypeSymbol.Void {
+            if declaredType == nil {
+                let materializedFieldType = TypeSymbol.MaterializeNeverFunctionReturns(value.Type)
+                if !object.ReferenceEquals(materializedFieldType, value.Type) {
+                    value = Conversions.BindConversion(member.Value.Location, value, materializedFieldType)
+                }
+            }
+            if value is BoundErrorExpression ||
+                value.Type == TypeSymbol.Null ||
+                value.Type == TypeSymbol.Void ||
+                (declaredType == nil && TypeSymbol.ContainsNeverType(value.Type)) {
                 if declaredType == nil {
                     Diagnostics.ReportRichAnonymousFieldInference(
                         member.Identifier.Location,

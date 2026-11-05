@@ -55,7 +55,7 @@ internal partial class ExpressionBinder {
                 ]?
             )
         }
-        let discriminant = BindExpression(syntax.Expression)
+        var discriminant = BindExpression(syntax.Expression)
         if NativeProtocolOperations.GetProtocol(discriminant.Type) != nil {
             Diagnostics.ReportNativeProtocol(
                 syntax.Location,
@@ -63,8 +63,16 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(syntax)
         }
+        let materializedSwitchType = TypeSymbol.MaterializeNeverFunctionReturns(discriminant.Type)
+        if !object.ReferenceEquals(materializedSwitchType, discriminant.Type) {
+            discriminant = conversions.BindConversion(syntax.Expression.Location, discriminant, materializedSwitchType)
+        }
         let switchType = discriminant.Type
         if switchType == TypeSymbol.Error {
+            return BoundErrorExpression(nil)
+        }
+        if TypeSymbol.ContainsNeverType(switchType) {
+            Diagnostics.ReportExpressionMustHaveValue(syntax.Expression.Location)
             return BoundErrorExpression(nil)
         }
         if syntax.Arms.Length == 0 {
@@ -507,6 +515,16 @@ internal partial class ExpressionBinder {
                     if AllArmsImplicitlyConvertTo(significant, candidate) {
                         common = candidate
                         break
+                    }
+                }
+                if common == nil {
+                    for var i = 1; i < significant.Count && common == nil; i++ {
+                        for candidate in EnumerateSupertypeCandidates(significant[i]) {
+                            if AllArmsImplicitlyConvertTo(significant, candidate) {
+                                common = candidate
+                                break
+                            }
+                        }
                     }
                 }
             }

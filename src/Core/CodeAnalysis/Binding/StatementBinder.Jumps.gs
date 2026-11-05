@@ -1082,7 +1082,15 @@ internal partial class StatementBinder {
             bindNullCoalescingAssignmentStatement is {} bindCoalescingStatement {
             return bindCoalescingStatement(syntax, coalescing)
         }
-        let expression = bindExpression(syntax.Expression, true)
+        var expression = bindExpression(syntax.Expression, true)
+        let materializedType = TypeSymbol.MaterializeNeverFunctionReturns(expression.Type)
+        if !object.ReferenceEquals(materializedType, expression.Type) {
+            expression = conversions.BindConversion(syntax.Expression.Location, expression, materializedType)
+        }
+        if expression.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(expression.Type) {
+            Diagnostics.ReportExpressionMustHaveValue(syntax.Expression.Location)
+            expression = BoundErrorExpression(nil)
+        }
         return BoundExpressionStatement(syntax, expression)
     }
 
