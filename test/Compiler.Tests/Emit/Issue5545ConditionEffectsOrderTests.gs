@@ -896,14 +896,13 @@ class Legacy {
     public var Text string
     init() { }
 }
+func Read(in v string) int32 -> v.Length
 func Run(flag bool) int32 {
     let leg = Legacy()
     var a = leg.Text
     var b string = "ok"
-    let p = &(flag ? a : b)
     try {
-        let s string = *p
-        return s.Length
+        return Read(in (flag ? a : b))
     } catch (NullReferenceException) {
         return 42
     }
@@ -1058,6 +1057,41 @@ shared class Helper {
 }
 let g = Group(Object(), typeof(string).GetMethod("IsNullOrEmpty"))
 Console.WriteLine(Helper.Check(g))`, "", "run", "2"}
+            yield[]object{"r24_standalone_conditional_address_mismatched_top_level_platform_nullability_rejected", `import System
+
+@Oblivious
+class Legacy {
+    public var Text string
+    init() { }
+}
+func Run(flag bool) int32 {
+    let leg = Legacy()
+    var a = leg.Text
+    var b string = "ok"
+    let p = &(flag ? a : b)
+    return b.Length
+}
+Console.WriteLine(Run(false))`, "GS0260@12:15", "reject", ""}
+            yield[]object{"r25_statement_invalidation_uses_entry_callable_aliases_after_expression_export", `import System
+
+class C { var Value int32 = 1 }
+func Run(flag bool, callback () -> bool) int32 {
+    var x C? = C{}
+    var action () -> bool = func() bool {
+        x = nil
+        return true
+    }
+    if x == nil { return 0 }
+    let ignored = (action(), if flag {
+        action = callback
+        true
+    } else {
+        action = callback
+        false
+    }).Item1
+    return x.Value
+}
+Console.WriteLine(Run(true, () -> true))`, "GS0158@18:14", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

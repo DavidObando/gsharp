@@ -2546,7 +2546,8 @@ internal partial class ExpressionBinder {
             }
             return !requireExactNullability ||
                 (
-                !storageNullable &&
+                left.ReferenceNullability == right.ReferenceNullability &&
+                    !storageNullable &&
                     !parameterNullable &&
                     !nestedMismatch &&
                     !HasNestedReferenceNullabilityDifference(left, right)

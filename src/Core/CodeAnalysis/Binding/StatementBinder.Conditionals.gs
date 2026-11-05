@@ -143,7 +143,7 @@ internal partial class StatementBinder {
         if initStatement != nil {
             // ADR-0208 R18: the initializer runs before the condition and both branches, as the statement before
             // an `if` in the block this form lowers to.
-            ApplyInitializerEffectsToNarrowings(syntax.Initializer!!, initStatement)
+            ApplyInitializerEffectsToNarrowings(syntax.Initializer!!, initStatement, initializerAliasesAtEntry)
             UpdateExternalCallableAliases(initStatement, initializerAliasesAtEntry)
         }
         let (initCondition, initThenNarrow, initElseNarrow) = BindConditionWithEffects(syntax.Condition)
@@ -621,7 +621,7 @@ internal partial class StatementBinder {
             statements.Add(decl)
             // The initializer ran before the else block and the next binding: a getter in it can clear
             // storage that a guarded alias names (ADR-0208 R12).
-            InvalidateNarrowingsForAssignedVariables(binding, decl)
+            InvalidateNarrowingsForAssignedVariables(binding, decl, aliasesAtEntry: aliasesAtEntry)
             UpdateExternalCallableAliases(decl, aliasesAtEntry)
             if variable == nil || underlying == nil {
                 continue

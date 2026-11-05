@@ -307,7 +307,8 @@ internal partial class StatementBinder {
     private func InvalidateNarrowingsForAssignedVariables(
         statementSyntax SyntaxNode,
         boundStatement BoundStatement? = nil,
-        removedFacts Dictionary[AccessPath, TypeSymbol]? = nil
+        removedFacts Dictionary[AccessPath, TypeSymbol]? = nil,
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol]? = nil
     ) {
         EnsureClosureAssignedNames(statementSyntax)
         // Issue #1639: `NarrowedVariables.Count == 0` never fires in practice —
@@ -353,7 +354,7 @@ internal partial class StatementBinder {
         var runsEscapedClosure = false
         var statementCollector AssignedRootsCollector? = nil
         if boundStatement != nil {
-            let collector = GetStatementEffects(boundStatement, externalCallableAliases)
+            let collector = GetStatementEffects(boundStatement, aliasesAtEntry ?? externalCallableAliases)
             statementCollector = collector
             // A property getter with user code is no call expression in the syntax.
             dropAllMemberPaths = dropAllMemberPaths || collector.MayMutateMemberPaths
@@ -2103,11 +2104,15 @@ internal partial class StatementBinder {
 
     /// ADR-0208 R18: applies the effects of the initializer of `if init; cond` before the condition is bound. Inside
     /// a then-branch the removed facts are recorded, as a condition's are, for the sibling else-branch.
-    private func ApplyInitializerEffectsToNarrowings(syntax SyntaxNode, initializer BoundStatement) {
+    private func ApplyInitializerEffectsToNarrowings(
+        syntax SyntaxNode,
+        initializer BoundStatement,
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol]? = nil
+    ) {
         if !HasAnyActiveNarrowings() {
             return
         }
-        InvalidateNarrowingsForAssignedVariables(syntax, initializer)
+        InvalidateNarrowingsForAssignedVariables(syntax, initializer, aliasesAtEntry: aliasesAtEntry)
     }
 
     private func IsOnNarrowingStack(frame NarrowingFrame) bool {
@@ -2446,17 +2451,23 @@ internal partial class StatementBinder {
     /// after this call, so a test after the effect (`Check(h) && x != nil`) still narrows its branch. The
     /// effects are read with the callable aliases from before the condition, as for a statement, so this runs
     /// before (cref:ApplyHeaderCallableEffects). Returns the removed facts with the type a read saw, or `nil`.
-    private func ApplyConditionEffectsToNarrowings(syntax SyntaxNode, condition BoundExpression) Dictionary[
-        AccessPath,
-        TypeSymbol
-    ]? {
+    private func ApplyConditionEffectsToNarrowings(
+        syntax SyntaxNode,
+        condition BoundExpression,
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol]? = nil
+    ) Dictionary[AccessPath, TypeSymbol]? {
         if !HasAnyActiveNarrowings() {
             return nil
         }
         let removedFacts = conditionRemovedFacts ?? Dictionary[AccessPath, TypeSymbol]()
         conditionRemovedFacts = removedFacts
         removedFacts.Clear()
-        InvalidateNarrowingsForAssignedVariables(syntax, BoundExpressionStatement(nil, condition), removedFacts)
+        InvalidateNarrowingsForAssignedVariables(
+            syntax,
+            BoundExpressionStatement(nil, condition),
+            removedFacts,
+            aliasesAtEntry
+        )
         return if removedFacts.Count == 0 {
             default(Dictionary[AccessPath, TypeSymbol]?)
         } else {
@@ -2468,11 +2479,17 @@ internal partial class StatementBinder {
     /// apply to the narrowing facts first, as a condition's do. The test is the `is` test of the arm's pattern on the
     /// value that the switch evaluated once, so the one collector classifies it as it classifies `if x is 1`. The
     /// discriminant's own evaluation is not part of the test.
-    internal func ApplySwitchArmTestEffects(syntax SyntaxNode, discriminantType TypeSymbol, pattern BoundPattern) {
+    internal func ApplySwitchArmTestEffects(
+        syntax SyntaxNode,
+        discriminantType TypeSymbol,
+        pattern BoundPattern,
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol]? = nil
+    ) {
         let evaluated = LocalVariableSymbol("<switch-value>", true, discriminantType)
         ApplyConditionEffectsToNarrowings(
             syntax,
-            BoundIsExpression(syntax, BoundVariableExpression(nil, evaluated), pattern)
+            BoundIsExpression(syntax, BoundVariableExpression(nil, evaluated), pattern),
+            aliasesAtEntry
         )
     }
 
@@ -2530,7 +2547,7 @@ internal partial class StatementBinder {
         // The aliases that the header removes, statements inside a guard's block included, against its entry.
         let aliasesBefore = CaptureExternalCallableAliases()
         let pattern = patterns.BindPattern(valueSyntax, discriminant.Type)
-        ApplySwitchArmTestEffects(valueSyntax, discriminant.Type, pattern)
+        ApplySwitchArmTestEffects(valueSyntax, discriminant.Type, pattern, aliasesBefore)
         let test = BoundIsExpression(valueSyntax, discriminant, pattern)
         let testMayRemove = TestMayRemoveItsOperandFact(test)
         let frame = if discriminantStale || testMayRemove {
@@ -2542,8 +2559,9 @@ internal partial class StatementBinder {
         var removedAliases HashSet[VariableSymbol]? = nil
         var guardMayRemove = false
         if guardSyntax != nil {
+            let guardAliasesBefore = CaptureExternalCallableAliases()
             let bound = BindGuardExpressionWithNarrowing(guardSyntax, frame)
-            ApplySwitchGuardEffects(guardSyntax, bound, frame)
+            ApplySwitchGuardEffects(guardSyntax, bound, frame, guardAliasesBefore)
             ApplyHeaderCallableEffects(bound)
             guardMayRemove = EffectsMayRemoveFactOf(discriminant, bound, nil)
             boundGuard = bound
@@ -2575,15 +2593,16 @@ internal partial class StatementBinder {
     private func ApplySwitchGuardEffects(
         syntax SyntaxNode,
         boundGuard BoundExpression,
-        frame Dictionary[AccessPath, TypeSymbol]?
+        frame Dictionary[AccessPath, TypeSymbol]?,
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol]? = nil
     ) {
         if frame == nil {
-            ApplyConditionEffectsToNarrowings(syntax, boundGuard)
+            ApplyConditionEffectsToNarrowings(syntax, boundGuard, aliasesAtEntry)
             return
         }
         binderCtx.PushNarrowingFrame(frame)
         try {
-            ApplyConditionEffectsToNarrowings(syntax, boundGuard)
+            ApplyConditionEffectsToNarrowings(syntax, boundGuard, aliasesAtEntry)
         } finally {
             binderCtx.EndNarrowingProof()
         }
@@ -2619,7 +2638,7 @@ internal partial class StatementBinder {
                     default: default(BoundStatement?)
                 }
                 if boundStatement != nil {
-                    InvalidateNarrowingsForAssignedVariables(boundSyntax, boundStatement)
+                    InvalidateNarrowingsForAssignedVariables(boundSyntax, boundStatement, aliasesAtEntry: entryAliases)
                 }
             }
         }

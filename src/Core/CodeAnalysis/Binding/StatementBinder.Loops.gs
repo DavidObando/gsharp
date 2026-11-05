@@ -593,7 +593,8 @@ internal partial class StatementBinder {
                     "a bound for-clause initializer has initializer syntax",
                     expression: "syntax.Initializer"
                 ),
-                init
+                init,
+                aliasesAtEntry: externalCallableAliasesAtInitEntry
             )
             if binderCtx.NarrowedVariables.Count > 0 {
                 ApplyAssignmentNarrowing(init, binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1])
