@@ -44,7 +44,7 @@ shared class CorpusDiscovery {
         let apps = List[CorpusApp]()
         for projectPath in Directory
             .EnumerateFiles(fullCorpus, "*.csproj", SearchOption.AllDirectories)
-            .Where((p string) -> !IsUnderBinOrObj(p))
+            .Where((p string) -> !RepositoryFileInventory.IsBuildOutputPath(Path.GetRelativePath(fullCorpus, p)))
             .OrderBy((p string) -> p, StringComparer.Ordinal) {
             let projectDir string? = Path.GetDirectoryName(projectPath)
             let folderName = DirectoryInfo(projectDir!!).Name
@@ -147,14 +147,6 @@ shared class CorpusDiscovery {
         }
     }
 
-    private func IsUnderBinOrObj(path string) bool {
-        let normalized = path.Replace('\\', '/')
-        return normalized.Contains("/bin/", StringComparison.Ordinal) || normalized.Contains(
-            "/obj/",
-            StringComparison.Ordinal
-        )
-    }
-
     private func FindSiblingTestOracle(corpusRoot string, folderName string)(
         TestsProject string?,
         TestsBaseline string?
@@ -168,7 +160,7 @@ shared class CorpusDiscovery {
         let baseline = Path.Combine(testsFolder, "baseline.tests.json")
         let testsProject string? = Directory
             .EnumerateFiles(testsFolder, "*.csproj", SearchOption.TopDirectoryOnly)
-            .Where((p string) -> !IsUnderBinOrObj(p))
+            .Where((p string) -> !RepositoryFileInventory.IsBuildOutputPath(Path.GetRelativePath(testsFolder, p)))
             .OrderBy((p string) -> p, StringComparer.Ordinal)
             .FirstOrDefault()
         return (

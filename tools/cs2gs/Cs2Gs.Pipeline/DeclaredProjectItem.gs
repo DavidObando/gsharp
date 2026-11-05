@@ -10,6 +10,7 @@ import System.IO
 import System.Linq
 import System.Threading
 import System.Threading.Tasks
+import System.Xml
 import System.Xml.Linq
 import Cs2Gs.Translator.Loading
 
@@ -55,7 +56,12 @@ internal shared class DeclaredProjectItems {
         if string.IsNullOrEmpty(projectPath) || !File.Exists(projectPath) {
             return Array.Empty[DeclaredProjectItem]()
         }
-        let document = XDocument.Load(projectPath, LoadOptions.PreserveWhitespace)
+        var document XDocument
+        try {
+            document = XDocument.Load(projectPath, LoadOptions.PreserveWhitespace)
+        } catch (ex Exception) when ex is XmlException || ex is IOException || ex is UnauthorizedAccessException {
+            return Array.Empty[DeclaredProjectItem]()
+        }
         let projectDirectory = Path.GetDirectoryName(Path.GetFullPath(projectPath))
         let items = List[DeclaredProjectItem]()
         for itemGroup in document.Descendants().Where(
@@ -102,11 +108,21 @@ internal shared class DeclaredProjectItems {
 
     internal func EvaluateCompileProjectReferencePathsAsync(
         projectPath string,
-        cancellationToken CancellationToken = default(CancellationToken)
+        cancellationToken CancellationToken = default(CancellationToken),
+        configuration string? = nil
     ) Task[IReadOnlyList[string]] -> CSharpProjectLoader.EvaluateCompileProjectReferencePathsAsync(
         projectPath,
-        cancellationToken
+        cancellationToken,
+        configuration
     )
+
+    internal func WorkspaceConfiguration(projectPath string?, config string?) string? {
+        return if !string.IsNullOrEmpty(projectPath) && !string.IsNullOrWhiteSpace(config) {
+            config
+        } else {
+            default(string?)
+        }
+    }
 
     /// Collects the absolute project paths that any of the given projects
     /// declares a compile `ProjectReference` to (issue #3645). A

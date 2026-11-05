@@ -38,6 +38,12 @@ class RepositoryMirrorTests {
             File.WriteAllText(Path.Combine(shared, name + ".cs"), "public class " + name + " {}")
         }
         File.WriteAllBytes(Path.Combine(shared, "asset.bin"), []byte{0, 255, 13, 10})
+        Directory.CreateDirectory(Path.Combine(source, "build", "__pycache__"))
+        File.WriteAllBytes(
+            Path.Combine(source, "build", "__pycache__", "check-selfmig-stage-floor.cpython-314.pyc"),
+            []byte{66, 13, 13, 10}
+        )
+        File.WriteAllBytes(Path.Combine(source, "build", "stray.pyc"), []byte{66, 13, 13, 10})
         // Use the loaded driver, not the C# source tree selected by CS2GS_TEST_SOURCE_ROOT.
         let cli = typeof(Cs2Gs.Cli.Program).Assembly.Location
         let compiler string? = GscInvoker.Resolve(nil, "Release", AppContext.BaseDirectory)
@@ -85,6 +91,8 @@ class RepositoryMirrorTests {
         Assert.False(File.Exists(Path.Combine(destination, "shared", "Excluded.csproj")))
         Assert.False(File.Exists(Path.Combine(destination, "shared", "Excluded.gs")))
         Assert.False(File.Exists(Path.Combine(destination, "shared", "Excluded.cs")))
+        Assert.False(Directory.Exists(Path.Combine(destination, "build", "__pycache__")))
+        Assert.False(File.Exists(Path.Combine(destination, "build", "stray.pyc")))
     }
 
     @Fact
@@ -355,6 +363,53 @@ class RepositoryMirrorTests {
             missingSplit.Message,
             StringComparison.Ordinal
         )
+    }
+
+    @Fact
+    func ValidateCompleted_IgnoresPycacheAndPythonBytecodeFiles() {
+        using let scratch = RepositoryMirrorTests.ScratchDirectory()
+        let source = Path.Combine(scratch.Path, "source")
+        let destination = Path.Combine(scratch.Path, "destination")
+        Directory.CreateDirectory(source)
+        Directory.CreateDirectory(Path.Combine(destination, "build", "__pycache__"))
+        File.WriteAllText(Path.Combine(source, "Product.slnx"), "<Solution />")
+        File.WriteAllText(Path.Combine(destination, "Product.slnx"), "<Solution />")
+        File.WriteAllBytes(
+            Path.Combine(destination, "build", "__pycache__", "check-selfmig-stage-floor.cpython-314.pyc"),
+            []byte{66, 13, 13, 10}
+        )
+        File.WriteAllBytes(Path.Combine(destination, "build", "stray.pyc"), []byte{66, 13, 13, 10})
+        File.WriteAllBytes(Path.Combine(destination, "build", "stray.pyo"), []byte{66, 13, 13, 10})
+        RepositoryMirror.ValidateCompleted(source, destination, []string{"Product.slnx"})
+        File.WriteAllText(Path.Combine(destination, "build", "Unexpected.py"), "print(1)")
+        let exception = Assert.Throws[InvalidOperationException](
+            () -> RepositoryMirror.ValidateCompleted(source, destination, []string{"Product.slnx"})
+        )
+        Assert.Contains(
+            "unexpected file 'build" + Path.DirectorySeparatorChar + "Unexpected.py'",
+            exception.Message,
+            StringComparison.Ordinal
+        )
+    }
+
+    @Fact
+    func Prepare_ExcludesPycacheAndPythonBytecodeFiles() {
+        using let scratch = RepositoryMirrorTests.ScratchDirectory()
+        let source = Path.Combine(scratch.Path, "source")
+        let destination = Path.Combine(scratch.Path, "destination")
+        Directory.CreateDirectory(Path.Combine(source, "build", "__pycache__"))
+        File.WriteAllText(Path.Combine(source, "README.md"), "unchanged")
+        File.WriteAllText(Path.Combine(source, "build", "check-selfmig-stage-floor.py"), "STAGE_ORDER = ()\n")
+        File.WriteAllBytes(
+            Path.Combine(source, "build", "__pycache__", "check-selfmig-stage-floor.cpython-314.pyc"),
+            []byte{66, 13, 13, 10}
+        )
+        File.WriteAllBytes(Path.Combine(source, "build", "stray.pyc"), []byte{66, 13, 13, 10})
+        let files = RepositoryMirror.Prepare(source, destination)
+        Assert.Equal([]string{"README.md", "build/check-selfmig-stage-floor.py"}, files)
+        Assert.True(File.Exists(Path.Combine(destination, "build", "check-selfmig-stage-floor.py")))
+        Assert.False(Directory.Exists(Path.Combine(destination, "build", "__pycache__")))
+        Assert.False(File.Exists(Path.Combine(destination, "build", "stray.pyc")))
     }
 
     @Fact
