@@ -264,7 +264,47 @@ shared class ClrTypeUtilities {
     /// @param target Target parameter type.
     /// @param source Source argument type.
     /// @returns `true` when an assignment is permissible.
-    func IsAssignableByName(target Type?, source Type?) bool {
+    func IsAssignableByName(target Type?, source Type?) bool ->
+    IsAssignableByName(target, source, inProgress: nil)
+
+    internal func IsReferenceTypeForVariance(type Type?) bool ->
+    IsReferenceTypeForVariance(type, visited: nil)
+
+    private func IsReferenceTypeForVariance(type Type?, visited HashSet[Type]?) bool {
+        if type == nil || type.IsValueType || type.IsPointer || type.IsByRef || type.IsFunctionPointer {
+            return false
+        }
+        if !type.IsGenericParameter {
+            return true
+        }
+        try {
+            let attributes = type.GenericParameterAttributes
+            if (attributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 {
+                return false
+            }
+            if (attributes & GenericParameterAttributes.ReferenceTypeConstraint) != 0 {
+                return true
+            }
+            for constraint in type.GetGenericParameterConstraints() {
+                if constraint.IsGenericParameter {
+                    let active = visited ?? HashSet[Type](ReferenceEqualityComparer.Instance){type}
+                    if active.Add(constraint) && IsReferenceTypeForVariance(constraint, active) {
+                        return true
+                    }
+                    continue
+                }
+                if (constraint.IsClass || constraint.IsArray) &&
+                    constraint.FullName is not("System.Object" or "System.ValueType" or "System.Enum") {
+                    return true
+                }
+            }
+        } catch (ex Exception) when IsMetadataLoadFailure(ex) {
+            return false
+        }
+        return false
+    }
+
+    private func IsAssignableByName(target Type?, source Type?, inProgress List[(Type, Type)]?) bool {
         if target == nil || source == nil {
             return false
         }
@@ -272,13 +312,37 @@ shared class ClrTypeUtilities {
             return true
         }
         if string.Equals(target.FullName, "System.Object", StringComparison.Ordinal) {
-            return true
+            return !source.IsPointer && !source.IsByRef && !source.IsFunctionPointer
+        }
+        if inProgress != nil {
+            for pair in inProgress {
+                if AreSame(pair.Item1, target) && AreSame(pair.Item2, source) {
+                    return false
+                }
+            }
         }
         if target.IsGenericType &&
             source.IsGenericType &&
-            AreSame(target.GetGenericTypeDefinition(), source.GetGenericTypeDefinition()) &&
-            GenericArgumentsAreAssignable(target, source) {
-            return true
+            AreSame(target.GetGenericTypeDefinition(), source.GetGenericTypeDefinition()) {
+            let active = inProgress ?? List[(Type, Type)]()
+            active.Add((target, source))
+            let matched = GenericArgumentsAreAssignable(target, source, active)
+            active.RemoveAt(active.Count - 1)
+            if matched {
+                return true
+            }
+        }
+        if target.IsArray && source.IsArray && target.GetArrayRank() == source.GetArrayRank() &&
+            target.IsSZArray == source.IsSZArray &&
+            IsReferenceTypeForVariance(target.GetElementType()) &&
+            IsReferenceTypeForVariance(source.GetElementType()) {
+            let active = inProgress ?? List[(Type, Type)]()
+            active.Add((target, source))
+            let matched = IsAssignableByName(target.GetElementType(), source.GetElementType(), active)
+            active.RemoveAt(active.Count - 1)
+            if matched {
+                return true
+            }
         }
         // Same-context fast path covers inheritance / interfaces.
         if object.ReferenceEquals(target.Assembly, source.Assembly) || target.GetType() == source.GetType() {
@@ -314,7 +378,24 @@ shared class ClrTypeUtilities {
         // generalizes the dedicated #570 slice-to-interface arm so ALL CLR
         // reference upcasts work across reflection contexts.
         if target.IsInterface {
-            return ImplementsInterfaceByName(source, target)
+            if ImplementsInterfaceByName(source, target) {
+                return true
+            }
+            if target.IsGenericType && !target.IsGenericTypeDefinition {
+                let targetDefinition = target.GetGenericTypeDefinition()
+                let active = inProgress ?? List[(Type, Type)]()
+                active.Add((target, source))
+                for iface in SafeGetInterfaces(source) {
+                    if iface.IsGenericType &&
+                        AreSame(targetDefinition, iface.GetGenericTypeDefinition()) &&
+                        GenericArgumentsAreAssignable(target, iface, active) {
+                        active.RemoveAt(active.Count - 1)
+                        return true
+                    }
+                }
+                active.RemoveAt(active.Count - 1)
+            }
+            return false
         }
         // Base-class walk: check if source derives from target by comparing
         // base type full names up the chain.
@@ -1171,7 +1252,7 @@ shared class ClrTypeUtilities {
         }
     }
 
-    private func GenericArgumentsAreAssignable(target Type, source Type) bool {
+    private func GenericArgumentsAreAssignable(target Type, source Type, inProgress List[(Type, Type)]? = nil) bool {
         let parameters = target.GetGenericTypeDefinition().GetGenericArguments()
         let targetArguments = target.GetGenericArguments()
         let sourceArguments = source.GetGenericArguments()
@@ -1179,16 +1260,16 @@ shared class ClrTypeUtilities {
             if AreSame(targetArguments[i], sourceArguments[i]) {
                 continue
             }
-            if targetArguments[i].IsValueType || sourceArguments[i].IsValueType {
+            if !IsReferenceTypeForVariance(targetArguments[i]) || !IsReferenceTypeForVariance(sourceArguments[i]) {
                 return false
             }
             let variance = parameters[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
             if variance == GenericParameterAttributes.Covariant &&
-                IsAssignableByName(targetArguments[i], sourceArguments[i]) {
+                IsAssignableByName(targetArguments[i], sourceArguments[i], inProgress) {
                 continue
             }
             if variance == GenericParameterAttributes.Contravariant &&
-                IsAssignableByName(sourceArguments[i], targetArguments[i]) {
+                IsAssignableByName(sourceArguments[i], targetArguments[i], inProgress) {
                 continue
             }
             return false
