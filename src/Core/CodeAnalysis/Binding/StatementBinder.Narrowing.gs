@@ -2488,17 +2488,36 @@ internal partial class StatementBinder {
                 MarkRunsEscapedClosure()
                 runsEscapedClosureHere = true
             }
-            // A hole of a type other than a built-in value or a string calls its `ToString`.
+            // A custom interpolated-string handler constructs the handler and calls its AppendLiteral /
+            // AppendFormatted methods; the default handler calls `ToString` on a hole of a type other than a
+            // built-in value or a string.
             if node is BoundInterpolatedStringExpression interpolation {
-                for part in interpolation.Parts {
-                    if part.Value is {} hole && hole.Type != TypeSymbol.String && !TypeSymbol.IsLegalPointeeType(
-                        hole.Type
-                    ) {
-                        MarkMayMutateGlobalRoots(writesReferenceStorage: false)
-                        runsEscapedClosureHere = true
-                        break
+                if interpolation.Handler != nil {
+                    MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                    runsEscapedClosureHere = true
+                } else {
+                    for part in interpolation.Parts {
+                        if part.Value is {} hole && hole.Type != TypeSymbol.String && !TypeSymbol.IsLegalPointeeType(
+                            hole.Type
+                        ) {
+                            MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                            runsEscapedClosureHere = true
+                            break
+                        }
                     }
                 }
+            }
+            if node is BoundMapLiteralExpression mapLiteral &&
+                !mapLiteral
+                .Entries
+                .IsDefaultOrEmpty &&
+                mapLiteral
+                .MapType
+                .KeyType != TypeSymbol.String &&
+                !TypeSymbol.IsLegalPointeeType(mapLiteral.MapType.KeyType) {
+                MayMutateMemberPaths = true
+                MarkMayMutateGlobalRoots()
+                runsEscapedClosureHere = true
             }
             if node is BoundFunctionLiteralExpression nestedLiteral {
                 for captured in nestedLiteral.CapturedVariables {
@@ -4562,7 +4581,9 @@ internal partial class StatementBinder {
                 } else {
                     initializer = bindExpression(syntax.Initializer!!, false)
                 }
-                variableType = type ?? preDeclaredSelf?.Type ?? initializer.Type
+                variableType = type ?? preDeclaredSelf?.Type ?? TypeSymbol.MaterializeNeverFunctionReturns(
+                    initializer.Type
+                )
                 if syntax.TypeClause != nil && (type == nil || type == TypeSymbol.Error) {
                     convertedInitializer = BoundErrorExpression(initializer.Syntax)
                     variableType = TypeSymbol.Error
@@ -4573,7 +4594,7 @@ internal partial class StatementBinder {
                         syntax.Initializer!!.Location
                     )
                     variableType = TypeSymbol.Error
-                } else if syntax.TypeClause == nil && ContainsNever(variableType) {
+                } else if syntax.TypeClause == nil && TypeSymbol.ContainsNeverType(variableType) {
                     // Issue #4965 (ADR-0202): an initializer that never produces
                     // a value (`let a = throw e`, or a block/if/switch every
                     // path of which exits) gives the local no type to infer.
@@ -4991,6 +5012,19 @@ internal partial class StatementBinder {
         }
         if initializer.Type == TypeSymbol.Error {
             return BoundExpressionStatement(syntax, initializer)
+        }
+        let materializedInitializerType = TypeSymbol.MaterializeNeverFunctionReturns(initializer.Type)
+        if !object.ReferenceEquals(materializedInitializerType, initializer.Type) {
+            initializer = conversions.BindConversion(
+                syntax.Initializer.Location,
+                initializer,
+                materializedInitializerType
+            )
+        }
+        if TypeSymbol.ContainsNeverType(initializer.Type) {
+            Diagnostics.ReportExpressionMustHaveValue(syntax.Initializer.Location)
+            DeclareErrorTypedLocals(syntax.Identifiers)
+            return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
         }
         // ADR-0186 §4/§5, issue #4325: deconstruction reads members out of
         // the source, so the source is a receiver and gets the same check and
@@ -5449,6 +5483,15 @@ internal partial class StatementBinder {
         var initializer = bindExpression(syntax.Initializer, false)
         if initializer.Type == TypeSymbol.Error {
             return BoundExpressionStatement(syntax, initializer)
+        }
+        if TypeSymbol.ContainsNeverType(TypeSymbol.MaterializeNeverFunctionReturns(initializer.Type)) {
+            Diagnostics.ReportExpressionMustHaveValue(syntax.Initializer.Location)
+            for fieldSyntax in syntax.Fields {
+                if !IsDiscard(fieldSyntax.LocalIdentifier) {
+                    bindLocalVariable(fieldSyntax.LocalIdentifier, true, TypeSymbol.Error)
+                }
+            }
+            return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
         }
         // ADR-0186 §4/§5: named deconstruction reads each field off the
         // initializer, so a platform `DPt!` is used as non-null here, exactly
@@ -6611,27 +6654,6 @@ internal partial class StatementBinder {
         /// @param type The candidate type.
         /// @returns `true` when [`type`](paramref) is reference-like.
         private func IsReferenceLikeType(type TypeSymbol?) bool -> type != nil && Conversion.IsReferenceLikeTarget(type)
-
-        /// Issue #4965 (ADR-0202): whether [`type`](paramref) is, or is a tuple
-        /// with an element that is, the bottom type — the inferred type of an
-        /// initializer that never produces a value (`throw e`,
-        /// `(if c { return 1 } else { return 2 }, 0)`). Such a type cannot be
-        /// a local's type: `never` has no CLR form.
-        /// @param type The inferred type.
-        /// @returns `true` when the type contains `never`.
-        internal func ContainsNever(type TypeSymbol?) bool {
-            if type == TypeSymbol.Never {
-                return true
-            }
-            if type is TupleTypeSymbol tuple {
-                for element in tuple.ElementTypes {
-                    if ContainsNever(element) {
-                        return true
-                    }
-                }
-            }
-            return false
-        }
 
         /// Issue #4965 (ADR-0202): whether the end of a block whose bound
         /// statements are [`statements`](paramref) is unreachable, so that a

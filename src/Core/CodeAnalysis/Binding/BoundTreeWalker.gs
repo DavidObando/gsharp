@@ -791,7 +791,7 @@ abstract class BoundTreeWalker {
 
     protected open func VisitTypePattern(node BoundTypePattern) {
         if node.PropertyPattern != nil {
-            VisitPropertyPattern(node.PropertyPattern)
+            VisitPattern(node.PropertyPattern)
         }
     }
 

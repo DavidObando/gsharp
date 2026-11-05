@@ -177,6 +177,27 @@ class ValidationManifest {
         context.IsAnalyzerTestProject = this.IsAnalyzerTestProject
         context.RootNamespace = this.RootNamespace
         context.AssemblyName = this.AssemblyName
+        context.ProjectReferences.Clear()
+        context.ProjectReferences.AddRange(DeclaredProjectItems.Read(context.App.ProjectPath, "ProjectReference"))
+        if context.Options.EvaluatedProjectReferences != nil && !string.IsNullOrEmpty(context.App.ProjectPath) &&
+            context
+            .Options
+            .EvaluatedProjectReferences!!
+            .TryGetValue(Path.GetFullPath(context.App.ProjectPath), out var evaluatedReferencePaths) {
+            context.EvaluatedProjectReferencePaths.Clear()
+            for evaluatedReferencePath in evaluatedReferencePaths {
+                if !string.IsNullOrEmpty(evaluatedReferencePath) {
+                    let fullEvaluatedPath = Path.GetFullPath(evaluatedReferencePath)
+                    if !context.EvaluatedProjectReferencePaths.Contains(
+                        fullEvaluatedPath,
+                        StringComparer.OrdinalIgnoreCase
+                    ) {
+                        context.EvaluatedProjectReferencePaths.Add(fullEvaluatedPath)
+                    }
+                }
+            }
+            context.EvaluatedProjectReferencesResolved = true
+        }
         for friend in this.GeneratedFriendAssemblies {
             context.GeneratedFriendAssemblies.Add(friend)
         }

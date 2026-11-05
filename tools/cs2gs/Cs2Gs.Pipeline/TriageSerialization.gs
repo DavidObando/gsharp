@@ -67,6 +67,7 @@ shared class TriageSerialization {
         case TriageCategory.IlVerifyFailure: "ilverify-failure"
         case TriageCategory.TestParityFailure: "test-parity-failure"
         case TriageCategory.PipelineCrash: "pipeline-crash"
+        case TriageCategory.DependencyBlocked: "dependency-blocked"
         default: throw ArgumentOutOfRangeException("category")
     }
 }

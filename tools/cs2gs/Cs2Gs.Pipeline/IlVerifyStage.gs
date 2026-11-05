@@ -54,10 +54,25 @@ class IlVerifyStage : IMigrationStage {
         if context == nil {
             throw ArgumentNullException("context")
         }
-        // No assembly was emitted (e.g. an empty translation that still passed
-        // stage 2). Nothing to verify.
-        if string.IsNullOrEmpty(context.EmittedAssemblyPath) {
-            return Task.FromResult(StageOutcome.Passed())
+        // Issue #4767: a missing required output assembly must never become a
+        // passed verification stage.
+        if string.IsNullOrEmpty(context.EmittedAssemblyPath) || !File.Exists(context.EmittedAssemblyPath) {
+            let missingGsFile string? = if context.EmittedFiles.Count > 0 {
+                context.EmittedFiles[0].RelativeGsPath
+            } else {
+                default(string?)
+            }
+            let expectedAssembly = if string.IsNullOrEmpty(context.EmittedAssemblyPath) {
+                Path.GetFileNameWithoutExtension(context.App.ProjectPath) + ".dll"
+            } else {
+                context.EmittedAssemblyPath!!
+            }
+            let message = "Verification failed: required output assembly '$expectedAssembly' was not emitted."
+            let artifact = context.Triage.IlVerifyFailure(
+                IlVerifyError("IlVerifyMissingAssembly", nil, message),
+                missingGsFile
+            )
+            return Task.FromResult(StageOutcome.Failed([]TriageArtifact{artifact}))
         }
         var verifyReferences IReadOnlyList[string] = if context.App.ReferencedAssemblies is {Count: > 0} appRefs {
             appRefs.Concat(context.ExternalReferencePaths).ToList()

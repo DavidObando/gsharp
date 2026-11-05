@@ -975,8 +975,17 @@ internal partial class OverloadResolver {
         calleeName string,
         calleeLocation TextLocation
     ) BoundExpression {
+        var callee = callee
         if callee is BoundErrorExpression {
             return callee
+        }
+        let materializedCalleeType = TypeSymbol.MaterializeNeverFunctionReturns(callee.Type)
+        if !object.ReferenceEquals(materializedCalleeType, callee.Type) {
+            callee = conversions.BindConversion(calleeLocation, callee, materializedCalleeType)
+        }
+        if TypeSymbol.ContainsNeverType(callee.Type) {
+            Diagnostics.ReportExpressionMustHaveValue(calleeLocation)
+            return BoundErrorExpression(nil)
         }
         let callableType = if callee.Type is NullableTypeSymbol nullable {
             nullable.UnderlyingType
@@ -1108,9 +1117,20 @@ internal partial class OverloadResolver {
             )
         }
         if callee.Type is FunctionTypeSymbol fnType {
+            var resolvedFnType = fnType
+            if TypeSymbol.MaterializeNeverFunctionReturns(resolvedFnType) is FunctionTypeSymbol materializedFnType &&
+                !object
+                .ReferenceEquals(materializedFnType, resolvedFnType) {
+                callee = conversions.BindConversion(calleeLocation, callee, materializedFnType)
+                resolvedFnType = materializedFnType
+            }
+            if TypeSymbol.ContainsNeverType(resolvedFnType) {
+                Diagnostics.ReportExpressionMustHaveValue(calleeLocation)
+                return BoundErrorExpression(nil)
+            }
             if !TryBindFunctionTypeArguments(
                 calleeName,
-                fnType,
+                resolvedFnType,
                 syntax,
                 boundArguments.ToImmutable(),
                 GetIndirectCallableParameterNames(callee),
@@ -1118,7 +1138,7 @@ internal partial class OverloadResolver {
             ) {
                 return BoundErrorExpression(nil)
             }
-            return CompleteInvocation(BoundIndirectCallExpression(syntax, callee, fnType, convertedArgs))
+            return CompleteInvocation(BoundIndirectCallExpression(syntax, callee, resolvedFnType, convertedArgs))
         }
         if callee.Type is DelegateTypeSymbol delegateSym {
             if !TryBindNamedDelegateArguments(
