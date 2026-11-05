@@ -3533,6 +3533,9 @@ internal partial class DeclarationBinder {
             )
         }
         if fieldInitInstanceInitializers.Count > 0 || fieldInitZeroValueInstanceFields.Count > 0 {
+            if fieldInitInstanceInitializers.Count > 0 {
+                structSymbol.DeclaresInstanceFieldInitializer = true
+            }
             let instanceMemberNames = HashSet[string](StringComparer.Ordinal){"this"}
             let primaryCtorParameterNames = HashSet[string](
                 fieldInitPrimaryCtorParameters.Select((parameter ParameterSymbol) -> parameter.Name),
