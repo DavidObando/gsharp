@@ -185,6 +185,20 @@ internal shared class MethodInfoHelpers {
                 return true
             }
         }
+        for ev in receiverStruct.Events {
+            if (
+                object.ReferenceEquals(ev.AddMethodSymbol, function) || object.ReferenceEquals(
+                    ev.RemoveMethodSymbol,
+                    function
+                ) ||
+                    object.ReferenceEquals(ev.RaiseMethodSymbol, function)
+            ) &&
+                (
+                ev.HasExplicitInterfaceClause || MemberDefEmitter.EventImplicitlyImplementsInterface(receiverStruct, ev)
+            ) {
+                return true
+            }
+        }
         // Issue #4157: the property loop above checks a PROPERTY accessor's
         // explicit-interface clause, but an ordinary METHOD's own explicit
         // binding to an interface slot was never checked here — the code fell
@@ -228,25 +242,6 @@ internal shared class MethodInfoHelpers {
     func MethodImplicitlyImplementsInterface(structSym StructSymbol, method FunctionSymbol) bool {
         if !structSym.Interfaces.IsDefaultOrEmpty {
             for iface in structSym.Interfaces {
-                let defIface = iface.Definition ?? iface
-                for interfaceEvent in defIface.Events {
-                    var implementationEvent EventSymbol? = nil
-                    for candidate in structSym.Events {
-                        if object.ReferenceEquals(candidate.AddMethodSymbol, method) || object.ReferenceEquals(
-                            candidate.RemoveMethodSymbol,
-                            method
-                        ) ||
-                            object.ReferenceEquals(candidate.RaiseMethodSymbol, method) {
-                            implementationEvent = candidate
-                            break
-                        }
-                    }
-                    if implementationEvent != nil &&
-                        interfaceEvent.Name == implementationEvent.Name &&
-                        DeclarationBinder.InterfaceEventTypesEquivalent(iface, interfaceEvent, implementationEvent) {
-                        return true
-                    }
-                }
                 if iface.Methods.IsDefaultOrEmpty {
                     continue
                 }
@@ -257,57 +252,154 @@ internal shared class MethodInfoHelpers {
                 }
             }
         }
-        if !structSym.ImplementedClrInterfaces.IsDefaultOrEmpty {
-            for ifaceSym in structSym.ImplementedClrInterfaces {
-                // Issue #949: a CLR generic interface closed over a user G# type
-                // (e.g. `IEquatable[Shape]`) is type-erased; match against the
-                // open definition with the symbolic arguments substituted so the
-                // user method (`Equals(Shape)`) is recognised as an implicit
-                // implementation and is promoted to a virtual interface slot.
-                if MemberLookup.TryGetSymbolicClrGenericInterface(
-                    ifaceSym,
-                    out var openDefinition,
-                    out var symbolicArgs
-                ) {
-                    for slot in MemberLookup.EnumerateClrInterfaceSlots(ifaceSym, includeDefaultMethods: true) {
-                        if slot.Method.Name == method.Name && MemberLookup.MethodSatisfiesClrSlot(method, slot) {
-                            return true
-                        }
-                    }
-                    for inherited in MemberLookup.EnumerateSelfAndInterfaces(openDefinition) {
-                        for openMethod in inherited.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
-                            if openMethod.Name != method.Name || (openMethod.IsSpecialName && !method.IsSpecialName) {
-                                continue
-                            }
-                            if MemberLookup.MethodMatchesSymbolicClrInterfaceSignature(
-                                method,
-                                openMethod,
-                                symbolicArgs
-                            ) {
-                                return true
-                            }
-                        }
-                    }
-                    continue
+        return TryFindImplicitClrInterfaceMethodSlot(structSym, method) != nil
+    }
+
+    func TryFindImportedMethodSlot(function FunctionSymbol) MethodInfo? {
+        var current FunctionSymbol? = function
+        while current != nil {
+            let method = current
+            if method.ExternalOverriddenMethod != nil {
+                return method.ExternalOverriddenMethod
+            }
+            if method.ExplicitInterfaceSlot != nil {
+                return method.ExplicitInterfaceSlot
+            }
+            if method.AssociatedSymbol is PropertySymbol assocProp {
+                let ownerStruct = method.ReceiverType as StructSymbol ?? method.StaticOwnerType as StructSymbol
+                let (getterSlot, setterSlot) = TryFindImportedPropertySlots(ownerStruct, assocProp)
+                if object.ReferenceEquals(assocProp.GetterSymbol, method) && getterSlot != nil {
+                    return getterSlot
                 }
-                let clrIface Type? = ifaceSym?.ClrType
-                if clrIface == nil {
-                    continue
+                if object.ReferenceEquals(assocProp.SetterSymbol, method) && setterSlot != nil {
+                    return setterSlot
                 }
-                // GetMethods on an interface omits inherited slots (#4214).
-                for inherited in MemberLookup.EnumerateSelfAndInterfaces(clrIface) {
-                    for clrMethod in inherited.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
-                        if clrMethod.Name != method.Name || (clrMethod.IsSpecialName && !method.IsSpecialName) {
-                            continue
-                        }
-                        if MemberLookup.MethodMatchesClrSignature(method, clrMethod) {
-                            return true
-                        }
+            }
+            if method.ReceiverType is StructSymbol structSym &&
+                TryFindImplicitClrInterfaceMethodSlot(structSym, method) is {} ifaceSlot {
+                return ifaceSlot
+            }
+            current = method.OverriddenMethod
+        }
+        return nil
+    }
+
+    func TryFindImportedPropertySlots(structSym StructSymbol?, prop PropertySymbol)(
+        Getter MethodInfo?,
+        Setter MethodInfo?
+    ) {
+        var getter MethodInfo? = nil
+        var setter MethodInfo? = nil
+        var current PropertySymbol? = prop
+        while current != nil {
+            let property = current
+            getter ??= property.ExternalOverriddenGetter ?? property.ExplicitInterfaceGetterSlot
+            setter ??= property.ExternalOverriddenSetter ?? property.ExplicitInterfaceSetterSlot
+            let owner = FindPropertyDeclaringStruct(structSym, property) ?? structSym
+            if owner != nil && !property.IsStatic {
+                let ifaceSlots = TryFindImplicitClrInterfacePropertySlots(owner, property)
+                getter ??= ifaceSlots.Getter
+                setter ??= ifaceSlots.Setter
+            }
+            if (getter != nil || !prop.HasGetter) && (setter != nil || !prop.HasSetter) {
+                return (getter, setter)
+            }
+            current = property.OverriddenProperty
+        }
+        return (getter, setter)
+    }
+
+    func TryFindImplicitClrInterfacePropertySlots(structSym StructSymbol, prop PropertySymbol)(
+        Getter MethodInfo?,
+        Setter MethodInfo?
+    ) {
+        if prop.HasExplicitInterfaceClause || structSym.ImplementedClrInterfaces.IsDefaultOrEmpty {
+            return (nil, nil)
+        }
+        var getter MethodInfo? = nil
+        var setter MethodInfo? = nil
+        for ifaceSym in structSym.ImplementedClrInterfaces {
+            let clrIface Type? = ifaceSym?.ClrType
+            if clrIface == nil {
+                continue
+            }
+            for inherited in MemberLookup.EnumerateSelfAndInterfaces(clrIface) {
+                for clrProp in inherited.GetProperties(BindingFlags.Public | BindingFlags.Instance) {
+                    let indexParameters = clrProp.GetIndexParameters()
+                    if prop.IsIndexer != (indexParameters.Length > 0) ||
+                        (clrProp.GetMethod != nil && !prop.HasGetter) ||
+                        (clrProp.SetMethod != nil && !prop.HasSetter) ||
+                        !MemberLookup.PropertyMatchesClrInterfaceSignature(prop, ifaceSym, clrProp) {
+                        continue
+                    }
+                    getter ??= clrProp.GetMethod
+                    setter ??= clrProp.SetMethod
+                    if (getter != nil || !prop.HasGetter) && (setter != nil || !prop.HasSetter) {
+                        return (getter, setter)
                     }
                 }
             }
         }
-        return false
+        return (getter, setter)
+    }
+
+    private func FindPropertyDeclaringStruct(structSym StructSymbol?, prop PropertySymbol) StructSymbol? {
+        if structSym != nil {
+            for candidate in structSym.GetHierarchy() {
+                let def = candidate.Definition ?? candidate
+                if !def.Properties.IsDefaultOrEmpty && def.Properties.Contains(prop) {
+                    return def
+                }
+            }
+        }
+        return prop.GetterSymbol?.ReceiverType as StructSymbol ?? prop.SetterSymbol?.ReceiverType as StructSymbol
+    }
+
+    private func TryFindImplicitClrInterfaceMethodSlot(structSym StructSymbol, method FunctionSymbol) MethodInfo? {
+        if method.HasExplicitInterfaceClause || structSym.ImplementedClrInterfaces.IsDefaultOrEmpty {
+            return nil
+        }
+        for ifaceSym in structSym.ImplementedClrInterfaces {
+            // Issue #949: a CLR generic interface closed over a user G# type
+            // (e.g. `IEquatable[Shape]`) is type-erased; match against the
+            // open definition with the symbolic arguments substituted so the
+            // user method (`Equals(Shape)`) is recognised as an implicit
+            // implementation and is promoted to a virtual interface slot.
+            if MemberLookup.TryGetSymbolicClrGenericInterface(ifaceSym, out var openDefinition, out var symbolicArgs) {
+                for slot in MemberLookup.EnumerateClrInterfaceSlots(ifaceSym, includeDefaultMethods: true) {
+                    if slot.Method.Name == method.Name && MemberLookup.MethodSatisfiesClrSlot(method, slot) {
+                        return slot.Method
+                    }
+                }
+                for inherited in MemberLookup.EnumerateSelfAndInterfaces(openDefinition) {
+                    for openMethod in inherited.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
+                        if openMethod.Name != method.Name || (openMethod.IsSpecialName && !method.IsSpecialName) {
+                            continue
+                        }
+                        if MemberLookup.MethodMatchesSymbolicClrInterfaceSignature(method, openMethod, symbolicArgs) {
+                            return openMethod
+                        }
+                    }
+                }
+                continue
+            }
+            let clrIface Type? = ifaceSym?.ClrType
+            if clrIface == nil {
+                continue
+            }
+            // GetMethods on an interface omits inherited slots (#4214).
+            for inherited in MemberLookup.EnumerateSelfAndInterfaces(clrIface) {
+                for clrMethod in inherited.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
+                    if clrMethod.Name != method.Name || (clrMethod.IsSpecialName && !method.IsSpecialName) {
+                        continue
+                    }
+                    if MemberLookup.MethodMatchesClrSignature(method, clrMethod) {
+                        return clrMethod
+                    }
+                }
+            }
+        }
+        return nil
     }
 
     /// Returns true when the two G# function signatures match (name, return

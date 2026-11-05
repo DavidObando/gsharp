@@ -36,19 +36,15 @@ import Xunit
 /// declarations (the C# twin), which also pins the method-level context compression.
 open class Issue4988SignatureNullabilityMatrixTests {
     /// The whole matrix, for a modern and a downlevel producer. A netstandard2.0
-    /// producer embeds its own `NullableAttribute` / `NullableContextAttribute`
-    /// (#4922), so it exercises the same plan through a different attribute
-    /// binding. Data classes and inline structs are left out of the
-    /// netstandard2.0 producer: their synthesized members bind to
-    /// `System.HashCode`, `IsExternalInit` and `IsReadOnlyAttribute`, which
-    /// netstandard2.0 does not have, through host-only references (#4993).
+    /// producer embeds its own `NullableAttribute`, `NullableContextAttribute`,
+    /// `IsReadOnlyAttribute`, and `IsExternalInit` (#4922, #4993), so it
+    /// exercises the same plan through embedded attribute/modifier bindings.
     /// @param targetFramework The producer's target framework.
     @Theory
     @InlineData("net10.0")
     @InlineData("netstandard2.0")
     func EveryDeclarationKind_RoundTripsEveryShape_ThroughMetadata(targetFramework string) {
         let isNetStandard = targetFramework == "netstandard2.0"
-        let includeModernOnlyKinds = !isNetStandard
         let tempDir = Directory.CreateTempSubdirectory("gs_issue4988_").FullName
         try {
             var coreDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location) ??
@@ -65,12 +61,12 @@ open class Issue4988SignatureNullabilityMatrixTests {
             }
             let producerPath = CompileGSharp(
                 tempDir,
-                BuildGSharpProducer(includeModernOnlyKinds),
+                BuildGSharpProducer(true),
                 targetFramework,
                 references,
                 verify: !isNetStandard
             )
-            let twinPath = CompileCSharp(tempDir, BuildCSharpTwin(includeModernOnlyKinds))
+            let twinPath = CompileCSharp(tempDir, BuildCSharpTwin(true))
             using let producerContext = LoadContext(producerPath, coreDirectory, isNetStandard)
             using let twinContext = LoadContext(
                 twinPath,
@@ -83,7 +79,7 @@ open class Issue4988SignatureNullabilityMatrixTests {
             let failures = List[string]()
             var checkedPositions = 0
             var failingPositions = 0
-            for position in BuildPositions(includeModernOnlyKinds) {
+            for position in BuildPositions(true) {
                 let reference = Resolve(twin, position)
                 checkedPositions++
                 // A position gsc emitted without a row at all (an unnamed or
@@ -891,42 +887,8 @@ open class Issue4988SignatureNullabilityMatrixTests {
 
         /// The netstandard2.0 contract: the NETStandard.Library 2.0 package's
         /// reference assembly when the NuGet cache has it, otherwise the SDK's
-        /// NETStandard.Library.Ref pack (as Issue4921HostFallbackEmbeddableAttributeTests does).
-        private func FindNetStandardReference() string? {
-            let packages = Environment.GetEnvironmentVariable("NUGET_PACKAGES") ?? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".nuget",
-                "packages"
-            )
-            let packageRoot = Path.Combine(packages, "netstandard.library")
-            if Directory.Exists(packageRoot) {
-                let packaged string? = Directory
-                    .GetFiles(packageRoot, "netstandard.dll", SearchOption.AllDirectories)
-                    .Where(
-                    (p string) -> p.Contains(Path.Combine("build", "netstandard2.0", "ref"), StringComparison.Ordinal)
-                )
-                    .OrderByDescending((p string) -> p, StringComparer.Ordinal)
-                    .FirstOrDefault()
-                if packaged != nil {
-                    return packaged
-                }
-            }
-            var dotnetRoot string? = Path.GetDirectoryName(typeof(object).Assembly.Location)
-            while dotnetRoot != nil && !Directory.Exists(Path.Combine(dotnetRoot, "packs")) {
-                dotnetRoot = Path.GetDirectoryName(dotnetRoot)
-            }
-            if dotnetRoot == nil {
-                return nil
-            }
-            let packRoot = Path.Combine(dotnetRoot, "packs", "NETStandard.Library.Ref")
-            if !Directory.Exists(packRoot) {
-                return nil
-            }
-            return Directory
-                .GetFiles(packRoot, "netstandard.dll", SearchOption.AllDirectories)
-                .OrderByDescending((p string) -> p, StringComparer.Ordinal)
-                .FirstOrDefault()
-        }
+        /// NETStandard.Library.Ref pack scrubbed to the netstandard2.0 surface.
+        private func FindNetStandardReference() string? -> Issue4921HostFallbackEmbeddableAttributeTests.FindNetStandardReference()
 
         private func TryDelete(directory string) {
             try {

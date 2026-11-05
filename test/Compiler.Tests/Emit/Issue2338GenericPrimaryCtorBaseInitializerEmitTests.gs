@@ -108,12 +108,11 @@ func Main() {
     Console.WriteLine(m.Equals(m2).ToString())
     Console.WriteLine((m.GetHashCode() == m2.GetHashCode()).ToString())
 }`
-        // The derived class re-declares `Type`/`Message` (the shape cs2gs emits
-        // for the Oahu record, which C# does not duplicate: #4874), so each
-        // declaring type prints its own copy.
+        // Issue #4874: the derived class reuses `Type`/`Message` from the base
+        // data class instead of synthesizing duplicate properties.
         Assert.Equal(
             "info${Environment.NewLine}hello${Environment.NewLine}99${Environment.NewLine}" +
-                "InteractionMessage { Type = info, Message = hello, Type = info, Message = hello, Data = 99 }${Environment.NewLine}" +
+                "InteractionMessage { Type = info, Message = hello, Data = 99 }${Environment.NewLine}" +
                 "True${Environment.NewLine}True${Environment.NewLine}True${Environment.NewLine}",
             CompileAndRun(source)
         )
@@ -198,9 +197,9 @@ func Main() {
     Console.WriteLine(d.Value.ToString())
     Console.WriteLine(d.ToString())
 }`
-        // `Derived` re-declares `Name`, so both copies print (see #4874).
+        // Issue #4874: `Derived` reuses `Name` from the base data class.
         Assert.Equal(
-            "hello${Environment.NewLine}42${Environment.NewLine}Derived2338DataExtendsData { Name = hello, Name = hello, Value = 42 }${Environment.NewLine}",
+            "hello${Environment.NewLine}42${Environment.NewLine}Derived2338DataExtendsData { Name = hello, Value = 42 }${Environment.NewLine}",
             CompileAndRun(source)
         )
     }

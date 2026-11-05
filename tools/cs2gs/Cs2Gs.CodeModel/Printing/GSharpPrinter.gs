@@ -1885,6 +1885,9 @@ shared class GSharpPrinter {
         if ifStatement.ElseBranch is IfStatement elseIf {
             sb.Append(" else ")
             sb.Append(RenderIf(elseIf, indent).TrimStart())
+        } else if ifStatement.ElseBranch is IfLetStatement elseIfLet {
+            sb.Append(" else ")
+            sb.Append(RenderIfLet(elseIfLet, indent).TrimStart())
         } else if ifStatement.ElseBranch is BlockStatement elseBlock {
             sb.Append(" else ")
             sb.Append(RenderBlock(elseBlock, indent))

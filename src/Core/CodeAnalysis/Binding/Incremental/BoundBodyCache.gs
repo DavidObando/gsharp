@@ -244,3 +244,28 @@ internal class BoundBodyCache {
         }
     }
 }
+
+partial class Binder {
+    shared {
+        internal func BindProgram(
+            globalScope BoundGlobalScope,
+            references ReferenceResolver?,
+            cache BoundBodyCache?
+        ) BoundProgram -> BindProgram(globalScope, references, BodyBindingOptions(cache, nil), workBudget: nil)
+
+        internal func BindProgram(
+            globalScope BoundGlobalScope,
+            references ReferenceResolver?,
+            cache BoundBodyCache?,
+            dirtyTrees ImmutableHashSet[SyntaxTree]?
+        ) BoundProgram -> BindProgram(globalScope, references, BodyBindingOptions(cache, dirtyTrees), workBudget: nil)
+
+        internal func BindProgram(
+            globalScope BoundGlobalScope,
+            references ReferenceResolver?,
+            cache BoundBodyCache?,
+            dirtyTrees ImmutableHashSet[SyntaxTree]?,
+            workBudget CompilationWorkBudget?
+        ) BoundProgram -> BindProgram(globalScope, references, BodyBindingOptions(cache, dirtyTrees), workBudget)
+    }
+}

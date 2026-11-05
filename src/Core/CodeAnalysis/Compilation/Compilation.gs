@@ -388,7 +388,12 @@ open class Compilation {
             using let recordingScope = CallCandidateRecorder.Enter(RecordMemberGroups, FailedCalls)
             ThrowIfCannotBuild_Locked()
             BodyBindProbe?.Invoke()
-            let bp = Binder.BindProgram(declarations, References, BodyCache, DirtyBodyTrees, WorkBudget)
+            let bp = Binder.BindProgram(
+                declarations,
+                References,
+                BodyBindingOptions(BodyCache, DirtyBodyTrees),
+                WorkBudget
+            )
             CompilationMeasurements.Count("input.methods", bp.Functions.Count)
             // A cancelled build publishes nothing: the compilation is dead (ADR-0212 §8).
             WorkBudget.CancellationToken.ThrowIfCancellationRequested()

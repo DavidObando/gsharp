@@ -585,7 +585,7 @@ internal partial class DeclarationBinder {
                 // below; ordinary declared properties keep their established
                 // interface-verification behavior.
                 let isPositionalMember = implProp.Declaration == nil &&
-                    TypeMemberModel.TryGetPrimaryConstructorParameter(structSymbol, iprop.Name, out _)
+                    HasBackingPositionalParameter(structSymbol, iprop.Name, out _)
                 if isPositionalMember {
                     found = false
                 } else if InterfacePropertySetterKindsMismatch(iprop, implProp) {
@@ -606,11 +606,7 @@ internal partial class DeclarationBinder {
             // this-first BaseClass chain (mirroring `TryGetProperty` and
             // issue #1066) and treat a same-name, type-compatible
             // positional parameter as satisfying the property contract.
-            if !found && TypeMemberModel.TryGetPrimaryConstructorParameter(
-                structSymbol,
-                iprop.Name,
-                out var positionalParam
-            ) {
+            if !found && HasBackingPositionalParameter(structSymbol, iprop.Name, out var positionalParam) {
                 found = true
                 // Issue #2150: get-only covariance permits T to satisfy T?
                 // only when the nullable annotation is erased in metadata
@@ -654,6 +650,38 @@ internal partial class DeclarationBinder {
                     } else {
                         positionalInterfaceProps[iprop.Name] = (positionalParam!!, needsSetter)
                     }
+                }
+            }
+            if !found && !iprop.IsIndexer && TypeMemberModel.TryGetInheritedDataPositionalProperty(
+                structSymbol,
+                iprop.Name,
+                out var reusedProp,
+                out _
+            ) &&
+                reusedProp is {} resolvedReusedProp &&
+                resolvedReusedProp.ImportedMember != nil &&
+                resolvedReusedProp.Accessibility == Accessibility.Public &&
+                (!iprop.HasGetter || resolvedReusedProp.GetterAccessibility == Accessibility.Public) {
+                if !IsInterfacePropertyTypeCompatible(
+                    resolvedReusedProp.Type,
+                    iprop.Type,
+                    iprop.HasSetter,
+                    typeParameterMap
+                ) {
+                    typeMismatch ??= resolvedReusedProp
+                } else if iprop.HasSetter &&
+                    resolvedReusedProp.HasSetter &&
+                    resolvedReusedProp.SetterAccessibility == Accessibility.Public &&
+                    InterfacePropertySetterKindsMismatch(iprop, resolvedReusedProp) {
+                    ReportInterfacePropertySetterKindMismatch(
+                        syntax,
+                        structSymbol,
+                        iface.Name,
+                        iprop.Name,
+                        iprop.IsInitOnly,
+                        resolvedReusedProp
+                    )
+                    continue
                 }
             }
             if !found {
@@ -2189,6 +2217,38 @@ internal partial class DeclarationBinder {
             return nil
         }
 
+        private func HasBackingPositionalParameter(
+            structSymbol StructSymbol,
+            name string,
+            @System.Diagnostics.CodeAnalysis.NotNullWhen(true) out parameter ParameterSymbol?
+        ) bool {
+            for c in structSymbol.GetHierarchy() {
+                if c.PrimaryConstructorParameters.IsDefaultOrEmpty {
+                    continue
+                }
+                for p in c.PrimaryConstructorParameters {
+                    if p.Name != name {
+                        continue
+                    }
+                    let hasSynthesizedPositionalProperty = c.Properties.Any(
+                        (prop PropertySymbol) -> prop.Declaration == nil &&
+                            !prop.IsStatic &&
+                            !prop.IsIndexer &&
+                            prop.Name == name
+                    )
+                    let hasPositionalField = !c.IsData && c.Fields.Any(
+                        (field FieldSymbol) -> !field.IsStatic && field.Name == name
+                    )
+                    if hasSynthesizedPositionalProperty || hasPositionalField {
+                        parameter = p
+                        return true
+                    }
+                }
+            }
+            parameter = nil
+            return false
+        }
+
         private func TryGetConstructedInterfacePropertyImplementation(
             structSymbol StructSymbol,
             interfaceProperty PropertySymbol,
@@ -2205,7 +2265,19 @@ internal partial class DeclarationBinder {
                         candidate.Name != interfaceProperty.Name ||
                         (
                         !object.ReferenceEquals(current, structSymbol) &&
-                            candidate.Accessibility != Accessibility.Public
+                            (
+                            candidate.Accessibility != Accessibility.Public ||
+                                (
+                                interfaceProperty.HasGetter &&
+                                    candidate.HasGetter &&
+                                    candidate.GetterAccessibility != Accessibility.Public
+                            ) ||
+                                (
+                                interfaceProperty.HasSetter &&
+                                    candidate.HasSetter &&
+                                    candidate.SetterAccessibility != Accessibility.Public
+                            )
+                        )
                     ) ||
                         candidate.IsIndexer != interfaceProperty.IsIndexer ||
                         candidate
@@ -2381,7 +2453,7 @@ internal partial class DeclarationBinder {
                         hasGetter: true,
                         hasSetter: entry.NeedsSetter,
                         isAutoProperty: true,
-                        isVirtual: true,
+                        isVirtual: false,
                         isOverride: false
                     ){BackingField = backingField}
                     declaringType!!.SetProperties(declaringType!!.Properties.Add(synthProp))
@@ -3088,7 +3160,7 @@ internal partial class DeclarationBinder {
                 hasGetter: true,
                 hasSetter: requiresSetter,
                 isAutoProperty: true,
-                isVirtual: true,
+                isVirtual: false,
                 isOverride: false,
                 isInitOnly: contractIsInitOnly
             )
@@ -3122,20 +3194,45 @@ internal partial class DeclarationBinder {
                 }
             }
             if implementation == nil {
-                for property in GetMembersIncludingInherited(structSymbol, (type StructSymbol) -> type.Properties) {
-                    if MemberLookup.IsImplicitInterfaceImplementationCandidate(property) &&
-                        (
-                        if symbolicArgs.IsDefaultOrEmpty {
-                            MemberLookup.PropertyMatchesClrInterfaceSignature(property, interfaceType, clrProperty)
-                        } else {
-                            MemberLookup.PropertyMatchesSymbolicClrInterfaceSignature(
-                                property,
-                                clrProperty,
-                                symbolicArgs
+                for type in structSymbol.GetHierarchy() {
+                    for property in type.Properties {
+                        if !object.ReferenceEquals(type, structSymbol) &&
+                            (
+                            property.Accessibility != Accessibility.Public ||
+                                (
+                                clrProperty
+                                    .GetMethod
+                                    ?.IsAbstract == true &&
+                                    property.HasGetter &&
+                                    property.GetterAccessibility != Accessibility.Public
+                            ) ||
+                                (
+                                clrProperty
+                                    .SetMethod
+                                    ?.IsAbstract == true &&
+                                    property.HasSetter &&
+                                    property.SetterAccessibility != Accessibility.Public
                             )
+                        ) {
+                            continue
                         }
-                    ) {
-                        implementation = property
+                        if MemberLookup.IsImplicitInterfaceImplementationCandidate(property) &&
+                            (
+                            if symbolicArgs.IsDefaultOrEmpty {
+                                MemberLookup.PropertyMatchesClrInterfaceSignature(property, interfaceType, clrProperty)
+                            } else {
+                                MemberLookup.PropertyMatchesSymbolicClrInterfaceSignature(
+                                    property,
+                                    clrProperty,
+                                    symbolicArgs
+                                )
+                            }
+                        ) {
+                            implementation = property
+                            break
+                        }
+                    }
+                    if implementation != nil {
                         break
                     }
                 }
