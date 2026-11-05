@@ -492,10 +492,24 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             current = block.Expression
         }
         let clrIndex = cast[BoundClrIndexExpression](current)
+        let receiverTarget = this.SpillStorageReceiverParts(clrIndex.Target, statements, captureComponents)
+        var anyArgumentHasSideEffect = false
+        for argument in clrIndex.Arguments {
+            if SideEffectAnalyzer.HasObservableSideEffect(argument) {
+                anyArgumentHasSideEffect = true
+                break
+            }
+        }
         let target = this.MaybeSpill(
-            clrIndex.Target,
-            !IsStableLocalRead(clrIndex.Target) &&
-                (captureComponents || SideEffectAnalyzer.HasObservableSideEffect(clrIndex.Target)),
+            receiverTarget,
+            receiverTarget is not BoundFieldAccessExpression and
+                not BoundClrPropertyAccessExpression{Member: FieldInfo} &&
+                !IsStableLocalRead(receiverTarget) &&
+                (
+                captureComponents || anyArgumentHasSideEffect || SideEffectAnalyzer.HasObservableSideEffect(
+                    receiverTarget
+                )
+            ),
             "coll",
             statements
         )

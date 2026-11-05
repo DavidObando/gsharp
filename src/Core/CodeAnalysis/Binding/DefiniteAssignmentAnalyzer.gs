@@ -1224,8 +1224,8 @@ internal shared class DefiniteAssignmentAnalyzer {
                 dispatchAssigned = patternFailedAssigned
                 dispatchAliases = patternFailedAliases
             } else if arm.PatternMatchesAllInputs {
-                dispatchAssigned = guardAssigned
-                dispatchAliases = guardAliases
+                dispatchAssigned = HashSet[VariableSymbol](guardAssigned)
+                dispatchAliases = Dictionary[VariableSymbol, VariableSymbol](guardAliases)
             } else {
                 MergeConditionalFlow(
                     dispatchAssigned,

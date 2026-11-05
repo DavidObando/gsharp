@@ -249,11 +249,20 @@ struct Pair {
     var Right Cell
     func Bump() { Left.Item++ }
 }
+class SliceHolder {
+    var Frames slice[Pair]
+}
 var owners = 0
 var indices = 0
 var index = 0
 let storage = []Pair{Pair{Left: Cell{Item: 3, Other: 50}, Right: Cell{Item: 80}}}
 var frames = slice[Pair].FromArray(storage)
+var holder = SliceHolder{Frames: slice[Pair].FromArray(storage)}
+func ChangeHolder() int32 {
+    let replacement = []Pair{Pair{}}
+    holder = SliceHolder{Frames: slice[Pair].FromArray(replacement)}
+    return 0
+}
 func Owner() slice[Pair] {
     owners++
     return frames
@@ -300,8 +309,9 @@ try {
 }
 frames = slice[Pair].FromArray(storage)
 index = 0
+var blockIdxCalls = 0
 scope {
-    go frames[0].Bump()
+    go frames[{ blockIdxCalls++; 0 }].Bump()
     frames = slice[Pair]{Pair{}}
 }
 frames = slice[Pair].FromArray(storage)
@@ -311,11 +321,14 @@ scope {
     frames = slice[Pair]{Pair{}}
     index = 99
 }
-Console.WriteLine("go:${storage[0].Left.Item}:${owners}:${indices}")`
+let afterGo = storage[0].Left.Item
+holder = SliceHolder{Frames: slice[Pair].FromArray(storage)}
+holder.Frames[ChangeHolder(), false].Left.Item = 31
+Console.WriteLine("go:${afterGo}:${storage[0].Left.Item}:${owners}:${indices}:${blockIdxCalls}:${holder.Frames[0].Left.Item}")`
         let dll = fixture.Compile(source, "channel_parameter_store", true)
         VerifyStrict(dll)
         Assert.Equal(
-            Encoding.UTF8.GetBytes("10\nFalse\n10:55:88:0\nFalse:1:1\n25:1:1\nbounds:2:2\ngo:27:3:3\n"),
+            Encoding.UTF8.GetBytes("10\nFalse\n10:55:88:0\nFalse:1:1\n25:1:1\nbounds:2:2\ngo:27:31:3:3:1:0\n"),
             Encoding.UTF8.GetBytes(fixture.Run(dll))
         )
     }

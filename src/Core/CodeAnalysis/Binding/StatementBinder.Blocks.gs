@@ -1498,8 +1498,10 @@ internal partial class StatementBinder {
         retainedVariables HashSet[VariableSymbol],
         retainRemaining[]bool
     ) BoundExpression -> switch operand {
-        case block is BoundBlockExpression when block.Syntax is not BlockExpressionSyntax &&
-            !ReadsUncapturableVariable(block, retainedVariables): HoistArgumentBlock(
+        case block is BoundBlockExpression when !ReadsUncapturableVariable(
+            block,
+            retainedVariables
+        ): HoistArgumentBlock(
             block,
             prefix,
             retainedVariables,

@@ -1205,6 +1205,14 @@ func F(xs []int32, out a int32) {
     }
     *p = 1
 }`, "GS0238", 12, 5)
+        AssertDiagnostic(`func Set(out a int32) int32 { a = 1 return 0 }
+func F(x int32, flag bool, out a int32) {
+    switch x {
+        case _ when flag { return }
+        case (Set(out a)) when flag {}
+        default {}
+    }
+}`, "GS0238", 4, 28)
     }
 
     @Fact
