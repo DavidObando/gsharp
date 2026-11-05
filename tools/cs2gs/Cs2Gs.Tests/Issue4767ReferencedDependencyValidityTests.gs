@@ -1536,6 +1536,105 @@ public static class Consumer
             Assert.Equal(StageStatus.Failed, sourcelessCompileOutcome.Status)
             Assert.Equal("dependency-blocked", sourcelessCompileOutcome.FailureCategory)
             Assert.Empty(sourcelessCompileOutcome.Artifacts)
+
+            // Case 4h (`PRRT_kwDOCzQNb86z3bE8`): wildcard `Include="../Models/*.csproj"`,
+            // `Exclude="../BadModels/*.csproj"`, and wildcard `Remove` must expand
+            // matching projects on disk instead of recording a literal `*.csproj` path
+            // that triggers a bogus `CS2GS0001` missing-file error.
+            File.WriteAllText(
+                consumerProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <ItemGroup>\n" +
+                    "    <ProjectReference Include=\"../Models/*.csproj;../BadModels/*.csproj\" Exclude=\"../BadModels/Bad*.csproj\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            let case4hOptions = PipelineOptions{
+                GscPath: compiler,
+                Config: "Release",
+                OutputRoot: Path.Combine(corpusRoot, "runs-case4h"),
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true
+            }
+            let case4hResult = await MigrationPipeline(case4hOptions, []IMigrationStage{TranslateStage()}).RunAsync(
+                []CorpusApp{app}
+            )
+            Assert.True(case4hResult.Succeeded)
+
+            // Case 4i (`PRRT_kwDOCzQNb86z3bFN`): imported `.props` in a separate
+            // `build/` directory declaring `Include="../Models/Models.csproj"` and
+            // `Remove="../BadModels/BadModels.csproj"` must resolve those relative
+            // item paths against `rootProjectDir` (`Consumer/`), not `build/`, while
+            // retaining `$(MSBuildThisFileDirectory)` for explicit props-relative paths.
+            let buildPropsDir = Path.Combine(corpusRoot, "build")
+            Directory.CreateDirectory(buildPropsDir)
+            let sharedRefsProps = Path.Combine(buildPropsDir, "Refs.props")
+            File.WriteAllText(
+                sharedRefsProps,
+                "<Project>\n" +
+                    "  <ItemGroup>\n" +
+                    "    <ProjectReference Include=\"../Models/Models.csproj\" />\n" +
+                    "    <ProjectReference Include=\"$$(MSBuildThisFileDirectory)../BadModels/BadModels.csproj\" />\n" +
+                    "    <ProjectReference Remove=\"../BadModels/BadModels.csproj\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            File.WriteAllText(
+                consumerProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <Import Project=\"../build/Refs.props\" />\n" +
+                    "</Project>\n"
+            )
+            let case4iOptions = PipelineOptions{
+                GscPath: compiler,
+                Config: "Release",
+                OutputRoot: Path.Combine(corpusRoot, "runs-case4i"),
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true
+            }
+            let case4iResult = await MigrationPipeline(case4iOptions, []IMigrationStage{TranslateStage()}).RunAsync(
+                []CorpusApp{app}
+            )
+            Assert.True(case4iResult.Succeeded)
+
+            // Case 4j (`PRRT_kwDOCzQNb86z3bFX`): an inactive compound condition
+            // such as `'$(Configuration)' != 'Release' And '$(Configuration)' == 'Debug'`
+            // or `'$(Configuration)' != 'Other' And '$(Configuration)' == 'Debug'`
+            // on a nonexistent project reference must evaluate to false in Release
+            // and must not synthesize a consumer-owned `CS2GS0001` error.
+            File.WriteAllText(
+                consumerProject,
+                "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>net10.0</TargetFramework>\n" +
+                    "    <Nullable>enable</Nullable>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <ItemGroup>\n" +
+                    "    <ProjectReference Include=\"../Models/Models.csproj\" />\n" +
+                    "    <ProjectReference Include=\"../Missing/Missing1.csproj\" Condition=\"'$$(Configuration)' != 'Release' And '$$(Configuration)' == 'Debug'\" />\n" +
+                    "    <ProjectReference Include=\"../Missing/Missing2.csproj\" Condition=\"'$$(Configuration)' != 'Other' And '$$(Configuration)' == 'Debug'\" />\n" +
+                    "  </ItemGroup>\n" +
+                    "</Project>\n"
+            )
+            let case4jOptions = PipelineOptions{
+                GscPath: compiler,
+                Config: "Release",
+                OutputRoot: Path.Combine(corpusRoot, "runs-case4j"),
+                SourceRoot: corpusRoot,
+                CompileViaSdk: true
+            }
+            let case4jResult = await MigrationPipeline(case4jOptions, []IMigrationStage{TranslateStage()}).RunAsync(
+                []CorpusApp{app}
+            )
+            Assert.True(case4jResult.Succeeded)
         } finally {
             Directory.Delete(corpusRoot, recursive: true)
         }

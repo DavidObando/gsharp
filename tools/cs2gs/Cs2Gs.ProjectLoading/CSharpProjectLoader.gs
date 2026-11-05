@@ -14,6 +14,7 @@ import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.IO
+import System.IO.Enumeration
 import System.Linq
 import System.Threading
 import System.Threading.Tasks
@@ -764,11 +765,23 @@ shared class CSharpProjectLoader {
         for child in container.Elements() {
             let localName = child.Name.LocalName
             if localName.Equals("PropertyGroup", StringComparison.OrdinalIgnoreCase) {
-                if !EvaluateMsbuildCondition(child.Attribute(XName?("Condition")!!)?.Value, properties) {
+                if !EvaluateMsbuildCondition(
+                    child.Attribute(XName?("Condition")!!)?.Value,
+                    properties,
+                    currentFileDir,
+                    customItems,
+                    rootProjectDir
+                ) {
                     continue
                 }
                 for propElement in child.Elements() {
-                    if !EvaluateMsbuildCondition(propElement.Attribute(XName?("Condition")!!)?.Value, properties) {
+                    if !EvaluateMsbuildCondition(
+                        propElement.Attribute(XName?("Condition")!!)?.Value,
+                        properties,
+                        currentFileDir,
+                        customItems,
+                        rootProjectDir
+                    ) {
                         continue
                     }
                     properties[propElement.Name.LocalName] = ExpandMsbuildExpressions(
@@ -779,7 +792,13 @@ shared class CSharpProjectLoader {
                     )
                 }
             } else if localName.Equals("Import", StringComparison.OrdinalIgnoreCase) {
-                if !EvaluateMsbuildCondition(child.Attribute(XName?("Condition")!!)?.Value, properties) {
+                if !EvaluateMsbuildCondition(
+                    child.Attribute(XName?("Condition")!!)?.Value,
+                    properties,
+                    currentFileDir,
+                    customItems,
+                    rootProjectDir
+                ) {
                     continue
                 }
                 let rawImport = ExpandMsbuildExpressions(
@@ -825,7 +844,13 @@ shared class CSharpProjectLoader {
                 for branch in child.Elements() {
                     if branch.Name.LocalName.Equals("When", StringComparison.OrdinalIgnoreCase) {
                         if !matchedBranch &&
-                            EvaluateMsbuildCondition(branch.Attribute(XName?("Condition")!!)?.Value, properties) {
+                            EvaluateMsbuildCondition(
+                            branch.Attribute(XName?("Condition")!!)?.Value,
+                            properties,
+                            currentFileDir,
+                            customItems,
+                            rootProjectDir
+                        ) {
                             matchedBranch = true
                             EvaluateXmlProjectContainer(
                                 branch,
@@ -853,11 +878,23 @@ shared class CSharpProjectLoader {
                     }
                 }
             } else if localName.Equals("ItemGroup", StringComparison.OrdinalIgnoreCase) {
-                if !EvaluateMsbuildCondition(child.Attribute(XName?("Condition")!!)?.Value, properties) {
+                if !EvaluateMsbuildCondition(
+                    child.Attribute(XName?("Condition")!!)?.Value,
+                    properties,
+                    currentFileDir,
+                    customItems,
+                    rootProjectDir
+                ) {
                     continue
                 }
                 for item in child.Elements() {
-                    if !EvaluateMsbuildCondition(item.Attribute(XName?("Condition")!!)?.Value, properties) {
+                    if !EvaluateMsbuildCondition(
+                        item.Attribute(XName?("Condition")!!)?.Value,
+                        properties,
+                        currentFileDir,
+                        customItems,
+                        rootProjectDir
+                    ) {
                         continue
                     }
                     let itemName = item.Name.LocalName
@@ -875,17 +912,8 @@ shared class CSharpProjectLoader {
                                     trimmed.Contains("@(", StringComparison.Ordinal) {
                                     continue
                                 }
-                                let normalizedRemove = trimmed.Replace('\\', Path.DirectorySeparatorChar).Replace(
-                                    '/',
-                                    Path.DirectorySeparatorChar
-                                )
-                                let fullRemove = Path.GetFullPath(Path.Combine(currentFileDir, normalizedRemove))
                                 projectReferences.RemoveAll(
-                                    (existing string) -> string.Equals(
-                                        existing,
-                                        fullRemove,
-                                        StringComparison.OrdinalIgnoreCase
-                                    )
+                                    (existing string) -> MatchesProjectReferenceSpec(existing, trimmed, rootProjectDir)
                                 )
                             }
                         }
@@ -916,18 +944,40 @@ shared class CSharpProjectLoader {
                         if string.Equals(refOutput?.Trim(), "false", StringComparison.OrdinalIgnoreCase) {
                             continue
                         }
+                        let excludeSpec = ExpandMsbuildExpressions(
+                            item.Attribute(XName?("Exclude")!!)?.Value,
+                            currentFileDir,
+                            properties,
+                            customItems
+                        )
+                        let excludePatterns = List[string]()
+                        if !string.IsNullOrWhiteSpace(excludeSpec) {
+                            for part in excludeSpec.Split(';', StringSplitOptions.RemoveEmptyEntries) {
+                                let trimmed = part.Trim()
+                                if !string.IsNullOrEmpty(trimmed) && !trimmed.Contains(
+                                    "$$(",
+                                    StringComparison.Ordinal
+                                ) &&
+                                    !trimmed.Contains("@(", StringComparison.Ordinal) {
+                                    excludePatterns.Add(trimmed)
+                                }
+                            }
+                        }
                         for part in includeSpec.Split(';', StringSplitOptions.RemoveEmptyEntries) {
                             let trimmed = part.Trim()
-                            if string.IsNullOrEmpty(trimmed) {
+                            if string.IsNullOrEmpty(trimmed) || trimmed.Contains("$$(", StringComparison.Ordinal) ||
+                                trimmed.Contains("@(", StringComparison.Ordinal) {
                                 continue
                             }
-                            let normalized = trimmed.Replace('\\', Path.DirectorySeparatorChar).Replace(
-                                '/',
-                                Path.DirectorySeparatorChar
-                            )
-                            let fullInclude = Path.GetFullPath(Path.Combine(currentFileDir, normalized))
-                            if !projectReferences.Contains(fullInclude, StringComparer.OrdinalIgnoreCase) {
-                                projectReferences.Add(fullInclude)
+                            for fullInclude in ExpandProjectReferenceIncludeSpec(trimmed, rootProjectDir) {
+                                if excludePatterns.Any(
+                                    (excl string) -> MatchesProjectReferenceSpec(fullInclude, excl, rootProjectDir)
+                                ) {
+                                    continue
+                                }
+                                if !projectReferences.Contains(fullInclude, StringComparer.OrdinalIgnoreCase) {
+                                    projectReferences.Add(fullInclude)
+                                }
                             }
                         }
                     } else {
@@ -944,13 +994,36 @@ shared class CSharpProjectLoader {
                         if !string.IsNullOrWhiteSpace(removeSpec) {
                             for part in removeSpec.Split(';', StringSplitOptions.RemoveEmptyEntries) {
                                 let trimmed = part.Trim()
+                                if string.IsNullOrEmpty(trimmed) {
+                                    continue
+                                }
                                 itemList.RemoveAll(
                                     (existing string) -> string.Equals(
                                         existing,
                                         trimmed,
                                         StringComparison.OrdinalIgnoreCase
+                                    ) ||
+                                        MatchesProjectReferenceSpec(
+                                        ResolveProjectReferencePath(existing, rootProjectDir),
+                                        trimmed,
+                                        rootProjectDir
                                     )
                                 )
+                            }
+                        }
+                        let excludeSpec = ExpandMsbuildExpressions(
+                            item.Attribute(XName?("Exclude")!!)?.Value,
+                            currentFileDir,
+                            properties,
+                            customItems
+                        )
+                        let excludePatterns = List[string]()
+                        if !string.IsNullOrWhiteSpace(excludeSpec) {
+                            for part in excludeSpec.Split(';', StringSplitOptions.RemoveEmptyEntries) {
+                                let trimmed = part.Trim()
+                                if !string.IsNullOrEmpty(trimmed) {
+                                    excludePatterns.Add(trimmed)
+                                }
                             }
                         }
                         let includeSpec = ExpandMsbuildExpressions(
@@ -962,7 +1035,34 @@ shared class CSharpProjectLoader {
                         if !string.IsNullOrWhiteSpace(includeSpec) {
                             for part in includeSpec.Split(';', StringSplitOptions.RemoveEmptyEntries) {
                                 let trimmed = part.Trim()
-                                if !string.IsNullOrEmpty(trimmed) {
+                                if string.IsNullOrEmpty(trimmed) {
+                                    continue
+                                }
+                                if ContainsWildcard(trimmed) {
+                                    for expandedPath in ExpandWildcardPaths(trimmed, rootProjectDir) {
+                                        if excludePatterns.Any(
+                                            (excl string) -> MatchesProjectReferenceSpec(
+                                                expandedPath,
+                                                excl,
+                                                rootProjectDir
+                                            )
+                                        ) {
+                                            continue
+                                        }
+                                        itemList.Add(expandedPath)
+                                    }
+                                } else {
+                                    let resolved = ResolveProjectReferencePath(trimmed, rootProjectDir)
+                                    if excludePatterns.Any(
+                                        (excl string) -> string.Equals(
+                                            trimmed,
+                                            excl,
+                                            StringComparison.OrdinalIgnoreCase
+                                        ) ||
+                                            MatchesProjectReferenceSpec(resolved, excl, rootProjectDir)
+                                    ) {
+                                        continue
+                                    }
                                     itemList.Add(trimmed)
                                 }
                             }
@@ -971,6 +1071,171 @@ shared class CSharpProjectLoader {
                 }
             }
         }
+    }
+
+    private func ContainsWildcard(spec string) bool ->
+    spec.IndexOf('*') >= 0 || spec.IndexOf('?') >= 0
+
+    private func ResolveProjectReferencePath(rawSpec string, rootProjectDir string) string {
+        let normalized = rawSpec.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar)
+        return Path.GetFullPath(Path.Combine(rootProjectDir, normalized))
+    }
+
+    private func ExpandProjectReferenceIncludeSpec(spec string, rootProjectDir string) IReadOnlyList[string] {
+        if ContainsWildcard(spec) {
+            return ExpandWildcardPaths(spec, rootProjectDir)
+        }
+        return []string{ResolveProjectReferencePath(spec, rootProjectDir)}
+    }
+
+    private func SplitWildcardBaseAndPattern(rawSpec string, rootProjectDir string)(BaseDir string, Segments[]string) {
+        let normalized = rawSpec.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar)
+        let combined = Path.Combine(rootProjectDir, normalized)
+        let firstStar = combined.IndexOf('*')
+        let firstQ = combined.IndexOf('?')
+        let wildcardIndex = if firstStar < 0 {
+            firstQ
+        } else if firstQ < 0 {
+            firstStar
+        } else {
+            Math.Min(firstStar, firstQ)
+        }
+        if wildcardIndex < 0 {
+            return (Path.GetFullPath(combined), Array.Empty[string]())
+        }
+        let sepIndex = combined.LastIndexOf(Path.DirectorySeparatorChar, wildcardIndex)
+        let rawBase = if sepIndex < 0 {
+            rootProjectDir
+        } else if sepIndex == 0 {
+            combined.Substring(0, 1)
+        } else {
+            combined.Substring(0, sepIndex)
+        }
+        let baseDir = Path.GetFullPath(rawBase)
+        let patternPart = if sepIndex < 0 {
+            combined
+        } else {
+            combined.Substring(sepIndex + 1)
+        }
+        let segments = patternPart.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries)
+        return (baseDir, segments)
+    }
+
+    private func ExpandWildcardPaths(rawSpec string, rootProjectDir string) IReadOnlyList[string] {
+        let results = List[string]()
+        try {
+            let (baseDir, segments) = SplitWildcardBaseAndPattern(rawSpec, rootProjectDir)
+            if segments.Length == 0 {
+                if File.Exists(baseDir) {
+                    results.Add(baseDir)
+                }
+                return results
+            }
+            ExpandWildcardSegments(baseDir, segments, 0, results)
+            results.Sort(StringComparer.OrdinalIgnoreCase)
+        } catch (ex Exception) when ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException {
+            return results
+        }
+        return results
+    }
+
+    private func ExpandWildcardSegments(currentDir string, segments[]string, index int, results List[string]) {
+        if !Directory.Exists(currentDir) || index >= segments.Length {
+            return
+        }
+        let segment = segments[index]
+        let isLast = index == segments.Length - 1
+        if segment == "**" {
+            if isLast {
+                for file in Directory.GetFiles(currentDir, "*", SearchOption.AllDirectories) {
+                    let fullFile = Path.GetFullPath(file)
+                    if !results.Contains(fullFile, StringComparer.OrdinalIgnoreCase) {
+                        results.Add(fullFile)
+                    }
+                }
+                return
+            }
+            ExpandWildcardSegments(currentDir, segments, index + 1, results)
+            for subDir in Directory.GetDirectories(currentDir) {
+                ExpandWildcardSegments(subDir, segments, index, results)
+            }
+            return
+        }
+        if isLast {
+            for file in Directory.GetFiles(currentDir) {
+                if FileSystemName.MatchesSimpleExpression(segment, Path.GetFileName(file), ignoreCase: true) {
+                    let fullFile = Path.GetFullPath(file)
+                    if !results.Contains(fullFile, StringComparer.OrdinalIgnoreCase) {
+                        results.Add(fullFile)
+                    }
+                }
+            }
+            return
+        }
+        if segment == "." {
+            ExpandWildcardSegments(currentDir, segments, index + 1, results)
+            return
+        }
+        if segment == ".." {
+            let parent = Directory.GetParent(currentDir)?.FullName
+            if !string.IsNullOrEmpty(parent) {
+                ExpandWildcardSegments(parent, segments, index + 1, results)
+            }
+            return
+        }
+        for subDir in Directory.GetDirectories(currentDir) {
+            if FileSystemName.MatchesSimpleExpression(segment, Path.GetFileName(subDir), ignoreCase: true) {
+                ExpandWildcardSegments(subDir, segments, index + 1, results)
+            }
+        }
+    }
+
+    private func MatchesProjectReferenceSpec(candidateFullPath string, rawPattern string, rootProjectDir string) bool {
+        if !ContainsWildcard(rawPattern) {
+            let resolved = ResolveProjectReferencePath(rawPattern, rootProjectDir)
+            return string.Equals(candidateFullPath, resolved, StringComparison.OrdinalIgnoreCase)
+        }
+        if ExpandWildcardPaths(rawPattern, rootProjectDir).Contains(
+            candidateFullPath,
+            StringComparer.OrdinalIgnoreCase
+        ) {
+            return true
+        }
+        try {
+            let (baseDir, patternSegments) = SplitWildcardBaseAndPattern(rawPattern, rootProjectDir)
+            let fullCandidate = Path.GetFullPath(candidateFullPath)
+            let prefix = baseDir.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar
+            if !fullCandidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) {
+                return false
+            }
+            let relPath = fullCandidate.Substring(prefix.Length)
+            let candidateSegments = relPath.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries)
+            return MatchPathSegments(candidateSegments, 0, patternSegments, 0)
+        } catch (ex Exception) when ex is IOException || ex is ArgumentException {
+            return false
+        }
+    }
+
+    private func MatchPathSegments(pathSegs[]string, pIdx int, patSegs[]string, patIdx int) bool {
+        if patIdx == patSegs.Length {
+            return pIdx == pathSegs.Length
+        }
+        if patSegs[patIdx] == "**" {
+            if MatchPathSegments(pathSegs, pIdx, patSegs, patIdx + 1) {
+                return true
+            }
+            if pIdx < pathSegs.Length && MatchPathSegments(pathSegs, pIdx + 1, patSegs, patIdx) {
+                return true
+            }
+            return false
+        }
+        if pIdx >= pathSegs.Length {
+            return false
+        }
+        if !FileSystemName.MatchesSimpleExpression(patSegs[patIdx], pathSegs[pIdx], ignoreCase: true) {
+            return false
+        }
+        return MatchPathSegments(pathSegs, pIdx + 1, patSegs, patIdx + 1)
     }
 
     private func ExpandMsbuildExpressions(
@@ -1014,40 +1279,216 @@ shared class CSharpProjectLoader {
         return result
     }
 
-    private func EvaluateMsbuildCondition(condition string?, properties Dictionary[string, string]) bool {
+    private func EvaluateMsbuildCondition(
+        condition string?,
+        properties Dictionary[string, string],
+        currentFileDir string = "",
+        customItems Dictionary[string, List[string]]? = nil,
+        rootProjectDir string = ""
+    ) bool {
         if string.IsNullOrWhiteSpace(condition) {
             return true
         }
-        var expanded = condition.Trim()
-        for kvp in properties {
-            expanded = expanded.Replace("$$(" + kvp.Key + ")", kvp.Value, StringComparison.OrdinalIgnoreCase)
-        }
-        expanded = expanded.Replace("'", string.Empty, StringComparison.Ordinal).Trim()
-        if string.Equals(expanded, "true", StringComparison.OrdinalIgnoreCase) {
+        let expanded = ExpandMsbuildExpressions(
+            condition.Trim(),
+            currentFileDir,
+            properties,
+            customItems ?? Dictionary[string, List[string]](StringComparer.OrdinalIgnoreCase)
+        )
+        let tokens = TokenizeMsbuildCondition(expanded)
+        if tokens.Count == 0 {
             return true
         }
-        if string.Equals(expanded, "false", StringComparison.OrdinalIgnoreCase) {
+        let baseDir = if !string.IsNullOrEmpty(rootProjectDir) {
+            rootProjectDir
+        } else {
+            currentFileDir
+        }
+        var index = 0
+        let result = ParseConditionOr(tokens, ref index, baseDir)
+        if index < tokens.Count {
             return false
         }
-        let neqIndex = expanded.IndexOf("!=", StringComparison.Ordinal)
-        if neqIndex >= 0 {
-            let left = expanded.Substring(0, neqIndex).Trim()
-            let right = expanded.Substring(neqIndex + 2).Trim()
-            if !left.Contains("$$(", StringComparison.Ordinal) && !right.Contains("$$(", StringComparison.Ordinal) {
-                return !string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+        return result
+    }
+
+    private func TokenizeMsbuildCondition(expanded string) List[(string, string)] {
+        let tokens = List[(string, string)]()
+        let len = expanded.Length
+        var i = 0
+        while i < len {
+            if char.IsWhiteSpace(expanded[i]) {
+                i += 1
+                continue
             }
+            if i + 1 < len {
+                if expanded[i] == '=' && expanded[i + 1] == '=' {
+                    tokens.Add(("==", "=="))
+                    i += 2
+                    continue
+                }
+                if expanded[i] == '!' && expanded[i + 1] == '=' {
+                    tokens.Add(("!=", "!="))
+                    i += 2
+                    continue
+                }
+            }
+            if expanded[i] == '(' {
+                tokens.Add(("(", "("))
+                i += 1
+                continue
+            }
+            if expanded[i] == ')' {
+                tokens.Add((")", ")"))
+                i += 1
+                continue
+            }
+            if expanded[i] == '!' {
+                tokens.Add(("!", "!"))
+                i += 1
+                continue
+            }
+            if expanded[i] == '\'' || expanded[i] == '"' {
+                let quote = expanded[i]
+                let start = i + 1
+                i += 1
+                while i < len && expanded[i] != quote {
+                    i += 1
+                }
+                let content = expanded.Substring(start, i - start)
+                if i < len {
+                    i += 1
+                }
+                tokens.Add(("val", content))
+                continue
+            }
+            let start = i
+            while i < len && !char.IsWhiteSpace(expanded[i]) &&
+                expanded[i] != '(' &&
+                expanded[i] != ')' &&
+                expanded[i] != '!' &&
+                expanded[i] != '=' &&
+                expanded[i] != '\'' &&
+                expanded[i] != '"' {
+                i += 1
+            }
+            let word = expanded.Substring(start, i - start)
+            if string.Equals(word, "and", StringComparison.OrdinalIgnoreCase) {
+                tokens.Add(("and", word))
+            } else if string.Equals(word, "or", StringComparison.OrdinalIgnoreCase) {
+                tokens.Add(("or", word))
+            } else {
+                tokens.Add(("val", word))
+            }
+        }
+        return tokens
+    }
+
+    private func ParseConditionOr(tokens List[(string, string)], ref index int, baseDir string) bool {
+        var left = ParseConditionAnd(tokens, ref index, baseDir)
+        while index < tokens.Count && tokens[index].Item1 == "or" {
+            index += 1
+            let right = ParseConditionAnd(tokens, ref index, baseDir)
+            left = left || right
+        }
+        return left
+    }
+
+    private func ParseConditionAnd(tokens List[(string, string)], ref index int, baseDir string) bool {
+        var left = ParseConditionUnary(tokens, ref index, baseDir)
+        while index < tokens.Count && tokens[index].Item1 == "and" {
+            index += 1
+            let right = ParseConditionUnary(tokens, ref index, baseDir)
+            left = left && right
+        }
+        return left
+    }
+
+    private func ParseConditionUnary(tokens List[(string, string)], ref index int, baseDir string) bool {
+        if index < tokens.Count && tokens[index].Item1 == "!" {
+            index += 1
+            return !ParseConditionUnary(tokens, ref index, baseDir)
+        }
+        return ParseConditionPrimary(tokens, ref index, baseDir)
+    }
+
+    private func ParseConditionPrimary(tokens List[(string, string)], ref index int, baseDir string) bool {
+        if index >= tokens.Count {
             return false
         }
-        let eqIndex = expanded.IndexOf("==", StringComparison.Ordinal)
-        if eqIndex >= 0 {
-            let left = expanded.Substring(0, eqIndex).Trim()
-            let right = expanded.Substring(eqIndex + 2).Trim()
-            if !left.Contains("$$(", StringComparison.Ordinal) && !right.Contains("$$(", StringComparison.Ordinal) {
-                return string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+        if tokens[index].Item1 == "(" {
+            index += 1
+            let inner = ParseConditionOr(tokens, ref index, baseDir)
+            if index < tokens.Count && tokens[index].Item1 == ")" {
+                index += 1
             }
+            return inner
+        }
+        let left = ParseConditionOperand(tokens, ref index, baseDir)
+        if index < tokens.Count && (tokens[index].Item1 == "==" || tokens[index].Item1 == "!=") {
+            let op = tokens[index].Item1
+            index += 1
+            let right = ParseConditionOperand(tokens, ref index, baseDir)
+            if left.Contains("$$(", StringComparison.Ordinal) || right.Contains("$$(", StringComparison.Ordinal) {
+                return false
+            }
+            return if op == "==" {
+                string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+            } else {
+                !string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+            }
+        }
+        if string.Equals(left, "true", StringComparison.OrdinalIgnoreCase) {
+            return true
+        }
+        if string.Equals(left, "false", StringComparison.OrdinalIgnoreCase) {
             return false
         }
         return false
+    }
+
+    private func ParseConditionOperand(tokens List[(string, string)], ref index int, baseDir string) string {
+        if index >= tokens.Count {
+            return string.Empty
+        }
+        let token = tokens[index]
+        if token.Item1 == "val" && string.Equals(token.Item2, "Exists", StringComparison.OrdinalIgnoreCase) &&
+            index +
+            1 < tokens.Count &&
+            tokens[index + 1].Item1 == "(" {
+            index += 2
+            var pathArg = string.Empty
+            if index < tokens.Count && tokens[index].Item1 == "val" {
+                pathArg = tokens[index].Item2
+                index += 1
+            }
+            if index < tokens.Count && tokens[index].Item1 == ")" {
+                index += 1
+            }
+            if string.IsNullOrWhiteSpace(pathArg) || pathArg.Contains("$$(", StringComparison.Ordinal) ||
+                pathArg.Contains("@(", StringComparison.Ordinal) {
+                return "false"
+            }
+            let normalized = pathArg.Replace('\\', Path.DirectorySeparatorChar).Replace(
+                '/',
+                Path.DirectorySeparatorChar
+            )
+            let resolved = if string.IsNullOrEmpty(baseDir) {
+                Path.GetFullPath(normalized)
+            } else {
+                Path.GetFullPath(Path.Combine(baseDir, normalized))
+            }
+            return if File.Exists(resolved) || Directory.Exists(resolved) {
+                "true"
+            } else {
+                "false"
+            }
+        }
+        if token.Item1 == "val" {
+            index += 1
+            return token.Item2
+        }
+        return string.Empty
     }
 
     private func EvaluateSimpleMsbuildCondition(condition string?, configuration string?) bool {
