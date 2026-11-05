@@ -77,10 +77,14 @@ shared class NullableLifting {
             return false
         }
         try {
-            let mappedUnderlying = references.MapClrTypeToReferences(underlying) ?? underlying
+            let mappedUnderlying = if references.TryMapClrTypeToReferences(underlying, out var projectedUnderlying) {
+                projectedUnderlying!!
+            } else {
+                underlying
+            }
             constructed = nullableOpen.MakeGenericType(mappedUnderlying)
             return constructed != nil
-        } catch {
+        } catch (ex Exception) when ReferenceResolver.IsProjectionFailure(ex) {
             constructed = nil
             return false
         }

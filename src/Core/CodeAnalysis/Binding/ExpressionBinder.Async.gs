@@ -1153,6 +1153,110 @@ internal partial class ExpressionBinder {
         return bound
     }
 
+    internal func BindConditionalRefParts(
+        conditionSyntax ExpressionSyntax,
+        whenTrueSyntax ExpressionSyntax,
+        whenFalseSyntax ExpressionSyntax
+    )(Condition BoundExpression, WhenTrue BoundExpression, WhenFalse BoundExpression) {
+        let conditionEntryAliases = GetCurrentExpressionCallableAliases()
+        let condition = BindExpression(conditionSyntax, TypeSymbol.Bool)
+        let afterCondition = CaptureExpressionNarrowingFrames()
+        let (whenTrueNarrowing, whenFalseNarrowing, whenTrueAliases, whenFalseAliases) = ClassifyConditionalNarrowing(
+            condition,
+            conditionEntryAliases
+        )
+        let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
+        let whenTrue = BindWithPatternVariables(
+            patternWhenTrue,
+            () -> BindExpressionWithNarrowing(whenTrueSyntax, whenTrueNarrowing, aliases: whenTrueAliases),
+            whenTrueSyntax
+        )
+        TruncateBranchSiblingExpressions(afterCondition)
+        let thenExit = CaptureExpressionNarrowingFrames()
+        RestoreExpressionNarrowingFrames(afterCondition)
+        let whenFalse = BindWithPatternVariables(
+            patternWhenFalse,
+            () -> BindExpressionWithNarrowing(whenFalseSyntax, whenFalseNarrowing, aliases: whenFalseAliases),
+            whenFalseSyntax
+        )
+        TruncateBranchSiblingExpressions(afterCondition)
+        let falseExit = CaptureExpressionNarrowingFrames()
+        JoinConditionalBranchExpressionNarrowingFrames(
+            thenExit,
+            falseExit,
+            whenTrue.Type != TypeSymbol.Never,
+            whenFalse.Type != TypeSymbol.Never
+        )
+        return (condition, UnwrapTerminalLvalueStorage(whenTrue), UnwrapTerminalLvalueStorage(whenFalse))
+    }
+
+    private func UnwrapTerminalLvalueStorage(expression BoundExpression) BoundExpression {
+        switch expression {
+            case unwrap is BoundUnaryExpression when unwrap.IsNarrowingUnwrap {
+                return UnwrapTerminalLvalueStorage(unwrap.Operand)
+            }
+            case variable is BoundVariableExpression when variable.NarrowedType != nil {
+                let raw = BoundVariableExpression(variable.Syntax, variable.Variable)
+                raw.AnchorSyntax(variable.Syntax)
+                return raw
+            }
+            case field is BoundFieldAccessExpression when field.NarrowedType != nil {
+                let raw = if field.InterfaceType != nil {
+                    BoundFieldAccessExpression(field.Syntax, field.Field, field.InterfaceType)
+                } else {
+                    BoundFieldAccessExpression(
+                        field.Syntax,
+                        field.Receiver,
+                        field.StructType,
+                        field.Field,
+                        field.SubstitutedType,
+                        narrowedType: nil
+                    )
+                }
+                raw.AnchorSyntax(field.Syntax)
+                return raw
+            }
+            case clrField is BoundClrPropertyAccessExpression when clrField.Member is FieldInfo fieldInfo {
+                let receiverType = clrField.StaticContainerType ??
+                    clrField.ConstrainedInterfaceType ??
+                    clrField
+                    .Receiver
+                    ?.Type
+                let declaredType = if receiverType != nil {
+                    MemberLookup.GetClrFieldTypeSymbol(receiverType, fieldInfo)
+                } else {
+                    ClrNullability.GetFieldTypeSymbol(fieldInfo)
+                }
+                if declaredType != clrField.Type {
+                    let raw = BoundClrPropertyAccessExpression(
+                        clrField.Syntax,
+                        clrField.Receiver,
+                        clrField.Member,
+                        declaredType,
+                        clrField.StaticContainerType,
+                        clrField.ConstrainedReceiverTypeParameter,
+                        clrField.ConstrainedInterfaceType,
+                        clrField.IsAddressableStaticField,
+                        clrField.IsReadOnlySubmissionGlobal
+                    )
+                    raw.AnchorSyntax(clrField.Syntax)
+                    return raw
+                }
+                return clrField
+            }
+            case block is BoundBlockExpression {
+                let inner = UnwrapTerminalLvalueStorage(block.Expression)
+                if !object.ReferenceEquals(inner, block.Expression) {
+                    return BoundBlockExpression(block.Syntax, block.Statements, inner)
+                }
+                return block
+            }
+            default {
+                return expression
+            }
+        }
+    }
+
     /// ADR-0062: binds a general conditional expression as a conditional
     /// address-of when used as the payload of a ref-kind modifier or as the
     /// operand of `&`. Reuses the same validation rules as
@@ -1165,10 +1269,11 @@ internal partial class ExpressionBinder {
         syntax ConditionalExpressionSyntax,
         outerModifier SyntaxToken?
     ) BoundExpression {
-        // Condition must be bool.
-        let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
-        let whenTrue = BindExpression(syntax.WhenTrue)
-        let whenFalse = BindExpression(syntax.WhenFalse)
+        let (condition, whenTrue, whenFalse) = BindConditionalRefParts(
+            syntax.Condition,
+            syntax.WhenTrue,
+            syntax.WhenFalse
+        )
         if whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression || condition is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }

@@ -982,7 +982,7 @@ internal partial class DeclarationBinder {
         let BindsCleanly = func (bind() -> void) bool {
             let before = Diagnostics.Count
             bind()
-            return !Diagnostics.Skip(before).Any((d Diagnostic) -> d.IsError)
+            return !Diagnostics.HasErrorSince(before)
         }
         if declaringPart.TypeParameterList is {} declaringTypeParameterList && !methodTypeParameters.IsDefaultOrEmpty {
             var declaringTypeParameters = ImmutableArray[TypeParameterSymbol].Empty

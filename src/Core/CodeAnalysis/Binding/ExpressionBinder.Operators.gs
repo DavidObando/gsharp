@@ -646,7 +646,11 @@ internal partial class ExpressionBinder {
         let deferOnFailure = targetType == nil && binderCtx.DeferTargetlessConditional
         this.binderCtx.DeferTargetlessConditional = false
         let diagMark = Diagnostics.Count
+        let suppressionMark = Diagnostics.SuppressionCount
+        let beforeConditional = CaptureExpressionNarrowingFrames()
+        let conditionEntryAliases = GetCurrentExpressionCallableAliases()
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
+        let afterCondition = CaptureExpressionNarrowingFrames()
         // ADR-0100 / issue #795: a bare `default` branch takes its type
         // from the sibling branch. Bind whichever branch is typed first so
         // we have a concrete target type for the bare default. When both
@@ -657,15 +661,26 @@ internal partial class ExpressionBinder {
         // Issue #4964: each branch is bound under the same smart-cast frames
         // the equivalent if-expression uses (`s != nil ? s.Length : 0`), so
         // the two conditional forms narrow identically.
-        let (whenTrueNarrowing, whenFalseNarrowing) = ClassifyConditionalNarrowing(condition)
+        let (whenTrueNarrowing, whenFalseNarrowing, whenTrueAliases, whenFalseAliases) = ClassifyConditionalNarrowing(
+            condition,
+            conditionEntryAliases
+        )
         // ADR-0166: each branch sees the pattern variables the condition
         // definitely assigns on that branch (`x is T t ? t.Name : "none"`).
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
+        var thenArmExitFrame Dictionary[AccessPath, TypeSymbol]? = nil
+        var elseArmExitFrame Dictionary[AccessPath, TypeSymbol]? = nil
         let bindWhenTrue = func (branchTargetType TypeSymbol?) BoundExpression {
             return BindWithPatternVariables(
                 patternWhenTrue,
                 () -> {
-                    return BindExpressionWithNarrowing(syntax.WhenTrue, whenTrueNarrowing, branchTargetType)
+                    return BindExpressionWithNarrowing(
+                        syntax.WhenTrue,
+                        whenTrueNarrowing,
+                        out thenArmExitFrame,
+                        branchTargetType,
+                        aliases: whenTrueAliases
+                    )
                 },
                 syntax.WhenTrue
             )
@@ -674,16 +689,49 @@ internal partial class ExpressionBinder {
             return BindWithPatternVariables(
                 patternWhenFalse,
                 () -> {
-                    return BindExpressionWithNarrowing(syntax.WhenFalse, whenFalseNarrowing, branchTargetType)
+                    return BindExpressionWithNarrowing(
+                        syntax.WhenFalse,
+                        whenFalseNarrowing,
+                        out elseArmExitFrame,
+                        branchTargetType,
+                        aliases: whenFalseAliases
+                    )
                 },
                 syntax.WhenFalse
             )
         }
         var whenTrue BoundExpression
         var whenFalse BoundExpression
+        var thenExit List[
+            (
+                Id int32,
+                Frame NarrowingFrame?,
+                Entries Dictionary[AccessPath, TypeSymbol]?,
+                Aliases HashSet[VariableSymbol]
+            )
+        ]? = nil
+        var falseExit List[
+            (
+                Id int32,
+                Frame NarrowingFrame?,
+                Entries Dictionary[AccessPath, TypeSymbol]?,
+                Aliases HashSet[VariableSymbol]
+            )
+        ]? = nil
         if targetType != nil {
             whenTrue = bindWhenTrue(targetType)
+            TruncateBranchSiblingExpressions(afterCondition)
+            thenExit = CaptureExpressionNarrowingFrames()
+            RestoreExpressionNarrowingFrames(afterCondition)
             whenFalse = bindWhenFalse(targetType)
+            TruncateBranchSiblingExpressions(afterCondition)
+            falseExit = CaptureExpressionNarrowingFrames()
+            JoinConditionalBranchExpressionNarrowingFrames(
+                thenExit,
+                falseExit,
+                whenTrue.Type != TypeSymbol.Never,
+                whenFalse.Type != TypeSymbol.Never
+            )
         } else if trueIsBareDefault && falseIsBareDefault {
             Diagnostics.ReportBareDefaultNoTargetType(
                 (cast[DefaultExpressionSyntax](syntax.WhenTrue)).DefaultKeyword.Location
@@ -694,33 +742,70 @@ internal partial class ExpressionBinder {
             if whenFalse is BoundErrorExpression {
                 return BoundErrorExpression(nil)
             }
+            TruncateBranchSiblingExpressions(afterCondition)
+            falseExit = CaptureExpressionNarrowingFrames()
+            RestoreExpressionNarrowingFrames(afterCondition)
             whenTrue = BindWithPatternVariables(
                 patternWhenTrue,
                 () -> BoundDefaultExpression(syntax.WhenTrue, whenFalse.Type),
                 syntax.WhenTrue
+            )
+            TruncateBranchSiblingExpressions(afterCondition)
+            thenExit = CaptureExpressionNarrowingFrames()
+            JoinConditionalBranchExpressionNarrowingFrames(
+                thenExit,
+                falseExit,
+                whenTrue.Type != TypeSymbol.Never,
+                whenFalse.Type != TypeSymbol.Never
             )
         } else if falseIsBareDefault {
             whenTrue = bindWhenTrue(nil)
             if whenTrue is BoundErrorExpression {
                 return BoundErrorExpression(nil)
             }
+            TruncateBranchSiblingExpressions(afterCondition)
+            thenExit = CaptureExpressionNarrowingFrames()
+            RestoreExpressionNarrowingFrames(afterCondition)
             whenFalse = BindWithPatternVariables(
                 patternWhenFalse,
                 () -> BoundDefaultExpression(syntax.WhenFalse, whenTrue.Type),
                 syntax.WhenFalse
             )
+            TruncateBranchSiblingExpressions(afterCondition)
+            falseExit = CaptureExpressionNarrowingFrames()
+            JoinConditionalBranchExpressionNarrowingFrames(
+                thenExit,
+                falseExit,
+                whenTrue.Type != TypeSymbol.Never,
+                whenFalse.Type != TypeSymbol.Never
+            )
         } else {
             whenTrue = bindWhenTrue(nil)
+            TruncateBranchSiblingExpressions(afterCondition)
+            thenExit = CaptureExpressionNarrowingFrames()
+            RestoreExpressionNarrowingFrames(afterCondition)
             whenFalse = bindWhenFalse(nil)
+            TruncateBranchSiblingExpressions(afterCondition)
+            falseExit = CaptureExpressionNarrowingFrames()
+            JoinConditionalBranchExpressionNarrowingFrames(
+                thenExit,
+                falseExit,
+                whenTrue.Type != TypeSymbol.Never,
+                whenFalse.Type != TypeSymbol.Never
+            )
         }
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }
+        let thenCompletes = whenTrue.Type != TypeSymbol.Never
+        let falseCompletes = whenFalse.Type != TypeSymbol.Never
         TryAdaptConditionalIntegerLiteralArm(&whenTrue, &whenFalse)
         let resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
         if resultType == nil {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
+                RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
             Diagnostics.ReportConditionalNoCommonResultType(
@@ -730,11 +815,30 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        let convertedTrue = ConvertConditionalBranch(syntax.WhenTrue.Location, whenTrue, resultType)
-        let convertedFalse = ConvertConditionalBranch(syntax.WhenFalse.Location, whenFalse, resultType)
+        RestoreExpressionNarrowingFrames(thenExit)
+        let convertedTrue = ConvertConditionalBranchWithNarrowing(
+            syntax.WhenTrue.Location,
+            whenTrue,
+            resultType,
+            thenArmExitFrame,
+            patternWhenTrue
+        )
+        thenExit = CaptureExpressionNarrowingFrames()
+        RestoreExpressionNarrowingFrames(falseExit)
+        let convertedFalse = ConvertConditionalBranchWithNarrowing(
+            syntax.WhenFalse.Location,
+            whenFalse,
+            resultType,
+            elseArmExitFrame,
+            patternWhenFalse
+        )
+        let finalFalseExit = CaptureExpressionNarrowingFrames()
+        JoinConditionalBranchExpressionNarrowingFrames(thenExit, finalFalseExit, thenCompletes, falseCompletes)
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
+                RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
             return BoundErrorExpression(nil)
@@ -818,8 +922,15 @@ internal partial class ExpressionBinder {
         // Issue #4966 (ADR-0202): nil only for the void `if` of a discarded
         // position; BindIfExpression rejects it elsewhere (GS0276).
         let elseSyntax = syntax.ElseExpression
+        let suppressionMark = Diagnostics.SuppressionCount
+        let beforeConditional = CaptureExpressionNarrowingFrames()
+        let conditionEntryAliases = GetCurrentExpressionCallableAliases()
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
-        let (whenTrueNarrowing, whenFalseNarrowing) = ClassifyConditionalNarrowing(condition)
+        let afterCondition = CaptureExpressionNarrowingFrames()
+        let (whenTrueNarrowing, whenFalseNarrowing, whenTrueAliases, whenFalseAliases) = ClassifyConditionalNarrowing(
+            condition,
+            conditionEntryAliases
+        )
         // ADR-0166: each arm also sees the pattern variables the condition
         // definitely assigns on that arm.
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
@@ -833,14 +944,24 @@ internal partial class ExpressionBinder {
                 BindIfExpressionElseBranch(elseSyntax, canBeVoid, targetType)
             }
         }
+        var thenArmExitFrame Dictionary[AccessPath, TypeSymbol]? = nil
+        var elseArmExitFrame Dictionary[AccessPath, TypeSymbol]? = nil
         let bindWhenTrueNarrowed() -> BoundExpression = () -> {
-            return BindWithNarrowing(whenTrueNarrowing, bindWhenTrue)
+            return BindWithNarrowing(whenTrueNarrowing, bindWhenTrue, out thenArmExitFrame, whenTrueAliases)
         }
         let bindWhenFalseNarrowed() -> BoundExpression = () -> {
-            return BindWithNarrowing(whenFalseNarrowing, bindWhenFalse)
+            return BindWithNarrowing(whenFalseNarrowing, bindWhenFalse, out elseArmExitFrame, whenFalseAliases)
         }
         var whenTrue = BindWithPatternVariables(patternWhenTrue, bindWhenTrueNarrowed, syntax.ThenBlock)
+        TruncateBranchSiblingExpressions(afterCondition)
+        var thenExit = CaptureExpressionNarrowingFrames()
+        RestoreExpressionNarrowingFrames(afterCondition)
         var whenFalse = BindWithPatternVariables(patternWhenFalse, bindWhenFalseNarrowed, elseSyntax)
+        TruncateBranchSiblingExpressions(afterCondition)
+        let falseExit = CaptureExpressionNarrowingFrames()
+        let thenCompletes = whenTrue.Type != TypeSymbol.Never
+        let falseCompletes = whenFalse.Type != TypeSymbol.Never
+        JoinConditionalBranchExpressionNarrowingFrames(thenExit, falseExit, thenCompletes, falseCompletes)
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }
@@ -860,6 +981,8 @@ internal partial class ExpressionBinder {
         if resultType == nil {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
+                RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
             Diagnostics.ReportConditionalNoCommonResultType(
@@ -869,11 +992,30 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        let convertedTrue = ConvertConditionalBranch(BranchValueLocation(syntax.ThenBlock), whenTrue, resultType)
-        let convertedFalse = ConvertConditionalBranch(BranchValueLocation(elseSyntax), whenFalse, resultType)
+        RestoreExpressionNarrowingFrames(thenExit)
+        let convertedTrue = ConvertConditionalBranchWithNarrowing(
+            BranchValueLocation(syntax.ThenBlock),
+            whenTrue,
+            resultType,
+            thenArmExitFrame,
+            patternWhenTrue
+        )
+        thenExit = CaptureExpressionNarrowingFrames()
+        RestoreExpressionNarrowingFrames(falseExit)
+        let convertedFalse = ConvertConditionalBranchWithNarrowing(
+            BranchValueLocation(elseSyntax),
+            whenFalse,
+            resultType,
+            elseArmExitFrame,
+            patternWhenFalse
+        )
+        let finalFalseExit = CaptureExpressionNarrowingFrames()
+        JoinConditionalBranchExpressionNarrowingFrames(thenExit, finalFalseExit, thenCompletes, falseCompletes)
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
+                RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
             return BoundErrorExpression(nil)
@@ -1040,16 +1182,32 @@ internal partial class ExpressionBinder {
 
     private func BindWithNarrowing(
         narrowing Dictionary[AccessPath, TypeSymbol]?,
-        bind() -> BoundExpression
+        bind() -> BoundExpression,
+        aliases HashSet[VariableSymbol]? = nil
+    ) BoundExpression -> BindWithNarrowing(narrowing, bind, out _, aliases)
+
+    private func BindWithNarrowing(
+        narrowing Dictionary[AccessPath, TypeSymbol]?,
+        bind() -> BoundExpression,
+        out exitFrame Dictionary[AccessPath, TypeSymbol]?,
+        aliases HashSet[VariableSymbol]? = nil
     ) BoundExpression {
-        if narrowing == nil {
+        exitFrame = nil
+        if (narrowing == nil || narrowing.Count == 0) && (aliases == nil || HasActiveExpressionNarrowings()) {
+            if aliases != nil {
+                SyncActiveExpressionCallableAliases(aliases)
+                setCallableAliases(aliases)
+            }
             return bind()
         }
-        binderCtx.PushNarrowingFrame(narrowing)
+        let pushed = PushExpressionNarrowingFrame(narrowing, aliases)
         try {
             return bind()
         } finally {
-            binderCtx.EndNarrowingProof()
+            if pushed != nil && pushed.Count > 0 {
+                exitFrame = Dictionary[AccessPath, TypeSymbol](pushed.Entries)
+            }
+            PopExpressionNarrowingFrame()
         }
     }
 
@@ -1347,6 +1505,31 @@ internal partial class ExpressionBinder {
         }
     }
 
+    private func ConvertConditionalBranchWithNarrowing(
+        location TextLocation,
+        branch BoundExpression,
+        target TypeSymbol?,
+        branchExitFrame Dictionary[AccessPath, TypeSymbol]?,
+        patternVariables ImmutableArray[LocalVariableSymbol] = default(ImmutableArray[LocalVariableSymbol])
+    ) BoundExpression {
+        let convert = () -> {
+            if branchExitFrame == nil || branchExitFrame.Count == 0 {
+                return ConvertConditionalBranch(location, branch, target)
+            }
+            PushExpressionNarrowingFrame(branchExitFrame, GetCurrentExpressionCallableAliases())
+            try {
+                return ConvertConditionalBranch(location, branch, target)
+            } finally {
+                PopExpressionNarrowingFrame()
+            }
+        }
+        return if patternVariables.IsDefaultOrEmpty {
+            convert()
+        } else {
+            BindWithPatternVariables(patternVariables, convert, branch.Syntax)
+        }
+    }
+
     private func ConvertConditionalBranch(
         location TextLocation,
         branch BoundExpression,
@@ -1385,7 +1568,12 @@ internal partial class ExpressionBinder {
         if object.ReferenceEquals(branch.Type, commonType) {
             return branch
         }
-        return conversions.BindConversion(location, branch, commonType)
+        let entryAliases = GetCurrentExpressionCallableAliases()
+        let converted = conversions.BindConversion(location, branch, commonType)
+        if !(converted is BoundErrorExpression) && !object.ReferenceEquals(converted, branch) {
+            InvalidateExpressionNarrowingFrames(converted, entryAliases)
+        }
+        return converted
     }
 
     /// Issue #5613: gets the location of the value of a branch: the trailing value of a block, or the branch.
@@ -1457,7 +1645,23 @@ internal partial class ExpressionBinder {
         if syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken {
             this.binderCtx.DeferTargetlessConditional = false
         }
+        let beforeCoalesce = if deferTargetlessCoalesce {
+            CaptureExpressionNarrowingFrames()
+        } else {
+            default(
+                List[
+                    (
+                        Id int32,
+                        Frame NarrowingFrame?,
+                        Entries Dictionary[AccessPath, TypeSymbol]?,
+                        Aliases HashSet[VariableSymbol]
+                    )
+                ]?
+            )
+        }
         let coalesceDiagMark = Diagnostics.Count
+        let coalesceSuppressionMark = Diagnostics.SuppressionCount
+        let leftEntryAliases = GetCurrentExpressionCallableAliases()
         var boundLeft = if coalesceTargetType != nil &&
             syntax
             .OperatorToken
@@ -1482,33 +1686,43 @@ internal partial class ExpressionBinder {
         // `!(x is T t) || t.Length > 0` likewise through the negation.
         var boundRight BoundExpression
         if syntax.OperatorToken.Kind == SyntaxKind.AmpersandAmpersandToken {
-            let rightFrame = TryClassifyTypeTestNarrowingForAnd(boundLeft)
+            let beforeRight = CaptureExpressionNarrowingFrames()
+            let rightFrame = TryClassifyTypeTestNarrowingForAnd(boundLeft, leftEntryAliases, out var rightAliases)
             let (leftWhenTrue, _) = PatternVariables.Classify(boundLeft)
             boundRight = BindWithPatternVariables(
                 leftWhenTrue,
                 () -> {
-                    return BindExpressionWithNarrowing(syntax.Right, rightFrame)
+                    return BindExpressionWithNarrowing(syntax.Right, rightFrame, aliases: rightAliases)
                 },
                 syntax.Right
             )
+            MergeBranchExpressionNarrowingFrames(beforeRight)
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenTrue, leftWhenTrue)
         } else if syntax.OperatorToken.Kind == SyntaxKind.PipePipeToken {
-            let rightFrame = TryClassifyTypeTestNarrowingForOr(boundLeft)
+            let beforeRight = CaptureExpressionNarrowingFrames()
+            let rightFrame = TryClassifyTypeTestNarrowingForOr(boundLeft, leftEntryAliases, out var rightAliases)
             let (_, leftWhenFalse) = PatternVariables.Classify(boundLeft)
             boundRight = BindWithPatternVariables(
                 leftWhenFalse,
                 () -> {
-                    return BindExpressionWithNarrowing(syntax.Right, rightFrame)
+                    return BindExpressionWithNarrowing(syntax.Right, rightFrame, aliases: rightAliases)
                 },
                 syntax.Right
             )
+            MergeBranchExpressionNarrowingFrames(beforeRight)
             ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenFalse, leftWhenFalse)
         } else if syntax
             .OperatorToken
             .Kind == SyntaxKind.QuestionQuestionToken &&
             coalesceTargetType != nil &&
             IsTargetDependentExpressionSyntax(syntax.Right) {
+            let beforeRight = CaptureExpressionNarrowingFrames()
             boundRight = BindExpression(syntax.Right, coalesceTargetType)
+            MergeBranchExpressionNarrowingFrames(beforeRight)
+        } else if syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken {
+            let beforeRight = CaptureExpressionNarrowingFrames()
+            boundRight = BindExpression(syntax.Right)
+            MergeBranchExpressionNarrowingFrames(beforeRight)
         } else {
             boundRight = BindExpression(syntax.Right)
         }
@@ -1532,7 +1746,7 @@ internal partial class ExpressionBinder {
                 leftUtf8.Slice
             )
         }
-        return BindBinaryOperation(
+        let result = BindBinaryOperation(
             syntax,
             syntax.OperatorToken.Kind,
             syntax.OperatorToken.Location,
@@ -1546,6 +1760,11 @@ internal partial class ExpressionBinder {
             deferTargetlessCoalesce,
             coalesceDiagMark
         )
+        if deferTargetlessCoalesce && result is BoundErrorExpression{Syntax: not nil} {
+            Diagnostics.RestoreSuppressionsTo(coalesceSuppressionMark)
+            RestoreExpressionNarrowingFrames(beforeCoalesce)
+        }
+        return result
     }
 
     /// Binds a binary operator on two bound operands: native, built-in, user-defined, CLR, and reference-equality
@@ -2639,26 +2858,38 @@ internal partial class ExpressionBinder {
         // value-type Nullable<T> and the other is its underlying T, lift T to T?
         // and re-bind the homogeneous lifted operator.
         if boundOperator == nil {
-            if boundLeft.Type is NullableTypeSymbol leftNullable &&
+            if boundLeft.Type is NullableTypeSymbol leftNullable && NullableLifting.IsAnyValueTypeNullable(
                 leftNullable
-                .UnderlyingType
-                ?.ClrType is {IsValueType: true} &&
+            ) &&
                 boundRight.Type == leftNullable
                 .UnderlyingType {
                 let lifted BoundBinaryOperator? = BoundBinaryOperator.Bind(operatorKind, leftNullable, leftNullable)
                 if lifted != nil {
-                    boundRight = conversions.BindConversion(rightLocation, boundRight, leftNullable)
+                    boundRight = if boundRight is BoundUnaryExpression{IsNarrowingUnwrap: true} rightUnwrap &&
+                        rightUnwrap
+                        .Operand
+                        .Type == leftNullable {
+                        rightUnwrap.Operand
+                    } else {
+                        conversions.BindConversion(rightLocation, boundRight, leftNullable)
+                    }
                     boundOperator = lifted
                 }
-            } else if boundRight.Type is NullableTypeSymbol rightNullable &&
+            } else if boundRight.Type is NullableTypeSymbol rightNullable && NullableLifting.IsAnyValueTypeNullable(
                 rightNullable
-                .UnderlyingType
-                ?.ClrType is {IsValueType: true} &&
+            ) &&
                 boundLeft.Type == rightNullable
                 .UnderlyingType {
                 let lifted BoundBinaryOperator? = BoundBinaryOperator.Bind(operatorKind, rightNullable, rightNullable)
                 if lifted != nil {
-                    boundLeft = conversions.BindConversion(leftLocation, boundLeft, rightNullable)
+                    boundLeft = if boundLeft is BoundUnaryExpression{IsNarrowingUnwrap: true} leftUnwrap &&
+                        leftUnwrap
+                        .Operand
+                        .Type == rightNullable {
+                        leftUnwrap.Operand
+                    } else {
+                        conversions.BindConversion(leftLocation, boundLeft, rightNullable)
+                    }
                     boundOperator = lifted
                 }
             }
@@ -2830,6 +3061,27 @@ internal partial class ExpressionBinder {
         }
     }
 
+    /// Issue #4964, #4969: computes the smart-cast narrowing frames that a
+    /// conditional's condition implies for each branch. The if-expression
+    /// (`if c { a } else { b }`) and the conditional operator (`c ? a : b`)
+    /// are two spellings of one value form, and both bind their branches
+    /// under these frames, so the two cannot narrow differently.
+    /// The `if let` expression's guard shares these frames (ADR-0201).
+    /// @param condition The bound condition.
+    /// @returns The frame for the branch taken when the condition is true,
+    /// and the frame for the branch taken when it is false. Either may be
+    /// `nil` when that branch narrows nothing.
+    private func ClassifyConditionalNarrowing(condition BoundExpression, entryAliases HashSet[VariableSymbol]? = nil)(
+        WhenTrue Dictionary[AccessPath, TypeSymbol]?,
+        WhenFalse Dictionary[AccessPath, TypeSymbol]?,
+        WhenTrueAliases HashSet[VariableSymbol],
+        WhenFalseAliases HashSet[VariableSymbol]
+    ) -> ClassifyTypeTestNarrowingInOrder(
+        condition,
+        entryAliases ?? GetCurrentExpressionCallableAliases(),
+        restrictBareVariableToLocalsAndParams: false
+    )
+
     shared {
         /// Issue #5635: gets a value indicating whether [`syntax`](paramref) is a block value, also in parentheses or
         /// `checked`/`unchecked`. These wrappers bind their operand as the value.
@@ -2921,68 +3173,6 @@ internal partial class ExpressionBinder {
         private func CanLowerPointerComparisonOperand(type TypeSymbol) bool -> type == TypeSymbol.Null ||
             Conversion
             .Classify(type, TypeSymbol.NInt).Exists
-
-        /// Issue #4964: computes the smart-cast narrowing frames that a
-        /// conditional's condition implies for each branch. The if-expression
-        /// (`if c { a } else { b }`) and the conditional operator (`c ? a : b`)
-        /// are two spellings of one value form, and both bind their branches
-        /// under these frames, so the two cannot narrow differently.
-        /// The `if let` expression's guard shares these frames (ADR-0201).
-        ///
-        /// Issue #2640 introduced the frames for the if-expression: a top-level
-        /// nil guard (`x != nil`, `x == nil`, nullable value types included),
-        /// merged with the type-test and short-circuit frames of
-        /// `ClassifyTypeTestNarrowing` (`x is T`, `!`, `&&`, `||`).
-        /// @param condition The bound condition.
-        /// @returns The frame for the branch taken when the condition is true,
-        /// and the frame for the branch taken when it is false. Either may be
-        /// `nil` when that branch narrows nothing.
-        private func ClassifyConditionalNarrowing(condition BoundExpression)(
-            WhenTrue Dictionary[AccessPath, TypeSymbol]?,
-            WhenFalse Dictionary[AccessPath, TypeSymbol]?
-        ) {
-            var whenTrueNarrowing Dictionary[AccessPath, TypeSymbol]? = nil
-            var whenFalseNarrowing Dictionary[AccessPath, TypeSymbol]? = nil
-            if SmartCastStability.TryClassifyNilGuardLeaf(
-                condition,
-                restrictBareVariableToLocalsAndParams: false,
-                referenceNullableOnly: false,
-                out var target,
-                out var underlying,
-                out var nonNilWhenTrue
-            ) &&
-                target != nil &&
-                underlying != nil {
-                let frame = Dictionary[AccessPath, TypeSymbol]{[target] = underlying}
-                if nonNilWhenTrue {
-                    whenTrueNarrowing = frame
-                } else {
-                    whenFalseNarrowing = frame
-                }
-            }
-            let (typeWhenTrue, typeWhenFalse) = ClassifyTypeTestNarrowing(condition)
-            return (
-                MergeIfExpressionNarrowing(whenTrueNarrowing, typeWhenTrue),
-                MergeIfExpressionNarrowing(whenFalseNarrowing, typeWhenFalse)
-            )
-        }
-
-        private func MergeIfExpressionNarrowing(
-            first Dictionary[AccessPath, TypeSymbol]?,
-            second Dictionary[AccessPath, TypeSymbol]?
-        ) Dictionary[AccessPath, TypeSymbol]? {
-            if first == nil || first.Count == 0 {
-                return second
-            }
-            if second == nil || second.Count == 0 {
-                return first
-            }
-            let merged = Dictionary[AccessPath, TypeSymbol](first)
-            for pair in second {
-                merged[pair.Key] = pair.Value
-            }
-            return merged
-        }
 
         private func IsNestedLambdaExpression(syntax ExpressionSyntax) bool {
             var syntax = syntax
