@@ -593,7 +593,8 @@ internal class ConstructorBodyEmitter {
             baseCtorToken,
             init?.ArgumentRefKinds ?? default(ImmutableArray[RefKind]),
             out var planned,
-            ctor.IsConvenience
+            ctor.IsConvenience,
+            ctor.Declaration
         ) {
             return planned
         }
@@ -661,6 +662,7 @@ internal class ConstructorBodyEmitter {
             )
         }
         let emitter = session.CreateEmitter(paramSlots, structThisParameter: structThisParameter)
+        emitter.RecordVisibleSequencePoint(ctor.Declaration?.InitKeyword)
         // ADR-0065 §2: a `convenience init(...)` does NOT chain to the base
         // constructor itself — the user-authored body begins with an
         // `init(args)` self-delegation (BoundConstructorChainingExpression)
@@ -707,7 +709,37 @@ internal class ConstructorBodyEmitter {
             let anchor = emitter.CurrentAnchor ?? classSym.Declaration ?? body.Syntax
             EmitDiagnosticException.Wrap(anchor, ex)
         }
-        return this.AddCompletedMethodBody(il, emitter, localsSignature)
+        emitter.RecordVisibleSequencePoint(ctor.Declaration?.Body.CloseBraceToken)
+        let offset = this.AddCompletedMethodBody(il, emitter, localsSignature)
+        this.RecordConstructorDebugInfo(ctor.Declaration, session, emitter, il.Offset, localsSignature)
+        return offset
+    }
+
+    private func RecordConstructorDebugInfo(
+        declaration ConstructorDeclarationSyntax?,
+        session ReflectionMetadataEmitter.MethodBodyEmitSession,
+        emitter MethodBodyEmitter,
+        codeSize int32,
+        localsSignature StandaloneSignatureHandle
+    ) {
+        if declaration == nil || this.emitCtx.Pdb == nil {
+            return
+        }
+        let nextMethodDef = MetadataTokens.MethodDefinitionHandle(
+            this.emitCtx.Metadata.GetRowCount(TableIndex.MethodDef) + 1
+        )
+        this
+            .emitCtx
+            .Pdb
+            ?.RecordMethod(
+            nextMethodDef,
+            emitter.SequencePoints,
+            MethodBodyPlanner.CollectLocalInfo(session.Locals),
+            MethodBodyPlanner.CollectLocalConstantInfo(session.ConstValues),
+            codeSize,
+            localsSignature,
+            declaration.SyntaxTree
+        )
     }
 
     private func TryEmitInitialization(
@@ -716,7 +748,8 @@ internal class ConstructorBodyEmitter {
         baseConstructor EntityHandle,
         argumentRefKinds ImmutableArray[RefKind],
         out offset int32,
-        convenience bool = false
+        convenience bool = false,
+        ctorDeclaration ConstructorDeclarationSyntax? = nil
     ) bool {
         offset = -1
         if !this.emitCtx.Program.Initializers.TryGetValue((owner, isStatic), out var plan) {
@@ -766,6 +799,7 @@ internal class ConstructorBodyEmitter {
             this.emitCtx.CurrentStaticConstructorOwner = owner
         }
         try {
+            emitter.RecordVisibleSequencePoint(ctorDeclaration?.InitKeyword)
             // Only parameter cells run before the existing base-call boundary.
             // User field initializers and primary stores still run after base.
             emitter.EmitBlock(plan.Prologue)
@@ -792,7 +826,9 @@ internal class ConstructorBodyEmitter {
                 }
             }
             emitter.EmitBlock(plan.Body)
+            emitter.RecordVisibleSequencePoint(ctorDeclaration?.Body.CloseBraceToken)
             offset = this.AddCompletedMethodBody(il, emitter, signature)
+            this.RecordConstructorDebugInfo(ctorDeclaration, session, emitter, il.Offset, signature)
             return true
         } finally {
             this.emitCtx.CurrentStaticConstructorOwner = previousOwner

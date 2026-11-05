@@ -574,19 +574,19 @@
       "rows=6 sha256=475CFC8A87A7C07A"
     ],
     "MemberRef": [
-      "rows=13 sha256=1178E6AEF56EEDB1"
+      "rows=14 sha256=0F89C2B2846FF2F8"
     ],
     "MethodBodies": [
-      "rows=11 sha256=6D756DB67D487486"
+      "rows=11 sha256=C0EC898090856E89"
     ],
     "MethodDef": [
-      "rows=11 sha256=769319F537496737"
+      "rows=11 sha256=2DAB5D457A8DB2BE"
     ],
     "TypeDef": [
       "rows=3 sha256=D1F70AAB0E610F52"
     ],
     "TypeRef": [
-      "rows=11 sha256=D8AD1CC39C07681E"
+      "rows=12 sha256=D154B90BA22FC2AD"
     ]
   },
   "samples/DataStructErgonomics.gs": {
@@ -599,19 +599,19 @@
       "rows=11 sha256=47F0DF8931F45DF2"
     ],
     "MemberRef": [
-      "rows=14 sha256=F413570C80913C2E"
+      "rows=15 sha256=340CC94F5919B4B5"
     ],
     "MethodBodies": [
-      "rows=11 sha256=C0BA1693B257E87B"
+      "rows=11 sha256=367EC3D58ACEB6D6"
     ],
     "MethodDef": [
-      "rows=11 sha256=769319F537496737"
+      "rows=11 sha256=2DAB5D457A8DB2BE"
     ],
     "TypeDef": [
       "rows=3 sha256=199429E3CB4893E0"
     ],
     "TypeRef": [
-      "rows=11 sha256=D8AD1CC39C07681E"
+      "rows=12 sha256=D154B90BA22FC2AD"
     ]
   },
   "samples/DefaultExpression.gs": {
@@ -1304,19 +1304,19 @@
       "rows=6 sha256=0FA5DE3BE29535F2"
     ],
     "MemberRef": [
-      "rows=19 sha256=956FF551FBAD9EB6"
+      "rows=20 sha256=D2227805508A6D4E"
     ],
     "MethodBodies": [
-      "rows=9 sha256=FEC50B3AE814F280"
+      "rows=9 sha256=2B39C4F8762E2535"
     ],
     "MethodDef": [
-      "rows=9 sha256=D86B8239C953841B"
+      "rows=9 sha256=0549250752CF5C61"
     ],
     "TypeDef": [
       "rows=3 sha256=3DEAE78EEC95DA27"
     ],
     "TypeRef": [
-      "rows=14 sha256=9262E28D73ABD4B6"
+      "rows=15 sha256=F285746B2E4083A8"
     ]
   },
   "samples/GoScope.gs": {
@@ -1546,10 +1546,10 @@
       "rows=8 sha256=DEA0D9CCBA79E57D"
     ],
     "MemberRef": [
-      "rows=12 sha256=7CD0BEBB1D3F183E"
+      "rows=13 sha256=5874ADCDB80BE5CE"
     ],
     "MethodBodies": [
-      "rows=19 sha256=A84A6DEFE76CCF36"
+      "rows=19 sha256=DF3363B8E35610FB"
     ],
     "MethodDef": [
       "rows=19 sha256=DE42EB52E5801A1D"
@@ -1558,7 +1558,7 @@
       "rows=4 sha256=0DAB918C08860C81"
     ],
     "TypeRef": [
-      "rows=8 sha256=56F57508BA304C31"
+      "rows=9 sha256=5A513AB42349AB16"
     ]
   },
   "samples/InterfaceDiamondDisambiguation.gs": {
@@ -2351,19 +2351,19 @@
       "rows=5 sha256=0D7F5786CDCBAEA2"
     ],
     "MemberRef": [
-      "rows=16 sha256=BDEC069F1A9011F1"
+      "rows=17 sha256=E235D92B0EE4CCBC"
     ],
     "MethodBodies": [
-      "rows=18 sha256=0A6227BB77B6E13F"
+      "rows=18 sha256=BCA199D44249F6F0"
     ],
     "MethodDef": [
-      "rows=18 sha256=A048B8F8F49715DF"
+      "rows=18 sha256=C40F73A836A2A7E9"
     ],
     "TypeDef": [
       "rows=6 sha256=30AA8ED819A6EB5E"
     ],
     "TypeRef": [
-      "rows=12 sha256=A45FD97702884F31"
+      "rows=13 sha256=F35E547DEB763A60"
     ]
   },
   "samples/Patterns.gs": {
@@ -2453,19 +2453,19 @@
       "rows=14 sha256=F6064DD17146AC07"
     ],
     "MemberRef": [
-      "rows=28 sha256=42747E3C2D2285DE"
+      "rows=29 sha256=5834E58DF2B11A2C"
     ],
     "MethodBodies": [
-      "rows=30 sha256=50CE2C3B0D5E8771"
+      "rows=30 sha256=B29C886D30A9029D"
     ],
     "MethodDef": [
-      "rows=30 sha256=821786510592C298"
+      "rows=30 sha256=BB2AF4A81A4D3160"
     ],
     "TypeDef": [
       "rows=6 sha256=461C3B34D380C3A6"
     ],
     "TypeRef": [
-      "rows=18 sha256=0596C4002061D9C1"
+      "rows=19 sha256=21E3CD70BC8FA156"
     ]
   },
   "samples/PrivateInterfaceHelpers.gs": {
@@ -2526,19 +2526,19 @@
       "rows=6 sha256=475CFC8A87A7C07A"
     ],
     "MemberRef": [
-      "rows=13 sha256=1178E6AEF56EEDB1"
+      "rows=14 sha256=0F89C2B2846FF2F8"
     ],
     "MethodBodies": [
-      "rows=11 sha256=6D756DB67D487486"
+      "rows=11 sha256=C0EC898090856E89"
     ],
     "MethodDef": [
-      "rows=11 sha256=769319F537496737"
+      "rows=11 sha256=2DAB5D457A8DB2BE"
     ],
     "TypeDef": [
       "rows=3 sha256=B5022FF7186BB28B"
     ],
     "TypeRef": [
-      "rows=11 sha256=D8AD1CC39C07681E"
+      "rows=12 sha256=D154B90BA22FC2AD"
     ]
   },
   "samples/RefIncrement.gs": {
@@ -2624,19 +2624,19 @@
       "rows=9 sha256=CB004FA27ED39B6E"
     ],
     "MemberRef": [
-      "rows=35 sha256=0972103070B76D94"
+      "rows=36 sha256=975A51925B65DFD5"
     ],
     "MethodBodies": [
-      "rows=14 sha256=12BA0E2BD1B93A4A"
+      "rows=14 sha256=4BD358A4246BF8B4"
     ],
     "MethodDef": [
-      "rows=14 sha256=835FFC774DC883FE"
+      "rows=14 sha256=F5CD4D3FCDCC6900"
     ],
     "TypeDef": [
       "rows=4 sha256=CE47CCFE186DA90B"
     ],
     "TypeRef": [
-      "rows=12 sha256=9C85B763D72E9F1C"
+      "rows=13 sha256=0DC341DE66321051"
     ]
   },
   "samples/ScopeAll.gs": {
@@ -2727,19 +2727,19 @@
       "rows=5 sha256=B89EE1B0D55C133F"
     ],
     "MemberRef": [
-      "rows=30 sha256=1E4EAA26406D237E"
+      "rows=31 sha256=3F81F3F94179FC12"
     ],
     "MethodBodies": [
-      "rows=20 sha256=54BBF2A21B85138C"
+      "rows=20 sha256=F76DA6EF0D479569"
     ],
     "MethodDef": [
-      "rows=20 sha256=B99E33EE1902B7C7"
+      "rows=20 sha256=DCD2961A3FD57820"
     ],
     "TypeDef": [
       "rows=3 sha256=893A49DE4A62DFEF"
     ],
     "TypeRef": [
-      "rows=19 sha256=BDC00E5D1E533037"
+      "rows=20 sha256=FA6D739F21BAA9E6"
     ]
   },
   "samples/SlicePattern.gs": {
@@ -2945,19 +2945,19 @@
       "rows=10 sha256=7BCEE9D9122D1559"
     ],
     "MemberRef": [
-      "rows=17 sha256=A6E8B3B9F6B1A2AC"
+      "rows=18 sha256=84F59241ABC68202"
     ],
     "MethodBodies": [
-      "rows=15 sha256=8A8FF94F650C2C9C"
+      "rows=15 sha256=8E3495282C74A89E"
     ],
     "MethodDef": [
-      "rows=15 sha256=01AB58E49B1D85BE"
+      "rows=15 sha256=8332A7832DBD116D"
     ],
     "TypeDef": [
       "rows=6 sha256=80C07B856402C00B"
     ],
     "TypeRef": [
-      "rows=13 sha256=53023B97C08A108C"
+      "rows=14 sha256=66B3E8D701857A9F"
     ]
   },
   "samples/TryParseOutVar.gs": {
@@ -3189,7 +3189,7 @@
       "rows=11 sha256=7801602EF878CEC6"
     ],
     "MethodBodies": [
-      "rows=12 sha256=AF740C37CDF8ABA3"
+      "rows=12 sha256=89D3A6D34B626DEC"
     ],
     "MethodDef": [
       "rows=12 sha256=C130D0CEE04A8D09"
@@ -3261,19 +3261,19 @@
       "rows=4 sha256=945BF3E98F83737D"
     ],
     "MemberRef": [
-      "rows=19 sha256=C426995F6B114F24"
+      "rows=20 sha256=97F2F5C3624CADC8"
     ],
     "MethodBodies": [
-      "rows=18 sha256=5FA2F572104B2948"
+      "rows=18 sha256=2515BBE92B3F8FFF"
     ],
     "MethodDef": [
-      "rows=18 sha256=15288007254FAA33"
+      "rows=18 sha256=A3A1B3D69861482E"
     ],
     "TypeDef": [
       "rows=3 sha256=10F2B62D0AD7681D"
     ],
     "TypeRef": [
-      "rows=15 sha256=DB309A27088830A2"
+      "rows=16 sha256=35AD7AB1190CE012"
     ]
   },
   "samples/WebsiteFallthrough.gs": {
@@ -3336,19 +3336,19 @@
       "rows=4 sha256=622A39F24309CED9"
     ],
     "MemberRef": [
-      "rows=23 sha256=1033A6F8D68AFBC9"
+      "rows=24 sha256=89A71E1C6C5F0010"
     ],
     "MethodBodies": [
-      "rows=19 sha256=AD5ADE555F1EE37F"
+      "rows=19 sha256=BFFF3A275E6DBF07"
     ],
     "MethodDef": [
-      "rows=19 sha256=6181F1E1CB017C68"
+      "rows=19 sha256=A69CD5B2209A4CB5"
     ],
     "TypeDef": [
       "rows=3 sha256=5460810A849E9555"
     ],
     "TypeRef": [
-      "rows=16 sha256=F0202948B4B38B94"
+      "rows=17 sha256=9CC3D862CBE5A947"
     ]
   },
   "samples/WebsiteNativeSlices.gs": {
@@ -3436,19 +3436,19 @@
       "rows=4 sha256=08912E7C988DD285"
     ],
     "MemberRef": [
-      "rows=20 sha256=BBAFF78EF08FD8CC"
+      "rows=21 sha256=14877EFB70159A78"
     ],
     "MethodBodies": [
-      "rows=12 sha256=7D741529BD61752B"
+      "rows=12 sha256=4A420B8EF727214B"
     ],
     "MethodDef": [
-      "rows=12 sha256=E56585D243BF86E3"
+      "rows=12 sha256=70852EE561F24844"
     ],
     "TypeDef": [
       "rows=3 sha256=0702FD1A465495BF"
     ],
     "TypeRef": [
-      "rows=13 sha256=27743BC3558BDE56"
+      "rows=14 sha256=4AEDF99DED881913"
     ]
   },
   "samples/WhileAndLabeledLoops.gs": {
@@ -3727,10 +3727,10 @@
       "rows=2 sha256=23BC4B60C857065B"
     ],
     "MemberRef": [
-      "rows=11 sha256=00B88BDA63F3F028"
+      "rows=12 sha256=E4856DBD9B087FB6"
     ],
     "MethodBodies": [
-      "rows=11 sha256=E238A41E5C291BAC"
+      "rows=11 sha256=FF85947379F93C1F"
     ],
     "MethodDef": [
       "rows=11 sha256=8CBE2E29FE1D2B16"
@@ -3739,7 +3739,7 @@
       "rows=3 sha256=A923DD2A2C005857"
     ],
     "TypeRef": [
-      "rows=8 sha256=56F57508BA304C31"
+      "rows=9 sha256=5A513AB42349AB16"
     ]
   },
   "samples/refactoring-baseline/RefStructByRefLike.gs": {

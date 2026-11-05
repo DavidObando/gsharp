@@ -3922,7 +3922,7 @@ internal class ConversionClassifier {
                 return explicitRead
             }
             if slot.UserDefaultParameter != nil {
-                return OverloadResolver.CreateOptionalUserDefaultArgument(slot.UserDefaultParameter)
+                return OverloadResolver.CreateOptionalUserDefaultArgument(slot.UserDefaultParameter, slot.TargetType)
             }
             if slot.ClrDefaultParameter != nil {
                 return CreateOptionalDefaultArgument(slot.ClrDefaultParameter)
