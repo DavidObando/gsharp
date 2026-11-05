@@ -19,6 +19,13 @@ import System.Threading
 internal partial class StatementBinder {
     private func BindSwitchStatement(syntax SwitchStatementSyntax) BoundStatement {
         var discriminant = bindExpression(syntax.Expression, false)
+        if discriminant.Type is TupleTypeSymbol{HasNilElement: true} unresolvedDiscriminantTuple {
+            discriminant = conversions.BindConversion(
+                syntax.Expression.Location,
+                discriminant,
+                TupleTypeSymbol.ResolveNilElements(unresolvedDiscriminantTuple)
+            )
+        }
         if NativeProtocolOperations.GetProtocol(discriminant.Type) != nil {
             Diagnostics.ReportNativeProtocol(
                 syntax.Location,
@@ -2884,7 +2891,8 @@ internal partial class StatementBinder {
             labelName,
             out var breakLabel,
             out var continueLabel,
-            iterationRunsUserCode: true
+            iterationRunsUserCode: true,
+            enumeratorDisposalRunsUserCode: true
         )
         if typedVariablePrelude != nil {
             body = BoundBlockStatement(originatingSyntax, ImmutableArray.Create(typedVariablePrelude, body))

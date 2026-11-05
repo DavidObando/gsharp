@@ -356,9 +356,14 @@ internal partial class StatementBinder {
         }
         {
             using let _ = binderCtx.PushUnsafeContext(entersUnsafe)
+            let blockFrameIndex = binderCtx.NarrowedVariables.Count
+            let blockAliasesAtEntry = externalCallableAliases.ToImmutableArray()
             let shadowEntry = ShadowBegin()
             let fallsThrough = BindBlockStatements(syntax.Statements, 0, statements)
             let block = BoundBlockStatement(syntax, statements.ToImmutable())
+            if binderCtx.LoopStack.Count > 0 {
+                boundStatementEntries[block] = (blockFrameIndex, blockAliasesAtEntry)
+            }
             ShadowRecordBlock(block, shadowEntry)
             RecordBlockExit(block, joinEntry)
             if !reachableOnEntry && fallsThrough {
@@ -488,6 +493,7 @@ internal partial class StatementBinder {
         // named fields are added to this frame and remain narrowed for all
         // subsequent statements in the block (until assignment invalidates them).
         let inheritedFallthrough = currentStatementListFallsThrough
+        let blockFrameIndex = binderCtx.NarrowedVariables.Count
         let memberNotNullFrame = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol]())
         let shadowSavedOverlay = ShadowEnterList()
         let shadowSavedBase = binderCtx.ShadowOverlayBase
@@ -742,6 +748,12 @@ internal partial class StatementBinder {
                 if !reachableBeforeStatement && currentStatementListFallsThrough && CanCompleteNormally(statement) {
                     internallyReachableFallthroughStatements.Add(statement)
                 }
+                if binderCtx.LoopStack.Count > 0 {
+                    boundStatementEntries[statement] = (
+                        blockFrameIndex,
+                        externalCallableAliasesAtEntry.ToImmutableArray()
+                    )
+                }
                 statements.Add(statement)
                 // Issue #208: after binding a call statement, apply any
                 // [MemberNotNull] post-condition narrowings to the persistent frame.
@@ -795,14 +807,24 @@ internal partial class StatementBinder {
                     canCompleteNormally
             }
             if trailingStatement != nil {
-                if trailingSyntax != nil {
-                    EnterBackwardJumpSpanIfFirstStatement(trailingSyntax)
+                var tailNode SyntaxNode? = trailingSyntax
+                if tailNode != nil {
+                    EnterBackwardJumpSpanIfFirstStatement(tailNode)
                 } else if statementSyntaxes.Length > 0 &&
                     statementSyntaxes[0].Parent is BlockExpressionSyntax blockExpr &&
                     blockExpr.Expression is {} tailExpr {
+                    tailNode = tailExpr
                     EnterBackwardJumpSpanIfFirstStatement(tailExpr)
                 }
-                statements.Add(trailingStatement())
+                let tailAliasesAtEntry = externalCallableAliases.ToImmutableArray()
+                if tailNode != nil && binderCtx.LoopStack.Count > 0 {
+                    trailingSyntaxEntries[tailNode] = (blockFrameIndex, tailAliasesAtEntry)
+                }
+                let tailStmt = trailingStatement()
+                if binderCtx.LoopStack.Count > 0 {
+                    boundStatementEntries[tailStmt] = (blockFrameIndex, tailAliasesAtEntry)
+                }
+                statements.Add(tailStmt)
             }
             return currentStatementListFallsThrough
         } finally {

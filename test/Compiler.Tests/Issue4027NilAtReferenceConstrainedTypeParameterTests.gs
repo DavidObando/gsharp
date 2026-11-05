@@ -119,7 +119,7 @@ open class Issue4027NilAtReferenceConstrainedTypeParameterTests {
         const Source = `package Demo
 import System
 
-func takesClassT[T class](x T) int32 { if x == nil { return 1 } else { return 2 } }
+func takesClassT[T class](x T?) int32 { if x == nil { return 1 } else { return 2 } }
 func fwdClassT[T class]() int32 { return takesClassT[T](nil) }
 
 Console.WriteLine(fwdClassT[string]())`
@@ -156,7 +156,7 @@ Console.WriteLine(fwdClassT[string]())`
             yield[]object{"the-issues-repro-a-call-argument-at-an-open-class-constrained-slot", `package Demo
 import System
 
-func takesClassT[T class](x T) int32 { if x == nil { return 1 } else { return 2 } }
+func takesClassT[T class](x T?) int32 { if x == nil { return 1 } else { return 2 } }
 func fwdClassT[T class]() int32 { return takesClassT[T](nil) }
 
 Console.WriteLine(fwdClassT[string]())`, []string{"1"}}
@@ -165,7 +165,7 @@ Console.WriteLine(fwdClassT[string]())`, []string{"1"}}
 import System
 
 func localSink[T class]() int32 {
-    let x T = nil
+    let x T? = nil
     if x == nil { return 1 }
     return 2
 }
@@ -177,7 +177,7 @@ Console.WriteLine(localSink[string]())`, []string{"1"}}
 import System
 
 func assignSink[T class](seed T) int32 {
-    var x T = seed
+    var x T? = seed
     if x == nil { return 3 }
     x = nil
     if x == nil { return 1 }
@@ -189,7 +189,7 @@ Console.WriteLine(assignSink[string]("seed"))`, []string{"1"}}
             yield[]object{"a-return-of-the-open-type-parameter", `package Demo
 import System
 
-func returnSink[T class]() T {
+func returnSink[T class]() T? {
     return nil
 }
 
@@ -200,7 +200,7 @@ Console.WriteLine(returnSink[string]() == nil)`, []string{"True"}}
 import System
 
 class Box[T class] {
-    public var V T
+    public var V T?
 
     public func Seed(v T) {
         this.V = v
@@ -210,7 +210,7 @@ class Box[T class] {
         this.V = nil
     }
 
-    public func Get() T {
+    public func Get() T? {
         return nil
     }
 }
@@ -231,7 +231,7 @@ import System
 
 class Payload { public var N int32 }
 
-func takesClassT[T class](x T) int32 { if x == nil { return 1 } else { return 2 } }
+func takesClassT[T class](x T?) int32 { if x == nil { return 1 } else { return 2 } }
 func fwdNil[T class]() int32 { return takesClassT[T](nil) }
 
 let p = Payload()
@@ -244,35 +244,35 @@ Console.WriteLine(fwdNil[Payload]())`, []string{"2", "1"}}
 import System
 
 class Box[T class] {
-    public var V T
+    public var V T?
 
     public func Set() {
         this.V = nil
     }
 
-    public func Get() T {
+    public func Get() T? {
         return nil
     }
 }
 
-func takesClassT[T class](x T) int32 { if x == nil { return 1 } else { return 2 } }
+func takesClassT[T class](x T?) int32 { if x == nil { return 1 } else { return 2 } }
 
 func argSink[T class]() int32 { return takesClassT[T](nil) }
 
 func localSink[T class]() int32 {
-    let x T = nil
+    let x T? = nil
     if x == nil { return 1 }
     return 2
 }
 
 func assignSink[T class](seed T) int32 {
-    var x T = seed
+    var x T? = seed
     x = nil
     if x == nil { return 1 }
     return 2
 }
 
-func returnSink[T class]() T {
+func returnSink[T class]() T? {
     return nil
 }
 
@@ -297,7 +297,7 @@ import System
 
 class Node { public var Name string }
 
-func takesNode(n Node) int32 { if n == nil { return 1 } else { return 2 } }
+func takesNode(n Node?) int32 { if n == nil { return 1 } else { return 2 } }
 
 Console.WriteLine(takesNode(nil))`, []string{"1"}}
             // `T?` over an open parameter — the spelling #814 already lowered.

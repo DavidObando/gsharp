@@ -121,6 +121,11 @@ internal partial class StatementBinder {
             set;
         }
 
+        prop ReferenceStorageRunsUserCode bool? {
+            get;
+            set;
+        }
+
         /// Whether a bare static member that the region reads or writes has an owner whose initializer runs user
         /// code (ADR-0208 R11, #5520).
         prop TouchesInitializingType bool {
@@ -375,21 +380,6 @@ internal partial class StatementBinder {
             // A unary operator that is not predefined for a literal or a built-in operand calls a user-defined or
             // an extension operator (`-"x"`), as does a binary one with an extension operator.
             resolved.RunsUserOperator = effects.OperatorHasUnresolvedOperand || OperatorsRunUserCode(effects, false)
-            for name in effects.OperatorOperandNames {
-                // A declaration of the region is not found here, and its type is unknown: it counts.
-                if TryLookupRegionVariableType(name) is {} rawOperandType {
-                    let operandType = StripAllNullability(rawOperandType)
-                    // `object` can hold a value of a type with operators.
-                    if operandType == nil || !MetadataTypeKeys.IsBuiltIn(operandType) || object.Equals(
-                        operandType,
-                        TypeSymbol.Object
-                    ) {
-                        resolved.RunsUserOperator = true
-                    }
-                } else {
-                    resolved.RunsUserOperator = true
-                }
-            }
         }
         for test in effects.PatternTests {
             if PatternTestRunsUserCode(test, effects) {
@@ -398,13 +388,9 @@ internal partial class StatementBinder {
             }
         }
         for name in effects.NilCompareOperandNames {
-            if TryLookupRegionVariableType(name) is {} comparedType {
-                // A non-nullable value type compared with `nil` may select a user-defined `==`.
-                if object.Equals(StripAllNullability(comparedType), TypeSymbol.Object) ||
-                    (comparedType !is NullableTypeSymbol && !IsReferenceLikeType(comparedType)) {
-                    resolved.RunsUserOperator = true
-                    resolved.NilCompareRunsUserOperator = true
-                }
+            if NilCompareNameRunsUserOperator(name, effects) {
+                resolved.RunsUserOperator = true
+                resolved.NilCompareRunsUserOperator = true
             }
         }
         for name in effects.BareReads {
@@ -553,11 +539,35 @@ internal partial class StatementBinder {
     private func RegionRunsCode(effects RegionEffects, resolved ResolvedRegionWrites) bool -> effects.ContainsCall ||
         effects.ContainsSuspension ||
         effects.ContainsIteration ||
-        effects.ContainsMemberRead ||
+        RunsUserCodeOnMemberRead(effects, resolved) ||
         resolved.RunsUserOperator ||
         resolved.RunsUserCodeOnWrite ||
-        resolved.PatternTestsCallEquals ||
-        resolved.ReadsProperty
+        resolved.PatternTestsCallEquals
+
+    // ADR-0213 W5 (#5549): whether a member, index or bare property read of the region can run user code.
+    private func RunsUserCodeOnMemberRead(effects RegionEffects, resolved ResolvedRegionWrites) bool {
+        if resolved.ReadsUserCodeProperty {
+            return true
+        }
+        if !effects.ContainsMemberRead && effects.NilCompareOperandPaths.Count == 0 {
+            return false
+        }
+        if resolved.ReadsRunUserCode == nil {
+            resolved.ReadsRunUserCode = (
+                effects
+                    .MemberReads
+                    .Count == 0 &&
+                    effects
+                    .PatternReads
+                    .Count == 0 &&
+                    effects
+                    .NilCompareOperandPaths
+                    .Count == 0
+            ) ||
+                ReadsRunUserCode(effects, false)
+        }
+        return resolved.ReadsRunUserCode == true
+    }
 
     private func CallIsIndirect(call RegionCall, effects RegionEffects) bool {
         switch call.Kind {
@@ -767,14 +777,15 @@ internal partial class StatementBinder {
     ) List[ReceiverType]? {
         let saved = keepNullableValueTypes
         try {
-            keepNullableValueTypes = keepNullableValueAtEnd && path.Steps.Length == 0
+            keepNullableValueTypes = keepNullableValueAtEnd || path.Steps.Length > 0
             return ResolveReceiverPathCore(path, effects, keepNullableValueAtEnd)
         } finally {
             keepNullableValueTypes = saved
         }
     }
 
-    // Whether (cref:AddSymbolType) keeps a nullable value type: only for the last type of a conversion site's path.
+    // Whether (cref:AddSymbolType) keeps a nullable value type: on intermediate receiver steps and when requested at
+    // the end of a path.
     private var keepNullableValueTypes bool = false
 
     private func ResolveReceiverPathCore(
@@ -817,7 +828,7 @@ internal partial class StatementBinder {
         }
         for var stepIndex = 0; stepIndex < path.Steps.Length; stepIndex++ {
             let step = path.Steps[stepIndex]
-            keepNullableValueTypes = keepNullableValueAtEnd && stepIndex == path.Steps.Length - 1
+            keepNullableValueTypes = keepNullableValueAtEnd || stepIndex < path.Steps.Length - 1
             let next = List[ReceiverType]()
             for type in types {
                 let outcome = AddStepTypes(type, step, next)
@@ -1004,6 +1015,27 @@ internal partial class StatementBinder {
     // that the step names, or `StepUnresolved` when a member that it names has a type that does not resolve.
     private func AddStepTypes(type ReceiverType, step RegionReceiverStep, next List[ReceiverType]) int32 {
         if type.Clr is {} clr {
+            if NullableLifting.GetValueTypeNullableUnderlyingClr(clr) is {} underlyingClr {
+                let nullableOutcome = AddClrStepTypes(clr, step, ImmutableArray[TypeSymbol].Empty, nil, next)
+                if nullableOutcome == StepUnresolved {
+                    return StepUnresolved
+                }
+                let underlyingOutcome = AddClrStepTypes(
+                    underlyingClr,
+                    step,
+                    ImmutableArray[TypeSymbol].Empty,
+                    nil,
+                    next
+                )
+                if underlyingOutcome == StepUnresolved {
+                    return StepUnresolved
+                }
+                return if nullableOutcome == StepFound || underlyingOutcome == StepFound {
+                    StepFound
+                } else {
+                    StepAbsent
+                }
+            }
             return AddClrStepTypes(clr, step, ImmutableArray[TypeSymbol].Empty, nil, next)
         }
         let symbol = type.Symbol
@@ -1012,10 +1044,35 @@ internal partial class StatementBinder {
             case nil {
                 return StepUnresolved
             }
+            case nullable is NullableTypeSymbol {
+                if StripAllNullability(nullable.UnderlyingType) is not{} underlying {
+                    return StepUnresolved
+                }
+                let nullableOutcome = AddClrStepTypes(
+                    typeof(Nullable[_]),
+                    step,
+                    ImmutableArray.Create[TypeSymbol](underlying),
+                    typeof(Nullable[_]),
+                    next
+                )
+                if nullableOutcome == StepUnresolved {
+                    return StepUnresolved
+                }
+                let underlyingOutcome = AddStepTypes(ReceiverType(underlying, nil), step, next)
+                if underlyingOutcome == StepUnresolved {
+                    return StepUnresolved
+                }
+                return if nullableOutcome == StepFound || underlyingOutcome == StepFound {
+                    StepFound
+                } else {
+                    StepAbsent
+                }
+            }
             case array is ArrayTypeSymbol {
                 if elementStep {
                     return Outcome(AddSymbolType(array.ElementType, next))
                 }
+                return AddClrStepTypes(typeof(Array), step, ImmutableArray[TypeSymbol].Empty, nil, next)
             }
             case slice is SliceTypeSymbol {
                 if elementStep {
@@ -1031,6 +1088,7 @@ internal partial class StatementBinder {
                 if elementStep {
                     return Outcome(AddSymbolType(rectangular.ElementType, next))
                 }
+                return AddClrStepTypes(typeof(Array), step, ImmutableArray[TypeSymbol].Empty, nil, next)
             }
             case tuple is TupleTypeSymbol {
                 if step.Kind == RegionReceiverStepKind.Member && step.Name is {} elementName {
@@ -1072,7 +1130,17 @@ internal partial class StatementBinder {
                 if hierarchy.Last().ImportedBaseType is {} importedBase {
                     return AddStepTypes(ReceiverType(importedBase, nil), step, next)
                 }
-                return AddClrStepTypes(typeof(object), step, ImmutableArray[TypeSymbol].Empty, nil, next)
+                let objectOutcome = AddClrStepTypes(typeof(object), step, ImmutableArray[TypeSymbol].Empty, nil, next)
+                if objectOutcome != StepAbsent || declared.IsClass {
+                    return objectOutcome
+                }
+                return AddClrStepTypes(
+                    typeof(Nullable[_]),
+                    step,
+                    ImmutableArray.Create[TypeSymbol](declared),
+                    typeof(Nullable[_]),
+                    next
+                )
             }
             case contract is InterfaceSymbol {
                 if step.Kind == RegionReceiverStepKind.Element {
@@ -1103,13 +1171,40 @@ internal partial class StatementBinder {
                 }
                 return AddClrStepTypes(typeof(object), step, ImmutableArray[TypeSymbol].Empty, nil, next)
             }
-            case EnumSymbol {
-                // An enum value has the members of `System.Enum`.
-                return AddClrStepTypes(typeof(Enum), step, ImmutableArray[TypeSymbol].Empty, nil, next)
+            case enumType is EnumSymbol {
+                if step.Kind == RegionReceiverStepKind.Member && step.Name is {} enumMember && enumType.TryGetMember(
+                    enumMember,
+                    out _
+                ) {
+                    next.Add(ReceiverType(enumType, nil))
+                    return StepFound
+                }
+                // An enum value has the members of `System.Enum` and `System.Nullable<T>`.
+                let enumOutcome = AddClrStepTypes(typeof(Enum), step, ImmutableArray[TypeSymbol].Empty, nil, next)
+                if enumOutcome != StepAbsent {
+                    return enumOutcome
+                }
+                return AddClrStepTypes(
+                    typeof(Nullable[_]),
+                    step,
+                    ImmutableArray.Create[TypeSymbol](enumType),
+                    typeof(Nullable[_]),
+                    next
+                )
             }
             case imported is ImportedTypeSymbol {
                 if imported.OpenDefinition is {} definition && !imported.TypeArguments.IsDefaultOrEmpty {
-                    return AddClrStepTypes(definition, step, imported.TypeArguments, definition, next)
+                    let importedOutcome = AddClrStepTypes(definition, step, imported.TypeArguments, definition, next)
+                    if importedOutcome != StepAbsent || !imported.IsValueType {
+                        return importedOutcome
+                    }
+                    return AddClrStepTypes(
+                        typeof(Nullable[_]),
+                        step,
+                        ImmutableArray.Create[TypeSymbol](imported),
+                        typeof(Nullable[_]),
+                        next
+                    )
                 }
             }
             default { }
@@ -1122,7 +1217,17 @@ internal partial class StatementBinder {
         } else {
             ImmutableArray[TypeSymbol].Empty
         }
-        return AddClrStepTypes(clrType, step, arguments, nil, next)
+        let clrOutcome = AddClrStepTypes(clrType, step, arguments, nil, next)
+        if clrOutcome != StepAbsent || symbol == nil || !symbol.IsValueType {
+            return clrOutcome
+        }
+        return AddClrStepTypes(
+            typeof(Nullable[_]),
+            step,
+            ImmutableArray.Create[TypeSymbol](symbol),
+            typeof(Nullable[_]),
+            next
+        )
     }
 
     private func Outcome(resolved bool) int32 -> if resolved {
@@ -1346,6 +1451,16 @@ internal partial class StatementBinder {
     // package or an extension operator) is a plain call that ADR-0208 A3 exempts, as on main; an imported operator is
     // not.
     private func OperatorsRunUserCode(effects RegionEffects, forReferenceStorage bool) bool {
+        let enumTypes = List[EnumSymbol]()
+        for candidate in effects.Operators {
+            for operand in candidate.Operands {
+                if operand != nil &&
+                    BuiltInOperandType(operand, effects) is EnumSymbol enumOperand &&
+                    !enumTypes.Contains(enumOperand) {
+                    enumTypes.Add(enumOperand)
+                }
+            }
+        }
         for candidate in effects.Operators {
             // A known built-in operand type, or `nil` for an operand that is itself an operator expression.
             let operandTypes = List[TypeSymbol?]()
@@ -1366,6 +1481,10 @@ internal partial class StatementBinder {
             }
             if operandTypes.Count == 1 {
                 if operandTypes[0] is not{} operandType {
+                    if !forReferenceStorage && OperatorNames.TryGetUnaryName(candidate.Kind) is {} unaryName &&
+                        HasAnyBuiltInOrEnumExtensionOperator(unaryName, enumTypes) {
+                        return true
+                    }
                     continue
                 }
                 var promotedType = operandType
@@ -1378,7 +1497,21 @@ internal partial class StatementBinder {
                 }
             } else if !forReferenceStorage &&
                 !IsPredefinedBinary(candidate.Kind, operandTypes[0], operandTypes[1]) &&
-                HasExtensionOperator(candidate.Kind, operandTypes[0], operandTypes[1]) {
+                HasExtensionOperator(candidate.Kind, operandTypes[0], operandTypes[1], enumTypes) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func HasAnyBuiltInOrEnumExtensionOperator(name string, enumTypes List[EnumSymbol]) bool {
+        for builtin in BuiltInTypes() {
+            if $scope.TryLookupExtensionFunction(builtin, name, out _) {
+                return true
+            }
+        }
+        for enumType in enumTypes {
+            if $scope.TryLookupExtensionFunction(enumType, name, out _) {
                 return true
             }
         }
@@ -1417,21 +1550,40 @@ internal partial class StatementBinder {
         return BoundBinaryOperator.Bind(kind, left, right) != nil
     }
 
-    private func HasExtensionOperator(kind SyntaxKind, left TypeSymbol?, right TypeSymbol?) bool {
+    private func HasExtensionOperator(
+        kind SyntaxKind,
+        left TypeSymbol?,
+        right TypeSymbol?,
+        enumTypes List[EnumSymbol]
+    ) bool {
         if OperatorNames.TryGetBinaryName(kind) is not{} name {
             return false
         }
-        if left != nil && $scope.TryLookupExtensionFunction(left, name, out var leftOperator) {
+        if left != nil {
+            if $scope.TryLookupExtensionFunction(left, name, out _) {
+                return true
+            }
+        } else if HasAnyBuiltInOrEnumExtensionOperator(name, enumTypes) {
             return true
         }
-        return right != nil && $scope.TryLookupExtensionFunction(right, name, out var rightOperator)
+        if right != nil {
+            if $scope.TryLookupExtensionFunction(right, name, out _) {
+                return true
+            }
+        } else if HasAnyBuiltInOrEnumExtensionOperator(name, enumTypes) {
+            return true
+        }
+        return false
     }
 
     // The one built-in type of an operand, or `nil` when it does not resolve to one.
     // The built-in type of an operand, or `nil` when it does not resolve to one. Candidates of several built-in types
     // (the overloads of `Math.Max`) give the first, since each has the same operators by kind.
     private func BuiltInOperandType(operand RegionReceiverPath, effects RegionEffects) TypeSymbol? {
-        if ResolveReceiverPath(operand, effects) is not{} types || types.Count == 0 {
+        if (operand.Steps.Length > 0 && (effects.ContainsMemberTypeTest || HasEntryMemberTypeTest())) ||
+            HasTypeTestOnReceiver(operand, effects) ||
+            ResolveReceiverPath(operand, effects) is not{} types ||
+            types.Count == 0 {
             return nil
         }
         var first TypeSymbol? = nil
@@ -1441,7 +1593,10 @@ internal partial class StatementBinder {
             } else {
                 candidate.Symbol
             }
-            if type == nil || !MetadataTypeKeys.IsBuiltIn(type) || object.Equals(type, TypeSymbol.Object) {
+            if type == nil || (!MetadataTypeKeys.IsBuiltIn(type) && type !is EnumSymbol) || object.Equals(
+                type,
+                TypeSymbol.Object
+            ) {
                 return nil
             }
             first ??= type
@@ -1559,6 +1714,10 @@ internal partial class StatementBinder {
                 return true
             }
         }
+        return IndexArgumentsRunUserConversion(effects, operatorResultsKnown)
+    }
+
+    private func IndexArgumentsRunUserConversion(effects RegionEffects, operatorResultsKnown bool) bool {
         for access in effects.IndexAccesses {
             if CallArgumentsRunUserConversion(access, effects, operatorResultsKnown) {
                 return true
@@ -1809,7 +1968,7 @@ internal partial class StatementBinder {
         if type is NullableTypeSymbol || type is TypeParameterSymbol || type is ByRefTypeSymbol || !type.IsValueType {
             return true
         }
-        return type.ClrType is {} clr && clr.IsGenericType && clr.Namespace == "System" && clr.Name == "Nullable`1"
+        return type.ClrType is {} clr && NullableLifting.IsValueTypeNullableClr(clr)
     }
 
     // Whether `nil` reaches the target of a conversion without an operator. The receiver resolution strips
@@ -2268,7 +2427,7 @@ internal partial class StatementBinder {
             IsExternalStorageAlias(root)
     }
 
-    private func ReadsRunUserCode(effects RegionEffects) bool {
+    private func ReadsRunUserCode(effects RegionEffects, forReferenceStorage bool) bool {
         for read in effects.MemberReads {
             if ReadRunsUserCode(read, effects) {
                 return true
@@ -2280,9 +2439,13 @@ internal partial class StatementBinder {
             }
         }
         for compared in effects.NilCompareOperandPaths {
-            if NilCompareRunsUserOperator(compared, effects) {
+            if NilCompareRunsUserOperator(compared, effects, forReferenceStorage) {
                 return true
             }
+        }
+        if (effects.IndexAccesses.Count > 0 || effects.PatternIndexAccesses.Count > 0) &&
+            IndexArgumentsRunUserConversion(effects, !OperatorsRunUserCode(effects, false)) {
+            return true
         }
         return false
     }
@@ -2350,22 +2513,82 @@ internal partial class StatementBinder {
         return segments
     }
 
+    private func NilCompareNameRunsUserOperator(name string, effects RegionEffects) bool {
+        guard let comparedType = TryLookupRegionVariableType(name) else {
+            return false
+        }
+        // A non-nullable value type compared with `nil` may select a user-defined `==`, as may a reference-typed
+        // variable or implicit member narrowed to a value type at the entry scope or inside the region.
+        if object.Equals(StripAllNullability(comparedType), TypeSymbol.Object) ||
+            (comparedType !is NullableTypeSymbol && !IsReferenceLikeType(comparedType)) {
+            return true
+        }
+        let symbol = $scope.TryLookupSymbol(name)
+        if symbol is VariableSymbol variable {
+            if (
+                variable is ImplicitFieldVariableSymbol or
+                    ImplicitPropertyVariableSymbol or
+                    ImplicitStaticFieldVariableSymbol or
+                    ImplicitStaticPropertyVariableSymbol
+            ) &&
+                (effects.ContainsMemberTypeTest || HasEntryMemberTypeTest()) {
+                return true
+            }
+        } else if effects.ContainsMemberTypeTest || HasEntryMemberTypeTest() {
+            return true
+        }
+        if !NullableLifting.IsAnyValueTypeNullable(comparedType as NullableTypeSymbol) &&
+            NilCompareRunsUserOperator(
+            RegionReceiverPath(name, false, nil, nil, ImmutableArray[RegionReceiverStep].Empty),
+            effects,
+            false
+        ) {
+            return true
+        }
+        return false
+    }
+
     // Whether a member or an element compared with `nil` has an imported value type whose `==` or `!=` takes a
     // reference (`operator ==(Token, object)`), which the comparison calls. A source operator is a plain call
     // (A3). An operand that does not resolve can run one.
-    private func NilCompareRunsUserOperator(compared RegionReceiverPath?, effects RegionEffects) bool {
-        if compared == nil || ResolveReceiverPath(compared, effects) is not{} types {
+    private func NilCompareRunsUserOperator(
+        compared RegionReceiverPath?,
+        effects RegionEffects,
+        forReferenceStorage bool
+    ) bool {
+        if compared == nil ||
+            (
+            compared
+                .Steps
+                .Length > 0 &&
+                (effects.ContainsMemberTypeTest || HasEntryMemberTypeTest() || HasTypeTestOnReceiver(compared, effects))
+        ) ||
+            ResolveReceiverPath(compared, effects, keepNullableValueAtEnd: true) is not{} types {
             return true
         }
         for type in types {
-            let clr = type.Clr ??
+            if !forReferenceStorage {
+                if type.Symbol is {} symbol {
+                    if object.Equals(symbol, TypeSymbol.Object) ||
+                        (symbol !is NullableTypeSymbol && !IsReferenceLikeType(symbol)) {
+                        return true
+                    }
+                } else if type.Clr is {} clrType && ReflectionType(clrType) is {} reflectedClr {
+                    if reflectedClr.FullName == "System.Object" ||
+                        (reflectedClr.IsValueType && !NullableLifting.IsValueTypeNullableClr(reflectedClr)) {
+                        return true
+                    }
+                }
+            }
+            var clr = type.Clr ??
                 (
                 if type.Symbol is StructSymbol {
                     default(Type?)
                 } else {
-                    type.Symbol?.ClrType
+                    StripAllNullability(type.Symbol)?.ClrType
                 }
             )
+            clr = NullableLifting.GetValueTypeNullableUnderlyingClr(clr) ?? clr
             if clr != nil && ClrEqualityTakesReference(clr) {
                 return true
             }
@@ -2384,7 +2607,7 @@ internal partial class StatementBinder {
                 }
                 for parameter in method.GetParameters() {
                     let parameterType = parameter.ParameterType
-                    if !parameterType.IsValueType || parameterType.IsGenericType && parameterType.Name == "Nullable`1" {
+                    if !parameterType.IsValueType || NullableLifting.IsValueTypeNullableClr(parameterType) {
                         return true
                     }
                 }
@@ -2395,16 +2618,20 @@ internal partial class StatementBinder {
         return false
     }
 
-    // Whether a member or index read can run user code, with the rules of the straight-line pass: a field, a
-    // tuple element, an array element and an enum member run none; a source property runs user code unless it is
-    // an auto property (R14); an imported property or indexer runs user code unless `IsStableClrAccessor` lists it
-    // (R16, R17). A receiver that does not resolve can run user code.
+    // Whether a member or index read can run user code, with the rules of the straight-line pass and the
+    // non-hiding requirement of #5549: a field of a value type or of a class that cannot have a subclass, a tuple
+    // element, an array or slice element or length and an enum member run none; a source property runs user code
+    // unless it is an auto property on a receiver type that cannot have a subclass (R14, #5549); an imported
+    // property or indexer runs user code unless `IsStableClrAccessor` lists it (R16, R17). A receiver that does
+    // not resolve or is type-tested in the region can run user code.
     private func ReadRunsUserCode(read RegionMemberRead, effects RegionEffects) bool {
         let path = read.Receiver
-        if path == nil || path.Steps.Length > 0 && effects.ContainsMemberTypeTest {
+        if path == nil ||
+            (path.Steps.Length > 0 && (effects.ContainsMemberTypeTest || HasEntryMemberTypeTest())) ||
+            HasTypeTestOnReceiver(path, effects) {
             return true
         }
-        let types = ResolveReceiverPath(path, effects)
+        let types = ResolveReceiverPath(path, effects, keepNullableValueAtEnd: true)
         if types == nil {
             return true
         }
@@ -2416,14 +2643,67 @@ internal partial class StatementBinder {
         return false
     }
 
+    private func HasTypeTestOnReceiver(path RegionReceiverPath, effects RegionEffects) bool {
+        if path.RootName is not{} root || path.RootIsCall {
+            return false
+        }
+        for test in effects.TypeTests {
+            if test.Name == root {
+                let tested = TestedType(test, out var testsConstant)
+                if tested != nil || !testsConstant {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func HasEntryMemberTypeTest() bool {
+        for var i = 0; i < binderCtx.NarrowedVariables.Count; i++ {
+            for entry in binderCtx.NarrowedVariables[i] {
+                if !entry.Key.HasMembers {
+                    continue
+                }
+                let declared = StripAllNullability(NarrowingState.DeclaredNonNullType(entry.Key))
+                if declared == nil || !object.Equals(declared, StripAllNullability(entry.Value)) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     private func ReadOfTypeRunsUserCode(type ReceiverType, member string?) bool {
         if type.Clr is {} clr {
+            if NullableLifting.GetValueTypeNullableUnderlyingClr(clr) is {} underlyingClr {
+                if member == "Value" {
+                    return true
+                }
+                if member == "HasValue" {
+                    return ClrDeclaresMember(underlyingClr, "HasValue") &&
+                        ClrReadRunsUserCode(underlyingClr, "HasValue", false)
+                }
+                return ClrReadRunsUserCode(underlyingClr, member, false)
+            }
             return ClrReadRunsUserCode(clr, member, false)
         }
         let symbol = type.Symbol
         switch symbol {
             case nil {
                 return true
+            }
+            case nullable is NullableTypeSymbol {
+                if StripAllNullability(nullable.UnderlyingType) is not{} underlying {
+                    return true
+                }
+                if member == "Value" {
+                    return true
+                }
+                if member == "HasValue" {
+                    return TypeDeclaresMember(underlying, "HasValue") &&
+                        ReadOfTypeRunsUserCode(ReceiverType(underlying, nil), "HasValue")
+                }
+                return ReadOfTypeRunsUserCode(ReceiverType(underlying, nil), member)
             }
             case ArrayTypeSymbol, SliceTypeSymbol, RectangularArrayTypeSymbol {
                 // An element and the length of an array or a slice are intrinsic reads.
@@ -2438,6 +2718,7 @@ internal partial class StatementBinder {
                 return member == nil
             }
             case declared is StructSymbol {
+                let canHaveSubclass = declared.IsClass && (declared.IsOpen || declared.IsSealedHierarchy)
                 let hierarchy = declared.GetHierarchy()
                 for level in hierarchy {
                     for candidate in level.GetMembers() {
@@ -2448,13 +2729,19 @@ internal partial class StatementBinder {
                         } else if candidate.Name == member {
                             switch candidate {
                                 case field is FieldSymbol {
-                                    // A constant is inlined and initializes nothing.
-                                    return field.IsStatic &&
-                                        !field.IsConst &&
-                                        TypeInitializationRunsUserCode(level, true)
+                                    // A constant is inlined and initializes nothing; an instance field on a class
+                                    // that can have a subclass can be hidden by a derived getter (#5549).
+                                    if !field.IsStatic {
+                                        return canHaveSubclass
+                                    }
+                                    return !field.IsConst && TypeInitializationRunsUserCode(level, true)
                                 }
                                 case property is PropertySymbol {
-                                    // ADR-0208 R14 (#5599): the one accessor decision, on the receiver's type.
+                                    // ADR-0208 R14 (#5599) and #5549: an instance property on a class that can have
+                                    // a subclass can be overridden or hidden by a derived getter.
+                                    if !property.IsStatic && canHaveSubclass {
+                                        return true
+                                    }
                                     return SourcePropertyRunsUserCode(
                                         property,
                                         if property.IsStatic {
@@ -2476,6 +2763,9 @@ internal partial class StatementBinder {
                 if hierarchy.Last().ImportedBaseType is {} importedBase {
                     return ReadOfTypeRunsUserCode(ReceiverType(importedBase, nil), member)
                 }
+                if !declared.IsClass {
+                    return ClrReadRunsUserCode(typeof(Nullable[_]), member, true)
+                }
                 return true
             }
             case imported is ImportedTypeSymbol {
@@ -2495,8 +2785,37 @@ internal partial class StatementBinder {
         return ClrReadRunsUserCode(clrType, member, false)
     }
 
-    // An imported read: a field or a constant runs no user code; a property or an indexer runs user code unless
-    // `IsStableClrAccessor` lists its getter. A member that is not found can run user code.
+    private func TypeDeclaresMember(type TypeSymbol, member string) bool {
+        if type is StructSymbol declared {
+            for level in declared.GetHierarchy() {
+                for candidate in level.GetMembers() {
+                    if candidate.Name == member {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+        if type.ClrType is {} clr {
+            return ClrDeclaresMember(clr, member)
+        }
+        return false
+    }
+
+    private func ClrDeclaresMember(type Type, member string) bool {
+        if ReflectionType(type) is not{} reflected {
+            return true
+        }
+        try {
+            let flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy
+            return reflected.GetMember(member, flags).Length > 0
+        } catch (ex NotSupportedException) {
+            return true
+        }
+    }
+
+    // An imported read: a field of a value type or sealed class or a constant runs no user code; a property or an
+    // indexer runs user code unless `IsStableClrAccessor` lists its getter. A member that is not found can run user code.
     private func ClrReadRunsUserCode(type Type, member string?, isDefinition bool) bool {
         if ReflectionType(type) is not{} reflected {
             return true
@@ -2525,7 +2844,15 @@ internal partial class StatementBinder {
                     }
                 } else {
                     for clrMember in searchedType.GetMember(member, flags) {
-                        if clrMember is FieldInfo {
+                        if clrMember is FieldInfo field {
+                            if !field.IsStatic && !reflected.IsSealed {
+                                return true
+                            }
+                            if field.IsStatic &&
+                                !field.IsLiteral &&
+                                ClrStaticMemberOwnerInitializes(field.DeclaringType ?? reflected) {
+                                return true
+                            }
                             found = true
                         } else if clrMember is PropertyInfo property && property.GetIndexParameters().Length == 0 {
                             found = true
@@ -2537,6 +2864,12 @@ internal partial class StatementBinder {
                         }
                     }
                 }
+            }
+            if !found && reflected.IsValueType && member != nil && !ClrTypeUtilities.AreSame(
+                reflected,
+                typeof(Nullable[_])
+            ) {
+                return ClrReadRunsUserCode(typeof(Nullable[_]), member, true)
             }
             return !found
         } catch (ex NotSupportedException) {
@@ -2954,8 +3287,9 @@ internal partial class StatementBinder {
             resolved.RunsUserOperator ||
             resolved.RunsUserCodeOnWrite ||
             resolved.PatternTestsCallEquals
-        // Rule W5: every member or index read is an unknown getter, which is a call.
-        let readLike = effects.ContainsMemberRead || resolved.ReadsProperty
+        // Rule W5 (#5549): a member, index or bare property read is a call unless it resolves to a member that
+        // runs no user code and cannot be hidden.
+        let readLike = RunsUserCodeOnMemberRead(effects, resolved)
         let memberWrite = effects.ContainsMemberWrite || effects.ContainsPointerWrite || resolved.ImplicitMemberWrite
         let mayMutateMemberPaths = callLike || readLike || memberWrite
         var indirectCall = effects.ContainsIteration || effects.ContainsSuspension
@@ -2979,16 +3313,16 @@ internal partial class StatementBinder {
         // The same holds for a user-defined or imported operator or conversion and a static initializer (ADR-0208
         // A3 exempts only a plain call to a method).
         if !indirectCall && NamesReferenceStorage(path) {
-            if resolved.ReadsRunUserCode == nil {
-                resolved.ReadsRunUserCode = resolved.ReadsUserCodeProperty ||
+            if resolved.ReferenceStorageRunsUserCode == nil {
+                resolved.ReferenceStorageRunsUserCode = resolved.ReadsUserCodeProperty ||
                     resolved.TouchesInitializingType ||
                     resolved.NilCompareRunsUserOperator ||
                     resolved.ConversionsRunUserCode ||
-                    ReadsRunUserCode(effects) ||
+                    ReadsRunUserCode(effects, true) ||
                     OperatorsRunUserCode(effects, true) ||
                     ArgumentsRunUserConversion(effects)
             }
-            indirectCall = resolved.ReadsRunUserCode == true
+            indirectCall = resolved.ReferenceStorageRunsUserCode == true
         }
         // A member read is an unknown getter, which the table classes as a call (ADR-0208 R14). Amendment A3
         // (#5292) keeps the fact of a by-reference parameter across a call, so a read does not write the
@@ -3536,56 +3870,140 @@ internal partial class StatementBinder {
         return condition is LiteralExpressionSyntax literal && literal.LiteralToken.Kind == SyntaxKind.FalseKeyword
     }
 
-    // The facts that the header of a loop proves when the loop ends, by loop statement. Row R7 (f).
+    // The facts that the exit of a loop proves when the loop ends, by loop statement (ADR-0213 table 9, #5460).
     private let loopExitFacts Dictionary[SyntaxNode, Dictionary[AccessPath, TypeSymbol]] = Dictionary[
         SyntaxNode,
         Dictionary[AccessPath, TypeSymbol]
     ]()
 
-    /// Row R7 (f), table 9 column `Exit state`: a loop without a `break` ends only when its header is
-    /// false, so the facts that the condition proves false hold after the loop whatever the body wrote.
-    /// The header is bound under the lower bound of the loop, so each fact holds on every iteration.
-    /// A fact that the condition itself may remove is dropped, as for a statement (rule A2).
-    /// @remarks A loop with a `break` keeps today's exit (no fact is added): the states of the `break`
-    /// statements are not recorded yet, so the join of table 9 cannot be taken. The same holds in a
-    /// function with a user label or `goto` (#4285).
-    private func RecordLoopExitFacts(loopBody StatementSyntax, condition BoundExpression?) {
-        if condition == nil {
-            return
+    // Whether the loop header has no false exit edge (`for { }`, `for init; ; post`, `while true`, `for true`, `do { } while true`).
+    private func HeaderIsUnconditional(loop SyntaxNode) bool {
+        if loop.Kind == SyntaxKind.ForInfiniteStatement {
+            return true
         }
+        if loop is ForClauseStatementSyntax{Condition: nil} {
+            return true
+        }
+        var condition = HeaderSyntax(loop) as ExpressionSyntax
+        while condition is ParenthesizedExpressionSyntax parenthesized {
+            condition = parenthesized.Expression
+        }
+        return condition is LiteralExpressionSyntax literal && literal.LiteralToken.Kind == SyntaxKind.TrueKeyword
+    }
+
+    private func IsLoopHeaderExitReachable(loop SyntaxNode, continueLabel BoundLabel, boundBody BoundStatement) bool {
+        if HeaderIsUnconditional(loop) {
+            return false
+        }
+        if loop.Kind == SyntaxKind.DoWhileStatement {
+            return !EndsInUnconditionalExit(boundBody) ||
+                HasInternallyReachableFallthrough(boundBody) ||
+                internallyReachableLoopBacks.Contains(continueLabel)
+        }
+        return true
+    }
+
+    /// Row R7 (f) and issue #5460, table 9 column `Exit state`: the exit state of a loop is
+    /// `Jmp(break, header-false)`, joining every reachable `break` state targeting the loop (after
+    /// pending cleanup transfers) with the header's false state when the header exit is reachable.
+    /// The header is bound under the lower bound of the loop, so each fact holds on every iteration.
+    /// A fact that the condition itself may remove is dropped from the header-false state (rule A2).
+    /// In a function with a user label or `goto`, loop exit lifts stay off (#4285).
+    private func RecordLoopExitFacts(
+        loopBody StatementSyntax,
+        condition BoundExpression?,
+        breakLabel BoundLabel,
+        continueLabel BoundLabel,
+        boundBody BoundStatement,
+        loopEntryState NarrowingState,
+        loopEntryAliases ImmutableArray[VariableSymbol],
+        boundPost BoundStatement? = nil
+    ) {
+        let rawBreaks = binderCtx.NarrowingFlow.TakeBreaks(breakLabel)
         let loop = loopBody.Parent
         if loop == nil {
             return
         }
-        let elseFacts = ComputeConditionNarrowing(condition).Else
-        if elseFacts == nil || elseFacts.Count == 0 {
+        var reachableBreaks List[NarrowingState]? = nil
+        if rawBreaks != nil && rawBreaks.Count > 0 {
+            let activeFinallySet = HashSet[FinallyClauseSyntax](activeFinallyClauses)
+            let activeCleanupSet = HashSet[BoundStatement](activeCleanupStatements)
+            for snapshot in rawBreaks {
+                ApplyBreakPrefixEffects(snapshot, loopBody, boundBody, condition, loopEntryAliases, boundPost)
+                if ApplyExitedFinallyEffects(snapshot, activeFinallySet, activeCleanupSet) {
+                    reachableBreaks ??= List[NarrowingState](rawBreaks.Count)
+                    reachableBreaks!!.Add(NarrowingState.Empty.WithAll(snapshot.NarrowedVariables))
+                }
+            }
+        }
+        let hasBreak = reachableBreaks != nil && reachableBreaks.Count > 0
+        let headerFalseReachable = IsLoopHeaderExitReachable(loop, continueLabel, boundBody)
+        if (currentStatementListFallsThrough || HasInternallyReachableFallthrough(boundBody)) && headerFalseReachable {
+            internallyReachableLoopExits.Add(breakLabel)
+        }
+        let elseFacts = if condition == nil || !headerFalseReachable {
+            default(Dictionary[AccessPath, TypeSymbol]?)
+        } else {
+            ComputeConditionNarrowing(condition).Else
+        }
+        if headerFalseReachable && (elseFacts == nil || elseFacts.Count == 0) {
             return
         }
-        // The loop ends when the header is false, so the break of a block expression in the header or in the post
-        // statement also leaves it: the whole loop is scanned.
-        if binderCtx.FunctionContainsUserGotoOrLabel || ContainsBreakFor(loop) {
+        if !headerFalseReachable && !hasBreak {
             return
         }
-        // The effects of the header decide which facts survive it, by the same rule as the entry (A2): a call,
-        // a getter, an operator, a write to the root, a write through `ref` or a filter of an enclosing try.
-        let headerSyntax = HeaderSyntax(loop)
-        if headerSyntax == nil {
+        if binderCtx.FunctionContainsUserGotoOrLabel {
             return
         }
-        let headerEffects = GetRegionScanner().ScanStatements([]SyntaxNode{headerSyntax})
-        let resolved = ResolveRegionWrites(headerEffects)
-        let filters = CollectCatchFiltersAbove(loop)
-        var filterWrites List[(TryBlock SyntaxNode?, Names HashSet[string])]? = nil
-        if filters.Count > 0 {
-            filterWrites = CollectEnclosingFilterWrites(filters)
+        var headerFalseState = NarrowingState.Unreachable
+        var survivingElseFacts Dictionary[AccessPath, TypeSymbol]? = nil
+        if headerFalseReachable {
+            // The effects of the header decide which facts survive it, by the same rule as the entry (A2): a call,
+            // a getter, an operator, a write to the root, a write through `ref` or a filter of an enclosing try.
+            let headerSyntax = HeaderSyntax(loop)
+            if headerSyntax == nil {
+                return
+            }
+            let headerEffects = GetRegionScanner().ScanStatements([]SyntaxNode{headerSyntax})
+            let resolved = ResolveRegionWrites(headerEffects)
+            let filters = CollectCatchFiltersAbove(loop)
+            var filterWrites List[(TryBlock SyntaxNode?, Names HashSet[string])]? = nil
+            if filters.Count > 0 {
+                filterWrites = CollectEnclosingFilterWrites(filters)
+            }
+            headerFalseState = loopEntryState
+            for entry in elseFacts!! {
+                let path = entry.Key
+                // The enclosing filters apply when the header has a handler or runs code (W8, in `DecideRegionKill`).
+                let removed = DecideRegionKill(path, entry.Value, headerEffects, resolved, filterWrites).Killed
+                if !removed {
+                    survivingElseFacts ??= Dictionary[AccessPath, TypeSymbol]()
+                    survivingElseFacts!![path] = entry.Value
+                    headerFalseState = headerFalseState.With(path, entry.Value)
+                }
+            }
+            if survivingElseFacts == nil {
+                return
+            }
+        }
+        let predecessors = List[NarrowingState]()
+        if reachableBreaks != nil {
+            predecessors.AddRange(reachableBreaks)
+        }
+        predecessors.Add(headerFalseState)
+        let exitState = NarrowingState.Join(predecessors)
+        if exitState.Count == 0 {
+            return
         }
         let facts = Dictionary[AccessPath, TypeSymbol]()
-        for entry in elseFacts {
-            let path = entry.Key
-            // The enclosing filters apply when the header has a handler or runs code (W8, in `DecideRegionKill`).
-            let removed = DecideRegionKill(path, entry.Value, headerEffects, resolved, filterWrites).Killed
-            if !removed {
-                facts[path] = entry.Value
+        for path in exitState.Paths {
+            if exitState.NarrowedType(path) is not{} joined {
+                continue
+            }
+            let entryType = loopEntryState.NarrowedType(path)
+            if (entryType == nil || !IsWeakerOrEqual(entryType, joined)) ||
+                (survivingElseFacts != nil && survivingElseFacts.ContainsKey(path)) {
+                facts[path] = joined
             }
         }
         if facts.Count > 0 {
@@ -3614,9 +4032,9 @@ internal partial class StatementBinder {
         }
     }
 
-    /// Adds the facts that the header of the loop statement [`syntax`](paramref) proves on exit to
+    /// Adds the facts that the exit of the loop statement [`syntax`](paramref) proves to
     /// [`persistentFrame`](paramref). It runs after the statement's invalidation, which removes the
-    /// roots that the body writes: the exit state is the state of the header, not of the body.
+    /// roots that the body writes: the exit state is the join of the reachable exit edges.
     private func ApplyLoopExitNarrowings(syntax SyntaxNode, persistentFrame NarrowingFrame) {
         var node = syntax
         while node is LabeledStatementSyntax labeled {
@@ -3627,19 +4045,10 @@ internal partial class StatementBinder {
         }
         loopExitFacts.Remove(node)
         for entry in facts {
-            SetPersistentNarrowing(persistentFrame, entry.Key, entry.Value)
-        }
-    }
-
-    private func ContainsBreakFor(node SyntaxNode) bool {
-        if node.Kind == SyntaxKind.BreakStatement {
-            return true
-        }
-        for child in node.GetChildren() {
-            if ContainsBreakFor(child) {
-                return true
+            if $scope.TryLookupSymbol(entry.Key.Root.Name) is VariableSymbol inScope &&
+                SameRoot(inScope, entry.Key.Root) {
+                SetPersistentNarrowing(persistentFrame, entry.Key, entry.Value)
             }
         }
-        return false
     }
 }

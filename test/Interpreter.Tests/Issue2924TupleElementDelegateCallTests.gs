@@ -95,7 +95,7 @@ Console.WriteLine(factory?.Make(40)(2))`)
         return (value int32) -> seed + value
     }
 }
-let factory Factory = nil
+let factory Factory? = nil
 factory?.Make(40)(2)
 Console.WriteLine("end")`)
         Assert.Equal("end${Environment.NewLine}", output)
@@ -118,7 +118,7 @@ Console.WriteLine("end")`)
 }
 let live = Factory()
 Console.WriteLine(live?.Make(40)!!(2))
-let missing Factory = nil
+let missing Factory? = nil
 missing?.Make(40)!!(2)
 Console.WriteLine("end")`)
         // Issue #3501: the `!!!!` double-assertion variants moved out of this

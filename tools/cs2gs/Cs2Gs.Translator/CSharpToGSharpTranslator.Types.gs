@@ -780,10 +780,16 @@ partial class CSharpToGSharpTranslator {
         ) GExpression? {
             let (value, statements) = this.TranslateConditionalValueBranch(
                 expression,
-                () -> if nullableResultType != nil && IsNullOrDefaultLiteral(expression) {
-                    cast[GExpression](DefaultValueExpression(nullableResultType))
-                } else {
-                    this.CoerceSwitchArmValue(expression, this.TranslateValueWithNullForgiveness(expression))!!
+                () -> {
+                    let translated = this.TranslateValueWithNullForgiveness(expression)
+                    if translated is DefaultValueExpression && IsNullOrSuppressedNull(expression) {
+                        return translated
+                    }
+                    return if nullableResultType != nil && IsNullOrDefaultLiteral(expression) {
+                        cast[GExpression](DefaultValueExpression(nullableResultType))
+                    } else {
+                        this.CoerceSwitchArmValue(expression, translated)!!
+                    }
                 }
             )
             return if statements.Count == 0 {
@@ -898,7 +904,10 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
             }
-            let nullableValue = !(translated is NonNullAssertionExpression) &&
+            let nullableValue = !(translated is NonNullAssertionExpression) && !this.IsGSharpFlowNarrowedLocal(
+                expression
+            ) &&
+                !this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(expression) &&
                 (
                 this
                     .context
@@ -908,7 +917,8 @@ partial class CSharpToGSharpTranslator {
                     .CodeAnalysis
                     .NullableAnnotation
                     .Annotated ||
-                    (this.IsObliviousCompilation() && this.IsNullablePromotedValue(expression))
+                    (this.IsObliviousCompilation() && this.IsNullablePromotedValue(expression)) ||
+                    this.IsTranslatorWidenedDeclaration(this.context.GetSymbolInfo(expression).Symbol)
             )
             if nullableValue {
                 return ParenthesizedExpression(BinaryExpression(translated, "as", TypeExpression(target)))

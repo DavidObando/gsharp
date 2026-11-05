@@ -2667,28 +2667,50 @@ internal shared class ObliviousNullabilityAnalyzer {
     // declaration this rule widens too — `(false, slot)`, decided by the fixed
     // point. Anything else — a local, a lambda result, an interpolation, a `!`,
     // a cast — is `(false, nil)`: the translation would assert it.
-    private func ClassifyNullArgumentRead(expression ExpressionSyntax, model SemanticModel, run NullArgumentRun)(
-        Safe bool,
-        Slot string?
-    ) {
+    private func ClassifyNullArgumentRead(
+        expression ExpressionSyntax,
+        model SemanticModel,
+        run NullArgumentRun,
+        localSafety Dictionary[ISymbol, bool]? = nil
+    )(Safe bool, Slot string?) {
         var value SyntaxNode = expression
-        while value.Parent is ParenthesizedExpressionSyntax parenthesized {
-            value = parenthesized
-        }
         let unsafe = (false, default(string?))
         // A read that a null test guards never sees the null, in C# or in G#.
         if IsNullGuardDominatedRead(expression, model) {
             return (true, default(string?))
         }
-        // A user-defined conversion receives the value first: its input is the slot.
-        if value is ExpressionSyntax converted && model.GetConversion(converted) is {
-            IsUserDefined: true,
-            MethodSymbol: {} conversionOperator
-        } &&
-            conversionOperator
-            .Parameters
-            .Length > 0 {
-            return ClassifyNullArgumentSlot(conversionOperator.Parameters[0], run)
+        while true {
+            // A user-defined conversion receives the value first: its input is the slot.
+            if value is ExpressionSyntax converted && model.GetConversion(converted) is {
+                IsUserDefined: true,
+                MethodSymbol: {} conversionOperator
+            } &&
+                conversionOperator
+                .Parameters
+                .Length > 0 {
+                return ClassifyNullArgumentSlot(conversionOperator.Parameters[0], model, run, localSafety)
+            }
+            if value.Parent is ParenthesizedExpressionSyntax parenthesized {
+                value = parenthesized
+                continue
+            }
+            if value.Parent is SwitchExpressionArmSyntax arm &&
+                arm.Expression == value &&
+                arm.Parent is SwitchExpressionSyntax switchParent {
+                value = switchParent
+                continue
+            }
+            if value.Parent is ConditionalExpressionSyntax conditional &&
+                (conditional.WhenTrue == value || conditional.WhenFalse == value) {
+                value = conditional
+                continue
+            }
+            if value.Parent is BinaryExpressionSyntax coalesce && coalesce.IsKind(SyntaxKind.CoalesceExpression) &&
+                coalesce.Right == value {
+                value = coalesce
+                continue
+            }
+            break
         }
         switch value.Parent {
             case _ is ExpressionStatementSyntax {
@@ -2704,7 +2726,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     unreduced
                     .Parameters
                     .Length > 0 {
-                    return ClassifyNullArgumentSlot(unreduced.Parameters[0], run)
+                    return ClassifyNullArgumentSlot(unreduced.Parameters[0], model, run, localSafety)
                 }
                 return (true, default(string?))
             }
@@ -2726,7 +2748,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     } else {
                         userOperator.Parameters[1]
                     }
-                    return ClassifyNullArgumentSlot(operand, run)
+                    return ClassifyNullArgumentSlot(operand, model, run, localSafety)
                 }
                 // A reference comparison takes a `T?` operand; `x ?? y` tests `x`.
                 return if binary.IsKind(SyntaxKind.EqualsExpression) || binary.IsKind(SyntaxKind.NotEqualsExpression) ||
@@ -2790,14 +2812,21 @@ internal shared class ObliviousNullabilityAnalyzer {
                 SyntaxKind.SimpleAssignmentExpression
             ) &&
                 assignment.Right == value {
-                return ClassifyNullArgumentSlot(model.GetSymbolInfo(assignment.Left).Symbol, run)
+                return ClassifyNullArgumentSlot(model.GetSymbolInfo(assignment.Left).Symbol, model, run, localSafety)
+            }
+            case equalsValue is EqualsValueClauseSyntax when equalsValue.Value == value {
+                return if equalsValue.Parent is {} declarator {
+                    ClassifyNullArgumentSlot(model.GetDeclaredSymbol(declarator), model, run, localSafety)
+                } else {
+                    unsafe
+                }
             }
             case argument is ArgumentSyntax when argument.RefKindKeyword.IsKind(SyntaxKind.None) {
                 if model.GetOperation(argument) is IArgumentOperation{
                     ArgumentKind: ArgumentKind.Explicit,
                     Parameter: {} parameter
                 } {
-                    return ClassifyNullArgumentSlot(parameter, run)
+                    return ClassifyNullArgumentSlot(parameter, model, run, localSafety)
                 }
                 // An expanded `params` element is stored in the collection: it
                 // takes the null when the element type is nullable.
@@ -2819,12 +2848,12 @@ internal shared class ObliviousNullabilityAnalyzer {
                 return if function is AnonymousFunctionExpressionSyntax || function == nil {
                     unsafe
                 } else {
-                    ClassifyNullArgumentSlot(model.GetDeclaredSymbol(function), run)
+                    ClassifyNullArgumentSlot(model.GetDeclaredSymbol(function), model, run, localSafety)
                 }
             }
             case arrow is ArrowExpressionClauseSyntax {
                 return if arrow.Parent is {} owner {
-                    ClassifyNullArgumentSlot(model.GetDeclaredSymbol(owner), run)
+                    ClassifyNullArgumentSlot(model.GetDeclaredSymbol(owner), model, run, localSafety)
                 } else {
                     unsafe
                 }
@@ -2871,10 +2900,18 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     // Issue #5574: a slot that receives a read. A nullable slot takes the null;
     // a declaration the rule may widen takes it exactly when it stays widened;
-    // a local, a generic slot, and every other non-null slot, does not.
-    private func ClassifyNullArgumentSlot(slot ISymbol?, run NullArgumentRun)(Safe bool, Slot string?) {
-        if slot == nil || slot is ILocalSymbol {
+    // a non-nullable or inferred local, a generic slot, and every other non-null slot, does not.
+    private func ClassifyNullArgumentSlot(
+        slot ISymbol?,
+        model SemanticModel,
+        run NullArgumentRun,
+        localSafety Dictionary[ISymbol, bool]? = nil
+    )(Safe bool, Slot string?) {
+        if slot == nil {
             return (false, default(string?))
+        }
+        if slot is ILocalSymbol local {
+            return (IsSafeExplicitlyNullableReferenceLocal(local, model, run, localSafety), default(string?))
         }
         // A slot whose declaration is typed by a type parameter (`this T x`,
         // `T? x`, `List<T> xs`) is bound to the inferred argument, which the
@@ -2893,6 +2930,66 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         return (false, default(string?))
     }
+
+    private func IsSafeExplicitlyNullableReferenceLocal(
+        local ILocalSymbol,
+        model SemanticModel,
+        run NullArgumentRun,
+        localSafety Dictionary[ISymbol, bool]?
+    ) bool {
+        if !IsExplicitlyNullableReferenceLocal(local) {
+            return false
+        }
+        let memo = localSafety ?? Dictionary[ISymbol, bool](SymbolEqualityComparer.Default)
+        if memo.TryGetValue(local, out var cached) {
+            return cached
+        }
+        // Seed as false while on the active recursion stack so a cycle fails closed.
+        memo[local] = false
+        if local
+            .DeclaringSyntaxReferences
+            .Length != 1 ||
+            local
+            .DeclaringSyntaxReferences[0]
+            .GetSyntax() is not VariableDeclaratorSyntax declarator {
+            return false
+        }
+        let enclosingScope SyntaxNode? = declarator.Ancestors().FirstOrDefault(
+            (n SyntaxNode) -> n is BaseMethodDeclarationSyntax ||
+                n is AccessorDeclarationSyntax ||
+                n is LocalFunctionStatementSyntax ||
+                n is AnonymousFunctionExpressionSyntax
+        )
+        if enclosingScope == nil {
+            return false
+        }
+        for id in enclosingScope.DescendantNodes().OfType[IdentifierNameSyntax]() {
+            if IsInsideNameof(id) || !SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(id).Symbol, local) {
+                continue
+            }
+            if id.Parent is AssignmentExpressionSyntax assignment && assignment.Left == id {
+                return false
+            }
+            if !ClassifyNullArgumentRead(id, model, run, memo).Safe {
+                return false
+            }
+        }
+        memo[local] = true
+        return true
+    }
+
+    private func IsExplicitlyNullableReferenceLocal(local ILocalSymbol) bool -> local.Type is {
+        IsReferenceType: true,
+        NullableAnnotation: Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+    } &&
+        !MentionsTypeParameter(local.Type) &&
+        local
+        .DeclaringSyntaxReferences
+        .Any(
+        (r SyntaxReference) -> r.GetSyntax() is VariableDeclaratorSyntax{
+            Parent: VariableDeclarationSyntax{Type: NullableTypeSyntax}
+        }
+    )
 
     private func MentionsTypeParameter(type ITypeSymbol?) bool -> switch type {
         case _ is ITypeParameterSymbol: true
