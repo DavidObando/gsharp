@@ -1172,7 +1172,74 @@ internal partial class ExpressionBinder {
             whenTrue.Type != TypeSymbol.Never,
             whenFalse.Type != TypeSymbol.Never
         )
-        return (condition, whenTrue, whenFalse)
+        return (condition, UnwrapTerminalLvalueStorage(whenTrue), UnwrapTerminalLvalueStorage(whenFalse))
+    }
+
+    private func UnwrapTerminalLvalueStorage(expression BoundExpression) BoundExpression {
+        switch expression {
+            case unwrap is BoundUnaryExpression when unwrap.IsNarrowingUnwrap {
+                return UnwrapTerminalLvalueStorage(unwrap.Operand)
+            }
+            case variable is BoundVariableExpression when variable.NarrowedType != nil {
+                let raw = BoundVariableExpression(variable.Syntax, variable.Variable)
+                raw.AnchorSyntax(variable.Syntax)
+                return raw
+            }
+            case field is BoundFieldAccessExpression when field.NarrowedType != nil {
+                let raw = if field.InterfaceType != nil {
+                    BoundFieldAccessExpression(field.Syntax, field.Field, field.InterfaceType)
+                } else {
+                    BoundFieldAccessExpression(
+                        field.Syntax,
+                        field.Receiver,
+                        field.StructType,
+                        field.Field,
+                        field.SubstitutedType,
+                        narrowedType: nil
+                    )
+                }
+                raw.AnchorSyntax(field.Syntax)
+                return raw
+            }
+            case clrField is BoundClrPropertyAccessExpression when clrField.Member is FieldInfo fieldInfo {
+                let receiverType = clrField.StaticContainerType ??
+                    clrField.ConstrainedInterfaceType ??
+                    clrField
+                    .Receiver
+                    ?.Type
+                let declaredType = if receiverType != nil {
+                    MemberLookup.GetClrFieldTypeSymbol(receiverType, fieldInfo)
+                } else {
+                    ClrNullability.GetFieldTypeSymbol(fieldInfo)
+                }
+                if declaredType != clrField.Type {
+                    let raw = BoundClrPropertyAccessExpression(
+                        clrField.Syntax,
+                        clrField.Receiver,
+                        clrField.Member,
+                        declaredType,
+                        clrField.StaticContainerType,
+                        clrField.ConstrainedReceiverTypeParameter,
+                        clrField.ConstrainedInterfaceType,
+                        clrField.IsAddressableStaticField,
+                        clrField.IsReadOnlySubmissionGlobal
+                    )
+                    raw.AnchorSyntax(clrField.Syntax)
+                    return raw
+                }
+                return clrField
+            }
+            case block is BoundBlockExpression {
+                let inner = UnwrapTerminalLvalueStorage(block.Expression)
+                if !object.ReferenceEquals(inner, block.Expression) {
+                    return BoundBlockExpression(block.Syntax, block.Statements, inner)
+                }
+                return block
+            }
+            default {
+                return expression
+            }
+        }
     }
 
     /// ADR-0062: binds a general conditional expression as a conditional

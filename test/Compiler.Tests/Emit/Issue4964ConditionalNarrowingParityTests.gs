@@ -883,6 +883,8 @@ func TryRead(out r int32) bool {
 }
 func ConsumeOverload(x float64, v int32) bool -> true
 func ConsumeOverload(x float64, v int32?) bool -> v != nil
+func ConsumeWithOut(x float64, ok bool, v int32) bool -> false
+func ConsumeWithOut(x float64, ok bool, v string) bool -> v == "null"
 func ConsumeWithTuple(pair (float64, int32), x float64, b bool) bool -> b
 func Id[T](x float64, v T) T -> v
 func OuterOverload(v int32) bool -> true
@@ -953,6 +955,8 @@ Console.WriteLine(n != nil ? ConsumeWithTuple((1, 2), token, n > 0) : false)
 n = 5
 Console.WriteLine(!(n == nil) ? Box(token, n).HasValue : false)
 Console.WriteLine(RunOpenGenericRefresh[int32](5))
+n = 5
+Console.WriteLine(n != nil ? ConsumeWithOut(token, reader.Read(n, out var rOutUse), rOutUse) : false)
 `)
         Assert.Equal(
             string.Join(
@@ -972,7 +976,8 @@ Console.WriteLine(RunOpenGenericRefresh[int32](5))
                 "False",
                 "False",
                 "False",
-                "False"
+                "False",
+                "True"
             ) +
                 Environment.NewLine,
             identityArgRebindRun.Output
@@ -1049,6 +1054,13 @@ func CheckOverloadRetryWithSuppressedAssertion(token NToken) bool ->
 func CheckOverloadRetryRetainsWarning(token NToken) bool ->
     !(gn == nil) ? ConsumeOverloadWarn(token, gn) : false
 func ReadRef(in x int32) int32 -> x
+func UseRefNullableInt(ref v int32?) int32 -> v ?? 0
+func UseRefNullableString(ref v string?) int32 -> v?.Length ?? 0
+func CheckConditionalRefTerminalStoragePreserved(ref a int32?, ref b int32?, ref sa string?, ref sb string?) int32 ->
+    UseRefNullableInt(ref (a != nil ? a : b)) +
+        UseRefNullableInt(ref a != nil ? ref a : ref b) +
+        UseRefNullableString(ref (sa != nil ? sa : sb)) +
+        UseRefNullableString(ref sa != nil ? ref sa : ref sb)
 func CheckConditionalRefArmsIsolateNarrowing(ref s1 string?, ref s2 string?, a []int32, flag bool) int32 ->
     (s1 != nil ? ReadRef(in (flag ? a[(s1 = nil, 0).Item2] : a[s1.Length])) : 0) +
         (s2 != nil ? ReadRef(in flag ? in a[(s2 = nil, 0).Item2] : in a[s2.Length]) : 0)

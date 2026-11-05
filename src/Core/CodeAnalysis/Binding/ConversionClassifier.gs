@@ -212,7 +212,6 @@ internal class ConversionClassifier {
             return false
         }
         var builder ImmutableArray[BoundExpression].Builder? = nil
-        var anyTypeChanged = false
         for var i = 0; i < arguments.Length; i++ {
             let orig = arguments[i]
             let reb = ResolveReboundSibling(orig)
@@ -222,12 +221,9 @@ internal class ConversionClassifier {
                 }
                 builder ??= arguments.ToBuilder()
                 builder!![i] = reb
-                if reb.Type != orig.Type {
-                    anyTypeChanged = true
-                }
             }
         }
-        if !anyTypeChanged || builder == nil {
+        if builder == nil {
             return false
         }
         refreshed = builder.ToImmutable()
