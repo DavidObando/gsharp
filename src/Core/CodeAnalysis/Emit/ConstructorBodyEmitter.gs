@@ -967,8 +967,14 @@ internal class ConstructorBodyEmitter {
                     classSym.InstanceFieldInitializers.GetValueOrDefault(field)
                 }
                 if initExpr != nil {
-                    let assignment = BoundFieldAssignmentExpression(nil, thisParam, classSym, field, initExpr)
-                    statements.Add(BoundExpressionStatement(nil, assignment))
+                    let syntax = if !zeroInitialize &&
+                        field.Declaration is FieldDeclarationSyntax{Initializer: not nil} fieldDecl {
+                        cast[SyntaxNode?](initExpr.Syntax ?? fieldDecl)
+                    } else {
+                        default(SyntaxNode?)
+                    }
+                    let assignment = BoundFieldAssignmentExpression(syntax, thisParam, classSym, field, initExpr)
+                    statements.Add(BoundExpressionStatement(syntax, assignment))
                 }
             }
             return statements.ToImmutable()
