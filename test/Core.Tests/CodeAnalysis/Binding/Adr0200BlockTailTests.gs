@@ -1073,6 +1073,16 @@ func StmtSwitch(x int32, out a int32) int32 {
         default { return 0 }
     }
 }
+func FallthroughSwitch(x int32, out a int32) int32 {
+    switch x {
+        case (Match(out a, 75)) { fallthrough }
+        case 0 { return 1 }
+        default { return 0 }
+    }
+}
+func BoxPropSwitch(b Box, out a int32) int32 {
+    return switch b { case { Prop: Match(out a, 85) }: 1 default: 0 }
+}
 func VoidSwitch(x int32, out a int32) {
     switch x {
         case Match(out a, 80): Console.Write("")
@@ -1100,10 +1110,12 @@ Console.WriteLine("${OrLeftSwitch(5, out a)}:${a}")
 Console.WriteLine("${OrFailureFlowSwitch(1, out a)}:${a}")
 Console.WriteLine("${OrFailureFlowSwitch(5, out a)}:${a}")
 Console.WriteLine("${StmtSwitch(5, out a)}:${a}")
+Console.WriteLine("${FallthroughSwitch(5, out a)}:${a}")
+Console.WriteLine("${BoxPropSwitch(Box(5), out a)}:${a}")
 VoidSwitch(5, out a)
 Console.WriteLine(a)
 Console.WriteLine("${IsBranches(1, out a, out b)}:${a}:${b}")
-Console.WriteLine("${IsBranches(5, out a, out b)}:${a}:${b}")`, "0:10\n1:20\n0:25\n1:30\n0:40\n0:45\n0:50\n1:61\n0:60\n0:70\n80\n187:91:96\n186:91:95\n")
+Console.WriteLine("${IsBranches(5, out a, out b)}:${a}:${b}")`, "0:10\n1:20\n0:25\n1:30\n0:40\n0:45\n0:50\n1:61\n0:60\n0:70\n0:75\n0:85\n80\n187:91:96\n186:91:95\n")
 
         // Short-circuiting patterns do NOT definitely assign on skipped paths.
         AssertDiagnostic(`func Match(out a int32) int32 { a = 1 return -1 }
@@ -1118,15 +1130,36 @@ func F(x int32, out a int32) int32 {
 func F(x int32, out a int32) int32 {
     return switch x { case _ or Match(out a): 1 default: 0 }
 }`, "GS0238", 3, 5)
-        AssertDiagnostic(`struct Box(Prop int32)
+        AssertDiagnostic(`struct Pair(A int32, B int32)
 func Match(out a int32) int32 { a = 1 return -1 }
-func F(b Box, out a int32) int32 {
+func F(p Pair, out a int32) int32 {
+    return switch p { case { A: 1, B: Match(out a) }: 1 default: 0 }
+}`, "GS0238", 4, 5)
+        AssertDiagnostic(`class RefBox(Prop int32)
+func Match(out a int32) int32 { a = 1 return -1 }
+func F(b RefBox?, out a int32) int32 {
     return switch b { case { Prop: Match(out a) }: 1 default: 0 }
 }`, "GS0238", 4, 5)
         AssertDiagnostic(`func Match(out a int32) int32 { a = 1 return -1 }
 func F(xs []int32, out a int32) int32 {
     return switch xs { case [Match(out a)]: 1 default: 0 }
 }`, "GS0238", 3, 5)
+        AssertDiagnostic(`func F(x int32, out a int32) {
+    switch x {
+        case 1 or _ { fallthrough }
+        default { return }
+    }
+    a = 1
+}`, "GS0238", 4, 19)
+        AssertDiagnostic(`func F(x int32, out a int32) {
+    var b = 0
+    var p = &a
+    switch x {
+        case 1 {}
+        default { p = &b }
+    }
+    *p = 1
+}`, "GS0238", 8, 5)
     }
 
     @Fact
@@ -1144,6 +1177,12 @@ func StmtReturn(x int32) int32 {
         case 1 or _ { return 48 }
     }
 }
+func StmtFallthroughReturn(x int32) int32 {
+    switch x {
+        case 1 or _ { fallthrough }
+        default { return 50 }
+    }
+}
 Console.WriteLine(OrRight(2))
 Console.WriteLine(OrLeft(2))
 Console.WriteLine(Comma(2))
@@ -1151,7 +1190,8 @@ Console.WriteLine(AndBoth(2))
 Console.WriteLine(DoubleNot(2))
 Console.WriteLine(NestedAndOr(9))
 Console.WriteLine(VarBind(9))
-Console.WriteLine(StmtReturn(9))`, "42\n43\n44\n45\n46\n47\n49\n48\n")
+Console.WriteLine(StmtReturn(9))
+Console.WriteLine(StmtFallthroughReturn(9))`, "42\n43\n44\n45\n46\n47\n49\n48\n50\n")
 
         // Guarded wildcard alternatives and non-total combinators still require default.
         AssertDiagnostic(`func F(x int32) int32 {

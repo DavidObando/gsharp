@@ -1472,6 +1472,17 @@ internal partial class StatementBinder {
                 )
                 return BoundIndexExpression(element.Syntax, target, indices, element.Type)
             }
+            case dereference is BoundDereferenceExpression when GSharp
+                .Core
+                .CodeAnalysis
+                .Lowering
+                .SideEffectSpiller
+                .IsNativeSliceElementOperand(dereference.Operand) {
+                return BoundDereferenceExpression(
+                    dereference.Syntax,
+                    CaptureGoNativeSliceElementOperand(dereference.Operand, prefix, retainedVariables, retainRemaining)
+                )
+            }
             case BoundVariableExpression {
                 return receiver
             }
@@ -1479,6 +1490,40 @@ internal partial class StatementBinder {
                 return CaptureGoOperand(receiver, prefix, retainedVariables, retainRemaining)
             }
         }
+    }
+
+    private func CaptureGoNativeSliceElementOperand(
+        operand BoundExpression,
+        prefix ImmutableArray[BoundStatement].Builder,
+        retainedVariables HashSet[VariableSymbol],
+        retainRemaining[]bool
+    ) BoundExpression -> switch operand {
+        case block is BoundBlockExpression when block.Syntax is not BlockExpressionSyntax &&
+            !ReadsUncapturableVariable(block, retainedVariables): HoistArgumentBlock(
+            block,
+            prefix,
+            retainedVariables,
+            retainRemaining,
+            (tail BoundExpression) -> CaptureGoNativeSliceElementOperand(
+                tail,
+                prefix,
+                retainedVariables,
+                retainRemaining
+            )
+        )
+        case clrIndex is BoundClrIndexExpression: BoundClrIndexExpression(
+            clrIndex.Syntax,
+            CaptureGoOperand(clrIndex.Target, prefix, retainedVariables, retainRemaining),
+            clrIndex.Indexer,
+            CaptureArguments(
+                clrIndex.Arguments,
+                (argument BoundExpression) -> CaptureGoOperand(argument, prefix, retainedVariables, retainRemaining)
+            ),
+            clrIndex.Type,
+            clrIndex.ConstrainedReceiverTypeParameter,
+            clrIndex.ConstrainedInterfaceType
+        )
+        default: operand
     }
 
     private func AppendConditionalReceiverBranch(
@@ -1521,6 +1566,12 @@ internal partial class StatementBinder {
 
     private func NeedsLocationProbe(receiver BoundExpression?) bool -> switch receiver {
         case BoundIndexExpression{IsArrayBackedElementAccess: true}: true
+        case BoundDereferenceExpression{Operand: var operand} when GSharp
+            .Core
+            .CodeAnalysis
+            .Lowering
+            .SideEffectSpiller
+            .IsNativeSliceElementOperand(operand): true
         case BoundFieldAccessExpression{Receiver: {} owner}: !MayBeValueType(owner.Type) || NeedsLocationProbe(owner)
         case BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: {} owner}: !MayBeValueType(owner.Type) ||
             NeedsLocationProbe(owner)

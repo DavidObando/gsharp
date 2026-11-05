@@ -8,6 +8,7 @@ import System.Collections.Generic
 import System.Collections.Immutable
 import System.Diagnostics.CodeAnalysis
 import System.Linq
+import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Lowering
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
@@ -454,7 +455,9 @@ internal shared class DefiniteAssignmentAnalyzer {
         pointerAliases Dictionary[VariableSymbol, VariableSymbol],
         tracked HashSet[VariableSymbol],
         methodExitLabel BoundLabel?,
-        isFunctionBody bool = false
+        isFunctionBody bool = false,
+        fallthroughLabel BoundLabel? = nil,
+        fallthroughExits List[HashSet[VariableSymbol]]? = nil
     ) HashSet[VariableSymbol]? {
         CompilationMeasurements.Count("definite-assignment.region-analyses")
         let graph = ControlFlowGraph.Create(AsBlock(regionBody))
@@ -637,6 +640,13 @@ internal shared class DefiniteAssignmentAnalyzer {
                         }
                     }
                 }
+                continue
+            }
+            if fallthroughLabel != nil && lastStatement is BoundGotoStatement fallthroughGoto && object.ReferenceEquals(
+                fallthroughGoto.Label,
+                fallthroughLabel
+            ) {
+                fallthroughExits?.Add(HashSet[VariableSymbol](exit))
                 continue
             }
             anyNormal = true
@@ -1127,12 +1137,15 @@ internal shared class DefiniteAssignmentAnalyzer {
     ) {
         let flowContext = ExpressionFlowContext(outParams, function, methodExitLabel)
         ProcessExpression(switchStmt.Discriminant, assigned, diagnostics, pointerAliases, tracked, flowContext)
-        var meet HashSet[VariableSymbol]? = nil
-        var any = false
+        let armCount = switchStmt.Arms.Length
+        let armDispatchAssigned = [armCount]HashSet[VariableSymbol]?
+        let armDispatchAliases = [armCount]Dictionary[VariableSymbol, VariableSymbol]?
         var canMiss = true
+        var dispatchReachable = true
         var dispatchAssigned = HashSet[VariableSymbol](assigned)
         var dispatchAliases = Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
-        for arm in switchStmt.GetDispatchArms() {
+        let ProcessArmHeader = func (index int32) {
+            let arm = switchStmt.Arms[index]
             let (patternMatchedAssigned, patternMatchedAliases, patternFailedAssigned, patternFailedAliases) =
             ProcessPattern(arm.Pattern, dispatchAssigned, dispatchAliases, diagnostics, tracked, flowContext)
             let guardAssigned = HashSet[VariableSymbol](patternMatchedAssigned)
@@ -1140,31 +1153,15 @@ internal shared class DefiniteAssignmentAnalyzer {
             if arm.Guard != nil {
                 ProcessExpression(arm.Guard, guardAssigned, diagnostics, guardAliases, tracked, flowContext)
             }
-            var bodyEntry = guardAssigned
-            if HasFallthroughEntryLabel(arm) {
-                bodyEntry = Intersect(bodyEntry, assigned)
+            if !dispatchReachable {
+                return
             }
-            let armExit HashSet[VariableSymbol]? = AnalyzeRegion(
-                arm.Body,
-                bodyEntry,
-                outParams,
-                function,
-                diagnostics,
-                guardAliases,
-                tracked,
-                methodExitLabel
-            )
-            if armExit != nil {
-                any = true
-                meet = if meet == nil {
-                    armExit
-                } else {
-                    Intersect(meet, armExit)
-                }
-            }
+            armDispatchAssigned[index] = guardAssigned
+            armDispatchAliases[index] = guardAliases
             if arm.IsCatchAll {
                 canMiss = false
-                break
+                dispatchReachable = false
+                return
             }
             if arm.Guard == nil {
                 dispatchAssigned = patternFailedAssigned
@@ -1181,15 +1178,92 @@ internal shared class DefiniteAssignmentAnalyzer {
                 )
             }
         }
-        if canMiss {
-            meet = if meet == nil {
-                dispatchAssigned
-            } else {
-                Intersect(meet, dispatchAssigned)
+        for var i = 0; i < armCount; i++ {
+            if !switchStmt.Arms[i].IsDefault {
+                ProcessArmHeader(i)
             }
-            any = true
         }
-        if !canMiss && !any {
+        for var i = 0; i < armCount; i++ {
+            if switchStmt.Arms[i].IsDefault {
+                ProcessArmHeader(i)
+            }
+        }
+        let exitAssigned = List[HashSet[VariableSymbol]](armCount + 1)
+        let exitAliases = List[Dictionary[VariableSymbol, VariableSymbol]](armCount + 1)
+        var prevFallthroughAssigned HashSet[VariableSymbol]? = nil
+        var prevFallthroughAliases Dictionary[VariableSymbol, VariableSymbol]? = nil
+        for var i = 0; i < armCount; i++ {
+            let arm = switchStmt.Arms[i]
+            let incomingAssigned = List[HashSet[VariableSymbol]](2)
+            let incomingAliases = List[Dictionary[VariableSymbol, VariableSymbol]](2)
+            if armDispatchAssigned[i] is {} dispatchedAssigned && armDispatchAliases[i] is {} dispatchedAliases {
+                incomingAssigned.Add(dispatchedAssigned)
+                incomingAliases.Add(dispatchedAliases)
+            }
+            if TryGetFallthroughEntryLabel(arm) != nil &&
+                prevFallthroughAssigned != nil &&
+                prevFallthroughAliases != nil {
+                incomingAssigned.Add(prevFallthroughAssigned)
+                incomingAliases.Add(prevFallthroughAliases)
+            }
+            prevFallthroughAssigned = nil
+            prevFallthroughAliases = nil
+            if incomingAssigned.Count == 0 {
+                continue
+            }
+            let bodyEntry = HashSet[VariableSymbol]()
+            let bodyAliases = Dictionary[VariableSymbol, VariableSymbol]()
+            MergeConditionalFlow(bodyEntry, bodyAliases, incomingAssigned, incomingAliases)
+            let nextFallthroughLabel = if i + 1 < armCount {
+                TryGetFallthroughEntryLabel(switchStmt.Arms[i + 1])
+            } else {
+                default(BoundLabel?)
+            }
+            var armExit HashSet[VariableSymbol]? = nil
+            if nextFallthroughLabel == nil {
+                armExit = AnalyzeRegion(
+                    arm.Body,
+                    bodyEntry,
+                    outParams,
+                    function,
+                    diagnostics,
+                    bodyAliases,
+                    tracked,
+                    methodExitLabel
+                )
+            } else {
+                let fallthroughExits = List[HashSet[VariableSymbol]](1)
+                armExit = AnalyzeRegionUncached(
+                    arm.Body,
+                    bodyEntry,
+                    outParams,
+                    function,
+                    diagnostics,
+                    bodyAliases,
+                    tracked,
+                    methodExitLabel,
+                    fallthroughLabel: nextFallthroughLabel,
+                    fallthroughExits: fallthroughExits
+                )
+                if fallthroughExits.Count > 0 {
+                    var mergedFallthrough = fallthroughExits[0]
+                    for var j = 1; j < fallthroughExits.Count; j++ {
+                        mergedFallthrough = Intersect(mergedFallthrough, fallthroughExits[j])
+                    }
+                    prevFallthroughAssigned = mergedFallthrough
+                    prevFallthroughAliases = Dictionary[VariableSymbol, VariableSymbol](bodyAliases)
+                }
+            }
+            if armExit != nil {
+                exitAssigned.Add(armExit)
+                exitAliases.Add(Dictionary[VariableSymbol, VariableSymbol](bodyAliases))
+            }
+        }
+        if canMiss {
+            exitAssigned.Add(dispatchAssigned)
+            exitAliases.Add(dispatchAliases)
+        }
+        if !canMiss && exitAssigned.Count == 0 {
             // Every exhaustive arm terminates inside its recursively analyzed
             // region. The outer CFG models pattern switches as opaque and still
             // carries a synthetic fall-through edge, so mark out parameters as
@@ -1198,16 +1272,16 @@ internal shared class DefiniteAssignmentAnalyzer {
             assigned.UnionWith(outParams)
             return
         }
-        if any && meet != nil {
-            assigned.Clear()
-            assigned.UnionWith(meet)
+        if exitAssigned.Count > 0 {
+            MergeConditionalFlow(assigned, pointerAliases, exitAssigned, exitAliases)
         }
     }
 
-    private func HasFallthroughEntryLabel(arm BoundPatternSwitchArm) bool -> arm.Body is BoundBlockStatement{
-        Statements: [BoundLabelStatement{Label: {Name: {} labelName}}, ..]
-    } &&
-        labelName.StartsWith("switchArm", StringComparison.Ordinal)
+    private func TryGetFallthroughEntryLabel(arm BoundPatternSwitchArm) BoundLabel? -> switch arm.Body {
+        case BoundBlockStatement{Statements: [BoundLabelStatement{Label: {Name: {} labelName} label}, ..]}
+        when labelName.StartsWith("switchArm", StringComparison.Ordinal): label
+        default: default(BoundLabel?)
+    }
 
     /// Best-effort `pointerVar = &localVar` alias tracking for
     /// (cref:BoundIndirectAssignmentExpression) (issue #1642): records
@@ -1932,24 +2006,36 @@ internal shared class DefiniteAssignmentAnalyzer {
             case propertyPattern is BoundPropertyPattern {
                 var matchedAssigned = HashSet[VariableSymbol](assigned)
                 var matchedAliases = Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
+                let failedAssigned = List[HashSet[VariableSymbol]](propertyPattern.Fields.Length + 1)
+                let failedAliases = List[Dictionary[VariableSymbol, VariableSymbol]](propertyPattern.Fields.Length + 1)
+                if propertyPattern.Type is NullableTypeSymbol || !ReflectionMetadataEmitter.IsValueTypeSymbol(
+                    propertyPattern.Type
+                ) {
+                    failedAssigned.Add(HashSet[VariableSymbol](assigned))
+                    failedAliases.Add(Dictionary[VariableSymbol, VariableSymbol](pointerAliases))
+                }
                 for field in propertyPattern.Fields {
-                    let (fieldMatchedAssigned, fieldMatchedAliases, _, _) = ProcessPattern(
-                        field.Pattern,
-                        matchedAssigned,
-                        matchedAliases,
-                        diagnostics,
-                        tracked,
-                        flowContext
-                    )
+                    let (fieldMatchedAssigned, fieldMatchedAliases, fieldFailedAssigned, fieldFailedAliases) =
+                    ProcessPattern(field.Pattern, matchedAssigned, matchedAliases, diagnostics, tracked, flowContext)
+                    if BoundSwitchExpressionArm.GetConstantMatch(field.Pattern) != true {
+                        failedAssigned.Add(fieldFailedAssigned)
+                        failedAliases.Add(fieldFailedAliases)
+                    }
                     matchedAssigned = fieldMatchedAssigned
                     matchedAliases = fieldMatchedAliases
                 }
-                return (
-                    matchedAssigned,
-                    matchedAliases,
-                    HashSet[VariableSymbol](assigned),
-                    Dictionary[VariableSymbol, VariableSymbol](pointerAliases)
-                )
+                if failedAssigned.Count == 0 {
+                    return (
+                        matchedAssigned,
+                        matchedAliases,
+                        HashSet[VariableSymbol](matchedAssigned),
+                        Dictionary[VariableSymbol, VariableSymbol](matchedAliases)
+                    )
+                }
+                let whenFailedAssigned = HashSet[VariableSymbol]()
+                let whenFailedAliases = Dictionary[VariableSymbol, VariableSymbol]()
+                MergeConditionalFlow(whenFailedAssigned, whenFailedAliases, failedAssigned, failedAliases)
+                return (matchedAssigned, matchedAliases, whenFailedAssigned, whenFailedAliases)
             }
             case listPattern is BoundListPattern {
                 var matchedAssigned = HashSet[VariableSymbol](assigned)

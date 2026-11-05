@@ -272,6 +272,8 @@ class Runner5012 {
         return idx
     }
 
+    func GetHolder() Holder5012 -> holder
+
     async func ProduceString() string {
         await Task.Yield()
         return "v"
@@ -298,11 +300,10 @@ class Runner5012 {
         GetArray()[GetIndex()].Inner.F = await ReplaceAndProduce(42)
         let afterSimple = backing[0].Inner.F
         holder.Value = await Task.FromResult[int32](1)
-        var localHolder = Holder5012{Value: 5}
-        let originalLocal = localHolder
-        localHolder.Value = {
+        let originalHolder = holder
+        GetHolder().Value = {
             await Task.Yield()
-            localHolder = Holder5012{Value: 99}
+            holder = Holder5012{Value: 99}
             12
         }
         arr = backing
@@ -317,7 +318,7 @@ class Runner5012 {
         } catch (e IndexOutOfRangeException) {
             boundsBeforeAwait = ownerCalls == 3 && indexCalls == 3
         }
-        return "${afterCompound}:${keepAfterCompound}:${afterSimple}:${holder.Value}:${originalLocal.Value}:${localHolder.Value}:${boundsBeforeAwait}"
+        return "${afterCompound}:${keepAfterCompound}:${afterSimple}:${originalHolder.Value}:${holder.Value}:${boundsBeforeAwait}"
     }
 }
 
@@ -327,7 +328,7 @@ func Main() {
     Console.WriteLine(r.RunNestedElementAndClassField().GetAwaiter().GetResult())
 }`
         let output = CompileAndRun(source)
-        let expected = string.Join(Environment.NewLine, []string{"v", "10:77:42:1:12:99:True", ""})
+        let expected = string.Join(Environment.NewLine, []string{"v", "10:77:42:12:99:True", ""})
         Assert.Equal(expected, output)
     }
 

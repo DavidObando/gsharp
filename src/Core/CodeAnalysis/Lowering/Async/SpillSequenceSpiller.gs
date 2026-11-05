@@ -1547,12 +1547,10 @@ shared class SpillSequenceSpiller {
         }
 
         private func SpillFieldAssignment(assign BoundFieldAssignmentExpression) BoundSpillSequenceExpression {
-            if assign.ReceiverExpression != nil ||
-                (assign.Receiver != nil && !assign.Receiver.IsReadOnly && BoundNodeForm.DeclaringType(assign).IsClass) {
-                let receiver = assign.ReceiverExpression ?? BoundVariableExpression(nil, assign.Receiver!!)
+            if assign.ReceiverExpression != nil {
                 return SpillTwoOperand(
                     assign,
-                    receiver,
+                    assign.ReceiverExpression,
                     assign.Value,
                     func (recv BoundExpression, val BoundExpression) BoundExpression {
                         return BoundFieldAssignmentExpression.WithExpressionReceiver(

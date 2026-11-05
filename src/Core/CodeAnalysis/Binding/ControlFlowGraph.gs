@@ -757,10 +757,13 @@ class ControlFlowGraph {
                     }
                     let armLabel = NewLabel!!("switchArm")
                     arms.Add((arm, armLabel))
+                    if dispatchComplete {
+                        continue
+                    }
                     if arm.IsCatchAll {
                         builder.Add(BoundGotoStatement(nil, armLabel))
                         dispatchComplete = true
-                        break
+                        continue
                     }
                     builder.Add(BoundConditionalGotoStatement(nil, armLabel, NewChoice!!()))
                 }

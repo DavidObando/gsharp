@@ -242,10 +242,12 @@ import System
 struct Cell {
     var Item int32
     var Other int32
+    func Bump() { Item++ }
 }
 struct Pair {
     var Left Cell
     var Right Cell
+    func Bump() { Left.Item++ }
 }
 var owners = 0
 var indices = 0
@@ -295,11 +297,20 @@ try {
     RunSet(neverRead).GetAwaiter().GetResult()
 } catch (error IndexOutOfRangeException) {
     Console.WriteLine("bounds:${owners}:${indices}")
-}`
+}
+frames = slice[Pair].FromArray(storage)
+index = 0
+scope {
+    go frames[0].Bump()
+    go Owner()[Index()].Left.Bump()
+    frames = slice[Pair]{Pair{}}
+    index = 99
+}
+Console.WriteLine("go:${storage[0].Left.Item}:${owners}:${indices}")`
         let dll = fixture.Compile(source, "channel_parameter_store", true)
         VerifyStrict(dll)
         Assert.Equal(
-            Encoding.UTF8.GetBytes("10\nFalse\n10:55:88:0\nFalse:1:1\n25:1:1\nbounds:2:2\n"),
+            Encoding.UTF8.GetBytes("10\nFalse\n10:55:88:0\nFalse:1:1\n25:1:1\nbounds:2:2\ngo:27:3:3\n"),
             Encoding.UTF8.GetBytes(fixture.Run(dll))
         )
     }
