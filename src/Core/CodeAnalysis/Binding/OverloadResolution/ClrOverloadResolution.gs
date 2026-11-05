@@ -8307,10 +8307,7 @@ internal shared class ClrOverloadResolution {
         }
         try {
             if type.IsGenericParameter {
-                return parameter.IsGenericParameter &&
-                    type.GenericParameterPosition == parameter.GenericParameterPosition &&
-                    type.DeclaringMethod == parameter.DeclaringMethod &&
-                    type.DeclaringType == parameter.DeclaringType
+                return type.IsSameAs(parameter)
             }
             if type.HasElementType {
                 return MentionsGenericParameter(type.GetElementType(), parameter)

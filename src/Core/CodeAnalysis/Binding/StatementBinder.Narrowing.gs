@@ -484,6 +484,42 @@ internal partial class StatementBinder {
         }
     }
 
+    /// Issue #5000: returns a predicate that decides whether [`expression`](paramref)
+    /// can reassign a variable.
+    internal func CreateExpressionVariableMutationChecker(anchor SyntaxNode, expression BoundExpression)(
+        VariableSymbol
+    ) -> bool {
+        var collector AssignedRootsCollector? = nil
+        var dropAllMemberPaths = false
+        var filterWrites List[(TryBlock SyntaxNode?, Names HashSet[string])]? = nil
+        return func (variable VariableSymbol) bool {
+            if variable.IsReadOnly && !IsByReferenceRoot(variable) {
+                return false
+            }
+            var effects = collector
+            if effects == nil {
+                EnsureClosureAssignedNames(anchor)
+                let aliases IEnumerable[VariableSymbol]? = if ContainsUserLabel(expression) {
+                    default(IEnumerable[VariableSymbol]?)
+                } else {
+                    externalCallableAliases
+                }
+                effects = NewCollector(nil, aliases)
+                effects.VisitExpression(expression)
+                collector = effects
+                dropAllMemberPaths = (expression.Syntax is {} exprSyntax && SyntaxMayMutateMemberPaths(exprSyntax)) ||
+                    effects.MayMutateMemberPaths
+                filterWrites = EnclosingFilterWrites(anchor, effects)
+            }
+            let path = AccessPath.ForVariable(variable)
+            return (
+                filterWrites != nil &&
+                    (FilterWritesVariable(filterWrites, variable) || MayBeMutatedByUnknownCallable(path))
+            ) ||
+                StatementKillsPath(effects, path, dropAllMemberPaths, effects.MayMutateReferenceStorage)
+        }
+    }
+
     // The one rule for the facts that a statement kills: a root it assigns, a root
     // an unknown write reaches, a mutable global when it can write one, and every
     // member path when it can mutate one (ADR-0069 #1180, #2943).

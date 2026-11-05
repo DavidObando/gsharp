@@ -1076,11 +1076,11 @@ main()`
         Assert.Equal("4${Environment.NewLine}", CompileAndRun(source))
     }
 
-    /// Review of #4980: in value position the right side runs before the
-    /// write, so a reference receiver or CLR indexer key held in a variable is
-    /// snapshotted; a right side that reassigns it does not redirect the write
-    /// (C#: the target is evaluated once). A struct receiver keeps writing
-    /// through its storage. The statement form is tracked separately in #5000.
+    /// Review of #4980 / issue #5000: in value position the right side runs
+    /// before the write, so a reference receiver or CLR indexer key held in a
+    /// variable is snapshotted; a right side that reassigns it does not
+    /// redirect the write (C#: the target is evaluated once). A struct
+    /// receiver keeps writing through its storage.
     @Fact
     func ValuePosition_RhsReassigningReceiverOrKey_WritesTheOriginalTarget() {
         let source = `package Test
@@ -1122,6 +1122,150 @@ main()`
             "v first=v other=nil${Environment.NewLine}w a=w b=nil${Environment.NewLine}struct struct${Environment.NewLine}",
             CompileAndRun(source)
         )
+    }
+
+    /// Issue #5000: in statement position a right side that reassigns a
+    /// variable holding a reference receiver or CLR indexer argument (directly,
+    /// through a helper call, or through a `ref` argument) still writes the
+    /// target whose nil test ran, and a struct field receiver reassigned by
+    /// the right side compiles and writes without violating the emitter's
+    /// field-assignment receiver precondition.
+    @Fact
+    func StatementPosition_RhsReassigningReceiverOrKey_WritesTheOriginalTarget() {
+        let source = `package Test
+import System
+import System.Collections.Generic
+import System.Runtime.CompilerServices
+
+class Box {
+    var F string?
+    var backing string?
+    prop P string? {
+        get -> backing
+        set { backing = value }
+    }
+}
+struct S {
+    var Tag int32
+    var F string?
+}
+func replaceBox(ref target Box, next Box) string {
+    target = next
+    return "ref"
+}
+
+func main() {
+    let first = Box{}
+    let other = Box{}
+    var box = first
+    box.F ??= {
+        box = other
+        "v"
+    }
+    Console.WriteLine("first=${first.F ?? "nil"} other=${other.F ?? "nil"}")
+
+    let propFirst = Box{}
+    let propOther = Box{}
+    var propBox = propFirst
+    propBox.P ??= {
+        propBox = propOther
+        "p"
+    }
+    Console.WriteLine("propFirst=${propFirst.P ?? "nil"} propOther=${propOther.P ?? "nil"}")
+
+    let sbFirst = StrongBox[string?](nil)
+    let sbOther = StrongBox[string?](nil)
+    var sb = sbFirst
+    sb.Value ??= {
+        sb = sbOther
+        "sb"
+    }
+    Console.WriteLine("sbFirst=${sbFirst.Value ?? "nil"} sbOther=${sbOther.Value ?? "nil"}")
+
+    var d = Dictionary[string, string?]()
+    d["a"] = nil
+    d["b"] = nil
+    var key = "a"
+    d[key] ??= {
+        key = "b"
+        "w"
+    }
+    Console.WriteLine("a=${d["a"] ?? "nil"} b=${d["b"] ?? "nil"}")
+
+    let d2 = Dictionary[string, string?]()
+    d2["a"] = nil
+    var dictTarget = d2
+    var dictKey = "a"
+    let swapDictAndKey = func () string {
+        dictTarget = d
+        dictKey = "b"
+        return "helper"
+    }
+    dictTarget[dictKey] ??= swapDictAndKey()
+    Console.WriteLine("d2a=${d2["a"] ?? "nil"} db=${d["b"] ?? "nil"}")
+
+    let refFirst = Box{}
+    let refOther = Box{}
+    var refBox = refFirst
+    refBox.F ??= replaceBox(ref refBox, refOther)
+    Console.WriteLine("refFirst=${refFirst.F ?? "nil"} refOther=${refOther.F ?? "nil"}")
+
+    var s = S{Tag: 1, F: nil}
+    s.F ??= {
+        s = S{Tag: 2, F: "other"}
+        "struct"
+    }
+    Console.WriteLine("sTag=${s.Tag} sF=${s.F ?? "nil"}")
+}
+
+main()`
+        Assert.Equal(
+            "first=v other=nil${Environment.NewLine}" +
+                "propFirst=p propOther=nil${Environment.NewLine}" +
+                "sbFirst=sb sbOther=nil${Environment.NewLine}" +
+                "a=w b=nil${Environment.NewLine}" +
+                "d2a=helper db=nil${Environment.NewLine}" +
+                "refFirst=ref refOther=nil${Environment.NewLine}" +
+                "sTag=2 sF=struct${Environment.NewLine}",
+            CompileAndRun(source)
+        )
+    }
+
+    /// Issue #5018: imported dependent generic bounds that mention a non-zero
+    /// generic parameter position (`where TThird : IList<TSecond>`) resolve
+    /// the referenced parameter slot instead of equating every open generic
+    /// parameter with slot 0 via a nil `FullName`.
+    @Fact
+    func ImportedDependentGenericBound_ResolvesNonInitialTypeParameterPosition() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`using System.Collections.Generic;
+namespace DependentBound5018;
+public class Coupled<TFirst, TSecond, TThird>
+    where TThird : IList<TSecond>
+{
+    public string Tag { get; set; } = "ok";
+}`, "DependentBound5018")
+        let validSource = `package Consumer
+import System
+import System.Collections.Generic
+import DependentBound5018
+class First {}
+class Second {}
+let c = Coupled[First, Second, List[Second]]()
+Console.WriteLine(c.Tag)`
+        let executable = fixture.Compile(validSource, "DependentBoundValid5018", true, "/r:" + contract)
+        IlVerifier.Verify(contract)
+        IlVerifier.Verify(executable, []string{contract})
+        Assert.Equal("ok\n", fixture.Run(executable))
+        let invalidSource = `package Consumer
+import System.Collections.Generic
+import DependentBound5018
+class First {}
+class Second {}
+let _ = Coupled[First, Second, List[First]]()`
+        let (code, output) = fixture.TryCompile(invalidSource, "DependentBoundInvalid5018", true, "/r:" + contract)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0152", output, StringComparison.Ordinal)
     }
 
     @Theory

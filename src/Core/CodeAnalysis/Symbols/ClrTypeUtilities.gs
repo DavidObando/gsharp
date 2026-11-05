@@ -1416,7 +1416,11 @@ shared class ClrTypeUtilities {
     private func InterfaceMatchesByName(candidate Type, target Type) bool {
         // Non-generic interfaces: direct FullName comparison.
         if !target.IsGenericType {
-            return string.Equals(candidate.FullName, target.FullName, StringComparison.Ordinal)
+            return candidate.FullName != nil && string.Equals(
+                candidate.FullName,
+                target.FullName,
+                StringComparison.Ordinal
+            )
         }
         // Generic interfaces: compare the open definition's FullName (e.g.
         // `System.Collections.Generic.IEnumerable`1`) then match each
@@ -1424,9 +1428,11 @@ shared class ClrTypeUtilities {
         if !candidate.IsGenericType {
             return false
         }
-        if !string.Equals(
-            candidate.GetGenericTypeDefinition().FullName,
-            target.GetGenericTypeDefinition().FullName,
+        let candidateDefinitionName = candidate.GetGenericTypeDefinition().FullName
+        let targetDefinitionName = target.GetGenericTypeDefinition().FullName
+        if candidateDefinitionName == nil || !string.Equals(
+            candidateDefinitionName,
+            targetDefinitionName,
             StringComparison.Ordinal
         ) {
             return false
@@ -1442,6 +1448,194 @@ shared class ClrTypeUtilities {
             }
         }
         return true
+    }
+
+    internal func IsSameAsCore(self Type?, other Type?, selfMethod MethodBase?, otherMethod MethodBase?) bool {
+        if self == nil || other == nil {
+            return false
+        }
+        if object.ReferenceEquals(self, other) && selfMethod == nil && otherMethod == nil {
+            return true
+        }
+        // Arrays: element + rank must match. The constructed-array FullName
+        // embeds the element's assembly-qualified name when the element is
+        // itself a constructed generic, so arrays of cross-context generics
+        // require structural comparison.
+        if self.IsArray || other.IsArray {
+            return self.IsArray &&
+                other.IsArray &&
+                self.IsSZArray == other.IsSZArray &&
+                self.GetArrayRank() == other.GetArrayRank() &&
+                IsSameAsCore(self.GetElementType(), other.GetElementType(), selfMethod, otherMethod)
+        }
+        if self.IsByRef || other.IsByRef {
+            return self.IsByRef &&
+                other.IsByRef &&
+                IsSameAsCore(self.GetElementType(), other.GetElementType(), selfMethod, otherMethod)
+        }
+        if self.IsPointer || other.IsPointer {
+            return self.IsPointer &&
+                other.IsPointer &&
+                IsSameAsCore(self.GetElementType(), other.GetElementType(), selfMethod, otherMethod)
+        }
+        // Issue #5018: open generic parameters have FullName == nil, so compare
+        // position and declaring method or type rather than falling through to FullName.
+        if self.IsGenericParameter || other.IsGenericParameter {
+            return self.IsGenericParameter &&
+                other.IsGenericParameter &&
+                AreSameGenericParameters(self, other, selfMethod, otherMethod)
+        }
+        // Constructed generics: compare the open definition's FullName and recurse
+        // on each type argument (issue #504-reopen, #5018).
+        if self.IsGenericType || other.IsGenericType {
+            if !self.IsGenericType ||
+                !other.IsGenericType ||
+                self.IsGenericTypeDefinition != other.IsGenericTypeDefinition {
+                return false
+            }
+            if !self.IsGenericTypeDefinition {
+                let selfDefinitionName = self.UnderlyingSystemType.GetGenericTypeDefinition().FullName
+                let otherDefinitionName = other.UnderlyingSystemType.GetGenericTypeDefinition().FullName
+                if selfDefinitionName == nil || !string.Equals(
+                    selfDefinitionName,
+                    otherDefinitionName,
+                    StringComparison.Ordinal
+                ) {
+                    return false
+                }
+                let aArgs = self.GetGenericArguments()
+                let bArgs = other.GetGenericArguments()
+                if aArgs.Length != bArgs.Length {
+                    return false
+                }
+                for var i = 0; i < aArgs.Length; i++ {
+                    if !IsSameAsCore(aArgs[i], bArgs[i], selfMethod, otherMethod) {
+                        return false
+                    }
+                }
+                return true
+            }
+        }
+        let selfFullName = self.FullName
+        let otherFullName = other.FullName
+        return selfFullName != nil && string.Equals(selfFullName, otherFullName, StringComparison.Ordinal)
+    }
+
+    private func AreSameGenericParameters(self Type, other Type, selfMethod MethodBase?, otherMethod MethodBase?) bool {
+        if self.GenericParameterPosition != other.GenericParameterPosition {
+            return false
+        }
+        let selfDeclaringMethod = SafeGetDeclaringMethod(self)
+        let otherDeclaringMethod = SafeGetDeclaringMethod(other)
+        if (selfDeclaringMethod != nil) != (otherDeclaringMethod != nil) {
+            return false
+        }
+        if selfDeclaringMethod != nil && otherDeclaringMethod != nil {
+            if selfMethod != nil &&
+                otherMethod != nil &&
+                (
+                object.ReferenceEquals(selfDeclaringMethod, selfMethod) || object.ReferenceEquals(
+                    otherDeclaringMethod,
+                    otherMethod
+                )
+            ) {
+                return object.ReferenceEquals(selfDeclaringMethod, selfMethod) && object.ReferenceEquals(
+                    otherDeclaringMethod,
+                    otherMethod
+                )
+            }
+            return AreSameDeclaringMethod(selfDeclaringMethod, otherDeclaringMethod)
+        }
+        let selfDeclaringType = SafeGetGenericParameterDeclaringType(self)
+        let otherDeclaringType = SafeGetGenericParameterDeclaringType(other)
+        return selfDeclaringType != nil && otherDeclaringType != nil && selfDeclaringType.IsSameAs(otherDeclaringType)
+    }
+
+    private func AreSameDeclaringMethod(selfMethod MethodBase, otherMethod MethodBase) bool {
+        if object.ReferenceEquals(selfMethod, otherMethod) {
+            return true
+        }
+        if !string.Equals(selfMethod.Name, otherMethod.Name, StringComparison.Ordinal) {
+            return false
+        }
+        let selfDeclaringType = SafeGetMethodDeclaringType(selfMethod)
+        let otherDeclaringType = SafeGetMethodDeclaringType(otherMethod)
+        if selfDeclaringType == nil || otherDeclaringType == nil || !selfDeclaringType.IsSameAs(otherDeclaringType) {
+            return false
+        }
+        try {
+            if object.ReferenceEquals(selfMethod.Module, otherMethod.Module) {
+                return selfMethod.MetadataToken == otherMethod.MetadataToken
+            }
+        } catch (ex Exception) when IsMetadataLoadFailure(ex) || ex is InvalidOperationException { }
+        try {
+            if selfMethod.GetGenericArguments().Length != otherMethod.GetGenericArguments().Length {
+                return false
+            }
+            let selfParameters = selfMethod.GetParameters()
+            let otherParameters = otherMethod.GetParameters()
+            if selfParameters.Length != otherParameters.Length {
+                return false
+            }
+            for var i = 0; i < selfParameters.Length; i++ {
+                if !IsSameAsCore(
+                    selfParameters[i].ParameterType,
+                    otherParameters[i].ParameterType,
+                    selfMethod,
+                    otherMethod
+                ) {
+                    return false
+                }
+            }
+            if selfMethod is MethodInfo selfMethodInfo && otherMethod is MethodInfo otherMethodInfo {
+                return IsSameAsCore(selfMethodInfo.ReturnType, otherMethodInfo.ReturnType, selfMethod, otherMethod)
+            }
+            return true
+        } catch (ex Exception) when IsMetadataLoadFailure(ex) || ex is InvalidOperationException {
+            return false
+        }
+    }
+
+    private func SafeGetDeclaringMethod(parameter Type) MethodBase? {
+        try {
+            return parameter.DeclaringMethod
+        } catch (ex Exception) when IsMetadataLoadFailure(ex) || ex is InvalidOperationException {
+            return nil
+        }
+    }
+
+    private func SafeGetGenericParameterDeclaringType(parameter Type) Type? {
+        try {
+            let declaringType Type? = parameter.DeclaringType
+            if declaringType == nil {
+                return nil
+            }
+            return if declaringType.IsGenericType && !declaringType.IsGenericTypeDefinition {
+                declaringType.GetGenericTypeDefinition()
+            } else {
+                declaringType
+            }
+        } catch (ex Exception) when IsMetadataLoadFailure(ex) || ex is InvalidOperationException {
+            return nil
+        }
+    }
+
+    private func SafeGetMethodDeclaringType(method MethodBase) Type? {
+        try {
+            let declaringType Type? = method.DeclaringType
+            if declaringType == nil {
+                return nil
+            }
+            return if declaringType.IsGenericType &&
+                !declaringType.IsGenericTypeDefinition &&
+                declaringType.ContainsGenericParameters {
+                declaringType.GetGenericTypeDefinition()
+            } else {
+                declaringType
+            }
+        } catch (ex Exception) when IsMetadataLoadFailure(ex) || ex is InvalidOperationException {
+            return nil
+        }
     }
 
     private func SafeEnumerate[TMember MemberInfo](type Type?, flags BindingFlags, getAll(Type) -> []TMember)[]TMember {
@@ -1722,55 +1916,7 @@ func (type Type?) IsRuntimeProvidedType() bool -> type != nil && type.GetType() 
 /// `typeof(...)` literal.
 /// @returns `true` when both types denote the same logical CLR type.
 @ExtensionOwner(typeof(ClrTypeUtilities))
-func (self Type?) IsSameAs(other Type?) bool {
-    if self == nil || other == nil {
-        return false
-    }
-    if object.ReferenceEquals(self, other) {
-        return true
-    }
-    // Arrays: element + rank must match. The constructed-array FullName
-    // embeds the element's assembly-qualified name when the element is
-    // itself a constructed generic, so arrays of cross-context generics
-    // require structural comparison.
-    if self.IsArray && other.IsArray {
-        return self.IsSZArray == other.IsSZArray && self.GetArrayRank() == other.GetArrayRank() && self.GetElementType()
-            .IsSameAs(other.GetElementType())
-    }
-    if self.IsByRef && other.IsByRef {
-        return self.GetElementType().IsSameAs(other.GetElementType())
-    }
-    if self.IsPointer && other.IsPointer {
-        return self.GetElementType().IsSameAs(other.GetElementType())
-    }
-    // Constructed (closed) generics: compare the open definition's
-    // FullName (which is assembly-qualifier-free, e.g.
-    // `System.Nullable\u00601`) and recurse on each type argument. This
-    // is the cross-reflection-context fix that closes issue #504-reopen
-    // for `Nullable<T>` and applies equally to any other constructed
-    // generic with a leaf-FullName-matchable type argument.
-    if self.IsGenericType && other.IsGenericType && !self.IsGenericTypeDefinition && !other.IsGenericTypeDefinition {
-        if !string.Equals(
-            self.UnderlyingSystemType.GetGenericTypeDefinition().FullName,
-            other.UnderlyingSystemType.GetGenericTypeDefinition().FullName,
-            StringComparison.Ordinal
-        ) {
-            return false
-        }
-        let aArgs = self.GetGenericArguments()
-        let bArgs = other.GetGenericArguments()
-        if aArgs.Length != bArgs.Length {
-            return false
-        }
-        for var i = 0; i < aArgs.Length; i++ {
-            if !aArgs[i].IsSameAs(bArgs[i]) {
-                return false
-            }
-        }
-        return true
-    }
-    return string.Equals(self.FullName, other.FullName, StringComparison.Ordinal)
-}
+func (self Type?) IsSameAs(other Type?) bool -> ClrTypeUtilities.IsSameAsCore(self, other, nil, nil)
 
 /// Issue #3764: returns whether [`type`](paramref) is a CLR value type,
 /// answering correctly for types that reached the compiler from
