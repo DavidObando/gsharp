@@ -800,6 +800,7 @@ shared class DefinitionComputer {
             case f is FunctionSymbol when f.Declaration != nil: f.Declaration!!.Identifier
             case f is FunctionSymbol when f.LocalDeclaration != nil: f.LocalDeclaration!!.Identifier
             case s is StructSymbol when s.Declaration != nil: s.Declaration!!.Identifier
+            case i is InterfaceSymbol when i.Declaration != nil: i.Declaration.Identifier
             case e is EnumSymbol when e.Declaration != nil: e.Declaration.Identifier
             case m is EnumMemberSymbol: FindEnumMemberToken(m)
             case p is PropertySymbol when p.Declaration != nil: p.Declaration!!.Identifier
@@ -828,10 +829,32 @@ shared class DefinitionComputer {
         field FieldSymbol,
         ct CancellationToken = default(CancellationToken)
     ) SyntaxToken? {
+        switch field.Declaration {
+            case fieldDeclaration is FieldDeclarationSyntax {
+                return fieldDeclaration.Identifier
+            }
+            case parameter is ParameterSyntax {
+                return parameter.Identifier
+            }
+        }
         for tree in compilation.SyntaxTrees {
             ct.ThrowIfCancellationRequested()
             for structDecl in FindNodes[StructDeclarationSyntax](tree.Root) {
                 for fieldDecl in structDecl.Fields {
+                    if fieldDecl.Identifier.Text == field.Name {
+                        return fieldDecl.Identifier
+                    }
+                }
+                if structDecl.SharedBlock != nil {
+                    for fieldDecl in structDecl.SharedBlock!!.Fields {
+                        if fieldDecl.Identifier.Text == field.Name {
+                            return fieldDecl.Identifier
+                        }
+                    }
+                }
+            }
+            for interfaceDecl in FindNodes[InterfaceDeclarationSyntax](tree.Root) {
+                for fieldDecl in interfaceDecl.StaticFields {
                     if fieldDecl.Identifier.Text == field.Name {
                         return fieldDecl.Identifier
                     }

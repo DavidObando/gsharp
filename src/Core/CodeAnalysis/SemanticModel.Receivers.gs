@@ -803,6 +803,10 @@ partial class SemanticModel {
     /// Gets the symbol a bound read or call refers to, whatever its origin.
     private func ReferencedSymbol(node BoundExpression) Symbol? -> switch node {
         case variable is BoundVariableExpression: variable.Variable
+        case call is BoundCallOperationExpression when call.CalledFunction is FunctionSymbol{
+            AssociatedSymbol: PropertySymbol property
+        } function &&
+            object.ReferenceEquals(property.GetterSymbol, function): property
         case call is BoundCallOperationExpression: call.CalledFunction
         case baseCall is BoundBaseClassCallExpression: baseCall.Method ?? cast[Symbol?](baseCall.Property)
         case property is BoundPropertyReferenceOperationExpression: property.ReferencedProperty
@@ -827,9 +831,12 @@ partial class SemanticModel {
                 Variable: ImplicitStaticPropertyVariableSymbol staticProperty
             }: staticProperty.Property
             case variable is BoundVariableExpression: variable.Variable
-            case call is BoundCallExpression: call.Function
-            case constrained is BoundConstrainedStaticCallExpression: constrained.InterfaceMethod
-            case userCall is BoundUserInstanceCallExpression: userCall.Method
+            case call is BoundCallExpression: ReferencedCallSymbol(call.Function, call.Type)
+            case constrained is BoundConstrainedStaticCallExpression: ReferencedCallSymbol(
+                constrained.InterfaceMethod,
+                constrained.Type
+            )
+            case userCall is BoundUserInstanceCallExpression: ReferencedCallSymbol(userCall.Method, userCall.Type)
             case baseCall is BoundBaseClassCallExpression: baseCall.Method ?? cast[Symbol?](baseCall.Property)
             case baseCall is BoundBaseInterfaceCallExpression: baseCall.Method
             // A read through a constructed generic interface keeps the
@@ -847,6 +854,20 @@ partial class SemanticModel {
             case literal is BoundLiteralExpression: literal.StaticConstantFieldRead?.Field
             default: default(Symbol?)
         }
+    }
+
+    private func ReferencedCallSymbol(function FunctionSymbol?, type TypeSymbol) Symbol? {
+        if function?.AssociatedSymbol is PropertySymbol property && object.ReferenceEquals(
+            property.GetterSymbol,
+            function
+        ) {
+            return if !object.ReferenceEquals(type, property.Type) {
+                property.WithSignature(type, property.Parameters)
+            } else {
+                property
+            }
+        }
+        return function
     }
 
     /// Gets the imported member a bound call or read refers to, as the symbol (cref:LookupMembers) answers.
