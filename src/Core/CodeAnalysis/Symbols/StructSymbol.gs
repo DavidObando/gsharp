@@ -666,6 +666,12 @@ class StructSymbol : TypeSymbol {
     /// is bound, so every body reads the same answer. A `const` and a field with no initializer do not count.
     internal prop DeclaresNonLiteralSharedFieldInitializer bool
 
+    /// Gets a value indicating whether an instance field has an initializer (#5562). Like
+    /// (cref:DeclaresStaticInitializerBlock), it is set from the syntax in the declaration pass before any body or
+    /// deferred initializer is bound, so a lambda inside an earlier field initializer reads the same answer as a body
+    /// bound later.
+    internal prop DeclaresInstanceFieldInitializer bool
+
     /// Gets the type parameters when this is a generic definition (Phase 4.3 / ADR-0020). Empty for
     /// non-generic types and for constructed instances.
     private var _typeParameters ImmutableArray[TypeParameterSymbol] = ImmutableArray[TypeParameterSymbol].Empty
@@ -1461,6 +1467,9 @@ class StructSymbol : TypeSymbol {
     /// @param initializers A mapping from field symbol to its bound initializer expression.
     func SetInstanceFieldInitializers(initializers ImmutableDictionary[FieldSymbol, BoundExpression]) {
         InstanceFieldInitializers = initializers
+        if !initializers.IsEmpty {
+            DeclaresInstanceFieldInitializer = true
+        }
     }
 
     /// Sets (cref:StaticInitializerStatements) after binding the type's `shared { init { … } }` block(s)

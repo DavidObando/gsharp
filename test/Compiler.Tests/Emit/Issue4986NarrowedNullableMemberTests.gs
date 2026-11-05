@@ -1926,8 +1926,8 @@ Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Prob
     func Ambiguous_Fixed_Constraints_Retain_Joint_Class_Bounds(applicable bool) {
         using let fixture = CSharpFixture(`namespace Fixture4986 {
     public interface IProbe<in T,U,V> {}
-    public class Left : System.Collections.Generic.IComparer<LEFT>, System.Collections.Generic.IComparer<System.Exception> {
-        int System.Collections.Generic.IComparer<LEFT>.Compare(LEFT x, LEFT y) => 0;
+    public class Left : System.Collections.Generic.IComparer<System.IO.Stream>, System.Collections.Generic.IComparer<System.Exception> {
+        int System.Collections.Generic.IComparer<System.IO.Stream>.Compare(System.IO.Stream x, System.IO.Stream y) => 0;
         int System.Collections.Generic.IComparer<System.Exception>.Compare(System.Exception x, System.Exception y) => 0;
     }
     public class Right : System.Collections.Generic.IComparer<RIGHT>, System.Collections.Generic.IComparer<System.Collections.Generic.Dictionary<string,string>> {
@@ -1945,14 +1945,6 @@ Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Prob
             where V : System.Collections.Generic.IComparer<T> => new Probe(99);
     }
 }`.Replace(
-                "LEFT",
-                if applicable {
-                    "System.IO.MemoryStream"
-                } else {
-                    "System.IO.Stream"
-                }
-            )
-                .Replace(
                 "RIGHT",
                 if applicable {
                     "System.IO.MemoryStream"
@@ -2408,6 +2400,7 @@ Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Prob
     @InlineData("System.Action<string>", "System.Action<object>")
     @InlineData("System.Func<object>", "System.Func<string>")
     @InlineData("System.Func<object[]>", "System.Func<string[]>")
+    @InlineData("object[]", "string[]")
     @InlineData("object[,]", "string[,]")
     @InlineData("object[,,]", "string[,,]")
     func Variant_Sealed_Reference_Bounds_Keep_The_Underlying_Member(receiver string, candidate string) {
@@ -2437,6 +2430,7 @@ Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Prob
     }
 
     @Theory
+    @InlineData("object[]", "string[]")
     @InlineData("object[,]", "string[,]")
     func Fixed_Lower_Bounds_Use_Clr_Reference_Variance(receiver string, candidate string) {
         using let fixture = CSharpFixture((`namespace Fixture4986 {
@@ -2696,6 +2690,9 @@ Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Prob
     public struct Probe : IProbe<object[][],object> {
         public int V; public Probe(int v) { V = v; }
     }
+    public struct SelfProbe : IProbe<object[][],object>, IBounds<System.IO.Stream[][],System.IO.Stream> {
+        public int V; public SelfProbe(int v) { V = v; }
+    }
     public static class Extensions {
         public static Probe GetValueOrDefault<T,U>(this IProbe<T,U> value, IBounds<T,U> fallback)
             where T : System.Collections.Generic.IEnumerable<U[]>
@@ -2721,16 +2718,200 @@ func statement(n Probe?) int32 {
         let result = CompileAndRun(`import System
 import System.IO
 import Fixture4986
-func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault[[][]Stream,Stream](Bounds()).V : 0
-func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault[[][]Stream,Stream](Bounds()).V } else { 0 }
+func direct(n Probe) int32 -> n.GetValueOrDefault(Bounds()).V
+func selfDirect(n SelfProbe) int32 -> n.GetValueOrDefault(SelfProbe()).V
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Bounds()).V : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Bounds()).V } else { 0 }
 func statement(n Probe?) int32 {
-    if n != nil { return n.GetValueOrDefault[[][]Stream,Stream](Bounds()).V }
+    if n != nil { return n.GetValueOrDefault(Bounds()).V }
     return 0
 }
-Console.WriteLine(Probe(7).GetValueOrDefault[[][]Stream,Stream](Bounds()).V)
+Console.WriteLine("${direct(Probe(7))} ${selfDirect(SelfProbe(7))} ${Probe(7).GetValueOrDefault[[][]Stream,Stream](Bounds()).V}")
 Console.WriteLine("${ternary(Probe(7))} ${expression(Probe(7))} ${statement(Probe(7))} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
 `, fixture.AssemblyPath, compileInSeparateProcess: true)
+        Assert.Equal("99 99 99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
+    func Contravariant_Array_Receiver_Infers_Extension_From_Fallback() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public struct Probe : System.Collections.Generic.IComparer<object[]> {
+        public int Compare(object[] x, object[] y) => 0;
+    }
+    public static class Extensions {
+        public static System.Collections.Generic.IComparer<string[]> Fallback =>
+            System.Collections.Generic.Comparer<string[]>.Default;
+        public static int GetValueOrDefault<T>(
+            this System.Collections.Generic.IComparer<T> value,
+            System.Collections.Generic.IComparer<T> fallback)
+            where T : System.Collections.Generic.IEnumerable<string> => 99;
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func direct(n Probe) int32 -> n.GetValueOrDefault(Extensions.Fallback)
+func ternary(n Probe?) int32 -> n != nil ? n.GetValueOrDefault(Extensions.Fallback) : 0
+func expression(n Probe?) int32 -> if n != nil { n.GetValueOrDefault(Extensions.Fallback) } else { 0 }
+func statement(n Probe?) int32 {
+    if n != nil { return n.GetValueOrDefault(Extensions.Fallback) }
+    return 0
+}
+Console.WriteLine(direct(Probe()))
+Console.WriteLine("${ternary(Probe())} ${expression(Probe())} ${statement(Probe())} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`, fixture.AssemblyPath)
         Assert.Equal("99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
+    func Nested_Contravariant_And_Upper_Lower_Bounds_Fix_To_Common_Target() {
+        using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public static class Probes {
+        public static System.Collections.Generic.IComparer<System.Collections.Generic.IComparer<object>> Nested =>
+            System.Collections.Generic.Comparer<System.Collections.Generic.IComparer<object>>.Default;
+        public static string DoubleContravariantFirst<T>(
+            System.Collections.Generic.IComparer<System.Collections.Generic.IComparer<T>> comparer,
+            T value) => typeof(T).FullName ?? "";
+        public static string DoubleContravariantSecond<T>(
+            T value,
+            System.Collections.Generic.IComparer<System.Collections.Generic.IComparer<T>> comparer) => typeof(T).FullName ?? "";
+        public static string UpperAndLowerWithConstructorConstraint<T>(
+            System.Collections.Generic.IComparer<T> comparer,
+            T value) where T : new() => typeof(T).FullName ?? "";
+        public static R SelectAfterExactAndUpper<T, R>(
+            System.Collections.Generic.IList<T> items,
+            System.Collections.Generic.IComparer<T> comparer,
+            System.Func<T, R> selector) => selector(items[0]);
+        public static string JoinCovariantArrayLowerBounds<T>(
+            System.Collections.Generic.IEnumerable<T> left,
+            System.Collections.Generic.IEnumerable<T> right) => typeof(T).FullName ?? "";
+        public static System.Collections.Generic.IComparer<object> MakeObjectComparer() =>
+            System.Collections.Generic.Comparer<object>.Default;
+        public static string InferFromListAndComparerFactory<T>(
+            System.Collections.Generic.IList<T> items,
+            System.Func<System.Collections.Generic.IComparer<T>> factory) => typeof(T).FullName ?? "";
+#nullable enable
+        public static T EchoJoinedBounds<T>(
+            System.Collections.Generic.IEnumerable<T> items,
+            System.Collections.Generic.IComparer<T> comparer) => default!;
+#nullable restore
+    }
+}`)
+        let result = CompileAndRun(`import System
+import System.Collections.Generic
+import Fixture4986
+Console.WriteLine(Probes.DoubleContravariantFirst(Probes.Nested, "x"))
+Console.WriteLine(Probes.DoubleContravariantSecond("x", Probes.Nested))
+Console.WriteLine(Probes.UpperAndLowerWithConstructorConstraint(Comparer[object].Default, "x"))
+let items = List[string](){"hello"}
+Console.WriteLine(Probes.SelectAfterExactAndUpper(items, Comparer[object].Default, x -> x.Length))
+let left IEnumerable[[]string] = List[[]string]()
+let right IEnumerable[[]object] = List[[]object]()
+Console.WriteLine(Probes.JoinCovariantArrayLowerBounds(left, right))
+Console.WriteLine(Probes.JoinCovariantArrayLowerBounds(right, left))
+Console.WriteLine(Probes.InferFromListAndComparerFactory(items, Probes.MakeObjectComparer))
+`, fixture.AssemblyPath)
+        Assert.Equal(
+            "System.Object" +
+                Environment.NewLine +
+                "System.Object" +
+                Environment.NewLine +
+                "System.Object" +
+                Environment.NewLine +
+                "5" +
+                Environment.NewLine +
+                "System.Object[]" +
+                Environment.NewLine +
+                "System.Object[]" +
+                Environment.NewLine +
+                "System.String" +
+                Environment.NewLine,
+            result.Output
+        )
+        let nullableRefMismatch = Compile(`import System.Collections.Generic
+import Fixture4986
+func mismatchRef(items IEnumerable[string?], comparer IComparer[object]) object ->
+    Probes.EchoJoinedBounds(items, comparer)
+`, fixture.AssemblyPath)
+        Assert.NotEqual(0, nullableRefMismatch.ExitCode)
+        Assert.True(
+            Regex.IsMatch(
+                nullableRefMismatch.Output,
+                `\(4,12,4,45\): error GS0159: Cannot find function EchoJoinedBounds\.`
+            ),
+            nullableRefMismatch.Output
+        )
+        let nullableElementMismatch = Compile(`import System.Collections.Generic
+import Fixture4986
+func mismatch(items IEnumerable[[]string?], comparer IComparer[[]object]) []object ->
+    Probes.EchoJoinedBounds(items, comparer)
+`, fixture.AssemblyPath)
+        Assert.NotEqual(0, nullableElementMismatch.ExitCode)
+        Assert.True(
+            Regex.IsMatch(
+                nullableElementMismatch.Output,
+                `\(4,12,4,45\): error GS0159: Cannot find function EchoJoinedBounds\.`
+            ),
+            nullableElementMismatch.Output
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Tuple_Element_Widening_Satisfies_Ambiguous_Contravariant_Constraints(applicable bool) {
+        using let fixture = CSharpFixture(`using System;
+namespace TupleChoices {
+    public interface IFoo<in T> {}
+    public interface IBar<in T> {}
+    public interface IBounds<T> {}
+    public class Foo : IFoo<(int,int)>, IFoo<(long,long)> {}
+    public class Bar : IBar<BAR1>, IBar<(double,double)> {}
+    public class Bounds : IBounds<(long,long)> {}
+    public static class Extensions {
+        public static ((int,int),V,W) GetValueOrDefault<T,V,W>(
+            this (T,V,W) value, IBounds<T> fallback)
+            where T : struct, IComparable<T>
+            where V : IFoo<T> where W : IBar<T>
+            => ((99,0), value.Item2, value.Item3);
+    }
+}`.Replace(
+                "BAR1",
+                if applicable {
+                    "(long,long)"
+                } else {
+                    "(decimal,decimal)"
+                }
+            ))
+        let argument = if applicable {
+            "Bounds()"
+        } else {
+            "((0, 0), Foo(), Bar())"
+        }
+        let direct = if applicable {
+            "func direct(n ((int32,int32),Foo,Bar)) int32 -> n.GetValueOrDefault(Bounds()).Item1.Item1\nConsole.WriteLine(direct(((7,8), Foo(), Bar())))"
+        } else {
+            ""
+        }
+        let result = CompileAndRun((`import System
+import TupleChoices
+func ternary(n ((int32,int32),Foo,Bar)?) int32 -> n != nil ? n.GetValueOrDefault(ARGUMENT).Item1.Item1 : 0
+func expression(n ((int32,int32),Foo,Bar)?) int32 -> if n != nil { n.GetValueOrDefault(ARGUMENT).Item1.Item1 } else { 0 }
+func statement(n ((int32,int32),Foo,Bar)?) int32 {
+    if n != nil { return n.GetValueOrDefault(ARGUMENT).Item1.Item1 }
+    return 0
+}
+DIRECT
+let sample = ((7,8), Foo(), Bar())
+Console.WriteLine("${ternary(sample)} ${expression(sample)} ${statement(sample)} ${ternary(nil)} ${expression(nil)} ${statement(nil)}")
+`).Replace("DIRECT", direct).Replace("ARGUMENT", argument), fixture.AssemblyPath)
+        Assert.Equal(
+            if applicable {
+                "99" + Environment.NewLine + "99 99 99 0 0 0" + Environment.NewLine
+            } else {
+                "7 7 7 0 0 0" + Environment.NewLine
+            },
+            result.Output
+        )
     }
 
     @Fact

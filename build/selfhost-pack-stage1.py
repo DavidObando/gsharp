@@ -29,10 +29,11 @@ What it changes in the tree (all idempotent, all recorded in the report):
   so after normalization any versioned pin left on a project the SDK
   package builds is an error.
 
-The mirror forces `GeneratePackageOnBuild=false`; this script runs
-`dotnet pack` on the SDK project instead of editing it, so the project file
-stays exactly as cs2gs wrote it (re-enabling the property is a cut-over
-hand-fix, recorded in docs).
+`src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj` sets `GeneratePackageOnBuild=true`
+and `PackGsharpBuildTask` depends on `Build`, so an explicit `dotnet pack`
+must pass `-p:GeneratePackageOnBuild=false` to avoid re-entering `Pack`
+through `_PackAsBuildAfterTarget` (issue #5052). This script passes that
+property on the command line instead of editing the project file.
 
 The package is verified before the script succeeds: it must carry the same
 `tools/` and `Sdk/` payload as the stage-0 package, and its compiler
@@ -348,7 +349,8 @@ def pack(tree: Path, version: str, out: Path, work: Path, config: str) -> Path:
     commands = [["dotnet", "restore", str(tree / project), "-nodeReuse:false"]
                 for project in NESTED_PROJECTS if (tree / project).is_file()]
     commands.append(["dotnet", "pack", str(tree / SDK_PROJECT), "-c", config,
-                     f"-p:PackageVersion={version}", "-o", str(pack_out), "-nodeReuse:false"])
+                     "-p:GeneratePackageOnBuild=false", f"-p:PackageVersion={version}",
+                     "-o", str(pack_out), "-nodeReuse:false"])
     for command in commands:
         with log.open("a", encoding="utf-8") as handle:
             handle.write("$ " + " ".join(command) + "\n")

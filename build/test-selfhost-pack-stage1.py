@@ -621,5 +621,51 @@ class VerifyTests(unittest.TestCase):
             self.assertEqual(["tools/compiler/GSharp.Compiler.xml"], report["missingDocs"])
 
 
+class PackAutoPackTests(unittest.TestCase):
+    """Issue #5052: explicit pack must disable GeneratePackageOnBuild to avoid MSB4006."""
+
+    def test_pack_disables_generate_package_on_build_when_pack_target_depends_on_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = root / "tree"
+            out = root / "out"
+            work = root / "work"
+            source = ET.parse(REPO / "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.gsproj").getroot()
+            pack_task_target = source.find("./Target[@Name='PackGsharpBuildTask']")
+            self.assertIsNotNone(pack_task_target)
+            assert pack_task_target is not None
+            self.assertEqual("Build", pack_task_target.get("DependsOnTargets"))
+            sdk_project = tree / packer.SDK_PROJECT
+            write(sdk_project, """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <LanguageTargets>$(MSBuildToolsPath)/Microsoft.CSharp.targets</LanguageTargets>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Gsharp.NET.Sdk</AssemblyName>
+    <PackageId>Gsharp.NET.Sdk</PackageId>
+    <Version>0.5.7</Version>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <NoPackageAnalysis>true</NoPackageAnalysis>
+    <NuGetAudit>false</NuGetAudit>
+  </PropertyGroup>
+  <Target Name="PackGsharpBuildTask" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
+    <ItemGroup>
+      <_GsharpTaskFiles Include="$(OutputPath)Gsharp.NET.Sdk.dll" />
+      <None Include="@(_GsharpTaskFiles)" Pack="true" PackagePath="tools/task/" Visible="false" />
+    </ItemGroup>
+  </Target>
+</Project>
+""")
+            write(sdk_project.parent / "Task.cs", "namespace Gsharp.NET.Sdk; public sealed class TaskStub {}")
+            stamped = packer.pack(tree, "0.5.7-stage1", out, work, "Release")
+            self.assertEqual("Gsharp.NET.Sdk.0.5.7-stage1.nupkg", stamped.name)
+            self.assertTrue(stamped.is_file())
+            log_text = (work / "pack.log").read_text(encoding="utf-8")
+            self.assertIn("-p:GeneratePackageOnBuild=false", log_text)
+            with zipfile.ZipFile(stamped) as archive:
+                self.assertIn("tools/task/Gsharp.NET.Sdk.dll", [packer.entry_name(n) for n in archive.namelist()])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -111,6 +111,89 @@ for x in fib(20) {
     }
 
     @Fact
+    func Iterator_BareReturn_TerminatesEnumerationEarly() {
+        let source = `
+package IterTest
+import System
+import System.Collections.Generic
+
+func stopFirst(values IEnumerable[int32]) sequence[int32] {
+    for value in values {
+        yield value
+        return
+    }
+}
+
+func stopBeforeYield(empty bool) sequence[int32] {
+    if empty {
+        return
+    }
+    yield 10
+    yield 20
+}
+
+func emptyYieldBreak(stop bool) sequence[int32] {
+if stop {
+    return
+}
+yield break
+}
+
+func emptyConstantSwitch() sequence[int32] {
+switch 0 {
+    case 0 {
+        return
+    }
+    default {
+        yield 1
+    }
+}
+}
+
+for x in stopFirst([]int32{4, 5, 6}) {
+Console.Write(x)
+Console.Write(" ")
+}
+for x in stopBeforeYield(true) {
+Console.Write(x)
+Console.Write(" ")
+}
+for x in stopBeforeYield(false) {
+Console.Write(x)
+Console.Write(" ")
+}
+for x in emptyYieldBreak(true) {
+Console.Write(x)
+Console.Write(" ")
+}
+for x in emptyYieldBreak(false) {
+Console.Write(x)
+Console.Write(" ")
+}
+for x in emptyConstantSwitch() {
+Console.Write(x)
+Console.Write(" ")
+}
+`
+        let output = CompileLoadInvokeCaptureStdout(source, "Iterator_BareReturn_TerminatesEnumerationEarly")
+        Assert.Equal("4 10 20 ", output)
+    }
+
+    @Fact
+    func NonIterator_SequenceReturn_BareReturn_StillReportsGS0123() {
+        let source = `
+package IterTest
+func empty() sequence[int32] {
+    return
+}
+`
+        using let peStream = MemoryStream()
+        let result = Compile(source, peStream)
+        Assert.False(result.Success)
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0123")
+    }
+
+    @Fact
     func Iterator_With_Yield_Inside_Conditional_Works() {
         let source = `
 package IterTest

@@ -26,6 +26,7 @@ internal abstract class NestedFunctionBodyRewriter : BoundTreeRewriter {
         if object.ReferenceEquals(body, node.Body) {
             return node
         }
+        BodyFacts.PreserveContainsYield(node.Body, body)
         return BoundFunctionLiteralExpression(
             node.Syntax,
             node.Function,
