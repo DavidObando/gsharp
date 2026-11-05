@@ -400,13 +400,37 @@ open class ClrTypeUtilitiesTests {
         let mlcOtherBadGenericParam = incompleteFixture.GetMethod("OtherBadGenericMethod")!!.GetGenericArguments()[0]
         Assert.True(ClrTypeInspector.IsSameAs(hostBadGenericParam, mlcBadGenericParam))
         Assert.False(ClrTypeInspector.IsSameAs(hostBadGenericParam, mlcOtherBadGenericParam))
-        // SafeGetMethodsIncludingInterfaces hides a base generic interface method when a derived interface redeclares it with a renamed method type parameter.
+        // SafeGetMethodsIncludingInterfaces hides a base generic interface method when a derived interface redeclares it with a renamed method type parameter, across inherited class implementations, and on constructed generic interfaces.
         let derivedInterfaceMethods = ClrTypeUtilities
             .SafeGetMethodsIncludingInterfaces(typeof(IDerivedGenericMethodFixture), InstanceFlags)
             .Where((m MethodInfo) -> m.Name == "Echo")
             .ToArray()
         let singleEcho = Assert.Single(derivedInterfaceMethods)
         Assert.Equal(typeof(IDerivedGenericMethodFixture), singleEcho.DeclaringType)
+        let inheritedClassMethods = ClrTypeUtilities
+            .SafeGetMethodsIncludingInterfaces(typeof(DerivedGenericMethodImplFixture), InstanceFlags)
+            .Where((m MethodInfo) -> m.Name == "Echo")
+            .ToArray()
+        let singleInheritedEcho = Assert.Single(inheritedClassMethods)
+        Assert.Equal(typeof(BaseGenericMethodImplFixture), singleInheritedEcho.DeclaringType)
+        let constructedDerivedInterface = typeof(IDerivedConstructedGenericMethodFixture[_]).MakeGenericType(
+            typeof(int32)
+        )
+        let constructedInterfaceMethods = ClrTypeUtilities
+            .SafeGetMethodsIncludingInterfaces(constructedDerivedInterface, InstanceFlags)
+            .Where((m MethodInfo) -> m.Name == "Echo")
+            .ToArray()
+        let singleConstructedEcho = Assert.Single(constructedInterfaceMethods)
+        Assert.Equal(constructedDerivedInterface, singleConstructedEcho.DeclaringType)
+        let mlcConstructedDerivedInterface = mlcAssembly.GetType(
+            typeof(IDerivedConstructedGenericMethodFixture[_]).FullName!!,
+            throwOnError: true
+        )!!.MakeGenericType(mlcCoreAssembly.GetType("System.Int32", throwOnError: true)!!)
+        let mlcConstructedMethods = ClrTypeUtilities
+            .SafeGetMethodsIncludingInterfaces(mlcConstructedDerivedInterface, InstanceFlags)
+            .Where((m MethodInfo) -> m.Name == "Echo")
+            .ToArray()
+        Assert.Single(mlcConstructedMethods)
     }
 
     shared {
@@ -561,4 +585,18 @@ internal interface IBaseGenericMethodFixture {
 
 internal interface IDerivedGenericMethodFixture : IBaseGenericMethodFixture {
     func Echo[U](value U) U;
+}
+
+internal open class BaseGenericMethodImplFixture {
+    func Echo[T](value T) T -> value
+}
+
+internal class DerivedGenericMethodImplFixture : BaseGenericMethodImplFixture, IBaseGenericMethodFixture { }
+
+internal interface IBaseConstructedGenericMethodFixture[TOuter] {
+    func Echo[T](outer TOuter, value T) T;
+}
+
+internal interface IDerivedConstructedGenericMethodFixture[TOuter] : IBaseConstructedGenericMethodFixture[TOuter] {
+    func Echo[U](outer TOuter, value U) U;
 }

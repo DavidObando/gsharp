@@ -2540,7 +2540,7 @@ internal shared class ClrOverloadResolution {
                 return possible
             }
             var slots = prototypeSlots
-            if component.Any((i int32) -> slots.Contains(parameters[i])) {
+            if component.Any((i int32) -> slots.Any((slot Type) -> MentionsGenericParameter(slot, parameters[i]))) {
                 slots = prototypeSlots.ToArray()
                 let contextObject = ResolveObjectInSameContext(prototypeSlots[0]) ?? typeof(object)
                 let available = contextObject
@@ -2552,7 +2552,7 @@ internal shared class ClrOverloadResolution {
                     .Distinct()
                     .ToArray()
                 for var i = 0; i < slots.Length; i++ {
-                    if !component.Any((index int32) -> parameters[index] == prototypeSlots[i]) {
+                    if !component.Any((index int32) -> MentionsGenericParameter(prototypeSlots[i], parameters[index])) {
                         continue
                     }
                     let slotAttributes = prototypeSlots[i].GenericParameterAttributes &
@@ -2565,9 +2565,9 @@ internal shared class ClrOverloadResolution {
                             (slotAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 &&
                                 constraint.FullName == "System.ValueType"
                         ) &&
-                            !parameters.Contains(candidate) && !slots.Contains(candidate) && !arguments.Any(
-                            (argument Type) -> MentionsGenericParameter(argument, candidate)
-                        ) &&
+                            !parameters.Any((existing Type) -> MentionsGenericParameter(existing, candidate)) &&
+                            !slots.Any((existing Type) -> MentionsGenericParameter(existing, candidate)) &&
+                            !arguments.Any((argument Type) -> MentionsGenericParameter(argument, candidate)) &&
                             !receiverTerms
                             .Any(
                             (term(Type, Type, bool)) ->

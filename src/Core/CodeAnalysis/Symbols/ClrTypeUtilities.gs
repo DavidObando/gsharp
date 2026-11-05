@@ -1588,20 +1588,19 @@ shared class ClrTypeUtilities {
         if object.Equals(declaringMethod, method) {
             return true
         }
+        var openMethod = method
         if method is MethodInfo methodInfo {
-            if TryGetMappedOpenMethod(methodInfo, out var mappedOpen) && object.Equals(declaringMethod, mappedOpen) {
-                return true
+            if TryGetMappedOpenMethod(methodInfo, out var mappedOpen) {
+                openMethod = mappedOpen
+            } else {
+                try {
+                    if methodInfo.IsGenericMethod && !methodInfo.IsGenericMethodDefinition {
+                        openMethod = methodInfo.GetGenericMethodDefinition()
+                    }
+                } catch (ex Exception) when IsMetadataLoadFailure(ex) || ex is InvalidOperationException { }
             }
-            try {
-                if methodInfo.IsGenericMethod && !methodInfo.IsGenericMethodDefinition && object.Equals(
-                    declaringMethod,
-                    methodInfo.GetGenericMethodDefinition()
-                ) {
-                    return true
-                }
-            } catch (ex Exception) when IsMetadataLoadFailure(ex) || ex is InvalidOperationException { }
         }
-        return false
+        return object.Equals(declaringMethod, openMethod) || AreSameDeclaringMethod(declaringMethod, openMethod)
     }
 
     private func AreSameGenericParameters(self Type, other Type, selfMethod MethodBase?, otherMethod MethodBase?) bool {
@@ -1698,15 +1697,7 @@ shared class ClrTypeUtilities {
 
     private func SafeGetGenericParameterDeclaringType(parameter Type) Type? {
         try {
-            let declaringType Type? = parameter.DeclaringType
-            if declaringType == nil {
-                return nil
-            }
-            return if declaringType.IsGenericType && !declaringType.IsGenericTypeDefinition {
-                declaringType.GetGenericTypeDefinition()
-            } else {
-                declaringType
-            }
+            return NormalizeDeclaringTypeDefinition(parameter.DeclaringType)
         } catch (ex Exception) when IsMetadataLoadFailure(ex) || ex is InvalidOperationException {
             return nil
         }
@@ -1714,19 +1705,20 @@ shared class ClrTypeUtilities {
 
     private func SafeGetMethodDeclaringType(method MethodBase) Type? {
         try {
-            let declaringType Type? = method.DeclaringType
-            if declaringType == nil {
-                return nil
-            }
-            return if declaringType.IsGenericType &&
-                !declaringType.IsGenericTypeDefinition &&
-                declaringType.ContainsGenericParameters {
-                declaringType.GetGenericTypeDefinition()
-            } else {
-                declaringType
-            }
+            return NormalizeDeclaringTypeDefinition(method.DeclaringType)
         } catch (ex Exception) when IsMetadataLoadFailure(ex) || ex is InvalidOperationException {
             return nil
+        }
+    }
+
+    private func NormalizeDeclaringTypeDefinition(declaringType Type?) Type? {
+        if declaringType == nil {
+            return nil
+        }
+        return if declaringType.IsGenericType && !declaringType.IsGenericTypeDefinition {
+            declaringType.GetGenericTypeDefinition()
+        } else {
+            declaringType
         }
     }
 
