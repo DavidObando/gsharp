@@ -1496,26 +1496,23 @@ internal partial class ExpressionBinder {
         // Preserve the regular conversion diagnostic for nullable delegate
         // targets instead of replacing it with target-parameter diagnostics.
         bound = nil
-        let lambda LambdaExpressionSyntax? = syntax as LambdaExpressionSyntax
+        let lambda LambdaExpressionSyntax? = OverloadResolver.GetLambdaArgumentSyntax(syntax)
         if lambda == nil || targetType == nil {
             return false
-        }
-        if targetType is NullableTypeSymbol {
-            var allParametersTyped = true
-            for parameter in lambda.Parameters {
-                allParametersTyped &= parameter.Type != nil
-            }
-            if allParametersTyped {
-                return false
-            }
         }
         if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out var targetFunctionType) {
             return false
         }
-        bound = lambdas.BindLambdaExpression(
+        let mark = Diagnostics.Count
+        let candidate = lambdas.BindLambdaExpression(
             Invariant.Required(lambda, "lambda target typing requires lambda syntax", expression: "lambda"),
             targetFunctionType
         )
+        if targetType is NullableTypeSymbol && candidate is BoundErrorExpression {
+            Diagnostics.TruncateTo(mark)
+            return false
+        }
+        bound = candidate
         return true
     }
 

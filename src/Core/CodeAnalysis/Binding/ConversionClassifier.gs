@@ -357,7 +357,8 @@ internal class ConversionClassifier {
         // Issue #3355: bind a block against its target before converting so
         // target-only trailing forms (`default`, untyped lambdas, branchy
         // expressions) receive their expected type.
-        if syntax is BlockExpressionSyntax {
+        if syntax is BlockExpressionSyntax ||
+            (!allowExplicit && type != nil && OverloadResolver.GetLambdaArgumentSyntax(syntax) != nil) {
             return bindExpressionWithTargetType(syntax, type!!)
         }
         // ADR-0055 Tier 4: contextual conversion of an interpolated string to
@@ -1154,23 +1155,36 @@ internal class ConversionClassifier {
             // declares at that position — mirroring C#'s CS8123. Converting
             // a named-tuple-typed VALUE to a differently-named target is
             // silent: names are metadata over the positional shape.
-            if expression is BoundTupleLiteralExpression &&
+            if expression is BoundTupleLiteralExpression identityTupleLiteral &&
                 expression.Type is TupleTypeSymbol identitySourceTuple &&
                 type is TupleTypeSymbol identityTargetTuple &&
-                !object.ReferenceEquals(identitySourceTuple, identityTargetTuple) &&
-                identitySourceTuple.HasNames &&
-                identityTargetTuple
-                .HasNames {
-                for var i = 0; i < identitySourceTuple.Arity; i++ {
-                    let sourceName string? = identitySourceTuple.ElementNames[i]
-                    let targetName string? = identityTargetTuple.ElementNames[i]
-                    if sourceName != nil && targetName != nil && !string.Equals(
-                        sourceName,
-                        targetName,
-                        StringComparison.Ordinal
-                    ) {
-                        Diagnostics.ReportTupleElementNameMismatch(diagnosticLocation, sourceName, targetName)
+                !object
+                .ReferenceEquals(identitySourceTuple, identityTargetTuple) {
+                if identitySourceTuple.HasNames && identityTargetTuple.HasNames {
+                    for var i = 0; i < identitySourceTuple.Arity; i++ {
+                        let sourceName string? = identitySourceTuple.ElementNames[i]
+                        let targetName string? = identityTargetTuple.ElementNames[i]
+                        if sourceName != nil && targetName != nil && !string.Equals(
+                            sourceName,
+                            targetName,
+                            StringComparison.Ordinal
+                        ) {
+                            Diagnostics.ReportTupleElementNameMismatch(diagnosticLocation, sourceName, targetName)
+                        }
                     }
+                }
+                if !object.ReferenceEquals(identitySourceTuple.WithoutNames(), identityTargetTuple.WithoutNames()) &&
+                    identitySourceTuple.Arity == identityTargetTuple.Arity &&
+                    identityTupleLiteral
+                    .Elements
+                    .Any((e BoundExpression) -> e is BoundFunctionLiteralExpression) {
+                    return BindTupleConversion(
+                        diagnosticLocation,
+                        expression,
+                        identitySourceTuple,
+                        identityTargetTuple,
+                        allowExplicit
+                    )
                 }
             }
             return expression
@@ -3854,17 +3868,24 @@ internal class ConversionClassifier {
                     } else {
                         element.Syntax as ExpressionSyntax
                     }
-                    if earlierElementChangedNarrowing && elementSyntax != nil {
+                    if elementSyntax != nil {
                         let unwrappedSyntax = if elementSyntax is NamedTupleElementSyntax named {
                             named.Expression
                         } else {
                             elementSyntax
                         }
-                        Diagnostics.RemoveDiagnosticsIn(unwrappedSyntax.Location)
-                        element = if rebindTupleElement != nil {
-                            rebindTupleElement!!(element, unwrappedSyntax)
-                        } else {
-                            bindExpression(unwrappedSyntax)
+                        if earlierElementChangedNarrowing {
+                            Diagnostics.RemoveDiagnosticsIn(unwrappedSyntax.Location)
+                            element = if rebindTupleElement != nil {
+                                rebindTupleElement!!(element, unwrappedSyntax)
+                            } else {
+                                bindExpression(unwrappedSyntax)
+                            }
+                        } else if !allowExplicit && OverloadResolver.GetLambdaArgumentSyntax(unwrappedSyntax) != nil &&
+                            !object
+                            .ReferenceEquals(element.Type, targetTuple.ElementTypes[i]) {
+                            Diagnostics.RemoveDiagnosticsIn(unwrappedSyntax.Location)
+                            element = bindExpressionWithTargetType(unwrappedSyntax, targetTuple.ElementTypes[i])
                         }
                     }
                     let beforeVersion = expressionNarrowingVersion?.Invoke() ?? 0

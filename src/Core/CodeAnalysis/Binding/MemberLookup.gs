@@ -4376,7 +4376,9 @@ internal class MemberLookup {
             if type == nil {
                 return false
             }
-            if type is ImportedTypeSymbol imported && imported.OpenDefinition != nil && string.Equals(
+            if type.StripToBareShape() is ImportedTypeSymbol imported &&
+                imported.OpenDefinition != nil &&
+                string.Equals(
                 imported.OpenDefinition.FullName,
                 "System.Linq.Expressions.Expression`1",
                 StringComparison.Ordinal

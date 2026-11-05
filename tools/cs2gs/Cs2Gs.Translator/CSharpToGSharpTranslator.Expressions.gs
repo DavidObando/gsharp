@@ -3486,7 +3486,17 @@ partial class CSharpToGSharpTranslator {
                     .context
                     .GetTypeInfo(lambda)
                     .ConvertedType is INamedTypeSymbol{DelegateInvokeMethod: {}} &&
-                    this.SlotTypeIsDeclared(this.ResolveValueSink(lambda), lambda)
+                    this
+                    .SlotTypeIsDeclared(
+                    this.ResolveValueSink(lambda) ??
+                        (
+                        this.FindResultLambda(lambda) is {} enclosingLambda ? this.GetLambdaTargetDelegateType(
+                            enclosingLambda
+                        )
+                            ?.DelegateInvokeMethod: default(IMethodSymbol?)
+                    ),
+                    lambda
+                )
             } else {
                 true
             }
@@ -11012,10 +11022,14 @@ partial class CSharpToGSharpTranslator {
             }
             if target == nil &&
                 (current!!.Parent is ArgumentSyntax and {Parent: TupleExpressionSyntax}) &&
-                this.ResolveValueSink(value) is {} tupleSink && this.GetFixedElementDestinationType(
-                value,
-                tupleSink
-            ) is {} tupleTargetType {
+                (
+                this.ResolveValueSink(value) ??
+                    (
+                    this.FindResultLambda(value) is {} tupleLambda ? this.GetLambdaTargetDelegateType(tupleLambda)
+                        ?.DelegateInvokeMethod: default(IMethodSymbol?)
+                )
+            ) is {} tupleSink &&
+                this.GetFixedElementDestinationType(value, tupleSink) is {} tupleTargetType {
                 return (tupleTargetType, tupleSink)
             }
             // An arm's effective target is the sink of the whole expression — a
@@ -13193,6 +13207,8 @@ partial class CSharpToGSharpTranslator {
                     .Syntax
                     .SwitchExpressionSyntax switchExpression {
                     node = switchExpression
+                } else if node!!.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax tuple} {
+                    node = tuple
                 } else {
                     break
                 }

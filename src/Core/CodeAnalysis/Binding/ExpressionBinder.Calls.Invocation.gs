@@ -765,17 +765,18 @@ internal partial class ExpressionBinder {
                     break
                 }
                 let parameterType = ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex])
-                if parameterType.ContainsGenericParameters || !MemberLookup.TryGetLambdaTargetFunctionType(
-                    parameterType,
+                // The delegate slot's bare shape: a function literal is never
+                // nil, so the slot's own top-level nullability does not apply.
+                let delegateType = ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape()
+                if parameterType.ContainsGenericParameters || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                    delegateType,
                     out var fn
                 ) ||
                     fn == nil {
                     allMapped = false
                     break
                 }
-                // The delegate slot's bare shape: a function literal is never
-                // nil, so the slot's own top-level nullability does not apply.
-                targets[idx] = (fn, ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape())
+                targets[idx] = (fn, delegateType)
             }
             if !allMapped {
                 continue
@@ -1125,6 +1126,7 @@ internal partial class ExpressionBinder {
                 // infer it), but it does prove the reflected CLR target would be
                 // erased, so this symbolic path must win over the CLR probe.
                 var returnGroundedInReceiver = false
+                var returnHasInferredMethodTypeParameter = false
                 if openParameterType.IsGenericParameter {
                     if !TryBuildSymbolicDelegateTarget(
                         openParameterType,
@@ -1242,7 +1244,7 @@ internal partial class ExpressionBinder {
                         )
                     }
                     let returnClrType Type? = invoke.ReturnType
-                    let mappedReturnType = if returnClrType != nil && returnClrType.IsSameAs(typeof(Void)) {
+                    var mappedReturnType = if returnClrType != nil && returnClrType.IsSameAs(typeof(Void)) {
                         TypeSymbol.Void
                     } else {
                         MemberLookup.MapOpenSignatureWithoutDeclarationMerge(
@@ -1253,9 +1255,24 @@ internal partial class ExpressionBinder {
                             methodTypeArgs
                         )
                     }
+                    if mappedReturnType != TypeSymbol.Void && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                        MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
+                            openParameters[paramIndex],
+                            receiverOpenDefinition,
+                            receiverTypeArguments,
+                            openMethod,
+                            methodTypeArgs
+                        ),
+                        out var mergedFunctionType
+                    ) {
+                        mappedReturnType = mergedFunctionType!!.ReturnType
+                    }
                     functionType = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), mappedReturnType)
                     returnGroundedInReceiver = returnClrType != nil &&
                         AllMethodTypeParametersResolved(returnClrType, openMethod, inferred)
+                    returnHasInferredMethodTypeParameter = explicitTypeArgSymbols.IsDefaultOrEmpty &&
+                        returnClrType != nil &&
+                        !AllMethodTypeParametersResolved(returnClrType, openMethod, Array.Empty[TypeSymbol?]())
                 }
                 for parameterType in functionType.ParameterTypes {
                     if TypeSymbol.RequiresSymbolicProjection(parameterType) {
@@ -1271,9 +1288,12 @@ internal partial class ExpressionBinder {
                 // the pre-existing placeholder + inferReturnTypeFromBody
                 // behavior for that slot.
                 let mappedReturn TypeSymbol? = functionType.ReturnType
-                if mappedReturn != nil && mappedReturn != TypeSymbol.Error && !TypeSymbol.ContainsTypeParameter(
-                    mappedReturn
-                ) {
+                if !MemberLookup.TryGetExpressionTreeDelegateType(openParameterType, out _) &&
+                    !returnHasInferredMethodTypeParameter &&
+                    mappedReturn != nil &&
+                    mappedReturn != TypeSymbol.Error &&
+                    !TypeSymbol
+                    .ContainsTypeParameter(mappedReturn) {
                     slotReturnTypes[idx] = mappedReturn
                     if TypeSymbol.RequiresSymbolicProjection(mappedReturn) {
                         candidateHasSymbolicType = true

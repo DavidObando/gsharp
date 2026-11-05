@@ -1027,12 +1027,14 @@ internal partial class DeclarationBinder {
                         () -> {
                             let initializersBuilder = ImmutableDictionary.CreateBuilder[FieldSymbol, BoundExpression]()
                             for (fieldSymbol, initSyntax, fieldType) in pendingStaticInitializers {
-                                let boundInit = if initSyntax is BlockExpressionSyntax {
+                                let targetTypedInit = initSyntax is BlockExpressionSyntax ||
+                                    OverloadResolver.GetLambdaArgumentSyntax(initSyntax) != nil
+                                let boundInit = if targetTypedInit {
                                     conversions.BindConversion(initSyntax, fieldType)
                                 } else {
                                     bindExpression(initSyntax)
                                 }
-                                let convertedInit = if initSyntax is BlockExpressionSyntax {
+                                let convertedInit = if targetTypedInit {
                                     boundInit
                                 } else {
                                     conversions.BindConversion(initSyntax.Location, boundInit, fieldType)

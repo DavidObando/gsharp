@@ -3391,7 +3391,10 @@ internal partial class ExpressionBinder {
                     sawOpenGenericParameter = false
                     return false
                 }
-                if !MemberLookup.TryGetLambdaTargetFunctionType(parameterType, out var candidate) || candidate == nil {
+                // The delegate slot's bare shape: a function literal is never nil.
+                let nominalCandidate = ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape()
+                if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(nominalCandidate, out var candidate) ||
+                    candidate == nil {
                     continue
                 }
                 if target == nil {
@@ -3405,8 +3408,6 @@ internal partial class ExpressionBinder {
                     sawOpenGenericParameter = false
                     return false
                 }
-                // The delegate slot's bare shape: a function literal is never nil.
-                let nominalCandidate = ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape()
                 if nominalTargetsAgree {
                     if nominalTarget == nil {
                         nominalTarget = nominalCandidate

@@ -149,9 +149,8 @@ namespace Demo
     }
 
     /// Control: the result of a lambda whose type G# infers from its body (`var read = () => …`), in block and
-    /// expression form and through a conditional arm, takes the null as C# does. A block lambda and an arm of an
-    /// expression lambda whose delegate type fixes a non-null result keep the `!!`. A bare expression body at a
-    /// fixed delegate binds without it (#5686).
+    /// expression form and through a conditional arm, takes the null as C# does. An expression lambda, a block
+    /// lambda and an arm of an expression lambda whose delegate type fixes a non-null result keep the `!!` (#5686).
     @Fact
     func AnInferredLambdaResult_TakesTheNullUnasserted() {
         let printed = Translate(`
@@ -176,6 +175,7 @@ namespace Demo
 }`)
         Assert.Contains("return Volatile.Read(&cache)\n", printed)
         Assert.Contains("let read = () -> Volatile.Read(&cache)\n", printed)
+        Assert.Contains("let read () -> Dictionary[string, int32] = () -> Volatile.Read(&full)!!\n", printed)
         Assert.Contains("return Volatile.Read(&full)!!\n", printed)
         Assert.Contains("let read = () -> if flag { Volatile.Read(&cache) } else", printed)
         Assert.Contains("() -> if flag { Volatile.Read(&full)!! } else", printed)
@@ -243,8 +243,9 @@ namespace Demo
         static int Alias() { var a = Volatile.Read(ref cache!); var b = a; b = Volatile.Read(ref cache!); return 1; }
         static int Generic() { var b = Id(Volatile.Read(ref cache!)); b = Volatile.Read(ref cache!); return 1; }
         static int FixedLambdaTuple() { Func<(Dictionary<string, int>, int)> read = () => { return (Volatile.Read(ref full!), 0); }; return read().Item1.Count; }
+        static int FixedLambdaTupleExpr() { Func<(Dictionary<string, int>, int)> read = () => (Volatile.Read(ref full!), 0); return read().Item1.Count; }
         public static string Run() =>
-            Operator(true) + " " + TupleReassign() + " " + LambdaTuple() + " " + LambdaTupleExpr() + " " + Alias() + " " + Generic() + " " + FixedLambdaTuple();
+            Operator(true) + " " + TupleReassign() + " " + LambdaTuple() + " " + LambdaTupleExpr() + " " + Alias() + " " + Generic() + " " + FixedLambdaTuple() + " " + FixedLambdaTupleExpr();
     }
 }`)
         Assert.Contains("Box(Volatile.Read(&full)!!)", printed)
@@ -253,7 +254,8 @@ namespace Demo
         Assert.Contains("let read = () -> (Volatile.Read(&cache), 0)\n", printed)
         Assert.Contains("b = Volatile.Read(&cache)\n", printed)
         Assert.Contains("return (Volatile.Read(&full)!!, 0)\n", printed)
-        RunsAs(printed, "box 1 True True 1 1 1")
+        Assert.Contains("() -> (Volatile.Read(&full)!!, 0)\n", printed)
+        RunsAs(printed, "box 1 True True 1 1 1 1")
     }
 
     /// Control: a field, a property or a parameter whose declared type mentions a type parameter is typed by
@@ -323,19 +325,25 @@ namespace Demo
         static int Deconstruct() { (Dictionary<string, int> d, int n) = (Volatile.Read(ref cache!), 0); d = Volatile.Read(ref cache!); return 1; }
         static int TypedThenGeneric() { Dictionary<string, int> d = Id(Volatile.Read(ref cache!)); d = Volatile.Read(ref cache!); return 1; }
         static int FixedField() { fixedRead = () => { return Volatile.Read(ref full!); }; return fixedRead().Count; }
+        static int FixedFieldExpr() { fixedRead = () => Volatile.Read(ref full!); return fixedRead().Count; }
+        static int NestedFixedExpr() { Func<Func<Dictionary<string, int>>> outer = () => () => Volatile.Read(ref full!); return outer()().Count; }
         static bool AsDelegate() { Delegate read = () => { return Volatile.Read(ref cache!); }; return read.DynamicInvoke() == null; }
+        static bool AsDelegateExpr() { Delegate read = () => Volatile.Read(ref cache!); return read.DynamicInvoke() == null; }
         static int TypedReassign() { Dictionary<string, int> d = Volatile.Read(ref full!); d = Volatile.Read(ref full!); return d.Count; }
         public static string Run() =>
-            Reassign() + " " + Use() + " " + UseBlock() + " " + Deconstruct() + " " + TypedThenGeneric() + " " + FixedField() + " " + TypedReassign() + " " + AsDelegate();
+            Reassign() + " " + Use() + " " + UseBlock() + " " + Deconstruct() + " " + TypedThenGeneric() + " " + FixedField() + " " + FixedFieldExpr() + " " + NestedFixedExpr() + " " + TypedReassign() + " " + AsDelegate() + " " + AsDelegateExpr();
     }
 }`)
         Assert.Contains("return b.Use(() -> Volatile.Read(&cache))", printed)
         Assert.Contains("var (d, n) = (Volatile.Read(&cache), 0)\n        d = Volatile.Read(&cache)\n", printed)
         Assert.Contains("var d = Id(Volatile.Read(&cache))\n        d = Volatile.Read(&cache)\n", printed)
         Assert.Contains("return Volatile.Read(&full)!!\n", printed)
+        Assert.Contains("fixedRead = () -> Volatile.Read(&full)!!\n", printed)
+        Assert.Contains("() -> () -> Volatile.Read(&full)!!\n", printed)
         Assert.Contains("var d = Volatile.Read(&full)!!\n        d = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("let read Delegate = () -> {\n            return Volatile.Read(&cache)\n", printed)
-        RunsAs(printed, "True 1 1 1 1 1 1 True")
+        Assert.Contains("let read Delegate = () -> Volatile.Read(&cache)\n", printed)
+        RunsAs(printed, "True 1 1 1 1 1 1 1 1 True True")
     }
 
     /// An indexer key is a parameter slot: a key that is `T?` only in G# is asserted at a non-null indexer

@@ -1549,8 +1549,16 @@ internal class LambdaBinder {
             } else {
                 Diagnostics.AddRange(targetDiagnostics)
                 boundBody = converted
-                returnType = InferLambdaReturnType(boundBody, syntax, targetFunctionType, isAsync)
+                returnType = if boundBody is BoundErrorExpression {
+                    TypeSymbol.Error
+                } else {
+                    placeholderReturnType
+                }
             }
+        } else if placeholderReturnType != TypeSymbol.Error &&
+            placeholderReturnType != TypeSymbol.Void &&
+            !(boundBody is BoundErrorExpression) {
+            returnType = placeholderReturnType
         }
         if isAsync && isAsyncIteratorReturnType(returnType) {
             Diagnostics.ReportAsyncIteratorFunctionLiteralNotSupported(syntax.Location, returnType)
@@ -2540,10 +2548,11 @@ internal class LambdaBinder {
             }
             return
         }
+        let trailingLocation = (syntax.Body as BlockExpressionSyntax)?.Expression?.Location ?? syntax.Body.Location
         let trailingConverted = if trailing.Type == returnType {
             trailing
         } else {
-            conversions.BindConversion(syntax.Body.Location, trailing, returnType)
+            conversions.BindConversion(trailingLocation, trailing, returnType)
         }
         bodyStatements.Add(BoundReturnStatement(syntax.Body, trailingConverted))
     }

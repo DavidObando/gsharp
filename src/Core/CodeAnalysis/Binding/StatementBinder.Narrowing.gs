@@ -5823,8 +5823,9 @@ internal partial class StatementBinder {
                 isFormattableStringTargetType(type) {
                 variableType = type
                 convertedInitializer = bindInterpolatedStringAsFormattable(interpolatedInit, type)
-            } else if type != nil &&
-                syntax.Initializer is LambdaExpressionSyntax targetTypedLambda &&
+            } else if type != nil && OverloadResolver.GetLambdaArgumentSyntax(
+                syntax.Initializer
+            ) is {} targetTypedLambda &&
                 bindLambdaWithTargetType != nil &&
                 MemberLookup
                 .TryGetLambdaTargetFunctionTypeFromSymbol(type, out var targetFnType) {
