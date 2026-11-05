@@ -644,8 +644,19 @@ internal partial class ExpressionBinder {
         // immediately so nested sub-expressions bind with normal semantics.
         let deferOnFailure = targetType == nil && binderCtx.DeferTargetlessConditional
         this.binderCtx.DeferTargetlessConditional = false
+        return bindDeferrableConditional(
+            deferOnFailure,
+            () -> BindConditionalExpressionCore(syntax, targetType, deferOnFailure)
+        )
+    }
+
+    private func BindConditionalExpressionCore(
+        syntax ConditionalExpressionSyntax,
+        targetType TypeSymbol?,
+        deferOnFailure bool
+    ) BoundExpression {
         let diagMark = Diagnostics.Count
-        let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
+        let (condition, whenTrueNarrowing, whenFalseNarrowing) = bindConditionWithEffects(syntax.Condition)
         // ADR-0100 / issue #795: a bare `default` branch takes its type
         // from the sibling branch. Bind whichever branch is typed first so
         // we have a concrete target type for the bare default. When both
@@ -653,10 +664,6 @@ internal partial class ExpressionBinder {
         // expression is invalid.
         let trueIsBareDefault = syntax.WhenTrue is DefaultExpressionSyntax tDef && tDef.TypeClause == nil
         let falseIsBareDefault = syntax.WhenFalse is DefaultExpressionSyntax fDef && fDef.TypeClause == nil
-        // Issue #4964: each branch is bound under the same smart-cast frames
-        // the equivalent if-expression uses (`s != nil ? s.Length : 0`), so
-        // the two conditional forms narrow identically.
-        let (whenTrueNarrowing, whenFalseNarrowing) = ClassifyConditionalNarrowing(condition)
         // ADR-0166: each branch sees the pattern variables the condition
         // definitely assigns on that branch (`x is T t ? t.Name : "none"`).
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
@@ -681,8 +688,8 @@ internal partial class ExpressionBinder {
         var whenTrue BoundExpression
         var whenFalse BoundExpression
         if targetType != nil {
-            whenTrue = bindWhenTrue(targetType)
-            whenFalse = bindWhenFalse(targetType)
+            whenTrue,
+            whenFalse = bindConditionalBranches(true, () -> bindWhenTrue(targetType), () -> bindWhenFalse(targetType))
         } else if trueIsBareDefault && falseIsBareDefault {
             Diagnostics.ReportBareDefaultNoTargetType(
                 (cast[DefaultExpressionSyntax](syntax.WhenTrue)).DefaultKeyword.Location
@@ -699,8 +706,26 @@ internal partial class ExpressionBinder {
                 syntax.WhenTrue
             )
         } else if falseIsBareDefault {
-            whenTrue = bindWhenTrue(nil)
-            if whenTrue is BoundErrorExpression {
+            var trueFailed = false
+            whenTrue,
+            whenFalse = bindConditionalBranches(
+                true,
+                () -> {
+                    let bound = bindWhenTrue(nil)
+                    trueFailed = bound is BoundErrorExpression
+                    return bound
+                },
+                () -> if trueFailed {
+                    BoundErrorExpression(nil)
+                } else {
+                    BindWithPatternVariables(
+                        patternWhenFalse,
+                        () -> BoundDefaultExpression(syntax.WhenFalse, TypeSymbol.Error),
+                        syntax.WhenFalse
+                    )
+                }
+            )
+            if trueFailed {
                 return BoundErrorExpression(nil)
             }
             whenFalse = BindWithPatternVariables(
@@ -709,8 +734,7 @@ internal partial class ExpressionBinder {
                 syntax.WhenFalse
             )
         } else {
-            whenTrue = bindWhenTrue(nil)
-            whenFalse = bindWhenFalse(nil)
+            whenTrue, whenFalse = bindConditionalBranches(true, () -> bindWhenTrue(nil), () -> bindWhenFalse(nil))
         }
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
             return BoundErrorExpression(nil)
@@ -775,7 +799,10 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         if syntax.Initializer is not StatementSyntax initializer {
-            return BindIfExpressionBranches(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
+            return bindDeferrableConditional(
+                deferOnFailure,
+                () -> BindIfExpressionBranches(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
+            )
         }
         // Issue #4962: `if init; cond { … } else { … }` scopes the initializer
         // exactly as BindIfStatement does for the statement form. It is
@@ -783,18 +810,21 @@ internal partial class ExpressionBinder {
         // `else if` chain, and not after the expression. It runs once, before
         // the condition:
         //   { init; cond ? then : else }
-        return BindInBlockExpressionScope(
-            () -> {
-                let (statements, value) = BindStatementsBeforeValue(
-                    ImmutableArray.Create[StatementSyntax](initializer),
-                    syntax,
-                    () -> BindIfExpressionBranches(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
-                )
-                if value is BoundErrorExpression {
-                    return value
+        return bindDeferrableConditional(
+            deferOnFailure,
+            () -> BindInBlockExpressionScope(
+                () -> {
+                    let (statements, value) = BindStatementsBeforeValue(
+                        ImmutableArray.Create[StatementSyntax](initializer),
+                        syntax,
+                        () -> BindIfExpressionBranches(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
+                    )
+                    if value is BoundErrorExpression {
+                        return value
+                    }
+                    return BoundBlockExpression(nil, statements, value)
                 }
-                return BoundBlockExpression(nil, statements, value)
-            }
+            )
         )
     }
 
@@ -817,8 +847,7 @@ internal partial class ExpressionBinder {
         // Issue #4966 (ADR-0202): nil only for the void `if` of a discarded
         // position; BindIfExpression rejects it elsewhere (GS0276).
         let elseSyntax = syntax.ElseExpression
-        let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
-        let (whenTrueNarrowing, whenFalseNarrowing) = ClassifyConditionalNarrowing(condition)
+        let (condition, whenTrueNarrowing, whenFalseNarrowing) = bindConditionWithEffects(syntax.Condition)
         // ADR-0166: each arm also sees the pattern variables the condition
         // definitely assigns on that arm.
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
@@ -838,8 +867,11 @@ internal partial class ExpressionBinder {
         let bindWhenFalseNarrowed() -> BoundExpression = () -> {
             return BindWithNarrowing(whenFalseNarrowing, bindWhenFalse)
         }
-        var whenTrue = BindWithPatternVariables(patternWhenTrue, bindWhenTrueNarrowed, syntax.ThenBlock)
-        var whenFalse = BindWithPatternVariables(patternWhenFalse, bindWhenFalseNarrowed, elseSyntax)
+        var (whenTrue, whenFalse) = bindConditionalBranches(
+            elseSyntax != nil,
+            () -> BindWithPatternVariables(patternWhenTrue, bindWhenTrueNarrowed, syntax.ThenBlock),
+            () -> BindWithPatternVariables(patternWhenFalse, bindWhenFalseNarrowed, elseSyntax)
+        )
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }
@@ -1429,59 +1461,67 @@ internal partial class ExpressionBinder {
             this.binderCtx.DeferTargetlessConditional = false
         }
         let coalesceDiagMark = Diagnostics.Count
-        var boundLeft = if coalesceTargetType != nil &&
-            syntax
-            .OperatorToken
-            .Kind == SyntaxKind.QuestionQuestionToken &&
-            IsTargetDependentExpressionSyntax(syntax.Left) {
-            BindExpression(syntax.Left, coalesceTargetType)
-        } else {
-            BindExpression(syntax.Left)
-        }
-        // ADR-0069 / issue #700: `&&` short-circuits — the right operand is
-        // only evaluated when the left operand was true. Thread any
-        // narrowing implied by the left operand into the right-operand
-        // binder so `x is T && f(x)` binds `f(x)` with `x` narrowed to `T`.
-        //
-        // ADR-0069 addendum / issue #712: `||` short-circuits too — the
-        // right operand is only evaluated when the left operand was false.
-        // Thread the left's else-frame (its negative narrowing) so
-        // `!(x is T) || f(x)` binds `f(x)` with `x` narrowed to `T`.
-        //
-        // ADR-0166: the same short-circuit regions scope pattern variables —
-        // `x is T t && t.Length > 0` binds `t.Length` with `t` in scope, and
-        // `!(x is T t) || t.Length > 0` likewise through the negation.
+        var boundLeft BoundExpression
         var boundRight BoundExpression
         if syntax.OperatorToken.Kind == SyntaxKind.AmpersandAmpersandToken {
-            let rightFrame = TryClassifyTypeTestNarrowingForAnd(boundLeft)
-            let (leftWhenTrue, _) = PatternVariables.Classify(boundLeft)
-            boundRight = BindWithPatternVariables(
-                leftWhenTrue,
-                () -> {
-                    return BindExpressionWithNarrowing(syntax.Right, rightFrame)
-                },
-                syntax.Right
+            boundLeft,
+            boundRight = bindShortCircuitOperands(
+                syntax.Left,
+                syntax.Right,
+                true,
+                () -> BindExpression(syntax.Left),
+                (left BoundExpression, rightFrame Dictionary[AccessPath, TypeSymbol]?) -> {
+                    let (leftWhenTrue, _) = PatternVariables.Classify(left)
+                    let right = BindWithPatternVariables(
+                        leftWhenTrue,
+                        () -> {
+                            return BindExpressionWithNarrowing(syntax.Right, rightFrame)
+                        },
+                        syntax.Right
+                    )
+                    ReportDuplicatePatternVariables(PatternVariables.Classify(right).WhenTrue, leftWhenTrue)
+                    return right
+                }
             )
-            ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenTrue, leftWhenTrue)
         } else if syntax.OperatorToken.Kind == SyntaxKind.PipePipeToken {
-            let rightFrame = TryClassifyTypeTestNarrowingForOr(boundLeft)
-            let (_, leftWhenFalse) = PatternVariables.Classify(boundLeft)
-            boundRight = BindWithPatternVariables(
-                leftWhenFalse,
-                () -> {
-                    return BindExpressionWithNarrowing(syntax.Right, rightFrame)
-                },
-                syntax.Right
+            boundLeft,
+            boundRight = bindShortCircuitOperands(
+                syntax.Left,
+                syntax.Right,
+                false,
+                () -> BindExpression(syntax.Left),
+                (left BoundExpression, rightFrame Dictionary[AccessPath, TypeSymbol]?) -> {
+                    let (_, leftWhenFalse) = PatternVariables.Classify(left)
+                    let right = BindWithPatternVariables(
+                        leftWhenFalse,
+                        () -> {
+                            return BindExpressionWithNarrowing(syntax.Right, rightFrame)
+                        },
+                        syntax.Right
+                    )
+                    ReportDuplicatePatternVariables(PatternVariables.Classify(right).WhenFalse, leftWhenFalse)
+                    return right
+                }
             )
-            ReportDuplicatePatternVariables(PatternVariables.Classify(boundRight).WhenFalse, leftWhenFalse)
-        } else if syntax
-            .OperatorToken
-            .Kind == SyntaxKind.QuestionQuestionToken &&
-            coalesceTargetType != nil &&
-            IsTargetDependentExpressionSyntax(syntax.Right) {
-            boundRight = BindExpression(syntax.Right, coalesceTargetType)
         } else {
-            boundRight = BindExpression(syntax.Right)
+            boundLeft = if coalesceTargetType != nil &&
+                syntax
+                .OperatorToken
+                .Kind == SyntaxKind.QuestionQuestionToken &&
+                IsTargetDependentExpressionSyntax(syntax.Left) {
+                BindExpression(syntax.Left, coalesceTargetType)
+            } else {
+                BindExpression(syntax.Left)
+            }
+            boundRight = if syntax
+                .OperatorToken
+                .Kind == SyntaxKind.QuestionQuestionToken &&
+                coalesceTargetType != nil &&
+                IsTargetDependentExpressionSyntax(syntax.Right) {
+                BindExpression(syntax.Right, coalesceTargetType)
+            } else {
+                BindExpression(syntax.Right)
+            }
         }
         if syntax
             .OperatorToken
@@ -2871,68 +2911,6 @@ internal partial class ExpressionBinder {
         private func CanLowerPointerComparisonOperand(type TypeSymbol) bool -> type == TypeSymbol.Null ||
             Conversion
             .Classify(type, TypeSymbol.NInt).Exists
-
-        /// Issue #4964: computes the smart-cast narrowing frames that a
-        /// conditional's condition implies for each branch. The if-expression
-        /// (`if c { a } else { b }`) and the conditional operator (`c ? a : b`)
-        /// are two spellings of one value form, and both bind their branches
-        /// under these frames, so the two cannot narrow differently.
-        /// The `if let` expression's guard shares these frames (ADR-0201).
-        ///
-        /// Issue #2640 introduced the frames for the if-expression: a top-level
-        /// nil guard (`x != nil`, `x == nil`, nullable value types included),
-        /// merged with the type-test and short-circuit frames of
-        /// `ClassifyTypeTestNarrowing` (`x is T`, `!`, `&&`, `||`).
-        /// @param condition The bound condition.
-        /// @returns The frame for the branch taken when the condition is true,
-        /// and the frame for the branch taken when it is false. Either may be
-        /// `nil` when that branch narrows nothing.
-        private func ClassifyConditionalNarrowing(condition BoundExpression)(
-            WhenTrue Dictionary[AccessPath, TypeSymbol]?,
-            WhenFalse Dictionary[AccessPath, TypeSymbol]?
-        ) {
-            var whenTrueNarrowing Dictionary[AccessPath, TypeSymbol]? = nil
-            var whenFalseNarrowing Dictionary[AccessPath, TypeSymbol]? = nil
-            if SmartCastStability.TryClassifyNilGuardLeaf(
-                condition,
-                restrictBareVariableToLocalsAndParams: false,
-                referenceNullableOnly: false,
-                out var target,
-                out var underlying,
-                out var nonNilWhenTrue
-            ) &&
-                target != nil &&
-                underlying != nil {
-                let frame = Dictionary[AccessPath, TypeSymbol]{[target] = underlying}
-                if nonNilWhenTrue {
-                    whenTrueNarrowing = frame
-                } else {
-                    whenFalseNarrowing = frame
-                }
-            }
-            let (typeWhenTrue, typeWhenFalse) = ClassifyTypeTestNarrowing(condition)
-            return (
-                MergeIfExpressionNarrowing(whenTrueNarrowing, typeWhenTrue),
-                MergeIfExpressionNarrowing(whenFalseNarrowing, typeWhenFalse)
-            )
-        }
-
-        private func MergeIfExpressionNarrowing(
-            first Dictionary[AccessPath, TypeSymbol]?,
-            second Dictionary[AccessPath, TypeSymbol]?
-        ) Dictionary[AccessPath, TypeSymbol]? {
-            if first == nil || first.Count == 0 {
-                return second
-            }
-            if second == nil || second.Count == 0 {
-                return first
-            }
-            let merged = Dictionary[AccessPath, TypeSymbol](first)
-            for pair in second {
-                merged[pair.Key] = pair.Value
-            }
-            return merged
-        }
 
         private func IsNestedLambdaExpression(syntax ExpressionSyntax) bool {
             var syntax = syntax

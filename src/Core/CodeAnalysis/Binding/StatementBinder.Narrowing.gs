@@ -34,12 +34,10 @@ internal partial class StatementBinder {
     private let memberMutationBySyntax Dictionary[SyntaxNode, bool] = Dictionary[SyntaxNode, bool]()
     // ADR-0208 R18: reused for each condition; read only before the branches are bound.
     private var conditionRemovedFacts Dictionary[AccessPath, TypeSymbol]?
+    private var activeConditionRemovedFacts Dictionary[AccessPath, TypeSymbol]?
     // ADR-0208 R18 (#5534, #5654): the facts that the conditions and statements in the then-branch being bound
     // removed, so the sibling else-branch can be bound without them. `nil` outside such a branch.
     private var conditionKillJournal List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?
-    // ADR-0208 R18: the callable aliases at each operand of the condition being classified (cref:AliasesAtTests);
-    // `nil` otherwise, and the current aliases apply.
-    private var testAliasesAt Dictionary[BoundExpression, HashSet[VariableSymbol]]?
 
     internal func IsolateExternalCallableAliases() HashSet[VariableSymbol] {
         let saved = HashSet[VariableSymbol](externalCallableAliases)
@@ -456,10 +454,11 @@ internal partial class StatementBinder {
                 }
             }
             if toRemove != nil {
+                let targetRemovedFacts = removedFacts ?? activeConditionRemovedFacts
                 for key in toRemove {
                     // The frames are visited innermost first, so the recorded type is the one a read saw.
-                    if removedFacts != nil && !removedFacts.ContainsKey(key) {
-                        removedFacts[key] = frame[key]
+                    if targetRemovedFacts != nil && !targetRemovedFacts.ContainsKey(key) {
+                        targetRemovedFacts[key] = frame[key]
                     }
                     conditionKillJournal?.Add((frame, key, frame[key]))
                     frame.Remove(key)
@@ -1682,11 +1681,23 @@ internal partial class StatementBinder {
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
         let aliases = HashSet[VariableSymbol](callableAliases ?? externalCallableAliases)
-        let (thenNarrow, elseNarrow, _, _) = ComputeConditionNarrowingInOrder(condition, aliases)
+        let (thenNarrow, elseNarrow, _, _) = ComputeConditionNarrowingInOrder(
+            condition,
+            aliases,
+            keepBoolCallInLogicalOps: true
+        )
         return (thenNarrow, elseNarrow)
     }
 
-    private func ComputeConditionNarrowingInOrder(condition BoundExpression, beforeAliases HashSet[VariableSymbol])(
+    private func ComputeConditionNarrowingInOrder(
+        condition BoundExpression,
+        beforeAliases HashSet[VariableSymbol],
+        removedFacts Dictionary[AccessPath, TypeSymbol]? = nil,
+        forShortCircuitOperand bool = false,
+        allowBoolCall bool = true,
+        keepBoolCallInLogicalOps bool = false,
+        shortCircuitInComposedOps bool = false
+    )(
         Then Dictionary[AccessPath, TypeSymbol]?,
         Else Dictionary[AccessPath, TypeSymbol]?,
         WhenTrueAliases HashSet[VariableSymbol],
@@ -1695,29 +1706,45 @@ internal partial class StatementBinder {
         if ContainsUserLabel(condition) {
             return (nil, nil, HashSet[VariableSymbol](), HashSet[VariableSymbol]())
         }
+        let childShortCircuit = forShortCircuitOperand || shortCircuitInComposedOps
         switch condition {
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
                 let (inThen, inElse, trueAliases, falseAliases) = ComputeConditionNarrowingInOrder(
                     unary.Operand,
-                    beforeAliases
+                    beforeAliases,
+                    removedFacts,
+                    childShortCircuit,
+                    allowBoolCall,
+                    keepBoolCallInLogicalOps,
+                    shortCircuitInComposedOps
                 )
                 return (inElse, inThen, falseAliases, trueAliases)
             }
             case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
                 var (leftThen, _, leftTrueAliases, leftFalseAliases) = ComputeConditionNarrowingInOrder(
                     bin.Left,
-                    beforeAliases
+                    beforeAliases,
+                    removedFacts,
+                    childShortCircuit,
+                    keepBoolCallInLogicalOps,
+                    keepBoolCallInLogicalOps,
+                    shortCircuitInComposedOps
                 )
                 if leftThen != nil && leftThen.Count > 0 {
                     leftThen = Dictionary[AccessPath, TypeSymbol](leftThen)
-                    ClearAssignedRoots(bin.Right, leftThen, leftTrueAliases)
+                    ClearOperandFacts(bin.Right, leftThen, leftTrueAliases)
                     if leftThen.Count == 0 {
                         leftThen = nil
                     }
                 }
                 let (rightThen, _, rightTrueAliases, rightFalseAliases) = ComputeConditionNarrowingInOrder(
                     bin.Right,
-                    leftTrueAliases
+                    leftTrueAliases,
+                    removedFacts,
+                    childShortCircuit,
+                    keepBoolCallInLogicalOps,
+                    keepBoolCallInLogicalOps,
+                    shortCircuitInComposedOps
                 )
                 let combinedThen = MergeNarrowingFrames(leftThen, rightThen)
                 return (combinedThen, nil, rightTrueAliases, JoinAliases(leftFalseAliases, rightFalseAliases))
@@ -1725,33 +1752,110 @@ internal partial class StatementBinder {
             case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
                 var (leftThen, leftElse, leftTrueAliases, leftFalseAliases) = ComputeConditionNarrowingInOrder(
                     bin.Left,
-                    beforeAliases
+                    beforeAliases,
+                    removedFacts,
+                    childShortCircuit,
+                    keepBoolCallInLogicalOps,
+                    keepBoolCallInLogicalOps,
+                    shortCircuitInComposedOps
                 )
                 if leftElse != nil && leftElse.Count > 0 {
                     leftElse = Dictionary[AccessPath, TypeSymbol](leftElse)
-                    ClearAssignedRoots(bin.Right, leftElse, leftFalseAliases)
+                    ClearOperandFacts(bin.Right, leftElse, leftFalseAliases)
                     if leftElse.Count == 0 {
                         leftElse = nil
                     }
                 }
                 let (rightThen, rightElse, rightTrueAliases, rightFalseAliases) = ComputeConditionNarrowingInOrder(
                     bin.Right,
-                    leftFalseAliases
+                    leftFalseAliases,
+                    removedFacts,
+                    childShortCircuit,
+                    keepBoolCallInLogicalOps,
+                    keepBoolCallInLogicalOps,
+                    shortCircuitInComposedOps
                 )
                 let combinedThen = IntersectNarrowingFrames(leftThen, rightThen)
                 let combinedElse = MergeNarrowingFrames(leftElse, rightElse)
                 return (combinedThen, combinedElse, JoinAliases(leftTrueAliases, rightTrueAliases), rightFalseAliases)
             }
         }
-        var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition)
-        if thenNarrow == nil && elseNarrow == nil {
+        var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition, forShortCircuitOperand)
+        if !forShortCircuitOperand && allowBoolCall && thenNarrow == nil && elseNarrow == nil {
             thenNarrow, elseNarrow = TryClassifyBoolCallNarrowing(condition)
         }
-        let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition, removedFacts: nil, beforeAliases)
+        let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition, removedFacts, beforeAliases)
         thenNarrow = MergeNarrowingFrames(thenNarrow, typeThen)
         elseNarrow = MergeNarrowingFrames(elseNarrow, typeElse)
         let afterAliases = AliasesAfter(condition, beforeAliases)
         return (thenNarrow, elseNarrow, afterAliases, afterAliases)
+    }
+
+    // ADR-0208 R18 (#5545 shape 5): removes from [`state`](paramref) the facts of an earlier operand that the later
+    // operand [`operand`](paramref) can invalidate. A stable member path's members are immutable, so only a write or
+    // unknown write that can replace its root removes it, matching (cref:KillsJoinGain).
+    private func ClearOperandFacts(
+        operand BoundExpression,
+        state Dictionary[AccessPath, TypeSymbol],
+        callableAliases IReadOnlyCollection[VariableSymbol]
+    ) {
+        if state.Count == 0 {
+            return
+        }
+        let operandSyntax = operand.Syntax
+        if operandSyntax != nil {
+            EnsureClosureAssignedNames(operandSyntax)
+        }
+        let collector = NewCollector(nil, callableAliases)
+        collector.VisitExpression(operand)
+        let filterWrites = if operandSyntax != nil && (collector.MayMutateMemberPaths || collector.ContainsTry) {
+            let filters = CollectCatchFiltersAbove(operandSyntax)
+            if filters.Count > 0 {
+                CollectEnclosingFilterWrites(filters)
+            } else {
+                default(List[(TryBlock SyntaxNode?, Names HashSet[string])]?)
+            }
+        } else {
+            default(List[(TryBlock SyntaxNode?, Names HashSet[string])]?)
+        }
+        let syntaxMutatesMembers = operandSyntax != nil && SyntaxMayMutateMemberPaths(operandSyntax)
+        for entry in state.ToArray() {
+            let path = entry.Key
+            let rootPath = AccessPath.ForVariable(path.Root)
+            if filterWrites != nil &&
+                (
+                FilterWritesVariable(filterWrites, path.Root) ||
+                    MayBeMutatedByUnknownCallable(
+                    if path.HasMembers && !IsExternalStorageAlias(path.Root) {
+                        rootPath
+                    } else {
+                        path
+                    }
+                )
+            ) {
+                state.Remove(path)
+                continue
+            }
+            if path.HasMembers && !IsExternalStorageAlias(path.Root) {
+                if collector.AssignsRoot(path.Root) ||
+                    MayBeMutatedByUnknownWrite(collector, rootPath) ||
+                    (
+                    (syntaxMutatesMembers || collector.MayMutateMemberPaths) && MayBeMutatedByUnknownCallable(rootPath)
+                ) {
+                    state.Remove(path)
+                }
+                continue
+            }
+            if MayBeMutatedByUnknownWrite(collector, path) || collector.MayMutateGlobalRoot(path.Root, entry.Value) ||
+                DropsOnMemberMutation(
+                path,
+                syntaxMutatesMembers || collector.MayMutateMemberPaths,
+                collector.MayMutateReferenceStorage
+            ) ||
+                collector.InvalidatesNarrowing(path.Root, entry.Value) || collector.Roots.Contains(path.Root) {
+                state.Remove(path)
+            }
+        }
     }
 
     // An unknown callable can reach a member path, a global or an implicit
@@ -1928,6 +2032,188 @@ internal partial class StatementBinder {
             }
         }
         return false
+    }
+
+    private func EffectsAlreadyAppliedByShortCircuit(expression BoundExpression) bool {
+        var current = expression
+        while current is BoundUnaryExpression unary && unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
+            current = unary.Operand
+        }
+        return current is BoundBinaryExpression binary &&
+            (
+            binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd || binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr
+        )
+    }
+
+    private func ApplyTrailingConditionEffects(
+        syntax SyntaxNode,
+        expression BoundExpression,
+        removedFacts Dictionary[AccessPath, TypeSymbol]? = nil
+    ) {
+        if !HasAnyActiveNarrowings() || EffectsAlreadyAppliedByShortCircuit(expression) {
+            return
+        }
+        InvalidateNarrowingsForAssignedVariables(
+            expression.Syntax ?? syntax,
+            BoundExpressionStatement(nil, expression),
+            removedFacts
+        )
+    }
+
+    /// ADR-0208 R18 (#5534, #5545): binds a boolean condition, applies its narrowing and callable-alias effects, and
+    /// classifies the narrowing frames that hold when it is true and when it is false.
+    internal func BindConditionWithEffects(conditionSyntax ExpressionSyntax, allowBoolCall bool = true)(
+        Condition BoundExpression,
+        WhenTrue Dictionary[AccessPath, TypeSymbol]?,
+        WhenFalse Dictionary[AccessPath, TypeSymbol]?
+    ) {
+        let aliasesBefore = CaptureExternalCallableAliases()
+        let outerRemoved = activeConditionRemovedFacts
+        let removedFacts = Dictionary[AccessPath, TypeSymbol]()
+        activeConditionRemovedFacts = removedFacts
+        var condition BoundExpression
+        try {
+            condition = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool)
+        } finally {
+            activeConditionRemovedFacts = outerRemoved
+        }
+        ApplyTrailingConditionEffects(conditionSyntax, condition, removedFacts)
+        if outerRemoved != nil {
+            for entry in removedFacts {
+                if !outerRemoved.ContainsKey(entry.Key) {
+                    outerRemoved[entry.Key] = entry.Value
+                }
+            }
+        }
+        RestoreExternalCallableAliases(aliasesBefore)
+        ApplyHeaderCallableEffects(condition)
+        let effectiveRemoved = if removedFacts.Count == 0 {
+            default(Dictionary[AccessPath, TypeSymbol]?)
+        } else {
+            removedFacts
+        }
+        let (thenNarrow, elseNarrow) = ClassifyIfConditionNarrowing(
+            condition,
+            effectiveRemoved,
+            aliasesBefore,
+            allowBoolCall
+        )
+        return (condition, thenNarrow, elseNarrow)
+    }
+
+    /// ADR-0208 R18 (#5545): binds an initializer expression (of `if let` or `while let`) and applies its narrowing
+    /// and callable-alias effects before the next binding, guard or branch is bound.
+    internal func BindInitializerWithEffects(initializerSyntax ExpressionSyntax) BoundExpression {
+        let aliasesBefore = CaptureExternalCallableAliases()
+        let bound = bindExpression(initializerSyntax, false)
+        ApplyTrailingConditionEffects(initializerSyntax, bound)
+        RestoreExternalCallableAliases(aliasesBefore)
+        ApplyHeaderCallableEffects(bound)
+        return bound
+    }
+
+    /// ADR-0208 R18 (#5545): binds the operands of `&&` or `||`, applying the left operand's narrowing and
+    /// callable-alias effects before binding the right operand.
+    internal func BindShortCircuitBinaryOperands(
+        leftSyntax ExpressionSyntax,
+        rightSyntax ExpressionSyntax,
+        isAnd bool,
+        bindLeft() -> BoundExpression,
+        bindRight(BoundExpression, Dictionary[AccessPath, TypeSymbol]?) -> BoundExpression
+    )(Left BoundExpression, Right BoundExpression) {
+        let aliasesBeforeLeft = CaptureExternalCallableAliases()
+        let boundLeft = bindLeft()
+        ApplyTrailingConditionEffects(leftSyntax, boundLeft)
+        let (thenNarrow, elseNarrow, whenTrueAliases, whenFalseAliases) = ComputeConditionNarrowingInOrder(
+            boundLeft,
+            aliasesBeforeLeft,
+            activeConditionRemovedFacts,
+            forShortCircuitOperand: true,
+            allowBoolCall: false
+        )
+        RestoreExternalCallableAliases(
+            if isAnd {
+                whenTrueAliases
+            } else {
+                whenFalseAliases
+            }
+        )
+        try {
+            let rightFrame = if isAnd {
+                thenNarrow
+            } else {
+                elseNarrow
+            }
+            let boundRight = bindRight(boundLeft, rightFrame)
+            ApplyTrailingConditionEffects(rightSyntax, boundRight)
+            return (boundLeft, boundRight)
+        } finally {
+            RestoreExternalCallableAliases(aliasesBeforeLeft)
+        }
+    }
+
+    /// ADR-0208 R18 (#5545, #5654): binds the then- and else-arms of an `if`-expression or `?:` conditional
+    /// expression, restoring for the else-arm any narrowing facts that the then-arm removed.
+    internal func BindConditionalExpressionBranches(
+        hasElse bool,
+        bindWhenTrue() -> BoundExpression,
+        bindWhenFalse() -> BoundExpression
+    )(WhenTrue BoundExpression, WhenFalse BoundExpression) {
+        let callableEntry = CaptureExternalCallableAliases()
+        let joinEntry = binderCtx.Narrowing
+        let outerConditionKills = if !hasElse {
+            conditionKillJournal
+        } else {
+            BeginThenBranchConditionKills()
+        }
+        let whenTrue = bindWhenTrue()
+        let restoredConditionKills = if !hasElse {
+            default(List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?)
+        } else {
+            RestoreThenBranchConditionKills(outerConditionKills, joinEntry)
+        }
+        let callableThenExit = CaptureExternalCallableAliases()
+        RestoreExternalCallableAliases(callableEntry)
+        let whenFalse = bindWhenFalse()
+        if restoredConditionKills != nil {
+            EndThenBranchConditionKills(restoredConditionKills)
+        }
+        let callableElseExit = if !hasElse {
+            callableEntry
+        } else {
+            CaptureExternalCallableAliases()
+        }
+        RestoreJoinedExternalCallableAliases(callableThenExit, callableElseExit)
+        return (whenTrue, whenFalse)
+    }
+
+    /// Rolls back narrowing kills and callable-alias updates when a targetless branchy argument defers to be re-bound
+    /// with a parameter target type (issue #1238).
+    internal func BindDeferrableConditional(deferOnFailure bool, bind() -> BoundExpression) BoundExpression {
+        if !deferOnFailure {
+            return bind()
+        }
+        let outer = BeginThenBranchConditionKills()
+        let entry = binderCtx.Narrowing
+        let entryAliases = CaptureExternalCallableAliases()
+        let result = bind()
+        let kills = conditionKillJournal!!
+        conditionKillJournal = outer
+        if result is BoundErrorExpression{Syntax: not nil} {
+            for var i = kills.Count - 1; i >= 0; i-- {
+                let kill = kills[i]
+                if !kill.Frame.ContainsKey(kill.Path) && IsOnNarrowingStack(kill.Frame) && object.Equals(
+                    entry.NarrowedType(kill.Path),
+                    kill.Type
+                ) {
+                    kill.Frame[kill.Path] = kill.Type
+                }
+            }
+            RestoreExternalCallableAliases(entryAliases)
+            return result
+        }
+        outer?.AddRange(kills)
+        return result
     }
 
     /// ADR-0208 section 9 and row R18 (#5534): the effects of a branching condition apply to the narrowing facts

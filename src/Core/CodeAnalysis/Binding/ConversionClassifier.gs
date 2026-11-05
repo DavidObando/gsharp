@@ -5330,7 +5330,9 @@ internal class ConversionClassifier {
             } else {
                 target
             }
-            return NullableLifting.IsAnyValueTypeNullable(source) && BoundClrConversionCallExpression.CanLiftTo(
+            var resolvedMethod FunctionSymbol? = nil
+            var resolvedOwner StructSymbol? = nil
+            let matched = NullableLifting.IsAnyValueTypeNullable(source) && BoundClrConversionCallExpression.CanLiftTo(
                 target
             ) &&
                 (allowExplicit || BoundClrConversionCallExpression.CanLiftImplicitlyTo(target)) &&
@@ -5340,42 +5342,46 @@ internal class ConversionClassifier {
                     source.UnderlyingType,
                     targetUnderlying,
                     allowExplicit,
-                    out method,
-                    out methodOwner
+                    out resolvedMethod,
+                    out resolvedOwner
                 ) ||
                     TryResolveUserDefinedSymbolConversion(
                     source.UnderlyingType,
                     target,
                     allowExplicit,
-                    out method,
-                    out methodOwner
+                    out resolvedMethod,
+                    out resolvedOwner
                 )
             ) &&
-                methodOwner != nil &&
-                methodOwner.ClrType == nil &&
-                method!!
+                resolvedOwner != nil &&
+                resolvedOwner.ClrType == nil &&
+                resolvedMethod!!
                 .Parameters
                 .Length == 1 &&
-                method!!
+                resolvedMethod!!
                 .Parameters[0]
                 .RefKind == RefKind.None &&
-                method!!.ReturnRefKind == RefKind.None &&
+                resolvedMethod!!.ReturnRefKind == RefKind.None &&
                 Conversion
                 .ClassifyNonStructural(
                 source.UnderlyingType,
-                methodOwner.SubstituteMemberType(method!!.Parameters[0].Type)!!
+                resolvedOwner.SubstituteMemberType(resolvedMethod!!.Parameters[0].Type)!!
             )
                 .IsIdentity &&
                 (
                 TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
-                    methodOwner.SubstituteMemberType(method!!.Type),
+                    resolvedOwner.SubstituteMemberType(resolvedMethod!!.Type),
                     targetUnderlying
                 ) ||
-                    TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
-                    methodOwner.SubstituteMemberType(method!!.Type),
+                    TypeSymbol
+                    .AreRuntimeEquivalentIgnoringReferenceNullability(
+                    resolvedOwner.SubstituteMemberType(resolvedMethod!!.Type),
                     target
                 )
             )
+            method = resolvedMethod
+            methodOwner = resolvedOwner
+            return matched
         }
 
         private func TryResolveUserDefinedSymbolConversion(

@@ -82,15 +82,39 @@ internal partial class ExpressionBinder {
         StatementBinder.SwitchArmHeader
     ) -> HashSet[VariableSymbol]?
     private let bindAfterLaterArmTests(() -> void, bool, () -> BoundNode) -> BoundNode
+    private let bindConditionWithEffects(ExpressionSyntax) -> (
+        Condition BoundExpression,
+        WhenTrue Dictionary[AccessPath, TypeSymbol]?,
+        WhenFalse Dictionary[AccessPath, TypeSymbol]?
+    )
+    private let bindShortCircuitOperands(
+        ExpressionSyntax,
+        ExpressionSyntax,
+        bool,
+        () -> BoundExpression,
+        (BoundExpression, Dictionary[AccessPath, TypeSymbol]?) -> BoundExpression
+    ) -> (Left BoundExpression, Right BoundExpression)
+    private let bindConditionalBranches(bool, () -> BoundExpression, () -> BoundExpression) -> (
+        WhenTrue BoundExpression,
+        WhenFalse BoundExpression
+    )
+    private let bindIfLetBranches(
+        SeparatedSyntaxList[IfLetBindingClauseSyntax],
+        ExpressionSyntax?,
+        bool,
+        SyntaxNode?,
+        () -> BoundExpression,
+        () -> BoundExpression
+    ) -> (
+        Clauses ImmutableArray[IfLetBindingSupport.BoundIfLetClause],
+        Guard BoundExpression?,
+        Then BoundExpression,
+        Else BoundExpression
+    )
+    private let bindDeferrableConditional(bool, () -> BoundExpression) -> BoundExpression
 
     // Issue #5569: the diagnostics of each discarded literal target bind in the calls that are binding now.
     private let literalTargetDiagnostics List[ImmutableArray[Diagnostic]] = List[ImmutableArray[Diagnostic]]()
-
-    // ADR-0151: declares the local a value-position `if let` binding
-    // introduces, routed through the same
-    // `DeclarationBinder.BindVariableDeclaration` the statement forms use so
-    // duplicate-name reporting and top-level/global variable shaping match.
-    private let bindLocalVariable(SyntaxToken, bool, TypeSymbol) -> VariableSymbol
 
     // Issue #1502 follow-up: when true, a same-compilation enum (or `Enum?`)
     // appearing inside a delegate shape is erased to `object` (the covariant
@@ -121,7 +145,6 @@ internal partial class ExpressionBinder {
         bindStatementList(ImmutableArray[StatementSyntax], (() -> BoundStatement)?, SyntaxNode?) -> ImmutableArray[
             BoundStatement
         ],
-        bindLocalVariable(SyntaxToken, bool, TypeSymbol) -> VariableSymbol,
         bindRichAnonymousObject(AnonymousClassExpressionSyntax, StructSymbol) -> BoundExpression,
         bindStructuralAdaptation(CallExpressionSyntax) -> BoundExpression,
         bindNativeProtocolProbe(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression,
@@ -129,7 +152,37 @@ internal partial class ExpressionBinder {
         reapplySwitchArmHeaderEffects(PatternSyntax, ExpressionSyntax?, StatementBinder.SwitchArmHeader) -> HashSet[
             VariableSymbol
         ]?,
-        bindAfterLaterArmTests(() -> void, bool, () -> BoundNode) -> BoundNode
+        bindAfterLaterArmTests(() -> void, bool, () -> BoundNode) -> BoundNode,
+        bindConditionWithEffects(ExpressionSyntax) -> (
+            Condition BoundExpression,
+            WhenTrue Dictionary[AccessPath, TypeSymbol]?,
+            WhenFalse Dictionary[AccessPath, TypeSymbol]?
+        ),
+        bindShortCircuitOperands(
+            ExpressionSyntax,
+            ExpressionSyntax,
+            bool,
+            () -> BoundExpression,
+            (BoundExpression, Dictionary[AccessPath, TypeSymbol]?) -> BoundExpression
+        ) -> (Left BoundExpression, Right BoundExpression),
+        bindConditionalBranches(bool, () -> BoundExpression, () -> BoundExpression) -> (
+            WhenTrue BoundExpression,
+            WhenFalse BoundExpression
+        ),
+        bindIfLetBranches(
+            SeparatedSyntaxList[IfLetBindingClauseSyntax],
+            ExpressionSyntax?,
+            bool,
+            SyntaxNode?,
+            () -> BoundExpression,
+            () -> BoundExpression
+        ) -> (
+            Clauses ImmutableArray[IfLetBindingSupport.BoundIfLetClause],
+            Guard BoundExpression?,
+            Then BoundExpression,
+            Else BoundExpression
+        ),
+        bindDeferrableConditional(bool, () -> BoundExpression) -> BoundExpression
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.memberLookup = memberLookup ?? throw ArgumentNullException("memberLookup")
@@ -148,13 +201,17 @@ internal partial class ExpressionBinder {
             throw ArgumentNullException("isAsyncIteratorReturnType")
         this.getCurrentFunction = getCurrentFunction ?? throw ArgumentNullException("getCurrentFunction")
         this.bindStatementList = bindStatementList
-        this.bindLocalVariable = bindLocalVariable
         this.bindRichAnonymousObject = bindRichAnonymousObject
         this.bindStructuralAdaptation = bindStructuralAdaptation
         this.bindNativeProtocolProbe = bindNativeProtocolProbe
         this.bindSwitchArmHeader = bindSwitchArmHeader
         this.reapplySwitchArmHeaderEffects = reapplySwitchArmHeaderEffects
         this.bindAfterLaterArmTests = bindAfterLaterArmTests
+        this.bindConditionWithEffects = bindConditionWithEffects
+        this.bindShortCircuitOperands = bindShortCircuitOperands
+        this.bindConditionalBranches = bindConditionalBranches
+        this.bindIfLetBranches = bindIfLetBranches
+        this.bindDeferrableConditional = bindDeferrableConditional
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics
@@ -1095,35 +1152,6 @@ internal partial class ExpressionBinder {
             clrAccess.ConstrainedInterfaceType
         )
         return BuildNarrowedRead(clrBaseRead, clrAccess.Type, clrNarrowed, makeNarrowedClrProperty)
-    }
-
-    /// ADR-0069 / issue #700: when binding an `&&` expression,
-    /// derive the narrowing frame the right operand should bind under from
-    /// the (already-bound) left operand. Recognises `x is T`,
-    /// `!(x is T)`, and nested `&&` chains; returns
-    /// `null` when no narrowing can be safely inferred.
-    private func TryClassifyTypeTestNarrowingForAnd(boundLeft BoundExpression) Dictionary[AccessPath, TypeSymbol]? {
-        let (thenFrame, _) = ClassifyTypeTestNarrowing(boundLeft)
-        return if (thenFrame != nil && thenFrame.Count > 0) {
-            thenFrame
-        } else {
-            default(Dictionary[AccessPath, TypeSymbol]?)
-        }
-    }
-
-    /// ADR-0069 addendum / issue #712: when binding a `||` expression,
-    /// derive the narrowing frame the right operand should bind under from
-    /// the (already-bound) left operand. The right operand is only
-    /// evaluated when the left was false, so the left operand's
-    /// `else` frame (the negation of its narrowing) applies. This
-    /// makes `!(x is T) || f(x)` bind `f(x)` with `x` narrowed to `T`.
-    private func TryClassifyTypeTestNarrowingForOr(boundLeft BoundExpression) Dictionary[AccessPath, TypeSymbol]? {
-        let (_, elseFrame) = ClassifyTypeTestNarrowing(boundLeft)
-        return if (elseFrame != nil && elseFrame.Count > 0) {
-            elseFrame
-        } else {
-            default(Dictionary[AccessPath, TypeSymbol]?)
-        }
     }
 
     /// Binds a name expression to produce its bound form without side effects
@@ -2427,128 +2455,6 @@ internal partial class ExpressionBinder {
             let read = makeNarrowedNode(narrowedType)
             read.AnchorSyntax(bareRead.Syntax)
             return read
-        }
-
-        private func ClassifyTypeTestNarrowing(condition BoundExpression)(
-            Then Dictionary[AccessPath, TypeSymbol]?,
-            Else Dictionary[AccessPath, TypeSymbol]?
-        ) {
-            switch condition {
-                case isExpr is BoundIsExpression {
-                    {
-                        if isExpr.Pattern is BoundNotPattern notPattern {
-                            return (
-                                nil,
-                                StatementBinder.TryClassifyPatternNarrowing(
-                                    isExpr.Expression,
-                                    notPattern.Pattern,
-                                    allowReadOnlyGlobals: false
-                                )
-                            )
-                        }
-                        return (
-                            StatementBinder.TryClassifyPatternNarrowing(
-                                isExpr.Expression,
-                                isExpr.Pattern,
-                                allowReadOnlyGlobals: false
-                            ),
-                            nil
-                        )
-                    }
-                }
-                case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
-                    {
-                        let (inThen, inElse) = ClassifyTypeTestNarrowing(unary.Operand)
-                        return (inElse, inThen)
-                    }
-                }
-                case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
-                    {
-                        let (leftThen, _) = ClassifyTypeTestNarrowing(binary.Left)
-                        let (rightThen, _) = ClassifyTypeTestNarrowing(binary.Right)
-                        if (leftThen == nil || leftThen.Count == 0) && (rightThen == nil || rightThen.Count == 0) {
-                            return (nil, nil)
-                        }
-                        let combined = if leftThen == nil {
-                            Dictionary[AccessPath, TypeSymbol]()
-                        } else {
-                            Dictionary[AccessPath, TypeSymbol](leftThen)
-                        }
-                        if rightThen != nil {
-                            for kv in rightThen {
-                                combined[kv.Key] = kv.Value
-                            }
-                        }
-                        return (combined, nil)
-                    }
-                }
-                case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
-                    {
-                        // ADR-0069 addendum / issue #712: De Morgan dual of `&&`.
-                        // For `A || B`: then = intersection of thenL and thenR
-                        // (a narrowing only survives the OR if both operands prove it);
-                        // else = elseL ∪ elseR (both operands were false → both
-                        // negations apply). This is the expression-level mirror
-                        // of the if-condition classifier in StatementBinder.
-                        let (leftThen, leftElse) = ClassifyTypeTestNarrowing(binary.Left)
-                        let (rightThen, rightElse) = ClassifyTypeTestNarrowing(binary.Right)
-                        var combinedThen Dictionary[AccessPath, TypeSymbol]? = nil
-                        if leftThen != nil && leftThen.Count > 0 && rightThen != nil && rightThen.Count > 0 {
-                            for kv in leftThen {
-                                if rightThen.TryGetValue(kv.Key, out var other) && other == kv.Value {
-                                    combinedThen ??= Dictionary[AccessPath, TypeSymbol]()
-                                    combinedThen!![kv.Key] = kv.Value
-                                }
-                            }
-                        }
-                        var combinedElse Dictionary[AccessPath, TypeSymbol]? = nil
-                        if (leftElse != nil && leftElse.Count > 0) || (rightElse != nil && rightElse.Count > 0) {
-                            combinedElse = if leftElse == nil {
-                                Dictionary[AccessPath, TypeSymbol]()
-                            } else {
-                                Dictionary[AccessPath, TypeSymbol](leftElse)
-                            }
-                            if rightElse != nil {
-                                for kv in rightElse {
-                                    combinedElse!![kv.Key] = kv.Value
-                                }
-                            }
-                        }
-                        if (combinedThen == nil || combinedThen.Count == 0) &&
-                            (combinedElse == nil || combinedElse.Count == 0) {
-                            return (nil, nil)
-                        }
-                        return (combinedThen, combinedElse)
-                    }
-                }
-            }
-            // ADR-0069 addendum / issue #1545: nil-guard leaf. Threads
-            // `x == nil` / `x != nil` narrowing into the right operand of
-            // `&&`/`||`, mirroring the type-test (`x is T`) cases above. Uses the
-            // shared leaf classifier kept in sync with
-            // StatementBinder.TryClassifyNilGuard.
-            if SmartCastStability.TryClassifyNilGuardLeaf(
-                condition,
-                restrictBareVariableToLocalsAndParams: true,
-                referenceNullableOnly: true,
-                out var nilTarget,
-                out var nilUnderlying,
-                out var nonNilWhenTrue
-            ) {
-                let nonNilFrame = Dictionary[AccessPath, TypeSymbol]{
-                    [nilTarget] = Invariant.Required(
-                        nilUnderlying,
-                        "a classified nil guard has an underlying type",
-                        expression: "nilUnderlying"
-                    )
-                }
-                return if nonNilWhenTrue {
-                    (nonNilFrame, nil)
-                } else {
-                    (nil, nonNilFrame)
-                }
-            }
-            return (nil, nil)
         }
 
         /// Issue #3705 (family 3): whether a structural function type has exactly

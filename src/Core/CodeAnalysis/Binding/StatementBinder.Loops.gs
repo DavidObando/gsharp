@@ -54,7 +54,11 @@ internal partial class StatementBinder {
         labelName string?
     ) BoundStatement {
         let lowerBound = bindExpressionWithTargetType(syntax.LowerBound, TypeSymbol.Int32)
+        ApplyTrailingConditionEffects(syntax.LowerBound, lowerBound)
+        ApplyHeaderCallableEffects(lowerBound)
         let upperBound = bindExpressionWithTargetType(syntax.UpperBound, TypeSymbol.Int32)
+        ApplyTrailingConditionEffects(syntax.UpperBound, upperBound)
+        ApplyHeaderCallableEffects(upperBound)
         $scope = BoundScope($scope)
         let variable = bindLocalVariable(syntax.Identifier, false, TypeSymbol.Int32)
         let body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel)
@@ -674,12 +678,16 @@ internal partial class StatementBinder {
                 // label scope under the lower bound of the loop (ADR-0213 section 6, I6).
                 $scope = BoundScope(headerParentScope)
                 try {
-                    boundCondition = if conditionSyntax == nil {
-                        default(BoundExpression?)
+                    if conditionSyntax == nil {
+                        boundCondition = nil
                     } else {
-                        bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool)
+                        let aliasesBeforeCondition = CaptureExternalCallableAliases()
+                        let bound = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool)
+                        ApplyTrailingConditionEffects(conditionSyntax, bound)
+                        RestoreExternalCallableAliases(aliasesBeforeCondition)
+                        ApplyHeaderCallableEffects(bound)
+                        boundCondition = bound
                     }
-                    ApplyHeaderCallableEffects(boundCondition)
                     let postFrameIndex = binderCtx.NarrowedVariables.Count
                     let postAliasesAtEntry = externalCallableAliases.ToImmutableArray()
                     boundPost = if postSyntax == nil {
@@ -850,7 +858,7 @@ internal partial class StatementBinder {
                 conversions,
                 bindTypeClause,
                 (syntax ExpressionSyntax) -> {
-                    return bindExpression(syntax, false)
+                    return BindInitializerWithEffects(syntax)
                 },
                 (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> {
                     let initializerScope = $scope

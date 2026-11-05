@@ -1151,9 +1151,21 @@ internal partial class ExpressionBinder {
         outerModifier SyntaxToken?
     ) BoundExpression {
         // Condition must be bool.
-        let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
-        let whenTrue = BindExpression(syntax.WhenTrue)
-        let whenFalse = BindExpression(syntax.WhenFalse)
+        let (condition, whenTrueNarrowing, whenFalseNarrowing) = bindConditionWithEffects(syntax.Condition)
+        let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
+        let (whenTrue, whenFalse) = bindConditionalBranches(
+            true,
+            () -> BindWithPatternVariables(
+                patternWhenTrue,
+                () -> BindExpressionWithNarrowing(syntax.WhenTrue, whenTrueNarrowing),
+                syntax.WhenTrue
+            ),
+            () -> BindWithPatternVariables(
+                patternWhenFalse,
+                () -> BindExpressionWithNarrowing(syntax.WhenFalse, whenFalseNarrowing),
+                syntax.WhenFalse
+            )
+        )
         if whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression || condition is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }

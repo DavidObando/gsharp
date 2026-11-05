@@ -20,41 +20,33 @@ import System.Threading
 
 internal partial class StatementBinder {
     /// The narrowing frames an `if` condition implies for its then- and
-    /// else-branches. Shared by the `if` statement and, for its guard, the
-    /// `if let` statement (issue #4961 / ADR-0201). [`removedFacts`](paramref) are the facts that the
-    /// condition's own effects removed (ADR-0208 R18), so a type test of such a path is classified against the
-    /// type the path has now.
+    /// else-branches. Shared by the `if` statement, `if`-expression, conditional
+    /// expression, and `if let` guard (issue #4961 / ADR-0201, #5545).
+    /// [`removedFacts`](paramref) are the facts that the condition's own effects
+    /// removed (ADR-0208 R18), so a type test of such a path is classified against
+    /// the type the path has now.
     private func ClassifyIfConditionNarrowing(
         condition BoundExpression,
-        removedFacts Dictionary[AccessPath, TypeSymbol]? = nil
+        removedFacts Dictionary[AccessPath, TypeSymbol]? = nil,
+        callableAliases IReadOnlyCollection[VariableSymbol]? = nil,
+        allowBoolCall bool = true
     )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
-        if ContainsUserLabel(condition) {
-            return (nil, nil)
-        }
-        // Phase 3.C.4/6.6: recognise one top-level nullable guard. Boolean
-        // conjunction/disjunction flow (for example `s != nil && IsValid(s)`)
-        // is intentionally deferred for the nil-guard classifier.
-        var thenNarrow Dictionary[AccessPath, TypeSymbol]?
-        var elseNarrow Dictionary[AccessPath, TypeSymbol]?
-        thenNarrow, elseNarrow = TryClassifyNilGuard(condition)
-        if thenNarrow == nil && elseNarrow == nil {
-            thenNarrow, elseNarrow = TryClassifyBoolCallNarrowing(condition)
-        }
-        // ADR-0069 / issue #700: smart-cast type-test narrowing on
-        // `x is T`, `x !is T`, and `&&` chains thereof. Compose with the
-        // nullable / `[NotNullWhen]` frames computed above so a condition
-        // that combines both styles narrows on both axes.
-        let (typeThen, typeElse) = TryClassifyTypeTestNarrowing(condition, removedFacts)
-        return (MergeNarrowingFrames(thenNarrow, typeThen), MergeNarrowingFrames(elseNarrow, typeElse))
+        let aliases = HashSet[VariableSymbol](callableAliases ?? externalCallableAliases)
+        let (thenNarrow, elseNarrow, _, _) = ComputeConditionNarrowingInOrder(
+            condition,
+            aliases,
+            removedFacts,
+            forShortCircuitOperand: false,
+            allowBoolCall: allowBoolCall,
+            keepBoolCallInLogicalOps: false,
+            shortCircuitInComposedOps: !allowBoolCall
+        )
+        return (thenNarrow, elseNarrow)
     }
 
     private func BindIfStatement(syntax IfStatementSyntax) BoundStatement {
         if syntax.Initializer == nil {
-            let condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
-            let removedFacts = ApplyConditionEffectsToNarrowings(syntax.Condition, condition)
-            testAliasesAt = AliasesAtTests(ApplyHeaderCallableEffects(condition), syntax.Condition, condition)
-            let (thenNarrow, elseNarrow) = ClassifyIfConditionNarrowing(condition, removedFacts)
-            testAliasesAt = nil
+            let (condition, thenNarrow, elseNarrow) = BindConditionWithEffects(syntax.Condition)
             // ADR-0166: pattern variables are in scope in the branch their
             // match dominates: when-true in the then-branch, when-false in the
             // else-branch (`if !(x is T t) { ... } else { use(t) }`).
@@ -143,11 +135,7 @@ internal partial class StatementBinder {
             ApplyInitializerEffectsToNarrowings(syntax.Initializer!!, initStatement)
             UpdateExternalCallableAliases(initStatement, initializerAliasesAtEntry)
         }
-        let initCondition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
-        let initRemovedFacts = ApplyConditionEffectsToNarrowings(syntax.Condition, initCondition)
-        testAliasesAt = AliasesAtTests(ApplyHeaderCallableEffects(initCondition), syntax.Condition, initCondition)
-        let (initThenNarrow, initElseNarrow) = ClassifyIfConditionNarrowing(initCondition, initRemovedFacts)
-        testAliasesAt = nil
+        let (initCondition, initThenNarrow, initElseNarrow) = BindConditionWithEffects(syntax.Condition)
         let (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition)
         let initCallableEntry = CaptureExternalCallableAliases()
         let initShadowFlow = ShadowBegin(initCondition, initStatement)
@@ -231,6 +219,95 @@ internal partial class StatementBinder {
     //  rewriter / walker / printer / spiller / emitter / interpreter
     //  surface needs no updates.
     // ──────────────────────────────────────────────────────────────────────
+    /// ADR-0071 / issue #708, issue #4961 / ADR-0201, #5545: binds the header (bindings and optional guard) and
+    /// branches of an `if let` statement or expression. Each initializer and the guard apply their narrowing and
+    /// callable-alias effects before the next binding, guard and branches are bound.
+    internal func BindIfLetBranches[TBranch](
+        bindings SeparatedSyntaxList[IfLetBindingClauseSyntax],
+        guardSyntax ExpressionSyntax?,
+        hasElse bool,
+        allowGuardBoolCall bool,
+        thenSyntax SyntaxNode?,
+        bindThen() -> TBranch,
+        bindElse() -> TBranch
+    )(
+        Clauses ImmutableArray[IfLetBindingSupport.BoundIfLetClause],
+        Guard BoundExpression?,
+        Then TBranch,
+        Else TBranch
+    ) {
+        var callableEntry = CaptureExternalCallableAliases()
+        var callableThenExit = callableEntry
+        // The else-branch starts from the state before the header: the guard's facts hold only in the then-branch.
+        let elseEntry = binderCtx.Narrowing
+        var outerConditionKills = conditionKillJournal
+        var thenKillsStarted = false
+        let header = List[(Syntax SyntaxNode, Bound BoundExpression)]()
+        let aliasesBeforeHeader = callableEntry
+        var guardThenFrame Dictionary[AccessPath, TypeSymbol]? = nil
+        let (clauses, guard_, thenBranch) = IfLetBindingSupport.BindHeader(
+            binderCtx,
+            bindings,
+            guardSyntax,
+            Diagnostics,
+            conversions,
+            bindTypeClause,
+            (initializer ExpressionSyntax) -> {
+                let bound = BindInitializerWithEffects(initializer)
+                header.Add((initializer, bound))
+                return bound
+            },
+            (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> bindLocalVariable(
+                identifier,
+                isReadOnly,
+                type
+            ),
+            (guardExprSyntax ExpressionSyntax) -> {
+                let (bound, guardThen, _) = BindConditionWithEffects(guardExprSyntax, allowGuardBoolCall)
+                guardThenFrame = guardThen
+                header.Add((guardExprSyntax, bound))
+                return bound
+            },
+            (_ BoundExpression) -> {
+                let frame = guardThenFrame
+                guardThenFrame = nil
+                return frame
+            },
+            () -> {
+                callableEntry = CaptureExternalCallableAliases()
+                if hasElse {
+                    outerConditionKills = BeginThenBranchConditionKills()
+                    thenKillsStarted = true
+                }
+                let then = bindThen()
+                callableThenExit = CaptureExternalCallableAliases()
+                RestoreExternalCallableAliases(callableEntry)
+                return then
+            },
+            thenSyntax
+        )
+        // ADR-0208 R18: as for an `if` statement, the else-branch is bound without the facts that the conditions in
+        // the then-branch removed. The header runs on the else path too, so a fact that it can remove stays removed.
+        let restoredConditionKills = if thenKillsStarted {
+            RestoreThenBranchConditionKills(outerConditionKills, elseEntry, header, aliasesBeforeHeader)
+        } else {
+            default(List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?)
+        }
+        // Bound AFTER the header scope is popped: the else branch never sees
+        // the bindings.
+        let elseBranch = bindElse()
+        if restoredConditionKills != nil {
+            EndThenBranchConditionKills(restoredConditionKills)
+        }
+        let callableElseExit = if !hasElse {
+            callableEntry
+        } else {
+            CaptureExternalCallableAliases()
+        }
+        RestoreJoinedExternalCallableAliases(callableThenExit, callableElseExit)
+        return (clauses, guard_, thenBranch, elseBranch)
+    }
+
     /// ADR-0071 / issue #708, issue #4961 / ADR-0201: binds the `if let`
     /// STATEMENT. The header (bindings, optional guard, then-region) goes
     /// through (cref:IfLetBindingSupport.BindHeader), shared with the
@@ -250,84 +327,24 @@ internal partial class StatementBinder {
     /// exactly once and definite-assignment and return analysis see plain
     /// control flow.
     private func BindIfLetStatement(syntax IfLetStatementSyntax) BoundStatement {
-        // The header (initializers and guard) runs before either branch, like
-        // an `if` condition: fold its callable effects into the alias state
-        // before the branches are bound, then join the branch exits, exactly as
-        // BindIfStatement does.
-        var callableEntry = CaptureExternalCallableAliases()
-        var callableThenExit = callableEntry
-        // The else-branch starts from the state before the header: the guard's facts hold only in the then-branch.
-        let elseEntry = binderCtx.Narrowing
-        var outerConditionKills = conditionKillJournal
-        var thenKillsStarted = false
-        let header = List[(Syntax SyntaxNode, Bound BoundExpression)]()
-        let aliasesBeforeHeader = callableEntry
-        let (clauses, guard_, thenStatement) = IfLetBindingSupport.BindHeader(
-            binderCtx,
+        let (clauses, guard_, thenStatement, elseStatement) = BindIfLetBranches[BoundStatement?](
             syntax.Bindings,
             syntax.Guard,
-            Diagnostics,
-            conversions,
-            bindTypeClause,
-            (initializer ExpressionSyntax) -> {
-                let bound = bindExpression(initializer, false)
-                ApplyHeaderCallableEffects(bound)
-                header.Add((initializer, bound))
-                return bound
-            },
-            (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> bindLocalVariable(
-                identifier,
-                isReadOnly,
-                type
-            ),
-            (guardSyntax ExpressionSyntax) -> {
-                let bound = bindExpressionWithTargetType(guardSyntax, TypeSymbol.Bool)
-                testAliasesAt = AliasesAtTests(ApplyHeaderCallableEffects(bound), guardSyntax, bound)
-                header.Add((guardSyntax, bound))
-                return bound
-            },
-            (boundGuard BoundExpression) -> {
-                let guardThen = ClassifyIfConditionNarrowing(boundGuard).Then
-                testAliasesAt = nil
-                return guardThen
-            },
-            () -> {
-                callableEntry = CaptureExternalCallableAliases()
-                if syntax.ElseClause != nil {
-                    outerConditionKills = BeginThenBranchConditionKills()
-                    thenKillsStarted = true
-                }
-                let then = BindStatementWithNarrowing(syntax.ThenStatement, nil)
-                callableThenExit = CaptureExternalCallableAliases()
-                RestoreExternalCallableAliases(callableEntry)
-                return then
-            },
-            syntax.ThenStatement
+            syntax.ElseClause != nil,
+            true,
+            syntax.ThenStatement,
+            () -> BindStatementWithNarrowing(syntax.ThenStatement, nil),
+            () -> if syntax.ElseClause == nil {
+                default(BoundStatement?)
+            } else {
+                BindStatement(syntax.ElseClause.ElseStatement)
+            }
         )
-        testAliasesAt = nil
-        // ADR-0208 R18: as for an `if` statement, the else-branch is bound without the facts that the conditions in
-        // the then-branch removed. The header runs on the else path too, so a fact that it can remove stays removed.
-        let restoredConditionKills = if thenKillsStarted {
-            RestoreThenBranchConditionKills(outerConditionKills, elseEntry, header, aliasesBeforeHeader)
-        } else {
-            default(List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?)
-        }
-        // Bound AFTER the header scope is popped: the else branch never sees
-        // the bindings.
-        let elseStatement = if syntax.ElseClause == nil {
-            default(BoundStatement?)
-        } else {
-            BindStatement(syntax.ElseClause.ElseStatement)
-        }
-        if restoredConditionKills != nil {
-            EndThenBranchConditionKills(restoredConditionKills)
-        }
-        let callableElseExit = if syntax.ElseClause == nil {
-            callableEntry
-        } else {
-            CaptureExternalCallableAliases()
-        }
-        RestoreJoinedExternalCallableAliases(callableThenExit, callableElseExit)
+        let thenStmt = Invariant.Required(
+            thenStatement,
+            "an if-let then-branch has a bound statement",
+            expression: "thenStatement"
+        )
         if !clauses.Any((clause IfLetBindingSupport.BoundIfLetClause) -> clause.Binding.IsValid) {
             // Every initializer was an error: keep the declarations so the
             // user still sees diagnostics, but no synthetic if-shape leaks.
@@ -359,7 +376,7 @@ internal partial class StatementBinder {
         if elseStatement == nil || ifCount == 1 {
             return BoundBlockStatement(
                 syntax,
-                LowerIfLetClauses(syntax, clauses, 0, usableGuard, thenStatement, elseStatement)
+                LowerIfLetClauses(syntax, clauses, 0, usableGuard, thenStmt, elseStatement)
             )
         }
         // More than one test and an else branch: lower to forward conditional
@@ -401,7 +418,7 @@ internal partial class StatementBinder {
         if usableGuard != nil {
             lowered.Add(BoundConditionalGotoStatement(syntax, elseLabel, usableGuard, jumpIfTrue: false))
         }
-        lowered.Add(thenStatement)
+        lowered.Add(thenStmt)
         lowered.Add(BoundGotoStatement(syntax, endLabel))
         lowered.Add(BoundLabelStatement(syntax, elseLabel))
         lowered.Add(Invariant.Required(elseStatement, "the goto shape has an else branch", expression: "elseStatement"))
@@ -548,11 +565,13 @@ internal partial class StatementBinder {
         // subsequent re-binds are truncated back to that point.
         var hasBoundElseOnce = false
         for binding in syntax.Bindings {
+            let aliasesAtEntry = externalCallableAliases.ToArray()
             let (variable, underlying, decl) = BindIfLetBindingClause(binding)
             statements.Add(decl)
             // The initializer ran before the else block and the next binding: a getter in it can clear
             // storage that a guarded alias names (ADR-0208 R12).
             InvalidateNarrowingsForAssignedVariables(binding, decl)
+            UpdateExternalCallableAliases(decl, aliasesAtEntry)
             if variable == nil || underlying == nil {
                 continue
             }
@@ -704,10 +723,11 @@ internal partial class StatementBinder {
         return nil
     }
 
-    /// ADR-0069 / issue #700: classify `is` / `!is` tests (and
-    /// `&&` chains thereof) on a local-variable or parameter
-    /// receiver into per-branch narrowing frames.
-    /// @param condition The bound condition expression.
+    /// ADR-0069 / issue #700: classify an `is` or `!is` leaf test on a
+    /// local-variable, parameter, or stable member-path receiver into
+    /// per-branch narrowing frames. Boolean negation, conjunction, and
+    /// disjunction compose in (cref:ComputeConditionNarrowingInOrder).
+    /// @param condition The bound leaf condition expression.
     /// @returns A pair of narrowing frames — the first applies to the
     /// then-branch, the second to the else-branch. Either may be
     /// `null` if the corresponding branch has no narrowing.
@@ -716,89 +736,38 @@ internal partial class StatementBinder {
         removedFacts Dictionary[AccessPath, TypeSymbol]? = nil,
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil
     )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
-        switch condition {
-            case isExpr is BoundIsExpression {
-                {
-                    if TestMayRemoveItsOperandFact(isExpr, callableAliases) {
-                        return (nil, nil)
-                    }
-                    let operandType = TypeTestOperandTypeAfterEffects(isExpr, removedFacts)
-                    if isExpr.Pattern is BoundNotPattern notPattern {
-                        return (
-                            nil,
-                            TryClassifyPatternNarrowing(
-                                isExpr.Expression,
-                                notPattern.Pattern,
-                                allowReadOnlyGlobals: false,
-                                operandType
-                            )
-                        )
-                    }
-                    return (
-                        TryClassifyPatternNarrowing(
-                            isExpr.Expression,
-                            isExpr.Pattern,
-                            allowReadOnlyGlobals: false,
-                            operandType
-                        ),
-                        nil
+        if condition is BoundIsExpression isExpr {
+            if TestMayRemoveItsOperandFact(isExpr, callableAliases) {
+                return (nil, nil)
+            }
+            let operandType = TypeTestOperandTypeAfterEffects(isExpr, removedFacts)
+            if isExpr.Pattern is BoundNotPattern notPattern {
+                return (
+                    nil,
+                    TryClassifyPatternNarrowing(
+                        isExpr.Expression,
+                        notPattern.Pattern,
+                        allowReadOnlyGlobals: false,
+                        operandType
                     )
-                }
+                )
             }
-            case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
-                {
-                    let (inThen, inElse) = TryClassifyTypeTestNarrowing(unary.Operand, removedFacts, callableAliases)
-                    return (inElse, inThen)
-                }
-            }
-            case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
-                {
-                    // De Morgan for `&&`: then = thenL ∧ thenR (both true → both narrowings apply).
-                    // The else frame is intentionally dropped — either operand could have been
-                    // the false one, so we cannot single out a per-variable narrowing.
-                    let (leftThen, _) = TryClassifyTypeTestNarrowing(binary.Left, removedFacts, callableAliases)
-                    let (rightThen, _) = TryClassifyTypeTestNarrowing(binary.Right, removedFacts, callableAliases)
-                    let combinedThen Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftThen, rightThen)
-                    if combinedThen == nil || combinedThen.Count == 0 {
-                        return (nil, nil)
-                    }
-                    return (combinedThen, nil)
-                }
-            }
-            case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
-                {
-                    // ADR-0069 addendum / issue #712: De Morgan dual of `&&` for `||`.
-                    // For `A || B`:
-                    //   • then = intersection of thenL and thenR — only narrowings present
-                    //     in BOTH operands' then-frames with the same target type survive
-                    //     (canonical example: `x is T || x is T` keeps `{x → T}`).
-                    //   • else = elseL ∧ elseR — when the whole `||` is false, BOTH operands
-                    //     were false, so both negative narrowings apply.
-                    let (leftThen, leftElse) = TryClassifyTypeTestNarrowing(binary.Left, removedFacts, callableAliases)
-                    let (rightThen, rightElse) = TryClassifyTypeTestNarrowing(
-                        binary.Right,
-                        removedFacts,
-                        callableAliases
-                    )
-                    let combinedThen Dictionary[AccessPath, TypeSymbol]? = IntersectNarrowingFrames(leftThen, rightThen)
-                    let combinedElse Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftElse, rightElse)
-                    if (combinedThen == nil || combinedThen.Count == 0) &&
-                        (combinedElse == nil || combinedElse.Count == 0) {
-                        return (nil, nil)
-                    }
-                    return (combinedThen, combinedElse)
-                }
-            }
+            return (
+                TryClassifyPatternNarrowing(
+                    isExpr.Expression,
+                    isExpr.Pattern,
+                    allowReadOnlyGlobals: false,
+                    operandType
+                ),
+                nil
+            )
         }
         return (nil, nil)
     }
 
-    /// ADR-0208 R18 (#5534): the condition is bound before its effects apply, so the operand of a type test reads
-    /// the fact from before the condition ran. When the condition's effects removed that fact (the operand still
-    /// has the removed type), the test is classified against the declared type of the path, the type the path has
-    /// after the effects. Otherwise the bound type is the current one and `nil` keeps it. Only a fact that strips
-    /// `?` or `!` from a reference type qualifies: its read emits no conversion, so the test sees the current
-    /// value. A subtype fact (`castclass`) or a nullable value (an unwrap) would test the stale read.
+    /// ADR-0208 R18 (#5534, #5545): when the condition's effects removed a fact on the path that [`isExpr`](paramref)
+    /// tests, returns the declared type of the path so a property pattern (`x is {}`) restores the removed nullability
+    /// fact.
     private func TypeTestOperandTypeAfterEffects(
         isExpr BoundIsExpression,
         removedFacts Dictionary[AccessPath, TypeSymbol]?
@@ -809,7 +778,7 @@ internal partial class StatementBinder {
         let operand = isExpr.Expression
         if operand is BoundVariableExpression variable {
             return if removedFacts.TryGetValue(AccessPath.ForVariable(variable.Variable), out var removedType) &&
-                operand.Type == removedType &&
+                (operand.Type == removedType || operand.Type == variable.Variable.Type) &&
                 IsNullabilityOnlyFact(variable.Variable.Type, removedType) {
                 variable.Variable.Type
             } else {
@@ -817,9 +786,11 @@ internal partial class StatementBinder {
             }
         }
         if SmartCastStability.TryGetStableMemberPath(operand, out var path, out var currentType) &&
-            removedFacts.TryGetValue(path!!, out var removedMemberType) && currentType == removedMemberType {
+            removedFacts
+            .TryGetValue(path!!, out var removedMemberType) {
             let declared = MemberLookup.GetDeclaredAccessPathType(path!!, currentType!!)
-            return if IsNullabilityOnlyFact(declared, currentType!!) {
+            return if (currentType == removedMemberType || currentType == declared) &&
+                IsNullabilityOnlyFact(declared, removedMemberType) {
                 declared
             } else {
                 default(TypeSymbol?)
@@ -867,10 +838,7 @@ internal partial class StatementBinder {
         if effects.Syntax is {} anchor {
             EnsureClosureAssignedNames(anchor)
         }
-        var aliases IReadOnlyCollection[VariableSymbol] = callableAliases ?? externalCallableAliases
-        if test != nil && testAliasesAt is {} aliasesAt && aliasesAt.TryGetValue(test, out var atTest) {
-            aliases = atTest
-        }
+        let aliases IReadOnlyCollection[VariableSymbol] = callableAliases ?? externalCallableAliases
         let collector = NewCollector(nil, aliases)
         collector.Visit(effects)
         return StatementKillsPath(
@@ -879,69 +847,6 @@ internal partial class StatementBinder {
             collector.MayMutateMemberPaths,
             collector.MayMutateReferenceStorage
         )
-    }
-
-    /// ADR-0208 R18 (#5534): the callable aliases at each operand of a condition, when its header effects removed
-    /// some or it assigns a variable; otherwise `nil`, and the aliases after the condition apply. A test reads the
-    /// aliases at its own evaluation point, not after the whole condition: a later reassignment (`(x is action()) &&
-    /// (action = f) ...`) does not change it, and an earlier one to an external callable (`(action = callback) is
-    /// {} a && (x is action())`) does. One walk in evaluation order visits each operand once.
-    private func AliasesAtTests(
-        removed HashSet[VariableSymbol]?,
-        header SyntaxNode,
-        condition BoundExpression
-    ) Dictionary[BoundExpression, HashSet[VariableSymbol]]? {
-        if (removed == nil || removed.Count == 0) && !header.DescendantNodesAndSelf().Any(
-            (node SyntaxNode) -> node is AssignmentExpressionSyntax
-        ) {
-            return nil
-        }
-        let entry = HashSet[VariableSymbol](externalCallableAliases)
-        if removed != nil {
-            entry.UnionWith(removed)
-        }
-        let aliasesAt = Dictionary[BoundExpression, HashSet[VariableSymbol]]()
-        WalkTestAliases(condition, entry, aliasesAt)
-        return aliasesAt
-    }
-
-    // Records the aliases before each operand and returns the aliases after [`expression`](paramref) when it is true
-    // and when it is false. The right operand of `&&` runs after a true left operand, the right operand of `||`
-    // after a false one, and a join keeps only the aliases of both paths. The sets are never changed in place.
-    private func WalkTestAliases(
-        expression BoundExpression,
-        before HashSet[VariableSymbol],
-        aliasesAt Dictionary[BoundExpression, HashSet[VariableSymbol]]
-    )(WhenTrue HashSet[VariableSymbol], WhenFalse HashSet[VariableSymbol]) {
-        switch expression {
-            case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
-                {
-                    let (leftTrue, leftFalse) = WalkTestAliases(binary.Left, before, aliasesAt)
-                    let (rightTrue, rightFalse) = WalkTestAliases(binary.Right, leftTrue, aliasesAt)
-                    return (rightTrue, JoinAliases(leftFalse, rightFalse))
-                }
-            }
-            case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
-                {
-                    let (leftTrue, leftFalse) = WalkTestAliases(binary.Left, before, aliasesAt)
-                    let (rightTrue, rightFalse) = WalkTestAliases(binary.Right, leftFalse, aliasesAt)
-                    return (JoinAliases(leftTrue, rightTrue), rightFalse)
-                }
-            }
-            case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
-                {
-                    let (operandTrue, operandFalse) = WalkTestAliases(unary.Operand, before, aliasesAt)
-                    return (operandFalse, operandTrue)
-                }
-            }
-            default {
-                {
-                    aliasesAt[expression] = before
-                    let after = AliasesAfter(expression, before)
-                    return (after, after)
-                }
-            }
-        }
     }
 
     private func JoinAliases(first HashSet[VariableSymbol], second HashSet[VariableSymbol]) HashSet[VariableSymbol] {
@@ -958,6 +863,15 @@ internal partial class StatementBinder {
     private func AliasesAfter(operand BoundExpression, before HashSet[VariableSymbol]) HashSet[VariableSymbol] {
         if ContainsUserLabel(operand) {
             return HashSet[VariableSymbol]()
+        }
+        let operandSyntax = operand.Syntax
+        if before.Count == 0 &&
+            (
+            operandSyntax == nil || !operandSyntax.DescendantNodesAndSelf().Any(
+                (node SyntaxNode) -> node is AssignmentExpressionSyntax or VariableDeclarationSyntax
+            )
+        ) {
+            return before
         }
         let collector = NewCollector(nil, before)
         collector.VisitExpression(operand)
@@ -992,55 +906,17 @@ internal partial class StatementBinder {
         default: false
     }
 
-    private func TryClassifyNilGuard(condition BoundExpression)(
+    private func TryClassifyNilGuard(condition BoundExpression, forShortCircuitOperand bool = false)(
         NonNil Dictionary[AccessPath, TypeSymbol]?,
         Nil Dictionary[AccessPath, TypeSymbol]?
     ) {
-        // ADR-0069 addendum / issue #712: compose nil-guard classification across
-        // `!`, `&&`, and `||` so guards like `if a == nil || cond { ... } else { use(a) }`
-        // narrow `a` to its non-nullable underlying type in the else-branch.
-        switch condition {
-            case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
-                {
-                    let (inThen, inElse) = TryClassifyNilGuard(unary.Operand)
-                    return (inElse, inThen)
-                }
-            }
-            case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalAnd {
-                {
-                    let (leftThen, _) = TryClassifyNilGuard(bin.Left)
-                    let (rightThen, _) = TryClassifyNilGuard(bin.Right)
-                    let combinedThen Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftThen, rightThen)
-                    if combinedThen == nil || combinedThen.Count == 0 {
-                        return (nil, nil)
-                    }
-                    return (combinedThen, nil)
-                }
-            }
-            case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.LogicalOr {
-                {
-                    let (leftThen, leftElse) = TryClassifyNilGuard(bin.Left)
-                    let (rightThen, rightElse) = TryClassifyNilGuard(bin.Right)
-                    let combinedThen Dictionary[AccessPath, TypeSymbol]? = IntersectNarrowingFrames(leftThen, rightThen)
-                    let combinedElse Dictionary[AccessPath, TypeSymbol]? = MergeNarrowingFrames(leftElse, rightElse)
-                    if (combinedThen == nil || combinedThen.Count == 0) &&
-                        (combinedElse == nil || combinedElse.Count == 0) {
-                        return (nil, nil)
-                    }
-                    return (combinedThen, combinedElse)
-                }
-            }
-        }
         // Phase 3.C.4: recognise the canonical narrowing patterns via the shared
-        // leaf classifier (SmartCastStability.TryClassifyNilGuardLeaf), kept in
-        // sync with ExpressionBinder.ClassifyTypeTestNarrowing (issue #1545). We
-        // support only single-variable/stable-path guards here at the leaf;
-        // conjunctions, disjunctions and pattern-based narrowing compose via the
-        // cases above.
+        // leaf classifier (SmartCastStability.TryClassifyNilGuardLeaf).
+        // Conjunctions, disjunctions and negations compose in ComputeConditionNarrowingInOrder.
         if !SmartCastStability.TryClassifyNilGuardLeaf(
             condition,
-            restrictBareVariableToLocalsAndParams: false,
-            referenceNullableOnly: false,
+            restrictBareVariableToLocalsAndParams: forShortCircuitOperand,
+            referenceNullableOnly: forShortCircuitOperand,
             out var target,
             out var underlying,
             out var nonNilWhenTrue

@@ -543,11 +543,6 @@ partial class Binder {
                 trailing(() -> BoundStatement)?,
                 trailingSyntax SyntaxNode?
             ) -> Statements.BindStatementList(syntax, trailingStatement: trailing, trailingSyntax: trailingSyntax),
-            bindLocalVariable: (
-                identifier SyntaxToken,
-                isReadOnly bool,
-                type TypeSymbol
-            ) -> Declarations.BindVariableDeclaration(identifier, isReadOnly, type),
             bindRichAnonymousObject: BindRichAnonymousObject,
             bindStructuralAdaptation: BindStructuralAdaptation,
             bindNativeProtocolProbe: (location TextLocation, source BoundExpression, target TypeSymbol) ->
@@ -564,7 +559,39 @@ partial class Binder {
                 header StatementBinder.SwitchArmHeader
             ) -> Statements.ReapplySwitchArmHeaderEffects(valueSyntax, guardSyntax, header),
             bindAfterLaterArmTests: (bindLaterTests() -> void, fallsThrough bool, bind() -> BoundNode) ->
-            Statements.BindAfterLaterArmTests(bindLaterTests, fallsThrough, bind)
+            Statements.BindAfterLaterArmTests(bindLaterTests, fallsThrough, bind),
+            bindConditionWithEffects: (conditionSyntax ExpressionSyntax) ->
+            Statements.BindConditionWithEffects(conditionSyntax, allowBoolCall: false),
+            bindShortCircuitOperands: (
+                leftSyntax ExpressionSyntax,
+                rightSyntax ExpressionSyntax,
+                isAnd bool,
+                bindLeft() -> BoundExpression,
+                bindRight(BoundExpression, Dictionary[AccessPath, TypeSymbol]?) -> BoundExpression
+            ) -> Statements.BindShortCircuitBinaryOperands(leftSyntax, rightSyntax, isAnd, bindLeft, bindRight),
+            bindConditionalBranches: (
+                hasElse bool,
+                bindWhenTrue() -> BoundExpression,
+                bindWhenFalse() -> BoundExpression
+            ) -> Statements.BindConditionalExpressionBranches(hasElse, bindWhenTrue, bindWhenFalse),
+            bindIfLetBranches: (
+                bindings SeparatedSyntaxList[IfLetBindingClauseSyntax],
+                guardSyntax ExpressionSyntax?,
+                hasElse bool,
+                thenSyntax SyntaxNode?,
+                bindThen() -> BoundExpression,
+                bindElse() -> BoundExpression
+            ) -> Statements.BindIfLetBranches[BoundExpression](
+                bindings,
+                guardSyntax,
+                hasElse,
+                false,
+                thenSyntax,
+                bindThen,
+                bindElse
+            ),
+            bindDeferrableConditional: (deferOnFailure bool, bind() -> BoundExpression) ->
+            Statements.BindDeferrableConditional(deferOnFailure, bind)
         )
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor

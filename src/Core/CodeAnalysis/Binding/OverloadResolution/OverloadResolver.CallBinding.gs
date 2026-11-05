@@ -874,12 +874,12 @@ internal partial class OverloadResolver {
             // speculatively here and again in the constructor binder can
             // duplicate capture/spill state even if diagnostics are truncated.
             let singleArgClass StructSymbol? = conversionType as StructSymbol
-            let typeArgumentsMatchConversionTarget = syntax.TypeArgumentList == nil ||
+            let typeArgumentList = syntax.TypeArgumentList
+            let typeArgumentsMatchConversionTarget = typeArgumentList == nil ||
                 (
                 singleArgClass != nil &&
                     singleArgClass.IsGenericDefinition == true &&
-                    syntax
-                    .TypeArgumentList
+                    typeArgumentList
                     .Arguments
                     .Count == singleArgClass
                     .TypeParameters

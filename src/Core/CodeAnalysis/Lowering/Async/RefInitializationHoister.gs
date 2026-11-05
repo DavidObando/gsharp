@@ -157,7 +157,8 @@ shared class RefInitializationHoister {
                 }
                 case field is BoundFieldAccessExpression {
                     {
-                        if field.Receiver == nil {
+                        let fieldReceiver = field.Receiver
+                        if fieldReceiver == nil {
                             // A static or interface static-field read (ADR-0089 /
                             // #1030) has no receiver expression to hoist, and
                             // rebuilding it through the receiver constructor would
@@ -165,11 +166,11 @@ shared class RefInitializationHoister {
                             // base BoundTreeRewriter bails the same way.
                             return field
                         }
-                        let receiver = if Binder.IsReferenceTypeForConstraint(field.Receiver.Type) ||
-                            !IsReconstructableStorage(field.Receiver) {
-                            HoistIfNeeded(field.Receiver, prelude, captureComponents)
+                        let receiver = if Binder.IsReferenceTypeForConstraint(fieldReceiver.Type) ||
+                            !IsReconstructableStorage(fieldReceiver) {
+                            HoistIfNeeded(fieldReceiver, prelude, captureComponents)
                         } else {
-                            HoistOperand(field.Receiver, prelude, captureComponents)
+                            HoistOperand(fieldReceiver, prelude, captureComponents)
                         }
                         return BoundFieldAccessExpression(
                             field.Syntax,

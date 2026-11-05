@@ -60,34 +60,37 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportIfExpressionMissingElse(syntax.IfKeyword.Location)
             return BoundErrorExpression(nil)
         }
-        // Issue #4961 / ADR-0201: the bindings, the guard, and the then-block
+        return bindDeferrableConditional(
+            deferOnFailure,
+            () -> BindIfLetExpressionCore(syntax, targetType, canBeVoid, deferOnFailure, diagMark)
+        )
+    }
+
+    private func BindIfLetExpressionCore(
+        syntax IfLetExpressionSyntax,
+        targetType TypeSymbol?,
+        canBeVoid bool,
+        deferOnFailure bool,
+        diagMark int32
+    ) BoundExpression {
+        // Issue #4961 / ADR-0201: the bindings, the guard, and the branches
         // are bound through the header helper the STATEMENT form shares, so
         // scoping (then-region only, never the else branch), progressive
         // narrowing, and the guard rules cannot drift between the forms.
-        let (clauses, guard_, whenTrueBound) = IfLetBindingSupport.BindHeader(
-            binderCtx,
+        var (clauses, guard_, whenTrue, whenFalse) = bindIfLetBranches(
             syntax.Bindings,
             syntax.Guard,
-            Diagnostics,
-            conversions,
-            bindTypeClause,
-            (initializer ExpressionSyntax) -> BindExpression(initializer),
-            DeclareIfLetLocal,
-            (guardSyntax ExpressionSyntax) -> BindExpression(guardSyntax, TypeSymbol.Bool),
-            (boundGuard BoundExpression) -> ClassifyConditionalNarrowing(boundGuard).WhenTrue,
+            true,
+            syntax.ThenBlock,
             () -> BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType),
-            syntax.ThenBlock
+            () -> BindIfLetElseBranch(syntax.ElseExpression!!, canBeVoid, targetType)
         )
-        var whenTrue = whenTrueBound
         var anyInvalid = false
         for clause in clauses {
             if !clause.Binding.IsValid {
                 anyInvalid = true
             }
         }
-        // Bound AFTER the binding scope/frame is popped: the else branch never
-        // sees the bindings.
-        var whenFalse = BindIfLetElseBranch(syntax.ElseExpression!!, canBeVoid, targetType)
         if anyInvalid ||
             clauses.Length == 0 ||
             guard_ is BoundErrorExpression ||
@@ -134,22 +137,6 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         return BoundConditionalExpression(nil, condition, convertedTrue, convertedFalse, resultType)
-    }
-
-    /// Declares one ADR-0151 binding local. Routed through the same
-    /// `DeclarationBinder.BindVariableDeclaration` callback the statement
-    /// forms use, so duplicate-name reporting (GS0004) and the top-level
-    /// global-variable shaping behave identically on both surfaces.
-    private func DeclareIfLetLocal(identifier SyntaxToken, isReadOnly bool, type TypeSymbol) VariableSymbol {
-        if bindLocalVariable != nil {
-            return bindLocalVariable(identifier, isReadOnly, type)
-        }
-        // Defensive: an ExpressionBinder constructed without the declaration
-        // callback (no production path does this) still produces a usable
-        // symbol so binding can continue and report the real diagnostics.
-        let fallback = LocalVariableSymbol(identifier.ValueText ?? "?", isReadOnly, type, declaringSyntax: identifier)
-        $scope.TryDeclareVariable(fallback)
-        return fallback
     }
 
     /// Binds the branch after `else`: a chained `else if` /
