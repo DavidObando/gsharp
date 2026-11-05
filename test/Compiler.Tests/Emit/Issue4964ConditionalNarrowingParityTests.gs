@@ -1163,10 +1163,25 @@ func CheckNestedScopeDuplicateSuppressionRebind(token NToken) int32 ->
 interface I {}
 class A : I {}
 class B : I {}
+var gn int32? = 5
+struct NToken {
+    shared {
+        func operator implicit(t NToken) float64 {
+            gn = nil
+            return 0.0
+        }
+    }
+}
+func ConsumeOverload2(x float64, v int32) bool -> true
+func ConsumeOverload2(x float64, v int32?) bool -> v != nil
 func TakeI(v I) int32 -> 1
 func TakeObj(v object) int32 -> 1
 func CheckCoalesce(ref s string?, a A?) int32 -> s != nil ? TakeI((s.Length, a).Item2 ?? (s = nil, B{}).Item2) : 0
 func CheckSwitch(ref s string?, flag bool) int32 -> s != nil ? TakeObj(switch flag { case true: (s.Length, A{}).Item2 default: (s = nil, B{}).Item2 }) : 0
+func CheckCommittedSuppressionSurvivesDiagnosticFreeSpeculativeProbe(token NToken, flag bool) int32 {
+    let _ = !(gn == nil) ? ConsumeOverload2(token, (gn!!, gn).Item2) : false
+    return TakeI(flag ? A{} : B{})
+}
 `)
         Assert.Equal("", deferredCoalesceAndSwitchDiag)
 

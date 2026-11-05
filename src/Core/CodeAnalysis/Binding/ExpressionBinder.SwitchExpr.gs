@@ -41,6 +41,7 @@ internal partial class ExpressionBinder {
         // front so nested sub-expressions bind with normal semantics.
         let deferOnFailure = targetType == nil && binderCtx.DeferTargetlessConditional
         this.binderCtx.DeferTargetlessConditional = false
+        let suppressionMark = Diagnostics.SuppressionCount
         let beforeSwitch = if deferOnFailure {
             CaptureExpressionNarrowingFrames()
         } else {
@@ -354,6 +355,7 @@ internal partial class ExpressionBinder {
         // resolved parameter type.
         if anyArmFailed && deferOnFailure {
             Diagnostics.TruncateTo(diagMark)
+            Diagnostics.RestoreSuppressionsTo(suppressionMark)
             RestoreExpressionNarrowingFrames(beforeSwitch)
             return BoundErrorExpression(syntax)
         }

@@ -32,9 +32,10 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     // which overload/lookup path the binder commits to — and are filtered only
     // when diagnostics are READ.
     private let cascadeSuppressed HashSet[Diagnostic] = HashSet[Diagnostic](ReferenceEqualityComparer.Instance)
-    private let reboundSuppressed Dictionary[Diagnostic, int32] = Dictionary[Diagnostic, int32](
-        ReferenceEqualityComparer.Instance
-    )
+    private let reboundSuppressed HashSet[Diagnostic] = HashSet[Diagnostic](ReferenceEqualityComparer.Instance)
+    private let reboundSuppressionLog List[(Diagnostic Diagnostic, CountAtSuppression int32)] = List[
+        (Diagnostic, int32)
+    ]()
     private let reboundDiagnosticDepth Dictionary[Diagnostic, int32] = Dictionary[Diagnostic, int32](
         ReferenceEqualityComparer.Instance
     )
@@ -46,25 +47,36 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     private var memberLookupCascadeDepth int32
     private var siblingRebindDepth int32
 
+    internal prop SuppressionCount int32 -> reboundSuppressionLog.Count
+
     internal func EnterSiblingRebind() {
         siblingRebindDepth++
     }
 
     internal func LeaveSiblingRebind() {
         siblingRebindDepth--
-        if siblingRebindDepth == 0 && reboundSuppressed.Count > 0 {
-            let currentCount = diagnostics.Count
-            for kv in reboundSuppressed.ToArray() {
-                if kv.Value > currentCount {
-                    reboundSuppressed[kv.Key] = currentCount
-                }
-            }
+    }
+
+    internal func RestoreSuppressionsTo(suppressionCount int32) {
+        let target = Math.Clamp(suppressionCount, 0, reboundSuppressionLog.Count)
+        while reboundSuppressionLog.Count > target {
+            let lastIndex = reboundSuppressionLog.Count - 1
+            let entry = reboundSuppressionLog[lastIndex]
+            reboundSuppressionLog.RemoveAt(lastIndex)
+            reboundSuppressed.Remove(entry.Diagnostic)
         }
     }
 
     private func OnDiagnosticRemoved(removed Diagnostic) {
         reboundDiagnosticDepth.Remove(removed)
-        reboundSuppressed.Remove(removed)
+        if reboundSuppressed.Remove(removed) {
+            for var i = reboundSuppressionLog.Count - 1; i >= 0; i-- {
+                if object.ReferenceEquals(reboundSuppressionLog[i].Diagnostic, removed) {
+                    reboundSuppressionLog.RemoveAt(i)
+                    break
+                }
+            }
+        }
     }
 
     /// Gets the number of diagnostics currently held in the bag. Used together
@@ -95,11 +107,13 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                 diagnostics.RemoveAt(lastIndex)
             }
         }
-        if siblingRebindDepth == 0 && reboundSuppressed.Count > 0 {
-            for kv in reboundSuppressed.ToArray() {
-                if kv.Value >= count {
-                    reboundSuppressed.Remove(kv.Key)
-                }
+        if siblingRebindDepth == 0 {
+            while reboundSuppressionLog.Count > 0 &&
+                reboundSuppressionLog[reboundSuppressionLog.Count - 1].CountAtSuppression > count {
+                let lastIndex = reboundSuppressionLog.Count - 1
+                let entry = reboundSuppressionLog[lastIndex]
+                reboundSuppressionLog.RemoveAt(lastIndex)
+                reboundSuppressed.Remove(entry.Diagnostic)
             }
         }
     }
@@ -127,7 +141,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         let start = Math.Clamp(startCount, 0, diagnostics.Count)
         for var i = start; i < diagnostics.Count; i++ {
             let diagnostic = diagnostics[i]
-            if !cascadeSuppressed.Contains(diagnostic) && !reboundSuppressed.ContainsKey(diagnostic) {
+            if !cascadeSuppressed.Contains(diagnostic) && !reboundSuppressed.Contains(diagnostic) {
                 sink.Add(diagnostic)
             }
         }
@@ -148,7 +162,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         let builder = ImmutableArray.CreateBuilder[Diagnostic](diagnostics.Count - start)
         for var i = start; i < diagnostics.Count; i++ {
             let diagnostic = diagnostics[i]
-            if !cascadeSuppressed.Contains(diagnostic) && !reboundSuppressed.ContainsKey(diagnostic) {
+            if !cascadeSuppressed.Contains(diagnostic) && !reboundSuppressed.Contains(diagnostic) {
                 builder.Add(diagnostic)
             }
         }
@@ -159,7 +173,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         let start = Math.Clamp(startCount, 0, diagnostics.Count)
         for var i = start; i < diagnostics.Count; i++ {
             let diagnostic = diagnostics[i]
-            if !cascadeSuppressed.Contains(diagnostic) && !reboundSuppressed.ContainsKey(diagnostic) &&
+            if !cascadeSuppressed.Contains(diagnostic) && !reboundSuppressed.Contains(diagnostic) &&
                 diagnostic.Severity == DiagnosticSeverity.Error {
                 return true
             }
@@ -185,7 +199,8 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                 .Span
                 .End &&
                 reboundSuppressed
-                .TryAdd(diagnostic, existingCount + 1) {
+                .Add(diagnostic) {
+                reboundSuppressionLog.Add((diagnostic, existingCount))
                 for txSuppressed in transactionSuppressed {
                     txSuppressed.Add(diagnostic)
                 }
@@ -207,8 +222,10 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// this instance.
     /// @param diagnostics The diagnostics bag to copy from.
     func AddRange(diagnostics DiagnosticBag) {
-        for pair in diagnostics.reboundSuppressed {
-            reboundSuppressed.TryAdd(pair.Key, this.diagnostics.Count)
+        for suppressed in diagnostics.reboundSuppressed {
+            if reboundSuppressed.Add(suppressed) {
+                reboundSuppressionLog.Add((suppressed, this.diagnostics.Count))
+            }
         }
         AddRange(diagnostics.diagnostics)
     }
@@ -242,7 +259,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     internal func SuppressDuplicateDiagnosticsIn[T](owner TextLocation, bind() -> T) T {
         var owner = owner
         let existing = diagnostics.Where(
-            (diagnostic Diagnostic) -> !reboundSuppressed.ContainsKey(diagnostic) && object.ReferenceEquals(
+            (diagnostic Diagnostic) -> !reboundSuppressed.Contains(diagnostic) && object.ReferenceEquals(
                 diagnostic.Location.Text,
                 owner.Text
             ) &&
@@ -268,7 +285,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param bind The analysis operation.
     /// @returns The operation result.
     internal func SuppressDuplicateDiagnostics[T](bind() -> T) T -> SuppressDuplicateDiagnostics(
-        diagnostics.Where((diagnostic Diagnostic) -> !reboundSuppressed.ContainsKey(diagnostic)).ToList(),
+        diagnostics.Where((diagnostic Diagnostic) -> !reboundSuppressed.Contains(diagnostic)).ToList(),
         bind
     )
 
@@ -335,7 +352,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     private func Visible() IEnumerable[Diagnostic] -> if cascadeSuppressed.Count == 0 && reboundSuppressed.Count == 0 {
         cast[IEnumerable[Diagnostic]](diagnostics)
     } else {
-        diagnostics.Where((d Diagnostic) -> !cascadeSuppressed.Contains(d) && !reboundSuppressed.ContainsKey(d))
+        diagnostics.Where((d Diagnostic) -> !cascadeSuppressed.Contains(d) && !reboundSuppressed.Contains(d))
     }
 
     private func Add(diagnostic Diagnostic) {
@@ -357,7 +374,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         if duplicateSuppressions.TryPeek(out var existing) {
             for var i = 0; i < existing.Count; i++ {
                 let candidate = existing[i]
-                if !reboundSuppressed.ContainsKey(candidate) && AreEquivalent(candidate, diagnostic) {
+                if !reboundSuppressed.Contains(candidate) && AreEquivalent(candidate, diagnostic) {
                     existing.RemoveAt(i)
                     return
                 }
@@ -383,7 +400,14 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         }
         if suppressedInTx != nil {
             for diag in suppressedInTx {
-                reboundSuppressed.Remove(diag)
+                if reboundSuppressed.Remove(diag) {
+                    for var i = reboundSuppressionLog.Count - 1; i >= 0; i-- {
+                        if object.ReferenceEquals(reboundSuppressionLog[i].Diagnostic, diag) {
+                            reboundSuppressionLog.RemoveAt(i)
+                            break
+                        }
+                    }
+                }
             }
         }
         for var addedIndex = added.Count - 1; addedIndex >= 0; addedIndex-- {

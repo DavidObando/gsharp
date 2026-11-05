@@ -646,6 +646,7 @@ internal partial class ExpressionBinder {
         let deferOnFailure = targetType == nil && binderCtx.DeferTargetlessConditional
         this.binderCtx.DeferTargetlessConditional = false
         let diagMark = Diagnostics.Count
+        let suppressionMark = Diagnostics.SuppressionCount
         let beforeConditional = CaptureExpressionNarrowingFrames()
         let conditionEntryAliases = GetCurrentExpressionCallableAliases()
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
@@ -803,6 +804,7 @@ internal partial class ExpressionBinder {
         if resultType == nil {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
                 RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
@@ -835,6 +837,7 @@ internal partial class ExpressionBinder {
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
                 RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
@@ -919,6 +922,7 @@ internal partial class ExpressionBinder {
         // Issue #4966 (ADR-0202): nil only for the void `if` of a discarded
         // position; BindIfExpression rejects it elsewhere (GS0276).
         let elseSyntax = syntax.ElseExpression
+        let suppressionMark = Diagnostics.SuppressionCount
         let beforeConditional = CaptureExpressionNarrowingFrames()
         let conditionEntryAliases = GetCurrentExpressionCallableAliases()
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
@@ -977,6 +981,7 @@ internal partial class ExpressionBinder {
         if resultType == nil {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
                 RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
@@ -1009,6 +1014,7 @@ internal partial class ExpressionBinder {
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
                 RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
@@ -1654,6 +1660,7 @@ internal partial class ExpressionBinder {
             )
         }
         let coalesceDiagMark = Diagnostics.Count
+        let coalesceSuppressionMark = Diagnostics.SuppressionCount
         let leftEntryAliases = GetCurrentExpressionCallableAliases()
         var boundLeft = if coalesceTargetType != nil &&
             syntax
@@ -1754,6 +1761,7 @@ internal partial class ExpressionBinder {
             coalesceDiagMark
         )
         if deferTargetlessCoalesce && result is BoundErrorExpression{Syntax: not nil} {
+            Diagnostics.RestoreSuppressionsTo(coalesceSuppressionMark)
             RestoreExpressionNarrowingFrames(beforeCoalesce)
         }
         return result

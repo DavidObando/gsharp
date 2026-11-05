@@ -55,6 +55,7 @@ internal partial class ExpressionBinder {
         let deferOnFailure = targetType == nil && binderCtx.DeferTargetlessConditional
         this.binderCtx.DeferTargetlessConditional = false
         let diagMark = Diagnostics.Count
+        let suppressionMark = Diagnostics.SuppressionCount
         // ADR-0151: `else` is mandatory in value position, exactly as for the
         // ADR-0064 if-expression (GS0276).
         if syntax.ElseExpression == nil {
@@ -177,6 +178,7 @@ internal partial class ExpressionBinder {
         if resultType == nil {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
                 RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
@@ -207,6 +209,7 @@ internal partial class ExpressionBinder {
         if convertedTrue is BoundErrorExpression || convertedFalse is BoundErrorExpression {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
+                Diagnostics.RestoreSuppressionsTo(suppressionMark)
                 RestoreExpressionNarrowingFrames(beforeConditional)
                 return BoundErrorExpression(syntax)
             }
