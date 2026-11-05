@@ -1335,6 +1335,7 @@ internal partial class OverloadResolver {
             )
         )
         for var i = 0; i < permutedArguments.Length; i++ {
+            let permutedArgument = conversions.ResolveReboundSibling(permutedArguments[i])
             let paramType = extension.Parameters[i + 1].Type
             let expectedType = if substitution != nil {
                 substituteType(paramType, substitution)
@@ -1343,7 +1344,7 @@ internal partial class OverloadResolver {
             }
             if substitution != nil && TypeSymbol.ContainsTypeParameter(paramType) {
                 if paramType is FunctionTypeSymbol openFunctionParameter &&
-                    tryGetFunctionLiteral(permutedArguments[i], out var functionLiteralArgument) {
+                    tryGetFunctionLiteral(permutedArgument, out var functionLiteralArgument) {
                     // ADR-0087 §3 R6: substitute the open target so the
                     // identity-check inside the adapter drops the
                     // wrapper when the literal already matches.
@@ -1375,12 +1376,12 @@ internal partial class OverloadResolver {
                     // Only APPLIES a conversion that resolves; when none does,
                     // the historical unconverted pass-through is unchanged, so
                     // the bare-`T` case this skip exists for is untouched.
-                    if permutedArguments[i].Type is {} openArgumentType &&
+                    if permutedArgument.Type is {} openArgumentType &&
                         openArgumentType != TypeSymbol.Error &&
                         openArgumentType != expectedType &&
                         conversions
                         .TryApplyUserDefinedImplicitArgumentConversion(
-                        permutedArguments[i],
+                        permutedArgument,
                         expectedType,
                         out var openTargetConverted
                     ) {
@@ -1390,7 +1391,7 @@ internal partial class OverloadResolver {
                     // A parameter typed as an open T is encoded as System.Object in
                     // the emitted signature; pass the argument unconverted so the
                     // emitter inserts box / unbox.any around the erased boundary.
-                    convertedArgs.Add(permutedArguments[i])
+                    convertedArgs.Add(permutedArgument)
                     continue
                 }
             }
@@ -1406,7 +1407,7 @@ internal partial class OverloadResolver {
             }
             if (extension.Parameters[i + 1].RefKind is RefKind.None or RefKind.In) &&
                 TryConvertLambdaArgumentWithTarget(
-                permutedArguments[i],
+                permutedArgument,
                 expectedType,
                 argLoc,
                 out var targetTypedLambda,
@@ -1425,7 +1426,7 @@ internal partial class OverloadResolver {
             convertedArgs.Add(
                 conversions.BindCallArgumentWithRefKind(
                     argLoc,
-                    permutedArguments[i],
+                    permutedArgument,
                     expectedType,
                     extension.Parameters[i + 1],
                     i + 1

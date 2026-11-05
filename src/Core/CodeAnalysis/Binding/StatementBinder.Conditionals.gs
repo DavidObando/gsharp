@@ -33,7 +33,23 @@ internal partial class StatementBinder {
         }
         switch condition {
             case block is BoundBlockExpression {
-                return ClassifyIfConditionNarrowing(block.Expression, removedFacts)
+                var prefixRefinements Dictionary[AccessPath, TypeSymbol]? = nil
+                if !block.Statements.IsDefaultOrEmpty {
+                    let prefixShell = BoundBlockExpression(
+                        block.Syntax,
+                        block.Statements,
+                        BoundLiteralExpression(nil, 0)
+                    )
+                    prefixRefinements = FilterLeftConditionNarrowings(
+                        block.Expression,
+                        TryClassifyConditionNonNullAssignments(prefixShell)
+                    )
+                }
+                let (innerThen, innerElse) = ClassifyIfConditionNarrowing(block.Expression, removedFacts)
+                return (
+                    MergeNarrowingFrames(prefixRefinements, innerThen),
+                    MergeNarrowingFrames(prefixRefinements, innerElse)
+                )
             }
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
                 let (inThen, inElse) = ClassifyIfConditionNarrowing(unary.Operand, removedFacts)

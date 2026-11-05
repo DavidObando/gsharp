@@ -740,6 +740,12 @@ func ConsumeOverloaded(x Token, n int32) int32 -> n
 func ConsumeOverloaded(x float64, b bool) int32 -> b ? 1 : 0
 func CheckOverloadProbeDoesNotInvalidate(token Token) int32 ->
     !string.IsNullOrEmpty(g) ? ConsumeOverloaded(token, g.Length) : 0
+func CheckReboundCallArgDropsRedundantAssertionWarning(token Token) int32 ->
+    !string.IsNullOrEmpty(g) ? Consume(token, g!!.Length) : 0
+func CheckReboundTupleElementDropsRedundantAssertionWarning(token Token) int32 {
+    let pair (float64, int32) = !string.IsNullOrEmpty(g) ? (token, g!!.Length) : (0.0, 0)
+    return pair.Item2
+}
 func Check() int32 -> CallbackPredicates.Has(g, () -> { g = nil }) ? g.Length : 0
 func CheckCondArmConv(flag bool, token Token) float64 ->
     !string.IsNullOrEmpty(g) ? (flag ? token : 0.0) + float64(g.Length) : 0.0
@@ -792,11 +798,29 @@ func CheckDirectTargetTypedTupleConv(token Token) int32 ->
             Assert.NotEqual(0, exitCode)
             let consumerDiagnostics = standardOut.ToString() + standardError.ToString()
             Assert.Equal(9, consumerDiagnostics.Split("GS0158").Length - 1)
+            Assert.DoesNotContain("GS0536", consumerDiagnostics)
         } finally {
             if Directory.Exists(outputDirectory) {
                 Directory.Delete(outputDirectory, recursive: true)
             }
         }
+
+        let identityArgRebindRun = CompileAndRun(`import System
+var n int32? = 5
+struct Token {
+    shared {
+        func operator implicit(t Token) float64 {
+            n = nil
+            return 0.0
+        }
+    }
+}
+func Consume(x float64, b bool) bool -> b
+let token = Token{}
+Console.WriteLine(n != nil ? Consume(token, n > 0) : false)
+`)
+        Assert.Equal("False" + Environment.NewLine, identityArgRebindRun.Output)
+        Assert.DoesNotContain("GS0536", identityArgRebindRun.CompilerOutput)
     }
 
     @Theory
@@ -860,6 +884,13 @@ func CheckDirectTargetTypedTupleConv(token Token) int32 ->
         "return (dict.TryGetValue(\"missing\", out value) || ((value = \"ok\") == \"ok\")) ? 0 : value.Length",
         ""
     )
+    @InlineData(
+        "return (!dict.TryGetValue(\"missing\", out value) && { value = \"ok\"\n true }) ? value.Length : 0",
+        ""
+    )
+    @InlineData("return (dict.TryGetValue(\"missing\", out value) || { value = \"ok\"\n true }) ? value.Length : 0", "")
+    @InlineData("return (!dict.TryGetValue(\"missing\", out value) && ((value = \"ok\") is {})) ? value.Length : 0", "")
+    @InlineData("return (dict.TryGetValue(\"missing\", out value) || ((value = \"ok\") is {})) ? value.Length : 0", "")
     func Composed_MaybeNullWhen_Preserves_Widening_Across_And_And_Or(body string, expected string) {
         let source = (`package Issue4969.ComposedMaybeNull
 import System.Collections.Generic

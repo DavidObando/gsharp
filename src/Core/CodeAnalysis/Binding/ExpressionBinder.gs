@@ -995,6 +995,7 @@ internal partial class ExpressionBinder {
         try {
             for var i = toRebind.Count - 1; i >= 0; i-- {
                 let item = toRebind[i]
+                Diagnostics.RemoveDiagnosticsIn(item.Syntax.Location)
                 let rebound = if item.TargetType is {} itemTargetType {
                     BindExpression(item.Syntax, itemTargetType)
                 } else {
@@ -1995,43 +1996,68 @@ internal partial class ExpressionBinder {
         switch condition {
             case block is BoundBlockExpression {
                 {
+                    var prefixRefinements Dictionary[AccessPath, TypeSymbol]? = nil
                     let afterPrefix = if block.Statements.IsDefaultOrEmpty {
                         beforeAliases
                     } else {
-                        evolveAliases(
-                            BoundBlockExpression(block.Syntax, block.Statements, BoundLiteralExpression(nil, 0)),
-                            beforeAliases
+                        let prefixShell = BoundBlockExpression(
+                            block.Syntax,
+                            block.Statements,
+                            BoundLiteralExpression(nil, 0)
                         )
+                        prefixRefinements = classifyConditionNonNullAssignments(prefixShell, beforeAliases)
+                        let evolved = evolveAliases(prefixShell, beforeAliases)
+                        if prefixRefinements != nil && prefixRefinements.Count > 0 {
+                            prefixRefinements = Dictionary[AccessPath, TypeSymbol](prefixRefinements)
+                            clearAssignedRoots(block.Expression, prefixRefinements, evolved)
+                            if prefixRefinements.Count == 0 {
+                                prefixRefinements = nil
+                            }
+                        }
+                        evolved
                     }
-                    return ClassifyTypeTestNarrowingInOrder(
+                    let (innerThen, innerElse, trueAliases, falseAliases) = ClassifyTypeTestNarrowingInOrder(
                         block.Expression,
                         afterPrefix,
                         restrictBareVariableToLocalsAndParams
+                    )
+                    return (
+                        StatementBinder.MergeNarrowingFrames(prefixRefinements, innerThen),
+                        StatementBinder.MergeNarrowingFrames(prefixRefinements, innerElse),
+                        trueAliases,
+                        falseAliases
                     )
                 }
             }
             case isExpr is BoundIsExpression {
                 {
+                    let assignRefinements = classifyConditionNonNullAssignments(condition, beforeAliases)
                     let afterIsAliases = evolveAliases(condition, beforeAliases)
                     if isExpr.Pattern is BoundNotPattern notPattern {
                         return (
-                            nil,
-                            StatementBinder.TryClassifyPatternNarrowing(
-                                isExpr.Expression,
-                                notPattern.Pattern,
-                                allowReadOnlyGlobals: false
+                            assignRefinements,
+                            StatementBinder.MergeNarrowingFrames(
+                                assignRefinements,
+                                StatementBinder.TryClassifyPatternNarrowing(
+                                    isExpr.Expression,
+                                    notPattern.Pattern,
+                                    allowReadOnlyGlobals: false
+                                )
                             ),
                             afterIsAliases,
                             afterIsAliases
                         )
                     }
                     return (
-                        StatementBinder.TryClassifyPatternNarrowing(
-                            isExpr.Expression,
-                            isExpr.Pattern,
-                            allowReadOnlyGlobals: false
+                        StatementBinder.MergeNarrowingFrames(
+                            assignRefinements,
+                            StatementBinder.TryClassifyPatternNarrowing(
+                                isExpr.Expression,
+                                isExpr.Pattern,
+                                allowReadOnlyGlobals: false
+                            )
                         ),
-                        nil,
+                        assignRefinements,
                         afterIsAliases,
                         afterIsAliases
                     )

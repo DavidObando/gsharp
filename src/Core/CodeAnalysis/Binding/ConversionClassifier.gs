@@ -99,6 +99,13 @@ internal class ConversionClassifier {
         this.leaveTupleConversion = leaveTupleConversion
     }
 
+    internal func ResolveReboundSibling(expression BoundExpression) BoundExpression {
+        if tryGetReboundSibling != nil && tryGetReboundSibling!!(expression) is {} reboundSibling {
+            return reboundSibling
+        }
+        return expression
+    }
+
     /// Initializes a new instance of the (cref:ConversionClassifier)
     /// class.
     /// @param binderCtx The shared binder context that exposes the
@@ -3452,6 +3459,7 @@ internal class ConversionClassifier {
                         } else {
                             elementSyntax
                         }
+                        Diagnostics.RemoveDiagnosticsIn(unwrappedSyntax.Location)
                         element = bindExpression(unwrappedSyntax)
                     }
                     let beforeVersion = expressionNarrowingVersion?.Invoke() ?? 0

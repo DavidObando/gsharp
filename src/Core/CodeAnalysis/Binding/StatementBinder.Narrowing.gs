@@ -1826,7 +1826,32 @@ internal partial class StatementBinder {
         switch condition {
             case block is BoundBlockExpression {
                 let afterPrefix = AliasesAfterBlockPrefix(block, beforeAliases)
-                return ComputeConditionNarrowingInOrder(block.Expression, afterPrefix)
+                var prefixRefinements Dictionary[AccessPath, TypeSymbol]? = nil
+                if !block.Statements.IsDefaultOrEmpty {
+                    let prefixShell = BoundBlockExpression(
+                        block.Syntax,
+                        block.Statements,
+                        BoundLiteralExpression(nil, 0)
+                    )
+                    prefixRefinements = TryClassifyConditionNonNullAssignments(prefixShell, beforeAliases)
+                    if prefixRefinements != nil && prefixRefinements.Count > 0 {
+                        prefixRefinements = Dictionary[AccessPath, TypeSymbol](prefixRefinements)
+                        ClearAssignedRoots(block.Expression, prefixRefinements, afterPrefix)
+                        if prefixRefinements.Count == 0 {
+                            prefixRefinements = nil
+                        }
+                    }
+                }
+                let (innerThen, innerElse, trueAliases, falseAliases) = ComputeConditionNarrowingInOrder(
+                    block.Expression,
+                    afterPrefix
+                )
+                return (
+                    MergeNarrowingFrames(prefixRefinements, innerThen),
+                    MergeNarrowingFrames(prefixRefinements, innerElse),
+                    trueAliases,
+                    falseAliases
+                )
             }
             case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation {
                 let (inThen, inElse, trueAliases, falseAliases) = ComputeConditionNarrowingInOrder(

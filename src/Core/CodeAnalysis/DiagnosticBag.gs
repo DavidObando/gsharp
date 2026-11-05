@@ -77,6 +77,27 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         TruncateTo(start)
     }
 
+    internal func RemoveDiagnosticsIn(owner TextLocation) {
+        for var i = diagnostics.Count - 1; i >= 0; i-- {
+            let diagnostic = diagnostics[i]
+            if object.ReferenceEquals(diagnostic.Location.Text, owner.Text) &&
+                diagnostic
+                .Location
+                .Span
+                .Start >= owner
+                .Span
+                .Start &&
+                diagnostic
+                .Location
+                .Span
+                .End <= owner
+                .Span
+                .End {
+                diagnostics.RemoveAt(i)
+            }
+        }
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
