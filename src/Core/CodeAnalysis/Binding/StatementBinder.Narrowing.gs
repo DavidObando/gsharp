@@ -2879,16 +2879,33 @@ internal partial class StatementBinder {
                 BoundTypeParameterConstructionExpression {
                 MarkRunsEscapedClosure()
             }
-            // A hole of a type other than a built-in value or a string calls its `ToString`.
+            // A custom interpolated-string handler constructs the handler and calls its AppendLiteral /
+            // AppendFormatted methods; the default handler calls `ToString` on a hole of a type other than a
+            // built-in value or a string.
             if node is BoundInterpolatedStringExpression interpolation {
-                for part in interpolation.Parts {
-                    if part.Value is {} hole && hole.Type != TypeSymbol.String && !TypeSymbol.IsLegalPointeeType(
-                        hole.Type
-                    ) {
-                        MarkMayMutateGlobalRoots(writesReferenceStorage: false)
-                        break
+                if interpolation.Handler != nil {
+                    MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                } else {
+                    for part in interpolation.Parts {
+                        if part.Value is {} hole && hole.Type != TypeSymbol.String && !TypeSymbol.IsLegalPointeeType(
+                            hole.Type
+                        ) {
+                            MarkMayMutateGlobalRoots(writesReferenceStorage: false)
+                            break
+                        }
                     }
                 }
+            }
+            if node is BoundMapLiteralExpression mapLiteral &&
+                !mapLiteral
+                .Entries
+                .IsDefaultOrEmpty &&
+                mapLiteral
+                .MapType
+                .KeyType != TypeSymbol.String &&
+                !TypeSymbol.IsLegalPointeeType(mapLiteral.MapType.KeyType) {
+                MayMutateMemberPaths = true
+                MarkMayMutateGlobalRoots()
             }
             if node is BoundFunctionLiteralExpression nestedLiteral {
                 for captured in nestedLiteral.CapturedVariables {
