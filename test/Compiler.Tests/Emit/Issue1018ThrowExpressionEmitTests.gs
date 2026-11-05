@@ -334,6 +334,8 @@ try {
     @InlineData("Id((1, throw Exception(\"x\")))", "GS0151")
     @InlineData("let t = (1, throw Exception(\"x\"))", "GS0124")
     @InlineData("(() -> throw Exception(\"a\"), throw Exception(\"b\"))", "GS0124")
+    @InlineData("let t (int32, int32) = (() -> (1, throw Exception(\"x\")))()", "GS0124")
+    @InlineData("(() -> (1, throw Exception(\"x\")))?()", "GS0124")
     func ThrowExpression_UninferrableType_ReportsDiagnosticWithoutCrash(statement string, expectedId string) {
         let source = `package P
 

@@ -1364,6 +1364,10 @@ internal partial class ExpressionBinder {
                 materializedReceiverType
             )
         }
+        if receiver.Type != TypeSymbol.Never && TypeSymbol.ContainsNeverType(receiver.Type) {
+            Diagnostics.ReportExpressionMustHaveValue(receiver.Syntax?.Location ?? rightPart.Location)
+            return BoundErrorExpression(nil)
+        }
         let receiverType = receiver.Type
         var underlying TypeSymbol
         if receiverType is NullableTypeSymbol nullable {

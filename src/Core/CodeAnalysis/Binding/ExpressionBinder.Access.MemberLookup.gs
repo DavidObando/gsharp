@@ -496,7 +496,10 @@ internal partial class ExpressionBinder {
                     materializedReceiverType
                 )
             }
-            if receiver?.Type is TupleTypeSymbol receiverTuple && TypeSymbol.ContainsNeverType(receiverTuple) {
+            if receiver is {} checkedReceiver &&
+                checkedReceiver.Type != TypeSymbol.Never &&
+                TypeSymbol
+                .ContainsNeverType(checkedReceiver.Type) {
                 Diagnostics.ReportExpressionMustHaveValue(receiverSyntax?.Location ?? rightPart.Location)
                 return BoundErrorExpression(nil)
             }

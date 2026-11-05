@@ -983,6 +983,10 @@ internal partial class OverloadResolver {
         if !object.ReferenceEquals(materializedCalleeType, callee.Type) {
             callee = conversions.BindConversion(calleeLocation, callee, materializedCalleeType)
         }
+        if TypeSymbol.ContainsNeverType(callee.Type) {
+            Diagnostics.ReportExpressionMustHaveValue(calleeLocation)
+            return BoundErrorExpression(nil)
+        }
         let callableType = if callee.Type is NullableTypeSymbol nullable {
             nullable.UnderlyingType
         } else {
@@ -1119,6 +1123,10 @@ internal partial class OverloadResolver {
                 .ReferenceEquals(materializedFnType, resolvedFnType) {
                 callee = conversions.BindConversion(calleeLocation, callee, materializedFnType)
                 resolvedFnType = materializedFnType
+            }
+            if TypeSymbol.ContainsNeverType(resolvedFnType) {
+                Diagnostics.ReportExpressionMustHaveValue(calleeLocation)
+                return BoundErrorExpression(nil)
             }
             if !TryBindFunctionTypeArguments(
                 calleeName,

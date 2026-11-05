@@ -1017,6 +1017,14 @@ func f() {
 }`, "GS0124", 3, 27)
         AssertDiagnostic(`import System
 func f() {
+    let t (int32, int32) = (() -> (1, throw Exception("x")))()
+}`, "GS0124", 3, 28)
+        AssertDiagnostic(`import System
+func f() {
+    (() -> (1, throw Exception("x")))?()
+}`, "GS0124", 3, 5)
+        AssertDiagnostic(`import System
+func f() {
     let o object = (1, throw Exception("x"))
 }`, "GS0155", 3, 20)
     }
