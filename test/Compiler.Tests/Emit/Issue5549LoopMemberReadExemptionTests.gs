@@ -352,13 +352,19 @@ Console.WriteLine(RunLoop(2) + RunSpan(2))`, "GS0158@17:27 GS0158@17:37 GS0158@3
 class C {
     var Value int32 = 1
 }
-struct Token {
+interface ITag { }
+struct Token : ITag {
     var N int32
 }
 func (t Token) operator -() int32 {
     g = nil
     return -t.N
 }
+func (t Token) operator ==(o object?) bool {
+    g = nil
+    return false
+}
+func (t Token) operator !=(o object?) bool -> true
 enum Tag {
     A = 1,
     B = 2
@@ -374,6 +380,7 @@ func (t Tag) operator ==(o object?) bool {
 func (t Tag) operator !=(o object?) bool -> true
 class Holder {
     var Kind Tag = Tag.A
+    let Item ITag = Token{N: 1}
 }
 
 func RunDerefUnaryInLoop(h managed[Token], n int32) int32 {
@@ -391,6 +398,26 @@ func RunEnumUnaryInLoop(n int32) int32 {
     for var i = 0; i < n; i++ {
         total = total + g.Value + -Tag.A
     }
+    return total
+}
+
+func RunNestedEnumUnaryInLoop(n int32) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + g.Value + -(~Tag.A) + -(Tag.A | Tag.B)
+    }
+    return total
+}
+
+func RunNestedEnumUnaryInSpan(n int32) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    var i = 0
+    Again:
+    total = total + g.Value + -(~Tag.A) + -(Tag.A | Tag.B)
+    i = i + 1
+    if i < n { goto Again }
     return total
 }
 
@@ -416,13 +443,37 @@ func RunEnumNilCompareInSpan(holder Holder, n int32) int32 {
     return total
 }
 
+func RunNarrowedMemberNilCompareInLoop(holder Holder, n int32) int32 {
+    if g == nil { return 0 }
+    var total = 0
+    for var i = 0; i < n; i++ {
+        total = total + g.Value
+        if holder.Item is Token {
+            if holder.Item == nil { total = total + 1 }
+        }
+    }
+    return total
+}
+
+func RunEntryNarrowedMemberNilCompareInSpan(holder Holder, n int32) int32 {
+    if g == nil || holder.Item !is Token { return 0 }
+    var total = 0
+    var i = 0
+    Again:
+    total = total + g.Value
+    if holder.Item == nil { total = total + 1 }
+    i = i + 1
+    if i < n { goto Again }
+    return total
+}
+
 func CallDeref(n int32) int32 {
     var tok = Token{N: 1}
     return RunDerefUnaryInLoop(managed(tok), n)
 }
 
 var g C? = C{}
-Console.WriteLine(CallDeref(2) + RunEnumUnaryInLoop(2) + RunEnumNilCompareInLoop(Holder{}, 2) + RunEnumNilCompareInSpan(Holder{}, 2))`, "GS0158@34:27 GS0158@43:27 GS0158@52:27 GS0158@63:23", "reject", ""}
+Console.WriteLine(CallDeref(2) + RunEnumUnaryInLoop(2) + RunNestedEnumUnaryInLoop(2) + RunNestedEnumUnaryInSpan(2) + RunEnumNilCompareInLoop(Holder{}, 2) + RunEnumNilCompareInSpan(Holder{}, 2) + RunNarrowedMemberNilCompareInLoop(Holder{}, 2) + RunEntryNarrowedMemberNilCompareInSpan(Holder{}, 2))`, "GS0158@41:27 GS0158@50:27 GS0158@59:27 GS0158@69:23 GS0158@79:27 GS0158@90:23 GS0158@101:27 GS0158@114:23", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

@@ -394,13 +394,9 @@ internal partial class StatementBinder {
             }
         }
         for name in effects.NilCompareOperandNames {
-            if TryLookupRegionVariableType(name) is {} comparedType {
-                // A non-nullable value type compared with `nil` may select a user-defined `==`.
-                if object.Equals(StripAllNullability(comparedType), TypeSymbol.Object) ||
-                    (comparedType !is NullableTypeSymbol && !IsReferenceLikeType(comparedType)) {
-                    resolved.RunsUserOperator = true
-                    resolved.NilCompareRunsUserOperator = true
-                }
+            if NilCompareNameRunsUserOperator(name, effects) {
+                resolved.RunsUserOperator = true
+                resolved.NilCompareRunsUserOperator = true
             }
         }
         for name in effects.BareReads {
@@ -559,11 +555,21 @@ internal partial class StatementBinder {
         if resolved.ReadsUserCodeProperty {
             return true
         }
-        if !effects.ContainsMemberRead {
+        if !effects.ContainsMemberRead && effects.NilCompareOperandPaths.Count == 0 {
             return false
         }
         if resolved.ReadsRunUserCode == nil {
-            resolved.ReadsRunUserCode = (effects.MemberReads.Count == 0 && effects.PatternReads.Count == 0) ||
+            resolved.ReadsRunUserCode = (
+                effects
+                    .MemberReads
+                    .Count == 0 &&
+                    effects
+                    .PatternReads
+                    .Count == 0 &&
+                    effects
+                    .NilCompareOperandPaths
+                    .Count == 0
+            ) ||
                 ReadsRunUserCode(effects, false)
         }
         return resolved.ReadsRunUserCode == true
@@ -1407,6 +1413,15 @@ internal partial class StatementBinder {
     private func OperatorsRunUserCode(effects RegionEffects, forReferenceStorage bool) bool {
         let enumTypes = List[EnumSymbol]()
         for candidate in effects.Operators {
+            for operand in candidate.Operands {
+                if operand != nil &&
+                    BuiltInOperandType(operand, effects) is EnumSymbol enumOperand &&
+                    !enumTypes.Contains(enumOperand) {
+                    enumTypes.Add(enumOperand)
+                }
+            }
+        }
+        for candidate in effects.Operators {
             // A known built-in operand type, or `nil` for an operand that is itself an operator expression.
             let operandTypes = List[TypeSymbol?]()
             for var index = 0; index < candidate.Operands.Count; index++ {
@@ -1417,9 +1432,6 @@ internal partial class StatementBinder {
                     }
                     operandTypes.Add(nil)
                 } else if BuiltInOperandType(operand, effects) is {} operandType {
-                    if operandType is EnumSymbol enumOperand && !enumTypes.Contains(enumOperand) {
-                        enumTypes.Add(enumOperand)
-                    }
                     operandTypes.Add(operandType)
                 } else if !forReferenceStorage || OperandIsImportedType(operand, effects) {
                     return true
@@ -2461,6 +2473,41 @@ internal partial class StatementBinder {
         return segments
     }
 
+    private func NilCompareNameRunsUserOperator(name string, effects RegionEffects) bool {
+        guard let comparedType = TryLookupRegionVariableType(name) else {
+            return false
+        }
+        // A non-nullable value type compared with `nil` may select a user-defined `==`, as may a reference-typed
+        // variable or implicit member narrowed to a value type at the entry scope or inside the region.
+        if object.Equals(StripAllNullability(comparedType), TypeSymbol.Object) ||
+            (comparedType !is NullableTypeSymbol && !IsReferenceLikeType(comparedType)) {
+            return true
+        }
+        let symbol = $scope.TryLookupSymbol(name)
+        if symbol is VariableSymbol variable {
+            if (
+                variable is ImplicitFieldVariableSymbol or
+                    ImplicitPropertyVariableSymbol or
+                    ImplicitStaticFieldVariableSymbol or
+                    ImplicitStaticPropertyVariableSymbol
+            ) &&
+                (effects.ContainsMemberTypeTest || HasEntryMemberTypeTest()) {
+                return true
+            }
+        } else if effects.ContainsMemberTypeTest || HasEntryMemberTypeTest() {
+            return true
+        }
+        if !NullableLifting.IsAnyValueTypeNullable(comparedType as NullableTypeSymbol) &&
+            NilCompareRunsUserOperator(
+            RegionReceiverPath(name, false, nil, nil, ImmutableArray[RegionReceiverStep].Empty),
+            effects,
+            false
+        ) {
+            return true
+        }
+        return false
+    }
+
     // Whether a member or an element compared with `nil` has an imported value type whose `==` or `!=` takes a
     // reference (`operator ==(Token, object)`), which the comparison calls. A source operator is a plain call
     // (A3). An operand that does not resolve can run one.
@@ -2469,7 +2516,14 @@ internal partial class StatementBinder {
         effects RegionEffects,
         forReferenceStorage bool
     ) bool {
-        if compared == nil || ResolveReceiverPath(compared, effects) is not{} types {
+        if compared == nil ||
+            (
+            compared
+                .Steps
+                .Length > 0 &&
+                (effects.ContainsMemberTypeTest || HasEntryMemberTypeTest() || HasTypeTestOnReceiver(compared, effects))
+        ) ||
+            ResolveReceiverPath(compared, effects) is not{} types {
             return true
         }
         for type in types {
