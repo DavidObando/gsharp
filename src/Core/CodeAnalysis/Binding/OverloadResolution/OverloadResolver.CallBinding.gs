@@ -1034,6 +1034,42 @@ internal partial class OverloadResolver {
             }
             boundArguments.Add(boundArgument)
         }
+        let initialArguments = boundArguments.ToImmutable()
+        let overloadDiagMark = Diagnostics.Count
+        var result = BindCallExpressionAfterArguments(
+            syntax,
+            resolvedType,
+            argumentNames,
+            boundArguments,
+            deferredArrowLambdas,
+            rollbackPrebind,
+            prebindDiagMark
+        )
+        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+            Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+            result = BindCallExpressionAfterArguments(
+                syntax,
+                resolvedType,
+                argumentNames,
+                refreshedArguments.ToBuilder(),
+                deferredArrowLambdas,
+                rollbackPrebind,
+                prebindDiagMark
+            )
+        }
+        return result
+    }
+
+    private func BindCallExpressionAfterArguments(
+        syntax CallExpressionSyntax,
+        resolvedType TypeSymbol?,
+        argumentNames ImmutableArray[string],
+        boundArguments ImmutableArray[BoundExpression].Builder,
+        deferredArrowLambdas HashSet[LambdaExpressionSyntax]?,
+        rollbackPrebind Action?,
+        prebindDiagMark int32
+    ) BoundExpression {
+        var boundArguments = boundArguments
         let symbol Symbol? = Scope.TryLookupSymbol(syntax.Identifier.ValueText)
         if symbol is VariableSymbol callTarget && AccessibilityChecker.TryGetInaccessibleImplicitMemberRead(
             callTarget,

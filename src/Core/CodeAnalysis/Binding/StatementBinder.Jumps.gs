@@ -258,6 +258,7 @@ internal partial class StatementBinder {
     /// again after a restore; a loop body binds once (ADR-0213 L1).
     private sealed class SpeculativeBindState {
         internal let DiagnosticCount int32
+        internal let SuppressionCount int32
         internal let NarrowingFrames[]Dictionary[AccessPath, TypeSymbol]
         internal let PendingEarlyExitFrames[]KeyValuePair[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]]
         internal let PendingSwitchExitFrames[]KeyValuePair[
@@ -291,6 +292,7 @@ internal partial class StatementBinder {
 
         init(
             diagnosticCount int32,
+            suppressionCount int32,
             narrowingFrames[]Dictionary[AccessPath, TypeSymbol],
             pendingEarlyExitFrames[]KeyValuePair[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]],
             pendingSwitchExitFrames[]KeyValuePair[BoundPatternSwitchStatement, Dictionary[AccessPath, TypeSymbol]],
@@ -312,6 +314,7 @@ internal partial class StatementBinder {
             deferredReturns LambdaBinder.DeferredReturnState?
         ) {
             DiagnosticCount = diagnosticCount
+            SuppressionCount = suppressionCount
             NarrowingFrames = narrowingFrames
             PendingEarlyExitFrames = pendingEarlyExitFrames
             PendingSwitchExitFrames = pendingSwitchExitFrames
@@ -340,6 +343,7 @@ internal partial class StatementBinder {
     /// @returns The captured state.
     private func CaptureSpeculativeBindState() SpeculativeBindState -> SpeculativeBindState(
         Diagnostics.Count,
+        Diagnostics.SuppressionCount,
         binderCtx
             .NarrowedVariables
             .Select((frame NarrowingFrame) -> Dictionary[AccessPath, TypeSymbol](frame))
@@ -369,6 +373,7 @@ internal partial class StatementBinder {
     /// @param state The captured state.
     private func RestoreSpeculativeBindState(state SpeculativeBindState) {
         Diagnostics.TruncateTo(state.DiagnosticCount)
+        Diagnostics.RestoreSuppressionsTo(state.SuppressionCount)
         for var i = 0; i < state.NarrowingFrames.Length; i++ {
             let frame = binderCtx.NarrowedVariables[i]
             frame.Clear()
@@ -380,6 +385,7 @@ internal partial class StatementBinder {
         RestoreEntries(binderCtx.PendingSwitchExitFrames, state.PendingSwitchExitFrames)
         RestoreItems(binderCtx.DefinedUserLabels, state.DefinedUserLabels)
         RestoreItems(externalCallableAliases, state.ExternalCallableAliases)
+        SyncExpressionCallableAliasesNow()
         binderCtx.NarrowingFlow.Restore(state.PendingJumps)
         RestoreEntries(binderCtx.UserLabels, state.UserLabels)
         RestoreEntries(binderCtx.UnresolvedGotoLabels, state.UnresolvedGotoLabels)
@@ -1122,7 +1128,7 @@ internal partial class StatementBinder {
             bindTarget ?? (() -> bindExpressionWithTargetType(value, targetType))
         )
         HoldDeferredReturnConversion(deferredReturns, value.Location, targetTyped, targetType)
-        let targetDiagnostics = Diagnostics.Skip(beforeValue.DiagnosticCount).ToImmutableArray()
+        let targetDiagnostics = Diagnostics.VisibleSince(beforeValue.DiagnosticCount)
         let afterTarget = CaptureSpeculativeBindState()
         let targetPassLabels = Dictionary[string, BoundLabel](binderCtx.UserLabels)
         RestoreSpeculativeBindState(beforeValue)
@@ -1137,7 +1143,7 @@ internal partial class StatementBinder {
         } finally {
             retriedValueUserLabels = outerRetriedLabels
         }
-        let naturalDiagnostics = Diagnostics.Skip(beforeValue.DiagnosticCount).ToImmutableArray()
+        let naturalDiagnostics = Diagnostics.VisibleSince(beforeValue.DiagnosticCount)
         let naturalCounter = binderCtx.SyntheticLocalCounter
         let naturalFailed = naturalDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError)
         Diagnostics.TruncateTo(beforeValue.DiagnosticCount)
@@ -1163,7 +1169,7 @@ internal partial class StatementBinder {
     ) {
         let mark = Diagnostics.Count
         let converted = conversions.BindConversion(location, value, targetType)
-        deferredReturns.HoldConversion(value, converted, Diagnostics.Skip(mark).ToImmutableArray())
+        deferredReturns.HoldConversion(value, converted, Diagnostics.VisibleSince(mark))
         Diagnostics.TruncateTo(mark)
     }
 

@@ -146,6 +146,70 @@ open class Outer {
         Assert.True(point!!.IsValueType)
     }
 
+    @Fact
+    func NestedDerivedDeclaredBeforeNestedBase_OverridesRun() {
+        let output = CompileAndRun(`package P
+
+import System
+
+class Container {
+    private class Derived : Middle {
+        var stored int32
+        protected override func Record(value int32) {
+            stored += value
+        }
+        protected override prop Current int32 {
+            get -> stored
+            set { stored = value }
+        }
+        protected override prop this[delta int32] int32 {
+            get -> stored + delta
+            set { stored = value + delta }
+        }
+        protected override event Changed Action[int32]
+        func Fire(v int32) {
+            Changed?.Invoke(v)
+        }
+    }
+
+    private open class Middle : Base[int32] {
+    }
+
+    private abstract class Base[T] {
+        protected open func Record(value T);
+        protected open prop Current T {
+            get -> default(T)
+            set { }
+        }
+        protected open prop this[delta int32] T {
+            get -> default(T)
+            set { }
+        }
+        protected open event Changed Action[T]
+
+        func Exercise(step T, initial T, indexed T, handler Action[T]) T {
+            Changed += handler
+            Current = initial
+            Record(step)
+            this[1] = indexed
+            return this[2]
+        }
+    }
+
+    func Run() string {
+        let d = Derived()
+        var seen = 0
+        let b Base[int32] = d
+        let res = b.Exercise(3, 10, 20, (x int32) -> { seen = x })
+        d.Fire(res)
+        return "${d.stored} $res $seen"
+    }
+}
+
+Console.WriteLine(Container().Run())`)
+        Assert.Equal("21 23 23${Environment.NewLine}", output)
+    }
+
     shared {
         private func CompileAndRun(source string) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_issue1069_emit_").FullName

@@ -438,7 +438,7 @@ internal partial class MethodBodyEmitter {
             fieldHandle = this.outer.userTokens.ResolveFieldToken(fieldContainer, fa.Field)
         } else if fa.Receiver?.Type is StructSymbol receiverStruct {
             fieldHandle = this.outer.userTokens.ResolveFieldToken(receiverStruct, fa.Field)
-        } else if this.outer.cache.StructFieldDefs.TryGetValue(fa.Field, out var defHandle) {
+        } else if this.TryGetEmittedFieldDefHandle(fa.Field, out var defHandle) {
             fieldHandle = defHandle
         } else {
             throw InvalidOperationException("Struct field '${fa.Field.Name}' has no emitted FieldDef.")
@@ -533,7 +533,7 @@ internal partial class MethodBodyEmitter {
             fieldHandle = this.outer.userTokens.ResolveFieldToken(fieldContainer, fas.Field)
         } else if fas.Receiver?.Type is StructSymbol receiverStruct {
             fieldHandle = this.outer.userTokens.ResolveFieldToken(receiverStruct, fas.Field)
-        } else if this.outer.cache.StructFieldDefs.TryGetValue(fas.Field, out var defHandle) {
+        } else if this.TryGetEmittedFieldDefHandle(fas.Field, out var defHandle) {
             fieldHandle = defHandle
         } else {
             throw InvalidOperationException("Struct field '${fas.Field.Name}' has no emitted FieldDef.")
@@ -1958,11 +1958,23 @@ internal partial class MethodBodyEmitter {
         if fieldContainer != nil {
             return this.outer.userTokens.ResolveFieldToken(fieldContainer, fa.Field)
         }
-        if this.outer.cache.StructFieldDefs.TryGetValue(fa.Field, out var defHandle) {
+        if this.TryGetEmittedFieldDefHandle(fa.Field, out var defHandle) {
             return defHandle
         }
         throw InvalidOperationException("Cannot take address of field '${fa.Field.Name}': no emitted FieldDef.")
     }
+
+    private func TryGetEmittedFieldDefHandle(field FieldSymbol, out handle FieldDefinitionHandle) bool ->
+    this
+        .outer
+        .cache
+        .StructFieldDefs
+        .TryGetValue(field, out handle) ||
+        this
+        .outer
+        .cache
+        .DeclaredFieldDefs
+        .TryGetValue(field, out handle)
 
     /// ADR-0039: Emits ldelema for array element address.
     private func EmitLoadElementAddress(elementType TypeSymbol) {

@@ -316,6 +316,7 @@ class BoundGlobalScope {
     }
 
     private var _declaredTypeAliases ImmutableArray[TypeAliasSymbol] = ImmutableArray[TypeAliasSymbol].Empty
+    private var _aliasDeclaringPackages ImmutableDictionary[string, string] = ImmutableDictionary[string, string].Empty
 
     /// Gets the source-declared `type Name = Target` alias symbols in declaration order (#5333).
     internal prop DeclaredTypeAliases ImmutableArray[TypeAliasSymbol] {
@@ -324,6 +325,15 @@ class BoundGlobalScope {
         }
         set {
             _declaredTypeAliases = value
+        }
+    }
+
+    internal prop AliasDeclaringPackages ImmutableDictionary[string, string] {
+        get {
+            return _aliasDeclaringPackages
+        }
+        set {
+            _aliasDeclaringPackages = value
         }
     }
 

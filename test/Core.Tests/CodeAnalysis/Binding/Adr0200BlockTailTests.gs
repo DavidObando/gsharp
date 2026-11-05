@@ -1029,6 +1029,235 @@ func f() {
 }`, "GS0155", 3, 20)
     }
 
+    @Fact
+    func Issue5011_SwitchAndIsPatternExpressions_FlowDefiniteAssignmentAndShortCircuit() {
+        AssertOutput(`import System
+struct Box(Prop int32)
+func Match(out a int32, v int32) int32 {
+    a = v
+    return -1
+}
+func ConstSwitch(x int32, out a int32) int32 {
+    return switch x { case Match(out a, 10): 1 default: 0 }
+}
+func RelSwitch(x int32, out a int32) int32 {
+    return switch x { case > Match(out a, 20): 1 default: 0 }
+}
+func EqRelSwitch(x int32, out a int32) int32 {
+    return switch x { case == Match(out a, 25): 1 default: 0 }
+}
+func NotSwitch(x int32, out a int32) int32 {
+    return switch x { case not Match(out a, 30): 1 default: 0 }
+}
+func AndLeftSwitch(x int32, out a int32) int32 {
+    return switch x { case Match(out a, 40) and 1: 1 default: 0 }
+}
+func AndWildcardLeftSwitch(x int32, out a int32) int32 {
+    return switch x { case _ and Match(out a, 45): 1 default: 0 }
+}
+func OrLeftSwitch(x int32, out a int32) int32 {
+    return switch x { case Match(out a, 50) or 1: 1 default: 0 }
+}
+func OrFailureFlowSwitch(x int32, out a int32) int32 {
+    return switch x {
+        case 1 or Match(out a, 60): {
+            a = 61
+            1
+        }
+        default: 0
+    }
+}
+func StmtSwitch(x int32, out a int32) int32 {
+    switch x {
+        case (Match(out a, 70)) { return 1 }
+        default { return 0 }
+    }
+}
+func FallthroughSwitch(x int32, out a int32) int32 {
+    switch x {
+        case (Match(out a, 75)) { fallthrough }
+        case 0 { return 1 }
+        default { return 0 }
+    }
+}
+func BoxPropSwitch(b Box, out a int32) int32 {
+    return switch b { case { Prop: Match(out a, 85) }: 1 default: 0 }
+}
+func VoidSwitch(x int32, out a int32) {
+    switch x {
+        case Match(out a, 80): Console.Write("")
+    }
+}
+func UseRef(ref a int32) bool {
+    a++
+    return true
+}
+func IsBranches(x int32, out a int32, out b int32) int32 {
+    if (x is (1 and Match(out a, 90))) && UseRef(ref a) {
+    } else {
+        a = 91
+    }
+    if !(x is (1 or Match(out b, 94))) && UseRef(ref b) {
+    } else {
+        b = 96
+    }
+    return a + b
+}
+var a int32
+var b int32
+Console.WriteLine("${ConstSwitch(5, out a)}:${a}")
+Console.WriteLine("${RelSwitch(5, out a)}:${a}")
+Console.WriteLine("${EqRelSwitch(5, out a)}:${a}")
+Console.WriteLine("${NotSwitch(5, out a)}:${a}")
+Console.WriteLine("${AndLeftSwitch(5, out a)}:${a}")
+Console.WriteLine("${AndWildcardLeftSwitch(5, out a)}:${a}")
+Console.WriteLine("${OrLeftSwitch(5, out a)}:${a}")
+Console.WriteLine("${OrFailureFlowSwitch(1, out a)}:${a}")
+Console.WriteLine("${OrFailureFlowSwitch(5, out a)}:${a}")
+Console.WriteLine("${StmtSwitch(5, out a)}:${a}")
+Console.WriteLine("${FallthroughSwitch(5, out a)}:${a}")
+Console.WriteLine("${BoxPropSwitch(Box(5), out a)}:${a}")
+VoidSwitch(5, out a)
+Console.WriteLine(a)
+Console.WriteLine("${IsBranches(1, out a, out b)}:${a}:${b}")
+Console.WriteLine("${IsBranches(5, out a, out b)}:${a}:${b}")`, "0:10\n1:20\n0:25\n1:30\n0:40\n0:45\n0:50\n1:61\n0:60\n0:70\n0:75\n0:85\n80\n187:91:96\n186:91:95\n")
+
+        // Short-circuiting patterns do NOT definitely assign on skipped paths.
+        AssertDiagnostic(`func Match(out a int32) int32 { a = 1 return -1 }
+func F(x int32, out a int32) int32 {
+    return switch x { case 1 and Match(out a): 1 default: 0 }
+}`, "GS0238", 3, 5)
+        AssertDiagnostic(`func Match(out a int32) int32 { a = 1 return -1 }
+func F(x int32, out a int32) int32 {
+    return switch x { case 1 or Match(out a): 1 default: { a = 2 0 } }
+}`, "GS0238", 3, 5)
+        AssertDiagnostic(`func Match(out a int32) int32 { a = 1 return -1 }
+func F(x int32, out a int32) int32 {
+    return switch x { case _ or Match(out a): 1 default: 0 }
+}`, "GS0238", 3, 5)
+        AssertDiagnostic(`struct Pair(A int32, B int32)
+func Match(out a int32) int32 { a = 1 return -1 }
+func F(p Pair, out a int32) int32 {
+    return switch p { case { A: 1, B: Match(out a) }: 1 default: 0 }
+}`, "GS0238", 4, 5)
+        AssertDiagnostic(`class RefBox(Prop int32)
+func Match(out a int32) int32 { a = 1 return -1 }
+func F(b RefBox?, out a int32) int32 {
+    return switch b { case { Prop: Match(out a) }: 1 default: 0 }
+}`, "GS0238", 4, 5)
+        AssertDiagnostic(`func Match(out a int32) int32 { a = 1 return -1 }
+func F(xs []int32, out a int32) int32 {
+    return switch xs { case [Match(out a)]: 1 default: 0 }
+}`, "GS0238", 3, 5)
+        AssertDiagnostic(`func F(x int32, out a int32) {
+    switch x {
+        case 1 or _ { fallthrough }
+        default { return }
+    }
+    a = 1
+}`, "GS0238", 4, 19)
+        AssertDiagnostic(`func F(x int32, out a int32) {
+    var b = 0
+    var p = &a
+    switch x {
+        case 1 {}
+        default { p = &b }
+    }
+    *p = 1
+}`, "GS0238", 8, 5)
+        AssertDiagnostic(`func IdFloat(v float64) float64 -> v
+func F(x object?, out a int32) {
+    var b = 0
+    var p = &a
+    switch x {
+        case IdFloat({ p = &b 1.0 }) {
+            a = 1
+            return
+        }
+        default {}
+    }
+    *p = 1
+}`, "GS0238", 12, 5)
+        AssertDiagnostic(`class Box(Prop int32)
+func IdInt(v int32) int32 -> v
+func F(x object?, out a int32) {
+    var b = 0
+    var p = &a
+    switch x {
+        case Box{ Prop: IdInt({ p = &b 1 }) } {
+            a = 1
+            return
+        }
+        default {}
+    }
+    *p = 1
+}`, "GS0238", 13, 5)
+        AssertDiagnostic(`func IdInt(v int32) int32 -> v
+func F(xs []int32, out a int32) {
+    var b = 0
+    var p = &a
+    switch xs {
+        case [.. [IdInt({ p = &b 1 })]] {
+            a = 1
+            return
+        }
+        default {}
+    }
+    *p = 1
+}`, "GS0238", 12, 5)
+        AssertDiagnostic(`func Set(out a int32) int32 { a = 1 return 0 }
+func F(x int32, flag bool, out a int32) {
+    switch x {
+        case _ when flag { return }
+        case (Set(out a)) when flag {}
+        default {}
+    }
+}`, "GS0238", 4, 28)
+    }
+
+    @Fact
+    func Issue5016_ValueSwitchIrrefutableCombinatorPatterns_SatisfyCatchAllWhenUnguarded() {
+        AssertOutput(`import System
+func OrRight(x int32) int32 -> switch x { case 1 or _: 42 }
+func OrLeft(x int32) int32 -> switch x { case _ or 1: 43 }
+func Comma(x int32) int32 -> switch x { case 1, _: 44 }
+func AndBoth(x int32) int32 -> switch x { case _ and _: 45 }
+func DoubleNot(x int32) int32 -> switch x { case not not _: 46 }
+func NestedAndOr(x int32) int32 -> switch x { case (1 or _) and (2 or _): 47 }
+func VarBind(x int32) int32 -> switch x { case var v: v + 40 }
+func StmtReturn(x int32) int32 {
+    switch x {
+        case 1 or _ { return 48 }
+    }
+}
+func StmtFallthroughReturn(x int32) int32 {
+    switch x {
+        case 1 or _ { fallthrough }
+        default { return 50 }
+    }
+}
+Console.WriteLine(OrRight(2))
+Console.WriteLine(OrLeft(2))
+Console.WriteLine(Comma(2))
+Console.WriteLine(AndBoth(2))
+Console.WriteLine(DoubleNot(2))
+Console.WriteLine(NestedAndOr(9))
+Console.WriteLine(VarBind(9))
+Console.WriteLine(StmtReturn(9))
+Console.WriteLine(StmtFallthroughReturn(9))`, "42\n43\n44\n45\n46\n47\n49\n48\n50\n")
+
+        // Guarded wildcard alternatives and non-total combinators still require default.
+        AssertDiagnostic(`func F(x int32) int32 {
+    return switch x { case 1 or _ when x > 0: 42 }
+}`, "GS0176", 2, 12)
+        AssertDiagnostic(`func F(x int32) int32 {
+    return switch x { case _ and 1: 42 }
+}`, "GS0176", 2, 12)
+        AssertDiagnostic(`func F(x int32) int32 {
+    return switch x { case 1 or not _: 42 }
+}`, "GS0176", 2, 12)
+    }
+
     shared {
         private func AssertOutput(source string, expected string) {
             let result = EmittedOracle.Evaluate(source)
@@ -1040,10 +1269,19 @@ func f() {
         private func AssertDiagnostic(source string, id string, line int32, column int32) {
             let result = EmittedOracle.Evaluate(source)
             let matches = result.Diagnostics.Where((d Diagnostic) -> d.Id == id).ToList()
-            Assert.NotEmpty(matches)
-            Assert.Contains(
-                matches,
-                (d Diagnostic) -> d.Location.StartLine + 1 == line && d.Location.StartCharacter + 1 == column
+            let all = string.Join(
+                "; ",
+                result.Diagnostics.Select(
+                    (
+                        d Diagnostic
+                    ) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}: ${d.Message}"
+                )
+            )
+            Assert.True(
+                matches.Any(
+                    (d Diagnostic) -> d.Location.StartLine + 1 == line && d.Location.StartCharacter + 1 == column
+                ),
+                "Expected $id@$line:$column, Actual: $all"
             )
         }
     }

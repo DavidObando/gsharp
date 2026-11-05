@@ -834,6 +834,21 @@ internal partial class ExpressionBinder {
                         return compoundResult
                     }
                 }
+                if boundReceiver.Type is TypeParameterSymbol{
+                    InterfaceConstraint: InterfaceSymbol compoundInterfaceConstraint
+                } {
+                    let compoundResult BoundExpression? = TryBindInterfaceCompoundAssignment(
+                        compoundInterfaceConstraint,
+                        boundReceiver,
+                        eventName,
+                        eventNameSyntax,
+                        syntax,
+                        baseOpSyntaxKind
+                    )
+                    if compoundResult != nil {
+                        return compoundResult
+                    }
+                }
                 if isEventCapableOperator && boundReceiver.Type is InterfaceSymbol eventInterface {
                     eventInfo = MemberLookup.GetInterfaceImportedBaseInstanceEvent(
                         eventInterface,
@@ -1139,6 +1154,62 @@ internal partial class ExpressionBinder {
         return bound
     }
 
+    internal func BindConditionalRefParts(
+        conditionSyntax ExpressionSyntax,
+        whenTrueSyntax ExpressionSyntax,
+        whenFalseSyntax ExpressionSyntax
+    )(Condition BoundExpression, WhenTrue BoundExpression, WhenFalse BoundExpression) {
+        let conditionEntryAliases = GetCurrentExpressionCallableAliases()
+        let condition = BindExpression(conditionSyntax, TypeSymbol.Bool)
+        applyShortCircuitOperandEffects(conditionSyntax, condition, conditionEntryAliases)
+        let afterCondition = CaptureExpressionNarrowingFrames()
+        let (whenTrueNarrowing, whenFalseNarrowing, whenTrueAliases, whenFalseAliases) = ClassifyConditionalNarrowing(
+            condition,
+            conditionEntryAliases
+        )
+        let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
+        let whenTrue = BindWithPatternVariables(
+            patternWhenTrue,
+            () -> BindExpressionWithNarrowing(whenTrueSyntax, whenTrueNarrowing, aliases: whenTrueAliases),
+            whenTrueSyntax
+        )
+        TruncateBranchSiblingExpressions(afterCondition)
+        let thenExit = CaptureExpressionNarrowingFrames()
+        RestoreExpressionNarrowingFrames(afterCondition)
+        let whenFalse = BindWithPatternVariables(
+            patternWhenFalse,
+            () -> BindExpressionWithNarrowing(whenFalseSyntax, whenFalseNarrowing, aliases: whenFalseAliases),
+            whenFalseSyntax
+        )
+        TruncateBranchSiblingExpressions(afterCondition)
+        let falseExit = CaptureExpressionNarrowingFrames()
+        JoinConditionalBranchExpressionNarrowingFrames(
+            thenExit,
+            falseExit,
+            whenTrue.Type != TypeSymbol.Never,
+            whenFalse.Type != TypeSymbol.Never
+        )
+        return (condition, UnwrapTerminalLvalueStorage(whenTrue), UnwrapTerminalLvalueStorage(whenFalse))
+    }
+
+    private func UnwrapTerminalLvalueStorage(expression BoundExpression) BoundExpression {
+        switch expression {
+            case unwrap is BoundUnaryExpression when unwrap.IsNarrowingUnwrap {
+                return UnwrapTerminalLvalueStorage(unwrap.Operand)
+            }
+            case block is BoundBlockExpression {
+                let inner = UnwrapTerminalLvalueStorage(block.Expression)
+                if !object.ReferenceEquals(inner, block.Expression) {
+                    return BoundBlockExpression(block.Syntax, block.Statements, inner)
+                }
+                return block
+            }
+            default {
+                return expression
+            }
+        }
+    }
+
     /// ADR-0062: binds a general conditional expression as a conditional
     /// address-of when used as the payload of a ref-kind modifier or as the
     /// operand of `&`. Reuses the same validation rules as
@@ -1165,22 +1236,7 @@ internal partial class ExpressionBinder {
         location TextLocation,
         outerModifier SyntaxToken?
     ) BoundExpression {
-        // Condition must be bool.
-        let (condition, whenTrueNarrowing, whenFalseNarrowing) = bindConditionWithEffects(conditionSyntax)
-        let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
-        let (whenTrue, whenFalse) = bindConditionalBranches(
-            true,
-            () -> BindWithPatternVariables(
-                patternWhenTrue,
-                () -> BindExpressionWithNarrowing(whenTrueSyntax, whenTrueNarrowing),
-                whenTrueSyntax
-            ),
-            () -> BindWithPatternVariables(
-                patternWhenFalse,
-                () -> BindExpressionWithNarrowing(whenFalseSyntax, whenFalseNarrowing),
-                whenFalseSyntax
-            )
-        )
+        let (condition, whenTrue, whenFalse) = BindConditionalRefParts(conditionSyntax, whenTrueSyntax, whenFalseSyntax)
         if whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression || condition is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }
@@ -1195,16 +1251,20 @@ internal partial class ExpressionBinder {
         // Branch storage types must match — no implicit widening, since the
         // resulting byref selects between slots whose physical type must agree.
         let standaloneAddress = outerModifier == nil
+        let outerText = outerModifier?.Text ?? "&"
+        let useEffectiveNullability = outerText == "in"
         if !TryResolveConditionalAddressStorageType(
             whenTrue,
             whenTrueSyntax.Location,
             standaloneAddress,
+            useEffectiveNullability,
             out var trueStorageType
         ) ||
             !TryResolveConditionalAddressStorageType(
             whenFalse,
             whenFalseSyntax.Location,
             standaloneAddress,
+            useEffectiveNullability,
             out var falseStorageType
         ) {
             return BoundErrorExpression(nil)
@@ -1221,7 +1281,6 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        let outerText = outerModifier?.Text ?? "&"
         let requiresWritable = outerText == "ref" || outerText == "out" || outerText == "&"
         if requiresWritable {
             if RefCapabilities.IsReadOnlyStorage(whenTrue) {
@@ -1258,6 +1317,7 @@ internal partial class ExpressionBinder {
         expression BoundExpression,
         location TextLocation,
         standaloneAddress bool,
+        useEffectiveNullability bool,
         @NotNullWhen(true) out storageType TypeSymbol?
     ) bool {
         var current = expression
@@ -1270,12 +1330,14 @@ internal partial class ExpressionBinder {
                 conditional.WhenTrue,
                 condLocation,
                 standaloneAddress,
+                useEffectiveNullability,
                 out var nestedTrue
             ) ||
                 !TryResolveConditionalAddressStorageType(
                 conditional.WhenFalse,
                 condLocation,
                 standaloneAddress,
+                useEffectiveNullability,
                 out var nestedFalse
             ) {
                 storageType = nil
@@ -1293,7 +1355,7 @@ internal partial class ExpressionBinder {
             storageType = MergeConditionalStorageType(nestedTrue, nestedFalse)
             return true
         }
-        storageType = AddressedLeafStorageType(current, useEffectiveNullability: !standaloneAddress)
+        storageType = AddressedLeafStorageType(current, useEffectiveNullability: useEffectiveNullability)
         return true
     }
 

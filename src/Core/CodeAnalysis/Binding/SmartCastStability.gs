@@ -198,14 +198,24 @@ internal shared class SmartCastStability {
         var targetType TypeSymbol? = nil
         if left is BoundVariableExpression lv &&
             IsAcceptableBareVariable(lv.Variable, restrictBareVariableToLocalsAndParams) &&
-            StatementBinder.IsNilLiteral(right) {
+            StatementBinder
+            .IsNilLiteral(right) {
             target = lv.Variable
-            targetType = lv.Variable.Type
+            targetType = if lv.NarrowedType is NullableTypeSymbol {
+                lv.NarrowedType
+            } else {
+                lv.Variable.Type
+            }
         } else if right is BoundVariableExpression rv &&
             IsAcceptableBareVariable(rv.Variable, restrictBareVariableToLocalsAndParams) &&
-            StatementBinder.IsNilLiteral(left) {
+            StatementBinder
+            .IsNilLiteral(left) {
             target = rv.Variable
-            targetType = rv.Variable.Type
+            targetType = if rv.NarrowedType is NullableTypeSymbol {
+                rv.NarrowedType
+            } else {
+                rv.Variable.Type
+            }
         } else if StatementBinder.IsNilLiteral(right) &&
             TryGetStableMemberPath(left, out var leftPath, out var leftType) {
             target = leftPath
@@ -341,7 +351,7 @@ internal shared class SmartCastStability {
         return false
     }
 
-    private func IsStableClrMember(member MemberInfo) bool {
+    func IsStableClrMember(member MemberInfo) bool {
         if member is FieldInfo field {
             return !field.IsStatic && field.IsInitOnly
         }

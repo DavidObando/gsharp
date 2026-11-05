@@ -472,9 +472,62 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
     }
 
     internal func ProbeStorageReceiver(receiver BoundExpression?, statements ImmutableArray[BoundStatement].Builder) {
-        if receiver != nil && receiver is not BoundVariableExpression && IsInPlaceStorageWriteReceiver(receiver) {
+        if receiver != nil &&
+            receiver is not BoundVariableExpression &&
+            receiver is not BoundDereferenceExpression{Operand: BoundVariableExpression} &&
+            IsInPlaceStorageWriteReceiver(receiver) {
             statements.Add(BoundExpressionStatement(nil, BoundAddressOfExpression(nil, receiver)))
         }
+    }
+
+    private func SpillNativeSliceElementOperand(
+        operand BoundExpression,
+        statements ImmutableArray[BoundStatement].Builder,
+        captureComponents bool
+    ) BoundExpression {
+        var current = operand
+        while current is BoundBlockExpression block {
+            for statement in block.Statements {
+                statements.Add(statement)
+            }
+            current = block.Expression
+        }
+        let clrIndex = cast[BoundClrIndexExpression](current)
+        let receiverLocation = if IsInPlaceStorageWriteReceiver(clrIndex.Target) {
+            let captured = this.SpillStorageReceiverParts(clrIndex.Target, statements, captureComponents: true)
+            this.ProbeStorageReceiver(captured, statements)
+            captured
+        } else {
+            this.MaybeSpill(
+                clrIndex.Target,
+                !IsStableLocalRead(clrIndex.Target) &&
+                    (captureComponents || SideEffectAnalyzer.HasObservableSideEffect(clrIndex.Target)),
+                "coll",
+                statements
+            )
+        }
+        let arguments = ImmutableArray.CreateBuilder[BoundExpression](clrIndex.Arguments.Length)
+        for argument in clrIndex.Arguments {
+            let spilled = this.MaybeSpill(
+                argument,
+                captureComponents ||
+                    (!IsStableLocalRead(argument) && argument is not BoundLiteralExpression) ||
+                    SideEffectAnalyzer.HasObservableSideEffect(argument),
+                "idx",
+                statements
+            )
+            arguments.Add(spilled)
+        }
+        let target = this.MaybeSpill(receiverLocation, !IsStableLocalRead(receiverLocation), "coll", statements)
+        return BoundClrIndexExpression(
+            clrIndex.Syntax,
+            target,
+            clrIndex.Indexer,
+            arguments.MoveToImmutable(),
+            clrIndex.Type,
+            clrIndex.ConstrainedReceiverTypeParameter,
+            clrIndex.ConstrainedInterfaceType
+        )
     }
 
     /// Rewrites an addressable receiver chain (see
@@ -505,6 +558,12 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         switch receiver {
             case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
                 return this.SpillStorageReceiverParts(address.Operand, statements, captureComponents: true)
+            }
+            case dereference is BoundDereferenceExpression when IsNativeSliceElementOperand(dereference.Operand) {
+                return BoundDereferenceExpression(
+                    dereference.Syntax,
+                    this.SpillNativeSliceElementOperand(dereference.Operand, statements, captureComponents)
+                )
             }
             case tuple is BoundTupleElementAccessExpression {
                 // Capture owners and indices before the RHS, without copying tuple storage.
@@ -539,6 +598,15 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     statements.Add(BoundConditionalGotoStatement(nil, skip, condition, jumpIfTrue: true))
                     statements.AddRange(falseStatements)
                     statements.Add(BoundLabelStatement(nil, skip))
+                }
+                if object.ReferenceEquals(condition, address.Condition) && object.ReferenceEquals(
+                    whenTrue,
+                    address.WhenTrueOperand
+                ) &&
+                    object.ReferenceEquals(whenFalse, address.WhenFalseOperand) &&
+                    trueStatements.Count == 0 &&
+                    falseStatements.Count == 0 {
+                    return dereference
                 }
                 let captured = BoundConditionalAddressExpression(
                     address.Syntax,
@@ -714,6 +782,26 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             return BoundVariableExpression(storage.Syntax, local)
         }
 
+        internal func IsCapturedRuntimeGenericStorageReceiver(
+            expression BoundExpression
+        ) bool -> expression is BoundDereferenceExpression{
+            Operand: BoundConditionalAddressExpression{
+                WhenFalseOperand: BoundVariableExpression{Variable: LocalVariableSymbol snapshot}
+            }
+        } &&
+            (
+            snapshot.Name.StartsWith("<>spillGeneric", StringComparison.Ordinal) || snapshot.Name.StartsWith(
+                "<ncaGeneric",
+                StringComparison.Ordinal
+            ) ||
+                snapshot
+                .Name
+                .StartsWith("$$go$$Generic$$", StringComparison.Ordinal) || snapshot.Name.StartsWith(
+                "$$postfix$$Generic$$",
+                StringComparison.Ordinal
+            )
+        )
+
         internal func CaptureRuntimeGenericStorageReceiver(
             storage BoundExpression,
             anchor SyntaxNode?,
@@ -722,7 +810,8 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         ) BoundExpression {
             if storage.Type is not TypeParameterSymbol parameter ||
                 parameter.HasValueTypeConstraint ||
-                BindingBinder.IsReferenceTypeForConstraint(parameter) {
+                BindingBinder.IsReferenceTypeForConstraint(parameter) ||
+                IsCapturedRuntimeGenericStorageReceiver(storage) {
                 return storage
             }
             // Snapshot reference instantiations, but reconstruct value-type storage after the RHS.
@@ -822,9 +911,21 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             Variable: LocalVariableSymbol{IsReadOnly: true, RefKind: RefKind.None}
         }
 
+        internal func IsNativeSliceElementOperand(expression BoundExpression?) bool -> switch expression {
+            case block is BoundBlockExpression: IsNativeSliceElementOperand(block.Expression)
+            case index is BoundClrIndexExpression: NativeSliceTypes.TryGetElement(index.Target.Type, out _, out _)
+            default: false
+        }
+
         internal func IsOpaqueStorageReceiver(expression BoundExpression?) bool -> switch expression {
             case block is BoundBlockExpression: IsOpaqueStorageReceiver(block.Expression)
-            case dereference is BoundDereferenceExpression: IsOpaqueStorageReceiver(dereference.Operand)
+            case dereference is BoundDereferenceExpression: !IsNativeSliceElementOperand(dereference.Operand) &&
+                IsOpaqueStorageReceiver(dereference.Operand)
+            case index is BoundClrIndexExpression when NativeSliceTypes.TryGetElement(
+                index.Target.Type,
+                out _,
+                out _
+            ): false
             case {} expression: RefCapabilities.IsRefReturningAccess(expression)
             default: false
         }
@@ -851,6 +952,11 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
                         receiver = address.Operand
                         continue
+                    }
+                    case dereference is BoundDereferenceExpression when IsNativeSliceElementOperand(
+                        dereference.Operand
+                    ) {
+                        return true
                     }
                     case tuple is BoundTupleElementAccessExpression {
                         receiver = tuple.Receiver

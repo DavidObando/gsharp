@@ -313,7 +313,7 @@ internal partial class OverloadResolver {
             // Convert/validate the fixed-portion arguments first.
             var hasErrorsV = false
             for var i = 0; i < fixedPrimaryCount; i++ {
-                let argument = boundArguments[i]
+                let argument = (boundArguments[i] = conversions.ResolveReboundSibling(boundArguments[i]))
                 let parameter = parameters[i]
                 if parameterSyntaxV[i] is InterpolatedStringExpressionSyntax interpolatedCtorArg &&
                     isFormattableStringTargetType(parameter.Type) {
@@ -905,6 +905,39 @@ internal partial class OverloadResolver {
             boundArgument ??= BindOverloadArgumentValue(argument)
             boundArgumentsBuilder.Add(boundArgument!!)
         }
+        let initialArguments = boundArgumentsBuilder.ToImmutable()
+        let overloadDiagMark = Diagnostics.Count
+        var result = BindExplicitConstructorCallAfterArguments(
+            syntax,
+            classType,
+            argumentNames,
+            inlineOutArgumentIndices,
+            ctorOverloads,
+            boundArgumentsBuilder
+        )
+        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+            Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+            result = BindExplicitConstructorCallAfterArguments(
+                syntax,
+                classType,
+                argumentNames,
+                inlineOutArgumentIndices,
+                ctorOverloads,
+                refreshedArguments.ToBuilder()
+            )
+        }
+        return result
+    }
+
+    private func BindExplicitConstructorCallAfterArguments(
+        syntax CallExpressionSyntax,
+        classType StructSymbol,
+        argumentNames ImmutableArray[string],
+        inlineOutArgumentIndices ImmutableArray[int32],
+        ctorOverloads ImmutableArray[ConstructorSymbol],
+        boundArgumentsBuilder ImmutableArray[BoundExpression].Builder
+    ) BoundExpression {
+        var ctorOverloads = ctorOverloads
         if !inlineOutArgumentIndices.IsDefaultOrEmpty && ctorOverloads.Length > 1 {
             let hasFailedExplicitInlineOutType = inlineOutArgumentIndices.Any(
                 (index int32) -> (
@@ -2123,14 +2156,16 @@ internal partial class OverloadResolver {
             // Issue #1238: re-bind a deferred target-typed conditional argument
             // against the constructor parameter type before the error/convert
             // checks below.
-            argument = FinalizeBranchyArgument(
-                argument,
-                if i < parameterSyntax.Length {
-                    parameterSyntax[i]
-                } else {
-                    default(ExpressionSyntax?)
-                },
-                parameter.Type
+            boundArgs[i] = (
+                argument = FinalizeBranchyArgument(
+                    argument,
+                    if i < parameterSyntax.Length {
+                        parameterSyntax[i]
+                    } else {
+                        default(ExpressionSyntax?)
+                    },
+                    parameter.Type
+                )
             )
             if TryBindConstructorMethodGroup(argument, parameter.Type, argLocation, out var methodGroupArg) {
                 let boundGroup = Invariant.Required(

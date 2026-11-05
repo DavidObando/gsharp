@@ -16,6 +16,7 @@ import System.IO
 import System.Linq
 import System.Reflection
 import System.Reflection.Metadata
+import System.Reflection.Metadata.Ecma335
 import System.Reflection.PortableExecutable
 import Xunit
 import Xunit.Sdk
@@ -165,7 +166,204 @@ class Use {
         }
     }
 
+    /// Issue #4928: when projecting a host type into the target reference set throws
+    /// `ArgumentException` (for example, an arity mismatch on `MakeGenericType` or an
+    /// invalid forwarded assembly culture), `TryGetMemberLookupType` degrades
+    /// gracefully instead of letting the exception escape binding as GS9998, and
+    /// compilation reports GS0546.
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ProjectionFailure_InTryGetMemberLookupType_ReportsGs0546NotGs9998(forwardedBadCulture bool) {
+        let directory = Directory.CreateTempSubdirectory("gs_4928_").FullName
+        try {
+            let references = BuildBrokenDownlevelReferences(directory, forwardedBadCulture)
+            using let resolver = ReferenceResolver.WithReferences(references)
+            let thrown = Assert.ThrowsAny[ArgumentException](
+                () -> cast[object?](resolver.MapClrTypeToReferences(typeof(Dictionary[int32, int32])))
+            )
+            Assert.NotNull(thrown)
+            Assert.False(resolver.TryGetMemberLookupType(typeof(Dictionary[int32, int32]), out _))
+            let (diagnostics, image) = Compile(references, `package App
+
+class Probe {
+    func Run(m map[int32, int32]) int32 -> m.Count
+}
+`)
+            Assert.Null(image)
+            Assert.DoesNotContain(diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+            Assert.Contains(
+                diagnostics,
+                (d Diagnostic) -> d.Id == "GS0546" && d.Message.Contains(
+                    "System.Collections.Generic.Dictionary`2",
+                    StringComparison.Ordinal
+                )
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     shared {
+        private func BuildBrokenDownlevelReferences(directory string, forwardedBadCulture bool) IReadOnlyList[string] {
+            let metadata = MetadataBuilder()
+            metadata.AddModule(
+                0,
+                metadata.GetOrAddString("netstandard.dll"),
+                metadata.GetOrAddGuid(Guid.NewGuid()),
+                GuidHandle(),
+                GuidHandle()
+            )
+            metadata.AddAssembly(
+                metadata.GetOrAddString("netstandard"),
+                Version(2, 0, 0, 0),
+                StringHandle(),
+                BlobHandle(),
+                cast[AssemblyFlags](0),
+                AssemblyHashAlgorithm.None
+            )
+            metadata.AddTypeDefinition(
+                cast[TypeAttributes](0),
+                StringHandle(),
+                metadata.GetOrAddString("<Module>"),
+                EntityHandle(),
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(1)
+            )
+            let systemNamespace = metadata.GetOrAddString("System")
+            let objectType = metadata.AddTypeDefinition(
+                TypeAttributes.Public | TypeAttributes.Class,
+                systemNamespace,
+                metadata.GetOrAddString("Object"),
+                EntityHandle(),
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(1)
+            )
+            let valueType = metadata.AddTypeDefinition(
+                TypeAttributes.Public | TypeAttributes.Class,
+                systemNamespace,
+                metadata.GetOrAddString("ValueType"),
+                objectType,
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(1)
+            )
+            metadata.AddTypeDefinition(
+                TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.SequentialLayout,
+                systemNamespace,
+                metadata.GetOrAddString("Int32"),
+                valueType,
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(1)
+            )
+            let paths = List[string]()
+            if forwardedBadCulture {
+                // Forward Dictionary`2 (not a CoreType, so not probed by MetadataLoadContext..ctor)
+                // to a sibling assembly via an AssemblyReference with an invalid Culture string
+                // ("invalid/culture"): MetadataTypeNameReader indexes the forwarder by simple name,
+                // and Assembly.GetType throws CultureNotFoundException (an ArgumentException
+                // subclass) during projection.
+                let badRef = metadata.AddAssemblyReference(
+                    metadata.GetOrAddString("Target"),
+                    Version(1, 0, 0, 0),
+                    metadata.GetOrAddString("invalid/culture"),
+                    BlobHandle(),
+                    cast[AssemblyFlags](0),
+                    BlobHandle()
+                )
+                metadata.AddExportedType(
+                    cast[TypeAttributes](0x00200000),
+                    metadata.GetOrAddString("System.Collections.Generic"),
+                    metadata.GetOrAddString("Dictionary`2"),
+                    badRef,
+                    0
+                )
+                let targetMetadata = MetadataBuilder()
+                targetMetadata.AddModule(
+                    0,
+                    targetMetadata.GetOrAddString("Target.dll"),
+                    targetMetadata.GetOrAddGuid(Guid.NewGuid()),
+                    GuidHandle(),
+                    GuidHandle()
+                )
+                targetMetadata.AddAssembly(
+                    targetMetadata.GetOrAddString("Target"),
+                    Version(1, 0, 0, 0),
+                    StringHandle(),
+                    BlobHandle(),
+                    cast[AssemblyFlags](0),
+                    AssemblyHashAlgorithm.None
+                )
+                targetMetadata.AddTypeDefinition(
+                    cast[TypeAttributes](0),
+                    StringHandle(),
+                    targetMetadata.GetOrAddString("<Module>"),
+                    EntityHandle(),
+                    MetadataTokens.FieldDefinitionHandle(1),
+                    MetadataTokens.MethodDefinitionHandle(1)
+                )
+                let targetDictionary = targetMetadata.AddTypeDefinition(
+                    TypeAttributes.Public | TypeAttributes.Class,
+                    targetMetadata.GetOrAddString("System.Collections.Generic"),
+                    targetMetadata.GetOrAddString("Dictionary`2"),
+                    EntityHandle(),
+                    MetadataTokens.FieldDefinitionHandle(1),
+                    MetadataTokens.MethodDefinitionHandle(1)
+                )
+                targetMetadata.AddGenericParameter(
+                    targetDictionary,
+                    GenericParameterAttributes.None,
+                    targetMetadata.GetOrAddString("TKey"),
+                    0
+                )
+                targetMetadata.AddGenericParameter(
+                    targetDictionary,
+                    GenericParameterAttributes.None,
+                    targetMetadata.GetOrAddString("TValue"),
+                    1
+                )
+                let targetImage = BlobBuilder()
+                ManagedPEBuilder(
+                    PEHeaderBuilder.CreateLibraryHeader(),
+                    MetadataRootBuilder(targetMetadata),
+                    BlobBuilder()
+                ).Serialize(targetImage)
+                let targetPath = Path.Combine(directory, "Target.dll")
+                File.WriteAllBytes(targetPath, targetImage.ToArray())
+                let netstandardImage = BlobBuilder()
+                ManagedPEBuilder(
+                    PEHeaderBuilder.CreateLibraryHeader(),
+                    MetadataRootBuilder(metadata),
+                    BlobBuilder()
+                ).Serialize(netstandardImage)
+                let netstandardPath = Path.Combine(directory, "netstandard.dll")
+                File.WriteAllBytes(netstandardPath, netstandardImage.ToArray())
+                paths.Add(netstandardPath)
+                paths.Add(targetPath)
+                return paths
+            }
+            let dictionary = metadata.AddTypeDefinition(
+                TypeAttributes.Public | TypeAttributes.Class,
+                metadata.GetOrAddString("System.Collections.Generic"),
+                metadata.GetOrAddString("Dictionary`2"),
+                objectType,
+                MetadataTokens.FieldDefinitionHandle(1),
+                MetadataTokens.MethodDefinitionHandle(1)
+            )
+            // One generic parameter on `Dictionary`2`: GetType and IsVisible succeed,
+            // and MakeGenericType(typeof(int), typeof(int)) throws ArgumentException for the arity mismatch.
+            metadata.AddGenericParameter(dictionary, GenericParameterAttributes.None, metadata.GetOrAddString("T1"), 0)
+            let image = BlobBuilder()
+            ManagedPEBuilder(
+                PEHeaderBuilder.CreateLibraryHeader(),
+                MetadataRootBuilder(metadata),
+                BlobBuilder()
+            ).Serialize(image)
+            let referencePath = Path.Combine(directory, "netstandard.dll")
+            File.WriteAllBytes(referencePath, image.ToArray())
+            paths.Add(referencePath)
+            return paths
+        }
+
         private func NetStandardReferences() IReadOnlyList[string] {
             let directory = typeof(Issue4924DownlevelMemberSurfaceTests)
                 .Assembly

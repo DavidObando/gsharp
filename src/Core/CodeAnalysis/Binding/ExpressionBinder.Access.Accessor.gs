@@ -1328,7 +1328,7 @@ internal partial class ExpressionBinder {
         if receiver is BoundErrorExpression {
             return receiver
         }
-        return BindNullConditionalAccessExpressionCore(receiver, syntax.RightPart)
+        return BindPossiblySkippedOperand(() -> BindNullConditionalAccessExpressionCore(receiver, syntax.RightPart))
     }
 
     private func BindNullConditionalAccessExpressionCore(
@@ -3137,7 +3137,10 @@ internal partial class ExpressionBinder {
             }
             case accessorChain is AccessorExpressionSyntax when !accessorChain.IsNullConditional {
                 if TryResolveQualifiedSourceType(accessorChain, out var remainder, out var sourceType) &&
-                    (remainder is IndexExpressionSyntax or GenericNameExpressionSyntax) {
+                    (
+                    remainder is IndexExpressionSyntax{IsNullConditional: false, Target: NameExpressionSyntax} ||
+                        remainder is GenericNameExpressionSyntax
+                ) {
                     return TryResolveConstructedGenericTypeReceiver(
                         remainder,
                         out constructedStruct,
@@ -3593,7 +3596,45 @@ internal partial class ExpressionBinder {
             boundArguments.Add(boundArgument)
             staticArgIndex++
         }
-        var arguments = boundArguments.ToImmutable()
+        let initialArguments = boundArguments.ToImmutable()
+        let overloadDiagMark = Diagnostics.Count
+        var result = BindUserTypeStaticCallAfterArguments(
+            ownerType,
+            structSym,
+            ifaceSym,
+            methodName,
+            ce,
+            argumentNames,
+            initialArguments,
+            deferredStaticLambdaIndices
+        )
+        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+            Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+            result = BindUserTypeStaticCallAfterArguments(
+                ownerType,
+                structSym,
+                ifaceSym,
+                methodName,
+                ce,
+                argumentNames,
+                refreshedArguments,
+                deferredStaticLambdaIndices
+            )
+        }
+        return result
+    }
+
+    private func BindUserTypeStaticCallAfterArguments(
+        ownerType TypeSymbol,
+        structSym StructSymbol?,
+        ifaceSym InterfaceSymbol?,
+        methodName string,
+        ce CallExpressionSyntax,
+        argumentNames ImmutableArray[string],
+        arguments ImmutableArray[BoundExpression],
+        deferredStaticLambdaIndices List[int32]?
+    ) BoundExpression {
+        var arguments = arguments
         // Issue #940: resolve static (shared) method overloads against the FULL
         // method group by arity, parameter types, and ref-kinds — identical to
         // the instance-method path — instead of taking the first by-name match

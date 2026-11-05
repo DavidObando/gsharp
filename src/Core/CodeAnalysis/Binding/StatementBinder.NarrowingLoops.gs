@@ -3491,6 +3491,7 @@ internal partial class StatementBinder {
             JournalLoopEntryKills(invalidations)
             InvalidateInheritedNarrowings(invalidations)
             externalCallableAliases.Clear()
+            SyncExpressionCallableAliasesNow()
             CompilationMeasurements.Count("narrowing.region-facts-killed", cast[int64](invalidations.Count))
             return
         }
@@ -3578,6 +3579,7 @@ internal partial class StatementBinder {
                 externalCallableAliases.RemoveWhere(NamesClosureAssignedStorage)
             }
         }
+        SyncExpressionCallableAliasesNow()
         if effects.MemberReadCount > 0 {
             CompilationMeasurements.Count("narrowing.region-member-reads", cast[int64](effects.MemberReadCount))
             if memberReadsWithLiveFacts > 0 {
@@ -3766,6 +3768,7 @@ internal partial class StatementBinder {
             for alias in entryState.ExternalCallableAliases {
                 externalCallableAliases.Add(alias)
             }
+            SyncExpressionCallableAliasesNow()
         }
         JoinPendingForwardJumpsIntoRegion(span.Labels)
         if HasAnyActiveNarrowings() || externalCallableAliases.Count > 0 {

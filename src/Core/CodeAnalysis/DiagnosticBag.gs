@@ -32,11 +32,52 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     // which overload/lookup path the binder commits to — and are filtered only
     // when diagnostics are READ.
     private let cascadeSuppressed HashSet[Diagnostic] = HashSet[Diagnostic](ReferenceEqualityComparer.Instance)
+    private let reboundSuppressed HashSet[Diagnostic] = HashSet[Diagnostic](ReferenceEqualityComparer.Instance)
+    private let reboundSuppressionLog List[(Diagnostic Diagnostic, CountAtSuppression int32)] = List[
+        (Diagnostic, int32)
+    ]()
+    private let reboundDiagnosticDepth Dictionary[Diagnostic, int32] = Dictionary[Diagnostic, int32](
+        ReferenceEqualityComparer.Instance
+    )
+    private let transactionSuppressed Stack[List[Diagnostic]] = Stack[List[Diagnostic]]()
 
     // Issue #3887: nesting depth of member lookups performed on a receiver
     // whose type is already TypeSymbol.Error. See
     // SuppressMemberLookupCascadeIn.
     private var memberLookupCascadeDepth int32
+    private var siblingRebindDepth int32
+
+    internal prop SuppressionCount int32 -> reboundSuppressionLog.Count
+
+    internal func EnterSiblingRebind() {
+        siblingRebindDepth++
+    }
+
+    internal func LeaveSiblingRebind() {
+        siblingRebindDepth--
+    }
+
+    internal func RestoreSuppressionsTo(suppressionCount int32) {
+        let target = Math.Clamp(suppressionCount, 0, reboundSuppressionLog.Count)
+        while reboundSuppressionLog.Count > target {
+            let lastIndex = reboundSuppressionLog.Count - 1
+            let entry = reboundSuppressionLog[lastIndex]
+            reboundSuppressionLog.RemoveAt(lastIndex)
+            reboundSuppressed.Remove(entry.Diagnostic)
+        }
+    }
+
+    private func OnDiagnosticRemoved(removed Diagnostic) {
+        reboundDiagnosticDepth.Remove(removed)
+        if reboundSuppressed.Remove(removed) {
+            for var i = reboundSuppressionLog.Count - 1; i >= 0; i-- {
+                if object.ReferenceEquals(reboundSuppressionLog[i].Diagnostic, removed) {
+                    reboundSuppressionLog.RemoveAt(i)
+                    break
+                }
+            }
+        }
+    }
 
     /// Gets the number of diagnostics currently held in the bag. Used together
     /// with (cref:TruncateTo) to discard speculative diagnostics emitted
@@ -61,7 +102,34 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         }
         if count < diagnostics.Count {
             while diagnostics.Count > count {
-                diagnostics.RemoveAt(diagnostics.Count - 1)
+                let lastIndex = diagnostics.Count - 1
+                OnDiagnosticRemoved(diagnostics[lastIndex])
+                diagnostics.RemoveAt(lastIndex)
+            }
+        }
+        if siblingRebindDepth == 0 {
+            while reboundSuppressionLog.Count > 0 &&
+                reboundSuppressionLog[reboundSuppressionLog.Count - 1].CountAtSuppression > count {
+                let lastIndex = reboundSuppressionLog.Count - 1
+                let entry = reboundSuppressionLog[lastIndex]
+                reboundSuppressionLog.RemoveAt(lastIndex)
+                reboundSuppressed.Remove(entry.Diagnostic)
+            }
+        }
+    }
+
+    internal func TruncateNonReboundSince(startCount int32) {
+        let start = Math.Clamp(startCount, 0, diagnostics.Count)
+        for var i = diagnostics.Count - 1; i >= start; i-- {
+            let diagnostic = diagnostics[i]
+            let depth = if reboundDiagnosticDepth.TryGetValue(diagnostic, out var recordedDepth) {
+                recordedDepth
+            } else {
+                0
+            }
+            if depth <= siblingRebindDepth {
+                OnDiagnosticRemoved(diagnostic)
+                diagnostics.RemoveAt(i)
             }
         }
     }
@@ -72,9 +140,72 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     internal func DrainSince(startCount int32, sink List[Diagnostic]) {
         let start = Math.Clamp(startCount, 0, diagnostics.Count)
         for var i = start; i < diagnostics.Count; i++ {
-            sink.Add(diagnostics[i])
+            let diagnostic = diagnostics[i]
+            if !cascadeSuppressed.Contains(diagnostic) && !reboundSuppressed.Contains(diagnostic) {
+                sink.Add(diagnostic)
+            }
         }
-        TruncateTo(start)
+        if start < diagnostics.Count {
+            while diagnostics.Count > start {
+                let lastIndex = diagnostics.Count - 1
+                OnDiagnosticRemoved(diagnostics[lastIndex])
+                diagnostics.RemoveAt(lastIndex)
+            }
+        }
+    }
+
+    internal func VisibleSince(startCount int32) ImmutableArray[Diagnostic] {
+        let start = Math.Clamp(startCount, 0, diagnostics.Count)
+        if start >= diagnostics.Count {
+            return ImmutableArray[Diagnostic].Empty
+        }
+        let builder = ImmutableArray.CreateBuilder[Diagnostic](diagnostics.Count - start)
+        for var i = start; i < diagnostics.Count; i++ {
+            let diagnostic = diagnostics[i]
+            if !cascadeSuppressed.Contains(diagnostic) && !reboundSuppressed.Contains(diagnostic) {
+                builder.Add(diagnostic)
+            }
+        }
+        return builder.ToImmutable()
+    }
+
+    internal func HasErrorSince(startCount int32) bool {
+        let start = Math.Clamp(startCount, 0, diagnostics.Count)
+        for var i = start; i < diagnostics.Count; i++ {
+            let diagnostic = diagnostics[i]
+            if !cascadeSuppressed.Contains(diagnostic) && !reboundSuppressed.Contains(diagnostic) &&
+                diagnostic.Severity == DiagnosticSeverity.Error {
+                return true
+            }
+        }
+        return false
+    }
+
+    internal func RemoveDiagnosticsIn(owner TextLocation) {
+        let existingCount = diagnostics.Count
+        for var i = existingCount - 1; i >= 0; i-- {
+            let diagnostic = diagnostics[i]
+            if object.ReferenceEquals(diagnostic.Location.Text, owner.Text) &&
+                diagnostic
+                .Location
+                .Span
+                .Start >= owner
+                .Span
+                .Start &&
+                diagnostic
+                .Location
+                .Span
+                .End <= owner
+                .Span
+                .End &&
+                reboundSuppressed
+                .Add(diagnostic) {
+                reboundSuppressionLog.Add((diagnostic, existingCount))
+                for txSuppressed in transactionSuppressed {
+                    txSuppressed.Add(diagnostic)
+                }
+            }
+        }
     }
 
     /// ```xmldoc
@@ -91,6 +222,11 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// this instance.
     /// @param diagnostics The diagnostics bag to copy from.
     func AddRange(diagnostics DiagnosticBag) {
+        for suppressed in diagnostics.reboundSuppressed {
+            if reboundSuppressed.Add(suppressed) {
+                reboundSuppressionLog.Add((suppressed, this.diagnostics.Count))
+            }
+        }
         AddRange(diagnostics.diagnostics)
     }
 
@@ -123,7 +259,10 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     internal func SuppressDuplicateDiagnosticsIn[T](owner TextLocation, bind() -> T) T {
         var owner = owner
         let existing = diagnostics.Where(
-            (diagnostic Diagnostic) -> object.ReferenceEquals(diagnostic.Location.Text, owner.Text) &&
+            (diagnostic Diagnostic) -> !reboundSuppressed.Contains(diagnostic) && object.ReferenceEquals(
+                diagnostic.Location.Text,
+                owner.Text
+            ) &&
                 diagnostic
                 .Location
                 .Span
@@ -146,7 +285,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param bind The analysis operation.
     /// @returns The operation result.
     internal func SuppressDuplicateDiagnostics[T](bind() -> T) T -> SuppressDuplicateDiagnostics(
-        diagnostics.ToList(),
+        diagnostics.Where((diagnostic Diagnostic) -> !reboundSuppressed.Contains(diagnostic)).ToList(),
         bind
     )
 
@@ -201,6 +340,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     internal func BeginTransaction() Transaction {
         let added = List[Diagnostic]()
         transactions.Push(added)
+        transactionSuppressed.Push(List[Diagnostic]())
         return Transaction(this, added)
     }
 
@@ -209,10 +349,10 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// (cref:SuppressMemberLookupCascadeIn{T}). The bag itself keeps
     /// those entries so (cref:Count) and (cref:TruncateTo) retain
     /// their exact meaning for the binder's speculative-rebind paths.
-    private func Visible() IEnumerable[Diagnostic] -> if cascadeSuppressed.Count == 0 {
+    private func Visible() IEnumerable[Diagnostic] -> if cascadeSuppressed.Count == 0 && reboundSuppressed.Count == 0 {
         cast[IEnumerable[Diagnostic]](diagnostics)
     } else {
-        diagnostics.Where((d Diagnostic) -> !cascadeSuppressed.Contains(d))
+        diagnostics.Where((d Diagnostic) -> !cascadeSuppressed.Contains(d) && !reboundSuppressed.Contains(d))
     }
 
     private func Add(diagnostic Diagnostic) {
@@ -233,25 +373,47 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         }
         if duplicateSuppressions.TryPeek(out var existing) {
             for var i = 0; i < existing.Count; i++ {
-                if AreEquivalent(existing[i], diagnostic) {
+                let candidate = existing[i]
+                if !reboundSuppressed.Contains(candidate) && AreEquivalent(candidate, diagnostic) {
                     existing.RemoveAt(i)
                     return
                 }
             }
         }
         diagnostics.Add(diagnostic)
+        if siblingRebindDepth > 0 {
+            reboundDiagnosticDepth[diagnostic] = siblingRebindDepth
+        }
         for transaction in transactions {
             transaction.Add(diagnostic)
         }
     }
 
     private func CompleteTransaction(added List[Diagnostic], commit bool) {
+        let suppressedInTx = if transactionSuppressed.Count > 0 {
+            transactionSuppressed.Pop()
+        } else {
+            default(List[Diagnostic]?)
+        }
         if !object.ReferenceEquals(transactions.Pop(), added) || commit {
             return
+        }
+        if suppressedInTx != nil {
+            for diag in suppressedInTx {
+                if reboundSuppressed.Remove(diag) {
+                    for var i = reboundSuppressionLog.Count - 1; i >= 0; i-- {
+                        if object.ReferenceEquals(reboundSuppressionLog[i].Diagnostic, diag) {
+                            reboundSuppressionLog.RemoveAt(i)
+                            break
+                        }
+                    }
+                }
+            }
         }
         for var addedIndex = added.Count - 1; addedIndex >= 0; addedIndex-- {
             for var diagnosticIndex = diagnostics.Count - 1; diagnosticIndex >= 0; diagnosticIndex-- {
                 if object.ReferenceEquals(diagnostics[diagnosticIndex], added[addedIndex]) {
+                    OnDiagnosticRemoved(diagnostics[diagnosticIndex])
                     diagnostics.RemoveAt(diagnosticIndex)
                     break
                 }

@@ -1022,7 +1022,7 @@ internal class LambdaBinder {
                 targetFunctionType.Arity,
                 syntax.Parameters.Count
             )
-            let arityDiagnostics = Diagnostics.Skip(arityMark).ToImmutableArray()
+            let arityDiagnostics = Diagnostics.VisibleSince(arityMark)
             Diagnostics.TruncateTo(arityMark)
             if TryBindNaturalFallback(
                 syntax,
@@ -1134,7 +1134,7 @@ internal class LambdaBinder {
                         }
                         // Issue #5569: held as for an ordinary written parameter type.
                         if naturalTypeAvailable {
-                            parameterTargetDiagnostics.AddRange(Diagnostics.Skip(parameterMark))
+                            parameterTargetDiagnostics.AddRange(Diagnostics.VisibleSince(parameterMark))
                             Diagnostics.TruncateTo(parameterMark)
                         }
                         hasIncompatibleExplicitParameter = true
@@ -1300,7 +1300,7 @@ internal class LambdaBinder {
                         Diagnostics.ReportCannotConvert(p.Type!!.Location, targetParameterType, parameterType)
                     }
                     if naturalTypeAvailable {
-                        parameterTargetDiagnostics.AddRange(Diagnostics.Skip(parameterMark))
+                        parameterTargetDiagnostics.AddRange(Diagnostics.VisibleSince(parameterMark))
                         Diagnostics.TruncateTo(parameterMark)
                     }
                     hasIncompatibleExplicitParameter = true
@@ -1522,7 +1522,7 @@ internal class LambdaBinder {
                 true,
                 deferredReturns
             )
-            let targetDiagnostics = deferredReturns.OperandDiagnostics().AddRange(Diagnostics.Skip(trialMark))
+            let targetDiagnostics = deferredReturns.OperandDiagnostics().AddRange(Diagnostics.VisibleSince(trialMark))
             Diagnostics.TruncateTo(trialMark)
             // The body fits the target only when the target-typed inference adopts the target return type, which
             // also checks a trailing value that is not a `return`.
@@ -1533,9 +1533,7 @@ internal class LambdaBinder {
             } else {
                 TypeSymbol.Error
             }
-            if naturalReturnType != TypeSymbol.Error && !Diagnostics.Skip(startMark).Any(
-                (diagnostic Diagnostic) -> diagnostic.IsError
-            ) &&
+            if naturalReturnType != TypeSymbol.Error && !Diagnostics.HasErrorSince(startMark) &&
                 acceptsNaturalType!!(
                 FunctionTypeSymbol.Get(
                     parameterTypes.ToImmutable(),
@@ -2605,10 +2603,7 @@ internal class LambdaBinder {
     ) bool {
         let mark = Diagnostics.Count
         let bound = BindLambdaExpression(syntax)
-        if !(bound is BoundErrorExpression) && !Diagnostics.Skip(mark).Any(
-            (diagnostic Diagnostic) -> diagnostic.IsError
-        ) &&
-            acceptsNaturalType(bound.Type) {
+        if !(bound is BoundErrorExpression) && !Diagnostics.HasErrorSince(mark) && acceptsNaturalType(bound.Type) {
             discardedTargetDiagnostics?.Add(targetDiagnostics)
             natural = bound
             return true

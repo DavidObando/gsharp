@@ -147,6 +147,55 @@ open class Outer {
         Assert.Contains(GetBinderDiagnostics(scope_), (d Diagnostic) -> d.Id == "GS0113")
     }
 
+    @Fact
+    func NestedDerivedDeclaredBeforeNestedBase_BindsOverridesAcrossHierarchy() {
+        let scope_ = BindSource(`package p
+import System
+class Container {
+    private class Derived : Middle {
+        protected override func Record(value int32) { }
+        protected override prop Value int32 {
+            get -> 1
+            set { }
+        }
+        protected override prop this[index int32] int32 {
+            get -> index
+            set { }
+        }
+        protected override event Changed Action[int32]
+    }
+
+    private open class Middle : Base[int32] {
+    }
+
+    private abstract class Base[T] {
+        protected open func Record(value T);
+        protected open prop Value T {
+            get -> default(T)
+            set { }
+        }
+        protected open prop this[index int32] T {
+            get -> default(T)
+            set { }
+        }
+        protected open event Changed Action[T]
+    }
+}`)
+        Assert.Empty(GetBinderDiagnostics(scope_))
+    }
+
+    @Fact
+    func NestedClassInheritanceCycle_ReportsGS0381() {
+        let scope_ = BindSource(`package p
+class Container {
+    open class First : Second { }
+    open class Second : First { }
+}`)
+        let diagnostics = GetBinderDiagnostics(scope_).ToArray()
+        Assert.NotEmpty(diagnostics)
+        Assert.Contains(diagnostics, (d Diagnostic) -> d.Id == "GS0381")
+    }
+
     shared {
         private func BindSource(source string) BoundGlobalScope {
             let tree = SyntaxTree.Parse(SourceText.From(source))

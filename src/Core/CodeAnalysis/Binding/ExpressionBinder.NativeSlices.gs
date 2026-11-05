@@ -120,6 +120,29 @@ internal partial class ExpressionBinder {
             )
             return overloads.BindCallExpression(ordinary)
         }
+        if syntax.NullableQuestionToken != nil {
+            if syntax.Callee is {} calleeSyntax {
+                let callee = BindExpression(calleeSyntax)
+                let calleeName = calleeSyntax.SyntaxTree.Text.ToString(calleeSyntax.Span)
+                return BindPossiblySkippedOperand(
+                    () -> overloads.BindNullConditionalIndirectCallExpression(
+                        syntax,
+                        callee,
+                        calleeName,
+                        calleeSyntax.Location
+                    )
+                )
+            }
+            let beforeCall = CaptureExpressionNarrowingFrames()
+            let entryAliases = GetCurrentExpressionCallableAliases()
+            let boundCall = overloads.BindCallExpression(syntax)
+            if boundCall is BoundNullConditionalAccessExpression {
+                InvalidateExpressionNarrowingFrames(boundCall, entryAliases)
+                MergeBranchExpressionNarrowingFrames(beforeCall)
+                expressionExitAliases[boundCall] = GetCurrentExpressionCallableAliases()
+            }
+            return boundCall
+        }
         return overloads.BindCallExpression(syntax)
     }
 
@@ -239,7 +262,10 @@ internal partial class ExpressionBinder {
         }
         let pointer = BoundAddressOfExpression(receiver.Syntax, receiver)
         let location = DeclareRangeTemp("receiverAddress", pointer.Type, pointer, statements)
-        savedReceiver = BoundDereferenceExpression(receiver.Syntax, BoundVariableExpression(nil, location))
+        savedReceiver = CaptureSavedStorageReceiver(
+            BoundDereferenceExpression(receiver.Syntax, BoundVariableExpression(nil, location)),
+            statements
+        )
         prefix = statements.ToImmutable()
         return true
     }

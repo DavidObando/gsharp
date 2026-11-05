@@ -54,6 +54,7 @@ internal partial class ExpressionBinder {
         canBeVoid bool,
         deferOnFailure bool
     ) BoundExpression {
+        let suppressionMark = Diagnostics.SuppressionCount
         var discriminant = BindExpression(syntax.Expression)
         if discriminant.Type is TupleTypeSymbol{HasNilElement: true} unresolvedDiscriminantTuple {
             discriminant = conversions.BindConversion(
@@ -97,6 +98,7 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         var hasDefault = false
+        var hasCatchAll = false
         let boundArmBuilders = ImmutableArray
             .CreateBuilder[
             (Syntax SwitchExpressionArmSyntax, Pattern BoundPattern?, Guard BoundExpression?, Result BoundExpression)
@@ -107,6 +109,18 @@ internal partial class ExpressionBinder {
         let earlyScopes = [syntax.Arms.Length]BoundScope?
         // #5629: whether a header so far can remove the discriminant's fact, in dispatch order.
         var discriminantStale = false
+        let armExits = List[
+            List[
+                (
+                    Id int32,
+                    Frame NarrowingFrame?,
+                    Entries Dictionary[AccessPath, TypeSymbol]?,
+                    Aliases HashSet[VariableSymbol]
+                )
+            ]?
+        ](syntax.Arms.Length)
+        let armExitFrames = List[Dictionary[AccessPath, TypeSymbol]?](syntax.Arms.Length)
+        let armPatternVariables = List[ImmutableArray[LocalVariableSymbol]](syntax.Arms.Length)
         for var armIndex = 0; armIndex < syntax.Arms.Length; armIndex++ {
             let armSyntax = syntax.Arms[armIndex]
             var pattern BoundPattern? = nil
@@ -115,9 +129,22 @@ internal partial class ExpressionBinder {
                     Diagnostics.ReportDuplicateSwitchDefault(armSyntax.Keyword.Location)
                 }
                 hasDefault = true
+                hasCatchAll = true
                 let defaultIndex = armIndex
+                var defaultExit List[
+                    (
+                        Id int32,
+                        Frame NarrowingFrame?,
+                        Entries Dictionary[AccessPath, TypeSymbol]?,
+                        Aliases HashSet[VariableSymbol]
+                    )
+                ]? = nil
+                let beforeDefaultArm = CaptureExpressionNarrowingFrames()
                 let bindDefaultResult = func () BoundExpression {
-                    return BindExpressionWithNarrowing(armSyntax.Result, nil, targetType, canBeVoid)
+                    let boundDefault = BindExpressionWithNarrowing(armSyntax.Result, nil, targetType, canBeVoid)
+                    TruncateBranchSiblingExpressions(beforeDefaultArm)
+                    defaultExit = CaptureExpressionNarrowingFrames()
+                    return boundDefault
                 }
                 let result = if defaultIndex == syntax.Arms.Length - 1 {
                     bindDefaultResult()
@@ -155,6 +182,10 @@ internal partial class ExpressionBinder {
                         )
                     )
                 }
+                armExits.Add(defaultExit)
+                armExitFrames.Add(nil)
+                armPatternVariables.Add(default(ImmutableArray[LocalVariableSymbol]))
+                RestoreExpressionNarrowingFrames(beforeDefaultArm)
                 boundArmBuilders.Add((armSyntax, pattern, default(BoundExpression), result))
                 continue
             }
@@ -169,6 +200,14 @@ internal partial class ExpressionBinder {
             let header = if earlyHeaders[armIndex] is {} early {
                 $scope = earlyScopes[armIndex]!!
                 reapplySwitchArmHeaderEffects(patternSyntax, armSyntax.Guard, early)
+                let evaluatedSwitchValue = LocalVariableSymbol("<switch-value>", true, discriminant.Type)
+                InvalidateExpressionNarrowingFrames(
+                    BoundIsExpression(patternSyntax, BoundVariableExpression(nil, evaluatedSwitchValue), early.Pattern),
+                    forceFullSubtree: true
+                )
+                if early.Guard is {} earlyGuard {
+                    InvalidateExpressionNarrowingFrames(earlyGuard, forceFullSubtree: true)
+                }
                 early
             } else {
                 $scope = BoundScope($scope)
@@ -183,6 +222,9 @@ internal partial class ExpressionBinder {
             // particular a guarded discard `case _ when …` does NOT act as a
             // default/total arm.
             let hasGuard = armSyntax.Guard != nil
+            if !hasGuard && BoundSwitchExpressionArm.MatchesAllInputs(pattern) {
+                hasCatchAll = true
+            }
             if pattern is BoundDiscardPattern && !hasGuard {
                 if hasDefault {
                     Diagnostics.ReportDuplicateSwitchDefault(patternSyntax.Location)
@@ -191,28 +233,64 @@ internal partial class ExpressionBinder {
             }
             // ADR-0166: the arm result sees the guard's when-true pattern variables.
             let (guardWhenTrue, _) = PatternVariables.Classify(guard_)
+            let beforeArmResult = CaptureExpressionNarrowingFrames()
+            var armExitFrame Dictionary[AccessPath, TypeSymbol]? = nil
             let armResult = BindWithPatternVariables(
                 guardWhenTrue,
                 () -> {
-                    return BindExpressionWithNarrowing(armSyntax.Result, frame, targetType, canBeVoid)
+                    return BindExpressionWithNarrowing(armSyntax.Result, frame, out armExitFrame, targetType, canBeVoid)
                 },
                 armSyntax.Result
             )
+            TruncateBranchSiblingExpressions(beforeArmResult)
+            armExits.Add(CaptureExpressionNarrowingFrames())
+            armExitFrames.Add(armExitFrame)
+            armPatternVariables.Add(guardWhenTrue)
+            RestoreExpressionNarrowingFrames(beforeArmResult)
             $scope = $scope.Pop()
             boundArmBuilders.Add((armSyntax, pattern, guard_, armResult))
         }
+        let unmatchedExit = CaptureExpressionNarrowingFrames(recordSiblingCount: false)
+        let includeUnmatched = !hasDefault && !ExhaustivenessAnalyzer.CoversAllVariants(
+            switchType,
+            boundArmBuilders.Where(
+                (
+                    a(
+                        Syntax SwitchExpressionArmSyntax,
+                        Pattern BoundPattern?,
+                        Guard BoundExpression?,
+                        Result BoundExpression
+                    )
+                ) -> a.Guard == nil
+            )
+                .Select(
+                (
+                    a(
+                        Syntax SwitchExpressionArmSyntax,
+                        Pattern BoundPattern?,
+                        Guard BoundExpression?,
+                        Result BoundExpression
+                    )
+                ) -> a.Pattern
+            ),
+            $scope.GetDeclaredStructs()
+        )
+        JoinSwitchArmExpressionNarrowingFrames(armExits, boundArmBuilders, unmatchedExit, includeUnmatched)
         let armResults = List[BoundExpression](boundArmBuilders.Count)
         for arm in boundArmBuilders {
             armResults.Add(arm.Result)
         }
         if IsVoidInDiscardedPosition(canBeVoid, armResults) {
+            if !hasDefault {
+                MergeBranchExpressionNarrowingFrames(unmatchedExit)
+            }
             let voidArms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](boundArmBuilders.Count)
             for arm in boundArmBuilders {
                 voidArms.Add(BoundSwitchExpressionArm(nil, arm.Pattern, arm.Guard, DiscardValue(arm.Result)))
             }
             return BoundSwitchExpression(nil, discriminant, voidArms.MoveToImmutable(), TypeSymbol.Void)
         }
-        if !hasDefault && !ExhaustivenessAnalyzer.IsExhaustiveDiscriminant(switchType) {
+        if !hasCatchAll && !ExhaustivenessAnalyzer.IsExhaustiveDiscriminant(switchType) {
             Diagnostics.ReportSwitchExpressionMissingDefault(syntax.SwitchKeyword.Location)
         }
         let resultType = ComputeSwitchExpressionResultType(boundArmBuilders, targetType)
@@ -236,12 +314,16 @@ internal partial class ExpressionBinder {
                 resultType != TypeSymbol.Error &&
                 resultType != TypeSymbol
                 .Void {
+                RestoreExpressionNarrowingFrames(armExits[armIndex], truncateSiblings: false)
                 result = BindExpression(arm.Syntax.Result, resultType)
+                armExits[armIndex] = CaptureExpressionNarrowingFrames(recordSiblingCount: false)
                 arms.Add(BoundSwitchExpressionArm(nil, arm.Pattern, arm.Guard, result))
                 continue
             }
             let conversion = Conversion.Classify(result.Type, resultType)
-            if !conversion.Exists || conversion.IsExplicit {
+            let hasUserImplicit = !conversion.IsImplicit &&
+                ConversionClassifier.HasUserDefinedImplicitConversionForTypes(result.Type, resultType)
+            if (!conversion.Exists || conversion.IsExplicit) && !hasUserImplicit {
                 if result.Type != TypeSymbol.Error && resultType != TypeSymbol.Error {
                     Diagnostics.ReportSwitchExpressionArmTypeMismatch(
                         arm.Syntax.Result.Location,
@@ -257,10 +339,19 @@ internal partial class ExpressionBinder {
                 // BoundDefaultExpression (the verifiable Nullable<T> default),
                 // matching the if-expression path. The Conversion.Classify check
                 // above still governs the GS0179 arm-mismatch diagnostic.
-                result = ConvertConditionalBranch(BranchValueLocation(arm.Syntax.Result), result, resultType)
+                RestoreExpressionNarrowingFrames(armExits[armIndex], truncateSiblings: false)
+                result = ConvertConditionalBranchWithNarrowing(
+                    BranchValueLocation(arm.Syntax.Result),
+                    result,
+                    resultType,
+                    armExitFrames[armIndex],
+                    armPatternVariables[armIndex]
+                )
+                armExits[armIndex] = CaptureExpressionNarrowingFrames(recordSiblingCount: false)
             }
             arms.Add(BoundSwitchExpressionArm(nil, arm.Pattern, arm.Guard, result))
         }
+        JoinSwitchArmExpressionNarrowingFrames(armExits, boundArmBuilders, unmatchedExit, includeUnmatched)
         let boundArms = arms.ToImmutable()
         // Issue #1238: a deferred argument switch-expression whose arms could not
         // unify without a target — suppress the GS0179 diagnostics and return a
@@ -268,6 +359,7 @@ internal partial class ExpressionBinder {
         // resolved parameter type.
         if anyArmFailed && deferOnFailure {
             Diagnostics.TruncateTo(diagMark)
+            Diagnostics.RestoreSuppressionsTo(suppressionMark)
             return BoundErrorExpression(syntax)
         }
         ExhaustivenessAnalyzer.AnalyzeSwitchExpression(
@@ -278,6 +370,61 @@ internal partial class ExpressionBinder {
             Diagnostics
         )
         return BoundSwitchExpression(nil, discriminant, boundArms, resultType)
+    }
+
+    private func JoinSwitchArmExpressionNarrowingFrames(
+        armExits List[
+            List[
+                (
+                    Id int32,
+                    Frame NarrowingFrame?,
+                    Entries Dictionary[AccessPath, TypeSymbol]?,
+                    Aliases HashSet[VariableSymbol]
+                )
+            ]?
+        ],
+        armBuilders IReadOnlyList[
+            (Syntax SwitchExpressionArmSyntax, Pattern BoundPattern?, Guard BoundExpression?, Result BoundExpression)
+        ],
+        unmatchedExit List[
+            (
+                Id int32,
+                Frame NarrowingFrame?,
+                Entries Dictionary[AccessPath, TypeSymbol]?,
+                Aliases HashSet[VariableSymbol]
+            )
+        ]?,
+        includeUnmatched bool
+    ) {
+        if armExits.Count == 0 {
+            RestoreExpressionNarrowingFrames(unmatchedExit, truncateSiblings: false)
+            return
+        }
+        var firstCompleting = -1
+        for var i = 0; i < armExits.Count; i++ {
+            if i >= armBuilders.Count || armBuilders[i].Result.Type != TypeSymbol.Never {
+                firstCompleting = i
+                break
+            }
+        }
+        if firstCompleting < 0 {
+            if includeUnmatched {
+                RestoreExpressionNarrowingFrames(unmatchedExit, truncateSiblings: false)
+            } else {
+                RestoreExpressionNarrowingFrames(armExits[0], truncateSiblings: false)
+            }
+            return
+        }
+        RestoreExpressionNarrowingFrames(armExits[firstCompleting], truncateSiblings: false)
+        for var i = firstCompleting + 1; i < armExits.Count; i++ {
+            if i < armBuilders.Count && armBuilders[i].Result.Type == TypeSymbol.Never {
+                continue
+            }
+            MergeBranchExpressionNarrowingFrames(armExits[i])
+        }
+        if includeUnmatched {
+            MergeBranchExpressionNarrowingFrames(unmatchedExit)
+        }
     }
 
     shared {
@@ -323,7 +470,10 @@ internal partial class ExpressionBinder {
                     continue
                 }
                 let conversion = Conversion.Classify(armType, candidate)
-                if !conversion.IsImplicit {
+                if !conversion.IsImplicit && !ConversionClassifier.HasUserDefinedImplicitConversionForTypes(
+                    armType,
+                    candidate
+                ) {
                     return false
                 }
             }

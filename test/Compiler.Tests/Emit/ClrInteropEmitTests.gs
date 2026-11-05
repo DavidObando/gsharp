@@ -192,8 +192,6 @@ class Owner {
 }
 data struct Stamp(Value int32)
 func Main() {
-    let constructed = QualifiedCalls5267.Stamp(8)
-    let literal = QualifiedCalls5267.Stamp{Value: 9}
     Console.Write(Probe.Read())
     Console.Write("|" + Owner.Format("nested").Name)
     Console.Write("|" + Owner.Make())
@@ -203,9 +201,9 @@ func Main() {
     Console.Write("|" + Sys.String.Format("{0}", 6))
     Console.Write("|" + System.String.Format("{0}", 7))
     Console.Write("|")
-    Console.Write(constructed.Value)
+    Console.Write(QualifiedCalls5267.Stamp(8).Value)
     Console.Write("|")
-    Console.Write(literal.Value)
+    Console.Write(QualifiedCalls5267.Stamp{Value: 9}.Value)
 }`
         let assembly = fixture.Compile(source, "qualified5267", executable: true)
         Assert.Equal(
@@ -297,16 +295,13 @@ public data struct Stamp(Name string)`)
         Assert.Equal(Encoding.UTF8.GetBytes("neighbor"), VerifyAndRunBytes(control))
         let prefix = "App." + component
         let assembly = fixture.Compile(header + `func Run[T]() {
-    let constructed = ` + prefix + `.Stamp(1)
-    let literal = ` + prefix + `.Stamp{Value: 2}
     ` + prefix + `.Store[int32].Value = 3
-    let neighbor = App.Neighbor5267.Stamp("neighbor")
-    Console.Write(constructed.Value)
+    Console.Write(` + prefix + `.Stamp(1).Value)
     Console.Write("|")
-    Console.Write(literal.Value)
+    Console.Write(` + prefix + `.Stamp{Value: 2}.Value)
     Console.Write("|")
     Console.Write(` + prefix + `.Store[int32].Value)
-    Console.Write("|" + neighbor.Name)
+    Console.Write("|" + App.Neighbor5267.Stamp("neighbor").Name)
 }
 func Main() { Run[int32]() }`, "packageTypes5267", true, sources)
         Assert.Equal(Encoding.UTF8.GetBytes("1|2|3|neighbor"), VerifyAndRunBytes(assembly))
