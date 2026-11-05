@@ -616,7 +616,18 @@ internal partial class ExpressionBinder {
                     RequiresSymbolicTupleElementInvocation(tupleType, tupleIndex) ||
                         RequiresDeclaredNameTupleElementInvocation(ce.Identifier.ValueText, tupleType, tupleIndex)
                 ) {
-                    let tupleElement = BoundTupleElementAccessExpression(nil, receiver!!, tupleType, tupleIndex)
+                    let resolvedTuple = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(tupleType))
+                    let resolvedReceiver = if object.ReferenceEquals(resolvedTuple, tupleType) {
+                        receiver!!
+                    } else {
+                        conversions.BindConversion(ce.Location, receiver!!, resolvedTuple)
+                    }
+                    let tupleElement = BoundTupleElementAccessExpression(
+                        nil,
+                        resolvedReceiver,
+                        resolvedTuple,
+                        tupleIndex
+                    )
                     return overloads.BindIndirectCallExpression(
                         ce,
                         tupleElement,
@@ -1094,7 +1105,13 @@ internal partial class ExpressionBinder {
                     // one-based Item1..ItemN or zero-based .0...N selectors.
                     let memberName = ne.IdentifierToken.ValueText
                     if TryGetTupleElementIndex(memberName, tupleSym, out var zeroBased) {
-                        return BoundTupleElementAccessExpression(nil, receiver, tupleSym, zeroBased)
+                        let resolvedTuple = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(tupleSym))
+                        let resolvedReceiver = if object.ReferenceEquals(resolvedTuple, tupleSym) {
+                            receiver
+                        } else {
+                            conversions.BindConversion(ne.Location, receiver, resolvedTuple)
+                        }
+                        return BoundTupleElementAccessExpression(nil, resolvedReceiver, resolvedTuple, zeroBased)
                     }
                     return BindExtensionMethodGroupOrError(receiver, ne)
                 } else if receiver != nil && TryBindNullableInstanceMember(receiver, ne, out var nullableMember) {

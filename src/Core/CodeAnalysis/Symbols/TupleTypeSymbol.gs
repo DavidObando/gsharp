@@ -103,6 +103,20 @@ class TupleTypeSymbol : TypeSymbol {
         }
     }
 
+    /// Issue #4316: whether an element, at any depth, is the `nil` type (`(nil, int32)`, the type of
+    /// a tuple literal that holds a bare `nil`). Such a tuple has no runtime representation until it
+    /// converts to a tuple whose element is a `T?`.
+    internal prop HasNilElement bool {
+        get {
+            for elementType in ElementTypes {
+                if elementType == TypeSymbol.Null || elementType is TupleTypeSymbol nested && nested.HasNilElement {
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
     /// Finds the zero-based position of a declared element name (ordinal,
     /// case-sensitive), or returns `false`.
     /// @param name The element name to find.
@@ -188,6 +202,48 @@ class TupleTypeSymbol : TypeSymbol {
             }
             let key = keyBuilder.ToString()
             return Cache.GetOrAdd(key, (_ string) -> TupleTypeSymbol(elementTypes, elementNames))
+        }
+
+        /// Issue #4316: replaces any unresolved `nil` element (`TypeSymbol.Null`) in [`type`](paramref)
+        /// with the corresponding element of [`targetType`](paramref) when `nil` implicitly converts to it,
+        /// or `object?` otherwise, before storage or a runtime receiver is materialized.
+        internal func ResolveNilElements(type TypeSymbol, targetType TypeSymbol? = nil) TypeSymbol {
+            if type == TypeSymbol.Null {
+                return if targetType != nil && targetType != TypeSymbol.Error && !TypeSymbol.ContainsNullLiteralType(
+                    targetType
+                ) &&
+                    Conversion
+                    .Classify(TypeSymbol.Null, targetType).IsImplicit {
+                    targetType
+                } else {
+                    cast[TypeSymbol](NullableTypeSymbol.Get(TypeSymbol.Object))
+                }
+            }
+            if type is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol innerTuple} && innerTuple.HasNilElement {
+                let innerTarget = if targetType is NullableTypeSymbol targetNullable {
+                    targetNullable.UnderlyingType
+                } else {
+                    targetType
+                }
+                return NullableTypeSymbol.Get(ResolveNilElements(innerTuple, innerTarget))
+            }
+            if type is not TupleTypeSymbol tuple || !tuple.HasNilElement {
+                return type
+            }
+            let targetTuple = if targetType is TupleTypeSymbol t && t.Arity == tuple.Arity {
+                t
+            } else {
+                default(TupleTypeSymbol?)
+            }
+            let elements = ImmutableArray.CreateBuilder[TypeSymbol](tuple.Arity)
+            for var i = 0; i < tuple.Arity; i++ {
+                elements.Add(ResolveNilElements(tuple.ElementTypes[i], targetTuple?.ElementTypes[i]))
+            }
+            return if tuple.HasNames {
+                Get(elements.MoveToImmutable(), tuple.ElementNames)
+            } else {
+                Get(elements.MoveToImmutable())
+            }
         }
 
         /// Issue #3987: recognizes a tuple-shaped type by SHAPE rather than by
