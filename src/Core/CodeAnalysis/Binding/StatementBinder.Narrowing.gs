@@ -1393,7 +1393,7 @@ internal partial class StatementBinder {
             if RefCapabilities.GetParameterRefKind(param) != RefKind.Out || HasClrNullabilityContract(param) {
                 continue
             }
-            let paramType = ClrNullability.GetParameterTypeSymbol(param).StripToBareShape()
+            let paramType = ClrNullability.GetParameterTypeSymbol(param)
             if arguments[i] is BoundAddressOfExpression{IsReadOnly: false, Operand: BoundVariableExpression v} &&
                 object.ReferenceEquals(v.Variable, targetRoot) &&
                 AssignmentTypePreservesNarrowing(paramType, underlying) &&

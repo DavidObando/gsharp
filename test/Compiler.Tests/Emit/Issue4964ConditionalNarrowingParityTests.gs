@@ -726,12 +726,21 @@ public shared class CallbackPredicates {
         callback()
         return value != nil
     }
+    public func ResetNullable(out value string?) int32 {
+        value = nil
+        return 1
+    }
+    public func ResetNonNull(out value string) int32 {
+        value = "ok"
+        return 1
+    }
 }
 `)
 
             let consumerPath = Path.Combine(outputDirectory, "Consumer.gs")
             let consumerOut = Path.Combine(outputDirectory, "Consumer.dll")
             File.WriteAllText(consumerPath, `package Issue4969.CallbackConsumer
+import System.Collections.Generic
 import Issue4969.CallbackLib
 var g string? = "seed"
 func Consume(x float64, n int32) int32 -> n
@@ -772,6 +781,14 @@ func CheckFalseArmPatternIsolation(o object, token Token) float64 {
     let v = g != nil ? (!(o is string text) ? token : float64(text.Length)) : 0.0
     return v
 }
+func CheckImportedNullableOutDoesNotDischarge(dict Dictionary[string, string]) int32 {
+    var value = "seed"
+    return dict.TryGetValue("missing", out value) ? 0 : (CallbackPredicates.ResetNullable(out value), value.Length).Item2
+}
+func CheckImportedNonNullOutDischarges(dict Dictionary[string, string]) int32 {
+    var value = "seed"
+    return dict.TryGetValue("missing", out value) ? 0 : (CallbackPredicates.ResetNonNull(out value), value.Length).Item2
+}
 `)
             using let standardOut = StringWriter()
             using let standardError = StringWriter()
@@ -801,7 +818,7 @@ func CheckFalseArmPatternIsolation(o object, token Token) float64 {
             Assert.Equal(0, helperExit)
             Assert.NotEqual(0, exitCode)
             let consumerDiagnostics = standardOut.ToString() + standardError.ToString()
-            Assert.Equal(9, consumerDiagnostics.Split("GS0158").Length - 1)
+            Assert.Equal(10, consumerDiagnostics.Split("GS0158").Length - 1)
             Assert.DoesNotContain("GS0536", consumerDiagnostics)
             Assert.DoesNotContain("GS0130", consumerDiagnostics)
         } finally {
@@ -952,6 +969,19 @@ func CheckIfLetEmptyAliasesNotCorrupted(external () -> bool, seed string?, n int
     }
     return first + (s != nil ? (reset() ? s.Length : 0) : 0)
 }
+var gn int32? = 5
+struct NToken {
+    shared {
+        func operator implicit(t NToken) float64 {
+            gn = nil
+            return 0.0
+        }
+    }
+}
+func ConsumeOverload2(x float64, v int32) bool -> true
+func ConsumeOverload2(x float64, v int32?) bool -> v != nil
+func CheckOverloadRetryWithSuppressedAssertion(token NToken) bool ->
+    !(gn == nil) ? ConsumeOverload2(token, (gn!!, gn).Item2) : false
 `)
         Assert.Equal("GS0156:this.n;GS0158:Length", throwingArmAndCtorFieldWriteDiag)
 

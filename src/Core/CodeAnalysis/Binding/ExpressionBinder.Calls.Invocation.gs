@@ -1513,7 +1513,7 @@ internal partial class ExpressionBinder {
         } else {
             default(HashSet[VariableSymbol]?)
         }
-        let call = BindAccessorCallCore(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+        let call = BindAccessorCallWithArgumentRefresh(receiver, classSymbol, ce, receiverSyntax, receiverStart)
         if ce.NullableQuestionToken != nil && call is BoundNullConditionalAccessExpression {
             InvalidateExpressionNarrowingFrames(call, entryAliases)
             MergeBranchExpressionNarrowingFrames(beforeCall)
@@ -1523,7 +1523,7 @@ internal partial class ExpressionBinder {
         return call
     }
 
-    private func BindAccessorCallCore(
+    private func BindAccessorCallWithArgumentRefresh(
         receiver BoundExpression?,
         classSymbol ImportedClassSymbol?,
         ce CallExpressionSyntax,
@@ -1858,7 +1858,7 @@ internal partial class ExpressionBinder {
         }
         let initialArguments = boundArguments.ToImmutable()
         let overloadDiagMark = Diagnostics.Count
-        var result = BindAccessorCallAfterArguments(
+        var result = BindAccessorCallCore(
             receiver,
             classSymbol,
             methodName,
@@ -1874,7 +1874,7 @@ internal partial class ExpressionBinder {
             let savedDiagnostics = List[Diagnostic]()
             Diagnostics.DrainSince(overloadDiagMark, savedDiagnostics)
             let retryDiagMark = Diagnostics.Count
-            let retryResult = BindAccessorCallAfterArguments(
+            let retryResult = BindAccessorCallCore(
                 receiver,
                 classSymbol,
                 methodName,
@@ -1896,7 +1896,7 @@ internal partial class ExpressionBinder {
         return result
     }
 
-    private func BindAccessorCallAfterArguments(
+    private func BindAccessorCallCore(
         receiver BoundExpression?,
         classSymbol ImportedClassSymbol?,
         methodName string,

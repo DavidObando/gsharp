@@ -72,7 +72,9 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     internal func DrainSince(startCount int32, sink List[Diagnostic]) {
         let start = Math.Clamp(startCount, 0, diagnostics.Count)
         for var i = start; i < diagnostics.Count; i++ {
-            sink.Add(diagnostics[i])
+            if !cascadeSuppressed.Contains(diagnostics[i]) {
+                sink.Add(diagnostics[i])
+            }
         }
         TruncateTo(start)
     }
@@ -93,7 +95,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                 .End <= owner
                 .Span
                 .End {
-                diagnostics.RemoveAt(i)
+                cascadeSuppressed.Add(diagnostic)
             }
         }
     }
@@ -112,7 +114,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// this instance.
     /// @param diagnostics The diagnostics bag to copy from.
     func AddRange(diagnostics DiagnosticBag) {
-        AddRange(diagnostics.diagnostics)
+        AddRange(diagnostics.Visible())
     }
 
     /// Adds a sequence of already-constructed diagnostics into this instance.
