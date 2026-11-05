@@ -41,6 +41,20 @@ internal partial class ExpressionBinder {
         // front so nested sub-expressions bind with normal semantics.
         let deferOnFailure = targetType == nil && binderCtx.DeferTargetlessConditional
         this.binderCtx.DeferTargetlessConditional = false
+        let beforeSwitch = if deferOnFailure {
+            CaptureExpressionNarrowingFrames()
+        } else {
+            default(
+                List[
+                    (
+                        Id int32,
+                        Frame NarrowingFrame?,
+                        Entries Dictionary[AccessPath, TypeSymbol]?,
+                        Aliases HashSet[VariableSymbol]
+                    )
+                ]?
+            )
+        }
         let discriminant = BindExpression(syntax.Expression)
         if NativeProtocolOperations.GetProtocol(discriminant.Type) != nil {
             Diagnostics.ReportNativeProtocol(
@@ -244,6 +258,9 @@ internal partial class ExpressionBinder {
             armResults.Add(arm.Result)
         }
         if IsVoidInDiscardedPosition(canBeVoid, armResults) {
+            if !hasDefault {
+                MergeBranchExpressionNarrowingFrames(unmatchedExit)
+            }
             let voidArms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](boundArmBuilders.Count)
             for arm in boundArmBuilders {
                 voidArms.Add(BoundSwitchExpressionArm(nil, arm.Pattern, arm.Guard, DiscardValue(arm.Result)))
@@ -319,6 +336,7 @@ internal partial class ExpressionBinder {
         // resolved parameter type.
         if anyArmFailed && deferOnFailure {
             Diagnostics.TruncateTo(diagMark)
+            RestoreExpressionNarrowingFrames(beforeSwitch)
             return BoundErrorExpression(syntax)
         }
         ExhaustivenessAnalyzer.AnalyzeSwitchExpression(

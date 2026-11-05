@@ -103,6 +103,41 @@ internal class ConversionClassifier {
         if tryGetReboundSibling != nil && tryGetReboundSibling!!(expression) is {} reboundSibling {
             return reboundSibling
         }
+        if expression is BoundArrayCreationExpression arr {
+            var builder ImmutableArray[BoundExpression].Builder? = nil
+            for var i = 0; i < arr.Elements.Length; i++ {
+                let elem = arr.Elements[i]
+                let resolvedElem = ResolveReboundArgument(elem)
+                if !object.ReferenceEquals(resolvedElem, elem) {
+                    builder ??= arr.Elements.ToBuilder()
+                    builder!![i] = resolvedElem
+                }
+            }
+            if builder != nil {
+                return BoundArrayCreationExpression(arr.Syntax, arr.Type, builder.ToImmutable())
+            }
+        } else if expression is BoundConversionExpression conv && conv.Expression is BoundArrayCreationExpression {
+            let resolvedInner = ResolveReboundSibling(conv.Expression)
+            if !object.ReferenceEquals(resolvedInner, conv.Expression) {
+                return BindConversion(conv.Syntax?.Location ?? default(TextLocation), resolvedInner, conv.Type)
+            }
+        } else if expression is BoundClrConstructorCallExpression ctorCall &&
+            ctorCall
+            .Arguments
+            .Length == 1 &&
+            ctorCall.Arguments[0] is BoundArrayCreationExpression {
+            let resolvedInner = ResolveReboundSibling(ctorCall.Arguments[0])
+            if !object.ReferenceEquals(resolvedInner, ctorCall.Arguments[0]) {
+                return BoundClrConstructorCallExpression(
+                    ctorCall.Syntax,
+                    ctorCall.ClrType,
+                    ctorCall.Constructor,
+                    ImmutableArray.Create(resolvedInner),
+                    ctorCall.Type,
+                    ctorCall.ArgumentRefKinds
+                )
+            }
+        }
         return expression
     }
 
@@ -124,6 +159,14 @@ internal class ConversionClassifier {
                 argument.Type
             )
         }
+        if argument is BoundConversionExpression conv &&
+            tryGetReboundSibling!!(conv.Expression) is {} reboundConvInner {
+            return BindConversion(
+                reboundConvInner.Syntax?.Location ?? conv.Syntax?.Location ?? default(TextLocation),
+                reboundConvInner,
+                conv.Type
+            )
+        }
         if argument is BoundAddressOfExpression{IsReadOnly: true} addr {
             let pointeeType = addr.Operand.Type
             if tryGetReboundSibling!!(addr.Operand) is {} reboundAddrOp {
@@ -141,7 +184,7 @@ internal class ConversionClassifier {
                 }
             }
         }
-        return argument
+        return ResolveReboundSibling(argument)
     }
 
     /// Initializes a new instance of the (cref:ConversionClassifier)

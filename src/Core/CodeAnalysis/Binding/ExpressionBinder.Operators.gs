@@ -1539,6 +1539,20 @@ internal partial class ExpressionBinder {
         if syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken {
             this.binderCtx.DeferTargetlessConditional = false
         }
+        let beforeCoalesce = if deferTargetlessCoalesce {
+            CaptureExpressionNarrowingFrames()
+        } else {
+            default(
+                List[
+                    (
+                        Id int32,
+                        Frame NarrowingFrame?,
+                        Entries Dictionary[AccessPath, TypeSymbol]?,
+                        Aliases HashSet[VariableSymbol]
+                    )
+                ]?
+            )
+        }
         let coalesceDiagMark = Diagnostics.Count
         let leftEntryAliases = GetCurrentExpressionCallableAliases()
         var boundLeft = if coalesceTargetType != nil &&
@@ -1625,7 +1639,7 @@ internal partial class ExpressionBinder {
                 leftUtf8.Slice
             )
         }
-        return BindBinaryOperation(
+        let result = BindBinaryOperation(
             syntax,
             syntax.OperatorToken.Kind,
             syntax.OperatorToken.Location,
@@ -1639,6 +1653,10 @@ internal partial class ExpressionBinder {
             deferTargetlessCoalesce,
             coalesceDiagMark
         )
+        if deferTargetlessCoalesce && result is BoundErrorExpression{Syntax: not nil} {
+            RestoreExpressionNarrowingFrames(beforeCoalesce)
+        }
+        return result
     }
 
     /// Binds a binary operator on two bound operands: native, built-in, user-defined, CLR, and reference-equality

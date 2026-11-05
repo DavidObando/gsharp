@@ -819,7 +819,13 @@ func Consume(x float64, b bool) bool -> b
 func ConsumeThree(x float64, b bool, tail int32?) bool -> b
 func ConsumeNamed(b bool, x float64) bool -> b
 func ConsumeVariadic(x float64, values ...bool) bool -> values[0]
+delegate VariadicDelegate(x float64, values ...bool) bool;
+struct VariadicSink {
+    func Use(x float64, values ...bool) bool -> values[0]
+}
 let token = Token{}
+let sink = VariadicSink{}
+let del VariadicDelegate = (x float64, values ...bool) -> values[0]
 Console.WriteLine(n != nil ? Consume(token, n > 0) : false)
 n = 5
 Console.WriteLine(n != nil ? ConsumeThree(token, n > 0, (n = nil)) : false)
@@ -830,12 +836,74 @@ n = 5
 Console.WriteLine(n != nil ? ConsumeNamed(x: token, b: n > 0) : false)
 n = 5
 Console.WriteLine(n != nil ? ConsumeVariadic(token, n > 0) : false)
+n = 5
+Console.WriteLine(n != nil ? sink.Use(token, n > 0) : false)
+n = 5
+Console.WriteLine(n != nil ? del(token, n > 0) : false)
 `)
         Assert.Equal(
-            string.Join(Environment.NewLine, "False", "False", "False", "False", "False") + Environment.NewLine,
+            string.Join(Environment.NewLine, "False", "False", "False", "False", "False", "False", "False") +
+                Environment.NewLine,
             identityArgRebindRun.Output
         )
         Assert.DoesNotContain("GS0536", identityArgRebindRun.CompilerOutput)
+
+        let deferredCoalesceAndSwitchDiag = DiagnoseSource(`package Issue4969.DeferredBranchyRetry
+interface I {}
+class A : I {}
+class B : I {}
+func TakeI(v I) int32 -> 1
+func TakeObj(v object) int32 -> 1
+func CheckCoalesce(ref s string?, a A?) int32 -> s != nil ? TakeI((s.Length, a).Item2 ?? (s = nil, B{}).Item2) : 0
+func CheckSwitch(ref s string?, flag bool) int32 -> s != nil ? TakeObj(switch flag { case true: (s.Length, A{}).Item2 default: (s = nil, B{}).Item2 }) : 0
+`)
+        Assert.Equal("", deferredCoalesceAndSwitchDiag)
+
+        let voidSwitchUnnamedEnumDiag = DiagnoseSource(`package Issue4969.VoidSwitchUnnamedEnum
+import System.Collections.Generic
+enum E { One = 1, Two = 2 }
+func VoidOp() {}
+func Check(dict Dictionary[string, string], e E) int32 {
+    var value = "seed"
+    return dict.TryGetValue("missing", out value) ? 0 : ({
+        switch e {
+            case E.One: {
+                value = "a"
+                VoidOp()
+            }
+            case E.Two: {
+                value = "b"
+                VoidOp()
+            }
+        }
+        value.Length
+    })
+}
+`)
+        Assert.Equal("GS0158:Length", voidSwitchUnnamedEnumDiag)
+
+        let voidSwitchWithDefaultDischargesDiag = DiagnoseSource(`package Issue4969.VoidSwitchWithDefault
+import System.Collections.Generic
+enum E { One = 1, Two = 2 }
+func VoidOp() {}
+func Check(dict Dictionary[string, string], e E) int32 {
+    var value = "seed"
+    return dict.TryGetValue("missing", out value) ? 0 : ({
+        switch e {
+            case E.One: {
+                value = "a"
+                VoidOp()
+            }
+            default: {
+                value = "b"
+                VoidOp()
+            }
+        }
+        value.Length
+    })
+}
+`)
+        Assert.Equal("", voidSwitchWithDefaultDischargesDiag)
 
         let constrainedComparerDiag = DiagnoseSource(`package Issue4969.ConstrainedComparerRebind
 import System.Collections.Generic
