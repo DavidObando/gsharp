@@ -457,7 +457,11 @@ partial class Binder {
                 statement ExpressionStatementSyntax,
                 syntax NullCoalescingAssignmentExpressionSyntax
             ) -> {
-                return Expressions.BindNullCoalescingAssignmentStatement(statement, syntax)
+                return Expressions.BindNullCoalescingAssignmentStatement(
+                    statement,
+                    syntax,
+                    (rhs BoundExpression) -> Statements.CreateExpressionVariableMutationChecker(statement, rhs)
+                )
             }
         )
         let BindTypeOfExpressionForDeclarations = func (syntax TypeOfExpressionSyntax) BoundExpression {
