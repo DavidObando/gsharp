@@ -422,11 +422,11 @@ shared class MoveNextBodyRewriter {
                 // are reference types, so aliasing the hoisted field into a fresh
                 // local lets us perform the index store through that local; the
                 // mutation lands on the same underlying array.
-                if node.Target != nil && TryGetHoistedField(node.Target, out var targetField) {
+                if node.Target is {} assignTarget && TryGetHoistedField(assignTarget, out var targetField) {
                     let aliasLocal = LocalVariableSymbol(
                         "<>arr_alias_" + (aliasOrdinal++).ToString(),
                         isReadOnly: false,
-                        node.Target.Type
+                        assignTarget.Type
                     )
                     let decl = BoundVariableDeclaration(nil, aliasLocal, ctx.ReadField(targetField!!))
                     let newAssign = BoundIndexAssignmentExpression(

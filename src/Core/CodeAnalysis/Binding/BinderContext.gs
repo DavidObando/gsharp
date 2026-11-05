@@ -832,10 +832,13 @@ internal class BinderContext {
         }
         if expression is BoundUnaryExpression{IsNarrowingUnwrap: true} unwrap {
             if unwrap.Operand is BoundVariableExpression unwrappedVariable {
-                let variablePath = AccessPath.ForVariable(unwrappedVariable.Variable)
-                path = variablePath
-                narrowedType = NarrowedVariables.Query(variablePath)
-                return narrowedType != nil
+                path = AccessPath.ForVariable(unwrappedVariable.Variable)
+                narrowedType = unwrap.Type
+                return true
+            }
+            if SmartCastStability.TryGetStableMemberPath(unwrap.Operand, out path, out _) {
+                narrowedType = unwrap.Type
+                return true
             }
             return TryGetNarrowedAccessPath(unwrap.Operand, out path, out narrowedType)
         }
@@ -844,6 +847,21 @@ internal class BinderContext {
         if !found || stablePath == nil {
             narrowedType = nil
             return false
+        }
+        if expression is BoundFieldAccessExpression{NarrowedType: {} fieldNarrowed} {
+            narrowedType = fieldNarrowed
+            return true
+        }
+        if expression is BoundPropertyAccessExpression{NarrowedType: {} propertyNarrowed} {
+            narrowedType = propertyNarrowed
+            return true
+        }
+        if expression is BoundClrPropertyAccessExpression clrAccess {
+            let declared = MemberLookup.GetDeclaredAccessPathType(stablePath, clrAccess.Type)
+            if !object.Equals(clrAccess.Type, declared) {
+                narrowedType = clrAccess.Type
+                return true
+            }
         }
         narrowedType = NarrowedVariables.Query(stablePath)
         return narrowedType != nil

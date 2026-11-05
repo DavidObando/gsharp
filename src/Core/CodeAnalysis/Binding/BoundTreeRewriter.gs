@@ -2328,7 +2328,7 @@ abstract class BoundTreeRewriter {
         if receiver == node.Receiver {
             return node
         }
-        return if node.FunctionType != nil {
+        return if node.FunctionType is {} functionType {
             BoundMethodGroupExpression(
                 node.Syntax,
                 receiver,
@@ -2337,7 +2337,7 @@ abstract class BoundTreeRewriter {
                     "a method group with a function type has a function",
                     expression: "node.Function"
                 ),
-                node.FunctionType,
+                functionType,
                 node.StaticOwnerType,
                 node.MethodTypeArguments
             ){

@@ -65,6 +65,7 @@ internal class PatternBinder {
     private let bindTypeClause(TypeClauseSyntax) -> TypeSymbol?
     private let isNilLiteral(BoundExpression) -> bool
     private let bindEqualityOperation(RelationalPatternSyntax, BoundExpression, BoundExpression) -> BoundExpression
+    private let applyPatternEffects((SyntaxNode, TypeSymbol, BoundPattern) -> void)?
     private var currentPatternInput TypeSymbol?
 
     /// Initializes a new instance of the (cref:PatternBinder)
@@ -92,7 +93,8 @@ internal class PatternBinder {
         bindExpression(ExpressionSyntax) -> BoundExpression,
         bindTypeClause(TypeClauseSyntax) -> TypeSymbol?,
         isNilLiteral(BoundExpression) -> bool,
-        bindEqualityOperation(RelationalPatternSyntax, BoundExpression, BoundExpression) -> BoundExpression
+        bindEqualityOperation(RelationalPatternSyntax, BoundExpression, BoundExpression) -> BoundExpression,
+        applyPatternEffects((SyntaxNode, TypeSymbol, BoundPattern) -> void)? = nil
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.conversions = conversions ?? throw ArgumentNullException("conversions")
@@ -100,6 +102,7 @@ internal class PatternBinder {
         this.bindTypeClause = bindTypeClause ?? throw ArgumentNullException("bindTypeClause")
         this.isNilLiteral = isNilLiteral ?? throw ArgumentNullException("isNilLiteral")
         this.bindEqualityOperation = bindEqualityOperation ?? throw ArgumentNullException("bindEqualityOperation")
+        this.applyPatternEffects = applyPatternEffects
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics
@@ -294,6 +297,7 @@ internal class PatternBinder {
             bindingContext
         }
         let left = BindPattern(syntax.Left, discriminantType, childBindingContext, preferTypeNames)
+        applyPatternEffects?(syntax.Left, discriminantType, left)
         var rightInputType = discriminantType
         var rightInputVariable LocalVariableSymbol? = nil
         if isConjunction && TryGetGuaranteedNarrowingValue(left, out var narrowedVariable) {
@@ -668,13 +672,14 @@ internal class PatternBinder {
                     )
                     continue
                 }
-                fields.Add(
-                    BoundPropertyPatternField(
-                        syntax,
-                        tupleField,
-                        BindMemberPattern(tupleFieldSyntax.Pattern, tupleField.Type, bindingContext, preferTypeNames)
-                    )
+                let boundMemberPattern = BindMemberPattern(
+                    tupleFieldSyntax.Pattern,
+                    tupleField.Type,
+                    bindingContext,
+                    preferTypeNames
                 )
+                fields.Add(BoundPropertyPatternField(syntax, tupleField, boundMemberPattern))
+                applyPatternEffects?(tupleFieldSyntax.Pattern, tupleField.Type, boundMemberPattern)
             }
             return BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable())
         }
@@ -703,6 +708,7 @@ internal class PatternBinder {
                 continue
             }
             fields.Add(field)
+            applyPatternEffects?(fieldSyntax.Pattern, field.Pattern.Type, field.Pattern)
         }
         return BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable())
     }
@@ -752,6 +758,22 @@ internal class PatternBinder {
                     if property.IsIndexer || property.IsStatic || !property.HasGetter {
                         return false
                     }
+                    applyPatternEffects?(
+                        syntax,
+                        lookupType,
+                        BoundPropertyPattern(
+                            syntax,
+                            lookupType,
+                            ImmutableArray.Create(
+                                BoundPropertyPatternField(
+                                    syntax,
+                                    property,
+                                    current,
+                                    BoundDiscardPattern(syntax.Pattern, property.Type)
+                                )
+                            )
+                        )
+                    )
                     boundField = BoundPropertyPatternField(
                         syntax,
                         property,
@@ -784,6 +806,22 @@ internal class PatternBinder {
                         boundField = nil
                         return false
                     }
+                    applyPatternEffects?(
+                        syntax,
+                        lookupType,
+                        BoundPropertyPattern(
+                            syntax,
+                            lookupType,
+                            ImmutableArray.Create(
+                                BoundPropertyPatternField(
+                                    syntax,
+                                    property,
+                                    current,
+                                    BoundDiscardPattern(syntax.Pattern, property.Type)
+                                )
+                            )
+                        )
+                    )
                     boundField = BoundPropertyPatternField(
                         syntax,
                         property,
@@ -861,6 +899,22 @@ internal class PatternBinder {
             } else {
                 rawPropertyType
             }
+            applyPatternEffects?(
+                syntax,
+                receiverType,
+                BoundPropertyPattern(
+                    syntax,
+                    receiverType,
+                    ImmutableArray.Create(
+                        BoundPropertyPatternField(
+                            syntax,
+                            property,
+                            propertyType,
+                            BoundDiscardPattern(syntax.Pattern, propertyType)
+                        )
+                    )
+                )
+            )
             boundField = BoundPropertyPatternField(
                 syntax,
                 property,
@@ -1052,19 +1106,85 @@ internal class PatternBinder {
         if elementType == TypeSymbol.Error {
             Diagnostics.ReportListPatternRequiresArrayOrSlice(syntax.OpenSquareBracketToken.Location, discriminantType)
         }
-        let elements = ImmutableArray.CreateBuilder[BoundPattern]()
+        let boundElements = [syntax.Elements.Count]BoundPattern?
         var sliceCount = 0
-        for elementSyntax in syntax.Elements {
+        if lengthProperty != nil {
+            applyPatternEffects?(
+                syntax,
+                discriminantType,
+                BoundListPattern(
+                    syntax,
+                    discriminantType,
+                    ImmutableArray[BoundPattern].Empty,
+                    elementType,
+                    lengthProperty,
+                    indexerProperty: nil,
+                    inputVariable
+                )
+            )
+        }
+        // EmitListPattern evaluates prefix elements, suffix elements, and finally
+        // the slice subpattern (MethodBodyEmitter.Patterns.gs), so bind and apply
+        // narrowing effects in that emitted evaluation order while keeping each
+        // bound element at its source position.
+        for var i = 0; i < syntax.Elements.Count; i++ {
+            let elementSyntax = syntax.Elements[i]
             if elementSyntax is SlicePatternSyntax slice {
                 // Issue #1505: at most one slice subpattern per list pattern.
                 sliceCount++
                 if sliceCount > 1 {
                     Diagnostics.ReportMultipleSlicePatternsInListPattern(slice.DotDotToken.Location)
                 }
-                elements.Add(BindSlicePattern(slice, discriminantType, elementType, bindingContext, preferTypeNames))
-            } else {
-                elements.Add(BindMemberPattern(elementSyntax, elementType, bindingContext, preferTypeNames))
+                continue
             }
+            if indexerProperty != nil && SyntaxPatternReadsInput(elementSyntax, elementType) {
+                applyPatternEffects?(
+                    syntax,
+                    discriminantType,
+                    BoundListPattern(
+                        syntax,
+                        discriminantType,
+                        ImmutableArray.Create[BoundPattern](
+                            BoundPropertyPattern(
+                                elementSyntax,
+                                elementType,
+                                ImmutableArray[BoundPropertyPatternField].Empty
+                            )
+                        ),
+                        elementType,
+                        lengthProperty: nil,
+                        indexerProperty,
+                        inputVariable
+                    )
+                )
+            }
+            let boundElement = BindMemberPattern(elementSyntax, elementType, bindingContext, preferTypeNames)
+            boundElements[i] = boundElement
+            applyPatternEffects?(elementSyntax, elementType, boundElement)
+        }
+        for var i = 0; i < syntax.Elements.Count; i++ {
+            if syntax.Elements[i] is not SlicePatternSyntax slice {
+                continue
+            }
+            let boundSlice = BindSlicePattern(slice, discriminantType, elementType, bindingContext, preferTypeNames)
+            boundElements[i] = boundSlice
+            applyPatternEffects?(
+                slice,
+                discriminantType,
+                BoundListPattern(
+                    syntax,
+                    discriminantType,
+                    ImmutableArray.Create(boundSlice),
+                    elementType,
+                    lengthProperty: nil,
+                    indexerProperty,
+                    inputVariable
+                )
+            )
+        }
+        let elements = ImmutableArray.CreateBuilder[BoundPattern](syntax.Elements.Count)
+        for var i = 0; i < syntax.Elements.Count; i++ {
+            elements.Add(boundElements[i]!!)
         }
         return BoundListPattern(
             syntax,
@@ -1075,6 +1195,25 @@ internal class PatternBinder {
             indexerProperty,
             inputVariable
         )
+    }
+
+    private func SyntaxPatternReadsInput(syntax PatternSyntax, inputType TypeSymbol) bool -> switch syntax {
+        case DiscardPatternSyntax: false
+        case property is PropertyPatternSyntax: property
+            .Fields
+            .Count > 0 ||
+            inputType is NullableTypeSymbol ||
+            !GSharp
+            .Core
+            .CodeAnalysis
+            .Emit
+            .ReflectionMetadataEmitter
+            .IsValueTypeSymbol(inputType)
+        case binary is BinaryPatternSyntax: SyntaxPatternReadsInput(binary.Left, inputType) ||
+            SyntaxPatternReadsInput(binary.Right, inputType)
+        case negation is NotPatternSyntax: SyntaxPatternReadsInput(negation.Pattern, inputType)
+        case paren is ParenthesizedPatternSyntax: SyntaxPatternReadsInput(paren.Pattern, inputType)
+        default: true
     }
 
     // Issue #1505: bind a slice ("rest") subpattern. A named capture (`..rest`)

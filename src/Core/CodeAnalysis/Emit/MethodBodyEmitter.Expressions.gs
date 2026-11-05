@@ -2229,8 +2229,8 @@ internal partial class MethodBodyEmitter {
                     }
                 )
                 this.il.Token(
-                    if access.StaticContainerType != nil {
-                        this.outer.memberRefs.GetFieldReference(field, access.StaticContainerType)
+                    if access.StaticContainerType is {} staticContainerType {
+                        this.outer.memberRefs.GetFieldReference(field, staticContainerType)
                     } else {
                         this.outer.memberRefs.GetFieldReference(field)
                     }

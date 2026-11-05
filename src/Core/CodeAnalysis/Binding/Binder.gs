@@ -193,7 +193,16 @@ partial class Binder {
             bindNativeProtocolConversion: (location TextLocation, source BoundExpression, target TypeSymbol) ->
             BindNativeProtocolConversion(location, source, target),
             canConvertNativeProtocol: CanConvertNativeProtocol,
-            getCurrentFunction: () -> this.function
+            getCurrentFunction: () -> this.function,
+            rebindDeferredArgumentWithSnapshot: (syntax SyntaxNode, bind() -> BoundExpression) ->
+            Statements.RebindDeferredArgumentWithSnapshot(syntax, bind),
+            recordConvertedArgument: (original BoundExpression?, converted BoundExpression?) ->
+            Statements.RecordConvertedArgument(original, converted),
+            verifyCallArgumentsAfterConversions: (
+                arguments GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
+                boundCall BoundExpression?,
+                rebindCall(() -> BoundExpression)?
+            ) -> Statements.VerifyCallArgumentsAfterConversions(arguments, boundCall, rebindCall)
         )
         overloads = OverloadResolver(
             binderCtx,
@@ -305,7 +314,20 @@ partial class Binder {
                     ImportedClassSymbol(clrType, ce, references: $scope.References),
                     ce
                 )
-            }
+            },
+            applySubExpressionEffects: (syntax SyntaxNode?, operand BoundExpression?) ->
+            Statements.ApplySubExpressionNarrowingEffects(syntax, operand),
+            captureNarrowingSnapshot: () -> Statements.CaptureNarrowingBindSnapshot(),
+            restoreNarrowingSnapshot: (snapshot StatementBinder.NarrowingBindSnapshot) ->
+            Statements.RestoreNarrowingBindSnapshot(snapshot),
+            recordDeferredArgumentSnapshot: (syntax SyntaxNode) -> Statements.RecordDeferredArgumentSnapshot(syntax),
+            rebindDeferredArgumentWithSnapshot: (syntax SyntaxNode, bind() -> BoundExpression) ->
+            Statements.RebindDeferredArgumentWithSnapshot(syntax, bind),
+            verifyCallArgumentsAfterConversions: (
+                arguments GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
+                boundCall BoundExpression?,
+                rebindCall(() -> BoundExpression)?
+            ) -> Statements.VerifyCallArgumentsAfterConversions(arguments, boundCall, rebindCall)
         )
         patterns = PatternBinder(
             binderCtx,
@@ -323,9 +345,12 @@ partial class Binder {
                     input,
                     value,
                     syntax.Location,
-                    syntax.Expression.Location
+                    syntax.Expression.Location,
+                    preLeftEffectsNarrowing: Expressions.GetSavedEntrySnapshot(syntax.Expression)
                 )
-            }
+            },
+            applyPatternEffects: (syntax SyntaxNode, discriminantType TypeSymbol, pattern BoundPattern) ->
+            Statements.ApplySwitchArmTestEffects(syntax, discriminantType, pattern)
         )
         // ADR-0185: bindLocalVariable/bindTupleDestructuringPrelude below
         // reuse StatementBinder's own local-declaration callback and its
@@ -466,7 +491,9 @@ partial class Binder {
                     syntax,
                     (rhs BoundExpression) -> Statements.CreateExpressionVariableMutationChecker(statement, rhs)
                 )
-            }
+            },
+            bindRefArgumentExpression: (refArg RefArgumentExpressionSyntax) ->
+            Expressions.BindRefArgumentExpression(refArg, parameter: nil)
         )
         let BindTypeOfExpressionForDeclarations = func (syntax TypeOfExpressionSyntax) BoundExpression {
             return Expressions.BindTypeOfExpression(syntax)
@@ -605,7 +632,36 @@ partial class Binder {
             classifyConditionNonNullAssignments: (
                 condition BoundExpression,
                 aliases IReadOnlyCollection[VariableSymbol]?
-            ) -> Statements.TryClassifyConditionNonNullAssignments(condition, aliases)
+            ) -> Statements.TryClassifyConditionNonNullAssignments(condition, aliases),
+            applySubExpressionEffects: (syntax SyntaxNode?, operand BoundExpression?) ->
+            Statements.ApplySubExpressionNarrowingEffects(syntax, operand),
+            applyConditionEffectsAndHeaderAliases: (syntax SyntaxNode, condition BoundExpression) ->
+            Statements.ApplyConditionEffectsAndHeaderAliases(syntax, condition),
+            captureNarrowingSnapshot: () -> Statements.CaptureNarrowingBindSnapshot(),
+            restoreNarrowingSnapshot: (snapshot StatementBinder.NarrowingBindSnapshot) ->
+            Statements.RestoreNarrowingBindSnapshot(snapshot),
+            recordDeferredArgumentSnapshot: (syntax SyntaxNode) -> Statements.RecordDeferredArgumentSnapshot(syntax),
+            joinBranchNarrowingSnapshots: (
+                whenTrueType TypeSymbol?,
+                afterWhenTrue StatementBinder.NarrowingBindSnapshot,
+                whenFalseType TypeSymbol?,
+                afterWhenFalse StatementBinder.NarrowingBindSnapshot
+            ) -> Statements.JoinBranchNarrowingSnapshots(whenTrueType, afterWhenTrue, whenFalseType, afterWhenFalse),
+            intersectNarrowingWithSnapshot: (other StatementBinder.NarrowingBindSnapshot) ->
+            Statements.IntersectNarrowingWithSnapshot(other),
+            verifyCallArgumentsAfterConversions: (
+                arguments GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
+                boundCall BoundExpression?,
+                rebindCall(() -> BoundExpression)?
+            ) -> Statements.VerifyCallArgumentsAfterConversions(arguments, boundCall, rebindCall),
+            rebindDeferredArgumentWithSnapshot: (syntax SyntaxNode, bind() -> BoundExpression) ->
+            Statements.RebindDeferredArgumentWithSnapshot(syntax, bind),
+            applyPendingMultiAssignmentValueSnapshot: (syntax SyntaxNode) ->
+            Statements.ApplyPendingMultiAssignmentValueSnapshot(syntax),
+            recordExpressionEntryAliases: (expression BoundExpression?, entryAliases HashSet[VariableSymbol]?) ->
+            Statements.RecordExpressionEntryAliases(expression, entryAliases),
+            recordAppliedBinaryLeft: (binary BoundBinaryExpression, rightEntryAliases HashSet[VariableSymbol]?) ->
+            Statements.RecordAppliedBinaryLeft(binary, rightEntryAliases)
         )
         Statements.SetSyncExpressionCallableAliases(
             (aliases IReadOnlyCollection[VariableSymbol]) -> expressions.SyncActiveExpressionCallableAliases(aliases)
@@ -642,7 +698,8 @@ partial class Binder {
             // de-dup set within the instance-member inheritance walk below.
             let seenMembers = HashSet[string]()
             if function.ThisParameter != nil {
-                $scope.TryDeclareVariable(function.ThisParameter)
+                let thisParameter = function.ThisParameter
+                $scope.TryDeclareVariable(thisParameter)
                 // ADR-0058 / ADR-0184 / issue #376: EVERY struct instance member's
                 // `this` is implicitly `scoped ref` in C#, not just a `ref struct`'s
                 // — its REF-safe-context is the method body, so a reference into the
@@ -4959,9 +5016,9 @@ partial class Binder {
         try {
             if syntax.ReadOnlySpanModifier != nil &&
                 (
-                syntax.HasQualifier || syntax.Identifier == nil || !binderCtx.CanUseSpanAlias(
+                syntax.HasQualifier || syntax.Identifier is not{} spanIdentifier || !binderCtx.CanUseSpanAlias(
                     $scope,
-                    syntax.Identifier,
+                    spanIdentifier,
                     function
                 )
             ) {

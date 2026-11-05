@@ -613,17 +613,15 @@ internal partial class MethodBodyEmitter {
         if from
             .ClrType
             ?.FullName == "System.Linq.Expressions.LambdaExpression" &&
-            to.ClrType != nil &&
-            to
-            .ClrType
-            .IsGenericType &&
+            to.ClrType is {} toClrType &&
+            toClrType.IsGenericType &&
             string
             .Equals(
             (
-                if to.ClrType.IsGenericTypeDefinition {
-                    to.ClrType
+                if toClrType.IsGenericTypeDefinition {
+                    toClrType
                 } else {
-                    to.ClrType.GetGenericTypeDefinition()
+                    toClrType.GetGenericTypeDefinition()
                 }
             ).FullName,
             "System.Linq.Expressions.Expression`1",
@@ -1670,11 +1668,9 @@ internal partial class MethodBodyEmitter {
         }
 
         internal func ReturnsValueTypeNullable(conversion BoundClrConversionCallExpression) bool {
-            if conversion.Function != nil {
-                let resultType = conversion.FunctionOwnerType?.SubstituteMemberType(conversion.Function.Type) ??
-                    conversion
-                    .Function
-                    .Type
+            if conversion.Function is {} conversionFunction {
+                let resultType = conversion.FunctionOwnerType?.SubstituteMemberType(conversionFunction.Type) ??
+                    conversionFunction.Type
                 return resultType is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable)
             }
             if TryGetSymbolicConversionReturnType(conversion, out var symbolicReturn) {

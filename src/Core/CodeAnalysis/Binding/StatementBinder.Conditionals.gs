@@ -89,20 +89,75 @@ internal partial class StatementBinder {
         )
     }
 
+    private func CaptureConditionEntryFacts() Dictionary[AccessPath, TypeSymbol]? {
+        var facts Dictionary[AccessPath, TypeSymbol]? = nil
+        for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {
+            for entry in binderCtx.NarrowedVariables[i] {
+                if facts == nil {
+                    facts = Dictionary[AccessPath, TypeSymbol]()
+                }
+                if !facts.ContainsKey(entry.Key) {
+                    facts[entry.Key] = entry.Value
+                }
+            }
+        }
+        return facts
+    }
+
+    private func ComputeConditionRemovedFacts(entryFacts Dictionary[AccessPath, TypeSymbol]?) Dictionary[
+        AccessPath,
+        TypeSymbol
+    ]? {
+        if entryFacts == nil {
+            return nil
+        }
+        var removed Dictionary[AccessPath, TypeSymbol]? = nil
+        for entry in entryFacts {
+            if binderCtx.NarrowedVariables.Query(entry.Key) != entry.Value {
+                if removed == nil {
+                    removed = Dictionary[AccessPath, TypeSymbol]()
+                }
+                removed[entry.Key] = entry.Value
+            }
+        }
+        return removed
+    }
+
+    private func BindIfConditionAndClassifyNarrowing(conditionSyntax ExpressionSyntax)(
+        Condition BoundExpression,
+        Then Dictionary[AccessPath, TypeSymbol]?,
+        Else Dictionary[AccessPath, TypeSymbol]?,
+        CallableWhenTrue HashSet[VariableSymbol],
+        CallableWhenFalse HashSet[VariableSymbol],
+        RemovedFacts Dictionary[AccessPath, TypeSymbol]?
+    ) {
+        let entryFacts = CaptureConditionEntryFacts()
+        let aliasesBeforeCondition = CaptureExternalCallableAliases()
+        let condition = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool)
+        RestoreExternalCallableAliases(aliasesBeforeCondition)
+        InvalidateNarrowingsForAssignedVariables(conditionSyntax, BoundExpressionStatement(conditionSyntax, condition))
+        let effectiveRemovedFacts = ComputeConditionRemovedFacts(entryFacts)
+        let (aliasesAt, callableWhenTrue, callableWhenFalse) = AliasesAtTests(
+            ApplyHeaderCallableEffects(condition),
+            conditionSyntax,
+            condition
+        )
+        testAliasesAt = aliasesAt
+        let (thenNarrow, elseNarrow) = ClassifyIfConditionNarrowing(condition, effectiveRemovedFacts)
+        testAliasesAt = nil
+        return (condition, thenNarrow, elseNarrow, callableWhenTrue, callableWhenFalse, effectiveRemovedFacts)
+    }
+
     private func BindIfStatement(syntax IfStatementSyntax) BoundStatement {
         if syntax.Initializer == nil {
-            let conditionEntryAliases = CaptureExternalCallableAliases()
-            let condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
-            RestoreExternalCallableAliases(conditionEntryAliases)
-            let removedFacts = ApplyConditionEffectsToNarrowings(syntax.Condition, condition)
-            let (aliasesAt, callableWhenTrue, callableWhenFalse) = AliasesAtTests(
-                ApplyHeaderCallableEffects(condition),
-                syntax.Condition,
-                condition
-            )
-            testAliasesAt = aliasesAt
-            let (thenNarrow, elseNarrow) = ClassifyIfConditionNarrowing(condition, removedFacts)
-            testAliasesAt = nil
+            let (
+                condition,
+                thenNarrow,
+                elseNarrow,
+                callableWhenTrue,
+                callableWhenFalse,
+                removedFacts
+            ) = BindIfConditionAndClassifyNarrowing(syntax.Condition)
             // ADR-0166: pattern variables are in scope in the branch their
             // match dominates: when-true in the then-branch, when-false in the
             // else-branch (`if !(x is T t) { ... } else { use(t) }`).
@@ -194,18 +249,14 @@ internal partial class StatementBinder {
             ApplyInitializerEffectsToNarrowings(syntax.Initializer!!, initStatement)
             UpdateExternalCallableAliases(initStatement, initializerAliasesAtEntry)
         }
-        let initConditionEntryAliases = CaptureExternalCallableAliases()
-        let initCondition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool)
-        RestoreExternalCallableAliases(initConditionEntryAliases)
-        let initRemovedFacts = ApplyConditionEffectsToNarrowings(syntax.Condition, initCondition)
-        let (initAliasesAt, initCallableWhenTrue, initCallableWhenFalse) = AliasesAtTests(
-            ApplyHeaderCallableEffects(initCondition),
-            syntax.Condition,
-            initCondition
-        )
-        testAliasesAt = initAliasesAt
-        let (initThenNarrow, initElseNarrow) = ClassifyIfConditionNarrowing(initCondition, initRemovedFacts)
-        testAliasesAt = nil
+        let (
+            initCondition,
+            initThenNarrow,
+            initElseNarrow,
+            initCallableWhenTrue,
+            initCallableWhenFalse,
+            initRemovedFacts
+        ) = BindIfConditionAndClassifyNarrowing(syntax.Condition)
         let (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition)
         let initShadowFlow = ShadowBegin(initCondition, initStatement)
         let initJoinEntry = binderCtx.Narrowing
@@ -325,6 +376,7 @@ internal partial class StatementBinder {
         var thenKillsStarted = false
         let header = List[(Syntax SyntaxNode, Bound BoundExpression)]()
         let aliasesBeforeHeader = callableEntry
+        var guardRemovedFacts Dictionary[AccessPath, TypeSymbol]? = nil
         let (clauses, guard_, thenStatement) = IfLetBindingSupport.BindHeader(
             binderCtx,
             syntax.Bindings,
@@ -344,9 +396,12 @@ internal partial class StatementBinder {
                 type
             ),
             (guardSyntax ExpressionSyntax) -> {
+                let entryFacts = CaptureConditionEntryFacts()
                 let guardEntryAliases = CaptureExternalCallableAliases()
                 let bound = bindExpressionWithTargetType(guardSyntax, TypeSymbol.Bool)
                 RestoreExternalCallableAliases(guardEntryAliases)
+                InvalidateNarrowingsForAssignedVariables(guardSyntax, BoundExpressionStatement(guardSyntax, bound))
+                guardRemovedFacts = ComputeConditionRemovedFacts(entryFacts)
                 let (aliasesAt, guardWhenTrue, guardWhenFalse) = AliasesAtTests(
                     ApplyHeaderCallableEffects(bound),
                     guardSyntax,
@@ -363,7 +418,7 @@ internal partial class StatementBinder {
                 return bound
             },
             (boundGuard BoundExpression) -> {
-                let guardThen = ClassifyIfConditionNarrowing(boundGuard).Then
+                let guardThen = ClassifyIfConditionNarrowing(boundGuard, guardRemovedFacts).Then
                 testAliasesAt = nil
                 return guardThen
             },
@@ -380,6 +435,10 @@ internal partial class StatementBinder {
             syntax.ThenStatement,
             (clauseSyntax IfLetBindingClauseSyntax, bound IfLetBindingSupport.BoundIfLetBinding) -> {
                 RestoreExternalCallableAliases(clauseEntryAliases)
+                InvalidateNarrowingsForAssignedVariables(
+                    clauseSyntax.Initializer,
+                    BoundExpressionStatement(clauseSyntax.Initializer, bound.Initializer)
+                )
                 let (_, initWhenTrue, initWhenFalse) = AliasesAtTests(
                     ApplyHeaderCallableEffects(bound.Initializer),
                     clauseSyntax,
@@ -939,21 +998,27 @@ internal partial class StatementBinder {
         }
         let operand = isExpr.Expression
         if operand is BoundVariableExpression variable {
-            return if removedFacts.TryGetValue(AccessPath.ForVariable(variable.Variable), out var removedType) &&
-                operand.Type == removedType &&
-                IsNullabilityOnlyFact(variable.Variable.Type, removedType) {
-                variable.Variable.Type
-            } else {
-                default(TypeSymbol?)
+            if removedFacts.TryGetValue(AccessPath.ForVariable(variable.Variable), out var removedType) {
+                if IsNullabilityOnlyFact(variable.Variable.Type, removedType) &&
+                    (operand.Type == removedType || operand.Type == variable.Variable.Type) {
+                    return variable.Variable.Type
+                }
+                if operand.Type == removedType {
+                    return removedType
+                }
             }
+            return nil
         }
         if SmartCastStability.TryGetStableMemberPath(operand, out var path, out var currentType) &&
-            removedFacts.TryGetValue(path!!, out var removedMemberType) && currentType == removedMemberType {
+            removedFacts
+            .TryGetValue(path!!, out var removedMemberType) {
             let declared = MemberLookup.GetDeclaredAccessPathType(path!!, currentType!!)
-            return if IsNullabilityOnlyFact(declared, currentType!!) {
-                declared
-            } else {
-                default(TypeSymbol?)
+            if IsNullabilityOnlyFact(declared, removedMemberType) &&
+                (currentType == removedMemberType || currentType == declared) {
+                return declared
+            }
+            if currentType == removedMemberType {
+                return removedMemberType
             }
         }
         return nil
@@ -1339,10 +1404,12 @@ internal partial class StatementBinder {
             for var i = 0; i < targets.Length; i++ {
                 if targets[i] is not NameExpressionSyntax nameExpr {
                     Diagnostics.ReportInvalidMultiAssignmentTarget(targets[i].Location)
-                    let _ = bindExpression(values[i], false)
+                    let badInitializer = bindExpression(values[i], false)
+                    ApplySubExpressionNarrowingEffects(values[i], badInitializer)
                     continue
                 }
                 var initializer = bindExpression(values[i], false)
+                ApplySubExpressionNarrowingEffects(values[i], initializer)
                 if IsDiscard(nameExpr.IdentifierToken) {
                     continue
                 }
@@ -1364,9 +1431,29 @@ internal partial class StatementBinder {
         }
         let captures = ImmutableArray.CreateBuilder[BoundStatement]()
         let plans = ImmutableArray.CreateBuilder[MultiAssignmentTargetPlan](targets.Length)
+        let targetSnapshots = [targets.Length]NarrowingBindSnapshot
         for var i = 0; i < targets.Length; i++ {
-            plans.Add(
-                if IsDiscardTarget(targets[i]) {
+            targetSnapshots[i] = CaptureNarrowingBindSnapshot()
+            ApplyMultiAssignmentTargetCaptureEffects(targets[i], values[i], syntax.OperatorToken)
+        }
+        var valueSnapshot = CaptureNarrowingBindSnapshot()
+        for var i = 0; i < targets.Length; i++ {
+            let unwrappedTarget = AssignmentTargetSyntaxFacts.UnwrapParentheses(targets[i])
+            let isSimpleTarget = IsDiscardTarget(unwrappedTarget) ||
+                unwrappedTarget is MultiAssignmentDeclarationExpressionSyntax ||
+                unwrappedTarget is NameExpressionSyntax
+            let prevPendingSyntax = pendingMultiAssignmentValueSyntax
+            let prevPendingSnapshot = pendingMultiAssignmentValueSnapshot
+            if isSimpleTarget {
+                RestoreNarrowingBindSnapshot(valueSnapshot)
+            } else {
+                RestoreNarrowingBindSnapshot(targetSnapshots[i])
+                pendingMultiAssignmentValueSyntax = values[i]
+                pendingMultiAssignmentValueSnapshot = valueSnapshot
+            }
+            var plan MultiAssignmentTargetPlan
+            try {
+                plan = if IsDiscardTarget(targets[i]) {
                     MultiAssignmentTargetPlan(bindExpression(values[i], false), createWrite: nil)
                 } else {
                     (
@@ -1377,9 +1464,148 @@ internal partial class StatementBinder {
                         }
                     )
                 }
-            )
+            } finally {
+                if pendingMultiAssignmentValueSyntax != nil && object.ReferenceEquals(
+                    pendingMultiAssignmentValueSyntax,
+                    values[i]
+                ) {
+                    RestoreNarrowingBindSnapshot(valueSnapshot)
+                }
+                pendingMultiAssignmentValueSyntax = prevPendingSyntax
+                pendingMultiAssignmentValueSnapshot = prevPendingSnapshot
+            }
+            ApplySubExpressionNarrowingEffects(values[i], plan.AssignedValue)
+            valueSnapshot = CaptureNarrowingBindSnapshot()
+            plans.Add(plan)
         }
         return BuildMultiAssignmentBlock(syntax, captures, plans)
+    }
+
+    private func ApplyMultiAssignmentTargetCaptureEffects(
+        target ExpressionSyntax,
+        valueSyntax ExpressionSyntax? = nil,
+        equalsToken SyntaxToken? = nil
+    ) {
+        let unwrapped = AssignmentTargetSyntaxFacts.UnwrapParentheses(target)
+        if IsDiscardTarget(unwrapped) ||
+            unwrapped is MultiAssignmentDeclarationExpressionSyntax ||
+            unwrapped is NameExpressionSyntax {
+            return
+        }
+        let preTarget = CaptureNarrowingBindSnapshot()
+        let diagMark = Diagnostics.Count
+        $scope = BoundScope($scope)
+        try {
+            var effectiveValueSyntax = valueSyntax
+            let boundTargetExpr = bindExpression(unwrapped, false)
+            RestoreNarrowingBindSnapshot(preTarget)
+            Diagnostics.TruncateTo(diagMark)
+            if effectiveValueSyntax == nil && equalsToken != nil {
+                if boundTargetExpr is not BoundErrorExpression &&
+                    boundTargetExpr.Type != nil &&
+                    boundTargetExpr.Type != TypeSymbol
+                    .Error {
+                    let probeLocal = LocalVariableSymbol("$$macap_probe", isReadOnly: true, boundTargetExpr.Type)
+                    $scope.TryDeclareVariable(probeLocal)
+                    effectiveValueSyntax = NameExpressionSyntax(
+                        unwrapped.SyntaxTree,
+                        SyntaxToken(
+                            unwrapped.SyntaxTree,
+                            SyntaxKind.IdentifierToken,
+                            unwrapped.Span.Start,
+                            "$$macap_probe",
+                            nil
+                        )
+                    )
+                } else {
+                    effectiveValueSyntax = DefaultExpressionSyntax(
+                        unwrapped.SyntaxTree,
+                        SyntaxToken(
+                            unwrapped.SyntaxTree,
+                            SyntaxKind.DefaultKeyword,
+                            unwrapped.Span.Start,
+                            "default",
+                            nil
+                        ),
+                        nil,
+                        nil,
+                        nil
+                    )
+                }
+            }
+            if effectiveValueSyntax != nil && equalsToken != nil {
+                let probeCaptures = ImmutableArray.CreateBuilder[BoundStatement]()
+                let _ = BindMultiAssignmentTarget(unwrapped, effectiveValueSyntax, equalsToken, probeCaptures)
+                RestoreNarrowingBindSnapshot(preTarget)
+                if probeCaptures.Count > 0 {
+                    for stmt in probeCaptures {
+                        switch stmt {
+                            case decl is BoundVariableDeclaration {
+                                ApplySubExpressionNarrowingEffects(unwrapped, decl.Initializer)
+                            }
+                            case exprStmt is BoundExpressionStatement {
+                                ApplySubExpressionNarrowingEffects(unwrapped, exprStmt.Expression)
+                            }
+                        }
+                    }
+                    return
+                }
+            }
+            if boundTargetExpr is not BoundErrorExpression {
+                switch boundTargetExpr {
+                    case indexExpr is BoundIndexExpression {
+                        ApplySubExpressionNarrowingEffects(unwrapped, indexExpr.Target)
+                        for arg in indexExpr.Indices {
+                            ApplySubExpressionNarrowingEffects(unwrapped, arg)
+                        }
+                        return
+                    }
+                    case clrIndex is BoundClrIndexExpression {
+                        ApplySubExpressionNarrowingEffects(unwrapped, clrIndex.Target)
+                        for arg in clrIndex.Arguments {
+                            ApplySubExpressionNarrowingEffects(unwrapped, arg)
+                        }
+                        return
+                    }
+                    case deref is BoundDereferenceExpression {
+                        ApplySubExpressionNarrowingEffects(unwrapped, deref)
+                        return
+                    }
+                }
+            }
+            if AssignmentTargetSyntaxFacts.TryLiftTrailingIndexer(unwrapped, out var indexed) && indexed != nil {
+                let boundTarget = bindExpression(indexed.Target, false)
+                ApplySubExpressionNarrowingEffects(indexed.Target, boundTarget)
+                let convertToInt = boundTarget.Type is ArrayTypeSymbol or
+                    SliceTypeSymbol ||
+                    NativeSliceTypes.TryGetElement(boundTarget.Type, out _, out _)
+                for indexSyntax in indexed.Indices {
+                    var boundIndex = bindExpression(indexSyntax, false)
+                    if convertToInt && boundIndex is not BoundErrorExpression && boundIndex.Type != TypeSymbol.Int32 {
+                        boundIndex = conversions.BindConversion(indexSyntax.Location, boundIndex, TypeSymbol.Int32)
+                    }
+                    ApplySubExpressionNarrowingEffects(indexSyntax, boundIndex)
+                }
+            } else if AssignmentTargetSyntaxFacts.TryLiftTrailingMemberAccess(
+                unwrapped,
+                out var receiver,
+                out _,
+                out _
+            ) {
+                let boundReceiver = bindExpression(receiver, false)
+                ApplySubExpressionNarrowingEffects(receiver, boundReceiver)
+            } else if unwrapped is UnaryExpressionSyntax dereference &&
+                dereference
+                .OperatorToken
+                .Kind == SyntaxKind
+                .StarToken {
+                let boundOperand = bindExpression(dereference.Operand, false)
+                ApplySubExpressionNarrowingEffects(dereference.Operand, boundOperand)
+            }
+        } finally {
+            $scope = $scope.Pop()
+            Diagnostics.TruncateTo(diagMark)
+        }
     }
 
     private func BindTupleValuedMultiAssignment(
@@ -1387,6 +1613,11 @@ internal partial class StatementBinder {
         targets ImmutableArray[ExpressionSyntax],
         valueSyntax ExpressionSyntax
     ) BoundStatement {
+        let targetSnapshots = [targets.Length]NarrowingBindSnapshot
+        for var i = 0; i < targets.Length; i++ {
+            targetSnapshots[i] = CaptureNarrowingBindSnapshot()
+            ApplyMultiAssignmentTargetCaptureEffects(targets[i], equalsToken: syntax.OperatorToken)
+        }
         var tupleValue BoundExpression
         if IsChannelReceiveSyntax(valueSyntax, out var receive) {
             // ADR-0174 D3: `v, ok = <-ch` (and ADR-0168's mixed `let v, ok = <-ch`,
@@ -1411,6 +1642,8 @@ internal partial class StatementBinder {
         } else {
             tupleValue = bindExpression(valueSyntax, false)
         }
+        ApplySubExpressionNarrowingEffects(valueSyntax, tupleValue)
+        let afterTupleValueSnapshot = CaptureNarrowingBindSnapshot()
         if tupleValue.Type == TypeSymbol.Error {
             return BoundExpressionStatement(syntax, tupleValue)
         }
@@ -1460,6 +1693,7 @@ internal partial class StatementBinder {
                 source.Name
             )
             let sourceSyntax = NameExpressionSyntax(syntax.SyntaxTree, sourceToken)
+            RestoreNarrowingBindSnapshot(targetSnapshots[i])
             let plan = BindMultiAssignmentTarget(targets[i], sourceSyntax, syntax.OperatorToken, captures)
             rawPlans[i] = plan
             let sourceTargetType = FindMultiAssignmentSourceConversionType(plan.AssignedValue, source) ??
@@ -1476,6 +1710,7 @@ internal partial class StatementBinder {
                 resolvedElements.Add(TupleTypeSymbol.ResolveNilElements(rawElement))
             }
         }
+        RestoreNarrowingBindSnapshot(afterTupleValueSnapshot)
         let tupleType = if rawTupleType.HasNames {
             TupleTypeSymbol.Get(resolvedElements.MoveToImmutable(), rawTupleType.ElementNames)
         } else {
@@ -1490,14 +1725,14 @@ internal partial class StatementBinder {
                 plans.Add(MultiAssignmentTargetPlan(tupleElements[i], createWrite: nil, plan.Declaration))
                 continue
             }
-            if plan.AssignedValue != nil && sources[i] is {} source {
+            if plan.AssignedValue is {} assignedValue && sources[i] is {} source {
                 plan = plan.WithAssignedValue(
                     MultiAssignmentTupleElementRewriter(
                         source,
                         tupleElements[i],
                         conversions,
                         targets[i].Location
-                    ).Replace(plan.AssignedValue)
+                    ).Replace(assignedValue)
                 )
             }
             plans.Add(plan)

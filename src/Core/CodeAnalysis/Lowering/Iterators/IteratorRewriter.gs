@@ -175,16 +175,12 @@ shared class IteratorRewriter {
             !imported
             .TypeArguments
             .IsDefaultOrEmpty &&
-            imported.OpenDefinition != nil &&
+            imported.OpenDefinition is {} openDef &&
             (
-            imported
-                .OpenDefinition
-                .FullName == "System.Collections.Generic.IEnumerable`1" ||
-                imported
-                .OpenDefinition
-                .FullName == "System.Collections.Generic.IEnumerator`1"
+            openDef.FullName == "System.Collections.Generic.IEnumerable`1" ||
+                openDef.FullName == "System.Collections.Generic.IEnumerator`1"
         ) {
-            returnsEnumerable = imported.OpenDefinition.FullName == "System.Collections.Generic.IEnumerable`1"
+            returnsEnumerable = openDef.FullName == "System.Collections.Generic.IEnumerable`1"
             return imported.TypeArguments[0]
         }
         let clr Type? = type?.ClrType

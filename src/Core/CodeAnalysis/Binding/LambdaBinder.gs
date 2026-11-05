@@ -410,9 +410,9 @@ internal class LambdaBinder {
         }
         // ADR-0058: a managed-pointer (*T) cannot be used as a lambda return type
         // because CLR Func<> delegates cannot carry by-ref type arguments.
-        if returnType is ByRefTypeSymbol && syntax.ReturnTypeClause != nil {
+        if returnType is ByRefTypeSymbol && syntax.ReturnTypeClause is {} returnTypeClause {
             Diagnostics.ReportByRefCannotEscape(
-                syntax.ReturnTypeClause.Location,
+                returnTypeClause.Location,
                 "a managed pointer (*T) cannot be the return type of a function literal"
             )
             returnType = TypeSymbol.Error
@@ -1904,13 +1904,14 @@ internal class LambdaBinder {
         let argumentRefKinds = ImmutableArray.CreateBuilder[RefKind](logicalParameterCount)
         var receiverTemp LocalVariableSymbol? = nil
         var adapterReceiver BoundExpression? = group.Receiver
-        if group.Receiver != nil {
-            receiverTemp = LocalVariableSymbol(
+        if group.Receiver is {} groupReceiver {
+            let temp = LocalVariableSymbol(
                 "<method_group_receiver${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
                 isReadOnly: true,
-                group.Receiver.Type
+                groupReceiver.Type
             )
-            adapterReceiver = BoundVariableExpression(nil, receiverTemp)
+            receiverTemp = temp
+            adapterReceiver = BoundVariableExpression(nil, temp)
         }
         if closesStaticReceiver {
             let receiverRefKind = methodRefKinds[0]
@@ -2049,10 +2050,10 @@ internal class LambdaBinder {
             expression: "group.FunctionType"
         )
         let needsValueTypeExtensionAdapter = function.IsExtension &&
-            group.Receiver != nil &&
+            group.Receiver is {} extReceiver &&
             (
-            ReflectionMetadataEmitter.IsValueTypeSymbol(group.Receiver.Type) ||
-                (group.Receiver.Type is TypeParameterSymbol receiverTp && !IsKnownReferenceTypeParameter(receiverTp))
+            ReflectionMetadataEmitter.IsValueTypeSymbol(extReceiver.Type) ||
+                (extReceiver.Type is TypeParameterSymbol receiverTp && !IsKnownReferenceTypeParameter(receiverTp))
         )
         if function.HiddenContextParameter == nil &&
             function.SuspendingKind != SuspendingKind.Inferred &&
@@ -2061,13 +2062,14 @@ internal class LambdaBinder {
         }
         var receiverTemp LocalVariableSymbol? = nil
         var adapterReceiver BoundExpression? = group.Receiver
-        if group.Receiver != nil {
-            receiverTemp = LocalVariableSymbol(
+        if group.Receiver is {} groupReceiver2 {
+            let temp = LocalVariableSymbol(
                 "<method_group_receiver${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
                 isReadOnly: true,
-                group.Receiver.Type
+                groupReceiver2.Type
             )
-            adapterReceiver = BoundVariableExpression(nil, receiverTemp)
+            receiverTemp = temp
+            adapterReceiver = BoundVariableExpression(nil, temp)
         }
         let adapterParameters = ImmutableArray.CreateBuilder[ParameterSymbol](functionType.ParameterTypes.Length)
         let arguments = ImmutableArray.CreateBuilder[BoundExpression](

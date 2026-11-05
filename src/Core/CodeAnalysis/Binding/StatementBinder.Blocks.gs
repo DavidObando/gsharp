@@ -33,6 +33,7 @@ internal partial class StatementBinder {
             )
             return BindErrorStatement()
         }
+        ApplyConditionEffectsToNarrowings(syntax.Expression, discriminant)
         ApplyHeaderCallableEffects(discriminant)
         let materializedDiscriminantType = TypeSymbol.MaterializeNeverFunctionReturns(discriminant.Type)
         if !object.ReferenceEquals(materializedDiscriminantType, discriminant.Type) {
@@ -1910,6 +1911,7 @@ internal partial class StatementBinder {
             Diagnostics.ReportSendOnReceiveOnlyChannel(syntax.LeftArrowToken.Location, channel.Type)
             return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
         }
+        ApplySubExpressionNarrowingEffects(syntax.Channel, channel)
         let value = conversions.BindConversion(syntax.Value, elementType)
         if !binderCtx.ChannelRuntime.IsAvailable {
             Diagnostics.ReportTargetFrameworkMemberUnavailable(

@@ -4789,17 +4789,12 @@ partial class CSharpToGSharpTranslator {
                 // Fire only when the step DIRECTLY after the index is an ordinary
                 // `.` / `[`. A bare `a?[i]` needs no second seam, and `a?[i]?.b`
                 // already has one (re-splitting it would print `[i]??.b`).
-                return elementBinding != nil &&
-                    (
-                    (
-                        elementBinding.Parent is MemberAccessExpressionSyntax member &&
-                            member.Expression == elementBinding
-                    ) ||
-                        (
-                        elementBinding.Parent is ElementAccessExpressionSyntax element &&
-                            element.Expression == elementBinding
-                    )
-                )
+                if elementBinding == nil {
+                    return false
+                }
+                let parent = elementBinding.Parent
+                return (parent is MemberAccessExpressionSyntax member && member.Expression == elementBinding) ||
+                    (parent is ElementAccessExpressionSyntax element && element.Expression == elementBinding)
             }
 
             private func FindConditionalAccessResult(

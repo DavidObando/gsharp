@@ -223,10 +223,10 @@ class ChannelTypeSymbol : TypeSymbol {
         internal func ClearCache() -> Cache.Clear()
 
         private func MakeClrType(elementType TypeSymbol, direction ChannelDirection) Type? {
-            if elementType.ClrType == nil {
+            if elementType.ClrType is not{} elementClrType {
                 return nil
             }
-            return OpenClrDefinition(direction).MakeGenericType(elementType.ClrType)
+            return OpenClrDefinition(direction).MakeGenericType(elementClrType)
         }
     }
 }

@@ -623,6 +623,7 @@ internal partial class ExpressionBinder {
                 accessor.LeftPart.Location,
                 "a compound member assignment receiver"
             )
+            ApplySubExpressionNarrowingEffects(accessor.LeftPart, boundReceiver)
             if boundReceiver.Type is TupleTypeSymbol tupleType {
                 eventName = GetTupleFieldName(eventName, tupleType)
             }
@@ -1160,25 +1161,36 @@ internal partial class ExpressionBinder {
     )(Condition BoundExpression, WhenTrue BoundExpression, WhenFalse BoundExpression) {
         let conditionEntryAliases = GetCurrentExpressionCallableAliases()
         let condition = BindExpression(conditionSyntax, TypeSymbol.Bool)
+        ApplyConditionEffectsAndHeaderAliases(conditionSyntax, condition)
+        let postConditionNarrowing = CaptureNarrowingBindSnapshot()
         let afterCondition = CaptureExpressionNarrowingFrames()
         let (whenTrueNarrowing, whenFalseNarrowing, whenTrueAliases, whenFalseAliases) = ClassifyConditionalNarrowing(
             condition,
             conditionEntryAliases
         )
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
-        let whenTrue = BindWithPatternVariables(
-            patternWhenTrue,
-            () -> BindExpressionWithNarrowing(whenTrueSyntax, whenTrueNarrowing, aliases: whenTrueAliases),
-            whenTrueSyntax
+        let whenTrue = UnwrapTerminalLvalueStorage(
+            BindWithPatternVariables(
+                patternWhenTrue,
+                () -> BindExpressionWithNarrowing(whenTrueSyntax, whenTrueNarrowing, aliases: whenTrueAliases),
+                whenTrueSyntax
+            )
         )
+        ApplySubExpressionNarrowingEffects(whenTrueSyntax, whenTrue)
+        let afterTrue = CaptureNarrowingBindSnapshot()
         TruncateBranchSiblingExpressions(afterCondition)
         let thenExit = CaptureExpressionNarrowingFrames()
         RestoreExpressionNarrowingFrames(afterCondition)
-        let whenFalse = BindWithPatternVariables(
-            patternWhenFalse,
-            () -> BindExpressionWithNarrowing(whenFalseSyntax, whenFalseNarrowing, aliases: whenFalseAliases),
-            whenFalseSyntax
+        RestoreNarrowingBindSnapshot(postConditionNarrowing)
+        let whenFalse = UnwrapTerminalLvalueStorage(
+            BindWithPatternVariables(
+                patternWhenFalse,
+                () -> BindExpressionWithNarrowing(whenFalseSyntax, whenFalseNarrowing, aliases: whenFalseAliases),
+                whenFalseSyntax
+            )
         )
+        ApplySubExpressionNarrowingEffects(whenFalseSyntax, whenFalse)
+        let afterFalse = CaptureNarrowingBindSnapshot()
         TruncateBranchSiblingExpressions(afterCondition)
         let falseExit = CaptureExpressionNarrowingFrames()
         JoinConditionalBranchExpressionNarrowingFrames(
@@ -1187,7 +1199,8 @@ internal partial class ExpressionBinder {
             whenTrue.Type != TypeSymbol.Never,
             whenFalse.Type != TypeSymbol.Never
         )
-        return (condition, UnwrapTerminalLvalueStorage(whenTrue), UnwrapTerminalLvalueStorage(whenFalse))
+        JoinBranchNarrowingSnapshots(whenTrue.Type, afterTrue, whenFalse.Type, afterFalse)
+        return (condition, whenTrue, whenFalse)
     }
 
     private func UnwrapTerminalLvalueStorage(expression BoundExpression) BoundExpression {
@@ -1265,6 +1278,11 @@ internal partial class ExpressionBinder {
     /// @param syntax The general conditional expression syntax.
     /// @param outerModifier The outer ref-kind modifier token (`null` for the bare `&` operand form).
     /// @returns The bound conditional address expression, or a (cref:BoundErrorExpression) on failure.
+    internal func BindConditionalRefArgumentWithNarrowing(
+        syntax ConditionalRefArgumentExpressionSyntax,
+        outerModifier SyntaxToken?
+    ) BoundExpression -> conversions.BindConditionalRefArgument(syntax, outerModifier)
+
     private func BindConditionalAddressFromGeneral(
         syntax ConditionalExpressionSyntax,
         outerModifier SyntaxToken?

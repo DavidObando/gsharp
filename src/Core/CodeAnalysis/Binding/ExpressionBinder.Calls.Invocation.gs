@@ -1455,7 +1455,15 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         let frame = CallCandidateRecorder.Begin(ce, receiver?.Type ?? classSymbol?.SymbolicReceiver)
         try {
-            let bound = BindAccessorCallWithReceiver(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+            var bound = BindAccessorCallWithReceiver(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+            if verifyCallArgumentsAfterConversions != nil {
+                bound = verifyCallArgumentsAfterConversions!!(
+                    ce.Arguments,
+                    bound,
+                    () -> BindAccessorCallWithReceiver(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+                ) ??
+                    bound
+            }
             CallCandidateRecorder.Stamp(frame, bound)
             return bound
         } finally {
@@ -1470,6 +1478,9 @@ internal partial class ExpressionBinder {
         receiverSyntax ExpressionSyntax?,
         receiverStart int32?
     ) BoundExpression {
+        if receiver != nil {
+            ApplySubExpressionNarrowingEffects(receiverSyntax ?? receiver.Syntax, receiver)
+        }
         if receiver != nil && NativeSliceTypes.TryGetElement(receiver.Type, out _, out _) {
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
             let saved = DeclareRangeTemp("callReceiver", receiver.Type, receiver, statements)
@@ -1628,13 +1639,18 @@ internal partial class ExpressionBinder {
             explicitTypeArgs = nil
             typeArgSymbols = default(ImmutableArray[TypeSymbol])
         }
+        if receiver != nil {
+            ApplySubExpressionNarrowingEffects(receiverSyntax ?? receiver.Syntax, receiver)
+        }
         let boundArguments = ImmutableArray.CreateBuilder[BoundExpression]()
         let deferredArrowLambdaIndices = List[int32]()
         var delegateTargetCandidateParams List[[]ParameterInfo]? = nil
         var delegateTargetCandidatesComputed = false
         var argSlot = 0
         for argument in ce.Arguments {
+            let countBeforeArg = boundArguments.Count
             let inner = OverloadResolver.UnwrapNamedArgumentValue(argument)
+            recordDeferredArgumentSnapshot?(inner)
             if inner is RefArgumentExpressionSyntax refArg {
                 boundArguments.Add(BindRefArgumentExpression(refArg, parameter: nil))
             } else if IsTargetDependentBlockArgumentSyntax(inner) {
@@ -1816,6 +1832,9 @@ internal partial class ExpressionBinder {
                 }
             } else {
                 boundArguments.Add(BindArgumentDeferringBranchy(inner))
+            }
+            if boundArguments.Count > countBeforeArg {
+                ApplySubExpressionNarrowingEffects(inner, boundArguments[boundArguments.Count - 1])
             }
             argSlot++
         }

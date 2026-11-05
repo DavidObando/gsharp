@@ -146,6 +146,7 @@ internal partial class OverloadResolver {
                 // this generic block). Roll back any diagnostics it produced so
                 // they are reported exactly once, by the real bind.
                 let inferenceDiagMark = Diagnostics.Count
+                let inferenceNarrowing = CaptureNarrowingBindSnapshot()
                 // Pre-bind arguments and infer type arguments from them.
                 // Issue #343: when an argument is named, locate its parameter
                 // by name (so type inference still works with named args) and
@@ -176,9 +177,6 @@ internal partial class OverloadResolver {
                                 break
                             }
                         }
-                        if paramIdx < 0 {
-                            continue
-                        }
                         argSyntax = named.Expression
                     } else {
                         paramIdx = i
@@ -188,32 +186,53 @@ internal partial class OverloadResolver {
                         // so we can choose between pass-through and pack.
                         continue
                     }
-                    if paramIdx >= defParams.Length {
+                    let preBound = if argSyntax is RefArgumentExpressionSyntax refArg {
+                        bindRefArgumentExpression(refArg, nil)
+                    } else {
+                        bindExpression(argSyntax)
+                    }
+                    ApplySubExpressionNarrowingEffects(argSyntax, preBound)
+                    if paramIdx < 0 || paramIdx >= defParams.Length {
                         continue
                     }
-                    let preBound = bindExpression(argSyntax)
                     inferTypeArguments(defParams[paramIdx].Type, preBound.Type, substitution)
                 }
                 if defIsVariadic {
                     let variadicParamType = defParams[defParams.Length - 1].Type
                     let trailingCount = syntax.Arguments.Count - defFixedCount
                     if trailingCount == 1 {
-                        let single = bindExpression(UnwrapNamedArgumentValue(syntax.Arguments[defFixedCount]))
+                        let singleSyntax = UnwrapNamedArgumentValue(syntax.Arguments[defFixedCount])
+                        let single = if singleSyntax is RefArgumentExpressionSyntax singleRef {
+                            bindRefArgumentExpression(singleRef, nil)
+                        } else {
+                            bindExpression(singleSyntax)
+                        }
+                        ApplySubExpressionNarrowingEffects(singleSyntax, single)
                         if single.Type is SliceTypeSymbol {
                             inferTypeArguments(variadicParamType, single.Type, substitution)
                         } else if variadicParamType is SliceTypeSymbol variadicSlice {
                             inferTypeArguments(variadicSlice.ElementType, single.Type, substitution)
                         }
-                    } else if trailingCount > 1 && variadicParamType is SliceTypeSymbol variadicSlice2 {
+                    } else if trailingCount > 1 {
+                        let variadicSlice2 = variadicParamType as SliceTypeSymbol
                         for var j = defFixedCount; j < syntax.Arguments.Count; j++ {
-                            let preBound = bindExpression(UnwrapNamedArgumentValue(syntax.Arguments[j]))
-                            inferTypeArguments(variadicSlice2.ElementType, preBound.Type, substitution)
+                            let trailingSyntax = UnwrapNamedArgumentValue(syntax.Arguments[j])
+                            let preBound = if trailingSyntax is RefArgumentExpressionSyntax trailingRef {
+                                bindRefArgumentExpression(trailingRef, nil)
+                            } else {
+                                bindExpression(trailingSyntax)
+                            }
+                            ApplySubExpressionNarrowingEffects(trailingSyntax, preBound)
+                            if variadicSlice2 != nil {
+                                inferTypeArguments(variadicSlice2.ElementType, preBound.Type, substitution)
+                            }
                         }
                     }
                 }
                 // Issue #1629: discard the pre-bind's speculative diagnostics —
                 // the arguments are bound again for real below.
                 Diagnostics.TruncateTo(inferenceDiagMark)
+                RestoreNarrowingBindSnapshot(inferenceNarrowing)
                 for tp in tps {
                     if !substitution.ContainsKey(tp) {
                         Diagnostics.ReportTypeArgumentInferenceFailed(
@@ -251,7 +270,8 @@ internal partial class OverloadResolver {
             } else {
                 StructSymbol.Construct(classType, typeArgs.MoveToImmutable())!!
             }
-        } else if syntax.TypeArgumentList != nil && !IsClosedGenericImportedAggregate(classType) {
+        } else if syntax.TypeArgumentList is {} unexpectedTypeArguments &&
+            !IsClosedGenericImportedAggregate(classType) {
             // Issue #2278: a `classType` that is itself the semantic aggregate
             // for an already-CLOSED imported generic data type (e.g.
             // `Box[int32]`) is not a generic DEFINITION — its `TypeParameters`
@@ -262,10 +282,10 @@ internal partial class OverloadResolver {
             // before building this aggregate, so seeing one here is expected
             // and must not be treated as an arity mismatch.
             Diagnostics.ReportWrongTypeArgumentCount(
-                syntax.TypeArgumentList.Location,
+                unexpectedTypeArguments.Location,
                 classType.Name,
                 0,
-                syntax.TypeArgumentList.Arguments.Count
+                unexpectedTypeArguments.Arguments.Count
             )
             return BoundErrorExpression(syntax)
         }
@@ -274,7 +294,10 @@ internal partial class OverloadResolver {
         var boundArguments = ImmutableArray.CreateBuilder[BoundExpression](syntax.Arguments.Count)
         for argument in syntax.Arguments {
             // Issue #343: bind the value behind any named-argument wrapper.
-            boundArguments.Add(BindOverloadArgumentValue(UnwrapNamedArgumentValue(argument)))
+            let unwrapped = UnwrapNamedArgumentValue(argument)
+            let boundArg = BindOverloadArgumentValue(unwrapped)
+            ApplySubExpressionNarrowingEffects(unwrapped, boundArg)
+            boundArguments.Add(boundArg)
         }
         // ADR-0101 follow-up / issue #819: a primary constructor may declare a
         // trailing variadic parameter (`name ...T`). When present, the
@@ -346,7 +369,7 @@ internal partial class OverloadResolver {
                     boundArguments[i] = conversions.BindConversion(
                         parameterSyntaxV[i].Location,
                         argument,
-                        parameter.Type
+                        namedDelegateCtorFixedTarget
                     )
                     continue
                 }
@@ -604,7 +627,7 @@ internal partial class OverloadResolver {
                     )
                         .Location,
                     argument,
-                    parameter.Type
+                    namedDelegateCtorTarget
                 )
                 continue
             }
@@ -903,6 +926,7 @@ internal partial class OverloadResolver {
                 boundArgument = BoundErrorExpression(lambdaArgument)
             }
             boundArgument ??= BindOverloadArgumentValue(argument)
+            ApplySubExpressionNarrowingEffects(argument, boundArgument)
             boundArgumentsBuilder.Add(boundArgument!!)
         }
         let initialArguments = boundArgumentsBuilder.ToImmutable()
@@ -1578,12 +1602,12 @@ internal partial class OverloadResolver {
         constructed = classType
         if !classType.IsGenericDefinition {
             // A type-argument list on a non-generic class is a usage error.
-            if syntax.TypeArgumentList != nil {
+            if syntax.TypeArgumentList is {} unexpectedTypeArguments {
                 Diagnostics.ReportWrongTypeArgumentCount(
-                    syntax.TypeArgumentList.Location,
+                    unexpectedTypeArguments.Location,
                     classType.Name,
                     0,
-                    syntax.TypeArgumentList.Arguments.Count
+                    unexpectedTypeArguments.Arguments.Count
                 )
                 return false
             }
@@ -1616,6 +1640,7 @@ internal partial class OverloadResolver {
             // known. Roll back any diagnostics the probe produced so they are
             // reported exactly once, by the real bind.
             let inferenceDiagMark = Diagnostics.Count
+            let inferenceNarrowing = CaptureNarrowingBindSnapshot()
             let inferenceArgumentTypes = [syntax.Arguments.Count]TypeSymbol?
             let inferenceBoundArguments = ImmutableArray.CreateBuilder[BoundExpression](syntax.Arguments.Count)
             for var i = 0; i < syntax.Arguments.Count; i++ {
@@ -1624,14 +1649,15 @@ internal partial class OverloadResolver {
                     if refArgument.IsInlineDeclaration {
                         let inlineOutType = BindExplicitConstructorInferenceArgument(argument)
                         inferenceArgumentTypes[i] = inlineOutType
-                        inferenceBoundArguments.Add(
-                            BoundAddressOfExpression(
-                                argument,
-                                BoundDefaultExpression(argument, inlineOutType ?? TypeSymbol.Error)
-                            )
+                        let placeholder = BoundAddressOfExpression(
+                            argument,
+                            BoundDefaultExpression(argument, inlineOutType ?? TypeSymbol.Error)
                         )
+                        ApplySubExpressionNarrowingEffects(argument, placeholder)
+                        inferenceBoundArguments.Add(placeholder)
                     } else {
                         let boundRefArgument = bindRefArgumentExpression(refArgument, nil)
+                        ApplySubExpressionNarrowingEffects(argument, boundRefArgument)
                         inferenceArgumentTypes[i] = ByRefStorageMatching.TryGetStorageType(boundRefArgument) ??
                             boundRefArgument.Type
                         inferenceBoundArguments.Add(boundRefArgument)
@@ -1639,6 +1665,7 @@ internal partial class OverloadResolver {
                     continue
                 }
                 let boundArgument = bindExpression(argument)
+                ApplySubExpressionNarrowingEffects(argument, boundArgument)
                 inferenceArgumentTypes[i] = ByRefStorageMatching.TryGetStorageType(boundArgument) ?? boundArgument.Type
                 inferenceBoundArguments.Add(boundArgument)
             }
@@ -1716,6 +1743,7 @@ internal partial class OverloadResolver {
                 candidates.Add((candidateFunction, candidateSubstitution))
             }
             Diagnostics.TruncateTo(inferenceDiagMark)
+            RestoreNarrowingBindSnapshot(inferenceNarrowing)
             if candidates.Count == 0 {
                 if constraintFailureSubstitution != nil {
                     substitution = constraintFailureSubstitution
@@ -2032,9 +2060,13 @@ internal partial class OverloadResolver {
                     // The callback uses null to mean that overload resolution has
                     // not identified the ref parameter yet; its legacy non-null
                     // annotation predates that two-pass binding contract.
-                    boundArgsBuilder.Add(bindRefArgumentExpression(refArg, parameterForArg))
+                    let boundRef = bindRefArgumentExpression(refArg, parameterForArg)
+                    ApplySubExpressionNarrowingEffects(argument, boundRef)
+                    boundArgsBuilder.Add(boundRef)
                 } else {
-                    boundArgsBuilder.Add(BindOverloadArgumentValue(argument))
+                    let boundArg = BindOverloadArgumentValue(argument)
+                    ApplySubExpressionNarrowingEffects(argument, boundArg)
+                    boundArgsBuilder.Add(boundArg)
                 }
             }
         } finally {

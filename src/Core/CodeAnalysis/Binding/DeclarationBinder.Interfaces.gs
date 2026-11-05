@@ -439,19 +439,11 @@ internal partial class DeclarationBinder {
                 // it is now accepted. ADR-0090 reverses the rejection of
                 // `private` — it is now accepted (and routed into the private
                 // helpers bucket).
-                if methodSyntax.OpenModifier != nil {
-                    Diagnostics.ReportInterfaceMethodModifierDeferred(
-                        methodSyntax.OpenModifier.Location,
-                        "open",
-                        methodName
-                    )
+                if methodSyntax.OpenModifier is {} openModifier {
+                    Diagnostics.ReportInterfaceMethodModifierDeferred(openModifier.Location, "open", methodName)
                 }
-                if methodSyntax.OverrideModifier != nil {
-                    Diagnostics.ReportInterfaceMethodModifierDeferred(
-                        methodSyntax.OverrideModifier.Location,
-                        "override",
-                        methodName
-                    )
+                if methodSyntax.OverrideModifier is {} overrideModifier {
+                    Diagnostics.ReportInterfaceMethodModifierDeferred(overrideModifier.Location, "override", methodName)
                 }
                 // ADR-0090 / issue #756: a `private` interface method must
                 // carry a body. The helper is part of the interface's own

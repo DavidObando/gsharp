@@ -73,6 +73,7 @@ internal partial class ExpressionBinder {
         // Bind the RHS, converting it to the LHS's nullable type so the
         // author can write either an underlying-typed value (which lifts
         // via the implicit T -> T? conversion) or another nullable value.
+        ApplySubExpressionNarrowingEffects(syntax.Target, boundRead)
         let rhsTargetType = nullableType ?? boundRead.Type
         let boundRhs = BindExpression(syntax.Value, rhsTargetType)
         if boundRhs is BoundErrorExpression || boundRhs.Type == TypeSymbol.Error {

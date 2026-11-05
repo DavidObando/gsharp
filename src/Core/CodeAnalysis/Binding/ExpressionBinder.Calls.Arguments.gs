@@ -2508,7 +2508,9 @@ internal partial class ExpressionBinder {
         // position, etc.) to surface in the same pass.
         let boundArguments = ImmutableArray.CreateBuilder[BoundExpression](syntax.Arguments.Count)
         for var i = 0; i < syntax.Arguments.Count; i++ {
-            boundArguments.Add(BindExpression(syntax.Arguments[i]))
+            let boundArg = BindExpression(syntax.Arguments[i])
+            ApplySubExpressionNarrowingEffects(syntax.Arguments[i], boundArg)
+            boundArguments.Add(boundArg)
         }
         // The selector must denote an interface.
         if ifaceType is not InterfaceSymbol ifaceSym {
@@ -2711,7 +2713,15 @@ internal partial class ExpressionBinder {
         let callSyntax SyntaxNode = syntaxOverride ?? ce
         let frame = CallCandidateRecorder.Begin(callSyntax)
         try {
-            let bound = BindBaseClassCallCore(ce, baseLocation, explicitBaseType, selectorLocation, callSyntax)
+            var bound = BindBaseClassCallCore(ce, baseLocation, explicitBaseType, selectorLocation, callSyntax)
+            if verifyCallArgumentsAfterConversions != nil {
+                bound = verifyCallArgumentsAfterConversions!!(
+                    ce.Arguments,
+                    bound,
+                    () -> BindBaseClassCallCore(ce, baseLocation, explicitBaseType, selectorLocation, callSyntax)
+                ) ??
+                    bound
+            }
             CallCandidateRecorder.Stamp(frame, bound)
             return bound
         } finally {
@@ -2840,13 +2850,14 @@ internal partial class ExpressionBinder {
         let boundArguments = ImmutableArray.CreateBuilder[BoundExpression](ce.Arguments.Count)
         for argument in ce.Arguments {
             let argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argument)
-            boundArguments.Add(
-                if argSyntax is RefArgumentExpressionSyntax refArgument {
-                    BindRefArgumentExpression(refArgument, parameter: nil)
-                } else {
-                    BindExpression(argSyntax)
-                }
-            )
+            recordDeferredArgumentSnapshot?(argSyntax)
+            let boundArg = if argSyntax is RefArgumentExpressionSyntax refArgument {
+                BindRefArgumentExpression(refArgument, parameter: nil)
+            } else {
+                BindArgumentDeferringBranchy(argSyntax)
+            }
+            ApplySubExpressionNarrowingEffects(argSyntax, boundArg)
+            boundArguments.Add(boundArg)
         }
         return boundArguments.ToImmutable()
     }

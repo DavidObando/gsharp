@@ -1519,9 +1519,9 @@ partial class CSharpToGSharpTranslator {
                 .ExplicitInterfaceImplementations
                 .Length > 0 ||
                 (
-                this.entryType != nil && SymbolEqualityComparer.Default.Equals(
+                this.entryType is {} entryType && SymbolEqualityComparer.Default.Equals(
                     definition.ContainingType?.OriginalDefinition,
-                    this.entryType.OriginalDefinition
+                    entryType.OriginalDefinition
                 )
             ) {
                 return false
@@ -1632,9 +1632,9 @@ partial class CSharpToGSharpTranslator {
                 .ExplicitInterfaceImplementations
                 .Length > 0 ||
                 (
-                this.entryType != nil && SymbolEqualityComparer.Default.Equals(
+                this.entryType is {} entryType2 && SymbolEqualityComparer.Default.Equals(
                     definition.ContainingType?.OriginalDefinition,
-                    this.entryType.OriginalDefinition
+                    entryType2.OriginalDefinition
                 )
             ) {
                 return false

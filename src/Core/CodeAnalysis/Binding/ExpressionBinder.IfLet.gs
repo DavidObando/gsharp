@@ -88,6 +88,8 @@ internal partial class ExpressionBinder {
         var guardEntryAliases HashSet[VariableSymbol]? = nil
         var guardTrueAliases HashSet[VariableSymbol]? = nil
         var thenArmExitFrame Dictionary[AccessPath, TypeSymbol]? = nil
+        var postHeaderNarrowing StatementBinder.NarrowingBindSnapshot? = nil
+        var trueExitNarrowing StatementBinder.NarrowingBindSnapshot? = nil
         let (clauses, guard_, whenTrueBound) = IfLetBindingSupport.BindHeader(
             binderCtx,
             syntax.Bindings,
@@ -102,7 +104,9 @@ internal partial class ExpressionBinder {
             },
             (guardSyntax ExpressionSyntax) -> {
                 guardEntryAliases = GetCurrentExpressionCallableAliases()
-                return BindExpression(guardSyntax, TypeSymbol.Bool)
+                let bound = BindExpression(guardSyntax, TypeSymbol.Bool)
+                ApplyConditionEffectsAndHeaderAliases(guardSyntax, bound)
+                return bound
             },
             (boundGuard BoundExpression) -> {
                 let classified = ClassifyConditionalNarrowing(boundGuard, guardEntryAliases)
@@ -111,6 +115,7 @@ internal partial class ExpressionBinder {
             },
             () -> {
                 afterHeader = CaptureExpressionNarrowingFrames()
+                postHeaderNarrowing = CaptureNarrowingBindSnapshot()
                 let savedStatementAliases = getCallableAliases()
                 let initialAliases = HashSet[VariableSymbol](guardTrueAliases ?? GetCurrentExpressionCallableAliases())
                 setCallableAliases(initialAliases)
@@ -119,7 +124,11 @@ internal partial class ExpressionBinder {
                 let id = nextExpressionFrameId
                 expressionNarrowingFrames.Add((id, topFrame, initialAliases, savedStatementAliases))
                 try {
-                    return BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
+                    let bound = BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType)
+                    ApplySubExpressionNarrowingEffects(syntax.ThenBlock, bound)
+                    trueExitNarrowing = CaptureNarrowingBindSnapshot()
+                    RestoreNarrowingBindSnapshot(postHeaderNarrowing!!)
+                    return bound
                 } finally {
                     if topFrame.Count > 0 {
                         thenArmExitFrame = Dictionary[AccessPath, TypeSymbol](topFrame.Entries)
@@ -132,7 +141,10 @@ internal partial class ExpressionBinder {
                     }
                 }
             },
-            syntax.ThenBlock
+            syntax.ThenBlock,
+            (clauseSyntax IfLetBindingClauseSyntax, bound IfLetBindingSupport.BoundIfLetBinding) -> {
+                ApplyConditionEffectsAndHeaderAliases(clauseSyntax.Initializer, bound.Initializer)
+            }
         )
         var whenTrue = whenTrueBound
         var anyInvalid = false
@@ -141,6 +153,7 @@ internal partial class ExpressionBinder {
                 anyInvalid = true
             }
         }
+        let postConditionNarrowing = postHeaderNarrowing ?? CaptureNarrowingBindSnapshot()
         // Bound AFTER the binding scope/frame is popped: the else branch never
         // sees the bindings.
         TruncateBranchSiblingExpressions(afterHeader)
@@ -150,11 +163,19 @@ internal partial class ExpressionBinder {
             MergeBranchExpressionNarrowingFrames(initExit)
         }
         var whenFalse = BindIfLetElseBranch(syntax.ElseExpression!!, canBeVoid, targetType)
+        ApplySubExpressionNarrowingEffects(syntax.ElseExpression!!, whenFalse)
+        let falseExitNarrowing = CaptureNarrowingBindSnapshot()
         TruncateBranchSiblingExpressions(afterHeader)
         let falseExit = CaptureExpressionNarrowingFrames()
         let thenCompletes = whenTrue.Type != TypeSymbol.Never
         let falseCompletes = whenFalse.Type != TypeSymbol.Never
         JoinConditionalBranchExpressionNarrowingFrames(thenExit, falseExit, thenCompletes, falseCompletes)
+        JoinBranchNarrowingSnapshots(
+            whenTrue.Type,
+            trueExitNarrowing ?? postConditionNarrowing,
+            whenFalse.Type,
+            falseExitNarrowing
+        )
         if anyInvalid ||
             clauses.Length == 0 ||
             guard_ is BoundErrorExpression ||

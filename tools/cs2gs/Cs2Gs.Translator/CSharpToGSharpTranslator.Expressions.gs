@@ -6074,19 +6074,49 @@ partial class CSharpToGSharpTranslator {
             $scope Microsoft.CodeAnalysis.SyntaxNode
         ) bool {
             return node.Ancestors().Any(
-                (ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .IfStatementSyntax ifStatement &&
-                    ifStatement.Else != nil &&
-                    ifStatement
-                    .Statement
-                    .Span
-                    .Contains(node.Span) &&
-                    ifStatement.Else!!
-                    .Span
-                    .Contains(use.Span) && !this.IfHasGotoAffectingElse(ifStatement, $scope)
+                (ancestor Microsoft.CodeAnalysis.SyntaxNode) -> (
+                    ancestor is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .IfStatementSyntax ifStatement &&
+                        ifStatement.Else != nil &&
+                        ifStatement
+                        .Statement
+                        .Span
+                        .Contains(node.Span) &&
+                        ifStatement.Else!!
+                        .Span
+                        .Contains(use.Span) && !this.IfHasGotoAffectingElse(ifStatement, $scope)
+                ) ||
+                    (
+                    ancestor is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ConditionalExpressionSyntax conditional &&
+                        conditional
+                        .WhenTrue
+                        .Span
+                        .Contains(node.Span) &&
+                        conditional
+                        .WhenFalse
+                        .Span
+                        .Contains(use.Span)
+                ) ||
+                    (
+                    ancestor is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .SwitchExpressionSyntax switchExpr &&
+                        switchExpr
+                        .Span
+                        .Contains(use.Span) && switchExpr.Arms.Any(
+                        (arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax) ->
+                        arm.Expression.Span.Contains(node.Span) && !arm.Span.Contains(use.Span)
+                    )
+                )
             )
         }
 
@@ -9954,12 +9984,14 @@ partial class CSharpToGSharpTranslator {
             if this.context.SemanticModel.GetOperation(pattern) is not IConstantPatternOperation operation {
                 return true
             }
-            let constant = operation.Value.ConstantValue
+            return this.ConstantSwitchTestMayCallEquals(operation.InputType, operation.Value.ConstantValue)
+        }
+
+        private func ConstantSwitchTestMayCallEquals(input ITypeSymbol?, constant Optional[object?]) bool {
             if constant.HasValue && constant.Value == nil {
                 return false
             }
-            let input = operation.InputType
-            if input.SpecialType == SpecialType.System_Object {
+            if input == nil || input.SpecialType == SpecialType.System_Object {
                 return true
             }
             if input is not INamedTypeSymbol{
@@ -9993,11 +10025,26 @@ partial class CSharpToGSharpTranslator {
                 .CSharp
                 .Syntax
                 .ExpressionSyntax anyExpression &&
+                (
                 this
-                .context
-                .SemanticModel
-                .GetConversion(anyExpression)
-                .IsUserDefined {
+                    .context
+                    .SemanticModel
+                    .GetConversion(anyExpression)
+                    .IsUserDefined ||
+                    (
+                    anyExpression.Parent is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .InitializerExpressionSyntax parentInit &&
+                        parentInit.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CollectionInitializerExpression) &&
+                        this
+                        .context
+                        .SemanticModel
+                        .GetCollectionInitializerSymbolInfo(anyExpression)
+                        .Symbol is IMethodSymbol
+                )
+            ) {
                 return false
             }
             // ADR-0208 R19 (#5593): gsc emits a constant pattern on an `object` input, or on a nullable value input
@@ -10005,6 +10052,18 @@ partial class CSharpToGSharpTranslator {
             // `Equals`.
             if node is Microsoft.CodeAnalysis.CSharp.Syntax.ConstantPatternSyntax constantPattern {
                 return !this.ConstantPatternMayCallEquals(constantPattern)
+            }
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.CaseSwitchLabelSyntax caseLabel {
+                let switchStmt = caseLabel.Parent?.Parent as Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax
+                let inputType ITypeSymbol? = if switchStmt == nil {
+                    default(ITypeSymbol?)
+                } else {
+                    this.context.GetTypeInfo(switchStmt.Expression).Type
+                }
+                return !this.ConstantSwitchTestMayCallEquals(
+                    inputType,
+                    this.context.SemanticModel.GetConstantValue(caseLabel.Value)
+                )
             }
             // The callee part of a call and its argument list run nothing themselves: the
             // invocation node does, once its arguments are evaluated.
@@ -10047,7 +10106,87 @@ partial class CSharpToGSharpTranslator {
                 .CodeAnalysis
                 .CSharp
                 .Syntax
-                .ConditionalExpressionSyntax {
+                .BinaryPatternSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ParenthesizedPatternSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .DiscardPatternSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .VarPatternSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .DeclarationPatternSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .TypePatternSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .SingleVariableDesignationSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .DiscardDesignationSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ParenthesizedVariableDesignationSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ConditionalExpressionSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .SwitchExpressionSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .SwitchExpressionArmSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .WhenClauseSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .SwitchStatementSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .SwitchSectionSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .CasePatternSwitchLabelSyntax ||
+                node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .DefaultSwitchLabelSyntax {
                 return true
             }
             if node is Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax memberAccess {
@@ -10230,6 +10369,9 @@ partial class CSharpToGSharpTranslator {
             use Microsoft.CodeAnalysis.SyntaxNode?,
             $scope Microsoft.CodeAnalysis.SyntaxNode
         ) bool {
+            let OutsideNestedFunctions = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
+                return !((node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax))
+            }
             let exitedLoop = if use == nil {
                 default(Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax?)
             } else {
@@ -10247,12 +10389,7 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return true
             }
-            return $scope.DescendantNodes(
-                (node Microsoft.CodeAnalysis.SyntaxNode) -> !(
-                    (node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax)
-                )
-            )
-                .Any(
+            if $scope.DescendantNodes(OutsideNestedFunctions).Any(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> (
                     if exitedLoop != nil {
                         (exitedCondition != nil && exitedCondition.Span.Contains(node.Span)) ||
@@ -10276,7 +10413,73 @@ partial class CSharpToGSharpTranslator {
                     }
                 ) &&
                     this.SyntaxNodeWritesSymbol(node, symbol)
-            )
+            ) {
+                return true
+            }
+            let effectiveStartEnd = if exitedLoop != nil {
+                exitedLoop.Span.End
+            } else {
+                start.Span.End
+            }
+            for var enclosing Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = use?.Parent;
+                enclosing != nil &&
+                enclosing != $scope;
+                enclosing = enclosing!!
+                .Parent {
+                if enclosing is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .TryStatementSyntax tryStmt &&
+                    tryStmt
+                    .Block
+                    .Span
+                    .Contains(use!!.Span) &&
+                    tryStmt
+                    .Catches
+                    .Any(
+                    (catchClause Microsoft.CodeAnalysis.CSharp.Syntax.CatchClauseSyntax) ->
+                    catchClause.Filter?.FilterExpression is {} filterExpr && filterExpr.DescendantNodesAndSelf(
+                        OutsideNestedFunctions
+                    )
+                        .Any((node Microsoft.CodeAnalysis.SyntaxNode) -> this.SyntaxNodeWritesSymbol(node, symbol))
+                ) &&
+                    tryStmt
+                    .Block
+                    .DescendantNodes(OutsideNestedFunctions)
+                    .Any(
+                    (node Microsoft.CodeAnalysis.SyntaxNode) -> (
+                        (node.SpanStart >= effectiveStartEnd && node.Span.End <= use!!.SpanStart) ||
+                            (
+                            node is Microsoft
+                                .CodeAnalysis
+                                .CSharp
+                                .Syntax
+                                .BaseObjectCreationExpressionSyntax creation &&
+                                creation.SpanStart >= effectiveStartEnd &&
+                                creation.Initializer != nil &&
+                                creation.Initializer!!
+                                .Span
+                                .Contains(use!!.Span)
+                        )
+                    ) &&
+                        (
+                        !this.IsKnownCallFreeNode(node) ||
+                            node is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .TryStatementSyntax
+                    ) &&
+                        !(node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax) &&
+                        !this.IsInThenBranchOfElseRead(node, use!!, $scope)
+                ) {
+                    return true
+                }
+            }
+            return false
         }
 
         private func ExitedConditionTriggersEnclosingFilterWrite(

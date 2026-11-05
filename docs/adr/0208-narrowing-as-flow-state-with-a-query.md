@@ -901,11 +901,17 @@ Details per row:
   to the follow-up ADR of section 10. Under the recorded scope those tests
   keep today's expectations, except the loop forms of d3, d4, f5 and f2,
   which R11 and R12 reject.
-- **R9.** New test with an ADR-0154 witness (red on today's compiler by
-  running the program). Compatibility: the program is wrong today; the
+- **R9 (#4985, #5637).** `StatementBinder.ApplySubExpressionNarrowingEffects` applies the narrowing and
+  callable-alias effects of each bound sub-expression before the next sequentially evaluated operand of the same
+  expression is bound (binary operators including short-circuit `&&` and `||`, `is` expressions and pattern
+  sub-tests, conditional/if/if-let/switch expressions, call receivers and arguments, constructor arguments,
+  indexers, range bounds, tuple/array/map/collection/object/struct/with/anonymous-class initializers, interpolated
+  string holes, assignments, and multi-assignment RHS values), unwrapping top-level `BoundAddressOfExpression` so a
+  plain `ref x` address does not kill `x` before the call runs while `Clear(ref x)` or `ref arr[Clear()]` applies
+  its inner effects (`Issue5637And5238OperandOrderNarrowingTests`). Compatibility: the program is wrong today; the
   diagnostic is the fix. `a ??= b` narrowing afterwards (#4978) becomes
   expressible in the same model; whether to enable it is #4978's decision.
-- **R10.** New test from probe cA with an ADR-0154 witness (today's
+- **R10 (#5168, #5238, #5239).** New test from probe cA with an ADR-0154 witness (today's
   compiler accepts it and the program throws). Compatibility: the program
   is wrong today; the diagnostic is the fix. ADR-0177's filter semantics
   (a false or throwing filter continues the handler search) is what makes
@@ -914,8 +920,11 @@ Details per row:
   narrower fix in the current scheme (invalidate the roots a filter writes
   before binding the remaining clauses and every finally it encloses, skipping
   any variable declared inside that `try`'s protected block so shadowing
-  locals keep their facts, #5239) may
-  land before this ADR, in which case R10 becomes a no-change row.
+  locals keep their facts, #5239, and apply enclosing filter writes between
+  sequentially evaluated operands and after condition headers when a
+  sub-expression may run user code, an escaped closure, or an inner `try`,
+  #5238) lands in the current scheme (`Issue5239And5654NarrowingTests`,
+  `Issue5637And5238OperandOrderNarrowingTests`).
 - **R11, R12.** New tests from probes d3, d3b, d4 and d4b with run-time
   witnesses on today's compiler. Both are defects in 0.5.212 (#5170,
   #5171) and may be fixed in the current scheme first, in which case the
@@ -971,9 +980,8 @@ Details per row:
   parameter receiver can. A `base.` access is a `BoundBaseClassCallExpression`, a call already. A constructor's
   store to an auto property without a setter writes the backing field and calls no accessor (row z17). The rule
   does not rely on the lowering of an auto property to its backing field inside its declaring type, which skips an
-  override (#5630). Not in this row: a call in an earlier operand does not remove a fact read by a later operand of
-  the same expression (#5637, the same for every call), and an auto property that is not `open` but implements an
-  interface is emitted `virtual` without `final`, so another assembly can override it (#5638). A `sealed class` admits subclasses in its package,
+  override (#5630). Sub-expression operand-order invalidation is covered by R9 (#5637, the same for every call), and
+  an auto property that is not `open` but implements an interface is emitted `virtual` with `final` (#5638). A `sealed class` admits subclasses in its package,
   so it can have an override (row z18). Corpus rows z01 to z18. Impact: no new diagnostic in the 18 projects of the repository. cs2gs does not
   change: it counts every C# property read as code for a closure-assigned local, a member path gets `!!`, and a
   by-reference read after any accessor call is #5617.

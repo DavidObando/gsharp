@@ -52,9 +52,10 @@ class PathMember : IEquatable[PathMember] {
             return ClrMember == nil && other.ClrMember == nil
         }
         let clrMember = ClrMember!!
-        return clrMember.MetadataToken == other.ClrMember.MetadataToken && object.ReferenceEquals(
+        let otherClrMember = other.ClrMember
+        return clrMember.MetadataToken == otherClrMember.MetadataToken && object.ReferenceEquals(
             clrMember.Module,
-            other.ClrMember.Module
+            otherClrMember.Module
         )
     }
 

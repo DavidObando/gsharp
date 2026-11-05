@@ -198,7 +198,7 @@ internal partial class ExpressionBinder {
             rawOperand = pen.Expression
         }
         if rawOperand is ConditionalRefArgumentExpressionSyntax condOperand {
-            return conversions.BindConditionalRefArgument(condOperand, outerModifier: nil)
+            return BindConditionalRefArgumentWithNarrowing(condOperand, outerModifier: nil)
         }
         // ADR-0062: a general conditional expression as the operand of `&`
         // binds to the conditional-address path (preserving ADR-0061 byref
@@ -650,6 +650,8 @@ internal partial class ExpressionBinder {
         let beforeConditional = CaptureExpressionNarrowingFrames()
         let conditionEntryAliases = GetCurrentExpressionCallableAliases()
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
+        ApplyConditionEffectsAndHeaderAliases(syntax.Condition, condition)
+        let postConditionNarrowing = CaptureNarrowingBindSnapshot()
         let afterCondition = CaptureExpressionNarrowingFrames()
         // ADR-0100 / issue #795: a bare `default` branch takes its type
         // from the sibling branch. Bind whichever branch is typed first so
@@ -670,8 +672,11 @@ internal partial class ExpressionBinder {
         let (patternWhenTrue, patternWhenFalse) = PatternVariables.Classify(condition)
         var thenArmExitFrame Dictionary[AccessPath, TypeSymbol]? = nil
         var elseArmExitFrame Dictionary[AccessPath, TypeSymbol]? = nil
+        var trueExitNarrowing StatementBinder.NarrowingBindSnapshot? = nil
+        var falseExitNarrowing StatementBinder.NarrowingBindSnapshot? = nil
         let bindWhenTrue = func (branchTargetType TypeSymbol?) BoundExpression {
-            return BindWithPatternVariables(
+            RestoreNarrowingBindSnapshot(postConditionNarrowing)
+            let bound = BindWithPatternVariables(
                 patternWhenTrue,
                 () -> {
                     return BindExpressionWithNarrowing(
@@ -684,9 +689,13 @@ internal partial class ExpressionBinder {
                 },
                 syntax.WhenTrue
             )
+            ApplySubExpressionNarrowingEffects(syntax.WhenTrue, bound)
+            trueExitNarrowing = CaptureNarrowingBindSnapshot()
+            return bound
         }
         let bindWhenFalse = func (branchTargetType TypeSymbol?) BoundExpression {
-            return BindWithPatternVariables(
+            RestoreNarrowingBindSnapshot(postConditionNarrowing)
+            let bound = BindWithPatternVariables(
                 patternWhenFalse,
                 () -> {
                     return BindExpressionWithNarrowing(
@@ -699,6 +708,9 @@ internal partial class ExpressionBinder {
                 },
                 syntax.WhenFalse
             )
+            ApplySubExpressionNarrowingEffects(syntax.WhenFalse, bound)
+            falseExitNarrowing = CaptureNarrowingBindSnapshot()
+            return bound
         }
         var whenTrue BoundExpression
         var whenFalse BoundExpression
@@ -745,11 +757,13 @@ internal partial class ExpressionBinder {
             TruncateBranchSiblingExpressions(afterCondition)
             falseExit = CaptureExpressionNarrowingFrames()
             RestoreExpressionNarrowingFrames(afterCondition)
+            RestoreNarrowingBindSnapshot(postConditionNarrowing)
             whenTrue = BindWithPatternVariables(
                 patternWhenTrue,
                 () -> BoundDefaultExpression(syntax.WhenTrue, whenFalse.Type),
                 syntax.WhenTrue
             )
+            trueExitNarrowing = CaptureNarrowingBindSnapshot()
             TruncateBranchSiblingExpressions(afterCondition)
             thenExit = CaptureExpressionNarrowingFrames()
             JoinConditionalBranchExpressionNarrowingFrames(
@@ -766,11 +780,13 @@ internal partial class ExpressionBinder {
             TruncateBranchSiblingExpressions(afterCondition)
             thenExit = CaptureExpressionNarrowingFrames()
             RestoreExpressionNarrowingFrames(afterCondition)
+            RestoreNarrowingBindSnapshot(postConditionNarrowing)
             whenFalse = BindWithPatternVariables(
                 patternWhenFalse,
                 () -> BoundDefaultExpression(syntax.WhenFalse, whenTrue.Type),
                 syntax.WhenFalse
             )
+            falseExitNarrowing = CaptureNarrowingBindSnapshot()
             TruncateBranchSiblingExpressions(afterCondition)
             falseExit = CaptureExpressionNarrowingFrames()
             JoinConditionalBranchExpressionNarrowingFrames(
@@ -794,6 +810,12 @@ internal partial class ExpressionBinder {
                 whenFalse.Type != TypeSymbol.Never
             )
         }
+        JoinBranchNarrowingSnapshots(
+            whenTrue.Type,
+            trueExitNarrowing ?? postConditionNarrowing,
+            whenFalse.Type,
+            falseExitNarrowing ?? postConditionNarrowing
+        )
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }
@@ -926,6 +948,8 @@ internal partial class ExpressionBinder {
         let beforeConditional = CaptureExpressionNarrowingFrames()
         let conditionEntryAliases = GetCurrentExpressionCallableAliases()
         let condition = BindExpression(syntax.Condition, TypeSymbol.Bool)
+        ApplyConditionEffectsAndHeaderAliases(syntax.Condition, condition)
+        let postConditionNarrowing = CaptureNarrowingBindSnapshot()
         let afterCondition = CaptureExpressionNarrowingFrames()
         let (whenTrueNarrowing, whenFalseNarrowing, whenTrueAliases, whenFalseAliases) = ClassifyConditionalNarrowing(
             condition,
@@ -953,15 +977,23 @@ internal partial class ExpressionBinder {
             return BindWithNarrowing(whenFalseNarrowing, bindWhenFalse, out elseArmExitFrame, whenFalseAliases)
         }
         var whenTrue = BindWithPatternVariables(patternWhenTrue, bindWhenTrueNarrowed, syntax.ThenBlock)
+        ApplySubExpressionNarrowingEffects(syntax.ThenBlock, whenTrue)
+        let trueExitNarrowing = CaptureNarrowingBindSnapshot()
         TruncateBranchSiblingExpressions(afterCondition)
         var thenExit = CaptureExpressionNarrowingFrames()
         RestoreExpressionNarrowingFrames(afterCondition)
+        RestoreNarrowingBindSnapshot(postConditionNarrowing)
         var whenFalse = BindWithPatternVariables(patternWhenFalse, bindWhenFalseNarrowed, elseSyntax)
+        if elseSyntax != nil {
+            ApplySubExpressionNarrowingEffects(elseSyntax, whenFalse)
+        }
+        let falseExitNarrowing = CaptureNarrowingBindSnapshot()
         TruncateBranchSiblingExpressions(afterCondition)
         let falseExit = CaptureExpressionNarrowingFrames()
         let thenCompletes = whenTrue.Type != TypeSymbol.Never
         let falseCompletes = whenFalse.Type != TypeSymbol.Never
         JoinConditionalBranchExpressionNarrowingFrames(thenExit, falseExit, thenCompletes, falseCompletes)
+        JoinBranchNarrowingSnapshots(whenTrue.Type, trueExitNarrowing, whenFalse.Type, falseExitNarrowing)
         if condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression {
             return BoundErrorExpression(nil)
         }
@@ -1684,11 +1716,14 @@ internal partial class ExpressionBinder {
         // ADR-0166: the same short-circuit regions scope pattern variables —
         // `x is T t && t.Length > 0` binds `t.Length` with `t` in scope, and
         // `!(x is T t) || t.Length > 0` likewise through the negation.
+        let preLeftEffectsNarrowing = CaptureNarrowingBindSnapshot()
         var boundRight BoundExpression
+        var rightEntryAliases HashSet[VariableSymbol]? = nil
         if syntax.OperatorToken.Kind == SyntaxKind.AmpersandAmpersandToken {
             let beforeRight = CaptureExpressionNarrowingFrames()
             let rightFrame = TryClassifyTypeTestNarrowingForAnd(boundLeft, leftEntryAliases, out var rightAliases)
             let (leftWhenTrue, _) = PatternVariables.Classify(boundLeft)
+            ApplySubExpressionNarrowingEffects(syntax.Left, boundLeft)
             boundRight = BindWithPatternVariables(
                 leftWhenTrue,
                 () -> {
@@ -1702,6 +1737,7 @@ internal partial class ExpressionBinder {
             let beforeRight = CaptureExpressionNarrowingFrames()
             let rightFrame = TryClassifyTypeTestNarrowingForOr(boundLeft, leftEntryAliases, out var rightAliases)
             let (_, leftWhenFalse) = PatternVariables.Classify(boundLeft)
+            ApplySubExpressionNarrowingEffects(syntax.Left, boundLeft)
             boundRight = BindWithPatternVariables(
                 leftWhenFalse,
                 () -> {
@@ -1716,14 +1752,24 @@ internal partial class ExpressionBinder {
             .Kind == SyntaxKind.QuestionQuestionToken &&
             coalesceTargetType != nil &&
             IsTargetDependentExpressionSyntax(syntax.Right) {
+            ApplySubExpressionNarrowingEffects(syntax.Left, boundLeft)
             let beforeRight = CaptureExpressionNarrowingFrames()
+            let preRightSnapshot = CaptureNarrowingBindSnapshot()
             boundRight = BindExpression(syntax.Right, coalesceTargetType)
+            ApplySubExpressionNarrowingEffects(syntax.Right, boundRight)
             MergeBranchExpressionNarrowingFrames(beforeRight)
+            intersectNarrowingWithSnapshot?(preRightSnapshot)
         } else if syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken {
+            ApplySubExpressionNarrowingEffects(syntax.Left, boundLeft)
             let beforeRight = CaptureExpressionNarrowingFrames()
+            let preRightSnapshot = CaptureNarrowingBindSnapshot()
             boundRight = BindExpression(syntax.Right)
+            ApplySubExpressionNarrowingEffects(syntax.Right, boundRight)
             MergeBranchExpressionNarrowingFrames(beforeRight)
+            intersectNarrowingWithSnapshot?(preRightSnapshot)
         } else {
+            ApplySubExpressionNarrowingEffects(syntax.Left, boundLeft)
+            rightEntryAliases = getCallableAliases()
             boundRight = BindExpression(syntax.Right)
         }
         if syntax
@@ -1746,7 +1792,7 @@ internal partial class ExpressionBinder {
                 leftUtf8.Slice
             )
         }
-        let result = BindBinaryOperation(
+        let operation = BindBinaryOperation(
             syntax,
             syntax.OperatorToken.Kind,
             syntax.OperatorToken.Location,
@@ -1758,13 +1804,24 @@ internal partial class ExpressionBinder {
             syntax.Right.Location,
             coalesceTargetType,
             deferTargetlessCoalesce,
-            coalesceDiagMark
+            coalesceDiagMark,
+            preLeftEffectsNarrowing
         )
-        if deferTargetlessCoalesce && result is BoundErrorExpression{Syntax: not nil} {
+        if deferTargetlessCoalesce && IsDeferredBranchyArgumentPlaceholder(operation, out _) {
             Diagnostics.RestoreSuppressionsTo(coalesceSuppressionMark)
             RestoreExpressionNarrowingFrames(beforeCoalesce)
+            ApplySubExpressionNarrowingEffects(syntax.Right, boundRight)
+        } else if operation is BoundBinaryExpression binOp &&
+            binOp
+            .Op
+            .Kind is not(
+            BoundBinaryOperatorKind.LogicalAnd or
+                BoundBinaryOperatorKind.LogicalOr or
+                BoundBinaryOperatorKind.NullCoalesce
+        ) {
+            recordAppliedBinaryLeft?(binOp, rightEntryAliases)
         }
-        return result
+        return operation
     }
 
     /// Binds a binary operator on two bound operands: native, built-in, user-defined, CLR, and reference-equality
@@ -1795,7 +1852,8 @@ internal partial class ExpressionBinder {
         rightLocation TextLocation,
         coalesceTargetType TypeSymbol? = nil,
         deferTargetlessCoalesce bool = false,
-        coalesceDiagMark int32 = 0
+        coalesceDiagMark int32 = 0,
+        preLeftEffectsNarrowing StatementBinder.NarrowingBindSnapshot? = nil
     ) BoundExpression {
         var boundLeft = left
         var boundRight = right
@@ -2022,6 +2080,74 @@ internal partial class ExpressionBinder {
                 out var ambiguous
             )
             if fallback != nil {
+                if !object.ReferenceEquals(boundLeft, left) && preLeftEffectsNarrowing is {} savedBeforeLeft {
+                    RestoreNarrowingBindSnapshot(savedBeforeLeft)
+                    if syntax is BinaryExpressionSyntax binarySyntax {
+                        ApplySubExpressionNarrowingEffects(binarySyntax.Left, boundLeft)
+                        boundRight = Diagnostics.ReplaceDiagnosticsIn(
+                            binarySyntax.Right.Location,
+                            () -> BindExpression(binarySyntax.Right)
+                        )
+                        var rebuiltLeft = left
+                        let rebuiltFallback = TryBindBinaryWithUserAndClrFallback(
+                            operatorKind,
+                            &rebuiltLeft,
+                            &boundRight,
+                            leftLocation,
+                            rightLocation,
+                            out ambiguous
+                        )
+                        ApplySubExpressionNarrowingEffects(binarySyntax.Right, boundRight)
+                        if rebuiltFallback != nil {
+                            return rebuiltFallback
+                        }
+                        return BindBinaryOperation(
+                            syntax,
+                            operatorKind,
+                            operatorLocation,
+                            operatorText,
+                            location,
+                            left,
+                            boundRight,
+                            leftLocation,
+                            rightLocation,
+                            coalesceTargetType,
+                            preLeftEffectsNarrowing: nil
+                        )
+                    } else if syntax is RelationalPatternSyntax relSyntax {
+                        ApplySubExpressionNarrowingEffects(relSyntax, boundLeft)
+                        boundRight = Diagnostics.ReplaceDiagnosticsIn(
+                            relSyntax.Expression.Location,
+                            () -> BindExpression(relSyntax.Expression)
+                        )
+                        var rebuiltLeft = left
+                        let rebuiltFallback = TryBindBinaryWithUserAndClrFallback(
+                            operatorKind,
+                            &rebuiltLeft,
+                            &boundRight,
+                            leftLocation,
+                            rightLocation,
+                            out ambiguous
+                        )
+                        ApplySubExpressionNarrowingEffects(relSyntax.Expression, boundRight)
+                        if rebuiltFallback != nil {
+                            return rebuiltFallback
+                        }
+                        return BindBinaryOperation(
+                            syntax,
+                            operatorKind,
+                            operatorLocation,
+                            operatorText,
+                            location,
+                            left,
+                            boundRight,
+                            leftLocation,
+                            rightLocation,
+                            coalesceTargetType,
+                            preLeftEffectsNarrowing: nil
+                        )
+                    }
+                }
                 return fallback
             }
             if ambiguous {
@@ -2421,6 +2547,8 @@ internal partial class ExpressionBinder {
                 }
                 let convertedLeft = conversions.BindConversion(leftLocation, left, leftParameterType)
                 let convertedRight = conversions.BindConversion(rightLocation, right, rightParameterType)
+                left = convertedLeft
+                right = convertedRight
                 return BoundCallExpression(
                     nil,
                     userOp,

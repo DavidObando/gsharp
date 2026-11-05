@@ -759,9 +759,9 @@ internal class ReflectionMetadataEmitter {
         let pendingRows = this.emitCtx.PendingGenericParameters
         for var gi = gpRowStart; gi < pendingRows.Count; gi++ {
             let gpRow = pendingRows[gi]
-            if gpRow.InterfaceConstraintType != nil && gpRow.PreResolvedConstraintHandle == nil {
+            if gpRow.InterfaceConstraintType is {} constraintType && gpRow.PreResolvedConstraintHandle == nil {
                 pendingRows[gi] = gpRow with{
-                    PreResolvedConstraintHandle = this.memberRefs.GetElementTypeToken(gpRow.InterfaceConstraintType)
+                    PreResolvedConstraintHandle = this.memberRefs.GetElementTypeToken(constraintType)
                 }
             }
         }
@@ -3066,15 +3066,15 @@ internal class ReflectionMetadataEmitter {
 
         }
         var entryHandle = default(MethodDefinitionHandle)
-        if this.emitCtx.Program.EntryPoint != nil {
+        if this.emitCtx.Program.EntryPoint is {} entryPoint {
             entryHandle = if this.EntryPointNeedsSeparateStub {
                 this.entryPointStubHandle
             } else {
                 (
                     if entryPointIsClassOwned {
-                        aggregateMethodHandles[this.emitCtx.Program.EntryPoint]
+                        aggregateMethodHandles[entryPoint]
                     } else {
-                        this.cache.FunctionHandles[this.emitCtx.Program.EntryPoint]
+                        this.cache.FunctionHandles[entryPoint]
                     }
                 )
             }

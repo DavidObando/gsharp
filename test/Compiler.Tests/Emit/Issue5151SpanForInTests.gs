@@ -263,9 +263,9 @@ func SpanNodesEarlyReturn(items []Node) int32 {
             }
             let calls = List[MethodBase]()
             for instruction in IlInstructionReader.Read(il) {
-                if instruction.MetadataToken != nil &&
+                if instruction.MetadataToken is {} metadataToken &&
                     (instruction.OpCode == OpCodes.Call || instruction.OpCode == OpCodes.Callvirt) {
-                    calls.Add(method.Module.ResolveMethod(instruction.MetadataToken, nil, methodArguments))
+                    calls.Add(method.Module.ResolveMethod(metadataToken, nil, methodArguments))
                 }
             }
             return calls.ToArray()

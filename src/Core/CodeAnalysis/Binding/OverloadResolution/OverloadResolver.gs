@@ -119,6 +119,18 @@ internal partial class OverloadResolver {
     private let bindLambdaWithTarget((LambdaExpressionSyntax, FunctionTypeSymbol) -> BoundExpression)?
     private let bindUserTypeStaticCall((StructSymbol, CallExpressionSyntax) -> BoundExpression)?
     private let bindImportedClrStaticCall((Type, CallExpressionSyntax) -> BoundExpression)?
+    private let applySubExpressionEffects((SyntaxNode?, BoundExpression?) -> void)?
+    private let captureNarrowingSnapshot(() -> StatementBinder.NarrowingBindSnapshot)?
+    private let restoreNarrowingSnapshot((StatementBinder.NarrowingBindSnapshot) -> void)?
+    private let recordDeferredArgumentSnapshot((SyntaxNode) -> void)?
+    private let rebindDeferredArgumentWithSnapshot((SyntaxNode, () -> BoundExpression) -> BoundExpression)?
+    private let verifyCallArgumentsAfterConversions(
+        (
+            GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
+            BoundExpression?,
+            (() -> BoundExpression)?
+        ) -> BoundExpression?
+    )?
 
     /// Initializes a new instance of the (cref:OverloadResolver)
     /// class.
@@ -264,7 +276,19 @@ internal partial class OverloadResolver {
         getCurrentFunction() -> FunctionSymbol?,
         bindLambdaWithTarget((LambdaExpressionSyntax, FunctionTypeSymbol) -> BoundExpression)? = nil,
         bindUserTypeStaticCall((StructSymbol, CallExpressionSyntax) -> BoundExpression)? = nil,
-        bindImportedClrStaticCall((Type, CallExpressionSyntax) -> BoundExpression)? = nil
+        bindImportedClrStaticCall((Type, CallExpressionSyntax) -> BoundExpression)? = nil,
+        applySubExpressionEffects((SyntaxNode?, BoundExpression?) -> void)? = nil,
+        captureNarrowingSnapshot(() -> StatementBinder.NarrowingBindSnapshot)? = nil,
+        restoreNarrowingSnapshot((StatementBinder.NarrowingBindSnapshot) -> void)? = nil,
+        recordDeferredArgumentSnapshot((SyntaxNode) -> void)? = nil,
+        rebindDeferredArgumentWithSnapshot((SyntaxNode, () -> BoundExpression) -> BoundExpression)? = nil,
+        verifyCallArgumentsAfterConversions(
+            (
+                GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
+                BoundExpression?,
+                (() -> BoundExpression)?
+            ) -> BoundExpression?
+        )? = nil
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.memberLookup = memberLookup ?? throw ArgumentNullException("memberLookup")
@@ -307,6 +331,26 @@ internal partial class OverloadResolver {
         this.bindLambdaWithTarget = bindLambdaWithTarget
         this.bindUserTypeStaticCall = bindUserTypeStaticCall
         this.bindImportedClrStaticCall = bindImportedClrStaticCall
+        this.applySubExpressionEffects = applySubExpressionEffects
+        this.captureNarrowingSnapshot = captureNarrowingSnapshot
+        this.restoreNarrowingSnapshot = restoreNarrowingSnapshot
+        this.recordDeferredArgumentSnapshot = recordDeferredArgumentSnapshot
+        this.rebindDeferredArgumentWithSnapshot = rebindDeferredArgumentWithSnapshot
+        this.verifyCallArgumentsAfterConversions = verifyCallArgumentsAfterConversions
+    }
+
+    private func ApplySubExpressionNarrowingEffects(syntax SyntaxNode?, operand BoundExpression?) {
+        applySubExpressionEffects?(syntax, operand)
+    }
+
+    private func CaptureNarrowingBindSnapshot() StatementBinder.NarrowingBindSnapshot -> if captureNarrowingSnapshot != nil {
+        captureNarrowingSnapshot!!()
+    } else {
+        default(StatementBinder.NarrowingBindSnapshot)
+    }
+
+    private func RestoreNarrowingBindSnapshot(snapshot StatementBinder.NarrowingBindSnapshot) {
+        restoreNarrowingSnapshot?(snapshot)
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics

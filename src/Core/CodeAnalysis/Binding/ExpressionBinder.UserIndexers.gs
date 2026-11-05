@@ -357,15 +357,28 @@ internal partial class ExpressionBinder {
     }
 
     private func BindIndexArgumentExpression(syntax ExpressionSyntax) BoundExpression {
+        recordDeferredArgumentSnapshot?(syntax)
+        var bound BoundExpression
         if syntax is RefArgumentExpressionSyntax refArgument {
             let placeholder ParameterSymbol? = if refArgument.IsInlineDeclaration {
                 ParameterSymbol("index", TypeSymbol.Error, refKind: RefKind.None)
             } else {
                 default(ParameterSymbol?)
             }
-            return BindRefArgumentExpression(refArgument, placeholder)
+            bound = BindRefArgumentExpression(refArgument, placeholder)
+        } else if IsTargetTypedBranchyArgumentSyntax(syntax) {
+            let previous = binderCtx.DeferTargetlessConditional
+            this.binderCtx.DeferTargetlessConditional = true
+            try {
+                bound = BindExpression(syntax)
+            } finally {
+                this.binderCtx.DeferTargetlessConditional = previous
+            }
+        } else {
+            bound = BindExpression(syntax)
         }
-        return BindExpression(syntax)
+        ApplySubExpressionNarrowingEffects(syntax, bound)
+        return bound
     }
 
     private func BindUserIndexerArgument(
@@ -380,17 +393,19 @@ internal partial class ExpressionBinder {
         if !preBoundArguments.IsDefault && argumentIndex < preBoundArguments.Length {
             preBound = preBoundArguments[argumentIndex]
         }
+        if preBound == nil {
+            recordDeferredArgumentSnapshot?(syntax)
+        }
         let location = syntax.Location
-        if syntax is RefArgumentExpressionSyntax refArgument {
+        let converted BoundExpression = if syntax is RefArgumentExpressionSyntax refArgument {
             let argumentRefKind = Binder.GetRefKindFromModifier(refArgument.RefKindModifier)
             let bound BoundExpression = preBound ?? BindRefArgumentExpression(refArgument, parameter)
             if refArgument.IsInlineDeclaration {
                 if preBound is BoundAddressOfExpression preBoundAddr && preBoundAddr.Operand is BoundErrorExpression {
                     let _ = BindRefArgumentExpression(refArgument, parameter)
                 }
-                return BoundErrorExpression(syntax)
-            }
-            if argumentRefKind != parameter.RefKind {
+                BoundErrorExpression(syntax)
+            } else if argumentRefKind != parameter.RefKind {
                 Diagnostics.ReportRefKindMismatch(
                     location,
                     argumentIndex + 1,
@@ -398,11 +413,11 @@ internal partial class ExpressionBinder {
                     Binder.RefKindToString(parameter.RefKind),
                     Binder.RefKindToString(argumentRefKind)
                 )
-                return BoundErrorExpression(syntax)
+                BoundErrorExpression(syntax)
+            } else {
+                conversions.BindCallArgumentWithRefKind(location, bound, parameterType, parameter, argumentIndex + 1)
             }
-            return conversions.BindCallArgumentWithRefKind(location, bound, parameterType, parameter, argumentIndex + 1)
-        }
-        if parameter.RefKind == RefKind.In {
+        } else if parameter.RefKind == RefKind.In {
             var bound BoundExpression
             if preBound != nil {
                 bound = preBound
@@ -413,13 +428,16 @@ internal partial class ExpressionBinder {
             } else {
                 bound = BindExpression(syntax)
             }
-            return conversions.BindCallArgumentWithRefKind(location, bound, parameterType, parameter, argumentIndex + 1)
-        }
-        return if preBound != nil {
+            conversions.BindCallArgumentWithRefKind(location, bound, parameterType, parameter, argumentIndex + 1)
+        } else if preBound != nil {
             conversions.BindConversion(location, preBound, parameterType, callParameter: parameter)
         } else {
             conversions.BindConversion(syntax, parameterType)
         }
+        if preBound == nil {
+            ApplySubExpressionNarrowingEffects(syntax, converted)
+        }
+        return converted
     }
 
     private func CaptureUserIndexerArgument(
@@ -585,14 +603,16 @@ internal partial class ExpressionBinder {
                 default(BoundErrorExpression?)
             }
         }
-        target = ViewIndexerReceiver(target, view, location)
-        let indexer = selected
+        let originalTarget = target
+        var finalView = view
+        target = ViewIndexerReceiver(originalTarget, finalView, location)
+        var indexer = selected
         if RefCapabilities.IsReadOnlyValueReference(target) {
             Diagnostics.ReportCannotAssign(location, "this[]")
             return BoundErrorExpression(nil)
         }
-        let setter FunctionSymbol? = indexer!!.SetterSymbol
-        let refGetter = if setter == nil &&
+        var setter FunctionSymbol? = indexer!!.SetterSymbol
+        var refGetter = if setter == nil &&
             target.Type is StructSymbol &&
             indexer!!.GetterSymbol is {ReturnRefKind: RefKind.Ref} getter {
             getter
@@ -604,14 +624,7 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportTypeNotIndexable(location, target.Type)
             return BoundErrorExpression(nil)
         }
-        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-        var receiver = target
-        if !(target is BoundVariableExpression) {
-            let receiverLocal = DeclareRangeTemp("receiver", target.Type, target, statements)
-            receiver = BoundVariableExpression(nil, receiverLocal)
-        }
-        let arguments = ImmutableArray.CreateBuilder[BoundExpression](indexer!!.Parameters.Length)
-        var hasNonReconstructableAddress = false
+        let rawConvertedArguments = ImmutableArray.CreateBuilder[BoundExpression](indexer!!.Parameters.Length)
         for var i = 0; i < indexer!!.Parameters.Length; i++ {
             let parameter = indexer!!.Parameters[i]
             let parameterType = SubstituteIndexerType(parameter.Type, substitution)
@@ -620,6 +633,123 @@ internal partial class ExpressionBinder {
             } else {
                 BindUserIndexerArgument(indexSyntaxes[i], preBound, nil, parameter, parameterType, i)
             }
+            rawConvertedArguments.Add(converted)
+        }
+        var elementType = SubstituteIndexerType(storedType, substitution)
+        var verifiedConvertedArguments = rawConvertedArguments.MoveToImmutable()
+        if !preBound.IsDefault && verifyCallArgumentsAfterConversions != nil {
+            let probeAccessor = setter ?? refGetter!!
+            let probeCall = BoundUserInstanceCallExpression(
+                nil,
+                target,
+                probeAccessor,
+                verifiedConvertedArguments,
+                elementType
+            )
+            var reselectedIndexer PropertySymbol? = nil
+            var reselectedSub Dictionary[TypeParameterSymbol, TypeSymbol]? = nil
+            var reselectedPreBound = default(ImmutableArray[BoundExpression])
+            var reselectedView TypeSymbol? = nil
+            let verifiedProbe = verifyCallArgumentsAfterConversions!!(
+                indexSyntaxes,
+                probeCall,
+                () -> {
+                    if TryResolveUserIndexer(
+                        originalTarget.Type,
+                        indexSyntaxes.Count,
+                        BindAll,
+                        location,
+                        out var reselected,
+                        out var resubstitution,
+                        out var repreBound,
+                        out _,
+                        out var review
+                    ) &&
+                        reselected != nil {
+                        let reSetter = reselected.SetterSymbol
+                        let reRefGetter = if reSetter == nil &&
+                            originalTarget.Type is StructSymbol &&
+                            reselected.GetterSymbol is {ReturnRefKind: RefKind.Ref} regetter {
+                            regetter
+                        } else {
+                            default(FunctionSymbol?)
+                        }
+                        let reStoredType = reRefGetter?.Type ?? reSetter?.Parameters[^1].Type
+                        if reStoredType == nil {
+                            Diagnostics.ReportTypeNotIndexable(location, originalTarget.Type)
+                            return cast[BoundExpression](BoundErrorExpression(nil))
+                        }
+                        reselectedIndexer = reselected
+                        reselectedSub = resubstitution
+                        reselectedPreBound = repreBound
+                        reselectedView = review
+                        let reElementType = SubstituteIndexerType(reStoredType, resubstitution)
+                        let rebuiltArgs = ImmutableArray.CreateBuilder[BoundExpression](reselected.Parameters.Length)
+                        for var k = 0; k < reselected.Parameters.Length; k++ {
+                            let param = reselected.Parameters[k]
+                            let paramType = SubstituteIndexerType(param.Type, resubstitution)
+                            rebuiltArgs.Add(
+                                if k >= indexSyntaxes.Count {
+                                    BindUserIndexerDefaultArgument(param, paramType)
+                                } else {
+                                    BindUserIndexerArgument(indexSyntaxes[k], repreBound, nil, param, paramType, k)
+                                }
+                            )
+                        }
+                        return cast[BoundExpression](
+                            BoundUserInstanceCallExpression(
+                                nil,
+                                ViewIndexerReceiver(originalTarget, review, location),
+                                reSetter ?? reRefGetter!!,
+                                rebuiltArgs.MoveToImmutable(),
+                                reElementType
+                            )
+                        )
+                    }
+                    return cast[BoundExpression](BoundErrorExpression(nil))
+                }
+            )
+            if verifiedProbe is BoundErrorExpression {
+                return verifiedProbe
+            }
+            if verifiedProbe is BoundUserInstanceCallExpression verifiedCall {
+                verifiedConvertedArguments = verifiedCall.Arguments
+                if reselectedIndexer is {} updatedIndexer {
+                    indexer = updatedIndexer
+                    substitution = reselectedSub
+                    preBound = reselectedPreBound
+                    finalView = reselectedView
+                    setter = updatedIndexer.SetterSymbol
+                    refGetter = if setter == nil &&
+                        originalTarget.Type is StructSymbol &&
+                        updatedIndexer.GetterSymbol is {ReturnRefKind: RefKind.Ref} updatedGetter {
+                        updatedGetter
+                    } else {
+                        default(FunctionSymbol?)
+                    }
+                    elementType = verifiedCall.Type
+                }
+            }
+            for var i = 0;
+                i < verifiedConvertedArguments.Length &&
+                i < indexSyntaxes.Count &&
+                i < preBound.Length;
+                i++ {
+                if !object.ReferenceEquals(verifiedConvertedArguments[i], preBound[i]) {
+                    ApplySubExpressionNarrowingEffects(indexSyntaxes[i], verifiedConvertedArguments[i])
+                }
+            }
+        }
+        target = ViewIndexerReceiver(originalTarget, finalView, location)
+        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+        var receiver = target
+        if !(target is BoundVariableExpression) {
+            let receiverLocal = DeclareRangeTemp("receiver", target.Type, target, statements)
+            receiver = BoundVariableExpression(nil, receiverLocal)
+        }
+        let arguments = ImmutableArray.CreateBuilder[BoundExpression](verifiedConvertedArguments.Length)
+        var hasNonReconstructableAddress = false
+        for converted in verifiedConvertedArguments {
             if hasNonReconstructableAddress && AsyncBoundTreeQueries.HasAwait(converted) {
                 Diagnostics.ReportManagedReference(
                     location,
@@ -631,7 +761,6 @@ internal partial class ExpressionBinder {
             arguments.Add(CaptureUserIndexerArgument(converted, statements))
         }
         let capturedArguments = arguments.MoveToImmutable()
-        let elementType = SubstituteIndexerType(storedType, substitution)
         if requiresRead && indexer!!.GetterSymbol == nil {
             bindValueForRecovery(elementType)
             Diagnostics.ReportTypeNotIndexable(location, target.Type)
@@ -658,21 +787,27 @@ internal partial class ExpressionBinder {
                 expression: "refGetter"
             )
             let refCall = BoundUserInstanceCallExpression(nil, receiver, refGetterCall, capturedArguments, elementType)
+            if indexSyntaxes.Count > 0 {
+                ApplySubExpressionNarrowingEffects(indexSyntaxes[0], refCall)
+            }
             let reference = BoundAddressOfExpression(nil, refCall, unmanaged: false)
             referenceTemp = DeclareRangeTemp("ref", reference.Type, reference, statements)
         }
         let ReadElement = func () BoundExpression {
-            return if referenceTemp != nil {
-                cast[BoundExpression](BoundDereferenceExpression(nil, BoundVariableExpression(nil, referenceTemp)))
-            } else {
-                BindUserIndexerRead(
-                    receiver,
-                    indexer!!,
-                    substitution,
-                    (i int32, _ TypeSymbol) -> capturedArguments[i],
-                    location
-                )
+            if referenceTemp != nil {
+                return BoundDereferenceExpression(nil, BoundVariableExpression(nil, referenceTemp))
             }
+            let read = BindUserIndexerRead(
+                receiver,
+                indexer!!,
+                substitution,
+                (i int32, _ TypeSymbol) -> capturedArguments[i],
+                location
+            )
+            if indexSyntaxes.Count > 0 {
+                ApplySubExpressionNarrowingEffects(indexSyntaxes[0], read)
+            }
+            return read
         }
         let previous BoundVariableExpression? = CaptureMultiIndexPreviousValue(
             returnsPreviousValue,
@@ -828,7 +963,7 @@ internal partial class ExpressionBinder {
                 default(BoundErrorExpression?)
             }
         }
-        let elementType = if target.Type is ImportedTypeSymbol importedTarget {
+        var elementType = if target.Type is ImportedTypeSymbol importedTarget {
             MapErasedIndexerElementType(importedTarget, indexer)
         } else {
             MemberLookup.GetClrPropertyTypeSymbol(target.Type, indexer)
@@ -836,8 +971,8 @@ internal partial class ExpressionBinder {
         // Review finding (#4350): only a writable `ref` return is written
         // through; a `ref readonly` indexer (`ReadOnlySlice<T>.this[int, bool]`)
         // is read-only exactly as on the single-index path.
-        let isRefIndexer = elementType is ByRefTypeSymbol && RefCapabilities.GetReturnRefKind(indexer) == RefKind.Ref
-        let visibleSetter MethodInfo? = ClrMemberVisibility.GetVisibleSetter(
+        var isRefIndexer = elementType is ByRefTypeSymbol && RefCapabilities.GetReturnRefKind(indexer) == RefKind.Ref
+        var visibleSetter MethodInfo? = ClrMemberVisibility.GetVisibleSetter(
             indexer,
             CanAccessInternalsOf(indexer.DeclaringType)
         )
@@ -851,7 +986,87 @@ internal partial class ExpressionBinder {
             let receiverLocal = DeclareRangeTemp("receiver", target.Type, target, statements)
             receiver = BoundVariableExpression(nil, receiverLocal)
         }
-        let converted = BindClrIndexerArguments(target.Type, indexer, resolvedArguments, location, indexSyntaxes)
+        var finalClrIndexer PropertyInfo = indexer
+        var converted = BindClrIndexerArguments(
+            target.Type,
+            finalClrIndexer,
+            resolvedArguments,
+            location,
+            indexSyntaxes
+        )
+        if verifyCallArgumentsAfterConversions != nil {
+            var reselectedClrIndexer PropertyInfo? = nil
+            var reselectedClrArgs = default(ImmutableArray[BoundExpression])
+            let verifiedClrProbe = verifyCallArgumentsAfterConversions!!(
+                indexSyntaxes,
+                BoundClrIndexExpression(nil, receiver, finalClrIndexer, converted, elementType),
+                () -> {
+                    let reboundArgs = ImmutableArray.CreateBuilder[BoundExpression](indexSyntaxes.Count)
+                    for indexSyntax in indexSyntaxes {
+                        reboundArgs.Add(BindIndexArgumentExpression(indexSyntax))
+                    }
+                    if memberLookup.TryResolveClrIndexer(
+                        target.Type,
+                        clrTarget,
+                        reboundArgs.MoveToImmutable(),
+                        out var reindexer,
+                        out var reresolvedArguments
+                    ) == ClrIndexerResolutionOutcome.Resolved &&
+                        reindexer != nil {
+                        reselectedClrIndexer = reindexer
+                        reselectedClrArgs = reresolvedArguments
+                        let reElementType = if target.Type is ImportedTypeSymbol reImportedTarget {
+                            MapErasedIndexerElementType(reImportedTarget, reindexer)
+                        } else {
+                            MemberLookup.GetClrPropertyTypeSymbol(target.Type, reindexer)
+                        }
+                        return cast[BoundExpression](
+                            BoundClrIndexExpression(
+                                nil,
+                                receiver,
+                                reindexer,
+                                BindClrIndexerArguments(
+                                    target.Type,
+                                    reindexer,
+                                    reresolvedArguments,
+                                    location,
+                                    indexSyntaxes
+                                ),
+                                reElementType
+                            )
+                        )
+                    }
+                    return cast[BoundExpression](BoundErrorExpression(nil))
+                }
+            )
+            if verifiedClrProbe is BoundErrorExpression {
+                return verifiedClrProbe
+            }
+            if verifiedClrProbe is BoundClrIndexExpression verifiedClrIndex {
+                converted = verifiedClrIndex.Arguments
+                if reselectedClrIndexer is {} updatedClrIndexer {
+                    finalClrIndexer = updatedClrIndexer
+                    resolvedArguments = reselectedClrArgs
+                    elementType = verifiedClrIndex.Type
+                    isRefIndexer = elementType is ByRefTypeSymbol && RefCapabilities.GetReturnRefKind(
+                        updatedClrIndexer
+                    ) == RefKind.Ref
+                    visibleSetter = ClrMemberVisibility.GetVisibleSetter(
+                        updatedClrIndexer,
+                        CanAccessInternalsOf(updatedClrIndexer.DeclaringType)
+                    )
+                    if !isRefIndexer && visibleSetter == nil {
+                        Diagnostics.ReportCannotAssign(location, "this[]")
+                        return BoundErrorExpression(nil)
+                    }
+                }
+            }
+        }
+        for var i = 0; i < converted.Length && i < indexSyntaxes.Count && i < resolvedArguments.Length; i++ {
+            if !object.ReferenceEquals(converted[i], resolvedArguments[i]) {
+                ApplySubExpressionNarrowingEffects(indexSyntaxes[i], converted[i])
+            }
+        }
         let arguments = ImmutableArray.CreateBuilder[BoundExpression](converted.Length)
         var hasNonReconstructableAddress = false
         for argument in converted {
@@ -867,7 +1082,10 @@ internal partial class ExpressionBinder {
         }
         let capturedArguments = arguments.MoveToImmutable()
         if isRefIndexer && elementType is ByRefTypeSymbol byRef {
-            let reference = BoundClrIndexExpression(nil, receiver, indexer, capturedArguments, elementType)
+            let reference = BoundClrIndexExpression(nil, receiver, finalClrIndexer, capturedArguments, elementType)
+            if indexSyntaxes.Count > 0 {
+                ApplySubExpressionNarrowingEffects(indexSyntaxes[0], reference)
+            }
             let referenceTemp = DeclareRangeTemp("ref", reference.Type, reference, statements)
             let ReadThroughReference = func () BoundExpression {
                 return BoundDereferenceExpression(nil, BoundVariableExpression(nil, referenceTemp))
@@ -903,7 +1121,11 @@ internal partial class ExpressionBinder {
             )
         }
         let ReadElement = func () BoundExpression {
-            return BoundClrIndexExpression(nil, receiver, indexer!!, capturedArguments, elementType)
+            let read = BoundClrIndexExpression(nil, receiver, finalClrIndexer, capturedArguments, elementType)
+            if indexSyntaxes.Count > 0 {
+                ApplySubExpressionNarrowingEffects(indexSyntaxes[0], read)
+            }
+            return read
         }
         let previous BoundVariableExpression? = CaptureMultiIndexPreviousValue(
             returnsPreviousValue,
@@ -933,7 +1155,7 @@ internal partial class ExpressionBinder {
                 BoundClrIndexAssignmentExpression.WithExpressionTarget(
                     nil,
                     receiver,
-                    indexer,
+                    finalClrIndexer,
                     capturedArguments,
                     valueRead,
                     elementType
