@@ -47,10 +47,20 @@ internal partial class StatementBinder {
     private var conditionKillJournal List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?
     private let branchyArgumentEntries Dictionary[
         SyntaxNode,
-        (Frames[](Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol]), Aliases HashSet[VariableSymbol])
+        (
+            EntryFrames[](Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol]),
+            EntryAliases HashSet[VariableSymbol],
+            ExitFrames[](Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol]),
+            ExitAliases HashSet[VariableSymbol]
+        )
     ] = Dictionary[
         SyntaxNode,
-        (Frames[](Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol]), Aliases HashSet[VariableSymbol])
+        (
+            EntryFrames[](Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol]),
+            EntryAliases HashSet[VariableSymbol],
+            ExitFrames[](Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol]),
+            ExitAliases HashSet[VariableSymbol]
+        )
     ]()
 
     internal func IsolateExternalCallableAliases() HashSet[VariableSymbol] {
@@ -2287,8 +2297,16 @@ internal partial class StatementBinder {
         bind() -> BoundExpression
     ) BoundExpression {
         if deferOnFailure {
-            branchyArgumentEntries[syntax] = (CaptureNarrowingFramesSnapshot(), CaptureExternalCallableAliases())
-            return bind()
+            let entryFrames = CaptureNarrowingFramesSnapshot()
+            let entryAliases = CaptureExternalCallableAliases()
+            let result = bind()
+            branchyArgumentEntries[syntax] = (
+                EntryFrames: entryFrames,
+                EntryAliases: entryAliases,
+                ExitFrames: CaptureNarrowingFramesSnapshot(),
+                ExitAliases: CaptureExternalCallableAliases()
+            )
+            return result
         }
         if !branchyArgumentEntries.TryGetValue(syntax, out var savedEntry) {
             return bind()
@@ -2296,8 +2314,8 @@ internal partial class StatementBinder {
         RemoveBranchyArgumentEntriesInSubtree(syntax)
         let postFrames = CaptureNarrowingFramesSnapshot()
         let postAliases = CaptureExternalCallableAliases()
-        RestoreNarrowingFramesSnapshot(savedEntry.Frames)
-        RestoreExternalCallableAliases(savedEntry.Aliases)
+        RestoreNarrowingFramesSnapshot(savedEntry.EntryFrames)
+        RestoreExternalCallableAliases(savedEntry.EntryAliases)
         let outerJournal = BeginThenBranchConditionKills()
         var result BoundExpression
         try {
@@ -2305,19 +2323,36 @@ internal partial class StatementBinder {
         } finally {
             let rebindKills = conditionKillJournal!!
             conditionKillJournal = outerJournal
-            let rebindRemovedAliases = HashSet[VariableSymbol](savedEntry.Aliases)
+            let rebindRemovedAliases = HashSet[VariableSymbol](savedEntry.ExitAliases)
             rebindRemovedAliases.ExceptWith(externalCallableAliases)
+            let rebindAddedAliases = HashSet[VariableSymbol](externalCallableAliases)
+            rebindAddedAliases.ExceptWith(savedEntry.ExitAliases)
             RestoreNarrowingFramesSnapshot(postFrames)
             for kill in rebindKills {
-                if IsOnNarrowingStack(kill.Frame) {
+                if IsOnNarrowingStack(kill.Frame) &&
+                    SavedFramesContainedFact(savedEntry.ExitFrames, kill.Frame, kill.Path) {
                     kill.Frame.Remove(kill.Path)
+                    outerJournal?.Add(kill)
                 }
             }
-            outerJournal?.AddRange(rebindKills)
             postAliases.ExceptWith(rebindRemovedAliases)
+            postAliases.UnionWith(rebindAddedAliases)
             RestoreExternalCallableAliases(postAliases)
         }
         return result
+    }
+
+    private func SavedFramesContainedFact(
+        saved[](Frame NarrowingFrame, Entries Dictionary[AccessPath, TypeSymbol]),
+        frame NarrowingFrame,
+        path AccessPath
+    ) bool {
+        for var i = 0; i < saved.Length; i++ {
+            if object.ReferenceEquals(saved[i].Frame, frame) {
+                return saved[i].Entries.ContainsKey(path)
+            }
+        }
+        return false
     }
 
     private func CaptureNarrowingFramesSnapshot()[](

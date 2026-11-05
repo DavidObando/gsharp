@@ -1204,12 +1204,13 @@ internal partial class ExpressionBinder {
                 return BoundErrorExpression(nil)
             }
         }
+        let mergedStorageType = MergeConditionalStorageType(trueStorageType, falseStorageType)
         return BoundConditionalAddressExpression(
             nil,
             condition,
             whenTrue,
             whenFalse,
-            Invariant.Required(trueStorageType, "a bound lvalue has a storage type", expression: "trueStorageType")
+            Invariant.Required(mergedStorageType, "a bound lvalue has a storage type", expression: "mergedStorageType")
         )
     }
 
@@ -1249,7 +1250,7 @@ internal partial class ExpressionBinder {
                 storageType = nil
                 return false
             }
-            storageType = nestedTrue
+            storageType = MergeConditionalStorageType(nestedTrue, nestedFalse)
             return true
         }
         storageType = AddressedLeafStorageType(current)

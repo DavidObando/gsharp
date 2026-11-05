@@ -794,6 +794,51 @@ func Run(flag bool, callback () -> string) int32 {
     return 0
 }
 Console.WriteLine(Run(true, () -> "hi"))`, "", "run", "2"}
+            yield[]object{"r10_conditional_in_argument_after_nil_guard_matches_non_null_storage", `import System
+
+func Read(in v string) string -> v
+func Run(flag bool, s string?, t string) string {
+    if s == nil { return "" }
+    return Read(in (flag ? s : t))
+}
+Console.WriteLine(Run(true, "ok", "alt"))`, "", "run", "ok"}
+            yield[]object{"r11_contextual_rebind_preserves_later_argument_callable_alias_write", `import System
+
+class C { var Value int32 = 7 }
+interface IAnimal { func Speak() int32; }
+open class Pet {}
+class Dog : Pet, IAnimal { func Speak() int32 -> 1 }
+class Cat : Pet, IAnimal { func Speak() int32 -> 2 }
+func Inner(a IAnimal, n int32) int32 -> a.Speak() + n
+func Outer(a int32, b int32) int32 -> a + b
+func Run(flag bool, callback () -> bool) int32 {
+    var x C? = C{}
+    let clear () -> bool = func() bool {
+        x = nil
+        return true
+    }
+    var action () -> bool = callback
+    return Outer(
+        Inner(
+            if flag {
+                action = clear
+                Dog()
+            } else {
+                action = clear
+                Cat()
+            },
+            if flag {
+                action = callback
+                1
+            } else {
+                action = callback
+                2
+            }
+        ),
+        if x != nil && action() { x.Value } else { 0 }
+    )
+}
+Console.WriteLine(Run(true, () -> true))`, "", "run", "9"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

@@ -2525,7 +2525,29 @@ internal partial class ExpressionBinder {
             left,
             right
         ) ||
-            string.Equals(left?.Name, right?.Name, StringComparison.Ordinal)
+            (left != nil && right != nil && ByRefStorageMatching.AreSameStorageType(left, right, out _, out _, out _))
+
+        internal func MergeConditionalStorageType(left TypeSymbol?, right TypeSymbol?) TypeSymbol? {
+            if left == nil {
+                return right
+            }
+            if right == nil {
+                return left
+            }
+            if left.ReferenceNullability == ReferenceNullabilityKind.Nullable {
+                return left
+            }
+            if right.ReferenceNullability == ReferenceNullabilityKind.Nullable {
+                return right
+            }
+            if left.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                return left
+            }
+            if right.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                return right
+            }
+            return left
+        }
 
         internal func TryGetAddressedStorageType(
             expression BoundExpression,
@@ -2542,7 +2564,7 @@ internal partial class ExpressionBinder {
                     storageType = nil
                     return false
                 }
-                storageType = nestedTrue
+                storageType = MergeConditionalStorageType(nestedTrue, nestedFalse)
                 return true
             }
             storageType = AddressedLeafStorageType(current)
@@ -2569,23 +2591,21 @@ internal partial class ExpressionBinder {
                     return if unboxesToValueType {
                         effectiveType
                     } else {
-                        declaredType
+                        ApplyEffectiveReferenceNullability(declaredType, effectiveType)
                     }
                 }
                 case fa is BoundFieldAccessExpression {
-                    return fa.SubstitutedType ?? fa.Field.Type
+                    return ApplyEffectiveReferenceNullability(fa.SubstitutedType ?? fa.Field.Type, fa.Type)
                 }
                 case BoundClrPropertyAccessExpression{Member: FieldInfo field} access {
-                    if access.Receiver != nil {
-                        return MemberLookup.GetClrFieldTypeSymbol(
-                            access.StaticContainerType ?? access.Receiver.Type,
-                            field
-                        )
+                    let declaredFieldType = if access.Receiver != nil {
+                        MemberLookup.GetClrFieldTypeSymbol(access.StaticContainerType ?? access.Receiver.Type, field)
+                    } else if access.StaticContainerType != nil {
+                        MemberLookup.GetClrFieldTypeSymbol(access.StaticContainerType, field)
+                    } else {
+                        ClrNullability.GetFieldTypeSymbol(field)
                     }
-                    if access.StaticContainerType != nil {
-                        return MemberLookup.GetClrFieldTypeSymbol(access.StaticContainerType, field)
-                    }
-                    return ClrNullability.GetFieldTypeSymbol(field)
+                    return ApplyEffectiveReferenceNullability(declaredFieldType, access.Type)
                 }
                 case addr is BoundConditionalAddressExpression {
                     return addr.PointeeType
@@ -2593,6 +2613,33 @@ internal partial class ExpressionBinder {
                 default {
                     return current.Type
                 }
+            }
+        }
+
+        private func ApplyEffectiveReferenceNullability(
+            declaredStorageType TypeSymbol,
+            effectiveType TypeSymbol?
+        ) TypeSymbol {
+            if effectiveType == nil ||
+                declaredStorageType.ReferenceNullability == ReferenceNullabilityKind.NotApplicable {
+                return declaredStorageType
+            }
+            let effectiveNullability = effectiveType.ReferenceNullability
+            if effectiveNullability == ReferenceNullabilityKind.NotApplicable ||
+                effectiveNullability == declaredStorageType.ReferenceNullability {
+                return declaredStorageType
+            }
+            var stripped = declaredStorageType
+            if stripped is PlatformTypeSymbol platform {
+                stripped = platform.UnderlyingType
+            } else if stripped is NullableTypeSymbol nullable &&
+                stripped.ReferenceNullability == ReferenceNullabilityKind.Nullable {
+                stripped = nullable.UnderlyingType
+            }
+            return switch effectiveNullability {
+                case ReferenceNullabilityKind.Nullable: NullableTypeSymbol.Get(stripped)
+                case ReferenceNullabilityKind.Platform: PlatformTypeSymbol.Get(stripped)
+                default: stripped
             }
         }
 
