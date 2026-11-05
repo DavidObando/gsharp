@@ -182,6 +182,57 @@ var y = true ? default : default
     }
 
     @Fact
+    func BareDefault_InLogicalAndOrAndEquality_Works() {
+        let (eval, vars) = EvaluateWithVariables(`
+func AndLeft(b bool) bool -> default && b
+func AndRight(b bool) bool -> b && default
+func OrLeft(b bool) bool -> default || b
+func OrRight(b bool) bool -> b || default
+func AndBoth() bool -> default && default
+func OrBoth() bool -> default || default
+var andLeftFalse = AndLeft(false)
+var andLeftTrue = AndLeft(true)
+var andRightTrue = AndRight(true)
+var orLeftTrue = OrLeft(true)
+var orRightFalse = OrRight(false)
+var andBoth = AndBoth()
+var orBoth = OrBoth()
+var eqZeroLeft = default == 0
+var eqZeroRight = 0 == default
+var neFiveLeft = default != 5
+var neFiveRight = 5 != default
+`)
+        Assert.Empty(eval.Diagnostics)
+        Assert.Equal(false, vars["andLeftFalse"])
+        Assert.Equal(false, vars["andLeftTrue"])
+        Assert.Equal(false, vars["andRightTrue"])
+        Assert.Equal(true, vars["orLeftTrue"])
+        Assert.Equal(false, vars["orRightFalse"])
+        Assert.Equal(false, vars["andBoth"])
+        Assert.Equal(false, vars["orBoth"])
+        Assert.Equal(true, vars["eqZeroLeft"])
+        Assert.Equal(true, vars["eqZeroRight"])
+        Assert.Equal(true, vars["neFiveLeft"])
+        Assert.Equal(true, vars["neFiveRight"])
+    }
+
+    @Theory
+    @InlineData("var x = default + 1")
+    @InlineData("var x = 1 + default")
+    @InlineData("var x = default + default")
+    @InlineData("var x = default == default")
+    @InlineData("var x = default == nil")
+    @InlineData("var x = !default")
+    @InlineData("var x = -default")
+    func BareDefault_InUntypedOperatorOperands_ReportsGS0362(source string) {
+        let compilation = CompileSnippet(source + "\n")
+        let result = compilation.Emit()
+        Assert.False(result.Success)
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0362")
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9998")
+    }
+
+    @Fact
     func DefaultOfInt32_StaticType_IsInt32() {
         let tree = SyntaxTree.Parse(SourceText.From("var x = default(int32)\n"))
         let compilation = Compilation(tree)

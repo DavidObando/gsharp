@@ -91,6 +91,7 @@ open class Issue5037SuspendingForInDisposalTests {
                 ("nested-dispose", "Y11,P,Dinner,Douter,Xdispose"),
                 ("nested-exhaust-dispose", "Y11,Y12,Dinner,Douter,Xdispose"),
                 ("continue-break", "Y1,Y2,Douter"),
+                ("stop", "Y1,Douter"),
                 ("async-normal", "P0,Douter,R3"),
                 ("async-throw", "P0,Douter,Xbody"),
                 ("async-iterator-normal", "P0,Y1,Y2,Douter"),
@@ -161,6 +162,20 @@ shared class Forwarder {
             }
             break
         }
+    }
+
+    func Stop(values IEnumerable[int32]) sequence[int32] {
+        for value in values {
+            yield value
+            return
+        }
+    }
+
+    func EmptyYieldBreak(stop bool) sequence[int32] {
+        if stop {
+            return
+        }
+        yield break
     }
 
     async func AwaitBody(values IEnumerable[int32], gate Task, fail bool) Task[int32] {
@@ -242,6 +257,14 @@ public static class DisposalContract
             break;
         }
     }
+    public static IEnumerable<int> Stop(IEnumerable<int> values)
+    {
+        foreach (int value in values)
+        {
+            yield return value;
+            yield break;
+        }
+    }
     public static async Task<int> AwaitBody(IEnumerable<int> values, Task gate, bool fail)
     {
         int sum = 0;
@@ -285,6 +308,7 @@ public static class DisposalContract
         if (scenario == "body-before") method = "BodyBefore";
         if (scenario == "body-after") method = "BodyAfter";
         if (scenario == "continue-break") method = "ContinueBreak";
+        if (scenario == "stop") method = "Stop";
         if (scenario == "nested-acquire") inner.ThrowAcquire = true;
         if (scenario.Contains("dispose")) inner.ThrowDispose = true;
         try
