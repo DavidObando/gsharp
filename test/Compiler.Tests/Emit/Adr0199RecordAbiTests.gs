@@ -4,6 +4,8 @@
 
 package GSharp.Compiler.Tests.Emit
 
+import GSharp.Compiler
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Tests
 import System
 import System.Globalization
@@ -630,6 +632,504 @@ data class Item(Id int32) {
         let (exitCode, output) = Adr0199RecordAbiWitness.TryCompileGSharp(source)
         Assert.NotEqual(0, exitCode)
         Assert.Contains("GS0623", output, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func InheritedPositionalProperty_NestedReversedOrder_AndPrivateGetterControls() {
+        const source = `package W
+
+data class Token(Kind int32)
+
+class Outer {
+    data class DerivedBeforeBase(Name string, Value int32) : BaseAfterDerived(Name)
+    data class QualifiedDerivedBeforeBase(Name string, Value int32) : Bases.NestedBase(Name)
+    data class PackageQualifiedDerived(Name string, Value int32) : W.Outer.BaseAfterDerived(Name)
+    unsafe data class GenericDerivedBeforeNonGenericBase[Token](Name string, Payload Token) : NonGenericBaseWithToken(Name)
+    open data class NonGenericBaseWithToken(Name string) {
+        var Tag Token = Token(7)
+    }
+    class Holder {
+        class BaseAfterDerived
+        data class HolderDerived(Name string, Value int32) : Outer.BaseAfterDerived(Name)
+    }
+    class Left {
+        data class D(Name string, Value int32) : Outer.Right.B(Name)
+        open data class A(Name string)
+    }
+    class Right {
+        data class E(Name string, Value int32) : Outer.Left.A(Name)
+        open data class B(Name string)
+    }
+    data class Message[T](Name string, Data T) : Message(Name)
+    open data class Message(Name string)
+    data class EscapedDerived(Name string, Value int32) : $event(Name)
+    open data class $event(Name string)
+    open data class BaseAfterDerived(Name string)
+    class Bases {
+        open data class NestedBase(Name string)
+    }
+
+    shared {
+        func EnclosingUnpack(item DerivedFromProtectedGetter) string {
+            let (v, e) = item
+            return "${v}:${e}"
+        }
+    }
+}
+
+open class BaseWithPrivateGetter {
+    prop Hidden int32 { private get; set; }
+}
+
+data class DerivedFromPrivateGetter(Hidden int32, Extra int32) : BaseWithPrivateGetter()
+
+open class BaseWithProtectedGetter {
+    protected prop Value int32 { get; set; }
+    init(v int32) {
+        Value = v
+    }
+}
+
+data class DerivedFromProtectedGetter(Value int32, Extra int32) : BaseWithProtectedGetter(Value) {
+    init(seed DerivedFromProtectedGetter) : base(0) {
+        let (sv, se) = seed
+        Value = sv + 1
+        Extra = se + 1
+    }
+}
+
+open data class TupleBase(Pair (X int32, Y int32))
+data class TupleDerived(Pair (Left int32, Right int32), Extra int32) : TupleBase(Pair)
+
+interface IValueCarrier {
+    prop Value int32 { get; }
+}
+
+data class DerivedWithExplicitInterface(Value int32, Extra int32) : BaseWithProtectedGetter(Value), IValueCarrier {
+    prop (IValueCarrier) Value int32 -> Value
+}
+
+open data class HiddenBase(Value int32)
+open class HiddenMiddle : HiddenBase(31) {
+    var Value string = "middle"
+}
+data class DerivedBehindField(Value int32, Extra int32) : HiddenMiddle()
+
+open data class FixedArrBase(Items [2]int32)
+data class FixedArrDerived(Items [3]int32, Extra int32) : FixedArrBase([2]int32{1, 2})
+
+open class ExplicitOnlyBase : IValueCarrier {
+    prop (IValueCarrier) Value int32 -> 99
+}
+data class DerivedOverExplicitOnly(Value int32) : ExplicitOnlyBase()
+
+open class ExplicitMiddle : HiddenBase(41), IValueCarrier {
+    init(v int32) : super(v) {}
+    prop (IValueCarrier) Value int32 -> 99
+}
+data class DerivedOverExplicitMiddle(Value int32, Extra int32) : ExplicitMiddle(Value)
+
+open data class GenBase[T](Value T)
+open data class GenMiddle(Value int32) : GenBase[int32](Value)
+data class GenLeaf(Extra int32) : GenMiddle(0)
+
+class SiblingConstructingDerived : BaseWithProtectedGetter {
+    init() : super(0) {}
+    func Make() DerivedFromProtectedGetter -> DerivedFromProtectedGetter{Value: 42, Extra: 8}
+}
+
+func Run() string {
+    let d = Outer.DerivedBeforeBase("ok", 7)
+    let (n, v) = d
+    let q = Outer.QualifiedDerivedBeforeBase("qual", 8)
+    let (qn, qv) = q
+    let msg = Outer.Message[int32]("msg", 99)
+    let (mn, md) = msg
+    let esc = Outer.EscapedDerived("ev", 3)
+    let (en, ev) = esc
+    let p = DerivedFromPrivateGetter(99, 5)
+    let (h, e) = p
+    let prot = DerivedFromProtectedGetter{Value: 15, Extra: 25}
+    let protNext = DerivedFromProtectedGetter(prot)
+    let (pv, pe) = protNext
+    let unpacked = Outer.EnclosingUnpack(prot)
+    let td = TupleDerived((3, 4), 10)
+    let (pair, te) = td
+    let gd = Outer.GenericDerivedBeforeNonGenericBase[string]("tok", "payload")
+    let explicitCarrier IValueCarrier = DerivedWithExplicitInterface(51, 52)
+    let behind = DerivedBehindField(61, 62)
+    let (bv, be) = behind
+    let fa = FixedArrDerived([3]int32{10, 20, 30}, 5)
+    let (faItems, faExtra) = fa
+    let eo = DerivedOverExplicitOnly(77)
+    let (eov) = eo
+    let em = DerivedOverExplicitMiddle(88, 89)
+    let (emv, eme) = em
+    let gl = GenLeaf{Extra: 1, Value: 2}
+    let sibConstructed = SiblingConstructingDerived().Make()
+    let sibUnpacked = Outer.EnclosingUnpack(sibConstructed)
+    return "${d}|${n}:${v}|${q}|${qn}:${qv}|${msg}|${mn}:${md}|${esc}|${en}:${ev}|${p}|${h}:${e}|${unpacked}|${pv}:${pe}|${pair.Left}:${pair.Right}:${te}|${gd.Name}:${gd.Payload}:${gd.Tag.Kind}|${explicitCarrier.Value}|${behind.Value}:${bv}:${be}|${faItems[0]}:${faItems[2]}:${faExtra}|${eo.Value}:${eov}|${em.Value}:${emv}:${eme}|${gl.Value}:${gl.Extra}|${sibUnpacked}"
+}`
+        let assembly = Adr0199RecordAbiWitness.CompileGSharp(source)
+        let declared = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
+        let nestedDerived = assembly.GetType("W.Outer+DerivedBeforeBase", throwOnError: true)!!
+        Assert.DoesNotContain(nestedDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let genericBeforeNonGeneric = assembly.GetType(
+            "W.Outer+GenericDerivedBeforeNonGenericBase`1",
+            throwOnError: true
+        )!!
+        Assert.DoesNotContain(genericBeforeNonGeneric.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let nonGenericBase = assembly.GetType("W.Outer+NonGenericBaseWithToken", throwOnError: true)!!
+        Assert.Equal("W.Token", nonGenericBase.GetField("Tag")!!.FieldType.FullName)
+        let behindFieldType = assembly.GetType("W.DerivedBehindField", throwOnError: true)!!
+        Assert.Contains(behindFieldType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
+        let fixedArrDerivedType = assembly.GetType("W.FixedArrDerived", throwOnError: true)!!
+        Assert.Contains(fixedArrDerivedType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Items")
+        let explicitOnlyDerivedType = assembly.GetType("W.DerivedOverExplicitOnly", throwOnError: true)!!
+        Assert.Contains(explicitOnlyDerivedType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
+        let explicitMiddleDerivedType = assembly.GetType("W.DerivedOverExplicitMiddle", throwOnError: true)!!
+        Assert.DoesNotContain(explicitMiddleDerivedType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
+        const safeBaseLeakCheck = `package W
+class Outer {
+    unsafe data class UnsafeDerived(Name string) : SafeBase(Name)
+    open data class SafeBase(Name string) {
+        func BadPtr(x *int32) int32 -> 0
+    }
+}`
+        let (safeExit, safeOut) = Adr0199RecordAbiWitness.TryCompileGSharp(safeBaseLeakCheck)
+        Assert.NotEqual(0, safeExit)
+        Assert.Contains("GS0243", safeOut, StringComparison.Ordinal)
+        const missingProtectedInterfaceCheck = `package W
+interface I { prop Value int32 { get; } }
+open class B {
+    protected prop Value int32 { get; set; }
+    init(v int32) { Value = v }
+}
+data class D(Value int32) : B(Value), I`
+        let (ifaceExit, ifaceOut) = Adr0199RecordAbiWitness.TryCompileGSharp(missingProtectedInterfaceCheck)
+        Assert.NotEqual(0, ifaceExit)
+        Assert.Contains("GS0187", ifaceOut, StringComparison.Ordinal)
+        const nullableBaseToNonNullDerivedCheck = `package W
+open data class B(Name string?)
+data class D(Name string, Value int32) : B(nil)`
+        let (nullExit, nullOut) = Adr0199RecordAbiWitness.TryCompileGSharp(nullableBaseToNonNullDerivedCheck)
+        Assert.NotEqual(0, nullExit)
+        Assert.Contains("GS0155", nullOut, StringComparison.Ordinal)
+        const nestedNullableBaseCheck = `package W
+import System.Collections.Generic
+open data class B(Items List[string?])
+data class D(Items List[string], Value int32) : B(Items)`
+        let (nestedNullExit, nestedNullOut) = Adr0199RecordAbiWitness.TryCompileGSharp(nestedNullableBaseCheck)
+        Assert.NotEqual(0, nestedNullExit)
+        Assert.Contains("GS0155", nestedNullOut, StringComparison.Ordinal)
+        const nestedTupleInContainerCheck = `package W
+import System.Collections.Generic
+open data class B(Items List[(Name string, Id int32)])
+data class D(Items List[(Name string?, Id int32)], Value int32) : B(Items)`
+        let (nestedTupleExit, nestedTupleOut) = Adr0199RecordAbiWitness.TryCompileGSharp(nestedTupleInContainerCheck)
+        Assert.NotEqual(0, nestedTupleExit)
+        Assert.Contains("GS0155", nestedTupleOut, StringComparison.Ordinal)
+        let qualifiedDerived = assembly.GetType("W.Outer+QualifiedDerivedBeforeBase", throwOnError: true)!!
+        Assert.DoesNotContain(qualifiedDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let packageQualifiedDerived = assembly.GetType("W.Outer+PackageQualifiedDerived", throwOnError: true)!!
+        Assert.DoesNotContain(packageQualifiedDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let holderDerived = assembly.GetType("W.Outer+Holder+HolderDerived", throwOnError: true)!!
+        Assert.DoesNotContain(holderDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let leftDerived = assembly.GetType("W.Outer+Left+D", throwOnError: true)!!
+        Assert.DoesNotContain(leftDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let rightDerived = assembly.GetType("W.Outer+Right+E", throwOnError: true)!!
+        Assert.DoesNotContain(rightDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let genericMessageDerived = assembly.GetType("W.Outer+Message`1", throwOnError: true)!!
+        Assert.DoesNotContain(genericMessageDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let escapedDerived = assembly.GetType("W.Outer+EscapedDerived", throwOnError: true)!!
+        Assert.DoesNotContain(escapedDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+        let privateGetterDerived = assembly.GetType("W.DerivedFromPrivateGetter", throwOnError: true)!!
+        Assert.Contains(privateGetterDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Hidden")
+        let protectedGetterDerived = assembly.GetType("W.DerivedFromProtectedGetter", throwOnError: true)!!
+        Assert.DoesNotContain(protectedGetterDerived.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
+        Assert.Equal(
+            "DerivedBeforeBase { Name = ok, Value = 7 }|ok:7|QualifiedDerivedBeforeBase { Name = qual, Value = 8 }|qual:8|Message { Name = msg, Data = 99 }|msg:99|EscapedDerived { Name = ev, Value = 3 }|ev:3|DerivedFromPrivateGetter { Hidden = 99, Extra = 5 }|99:5|15:25|16:26|3:4:10|tok:payload:7|51|61:61:62|10:30:5|77:77|88:88:89|2:1|42:8",
+            Adr0199RecordAbiWitness.Invoke(assembly, "Run")
+        )
+    }
+
+    @Fact
+    func ExplicitPositionalReplacement_OnDerivedDataClass_StillValidatesTypeCompatibility() {
+        const invalidReplacement = `package W
+
+open data class Base(Value int32)
+data class Child(Value int32) : Base(Value) {
+    prop Value string { get; init; }
+}`
+        let (exitCode, output) = Adr0199RecordAbiWitness.TryCompileGSharp(invalidReplacement)
+        Assert.NotEqual(0, exitCode)
+        Assert.Contains("GS0155", output, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ImportedClrBasePositionalProperty_ChecksTypeAndVisibility_AndSupportsLiterals() {
+        const csharpLib = `namespace ExtLib;
+public record ClrBase
+{
+    private int _refVal;
+    public ClrBase() { }
+    public ClrBase(int value) { Value = value; _refVal = value; }
+    public int Value { get; init; }
+    public ref int RefVal => ref _refVal;
+    public int IntProp => 10;
+    internal int InternalProp => 20;
+    private protected int PrivateProtectedProp => 30;
+}
+public record ClrGenericBase<T>(T Value);
+public record ClrProtGetBase
+{
+    public ClrProtGetBase(int value) { Value = value; }
+    public int Value { protected get; init; }
+}
+public record ClrProtSetBase
+{
+    public ClrProtSetBase(int value) { Value = value; }
+    public int Value { get; protected set; }
+}
+public record ClrMiddleWithField : ClrBase
+{
+    public new string Value = "clr-middle";
+    public ClrMiddleWithField() : base(31) { }
+}
+#nullable disable
+public record ClrObliviousBase(string Name);
+#nullable restore`
+        let tempDir = Directory.CreateTempSubdirectory("gs_adr0199_clrbase_").FullName
+        try {
+            let extPath = Path.Combine(tempDir, "ExtLib.dll")
+            let references = ReferenceResolver.HostTrustedPlatformAssemblyPaths().Select(
+                (path string) -> Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(path)
+            )
+            let csharpCompilation = Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpCompilation
+                .Create(
+                "ExtLib",
+                []Microsoft
+                    .CodeAnalysis
+                    .SyntaxTree{Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(csharpLib)},
+                references,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary)
+            )
+            using let extStream = MemoryStream()
+            Assert.True(csharpCompilation.Emit(extStream).Success)
+            let extBytes = extStream.ToArray()
+            File.WriteAllBytes(extPath, extBytes)
+            const friendCSharpLib = `[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("test")]
+namespace FriendLib;
+public record FriendPrivProtSetBase
+{
+    public FriendPrivProtSetBase(int value) { Value = value; }
+    public int Value { get; private protected set; }
+}
+public record FriendProtInternalSetBase
+{
+    public FriendProtInternalSetBase(int value) { Value = value; }
+    public int Value { get; protected internal set; }
+}`
+            let friendPath = Path.Combine(tempDir, "FriendLib.dll")
+            let friendCompilation = Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpCompilation
+                .Create(
+                "FriendLib",
+                []Microsoft
+                    .CodeAnalysis
+                    .SyntaxTree{Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(friendCSharpLib)},
+                references,
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary)
+            )
+            using let friendStream = MemoryStream()
+            Assert.True(friendCompilation.Emit(friendStream).Success)
+            let friendBytes = friendStream.ToArray()
+            File.WriteAllBytes(friendPath, friendBytes)
+            let gsSource = `package W
+import ExtLib
+import FriendLib
+
+data class ReusesValue(Value int32, Extra int32) : ClrBase(Value) {
+    init() : base(11) {
+        Extra = 22
+    }
+}
+data class ReusesRefVal(RefVal int32, Extra int32) : ClrBase(RefVal)
+data class GenericReusesValue[T](Value T) : ClrGenericBase[T](Value)
+data class ReusesProtGet(Value int32, Extra int32) : ClrProtGetBase(Value)
+data class ReusesProtSet(Value int32, Extra int32) : ClrProtSetBase(Value) {
+    func WithUpdated(v int32) ReusesProtSet -> this.copy(Value: v)
+}
+open data class ProtSetMiddle : ClrProtSetBase {
+    init() : base(0) {}
+    init(v int32) : base(v) {}
+    func UpdateChild(d ReusesProtSetViaMiddle, v int32) ReusesProtSetViaMiddle -> d.copy(Value: v)
+}
+data class ReusesProtSetViaMiddle(Value int32, Extra int32) : ProtSetMiddle(Value)
+data class ReusesPrivProtSet(Value int32, Extra int32) : FriendPrivProtSetBase(Value) {
+    func WithUpdated(v int32) ReusesPrivProtSet -> this.copy(Value: v)
+}
+data class ReusesProtInternalSet(Value int32, Extra int32) : FriendProtInternalSetBase(Value)
+interface IClrValue {
+    prop Value int32 { get; }
+}
+data class ReusesValueWithExplicit(Value int32, Extra int32) : ClrBase(Value), IClrValue {
+    prop (IClrValue) Value int32 -> Value + 100
+    func SpreadSelf() SpreadTarget -> SpreadTarget{...this}
+}
+data class ReusesObliviousAsNullable(Name string?, Extra int32) : ClrObliviousBase(Name)
+data class BehindClrField(Value int32, Extra int32) : ClrMiddleWithField()
+data class DifferentType(IntProp string, Extra int32) : ClrBase()
+data class InaccessibleGetters(InternalProp int32, PrivateProtectedProp int32) : ClrBase()
+class SpreadTarget {
+    var Value int32
+    var Extra int32
+}
+class SpreadRefTarget {
+    var RefVal int32
+    var Extra int32
+}
+
+func Run() string {
+    let a = ReusesValue{}
+    let b = ReusesValue{Value: 42, Extra: 7}
+    let (bv, be) = b
+    let spread = SpreadTarget{...b}
+    let refSource = ReusesRefVal(55, 66)
+    let spreadRef = SpreadRefTarget{...refSource}
+    let refMatched = (refSource is { RefVal: 55, Extra: 66 }) && !(refSource is { RefVal: 0 })
+    let pg = ReusesProtGet(12, 34)
+    let (pgv, pge) = pg
+    let ps = ReusesProtSet(70, 80).WithUpdated(90)
+    let psm = ProtSetMiddle(0).UpdateChild(ReusesProtSetViaMiddle(10, 20), 30)
+    let pps = ReusesPrivProtSet(50, 60).WithUpdated(95)
+    let pis = ReusesProtInternalSet(40, 50).copy(Value: 45)
+    let exprTree System.Linq.Expressions.Expression[System.Func[ReusesValue, int32]] = (rv ReusesValue) -> rv.Value
+    let exprVal = exprTree.Compile().Invoke(b)
+    let rve = ReusesValueWithExplicit{Value: 2, Extra: 3}.copy(Value: 4)
+    let rveIface IClrValue = rve
+    let rveMatched = (rve is { Value: 4, Extra: 3 }) && !(rve is { Value: 104 })
+    let rveSpreadExt = SpreadTarget{...rve}
+    let rveSpreadSelf = rve.SpreadSelf()
+    let obNull = ReusesObliviousAsNullable(nil, 7)
+    let (obn, obe) = obNull
+    let bf = BehindClrField(81, 82)
+    let (bfv, bfe) = bf
+    let ctorDefault = ReusesValue()
+    let gen = GenericReusesValue{Value: 77}
+    let c = DifferentType("hello", 9)
+    let (ci, ce) = c
+    let d = InaccessibleGetters(1, 2)
+    let (di, dp) = d
+    return "${a.Value}:${a.Extra}|${bv}:${be}|${spread.Value}:${spread.Extra}|${spreadRef.RefVal}:${spreadRef.Extra}:${refMatched}|${pgv}:${pge}|${ps.Value}:${ps.Extra}|${psm.Value}:${psm.Extra}|${pps.Value}:${pps.Extra}|${pis.Value}:${pis.Extra}:${exprVal}|${rve.Value}:${rve.Extra}:${rveIface.Value}:${rveMatched}:${rveSpreadExt.Value}:${rveSpreadSelf.Value}|${obn ?? "nil"}:${obe}|${bf.Value}:${bfv}:${bfe}|${ctorDefault.Value}:${ctorDefault.Extra}|${gen.Value}|${ci}:${ce}|${di}:${dp}"
+}`
+            let srcPath = Path.Combine(tempDir, "test.gs")
+            let outPath = Path.Combine(tempDir, "test.dll")
+            File.WriteAllText(srcPath, gsSource)
+            let exit = Program.Main(
+                []string{
+                    "/out:" + outPath,
+                    "/assemblyname:test",
+                    "/target:library",
+                    "/targetframework:net10.0",
+                    "/reference:" + extPath,
+                    "/reference:" + friendPath,
+                    srcPath
+                }
+            )
+            Assert.Equal(0, exit)
+            IlVerifier.Verify(outPath, []string{extPath, friendPath})
+            let badFriendSrcPath = Path.Combine(tempDir, "bad_friend.gs")
+            let badFriendOutPath = Path.Combine(tempDir, "bad_dir", "test.dll")
+            Directory.CreateDirectory(Path.GetDirectoryName(badFriendOutPath)!!)
+            File.WriteAllText(badFriendSrcPath, `package W
+import FriendLib
+data class ReusesPrivProtSet(Value int32, Extra int32) : FriendPrivProtSetBase(Value)
+func Bad() ReusesPrivProtSet -> ReusesPrivProtSet(1, 2).copy(Value: 3)`)
+            let badFriendExit = Program.Main(
+                []string{
+                    "/out:" + badFriendOutPath,
+                    "/assemblyname:test",
+                    "/target:library",
+                    "/targetframework:net10.0",
+                    "/reference:" + friendPath,
+                    badFriendSrcPath
+                }
+            )
+            Assert.NotEqual(0, badFriendExit)
+            let badReceiverSrcPath = Path.Combine(tempDir, "bad_receiver.gs")
+            let badReceiverOutPath = Path.Combine(tempDir, "bad_receiver.dll")
+            File.WriteAllText(badReceiverSrcPath, `package W
+import ExtLib
+open data class ProtSetMiddle : ClrProtSetBase {
+    init() : base(0) {}
+    init(v int32) : base(v) {}
+}
+data class ReusesProtSetViaMiddle(Value int32, Extra int32) : ProtSetMiddle(Value)
+class ProtSetSibling : ClrProtSetBase {
+    init(v int32) : base(v) {}
+    func Bad(d ReusesProtSetViaMiddle) ReusesProtSetViaMiddle -> d.copy(Value: 2)
+}`)
+            let badReceiverExit = Program.Main(
+                []string{
+                    "/out:" + badReceiverOutPath,
+                    "/target:library",
+                    "/targetframework:net10.0",
+                    "/reference:" + extPath,
+                    badReceiverSrcPath
+                }
+            )
+            Assert.NotEqual(0, badReceiverExit)
+            let outBytes = File.ReadAllBytes(outPath)
+            let declared = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
+            let alc = System
+                .Runtime
+                .Loader
+                .AssemblyLoadContext("Issue4874ClrBase_" + Guid.NewGuid().ToString("N"), isCollectible: true)
+            try {
+                using let extLoadStream = MemoryStream(extBytes)
+                alc.LoadFromStream(extLoadStream)
+                using let friendLoadStream = MemoryStream(friendBytes)
+                alc.LoadFromStream(friendLoadStream)
+                using let outLoadStream = MemoryStream(outBytes)
+                let asm = alc.LoadFromStream(outLoadStream)
+                let reusesType = asm.GetType("W.ReusesValue", throwOnError: true)!!
+                Assert.DoesNotContain(reusesType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
+                let protGetType = asm.GetType("W.ReusesProtGet", throwOnError: true)!!
+                Assert.DoesNotContain(protGetType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
+                let protSetType = asm.GetType("W.ReusesProtSet", throwOnError: true)!!
+                Assert.DoesNotContain(protSetType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
+                let obNullType = asm.GetType("W.ReusesObliviousAsNullable", throwOnError: true)!!
+                Assert.DoesNotContain(obNullType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Name")
+                let behindClrFieldType = asm.GetType("W.BehindClrField", throwOnError: true)!!
+                Assert.Contains(behindClrFieldType.GetProperties(declared), (p PropertyInfo) -> p.Name == "Value")
+                let diffType = asm.GetType("W.DifferentType", throwOnError: true)!!
+                Assert.Contains(diffType.GetProperties(declared), (p PropertyInfo) -> p.Name == "IntProp")
+                let inaccType = asm.GetType("W.InaccessibleGetters", throwOnError: true)!!
+                Assert.Contains(inaccType.GetProperties(declared), (p PropertyInfo) -> p.Name == "InternalProp")
+                Assert.Contains(inaccType.GetProperties(declared), (p PropertyInfo) -> p.Name == "PrivateProtectedProp")
+                let result = asm.GetType("W.<Program>", throwOnError: true)!!.GetMethod("Run")!!.Invoke(nil, nil)
+                Assert.Equal(
+                    "0:0|42:7|42:7|55:66:True|12:34|90:80|30:20|95:60|45:50:42|4:3:104:True:4:4|nil:7|81:81:82|11:22|77|hello:9|1:2",
+                    result
+                )
+            } finally {
+                alc.Unload()
+            }
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
     }
 
     shared {

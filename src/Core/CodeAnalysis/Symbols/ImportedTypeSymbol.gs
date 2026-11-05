@@ -628,7 +628,48 @@ class ImportedTypeSymbol : TypeSymbol {
                 baseClass: nil,
                 clrType: type
             )
-            aggregate.SetProperties(propertyBuilder.ToImmutable())
+            let builtProperties = propertyBuilder.ToImmutable()
+            aggregate.SetProperties(builtProperties)
+            if !semantics!!.IsValueType && semantics!!.IsData && !primaryConstructorParameters.IsDefaultOrEmpty {
+                let inheritedPositionalBuilder = ImmutableArray.CreateBuilder[PropertySymbol]()
+                for var i = 0; i < primaryConstructorParameters.Length; i++ {
+                    let parameter = primaryConstructorParameters[i]
+                    if builtProperties.Any((p PropertySymbol) -> p.Name == parameter.Name && p.HasGetter) {
+                        continue
+                    }
+                    if ImportedAssemblySemantics.GetPrimaryConstructorSignatureMember(
+                        type,
+                        i
+                    ) is PropertyInfo inheritedProp {
+                        let getter = inheritedProp.GetGetMethod(nonPublic: true)
+                        let setter = inheritedProp.GetSetMethod(nonPublic: true)
+                        let synthesized = PropertySymbol(
+                            parameter.Name,
+                            parameter.Type,
+                            Accessibility.Protected,
+                            hasGetter: getter != nil,
+                            hasSetter: setter != nil && IsVisible(setter, includeInternal),
+                            isAutoProperty: false,
+                            isVirtual: (getter ?? setter)?.IsVirtual == true,
+                            isOverride: (getter ?? setter) is {} accessor && ClrTypeUtilities.SafeIsOverride(accessor),
+                            isStatic: false,
+                            isInitOnly: setter != nil && IsInitOnlySetter(setter),
+                            getterAccessibility: Accessibility.Protected,
+                            setterAccessibility: if setter != nil && IsVisible(setter, includeInternal) {
+                                Accessibility.Public
+                            } else {
+                                Accessibility.Protected
+                            },
+                            metadataIsAbstract: (getter ?? setter)?.IsAbstract == true
+                        ){ReturnRefKind = RefCapabilities.GetReturnRefKind(inheritedProp)}
+                        synthesized.ImportedMember = inheritedProp
+                        inheritedPositionalBuilder.Add(synthesized)
+                    }
+                }
+                if inheritedPositionalBuilder.Count > 0 {
+                    aggregate.SetInheritedPositionalProperties(inheritedPositionalBuilder.ToImmutable())
+                }
+            }
             aggregate.SetMethods(BuildMethods(type, aggregate, includeInternal))
             aggregate.SetStaticMethods(BuildStaticMethods(type, aggregate, includeInternal))
             let instanceInitBuilder = ImmutableDictionary.CreateBuilder[FieldSymbol, BoundExpression]()
@@ -736,6 +777,16 @@ class ImportedTypeSymbol : TypeSymbol {
                         parameter = ParameterSymbol(name, ClrNullability.GetFieldTypeSymbol(field))
                     } else if member is PropertyInfo property {
                         parameter = ParameterSymbol(name, ClrNullability.GetPropertyTypeSymbol(property))
+                    } else if ImportedAssemblySemantics.GetPrimaryConstructorSignatureParameter(
+                        type,
+                        i
+                    ) is {} inheritedParam {
+                        parameter = ParameterSymbol(name, ClrNullability.GetParameterTypeSymbol(inheritedParam))
+                    } else if ImportedAssemblySemantics.GetPrimaryConstructorSignatureMember(
+                        type,
+                        i
+                    ) is PropertyInfo inheritedProperty {
+                        parameter = ParameterSymbol(name, ClrNullability.GetPropertyTypeSymbol(inheritedProperty))
                     }
                 }
                 // Preserve malformed slots so construction cannot select a parameterless fallback.
@@ -793,10 +844,10 @@ class ImportedTypeSymbol : TypeSymbol {
                         .Length {
                         member = shape.PrimaryConstructorProperties[i]
                     } else {
-                        member = ImportedAssemblySemantics.GetPrimaryConstructorMember(definition, i)
+                        member = ImportedAssemblySemantics.GetPrimaryConstructorSignatureMember(definition, i)
                     }
                     if member == nil || !ClrNullability.GetSignatureType(parameters[i]).Equals(
-                        ClrNullability.GetSignatureType(member)
+                        ImportedAssemblySemantics.GetPositionalValueSignatureType(member)
                     ) {
                         matches = false
                         break

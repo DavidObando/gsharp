@@ -404,6 +404,165 @@ internal class ConversionClassifier {
         if expression.Type == TypeSymbol.Never {
             return expression
         }
+        if type != nil && type != TypeSymbol.Error && type != TypeSymbol.Void && !TypeSymbol.ContainsNeverType(type) &&
+            TypeSymbol
+            .ContainsNeverType(expression.Type) {
+            if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out _) &&
+                !(type.StripToBareShape() is TupleTypeSymbol) {
+                let materialized = TypeSymbol.MaterializeNeverFunctionReturns(expression.Type)
+                if !object.ReferenceEquals(materialized, expression.Type) && !object.ReferenceEquals(
+                    materialized,
+                    type
+                ) {
+                    expression = BindConversion(
+                        diagnosticLocation,
+                        expression,
+                        materialized,
+                        allowExplicit,
+                        callParameter,
+                        trackNarrowing
+                    )
+                }
+            }
+            if expression is BoundDefaultExpression neverDefault {
+                return BoundDefaultExpression(neverDefault.Syntax, type)
+            }
+            if expression is BoundConversionExpression neverConversion {
+                return BindConversion(
+                    diagnosticLocation,
+                    neverConversion.Expression,
+                    type,
+                    allowExplicit,
+                    callParameter,
+                    trackNarrowing
+                )
+            }
+            if expression.Type is TupleTypeSymbol &&
+                type is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol targetTuple} {
+                let convertedTuple = BindConversion(
+                    diagnosticLocation,
+                    expression,
+                    targetTuple,
+                    allowExplicit,
+                    callParameter,
+                    trackNarrowing
+                )
+                return BoundConversionExpression(nil, type, convertedTuple, binderCtx.IsCheckedContext)
+            }
+            if expression is BoundUnaryExpression neverAssertion &&
+                neverAssertion
+                .Op
+                .Kind == BoundUnaryOperatorKind
+                .NullAssertion {
+                let convertedOperand = BindConversion(
+                    diagnosticLocation,
+                    neverAssertion.Operand,
+                    NullableTypeSymbol.Get(type),
+                    allowExplicit,
+                    callParameter,
+                    trackNarrowing
+                )
+                if BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, convertedOperand.Type) is {} rebuiltOp {
+                    return BoundUnaryExpression(
+                        neverAssertion.Syntax,
+                        rebuiltOp,
+                        convertedOperand,
+                        neverAssertion.IsChecked
+                    ){
+                        IsConversionUnwrap = neverAssertion.IsConversionUnwrap,
+                        IsNarrowingUnwrap = neverAssertion.IsNarrowingUnwrap
+                    }
+                }
+            }
+            if expression is BoundBinaryExpression neverCoalesce &&
+                neverCoalesce
+                .Op
+                .Kind == BoundBinaryOperatorKind
+                .NullCoalesce {
+                let convertedLeft = BindConversion(
+                    diagnosticLocation,
+                    neverCoalesce.Left,
+                    NullableTypeSymbol.Get(type),
+                    allowExplicit,
+                    callParameter,
+                    trackNarrowing
+                )
+                let convertedRight = BindConversion(
+                    diagnosticLocation,
+                    neverCoalesce.Right,
+                    type,
+                    allowExplicit,
+                    callParameter,
+                    trackNarrowing
+                )
+                return BoundBinaryExpression(
+                    neverCoalesce.Syntax,
+                    convertedLeft,
+                    BoundBinaryOperator.MakeNullCoalesce(convertedLeft.Type, convertedRight.Type, type),
+                    convertedRight,
+                    neverCoalesce.IsChecked
+                )
+            }
+            if expression is BoundBlockExpression neverBlock {
+                return ConvertNeverBlockExpression(
+                    neverBlock,
+                    diagnosticLocation,
+                    type,
+                    allowExplicit,
+                    callParameter,
+                    trackNarrowing
+                )
+            }
+            if expression is BoundConditionalExpression neverConditional {
+                return BoundConditionalExpression(
+                    neverConditional.Syntax,
+                    neverConditional.Condition,
+                    BindConversion(
+                        diagnosticLocation,
+                        neverConditional.WhenTrue,
+                        type,
+                        allowExplicit,
+                        callParameter,
+                        trackNarrowing
+                    ),
+                    BindConversion(
+                        diagnosticLocation,
+                        neverConditional.WhenFalse,
+                        type,
+                        allowExplicit,
+                        callParameter,
+                        trackNarrowing
+                    ),
+                    type
+                )
+            }
+            if expression is BoundSwitchExpression neverSwitch {
+                let convertedArms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](neverSwitch.Arms.Length)
+                for arm in neverSwitch.Arms {
+                    convertedArms.Add(
+                        BoundSwitchExpressionArm(
+                            arm.Syntax,
+                            arm.Pattern,
+                            arm.Guard,
+                            BindConversion(
+                                diagnosticLocation,
+                                arm.Result,
+                                type,
+                                allowExplicit,
+                                callParameter,
+                                trackNarrowing
+                            )
+                        )
+                    )
+                }
+                return BoundSwitchExpression(
+                    neverSwitch.Syntax,
+                    neverSwitch.Discriminant,
+                    convertedArms.MoveToImmutable(),
+                    type
+                )
+            }
+        }
         // ADR-0100 / issue #795: a typeless bare-`default` placeholder
         // (produced by ExpressionBinder.BindDefaultExpression when the
         // syntax has no type-clause) takes its concrete type from the
@@ -1017,6 +1176,12 @@ internal class ConversionClassifier {
             )
             return BoundErrorExpression(nil)
         }
+        // Issue #4316: a `nil` from a block, a conditional, a switch or `??` converts at each result (see
+        // `TryConvertEachResult`), so the effects before the `nil` still run.
+        if expression.Type == TypeSymbol.Null &&
+            TryConvertEachResult(diagnosticLocation, expression, type!!, allowExplicit) is {} convertedResults {
+            return convertedResults
+        }
         // Issue #504: lower `nil → Nullable<value-type>` to a
         // BoundDefaultExpression of the target Nullable<T>. Value-type
         // Nullable<T> is a CLR struct distinct from T; emitting `ldnull`
@@ -1041,9 +1206,8 @@ internal class ConversionClassifier {
         //
         // Issue #4027: the BARE (unwrapped) open type parameter needs exactly
         // the same lowering, and #814 reached only the `T?` spelling. A
-        // reference-constrained `[T class]` slot accepts `nil` — that is
-        // deliberate (#2354), and `Conversion.IsNilAssignableWithoutNullableWrapper`
-        // is the predicate that admits it — but the ARGUMENT was still emitted
+        // reference-constrained `[T class]` slot accepted `nil` (since
+        // #4316 only `T?` does, and the lowering below serves both) — but the ARGUMENT was still emitted
         // as a bare `ldnull`, whose stack type is `Nullobjref` where the slot's
         // signature type is `!!T`. ECMA-335 III.1.8.1.3 has no rule that lets a
         // null reference match a generic-parameter slot, constraint or no
@@ -1067,7 +1231,18 @@ internal class ConversionClassifier {
                 )
             )
         ) {
-            return BoundDefaultExpression(nil, type!!)
+            // A `nil` that an expression with effects produces (`if c { Log()\n nil } else { nil }`)
+            // still runs that expression; only a bare `nil` is replaced outright.
+            let zero = BoundDefaultExpression(nil, type!!)
+            return if StatementBinder.IsNilLiteral(expression) {
+                cast[BoundExpression](zero)
+            } else {
+                BoundBlockExpression(
+                    expression.Syntax,
+                    ImmutableArray.Create[BoundStatement](BoundExpressionStatement(expression.Syntax, expression)),
+                    zero
+                )
+            }
         }
         // Issue #1256: element-wise tuple conversion lowering. When the source
         // and target are tuple types of the same arity and the classifier above
@@ -1081,10 +1256,25 @@ internal class ConversionClassifier {
         // element conversion (reference upcast no-op, boxing, numeric widening,
         // nullable-reference upcast, …). The emitter then materialises this as a
         // normal `newobj ValueTuple<…>` over the converted element values.
-        if expression.Type is TupleTypeSymbol sourceTuple &&
-            type is TupleTypeSymbol targetTuple &&
-            sourceTuple.Arity == targetTuple.Arity {
-            return BindTupleConversion(diagnosticLocation, expression, sourceTuple, targetTuple, allowExplicit)
+        if expression.Type is TupleTypeSymbol sourceTuple {
+            if type is TupleTypeSymbol targetTuple && sourceTuple.Arity == targetTuple.Arity {
+                return BindTupleConversion(diagnosticLocation, expression, sourceTuple, targetTuple, allowExplicit)
+            }
+            if sourceTuple.HasNilElement {
+                let targetTuple = if type is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol innerTarget} &&
+                    innerTarget.Arity == sourceTuple.Arity {
+                    innerTarget
+                } else {
+                    cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(sourceTuple))
+                }
+                expression = BindTupleConversion(
+                    diagnosticLocation,
+                    expression,
+                    sourceTuple,
+                    targetTuple,
+                    allowExplicit
+                )
+            }
         }
         // Issue #1881: a conversion bound inside a `checked(...)`/`checked { }`
         // context traps on narrowing overflow via the emitter's `conv.ovf.*`
@@ -3359,6 +3549,11 @@ internal class ConversionClassifier {
             }
             return BoundTupleLiteralExpression(expression.Syntax, targetTuple, convertedLiteralElements.ToImmutable())
         }
+        // Issue #4316: a `(nil, int32)` source cannot be spilled into a temp of its own type.
+        if sourceTuple.HasNilElement &&
+            TryConvertEachResult(diagnosticLocation, expression, targetTuple, allowExplicit) is {} converted {
+            return converted
+        }
         // General path: evaluate the source once into a temp local, then build
         // a tuple literal of converted `ItemN` accesses off that local.
         let temp = LocalVariableSymbol("<>tupleConv", isReadOnly: true, type: sourceTuple)
@@ -3379,13 +3574,192 @@ internal class ConversionClassifier {
         return BoundBlockExpression(expression.Syntax, ImmutableArray.Create[BoundStatement](declaration), rebuilt)
     }
 
+    /// Issue #4316: `nil` and a tuple with a `nil` element (`(nil, int32)`) have no runtime
+    /// representation, so no temp, result local or slot may take that type. A source of such a type
+    /// that has several possible values converts each of them instead: a block's trailing value,
+    /// both conditional arms, every switch result and a `nil ?? rhs` fallback. The block statements,
+    /// the condition, the discriminant, the guards and a `nil`-typed left operand stay where they
+    /// are and run once; each result goes back through `BindConversion`, so nested forms recurse
+    /// down to the `nil` literals.
+    /// @param diagnosticLocation The conversion site.
+    /// @param expression The source, typed `nil` or a tuple with a `nil` element.
+    /// @param type The target type.
+    /// @param allowExplicit Whether explicit conversions are allowed.
+    /// @returns The source with each result converted, or `null` when the source has no such results.
+    private func TryConvertEachResult(
+        diagnosticLocation TextLocation,
+        expression BoundExpression,
+        type TypeSymbol,
+        allowExplicit bool
+    ) BoundExpression? {
+        switch expression {
+            case block is BoundBlockExpression {
+                if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultVar} &&
+                    resultVar
+                    .Name
+                    .StartsWith("<blockResult", StringComparison.Ordinal) &&
+                    TryRewriteCleanupBlockResult(
+                    block.Statements,
+                    resultVar,
+                    diagnosticLocation,
+                    type,
+                    allowExplicit,
+                    out var rewrittenStatements,
+                    out var newResultVar
+                ) {
+                    return BoundBlockExpression(
+                        block.Syntax,
+                        rewrittenStatements,
+                        BoundVariableExpression(block.Expression.Syntax, newResultVar!!)
+                    )
+                }
+                return BoundBlockExpression(
+                    block.Syntax,
+                    block.Statements,
+                    BindConversion(diagnosticLocation, block.Expression, type, allowExplicit)
+                )
+            }
+            case conditional is BoundConditionalExpression {
+                return BoundConditionalExpression(
+                    conditional.Syntax,
+                    conditional.Condition,
+                    BindConversion(diagnosticLocation, conditional.WhenTrue, type, allowExplicit),
+                    BindConversion(diagnosticLocation, conditional.WhenFalse, type, allowExplicit),
+                    type
+                )
+            }
+            case switchExpression is BoundSwitchExpression {
+                let arms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](switchExpression.Arms.Length)
+                for arm in switchExpression.Arms {
+                    arms.Add(
+                        BoundSwitchExpressionArm(
+                            arm.Syntax,
+                            arm.Pattern,
+                            arm.Guard,
+                            BindConversion(diagnosticLocation, arm.Result, type, allowExplicit)
+                        )
+                    )
+                }
+                return BoundSwitchExpression(
+                    switchExpression.Syntax,
+                    switchExpression.Discriminant,
+                    arms.MoveToImmutable(),
+                    type
+                )
+            }
+            case coalesce is BoundBinaryExpression when coalesce
+                .Op
+                .Kind == BoundBinaryOperatorKind.NullCoalesce &&
+                coalesce
+                .Left
+                .Type == TypeSymbol
+                .Null {
+                let right = BindConversion(diagnosticLocation, coalesce.Right, type, allowExplicit)
+                return if StatementBinder.IsNilLiteral(coalesce.Left) {
+                    right
+                } else {
+                    BoundBlockExpression(
+                        coalesce.Syntax,
+                        ImmutableArray.Create[BoundStatement](
+                            BoundExpressionStatement(
+                                coalesce.Left.Syntax,
+                                BindConversion(
+                                    diagnosticLocation,
+                                    coalesce.Left,
+                                    NullableTypeSymbol.Get(TypeSymbol.Object),
+                                    allowExplicit
+                                )
+                            )
+                        ),
+                        right
+                    )
+                }
+            }
+            default {
+                return nil
+            }
+        }
+    }
+
+    private func TryRewriteCleanupBlockResult(
+        statements ImmutableArray[BoundStatement],
+        resultVar LocalVariableSymbol,
+        diagnosticLocation TextLocation,
+        type TypeSymbol,
+        allowExplicit bool,
+        out rewritten ImmutableArray[BoundStatement],
+        out newResultVar LocalVariableSymbol?
+    ) bool {
+        let builder = ImmutableArray.CreateBuilder[BoundStatement](statements.Length)
+        newResultVar = nil
+        var changed = false
+        for stmt in statements {
+            if !changed && stmt is BoundVariableDeclaration decl && object.ReferenceEquals(decl.Variable, resultVar) &&
+                decl.Initializer is {} initializer {
+                let updatedVar = LocalVariableSymbol(resultVar.Name, resultVar.IsReadOnly, type)
+                newResultVar = updatedVar
+                builder.Add(
+                    BoundVariableDeclaration(
+                        decl.Syntax,
+                        updatedVar,
+                        BindConversion(diagnosticLocation, initializer, type, allowExplicit)
+                    )
+                )
+                changed = true
+            } else if !changed &&
+                stmt is BoundBlockStatement innerBlock &&
+                TryRewriteCleanupBlockResult(
+                innerBlock.Statements,
+                resultVar,
+                diagnosticLocation,
+                type,
+                allowExplicit,
+                out var innerStatements,
+                out newResultVar
+            ) {
+                builder.Add(BoundBlockStatement(innerBlock.Syntax, innerStatements))
+                changed = true
+            } else if !changed &&
+                stmt is BoundTryStatement tryStmt &&
+                tryStmt.TryBlock is BoundBlockStatement tryBlock &&
+                TryRewriteCleanupBlockResult(
+                tryBlock.Statements,
+                resultVar,
+                diagnosticLocation,
+                type,
+                allowExplicit,
+                out var tryStatements,
+                out newResultVar
+            ) {
+                builder.Add(
+                    BoundTryStatement(
+                        tryStmt.Syntax,
+                        BoundBlockStatement(tryBlock.Syntax, tryStatements),
+                        tryStmt.CatchClauses,
+                        tryStmt.FinallyBlock
+                    )
+                )
+                changed = true
+            } else {
+                builder.Add(stmt)
+            }
+        }
+        rewritten = if changed {
+            builder.MoveToImmutable()
+        } else {
+            statements
+        }
+        return changed
+    }
+
     private func BindContextualOpenLiteral(
         diagnosticLocation TextLocation,
         expression BoundExpression,
         targetType TypeSymbol
     ) BoundExpression {
         if StatementBinder.IsNilLiteral(expression) {
-            return if targetType is NullableTypeSymbol || Conversion.IsReferenceLikeTarget(targetType) {
+            // Issue #4316: only a `T?` target takes the bare `nil`; any other target asks the shared rule.
+            return if targetType is NullableTypeSymbol {
                 cast[BoundExpression](BoundDefaultExpression(expression.Syntax, targetType))
             } else {
                 BindConversion(diagnosticLocation, expression, targetType)
@@ -3808,6 +4182,91 @@ internal class ConversionClassifier {
             )
         }
         return BindConversion(diagnosticLocation, read, slot.TargetType)
+    }
+
+    private func ConvertNeverBlockExpression(
+        neverBlock BoundBlockExpression,
+        diagnosticLocation TextLocation,
+        type TypeSymbol,
+        allowExplicit bool,
+        callParameter ParameterSymbol?,
+        trackNarrowing bool
+    ) BoundExpression {
+        if neverBlock.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} resultRead &&
+            resultLocal
+            .Name
+            .StartsWith("<blockResult", StringComparison.Ordinal) && TypeSymbol.ContainsNeverType(resultLocal.Type) {
+            let rewriter = CleanupBlockResultRewriter(
+                resultLocal,
+                (initializer BoundExpression) -> BindConversion(
+                    diagnosticLocation,
+                    initializer,
+                    type,
+                    allowExplicit,
+                    callParameter,
+                    trackNarrowing
+                )
+            )
+            let statements = ImmutableArray.CreateBuilder[BoundStatement](neverBlock.Statements.Length)
+            for statement in neverBlock.Statements {
+                statements.Add(rewriter.RewriteStatement(statement))
+            }
+            if rewriter.ReplacedLocal is {} replacedLocal {
+                return BoundBlockExpression(
+                    neverBlock.Syntax,
+                    statements.MoveToImmutable(),
+                    BoundVariableExpression(resultRead.Syntax, replacedLocal)
+                )
+            }
+        }
+        return BoundBlockExpression(
+            neverBlock.Syntax,
+            neverBlock.Statements,
+            BindConversion(
+                diagnosticLocation,
+                neverBlock.Expression,
+                type,
+                allowExplicit,
+                callParameter,
+                trackNarrowing
+            )
+        )
+    }
+
+    private class CleanupBlockResultRewriter : BoundTreeRewriter {
+        private let targetLocal LocalVariableSymbol
+        private let convertInitializer(BoundExpression) -> BoundExpression
+
+        init(targetLocal LocalVariableSymbol, convertInitializer(BoundExpression) -> BoundExpression) {
+            this.targetLocal = targetLocal
+            this.convertInitializer = convertInitializer
+        }
+
+        prop ReplacedLocal LocalVariableSymbol? {
+            get;
+            private set;
+        }
+
+        protected override func RewriteVariableDeclaration(node BoundVariableDeclaration) BoundStatement {
+            let rewritten = cast[BoundVariableDeclaration](base.RewriteVariableDeclaration(node))
+            if object.ReferenceEquals(rewritten.Variable, this.targetLocal) && rewritten.Initializer is {} initializer {
+                let convertedInitializer = this.convertInitializer(initializer)
+                let replaced = LocalVariableSymbol(
+                    this.targetLocal.Name,
+                    this.targetLocal.IsReadOnly,
+                    convertedInitializer.Type,
+                    this.targetLocal.DeclaringSyntax
+                )
+                this.ReplacedLocal = replaced
+                return BoundVariableDeclaration(
+                    rewritten.Syntax,
+                    replaced,
+                    convertedInitializer,
+                    rewritten.ConstantValue
+                )
+            }
+            return rewritten
+        }
     }
 
     shared {
@@ -5197,8 +5656,85 @@ internal class ConversionClassifier {
         /// @param expression The converted expression.
         /// @param target The conversion target.
         /// @returns `false` when the conversion needs a new function body.
-        internal func KeepsConvertedDelegate(expression BoundExpression, target TypeSymbol) bool ->
-        expression is BoundFunctionLiteralExpression || Conversion.KeepsFunctionValueDelegate(expression.Type, target)
+        internal func KeepsConvertedDelegate(
+            expression BoundExpression,
+            target TypeSymbol
+        ) bool -> expression is BoundFunctionLiteralExpression ||
+            CanAdaptNeverDelegateValue(expression) ||
+            Conversion.KeepsFunctionValueDelegate(expression.Type, target)
+
+        private func CanAdaptNeverDelegateValue(expression BoundExpression) bool {
+            if !TypeSymbol.ContainsNeverType(expression.Type) {
+                return false
+            }
+            switch expression {
+                case BoundFunctionLiteralExpression {
+                    return true
+                }
+                case conversion is BoundConversionExpression {
+                    return conversion
+                        .Expression
+                        .Type == TypeSymbol.Null ||
+                        conversion
+                        .Expression
+                        .Type == TypeSymbol.Never ||
+                        CanAdaptNeverDelegateValue(conversion.Expression)
+                }
+                case unary is BoundUnaryExpression when unary.Op.Kind == BoundUnaryOperatorKind.NullAssertion {
+                    return CanAdaptNeverDelegateValue(unary.Operand)
+                }
+                case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.NullCoalesce {
+                    return CanAdaptNeverDelegateValue(binary.Left) &&
+                        (binary.Right.Type == TypeSymbol.Never || CanAdaptNeverDelegateValue(binary.Right))
+                }
+                case block is BoundBlockExpression {
+                    if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&
+                        resultLocal
+                        .Name
+                        .StartsWith("<blockResult", StringComparison.Ordinal) {
+                        return TypeSymbol.ContainsNeverType(resultLocal.Type)
+                    }
+                    return CanAdaptNeverDelegateValue(block.Expression)
+                }
+                case conditional is BoundConditionalExpression {
+                    return (
+                        conditional
+                            .WhenTrue
+                            .Type == TypeSymbol.Null ||
+                            conditional
+                            .WhenTrue
+                            .Type == TypeSymbol.Never ||
+                            CanAdaptNeverDelegateValue(conditional.WhenTrue)
+                    ) &&
+                        (
+                        conditional
+                            .WhenFalse
+                            .Type == TypeSymbol.Null ||
+                            conditional
+                            .WhenFalse
+                            .Type == TypeSymbol.Never ||
+                            CanAdaptNeverDelegateValue(conditional.WhenFalse)
+                    )
+                }
+                case switchExpr is BoundSwitchExpression {
+                    for arm in switchExpr.Arms {
+                        if arm
+                            .Result
+                            .Type != TypeSymbol.Null &&
+                            arm
+                            .Result
+                            .Type != TypeSymbol.Never &&
+                            !CanAdaptNeverDelegateValue(arm.Result) {
+                            return false
+                        }
+                    }
+                    return true
+                }
+                default {
+                    return false
+                }
+            }
+        }
 
         /// Issue #5536: adjusts the type-pair classification of [`expression`](paramref) for a function value
         /// that keeps its delegate. An implicit conversion that needs a new body does not exist for a function

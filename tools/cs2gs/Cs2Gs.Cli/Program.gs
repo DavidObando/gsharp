@@ -181,6 +181,9 @@ internal shared class Program {
             }
             Console.WriteLine(app.AppId.PadRight(idWidth) + "  " + string.Join("  ", cells))
             if !app.Succeeded {
+                if app.Artifacts.Count == 0 && !string.IsNullOrEmpty(app.FailureCategory) {
+                    Console.WriteLine("    -> ${app.FailureCategory}")
+                }
                 for artifact in app.Artifacts {
                     Console.WriteLine("    -> ${app.FailureCategory}: $artifact")
                 }
@@ -378,7 +381,16 @@ internal shared class Program {
                         "app is not acknowledged in the ledger's unverifiedApps list."
                 )
             }
+            let unattributedFailures = result
+                .Apps
+                .Where((a AppResult) -> !a.Succeeded && a.Artifacts.Count == 0)
+                .ToList()
+            for failedApp in unattributedFailures {
+                let category = failedApp.FailureCategory ?? "failed"
+                Console.WriteLine("  FAILED    ${failedApp.AppId} ($category) — app failed without a triage artifact.")
+            }
             let gatePassed = classification.PassesGate &&
+                unattributedFailures.Count == 0 &&
                 unacknowledged.Count == 0 &&
                 (!baselineStrict || classification.Stale.Count == 0)
             return DetermineMigrateExitCode(gatePassed, reportGenerated)

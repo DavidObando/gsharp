@@ -467,7 +467,8 @@ internal partial class StatementBinder {
             labelName,
             out var breakLabel,
             out var continueLabel,
-            iterationRunsUserCode: iterationKind != ForRangeKind.Indexed || LoopPreludeRunsUserCode(prelude)
+            iterationRunsUserCode: iterationKind != ForRangeKind.Indexed || LoopPreludeRunsUserCode(prelude),
+            enumeratorDisposalRunsUserCode: iterationKind != ForRangeKind.Indexed
         )
         if !prelude.IsEmpty {
             body = BoundBlockStatement(originatingSyntax, prelude.Add(body))
@@ -571,6 +572,7 @@ internal partial class StatementBinder {
         //     breakLabel:
         //   }
         $scope = BoundScope($scope)
+        let externalCallableAliasesAtInitEntry = externalCallableAliases.ToArray()
         let init BoundStatement? = if syntax.Initializer == nil {
             default(BoundStatement?)
         } else {
@@ -588,6 +590,7 @@ internal partial class StatementBinder {
             if binderCtx.NarrowedVariables.Count > 0 {
                 ApplyAssignmentNarrowing(init, binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1])
             }
+            UpdateExternalCallableAliases(init, externalCallableAliasesAtInitEntry)
         }
         let body = BindConditionedLoopBody(
             syntax.Condition,
@@ -677,10 +680,15 @@ internal partial class StatementBinder {
                         bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool)
                     }
                     ApplyHeaderCallableEffects(boundCondition)
+                    let postFrameIndex = binderCtx.NarrowedVariables.Count
+                    let postAliasesAtEntry = externalCallableAliases.ToImmutableArray()
                     boundPost = if postSyntax == nil {
                         default(BoundStatement?)
                     } else {
                         BindStatement(postSyntax)
+                    }
+                    if boundPost != nil {
+                        boundStatementEntries[boundPost] = (postFrameIndex, postAliasesAtEntry)
                     }
                     let (patternWhenTrue, _) = PatternVariables.Classify(boundCondition)
                     let boundBody = PatternVariables.BindInScope(
@@ -693,11 +701,12 @@ internal partial class StatementBinder {
                 } finally {
                     $scope = headerParentScope
                 }
-            }
+            },
+            loopCondition: () -> boundCondition,
+            loopPost: () -> boundPost
         )
         condition = boundCondition
         post = boundPost
-        RecordLoopExitFacts(bodySyntax, boundCondition)
         return body
     }
 
@@ -1004,10 +1013,10 @@ internal partial class StatementBinder {
                 } finally {
                     $scope = headerParentScope
                 }
-            }
+            },
+            loopCondition: () -> condition
         )
         $scope = $scope.Pop()
-        RecordLoopExitFacts(bodySyntax, condition)
         let bodyLabel = BoundLabel("body${binderCtx.LabelCounter}")
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         statements.Add(BoundLabelStatement(originatingSyntax, bodyLabel))

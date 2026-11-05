@@ -2015,6 +2015,11 @@ internal class ReflectionMetadataEmitter {
                         0
                     }
                 )
+                if !DataStructSynthesizer.HasZeroDeconstructionMembers(c) {
+                    this.cache.MethodHandles[c.DataDeconstruct] = MetadataTokens.MethodDefinitionHandle(
+                        methodRow + synthesizedRows - 1
+                    )
+                }
                 // ADR-0199: the synthesized C#-record PrintMembers is the last
                 // synthesized row (a hand-written one is an ordinary method).
                 if c.DataPrintMembers is {} printMembers {
@@ -2221,6 +2226,11 @@ internal class ReflectionMetadataEmitter {
                         0
                     }
                 )
+                if !DataStructSynthesizer.HasZeroDeconstructionMembers(s) {
+                    this.cache.MethodHandles[s.DataDeconstruct] = MetadataTokens.MethodDefinitionHandle(
+                        methodRow + structSynthesizedRows - 1
+                    )
+                }
                 // ADR-0199: PrintMembers is the last synthesized row, before the
                 // primary constructor; an anonymous literal has none.
                 if s.DataPrintMembers is {} structPrintMembers {
@@ -5011,6 +5021,7 @@ internal class ReflectionMetadataEmitter {
                     let _ = symbol.DataEqualsSelf
                     let _ = symbol.DataEqualsBase
                     let _ = symbol.DataEqualsObject
+                    let _ = symbol.DataDeconstruct
                     let _ = symbol.DataPrintMembers
                 }
             }
@@ -5165,17 +5176,31 @@ internal class ReflectionMetadataEmitter {
             if type.TryGetField(name, out field) {
                 return true
             }
-            if TypeMemberModel.TryGetProperty(type, name, out var property) && property!!.BackingField != nil {
+            if TypeMemberModel.TryGetProperty(type, name, out var property, out var declaringType) &&
+                object.ReferenceEquals(declaringType, type) && property!!.BackingField != nil {
                 field = property!!.BackingField
                 return true
             }
             field = nil
             if type.IsData &&
                 property != nil &&
-                property.IsAutoProperty == false &&
-                property.HasGetter == true &&
-                property.IsStatic == false {
+                (
+                !object.ReferenceEquals(declaringType, type) ||
+                    (property.IsAutoProperty == false && property.HasGetter == true && property.IsStatic == false)
+            ) {
                 return false
+            }
+            if type.IsData && type.IsClass {
+                for parameter in type.PrimaryConstructorParameters {
+                    if parameter.Name == name && TypeMemberModel.TryGetInheritedDataPositionalProperty(
+                        type,
+                        parameter,
+                        out _,
+                        out _
+                    ) {
+                        return false
+                    }
+                }
             }
             throw InvalidOperationException("Type '${type.Name}' has no field for primary ctor parameter '$name'.")
         }
@@ -5272,6 +5297,21 @@ internal class ReflectionMetadataEmitter {
         // ResolveUserStaticMethodToken). Stays on the root — it is a shared
         // imported-method lookup, not user-token-cache state.
         internal func FindImportedMethod(
+            declaringType Type,
+            method FunctionSymbol,
+            bindingFlags BindingFlags
+        ) MethodInfo? {
+            if FindImportedMethodCore(
+                declaringType,
+                method,
+                bindingFlags | BindingFlags.DeclaredOnly
+            ) is {} declaredMatch {
+                return declaredMatch
+            }
+            return FindImportedMethodCore(declaringType, method, bindingFlags)
+        }
+
+        private func FindImportedMethodCore(
             declaringType Type,
             method FunctionSymbol,
             bindingFlags BindingFlags

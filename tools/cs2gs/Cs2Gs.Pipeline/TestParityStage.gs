@@ -293,6 +293,21 @@ partial class TestParityStage : IMigrationStage {
     }
 
     private func RunStdoutParity(context StageExecutionContext) StageOutcome {
+        if string.IsNullOrEmpty(context.EmittedAssemblyPath) || !File.Exists(context.EmittedAssemblyPath) {
+            let missingAssembly = if string.IsNullOrEmpty(context.EmittedAssemblyPath) {
+                Path.GetFileNameWithoutExtension(context.App.ProjectPath) + ".dll"
+            } else {
+                context.EmittedAssemblyPath!!
+            }
+            this.Note(context, "stdout parity FAILED: required output assembly '$missingAssembly' was not emitted.")
+            let missingDiff = StdoutParityResult.Mismatch(
+                0,
+                "emitted executable assembly",
+                "missing output assembly '$missingAssembly'"
+            )
+            let missingArtifact = context.Triage.TestParityStdoutFailure(missingDiff, EmittedGsRelative(context))
+            return StageOutcome.Failed([]TriageArtifact{missingArtifact})
+        }
         let (exit, stdout, stderr, timedOut) = RunProgram(context.EmittedAssemblyPath, context.ProjectOutputDir)
         let parity = StdoutParity.CompareFile(context.App.StdoutGolden, stdout)
         let note = "stdout parity: exit=$exit; match=${parity.IsMatch}; timedOut=$timedOut." +
@@ -343,7 +358,11 @@ stderr:
         // translation (map-advanced) is complete, an unsupported construct or a
         // round-trip failure means the live library path cannot run yet; the
         // stage records the reason and skips rather than fabricating a pass.
-        let tests = await TranslateProjectAsync(context.App.TestsProjectPath, cancellationToken).ConfigureAwait(false)
+        let tests = await TranslateProjectAsync(
+            context.App.TestsProjectPath,
+            context.Options.Config,
+            cancellationToken
+        ).ConfigureAwait(false)
         if tests.LoadErrors != nil {
             this.Note(context, "library xUnit parity FAILED: .Tests project did not load.")
             let loadArtifact = context.Triage.ProjectLoadFailure(
@@ -671,8 +690,7 @@ stderr:
         private func IsStdoutEligible(context StageExecutionContext) bool -> context
             .App
             .TargetKind == TargetKind.Exe &&
-            !string.IsNullOrEmpty(context.App.StdoutGolden) && File.Exists(context.App.StdoutGolden) &&
-            !string.IsNullOrEmpty(context.EmittedAssemblyPath) && File.Exists(context.EmittedAssemblyPath)
+            !string.IsNullOrEmpty(context.App.StdoutGolden) && File.Exists(context.App.StdoutGolden)
 
         private func IsLibraryEligible(context StageExecutionContext) bool -> !string.IsNullOrEmpty(
             context.App.TestsProjectPath
@@ -745,10 +763,16 @@ stderr:
 
         private async func TranslateProjectAsync(
             projectPath string?,
+            config string?,
             cancellationToken CancellationToken
         ) TranslatedProject {
             let project = (
-                await CSharpProjectLoader.LoadProjectAsync(projectPath, cancellationToken).ConfigureAwait(false)
+                await CSharpProjectLoader.LoadProjectAsync(
+                    projectPath,
+                    cancellationToken,
+                    configuration: DeclaredProjectItems.WorkspaceConfiguration(projectPath, config)
+                )
+                    .ConfigureAwait(false)
             )
             // Issue #1742: same load-failure gate as TranslateStage, scoped to the
             // MSBuild workspace load failure signal (not every C# semantic error —
@@ -758,6 +782,9 @@ stderr:
             // to translate.
             if project.WorkspaceLoadFailed {
                 return TranslatedProject.LoadFailed(project.WorkspaceLoadErrors)
+            }
+            if project.ReferencedWorkspaceLoadFailed {
+                return TranslatedProject.LoadFailed(project.ReferencedWorkspaceLoadErrors)
             }
             // Issue #2321: a benign NuGet audit vulnerability advisory (CS2GS0003)
             // does not fail the workspace load gate above; carry it forward to the

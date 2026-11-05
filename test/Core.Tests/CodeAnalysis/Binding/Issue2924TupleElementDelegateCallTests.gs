@@ -120,7 +120,7 @@ holder.Value.0(1)`)
         return (value int32) -> seed + value
     }
 }
-let factory Factory = nil
+let factory Factory? = nil
 factory?.Make(40)(2)`)
         Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
         Assert.Null(result.Value)
@@ -156,7 +156,7 @@ factory?.Make(40)(2)`)
 let live = Factory()
 let answer = live?.Make(40)!!(2)
 let repeated = live?.Make(40)!!!!(2)
-let missing Factory = nil
+let missing Factory? = nil
 missing?.Make(40)!!(2)
 missing?.Make(40)!!!!(2)
 answer + repeated`)

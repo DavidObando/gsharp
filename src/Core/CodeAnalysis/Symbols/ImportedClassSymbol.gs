@@ -377,6 +377,10 @@ class ImportedClassSymbol : Symbol {
                 argTypes[i] = ClrOverloadResolution.DefaultLiteralArgumentType
                 continue
             }
+            if arguments[i].Type == TypeSymbol.Never {
+                argTypes[i] = ClrOverloadResolution.NeverArgumentType
+                continue
+            }
             // Issue #1538: an inline `out var`/`out let`/`out _` argument whose
             // type is omitted was bound in the eager first pass to a placeholder
             // address-of over an Error operand (no local declared yet, because

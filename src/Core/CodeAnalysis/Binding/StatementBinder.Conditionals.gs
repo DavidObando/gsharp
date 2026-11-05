@@ -1304,11 +1304,15 @@ internal partial class StatementBinder {
                     let _ = bindExpression(values[i], false)
                     continue
                 }
-                let initializer = bindExpression(values[i], false)
+                var initializer = bindExpression(values[i], false)
                 if IsDiscard(nameExpr.IdentifierToken) {
                     continue
                 }
-                let variable = bindLocalVariable(nameExpr.IdentifierToken, false, initializer.Type)
+                let varType = TupleTypeSymbol.ResolveNilElements(initializer.Type)
+                if !object.ReferenceEquals(varType, initializer.Type) {
+                    initializer = conversions.BindConversion(values[i].Location, initializer, varType)
+                }
+                let variable = bindLocalVariable(nameExpr.IdentifierToken, false, varType)
                 declarations.Add(BoundVariableDeclaration(syntax, variable, initializer))
             }
             return BoundBlockStatement(syntax, declarations.ToImmutable())
@@ -1372,27 +1376,44 @@ internal partial class StatementBinder {
         if tupleValue.Type == TypeSymbol.Error {
             return BoundExpressionStatement(syntax, tupleValue)
         }
-        if tupleValue.Type is not TupleTypeSymbol tupleType {
+        if tupleValue.Type is not TupleTypeSymbol rawTupleType {
             Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, 1)
             return BoundExpressionStatement(syntax, tupleValue)
         }
-        if targets.Length != tupleType.Arity {
-            Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, tupleType.Arity)
+        if targets.Length != rawTupleType.Arity {
+            Diagnostics.ReportMultiAssignmentMismatch(syntax.Location, targets.Length, rawTupleType.Arity)
             return BoundExpressionStatement(syntax, tupleValue)
         }
-        let (tupleTemp, tupleElements) = CreateTupleDeconstructionPlan(valueSyntax, tupleType)
         let captures = ImmutableArray.CreateBuilder[BoundStatement]()
-        let plans = ImmutableArray.CreateBuilder[MultiAssignmentTargetPlan](targets.Length)
+        let sources = [targets.Length]LocalVariableSymbol?
+        let rawPlans = [targets.Length]MultiAssignmentTargetPlan
+        let resolvedElements = ImmutableArray.CreateBuilder[TypeSymbol](targets.Length)
         for var i = 0; i < targets.Length; i++ {
+            let rawElement = rawTupleType.ElementTypes[i]
             if IsDiscardTarget(targets[i]) {
-                plans.Add(MultiAssignmentTargetPlan(assignedValue: nil, createWrite: nil))
+                rawPlans[i] = MultiAssignmentTargetPlan(assignedValue: nil, createWrite: nil)
+                resolvedElements.Add(
+                    if rawElement == TypeSymbol.Null {
+                        cast[TypeSymbol](NullableTypeSymbol.Get(TypeSymbol.Object))
+                    } else {
+                        TupleTypeSymbol.ResolveNilElements(rawElement)
+                    }
+                )
                 continue
             }
             if targets[i] is MultiAssignmentDeclarationExpressionSyntax declaration {
-                plans.Add(MultiAssignmentTargetPlan(tupleElements[i], createWrite: nil, declaration))
+                rawPlans[i] = MultiAssignmentTargetPlan(assignedValue: nil, createWrite: nil, declaration)
+                resolvedElements.Add(
+                    if rawElement == TypeSymbol.Null {
+                        cast[TypeSymbol](NullableTypeSymbol.Get(TypeSymbol.Object))
+                    } else {
+                        TupleTypeSymbol.ResolveNilElements(rawElement)
+                    }
+                )
                 continue
             }
-            let source = DeclareMultiAssignmentTemp("element$i", tupleType.ElementTypes[i])
+            let source = DeclareMultiAssignmentTemp("element$i", rawElement)
+            sources[i] = source
             let sourceToken = SyntaxToken(
                 syntax.SyntaxTree,
                 SyntaxKind.IdentifierToken,
@@ -1401,10 +1422,44 @@ internal partial class StatementBinder {
                 source.Name
             )
             let sourceSyntax = NameExpressionSyntax(syntax.SyntaxTree, sourceToken)
-            var plan = BindMultiAssignmentTarget(targets[i], sourceSyntax, syntax.OperatorToken, captures)
-            if plan.AssignedValue != nil {
+            let plan = BindMultiAssignmentTarget(targets[i], sourceSyntax, syntax.OperatorToken, captures)
+            rawPlans[i] = plan
+            let sourceTargetType = FindMultiAssignmentSourceConversionType(plan.AssignedValue, source) ??
+                plan
+                .AssignedValue
+                ?.Type
+            if (rawElement == TypeSymbol.Null || rawElement is TupleTypeSymbol{HasNilElement: true}) &&
+                sourceTargetType != nil &&
+                sourceTargetType != TypeSymbol.Error &&
+                !TypeSymbol
+                .ContainsNullLiteralType(sourceTargetType) {
+                resolvedElements.Add(TupleTypeSymbol.ResolveNilElements(rawElement, sourceTargetType))
+            } else {
+                resolvedElements.Add(TupleTypeSymbol.ResolveNilElements(rawElement))
+            }
+        }
+        let tupleType = if rawTupleType.HasNames {
+            TupleTypeSymbol.Get(resolvedElements.MoveToImmutable(), rawTupleType.ElementNames)
+        } else {
+            TupleTypeSymbol.Get(resolvedElements.MoveToImmutable())
+        }
+        tupleValue = conversions.BindConversion(valueSyntax.Location, tupleValue, tupleType)
+        let (tupleTemp, tupleElements) = CreateTupleDeconstructionPlan(valueSyntax, tupleType)
+        let plans = ImmutableArray.CreateBuilder[MultiAssignmentTargetPlan](targets.Length)
+        for var i = 0; i < targets.Length; i++ {
+            var plan = rawPlans[i]
+            if plan.Declaration != nil {
+                plans.Add(MultiAssignmentTargetPlan(tupleElements[i], createWrite: nil, plan.Declaration))
+                continue
+            }
+            if plan.AssignedValue != nil && sources[i] is {} source {
                 plan = plan.WithAssignedValue(
-                    MultiAssignmentTupleElementRewriter(source, tupleElements[i]).Replace(plan.AssignedValue)
+                    MultiAssignmentTupleElementRewriter(
+                        source,
+                        tupleElements[i],
+                        conversions,
+                        targets[i].Location
+                    ).Replace(plan.AssignedValue)
                 )
             }
             plans.Add(plan)
@@ -1434,13 +1489,22 @@ internal partial class StatementBinder {
     ) {
         let valueTemps = [plans.Count]LocalVariableSymbol?
         for var i = 0; i < plans.Count; i++ {
-            let assignedValue BoundExpression? = plans[i].AssignedValue
-            if assignedValue == nil {
+            if plans[i].AssignedValue is not{} initialValue {
                 continue
             }
-            if assignedValue.Type == TypeSymbol.Error {
-                statements.Add(BoundExpressionStatement(syntax, assignedValue))
+            if initialValue.Type == TypeSymbol.Error {
+                statements.Add(BoundExpressionStatement(syntax, initialValue))
                 continue
+            }
+            let assignedValue = if initialValue.Type is TupleTypeSymbol{HasNilElement: true} unresolvedTuple {
+                let resolvedTuple = TupleTypeSymbol.ResolveNilElements(unresolvedTuple)
+                conversions.BindConversion(
+                    initialValue.Syntax?.Location ?? syntax.Location,
+                    initialValue,
+                    resolvedTuple
+                )
+            } else {
+                initialValue
             }
             let valueTemp = DeclareMultiAssignmentTemp("value$i", assignedValue.Type)
             valueTemps[i] = valueTemp
@@ -1839,13 +1903,47 @@ internal partial class StatementBinder {
     private class MultiAssignmentTupleElementRewriter : BoundTreeRewriter {
         private let source VariableSymbol
         private let replacement BoundExpression
+        private let conversions ConversionClassifier?
+        private let location TextLocation
 
-        init(source VariableSymbol, replacement BoundExpression) {
+        init(
+            source VariableSymbol,
+            replacement BoundExpression,
+            conversions ConversionClassifier? = nil,
+            location TextLocation = default(TextLocation)
+        ) {
             this.source = source
             this.replacement = replacement
+            this.conversions = conversions
+            this.location = location
         }
 
         func Replace(expression BoundExpression) BoundExpression -> RewriteExpression(expression)
+
+        protected override func RewriteConversionExpression(node BoundConversionExpression) BoundExpression {
+            if node.Expression is BoundVariableExpression v && object.ReferenceEquals(v.Variable, source) &&
+                node.Type == replacement.Type {
+                return replacement
+            }
+            return base.RewriteConversionExpression(node)
+        }
+
+        protected override func RewriteBlockExpression(node BoundBlockExpression) BoundExpression {
+            if node
+                .Statements
+                .Length == 1 &&
+                node.Statements[0] is BoundVariableDeclaration{Initializer: BoundVariableExpression v} &&
+                object
+                .ReferenceEquals(v.Variable, source) {
+                if node.Type == replacement.Type {
+                    return replacement
+                }
+                if conversions != nil && node.Type != TypeSymbol.Error {
+                    return conversions.BindConversion(location, replacement, node.Type)
+                }
+            }
+            return base.RewriteBlockExpression(node)
+        }
 
         protected override func RewriteVariableExpression(
             node BoundVariableExpression
@@ -1853,6 +1951,47 @@ internal partial class StatementBinder {
             replacement
         } else {
             base.RewriteVariableExpression(node)
+        }
+    }
+
+    private func FindMultiAssignmentSourceConversionType(
+        expression BoundExpression?,
+        source VariableSymbol
+    ) TypeSymbol? {
+        switch expression {
+            case nil {
+                return nil
+            }
+            case conv is BoundConversionExpression {
+                if conv.Expression is BoundVariableExpression v && object.ReferenceEquals(v.Variable, source) {
+                    return conv.Type
+                }
+                return FindMultiAssignmentSourceConversionType(conv.Expression, source)
+            }
+            case block is BoundBlockExpression {
+                if block
+                    .Statements
+                    .Length == 1 &&
+                    block.Statements[0] is BoundVariableDeclaration{Initializer: BoundVariableExpression v} &&
+                    object.ReferenceEquals(v.Variable, source) {
+                    return block.Type
+                }
+                return FindMultiAssignmentSourceConversionType(block.Expression, source)
+            }
+            case call is BoundCallExpression {
+                for arg in call.Arguments {
+                    if FindMultiAssignmentSourceConversionType(arg, source) is {} found {
+                        return found
+                    }
+                }
+                return nil
+            }
+            case clrConv is BoundClrConversionCallExpression {
+                return FindMultiAssignmentSourceConversionType(clrConv.Source, source)
+            }
+            default {
+                return nil
+            }
         }
     }
 

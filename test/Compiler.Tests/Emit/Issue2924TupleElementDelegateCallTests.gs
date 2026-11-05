@@ -125,7 +125,7 @@ class Guard {
 
 var receiverEvaluations int32
 
-func Next(value Guard) Guard {
+func Next(value Guard?) Guard? {
     receiverEvaluations += 1
     return value
 }
@@ -138,7 +138,7 @@ Console.WriteLine(live?.Make(40)!!!!(2))
 Console.WriteLine(Next(live)?.Make(40)(2))
 Console.WriteLine(receiverEvaluations)
 
-let g Guard = nil
+let g Guard? = nil
 g?.Plain(1)
 Console.WriteLine("A ok")
 g?.Make(40)(2)

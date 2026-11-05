@@ -34,6 +34,9 @@ class CompileStage : IMigrationStage {
         if context == nil {
             throw ArgumentNullException("context")
         }
+        if HasInvalidProjectReference(context) {
+            return Task.FromResult(StageOutcome.DependencyBlocked())
+        }
         if context.EmittedFiles.Count == 0 {
             return Task.FromResult(StageOutcome.Passed())
         }
@@ -189,6 +192,10 @@ class CompileStage : IMigrationStage {
         )
         File.WriteAllText(Path.Combine(context.ArtifactDir, "gsc.compile.log"), result.Output ?? string.Empty)
         if result.Succeeded {
+            if !File.Exists(outputPath) {
+                let missingMessage = "Expected output assembly '${Path.GetFileName(outputPath)}' was not found after a successful gsc build."
+                return Task.FromResult(BuildFailureOutcome(context, Array.Empty[GscDiagnostic](), missingMessage))
+            }
             // Publish the emitted assembly path for the downstream IL-verify stage.
             context.EmittedAssemblyPath = outputPath
             return Task.FromResult(StageOutcome.Passed())
@@ -263,6 +270,9 @@ class CompileStage : IMigrationStage {
                 if nameMatch != nil {
                     return nameMatch
                 }
+                if Path.GetExtension(diagnosticFile).Equals(".gs", StringComparison.OrdinalIgnoreCase) {
+                    return nil
+                }
             }
             return if files.Count == 1 {
                 files[0]
@@ -324,28 +334,49 @@ class CompileStage : IMigrationStage {
             }
         }
 
-        private func BuildFailureOutcome(
+        internal func BuildFailureOutcome(
             context StageExecutionContext,
             errors IReadOnlyList[GscDiagnostic],
             syntheticMessageOnNoDiagnostics string
         ) StageOutcome {
             let artifacts = List[TriageArtifact]()
+            var blockedByReferencedProject = false
             for diagnostic in errors {
-                let file EmittedGsFile? = MatchEmittedFile(context.EmittedFiles, diagnostic.File)
+                let exactFile EmittedGsFile? = MatchExactEmittedFile(
+                    context.EmittedFiles,
+                    diagnostic.File,
+                    context.ProjectOutputDir
+                )
+                if exactFile != nil &&
+                    !exactFile.IsFromReferencedProject &&
+                    !IsDiagnosticFromReferencedProjectSuffix(context, diagnostic) {
+                    artifacts.Add(context.Triage.CompileError(diagnostic, exactFile))
+                    continue
+                }
                 // Errors located in a referenced sibling project's emitted file are
                 // that project's own concern (measured in its own run), not charged
                 // against this app. Sibling files are compile inputs only, so the
-                // app's uses of sibling types resolve (Refs #914).
+                // app's uses of sibling types resolve (Refs #914). Check referenced
+                // path ownership before falling back to basename-only matching on
+                // EmittedFiles so a same-basename sibling file is not misattributed
+                // to the consumer.
+                if (exactFile != nil && exactFile.IsFromReferencedProject) ||
+                    IsReferencedProjectDiagnostic(context, diagnostic) {
+                    blockedByReferencedProject = true
+                    continue
+                }
+                let file EmittedGsFile? = exactFile ?? MatchEmittedFile(context.EmittedFiles, diagnostic.File)
                 if file != nil && file.IsFromReferencedProject {
+                    blockedByReferencedProject = true
                     continue
                 }
                 artifacts.Add(context.Triage.CompileError(diagnostic, file))
             }
             // Every parsed error was in a referenced sibling file: the app's own G#
-            // compiled cleanly. The whole compilation still produced no assembly,
-            // so IL-verify simply has nothing to read.
-            if artifacts.Count == 0 && errors.Count > 0 {
-                return StageOutcome.Passed()
+            // reported no error, but the required dependency failed to compile so
+            // no consumer assembly was produced (issue #4767).
+            if artifacts.Count == 0 && blockedByReferencedProject {
+                return StageOutcome.DependencyBlocked()
             }
             // Exit was non-zero but no structured GSxxxx error was parsed (e.g. a
             // crash). Capture a synthetic compile-error so the failure is not lost.
@@ -361,6 +392,425 @@ class CompileStage : IMigrationStage {
                 artifacts.Add(context.Triage.CompileError(synthetic, context.EmittedFiles[0]))
             }
             return StageOutcome.Failed(artifacts)
+        }
+
+        internal func HasInvalidProjectReference(context StageExecutionContext) bool {
+            let invalidTranslated = context.Options.InvalidTranslatedProjectPaths
+            let invalidCompiled = context.Options.InvalidCompiledProjectPaths
+            if invalidTranslated == nil && invalidCompiled == nil {
+                return false
+            }
+            for referencedProjectPath in ActiveCompileReferencePaths(context) {
+                let fullPath = Path.GetFullPath(referencedProjectPath)
+                if invalidTranslated?.Contains(fullPath) == true || invalidCompiled?.Contains(fullPath) == true {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func ActiveCompileReferencePaths(context StageExecutionContext) IReadOnlyList[string] {
+            if context.EvaluatedProjectReferencesResolved {
+                return context.EvaluatedProjectReferencePaths
+            }
+            let appProjectPath = Path.GetFullPath(context.App.ProjectPath)
+            if context
+                .Options
+                .EvaluatedProjectReferences != nil &&
+                context
+                .Options
+                .EvaluatedProjectReferences!!.TryGetValue(appProjectPath, out var evaluated) {
+                return evaluated
+            }
+            return context
+                .ProjectReferences
+                .Where(
+                (reference DeclaredProjectItem) -> !string.IsNullOrEmpty(reference.SourceInclude) &&
+                    !IsBuildOrderingOnlyReference(reference) &&
+                    !HasCondition(reference)
+            )
+                .Select((reference DeclaredProjectItem) -> Path.GetFullPath(reference.SourceInclude!!))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList()
+        }
+
+        private func HasCondition(reference DeclaredProjectItem) bool {
+            return !string.IsNullOrWhiteSpace(reference.ItemGroupCondition) || !string.IsNullOrWhiteSpace(
+                reference.Element.Attribute(XName?("Condition")!!)?.Value
+            )
+        }
+
+        private func IsBuildOrderingOnlyReference(reference DeclaredProjectItem) bool {
+            let referenceOutputAssembly = reference
+                .Element
+                .Attribute(XName?("ReferenceOutputAssembly")!!)
+                ?.Value ??
+                reference
+                .Element
+                .Elements()
+                .FirstOrDefault(
+                (e XElement) -> e.Name.LocalName.Equals("ReferenceOutputAssembly", StringComparison.OrdinalIgnoreCase)
+            )
+                ?.Value
+            return string.Equals(referenceOutputAssembly?.Trim(), "false", StringComparison.OrdinalIgnoreCase)
+        }
+
+        internal func IsReferencedProjectDiagnostic(context StageExecutionContext, diagnostic GscDiagnostic) bool {
+            let activeReferences = ActiveCompileReferencePaths(context)
+            if activeReferences.Count == 0 {
+                return false
+            }
+            if IsDiagnosticFromReferencedProjectSuffix(context, diagnostic) {
+                return true
+            }
+            if IsDiagnosticFromOwnProjectSuffix(context, diagnostic) {
+                return false
+            }
+            if string.IsNullOrEmpty(diagnostic.File) {
+                return false
+            }
+            if !Path.GetExtension(diagnostic.File).Equals(".gs", StringComparison.OrdinalIgnoreCase) {
+                return false
+            }
+            let exactFile = MatchExactEmittedFile(context.EmittedFiles, diagnostic.File, context.ProjectOutputDir)
+            if exactFile != nil {
+                return exactFile.IsFromReferencedProject
+            }
+            let isRelativeDiagnostic = !Path.IsPathRooted(diagnostic.File)
+            let diagnosticPath = if !isRelativeDiagnostic {
+                Path.GetFullPath(diagnostic.File)
+            } else {
+                Path.GetFullPath(Path.Combine(context.ProjectOutputDir, diagnostic.File))
+            }
+            let ownOutputDir = Path.GetFullPath(context.ProjectOutputDir)
+            let ownSourceDir string? = if string.IsNullOrEmpty(context.App.ProjectPath) {
+                default(string?)
+            } else {
+                Path.GetDirectoryName(Path.GetFullPath(context.App.ProjectPath))
+            }
+            for referencedProjectPath in activeReferences {
+                let fullReferencedPath = Path.GetFullPath(referencedProjectPath)
+                var generatedProjectPath string? = nil
+                if context.Options.GeneratedProjectPaths != nil {
+                    context.Options.GeneratedProjectPaths!!.TryGetValue(fullReferencedPath, out generatedProjectPath)
+                }
+                if IsOwnedByReferencedCompileInputs(context, diagnosticPath, fullReferencedPath, generatedProjectPath) {
+                    return true
+                }
+                let referencedSourceDir string? = Path.GetDirectoryName(fullReferencedPath)
+                if isRelativeDiagnostic && !string.IsNullOrEmpty(referencedSourceDir) {
+                    let candidateInSourceDir = Path.GetFullPath(Path.Combine(referencedSourceDir, diagnostic.File))
+                    if IsOwnedByReferencedCompileInputs(
+                        context,
+                        candidateInSourceDir,
+                        fullReferencedPath,
+                        generatedProjectPath
+                    ) {
+                        return true
+                    }
+                }
+                if IsOwnedByReferencedDirectory(diagnosticPath, referencedSourceDir, ownOutputDir, ownSourceDir) {
+                    return true
+                }
+                if !string.IsNullOrEmpty(generatedProjectPath) {
+                    let generatedDir string? = Path.GetDirectoryName(Path.GetFullPath(generatedProjectPath))
+                    if isRelativeDiagnostic && !string.IsNullOrEmpty(generatedDir) {
+                        let candidateInGeneratedDir = Path.GetFullPath(Path.Combine(generatedDir, diagnostic.File))
+                        if IsOwnedByReferencedCompileInputs(
+                            context,
+                            candidateInGeneratedDir,
+                            fullReferencedPath,
+                            generatedProjectPath
+                        ) {
+                            return true
+                        }
+                    }
+                    if IsOwnedByReferencedDirectory(diagnosticPath, generatedDir, ownOutputDir, ownSourceDir) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func IsDiagnosticFromReferencedProjectSuffix(
+            context StageExecutionContext,
+            diagnostic GscDiagnostic
+        ) bool {
+            let suffixProjectPath string? = TryExtractDiagnosticProjectPath(diagnostic.Message)
+            if string.IsNullOrEmpty(suffixProjectPath) {
+                return false
+            }
+            for referencedProjectPath in ActiveCompileReferencePaths(context) {
+                let fullReferencedPath = Path.GetFullPath(referencedProjectPath)
+                if string.Equals(suffixProjectPath, fullReferencedPath, StringComparison.OrdinalIgnoreCase) {
+                    return true
+                }
+                if context.Options.GeneratedProjectPaths != nil && context.Options.GeneratedProjectPaths!!.TryGetValue(
+                    fullReferencedPath,
+                    out var generatedProjectPath
+                ) &&
+                    !string.IsNullOrEmpty(generatedProjectPath) && string.Equals(
+                    suffixProjectPath,
+                    Path.GetFullPath(generatedProjectPath),
+                    StringComparison.OrdinalIgnoreCase
+                ) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func IsDiagnosticFromOwnProjectSuffix(context StageExecutionContext, diagnostic GscDiagnostic) bool {
+            let suffixProjectPath string? = TryExtractDiagnosticProjectPath(diagnostic.Message)
+            if string.IsNullOrEmpty(suffixProjectPath) || string.IsNullOrEmpty(context.App.ProjectPath) {
+                return false
+            }
+            let fullOwnPath = Path.GetFullPath(context.App.ProjectPath)
+            if string.Equals(suffixProjectPath, fullOwnPath, StringComparison.OrdinalIgnoreCase) {
+                return true
+            }
+            if context.Options.GeneratedProjectPaths != nil && context.Options.GeneratedProjectPaths!!.TryGetValue(
+                fullOwnPath,
+                out var generatedOwnPath
+            ) &&
+                !string.IsNullOrEmpty(generatedOwnPath) && string.Equals(
+                suffixProjectPath,
+                Path.GetFullPath(generatedOwnPath),
+                StringComparison.OrdinalIgnoreCase
+            ) {
+                return true
+            }
+            return false
+        }
+
+        private func TryExtractDiagnosticProjectPath(message string?) string? {
+            if string.IsNullOrWhiteSpace(message) {
+                return nil
+            }
+            let trimmed = message.TrimEnd()
+            if !trimmed.EndsWith("]", StringComparison.Ordinal) {
+                return nil
+            }
+            let openIndex = trimmed.LastIndexOf('[')
+            if openIndex < 0 {
+                return nil
+            }
+            let candidate = trimmed.Substring(openIndex + 1, trimmed.Length - openIndex - 2).Trim()
+            if string.IsNullOrEmpty(candidate) || !Path.IsPathRooted(candidate) {
+                return nil
+            }
+            let ext = Path.GetExtension(candidate)
+            if !ext.Equals(".gsproj", StringComparison.OrdinalIgnoreCase) && !ext.Equals(
+                ".csproj",
+                StringComparison.OrdinalIgnoreCase
+            ) {
+                return nil
+            }
+            try {
+                return Path.GetFullPath(candidate)
+            } catch (Exception) {
+                return nil
+            }
+        }
+
+        private func IsOwnedByReferencedCompileInputs(
+            context StageExecutionContext,
+            diagnosticPath string,
+            fullReferencedPath string,
+            generatedProjectPath string?
+        ) bool {
+            let emittedByProject = context.Options.ProjectEmittedGsPaths
+            if emittedByProject != nil {
+                if emittedByProject.TryGetValue(fullReferencedPath, out var sourceSet) && sourceSet.Contains(
+                    diagnosticPath
+                ) {
+                    return true
+                }
+                if !string.IsNullOrEmpty(generatedProjectPath) && emittedByProject.TryGetValue(
+                    Path.GetFullPath(generatedProjectPath),
+                    out var generatedSet
+                ) &&
+                    generatedSet.Contains(diagnosticPath) {
+                    return true
+                }
+            }
+            if context
+                .Options
+                .RepositoryLoadedProjects != nil &&
+                context
+                .Options
+                .RepositoryLoadedProjects!!
+                .TryGetValue(fullReferencedPath, out var loadedReferenced) {
+                for document in loadedReferenced.Documents {
+                    if MatchesMappedProjectSource(context, diagnosticPath, document.FilePath) {
+                        return true
+                    }
+                }
+            }
+            if IsDeclaredCompileInputOfProject(context, diagnosticPath, fullReferencedPath) {
+                return true
+            }
+            if !string.IsNullOrEmpty(generatedProjectPath) &&
+                IsDeclaredCompileInputOfProject(context, diagnosticPath, Path.GetFullPath(generatedProjectPath)) {
+                return true
+            }
+            return false
+        }
+
+        private func IsDeclaredCompileInputOfProject(
+            context StageExecutionContext,
+            diagnosticPath string,
+            projectPath string
+        ) bool {
+            if string.IsNullOrEmpty(projectPath) || !File.Exists(projectPath) {
+                return false
+            }
+            let projectDir string? = Path.GetDirectoryName(Path.GetFullPath(projectPath))
+            if string.IsNullOrEmpty(projectDir) {
+                return false
+            }
+            for item in DeclaredProjectItems.Read(projectPath, "Compile") {
+                if !string.IsNullOrWhiteSpace(item.ItemGroupCondition) || !string.IsNullOrWhiteSpace(
+                    item.Element.Attribute(XName?("Condition")!!)?.Value
+                ) {
+                    continue
+                }
+                let rawInclude = item
+                    .Element
+                    .Attribute(XName?("Include")!!)
+                    ?.Value ??
+                    item
+                    .Element
+                    .Attribute(XName?("Update")!!)
+                    ?.Value
+                if string.IsNullOrWhiteSpace(rawInclude) {
+                    continue
+                }
+                for part in rawInclude.Split(';', StringSplitOptions.RemoveEmptyEntries) {
+                    let trimmed = part.Trim()
+                    if string.IsNullOrEmpty(trimmed) || trimmed.Contains("$$(", StringComparison.Ordinal) ||
+                        trimmed.Contains("@(", StringComparison.Ordinal) || trimmed.Contains(
+                        '*',
+                        StringComparison.Ordinal
+                    ) ||
+                        trimmed.Contains('?', StringComparison.Ordinal) {
+                        continue
+                    }
+                    let normalized = trimmed.Replace('\\', Path.DirectorySeparatorChar).Replace(
+                        '/',
+                        Path.DirectorySeparatorChar
+                    )
+                    let fullItemPath = Path.GetFullPath(Path.Combine(projectDir, normalized))
+                    if MatchesMappedProjectSource(context, diagnosticPath, fullItemPath) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func MatchesMappedProjectSource(
+            context StageExecutionContext,
+            diagnosticPath string,
+            sourceOrGsPath string
+        ) bool {
+            if string.IsNullOrEmpty(sourceOrGsPath) {
+                return false
+            }
+            let directGsPath = Path.GetFullPath(Path.ChangeExtension(sourceOrGsPath, ".gs"))
+            if string.Equals(directGsPath, diagnosticPath, StringComparison.OrdinalIgnoreCase) {
+                return true
+            }
+            if !string.IsNullOrEmpty(context.Options.SourceRoot) && !string.IsNullOrEmpty(context.Options.OutputRoot) {
+                let fullSourceRoot = Path.GetFullPath(context.Options.SourceRoot!!)
+                if IsUnderDirectory(directGsPath, fullSourceRoot) {
+                    let relative = Path.GetRelativePath(fullSourceRoot, directGsPath)
+                    let mirroredGsPath = Path.GetFullPath(Path.Combine(context.Options.OutputRoot!!, relative))
+                    if string.Equals(mirroredGsPath, diagnosticPath, StringComparison.OrdinalIgnoreCase) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func MatchExactEmittedFile(
+            files IReadOnlyList[EmittedGsFile]?,
+            diagnosticFile string,
+            projectOutputDir string?
+        ) EmittedGsFile? {
+            if files == nil || files.Count == 0 || string.IsNullOrEmpty(diagnosticFile) {
+                return nil
+            }
+            let candidates = List[string]()
+            if Path.IsPathRooted(diagnosticFile) {
+                candidates.Add(Path.GetFullPath(diagnosticFile))
+            } else {
+                if !string.IsNullOrEmpty(projectOutputDir) {
+                    candidates.Add(Path.GetFullPath(Path.Combine(projectOutputDir, diagnosticFile)))
+                }
+                candidates.Add(Path.GetFullPath(diagnosticFile))
+            }
+            for candidatePath in candidates {
+                let matches = files.Where(
+                    (f EmittedGsFile) -> !string.IsNullOrEmpty(f.GsPath) && string.Equals(
+                        Path.GetFullPath(f.GsPath!!),
+                        candidatePath,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
+                    .ToArray()
+                let matched = PreferOwnProject(matches)
+                if matched != nil {
+                    return matched
+                }
+            }
+            return nil
+        }
+
+        private func IsOwnedByReferencedDirectory(
+            diagnosticPath string,
+            referencedDir string?,
+            ownOutputDir string,
+            ownSourceDir string?
+        ) bool {
+            if string.IsNullOrEmpty(referencedDir) {
+                return false
+            }
+            let fullReferencedDir = Path.GetFullPath(referencedDir)
+            if !IsUnderDirectory(diagnosticPath, fullReferencedDir) {
+                return false
+            }
+            if IsUnderDirectory(diagnosticPath, ownOutputDir) &&
+                !IsStrictlyUnderDirectory(fullReferencedDir, ownOutputDir) {
+                return false
+            }
+            if !string.IsNullOrEmpty(ownSourceDir) {
+                let fullOwnSourceDir = Path.GetFullPath(ownSourceDir)
+                if IsUnderDirectory(diagnosticPath, fullOwnSourceDir) &&
+                    !IsStrictlyUnderDirectory(fullReferencedDir, fullOwnSourceDir) {
+                    return false
+                }
+            }
+            return true
+        }
+
+        private func IsUnderDirectory(path string, directory string) bool {
+            let relative = Path.GetRelativePath(directory, path)
+            return !Path.IsPathRooted(relative) && !relative.Equals("..", StringComparison.Ordinal) &&
+                !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
+                !relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal)
+        }
+
+        private func IsStrictlyUnderDirectory(path string, directory string) bool {
+            let relative = Path.GetRelativePath(directory, path)
+            return !Path.IsPathRooted(relative) && !relative.Equals(".", StringComparison.Ordinal) && !relative.Equals(
+                "..",
+                StringComparison.Ordinal
+            ) &&
+                !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
+                !relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal)
         }
 
         /// Builds the full `/reference:` set passed to `gsc`. gsc's

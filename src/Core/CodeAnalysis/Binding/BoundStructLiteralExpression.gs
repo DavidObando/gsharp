@@ -334,16 +334,28 @@ class BoundStructLiteralExpression : BoundExpression {
         internal func GetPrimaryMember(type StructSymbol, name string) Symbol? {
             for parameter in type.PrimaryConstructorParameters {
                 if parameter.Name == name {
-                    return TypeMemberModel.LookupMember(
+                    let found = TypeMemberModel.LookupMember(
                         type,
                         name,
                         MemberQuery(
                             includeInstance: true,
                             includeStatic: false,
-                            includeInherited: false,
+                            includeInherited: type.IsData && type.IsClass,
                             MemberKinds.Property | MemberKinds.Field
                         )
                     )
+                    if found != nil {
+                        return found
+                    }
+                    if type.IsData && type.IsClass && TypeMemberModel.TryGetInheritedDataPositionalProperty(
+                        type,
+                        parameter,
+                        out var inheritedProperty,
+                        out _
+                    ) {
+                        return inheritedProperty
+                    }
+                    return nil
                 }
             }
             return nil

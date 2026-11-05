@@ -464,7 +464,6 @@ internal sealed class RegionEffects {
         NilCompareOperandPaths = List[RegionReceiverPath?]()
         Declared = List[string]()
         BareReads = List[string]()
-        OperatorOperandNames = List[string]()
         NilCompareOperandNames = List[string]()
         TypeTests = List[RegionTypeTest]()
         MemberReads = List[RegionMemberRead]()
@@ -623,12 +622,6 @@ internal sealed class RegionEffects {
         get;
     }
 
-    /// Gets the names that are operands of an operator candidate (a binary or unary operator with no literal
-    /// operand), in order of first appearance.
-    prop OperatorOperandNames List[string] {
-        get;
-    }
-
     /// Whether an operator candidate has an operand that is not a plain name or a literal (a user-defined operator
     /// may be selected by its type, which the walker cannot see).
     prop OperatorHasUnresolvedOperand bool {
@@ -695,11 +688,6 @@ internal sealed class RegionEffects {
         for name in other.NilCompareOperandNames {
             if !NilCompareOperandNames.Contains(name) {
                 NilCompareOperandNames.Add(name)
-            }
-        }
-        for name in other.OperatorOperandNames {
-            if !OperatorOperandNames.Contains(name) {
-                OperatorOperandNames.Add(name)
             }
         }
         for name in other.BareReads {

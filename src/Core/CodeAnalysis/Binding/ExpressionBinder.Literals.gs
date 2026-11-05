@@ -950,6 +950,13 @@ internal partial class ExpressionBinder {
                     )
                     return BoundErrorExpression(nil)
                 }
+                if bound.Type is TupleTypeSymbol{HasNilElement: true} {
+                    bound = conversions.BindConversion(
+                        segmentExpression.Location,
+                        bound,
+                        TupleTypeSymbol.ResolveNilElements(bound.Type)
+                    )
+                }
                 if bound.Type is StructSymbol{IsRefStruct: true} structType && structType.TryGetMethod(
                     "ToString",
                     out _
@@ -1542,9 +1549,16 @@ internal partial class ExpressionBinder {
                 "an interpolation segment has an expression",
                 expression: "segment.Expression"
             )
-            let bound = BindExpression(segmentExpression)
+            var bound = BindExpression(segmentExpression)
             if bound is BoundErrorExpression {
                 return false
+            }
+            if bound.Type is TupleTypeSymbol{HasNilElement: true} {
+                bound = conversions.BindConversion(
+                    segmentExpression.Location,
+                    bound,
+                    TupleTypeSymbol.ResolveNilElements(bound.Type)
+                )
             }
             let index = values.Count
             values.Add(bound)
@@ -1677,10 +1691,27 @@ internal partial class ExpressionBinder {
             } else {
                 bindTypeClause(member.TypeClause)
             }
-            let value = if memberType == nil {
+            var value = if memberType == nil {
                 BindExpression(member.Value)
             } else {
                 BindExpression(member.Value, memberType)
+            }
+            if memberType == nil {
+                if value is not BoundErrorExpression && value.Type is TupleTypeSymbol{HasNilElement: true} {
+                    value = conversions.BindConversion(
+                        member.Value.Location,
+                        value,
+                        TupleTypeSymbol.ResolveNilElements(value.Type)
+                    )
+                }
+                let materializedMemberType = TypeSymbol.MaterializeNeverFunctionReturns(value.Type)
+                if !object.ReferenceEquals(materializedMemberType, value.Type) {
+                    value = conversions.BindConversion(member.Value.Location, value, materializedMemberType)
+                }
+                if TypeSymbol.ContainsNeverType(value.Type) {
+                    Diagnostics.ReportExpressionMustHaveValue(member.Value.Location)
+                    value = BoundErrorExpression(member.Value)
+                }
             }
             if value is BoundErrorExpression {
                 hadError = true
@@ -2139,8 +2170,15 @@ internal partial class ExpressionBinder {
                         structSymbol,
                         initSyntax.FieldIdentifier.ValueText,
                         out var property
+                    ) ||
+                        TypeMemberModel
+                        .TryGetInheritedDataPositionalProperty(
+                        structSymbol,
+                        initSyntax.FieldIdentifier.ValueText,
+                        out property,
+                        out _
                     ) {
-                        memberType = property.Type
+                        memberType = property!!.Type
                     } else {
                         continue
                     }
@@ -2320,11 +2358,29 @@ internal partial class ExpressionBinder {
             var property PropertySymbol? = nil
             var propertyDeclaringType StructSymbol? = nil
             if !hasField {
-                if !TypeMemberModel.TryGetProperty(structSymbol!!, fieldName, out property, out propertyDeclaringType) {
+                if !TypeMemberModel.TryGetProperty(
+                    structSymbol!!,
+                    fieldName,
+                    out property,
+                    out propertyDeclaringType
+                ) &&
+                    !TypeMemberModel
+                    .TryGetInheritedDataPositionalProperty(
+                    structSymbol!!,
+                    fieldName,
+                    out property,
+                    out propertyDeclaringType
+                ) {
                     Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, fieldName)
                     continue
                 }
             }
+            let primaryMember Symbol? = if callsPrimary {
+                BoundStructLiteralExpression.GetPrimaryMember(structSymbol!!, fieldName)
+            } else {
+                default(Symbol?)
+            }
+            let consumesPrimaryArgument = primaryMember != nil && (field == primaryMember || property == primaryMember)
             // Issue #2059: a composite/struct literal `Foo{ member: value }`
             // writes the member directly, bypassing normal assignment binding
             // — so it must enforce the SAME `private`/`protected` accessibility
@@ -2356,12 +2412,6 @@ internal partial class ExpressionBinder {
             } else {
                 Invariant.Required(property, "a resolved property has a type", expression: "property").Type
             }
-            let primaryMember Symbol? = if callsPrimary {
-                BoundStructLiteralExpression.GetPrimaryMember(structSymbol!!, fieldName)
-            } else {
-                default(Symbol?)
-            }
-            let consumesPrimaryArgument = primaryMember != nil && (field == primaryMember || property == primaryMember)
             let inputType = if consumesPrimaryArgument {
                 structSymbol!!
                     .PrimaryConstructorParameters
@@ -2370,7 +2420,9 @@ internal partial class ExpressionBinder {
             } else {
                 memberType
             }
-            if !AccessibilityChecker.IsAccessible(
+            if (!((callsDataConstructor || callsPrimary) && consumesPrimaryArgument) || usesGetter) &&
+                !AccessibilityChecker
+                .IsAccessible(
                 memberAccessibility,
                 Invariant.Required(
                     memberDeclaringType,
@@ -2438,7 +2490,7 @@ internal partial class ExpressionBinder {
             }
             // A get-only property (no `set` and no `init` accessor) cannot be
             // assigned in a composite literal — keep it diagnosed.
-            if !hasField && !(callsDataConstructor && consumesPrimaryArgument) && !Invariant.Required(
+            if !hasField && !((callsDataConstructor || callsPrimary) && consumesPrimaryArgument) && !Invariant.Required(
                 property,
                 "a resolved property is present",
                 expression: "property"
@@ -2563,7 +2615,18 @@ internal partial class ExpressionBinder {
                 let argumentName = "$$literalarg" + Interlocked.Increment(&binderCtx.SyntheticLocalCounter).ToString(
                     CultureInfo.InvariantCulture
                 )
-                let argument = LocalVariableSymbol(argumentName, isReadOnly: true, initializer.Value.Type)
+                let memberType = initializer.Field?.Type ?? Invariant.Required(
+                    initializer.Property,
+                    "a positional initializer targets a field or property",
+                    expression: "initializer.Property"
+                )
+                    .Type
+                let argumentType = if initializer.Value.Type == TypeSymbol.Never {
+                    memberType
+                } else {
+                    initializer.Value.Type
+                }
+                let argument = LocalVariableSymbol(argumentName, isReadOnly: true, argumentType)
                 $scope.TryDeclareVariable(argument)
                 argumentStatements!!.Add(BoundVariableDeclaration(nil, argument, initializer.Value))
                 let value = BoundVariableExpression(nil, argument)
@@ -2611,14 +2674,21 @@ internal partial class ExpressionBinder {
                     )
                     continue
                 }
-                let expression = BindExpression(
-                    member.Value,
-                    Invariant.Required(step.MemberType, "a positional member has a type", expression: "step.MemberType")
+                let memberType = Invariant.Required(
+                    step.MemberType,
+                    "a positional member has a type",
+                    expression: "step.MemberType"
                 )
+                let expression = BindExpression(member.Value, memberType)
                 let name = "$$literalarg" + Interlocked.Increment(&binderCtx.SyntheticLocalCounter).ToString(
                     CultureInfo.InvariantCulture
                 )
-                let argument = LocalVariableSymbol(name, isReadOnly: true, expression.Type)
+                let argumentType = if expression.Type == TypeSymbol.Never {
+                    memberType
+                } else {
+                    expression.Type
+                }
+                let argument = LocalVariableSymbol(name, isReadOnly: true, argumentType)
                 $scope.TryDeclareVariable(argument)
                 argumentStatements ??= ImmutableArray.CreateBuilder[BoundStatement]()
                 argumentStatements!!.Add(BoundVariableDeclaration(nil, argument, expression))
@@ -3895,6 +3965,12 @@ internal partial class ExpressionBinder {
         Load BoundExpression,
         Declaration BoundStatement
     ) {
+        if value.Type == TypeSymbol.Never {
+            return (
+                BoundThrowExpression(value.Syntax, BoundLiteralExpression(value.Syntax, value: nil)),
+                BoundExpressionStatement(value.Syntax, value)
+            )
+        }
         let counter = Interlocked.Increment(&binderCtx.SyntheticLocalCounter)
         let name = namePrefix + "_" + counter.ToString(CultureInfo.InvariantCulture)
         let local = LocalVariableSymbol(name, isReadOnly: true, value.Type)
