@@ -386,9 +386,20 @@ internal partial class StatementBinder {
             StaticInitializerBlockSyntax {
             topLevelStatementList = statementSyntaxes
         }
+        let reachableOnEntry = currentStatementListFallsThrough
         try {
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-            let _ = BindBlockStatements(statementSyntaxes, 0, statements, beforeBind, trailingStatement, trailingSyntax)
+            let fallsThrough = BindBlockStatements(
+                statementSyntaxes,
+                0,
+                statements,
+                beforeBind,
+                trailingStatement,
+                trailingSyntax
+            )
+            if !reachableOnEntry && fallsThrough {
+                currentStatementListFallsThrough = true
+            }
             return statements.ToImmutable()
         } finally {
             topLevelStatementList = previousTopLevelStatements
@@ -728,10 +739,14 @@ internal partial class StatementBinder {
                     )
                     continue
                 }
+                let reachableBeforeStatement = currentStatementListFallsThrough
                 let externalCallableAliasesAtEntry = externalCallableAliases.ToArray()
                 let statement BoundStatement? = BindStatement(statementSyntax)
                 if statement == nil {
                     continue
+                }
+                if !reachableBeforeStatement && currentStatementListFallsThrough && CanCompleteNormally(statement) {
+                    internallyReachableFallthroughStatements.Add(statement)
                 }
                 if binderCtx.LoopStack.Count > 0 {
                     boundStatementEntries[statement] = (

@@ -153,16 +153,29 @@ internal class MemberDefEmitter {
                 // ADR-0118 / issue #944: a CLR default indexer property carries
                 // its index parameter types in the PropertyDef signature.
                 let indexParams = prop.Parameters
+                let (importedGetter, importedSetter) = MethodInfoHelpers.TryFindImportedPropertySlots(structSym, prop)
+                let importedIndexParams = if importedGetter != nil {
+                    importedGetter.GetParameters()
+                } else if importedSetter != nil {
+                    importedSetter.GetParameters()
+                } else {
+                    Array.Empty[ParameterInfo]()
+                }
                 BlobEncoder(propertySignature).PropertySignature(isInstanceProperty: true).Parameters(
                     indexParams.Length,
                     (returnType ReturnTypeEncoder) -> this.EncodePropertyType(returnType, prop),
                     (parameters ParametersEncoder) -> {
-                        for indexParam in indexParams {
+                        for var i = 0; i < indexParams.Length; i++ {
                             TypeDefEmitter.EncodeParameterSignature(
                                 parameters,
-                                indexParam,
+                                indexParams[i],
                                 this.encodeTypeSymbol,
-                                this.wellKnown
+                                this.wellKnown,
+                                if i < importedIndexParams.Length {
+                                    importedIndexParams[i]
+                                } else {
+                                    default(ParameterInfo?)
+                                }
                             )
                         }
                     }
@@ -252,17 +265,14 @@ internal class MemberDefEmitter {
     }
 
     private func EmitIsReadOnlyAttribute(handle EntityHandle) {
+        let ctorRef = this.wellKnown.GetIsReadOnlyAttributeCtorRef()
+        if ctorRef.IsNil {
+            return
+        }
         let value = BlobBuilder()
         value.WriteUInt16(1)
         value.WriteUInt16(0)
-        this
-            .emitCtx
-            .Metadata
-            .AddCustomAttribute(
-            handle,
-            this.wellKnown.GetIsReadOnlyAttributeCtorRef(),
-            this.emitCtx.Metadata.GetOrAddBlob(value)
-        )
+        this.emitCtx.Metadata.AddCustomAttribute(handle, ctorRef, this.emitCtx.Metadata.GetOrAddBlob(value))
     }
 
     /// Issue #4988: mints an accessor MethodDef's `Param` rows — the
@@ -457,11 +467,17 @@ internal class MemberDefEmitter {
     /// For computed properties: emits the bound getter body IL.
     private func EmitPropertyGetter(structSym StructSymbol, prop PropertySymbol) MethodDefinitionHandle {
         if prop.IsAbstract && prop.GetterBodySyntax == nil {
-            return this.EmitAbstractClassPropertyAccessor(prop, isGetter: true)
+            return this.EmitAbstractClassPropertyAccessor(structSym, prop, isGetter: true)
         }
         let (computed, bodyOffset) = this.EmitPropertyAccessorBody(structSym, prop, isStatic: false, isGetter: true)
         if (computed != nil) {
             return computed
+        }
+        let (importedGetter, _) = MethodInfoHelpers.TryFindImportedPropertySlots(structSym, prop)
+        let importedGetterParams = if importedGetter != nil {
+            importedGetter.GetParameters()
+        } else {
+            Array.Empty[ParameterInfo]()
         }
         let sigBlob = BlobBuilder()
         BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
@@ -482,8 +498,18 @@ internal class MemberDefEmitter {
                 if prop.Parameters.IsDefaultOrEmpty {
                     return
                 }
-                for indexParam in prop.Parameters {
-                    TypeDefEmitter.EncodeParameterSignature(ps, indexParam, this.encodeTypeSymbol, this.wellKnown)
+                for var i = 0; i < prop.Parameters.Length; i++ {
+                    TypeDefEmitter.EncodeParameterSignature(
+                        ps,
+                        prop.Parameters[i],
+                        this.encodeTypeSymbol,
+                        this.wellKnown,
+                        if i < importedGetterParams.Length {
+                            importedGetterParams[i]
+                        } else {
+                            default(ParameterInfo?)
+                        }
+                    )
                 }
             }
         )
@@ -517,8 +543,9 @@ internal class MemberDefEmitter {
         } else if prop.IsVirtual {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
         } else if PropertyImplicitlyImplementsInterface(structSym, prop) {
-            // Issue #248: implicit interface implementation requires Virtual | NewSlot.
-            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
+            // Issue #248 / #5638: an implicit interface implementation that is
+            // neither `open` nor `override` requires Virtual | NewSlot | Final.
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         } else if this.emitCtx.InheritedInterfacePropertyAccessors.Contains((prop, true)) {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         } else if prop.ExplicitInterfaceMember != nil || prop.ExplicitInterfaceGetterSlot != nil {
@@ -572,11 +599,17 @@ internal class MemberDefEmitter {
     /// For computed properties: emits the bound setter body IL.
     private func EmitPropertySetter(structSym StructSymbol, prop PropertySymbol) MethodDefinitionHandle {
         if prop.IsAbstract && prop.SetterBodySyntax == nil {
-            return this.EmitAbstractClassPropertyAccessor(prop, isGetter: false)
+            return this.EmitAbstractClassPropertyAccessor(structSym, prop, isGetter: false)
         }
         let (computed, bodyOffset) = this.EmitPropertyAccessorBody(structSym, prop, isStatic: false, isGetter: false)
         if (computed != nil) {
             return computed
+        }
+        let (_, importedSetter) = MethodInfoHelpers.TryFindImportedPropertySlots(structSym, prop)
+        let importedSetterParams = if importedSetter != nil {
+            importedSetter.GetParameters()
+        } else {
+            Array.Empty[ParameterInfo]()
         }
         let sigBlob = BlobBuilder()
         let indexParameterCount = if prop.Parameters.IsDefaultOrEmpty {
@@ -592,7 +625,7 @@ internal class MemberDefEmitter {
                 // exactly as a C# 9 init-only setter does. This is how the
                 // CLR and peer compilers recognize the accessor as init-only.
                 if prop.IsInitOnly {
-                    let isExternalInit = this.wellKnown.GetIsExternalInitTypeRef()
+                    let isExternalInit = this.wellKnown.GetInitSetterModifierTypeRef(importedSetter)
                     if !isExternalInit.IsNil {
                         r.CustomModifiers().AddModifier(isExternalInit, isOptional: false)
                     }
@@ -604,8 +637,18 @@ internal class MemberDefEmitter {
                 // EmitPropertyGetter — an indexer's setter takes the index
                 // parameters ahead of the value parameter.
                 if !prop.Parameters.IsDefaultOrEmpty {
-                    for indexParam in prop.Parameters {
-                        TypeDefEmitter.EncodeParameterSignature(ps, indexParam, this.encodeTypeSymbol, this.wellKnown)
+                    for var i = 0; i < prop.Parameters.Length; i++ {
+                        TypeDefEmitter.EncodeParameterSignature(
+                            ps,
+                            prop.Parameters[i],
+                            this.encodeTypeSymbol,
+                            this.wellKnown,
+                            if i < importedSetterParams.Length {
+                                importedSetterParams[i]
+                            } else {
+                                default(ParameterInfo?)
+                            }
+                        )
                     }
                 }
                 this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type)
@@ -629,8 +672,9 @@ internal class MemberDefEmitter {
         } else if prop.IsVirtual {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
         } else if PropertyImplicitlyImplementsInterface(structSym, prop) {
-            // Issue #248: implicit interface implementation requires Virtual | NewSlot.
-            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
+            // Issue #248 / #5638: an implicit interface implementation that is
+            // neither `open` nor `override` requires Virtual | NewSlot | Final.
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         } else if this.emitCtx.InheritedInterfacePropertyAccessors.Contains((prop, false)) {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         } else if prop.ExplicitInterfaceMember != nil || prop.ExplicitInterfaceSetterSlot != nil {
@@ -672,7 +716,22 @@ internal class MemberDefEmitter {
         return accessor
     }
 
-    private func EmitAbstractClassPropertyAccessor(prop PropertySymbol, isGetter bool) MethodDefinitionHandle {
+    private func EmitAbstractClassPropertyAccessor(
+        structSym StructSymbol,
+        prop PropertySymbol,
+        isGetter bool
+    ) MethodDefinitionHandle {
+        let (importedGetter, importedSetter) = MethodInfoHelpers.TryFindImportedPropertySlots(structSym, prop)
+        let importedAccessor = if isGetter {
+            importedGetter
+        } else {
+            importedSetter
+        }
+        let importedParams = if importedAccessor != nil {
+            importedAccessor.GetParameters()
+        } else {
+            Array.Empty[ParameterInfo]()
+        }
         let sigBlob = BlobBuilder()
         BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
             prop
@@ -687,10 +746,10 @@ internal class MemberDefEmitter {
             ),
             (r ReturnTypeEncoder) -> {
                 if isGetter {
-                    this.encodeTypeSymbol(r.Type(), prop.Type)
+                    this.EncodePropertyType(r, prop)
                 } else {
                     if prop.IsInitOnly {
-                        let isExternalInit = this.wellKnown.GetIsExternalInitTypeRef()
+                        let isExternalInit = this.wellKnown.GetInitSetterModifierTypeRef(importedSetter)
                         if !isExternalInit.IsNil {
                             r.CustomModifiers().AddModifier(isExternalInit, isOptional: false)
                         }
@@ -699,8 +758,18 @@ internal class MemberDefEmitter {
                 }
             },
             (ps ParametersEncoder) -> {
-                for indexParam in prop.Parameters {
-                    TypeDefEmitter.EncodeParameterSignature(ps, indexParam, this.encodeTypeSymbol, this.wellKnown)
+                for var i = 0; i < prop.Parameters.Length; i++ {
+                    TypeDefEmitter.EncodeParameterSignature(
+                        ps,
+                        prop.Parameters[i],
+                        this.encodeTypeSymbol,
+                        this.wellKnown,
+                        if i < importedParams.Length {
+                            importedParams[i]
+                        } else {
+                            default(ParameterInfo?)
+                        }
+                    )
                 }
                 if !isGetter {
                     this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type)
@@ -1045,65 +1114,6 @@ internal class MemberDefEmitter {
         return accessor
     }
 
-    /// ADR-0052: determines whether an event on a class/struct implicitly implements
-    /// an interface event (same name on any implemented interface).
-    private func EventImplicitlyImplementsInterface(structSym StructSymbol, ev EventSymbol) bool {
-        if !structSym.Interfaces.IsDefaultOrEmpty {
-            for iface in structSym.Interfaces {
-                // ADR-0149 follow-up (issue #2370): see the matching comment in
-                // PropertyImplicitlyImplementsInterface — Events is likewise
-                // never substituted onto a constructed generic interface
-                // instance, so this must resolve against the open Definition.
-                let defIface = iface.Definition ?? iface
-                if defIface.Events.IsDefaultOrEmpty {
-                    continue
-                }
-                for ifaceEvent in defIface.Events {
-                    if ifaceEvent.Name == ev.Name {
-                        return true
-                    }
-                }
-            }
-        }
-        // Issue #2380: mirror PropertyImplicitlyImplementsInterface's
-        // ImplementedClrInterfaces (issue #525) branch — this was entirely
-        // missing for events, so a class/struct event implicitly satisfying
-        // an IMPORTED CLR interface's event (of any handler-type shape,
-        // including one that nests a `Nullable<T>` generic argument, e.g.
-        // `EventHandler<Notification<int?>>`) was never promoted to
-        // Virtual|NewSlot and silently produced unverifiable IL, exactly
-        // like the property/method gaps this issue fixes. Uses the same
-        // effective-CLR-type comparison as the property branch.
-        if !structSym.ImplementedClrInterfaces.IsDefaultOrEmpty {
-            let evClr Type? = NullableLifting.GetEffectiveClrType(ev.Type)
-            for ifaceSym in structSym.ImplementedClrInterfaces {
-                let clrIface Type? = ifaceSym?.ClrType
-                if clrIface == nil {
-                    continue
-                }
-                for clrEvent in MemberLookup.EnumerateSelfAndInterfaces(clrIface).SelectMany(
-                    func (inherited Type) IEnumerable[EventInfo] {
-                        return inherited.GetEvents(BindingFlags.Public | BindingFlags.Instance)
-                    }
-                ) {
-                    if clrEvent.Name == ev.Name &&
-                        (
-                        evClr == nil ||
-                            (
-                            clrEvent.EventHandlerType is {} eventHandlerType && ClrTypeUtilities.AreSame(
-                                evClr,
-                                eventHandlerType
-                            )
-                        )
-                    ) {
-                        return true
-                    }
-                }
-            }
-        }
-        return false
-    }
-
     /// ADR-0052: emits add/remove accessor MethodDefs, EventDef rows, EventMap,
     /// and MethodSemantics rows for all events declared on a type.
     /// @param structSym The owning struct or class symbol whose instance events are emitted.
@@ -1398,12 +1408,12 @@ internal class MemberDefEmitter {
                 MethodAttributes.Public
             }
         ) | MethodAttributes.SpecialName | MethodAttributes.HideBySig
-        if ev.IsVirtual {
-            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
-        } else if ev.IsOverride {
+        if ev.IsOverride {
             methodAttrs |= MethodAttributes.Virtual
-        } else if this.EventImplicitlyImplementsInterface(structSym, ev) {
+        } else if ev.IsVirtual {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
+        } else if EventImplicitlyImplementsInterface(structSym, ev) {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         } else if ev.ExplicitInterfaceMember != nil || ev.ExplicitInterfaceAddSlot != nil {
             // ADR-0149: mirrors the property MethodImpl-bridge promotion —
             // a MethodImpl body method must be Virtual per ECMA-335 §II.10.3.3;
@@ -1488,12 +1498,12 @@ internal class MemberDefEmitter {
                 MethodAttributes.Public
             }
         ) | MethodAttributes.SpecialName | MethodAttributes.HideBySig
-        if ev.IsVirtual {
-            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
-        } else if ev.IsOverride {
+        if ev.IsOverride {
             methodAttrs |= MethodAttributes.Virtual
-        } else if this.EventImplicitlyImplementsInterface(structSym, ev) {
+        } else if ev.IsVirtual {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
+        } else if EventImplicitlyImplementsInterface(structSym, ev) {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         } else if ev.ExplicitInterfaceMember != nil || ev.ExplicitInterfaceRemoveSlot != nil {
             // ADR-0149: see the matching comment in EmitEventAddAccessor.
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
@@ -1591,10 +1601,12 @@ internal class MemberDefEmitter {
         ) | MethodAttributes.SpecialName | MethodAttributes.HideBySig
         if isStatic {
             methodAttrs |= MethodAttributes.Static
-        } else if ev.IsVirtual {
-            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
         } else if ev.IsOverride {
             methodAttrs |= MethodAttributes.Virtual
+        } else if ev.IsVirtual {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot
+        } else if EventImplicitlyImplementsInterface(structSym, ev) {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         } else if ev.ExplicitInterfaceMember != nil || ev.ExplicitInterfaceRaiseSlot != nil {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final
         }
@@ -1967,6 +1979,64 @@ internal class MemberDefEmitter {
     }
 
     shared {
+        /// ADR-0052: determines whether an event implicitly implements an interface event.
+        /// @param structSym The type that declares the candidate event.
+        /// @param ev The candidate event.
+        /// @returns `true` when the event implements an interface event.
+        internal func EventImplicitlyImplementsInterface(structSym StructSymbol, ev EventSymbol) bool {
+            if ev.HasExplicitInterfaceClause {
+                return false
+            }
+            if !structSym.Interfaces.IsDefaultOrEmpty {
+                for iface in structSym.Interfaces {
+                    // Issue #2370: resolve events on the open definition because
+                    // constructed generic interfaces do not substitute Events.
+                    let defIface = iface.Definition ?? iface
+                    if defIface.Events.IsDefaultOrEmpty {
+                        continue
+                    }
+                    for ifaceEvent in defIface.Events {
+                        if ifaceEvent.Name == ev.Name && DeclarationBinder.InterfaceEventTypesEquivalent(
+                            iface,
+                            ifaceEvent,
+                            ev
+                        ) {
+                            return true
+                        }
+                    }
+                }
+            }
+            // Issue #2380: compare effective CLR types for imported interface events.
+            if !structSym.ImplementedClrInterfaces.IsDefaultOrEmpty {
+                let evClr Type? = NullableLifting.GetEffectiveClrType(ev.Type)
+                for ifaceSym in structSym.ImplementedClrInterfaces {
+                    let clrIface Type? = ifaceSym?.ClrType
+                    if clrIface == nil {
+                        continue
+                    }
+                    for clrEvent in MemberLookup.EnumerateSelfAndInterfaces(clrIface).SelectMany(
+                        func (inherited Type) IEnumerable[EventInfo] {
+                            return inherited.GetEvents(BindingFlags.Public | BindingFlags.Instance)
+                        }
+                    ) {
+                        if clrEvent.Name == ev.Name &&
+                            (
+                            evClr == nil ||
+                                (
+                                clrEvent.EventHandlerType is {} eventHandlerType && ClrTypeUtilities.AreSame(
+                                    evClr,
+                                    eventHandlerType
+                                )
+                            )
+                        ) {
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
+
         /// Issue #248: determines whether a property on a class/struct implicitly implements
         /// an interface property (same name and type on any implemented interface).
         /// @param structSym The type declaring the candidate property.
@@ -2025,10 +2095,13 @@ internal class MemberDefEmitter {
                         }
                     ) {
                         let indexParameters = clrProp.GetIndexParameters()
+                        let hasMatchingAccessor = (clrProp.GetMethod != nil && prop.HasGetter) ||
+                            (clrProp.SetMethod != nil && prop.HasSetter)
                         // Nullable reference annotations do not participate in CLR interface slots.
                         if prop.IsIndexer != (indexParameters.Length > 0) ||
-                            (clrProp.GetMethod != nil && !prop.HasGetter) ||
-                            (clrProp.SetMethod != nil && !prop.HasSetter) ||
+                            !hasMatchingAccessor ||
+                            (clrProp.GetMethod?.IsAbstract == true && !prop.HasGetter) ||
+                            (clrProp.SetMethod?.IsAbstract == true && !prop.HasSetter) ||
                             !MemberLookup
                             .PropertyMatchesClrInterfaceSignature(
                             prop,
@@ -2053,6 +2126,12 @@ internal class MemberDefEmitter {
             interfaceProperty PropertySymbol,
             typeParameterMap Dictionary[TypeParameterSymbol, TypeSymbol]?
         ) bool {
+            let hasMatchingAccessor = (interfaceProperty.HasGetter && property.HasGetter) ||
+                (interfaceProperty.HasSetter && property.HasSetter)
+            let requiresGetter = interfaceProperty.HasGetter &&
+                (interfaceProperty.GetterSymbol == nil || interfaceProperty.GetterSymbol!!.IsAbstract)
+            let requiresSetter = interfaceProperty.HasSetter &&
+                (interfaceProperty.SetterSymbol == nil || interfaceProperty.SetterSymbol!!.IsAbstract)
             if property.Name != interfaceProperty.Name ||
                 property.IsIndexer != interfaceProperty.IsIndexer ||
                 property
@@ -2060,13 +2139,14 @@ internal class MemberDefEmitter {
                 .Length != interfaceProperty
                 .Parameters
                 .Length ||
-                (interfaceProperty.HasGetter && !property.HasGetter) ||
-                (interfaceProperty.HasSetter && !property.HasSetter) ||
+                !hasMatchingAccessor ||
+                (requiresGetter && !property.HasGetter) ||
+                (requiresSetter && !property.HasSetter) ||
                 !DeclarationBinder
                 .IsInterfacePropertyTypeCompatible(
                 property.Type,
                 interfaceProperty.Type,
-                interfaceProperty.HasSetter,
+                property.HasSetter && interfaceProperty.HasSetter,
                 typeParameterMap
             ) {
                 return false

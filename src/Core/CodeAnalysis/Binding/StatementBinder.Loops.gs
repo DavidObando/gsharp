@@ -1044,9 +1044,6 @@ internal partial class StatementBinder {
         // enclosing block, matching C#'s `goto`/label semantics).
         if !IsLabelableLoop(inner) {
             let reachableOnEntry = currentStatementListFallsThrough
-            if NarrowingComparison.LoopsEnabled {
-                ReportBackwardJumpSpan(syntax)
-            }
             let userLabel = DefineUserLabel(labelName, syntax.LabelIdentifier.Location, syntax)
             let boundInner = BindStatement(inner)
             let labeledStatement = BoundBlockStatement(
@@ -1134,14 +1131,6 @@ internal partial class StatementBinder {
                 expression: "BindStatement(inner)"
             )
         }
-    }
-
-    private func BindLabeledForRange(
-        labelSyntax LabeledStatementSyntax,
-        inner ForRangeStatementSyntax,
-        labelName string?
-    ) BoundStatement {
-        return BindForRangeStatementCore(inner, labelName, labelSyntax)
     }
 
     shared {
