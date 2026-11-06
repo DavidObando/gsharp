@@ -5435,7 +5435,7 @@ internal class ConversionClassifier {
                 mapped != TypeSymbol.Error &&
                 (
                 allowConcreteSymbolic || TypeSymbol.ContainsTypeParameter(mapped) ||
-                    TypeSymbol.ContainsSameCompilationUserType(mapped)
+                    TypeSymbol.ContainsSameCompilationUserType(mapped) || TypeSymbol.ContainsFunctionPointer(mapped)
             ) {
                 mapped
             } else {
@@ -5911,6 +5911,9 @@ internal class ConversionClassifier {
                 return false
             }
             if substitutedTarget != nil && from == substitutedTarget {
+                return false
+            }
+            if from is FunctionPointerTypeSymbol && targetParameterType.IsFunctionPointer {
                 return false
             }
             // FunctionTypeSymbol carries no ClrType but always needs delegate

@@ -393,6 +393,99 @@ func Main() {
     }
 
     @Fact
+    func Issue5372_ReadonlyLiteral_InitializesViaConstructorAndPassesStrictVerification() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package ReadonlyLiteral
+import System
+
+public enum Kind { First; Second }
+public data struct Generated {
+    public let Number float64
+}
+public data struct ThreeFields {
+    public let Kind Kind
+    public let Number float64
+    public let Flag bool
+}
+public data struct GenericReadonly[T] {
+    public let Value T
+}
+public struct PlainReadonly {
+    public let Value int32
+}
+public data struct OrderedStruct {
+    public let Seed string = Trace.Record("C")
+    public var A string = ""
+    public let B string
+}
+public data struct ThrowingStruct {
+    public let Seed string = Trace.Fail("T")
+    public var A string = ""
+    public let B string
+}
+public data struct BoolShapes[T] {
+    public let A bool
+    public let B bool
+    public init(x bool, y bool, z bool) {
+        A = x
+        B = y
+    }
+}
+public class Trace {
+    shared {
+        public var Value string = ""
+        public func Record(step string) string {
+            Value = Value + step
+            return step
+        }
+        public func Fail(step string) string {
+            Value = Value + step
+            throw InvalidOperationException("ctor boom")
+        }
+    }
+}
+func Main() {
+    let value = Generated{Number: 1.0}
+    let a = ThreeFields{Kind: Kind.Second, Number: Double.NaN, Flag: true}
+    let b = ThreeFields{Kind: Kind.Second, Number: Double.NaN, Flag: true}
+    let g = GenericReadonly[int32]{Value: 42}
+    let p = PlainReadonly{Value: 7}
+    let ordered = OrderedStruct{A: Trace.Record("A"), B: Trace.Record("B")}
+    try {
+        let _ = ThrowingStruct{A: Trace.Record("X"), B: Trace.Record("Y")}
+    } catch (InvalidOperationException) {
+        Trace.Record("!")
+    }
+    let bothBools = BoolShapes[int32]{A: true, B: true}
+    let secondBoolOnly = BoolShapes[int32]{B: true}
+    Console.WriteLine(value.Number)
+    Console.WriteLine(a.Equals(b))
+    Console.WriteLine(a.GetHashCode() == b.GetHashCode())
+    Console.WriteLine(g.Value + p.Value)
+    Console.WriteLine(Trace.Value + ":" + ordered.A + ordered.B)
+    Console.WriteLine("${bothBools.A},${bothBools.B},${secondBoolOnly.A},${secondBoolOnly.B}")
+}`, "ReadonlyLiteral", true)
+        IlVerifier.Verify(dll)
+        let assembly = EmittedFixture.Load(dll)
+        for (typeName, fieldName) in[](string, string){
+            ("ReadonlyLiteral.Generated", "Number"),
+            ("ReadonlyLiteral.ThreeFields", "Kind"),
+            ("ReadonlyLiteral.ThreeFields", "Number"),
+            ("ReadonlyLiteral.ThreeFields", "Flag"),
+            ("ReadonlyLiteral.GenericReadonly`1", "Value"),
+            ("ReadonlyLiteral.PlainReadonly", "Value"),
+            ("ReadonlyLiteral.OrderedStruct", "B"),
+            ("ReadonlyLiteral.BoolShapes`1", "A"),
+            ("ReadonlyLiteral.BoolShapes`1", "B")
+        } {
+            let type = assembly.GetType(typeName, throwOnError: true)!!
+            let field = type.GetField(fieldName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)!!
+            Assert.True(field.IsInitOnly, "$typeName.$fieldName should remain initonly")
+        }
+        AssertOutputBytes(dll, "1\nTrue\nTrue\n49\nCABT!:AB\nTrue,True,False,True\n")
+    }
+
+    @Fact
     func TimedOutOutputFixture_TerminatesTheChild_AndCompletesPipeReads() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let dll = fixture.Compile(`package EqualityTimeout

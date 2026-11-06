@@ -2372,8 +2372,8 @@ internal partial class DeclarationBinder {
                     // A deeper base's type argument may itself be a type parameter of
                     // a shallower (already-processed) base; resolve it transitively so
                     // the map always lands on the concrete type in the derived context.
-                    if arg is TypeParameterSymbol tpArg && subst != nil && subst.TryGetValue(tpArg, out var resolved) {
-                        arg = resolved
+                    if subst != nil {
+                        arg = Binder.SubstituteType(arg, subst)
                     }
                     subst ??= Dictionary[TypeParameterSymbol, TypeSymbol]()
                     subst!![defParams[i]] = arg

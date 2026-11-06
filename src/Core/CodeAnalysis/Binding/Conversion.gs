@@ -539,10 +539,17 @@ class Conversion {
             // Only this direction is restricted. `sequence[T] -> IEnumerable[T]?`
             // and `sequence[T]? -> IEnumerable[T]?` keep the alias identity: they
             // ADD or PRESERVE the annotation and drop nothing.
-            if SequenceTypeSymbol.TryGetEnumerableInterfaceShape(from, out _, out _) &&
-                SequenceTypeSymbol.TryGetEnumerableInterfaceShape(to, out _, out _) &&
+            if SequenceTypeSymbol.TryGetEnumerableInterfaceShape(from, out var fromSeqDef, out var fromSeqElem) &&
+                SequenceTypeSymbol.TryGetEnumerableInterfaceShape(to, out var toSeqDef, out var toSeqElem) &&
                 !(from is NullableTypeSymbol && !(to is NullableTypeSymbol)) &&
-                TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from, to) {
+                (
+                if TypeSymbol.ContainsFunctionPointer(from) || TypeSymbol.ContainsFunctionPointer(to) {
+                    ClrTypeUtilities.AreSame(fromSeqDef, toSeqDef) &&
+                        HaveIdenticalTypeArgumentContracts(fromSeqElem, toSeqElem)
+                } else {
+                    TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from, to)
+                }
+            ) {
                 return Conversion.Identity
             }
             // Issue #3566: IEnumerable<T> (and its sequence[T] alias) implements
@@ -587,7 +594,13 @@ class Conversion {
                 IsImportedTypeIdentity(to) &&
                 (
                 !(RequiresSymbolicTypeArgumentIdentity(from) || RequiresSymbolicTypeArgumentIdentity(to)) ||
-                    TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from, to)
+                    (
+                    if TypeSymbol.ContainsFunctionPointer(from) || TypeSymbol.ContainsFunctionPointer(to) {
+                        HaveIdenticalTypeArgumentContracts(from, to)
+                    } else {
+                        TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from, to)
+                    }
+                )
             ) &&
                 ClrTypeUtilities.AreSame(from.ClrType, to.ClrType) {
                 return Conversion.Identity
@@ -810,6 +823,11 @@ class Conversion {
             if from is FunctionPointerTypeSymbol || to is FunctionPointerTypeSymbol {
                 if from == TypeSymbol.Null && to is FunctionPointerTypeSymbol {
                     return Conversion.Implicit
+                }
+                if from is FunctionPointerTypeSymbol fromFp &&
+                    to is FunctionPointerTypeSymbol toFp &&
+                    fromFp.SignatureEquals(toFp, HaveIdenticalTypeArgumentContracts) {
+                    return Conversion.Identity
                 }
                 if from is FunctionPointerTypeSymbol && to is FunctionPointerTypeSymbol {
                     return Conversion.Explicit
@@ -1581,7 +1599,9 @@ class Conversion {
             // every fixed length implicitly. Narrowing an unknown length to a
             // declared one is not implicit; the pair falls through to the #2516
             // guard below, which offers it as an explicit `cast[[N]T](s)`.
-            if from is SliceTypeSymbol sliceSrc && !(to is ArrayTypeSymbol) {
+            if from is SliceTypeSymbol sliceSrc &&
+                !(to is ArrayTypeSymbol) &&
+                !(TypeSymbol.ContainsFunctionPointer(from) || TypeSymbol.ContainsFunctionPointer(to)) {
                 let targetArray = to?.ClrType
                 let sourceElement Type? = sliceSrc.ElementType?.ClrType
                 if targetArray?.IsSZArray == true &&
@@ -3377,6 +3397,41 @@ class Conversion {
         private func HaveSameTypeArgumentDefinition(from TypeSymbol, to TypeSymbol) bool {
             let a = from.StripToBareShape()
             let b = to.StripToBareShape()
+            if a is SliceTypeSymbol && b is SliceTypeSymbol {
+                return true
+            }
+            if a is ArrayTypeSymbol arrayA && b is ArrayTypeSymbol arrayB {
+                return arrayA.Length == arrayB.Length
+            }
+            if (a is SliceTypeSymbol && b is ImportedTypeSymbol{ClrType: {IsSZArray: true}}) ||
+                (b is SliceTypeSymbol && a is ImportedTypeSymbol{ClrType: {IsSZArray: true}}) {
+                return true
+            }
+            if (
+                a is ArrayTypeSymbol &&
+                    b is ImportedTypeSymbol{ClrType: {IsSZArray: true}, TypeArguments: {IsDefaultOrEmpty: true}}
+            ) ||
+                (
+                b is ArrayTypeSymbol &&
+                    a is ImportedTypeSymbol{ClrType: {IsSZArray: true}, TypeArguments: {IsDefaultOrEmpty: true}}
+            ) {
+                return true
+            }
+            if a is RectangularArrayTypeSymbol rectA && b is RectangularArrayTypeSymbol rectB {
+                return rectA.Rank == rectB.Rank
+            }
+            if a is SequenceTypeSymbol && b is SequenceTypeSymbol {
+                return true
+            }
+            if a is AsyncSequenceTypeSymbol && b is AsyncSequenceTypeSymbol {
+                return true
+            }
+            if a is ChannelTypeSymbol chanA && b is ChannelTypeSymbol chanB {
+                return chanA.Direction == chanB.Direction
+            }
+            if a is MapTypeSymbol && b is MapTypeSymbol {
+                return true
+            }
             if a.ClrType != nil || b.ClrType != nil {
                 return AreTypeArgumentsEquivalent(a, b)
             }
@@ -3398,12 +3453,49 @@ class Conversion {
             return AreTypeArgumentsEquivalent(a, b)
         }
 
-        private func HaveIdenticalTypeArgumentContracts(from TypeSymbol, to TypeSymbol) bool {
+        internal func HaveIdenticalTypeArgumentContracts(from TypeSymbol, to TypeSymbol) bool {
+            if (from is ByRefTypeSymbol) != (to is ByRefTypeSymbol) {
+                return false
+            }
+            if from is ByRefTypeSymbol fromByRef && to is ByRefTypeSymbol toByRef {
+                return HaveIdenticalTypeArgumentContracts(fromByRef.PointeeType, toByRef.PointeeType)
+            }
+            let fromBare = from.StripToBareShape()
+            let toBare = to.StripToBareShape()
+            if fromBare is FunctionPointerTypeSymbol || toBare is FunctionPointerTypeSymbol {
+                return from.ReferenceNullability == to.ReferenceNullability && NullableLifting.IsAnyValueTypeNullable(
+                    fromBare as NullableTypeSymbol
+                ) ==
+                NullableLifting.IsAnyValueTypeNullable(toBare as NullableTypeSymbol) &&
+                    (
+                    fromBare as FunctionPointerTypeSymbol ??
+                        (fromBare as NullableTypeSymbol)?.UnderlyingType as FunctionPointerTypeSymbol
+                ) is {} fromFp &&
+                    (
+                    toBare as FunctionPointerTypeSymbol ??
+                        (toBare as NullableTypeSymbol)?.UnderlyingType as FunctionPointerTypeSymbol
+                ) is {} toFp &&
+                    fromFp.SignatureEquals(toFp, HaveIdenticalTypeArgumentContracts)
+            }
+            if fromBare is PointerTypeSymbol || toBare is PointerTypeSymbol {
+                return from.ReferenceNullability == to.ReferenceNullability && NullableLifting.IsAnyValueTypeNullable(
+                    fromBare as NullableTypeSymbol
+                ) ==
+                NullableLifting.IsAnyValueTypeNullable(toBare as NullableTypeSymbol) &&
+                    (
+                    fromBare as PointerTypeSymbol ??
+                        (fromBare as NullableTypeSymbol)?.UnderlyingType as PointerTypeSymbol
+                ) is {} fromPtr &&
+                    (
+                    toBare as PointerTypeSymbol ?? (toBare as NullableTypeSymbol)?.UnderlyingType as PointerTypeSymbol
+                ) is {} toPtr &&
+                    HaveIdenticalTypeArgumentContracts(fromPtr.PointeeType, toPtr.PointeeType)
+            }
             // Value optionality changes storage even when the symbol relays its underlying CLR type.
             if from.ReferenceNullability != to.ReferenceNullability || NullableLifting.IsAnyValueTypeNullable(
-                from.StripToBareShape() as NullableTypeSymbol
+                fromBare as NullableTypeSymbol
             ) !=
-            NullableLifting.IsAnyValueTypeNullable(to.StripToBareShape() as NullableTypeSymbol) ||
+            NullableLifting.IsAnyValueTypeNullable(toBare as NullableTypeSymbol) ||
                 !TryGetIdenticalTypeArgumentPositions(from, to, out var fromPositions, out var toPositions) {
                 return false
             }
@@ -5172,6 +5264,23 @@ class Conversion {
             }
             a = a.StripToBareShape()
             b = b.StripToBareShape()
+            if a is FunctionPointerTypeSymbol || b is FunctionPointerTypeSymbol {
+                return a is FunctionPointerTypeSymbol fpA && b is FunctionPointerTypeSymbol fpB && fpA.SignatureEquals(
+                    fpB,
+                    HaveIdenticalTypeArgumentContracts
+                )
+            }
+            if a is PointerTypeSymbol || b is PointerTypeSymbol {
+                return a is PointerTypeSymbol ptrA &&
+                    b is PointerTypeSymbol ptrB &&
+                    AreTypeArgumentsEquivalent(ptrA.PointeeType, ptrB.PointeeType)
+            }
+            if a is SliceTypeSymbol sliceA && b is SliceTypeSymbol sliceB {
+                return AreTypeArgumentsEquivalent(sliceA.ElementType, sliceB.ElementType)
+            }
+            if a is ArrayTypeSymbol arrA && b is ArrayTypeSymbol arrB {
+                return arrA.Length == arrB.Length && AreTypeArgumentsEquivalent(arrA.ElementType, arrB.ElementType)
+            }
             // After stripping, a remaining wrapper is value optionality: `Nullable<V>` is a different runtime argument than `V`.
             if a is NullableTypeSymbol || b is NullableTypeSymbol {
                 return a is NullableTypeSymbol aValue &&
@@ -5787,7 +5896,10 @@ class Conversion {
             if (type is SequenceTypeSymbol or AsyncSequenceTypeSymbol) &&
                 SequenceTypeSymbol
                 .TryGetEnumerableInterfaceShape(type!!, out _, out var elementType) {
-                return RequiresSymbolicTypeArgumentIdentity(elementType)
+                return TypeSymbol.ContainsFixedLengthArray(elementType) || TypeSymbol.ContainsFunctionPointer(
+                    elementType
+                ) ||
+                    RequiresSymbolicTypeArgumentIdentity(elementType)
             }
             if type is not ImportedTypeSymbol imported ||
                 (imported.OpenDefinition == nil && imported.TypeArguments.IsDefaultOrEmpty) {
@@ -5804,7 +5916,7 @@ class Conversion {
             } else {
                 imported.TypeArguments
             } {
-                if TypeSymbol.ContainsFixedLengthArray(argument) {
+                if TypeSymbol.ContainsFixedLengthArray(argument) || TypeSymbol.ContainsFunctionPointer(argument) {
                     return true
                 }
             }
@@ -6206,6 +6318,9 @@ class Conversion {
             }
             if a == nil || b == nil {
                 return false
+            }
+            if TypeSymbol.ContainsFunctionPointer(a) || TypeSymbol.ContainsFunctionPointer(b) {
+                return HaveIdenticalTypeArgumentContracts(a, b)
             }
             if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(a, b) {
                 return true
