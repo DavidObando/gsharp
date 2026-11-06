@@ -170,7 +170,28 @@ internal shared class MagicCollectionZeroValue {
         constructor ConstructorInfo? = nil
     ) BoundExpression? {
         missingDeclarationShape = false
-        let type = parameterType ?? parameter.Type
+        var type = parameterType ?? parameter.Type
+        if constructor != nil && owner.ClrType is {} importedForDefault && type is NullableTypeSymbol liftedNullable {
+            let indexForDefault = owner.PrimaryConstructorParameters.IndexOf(parameter)
+            let ctorParameters = constructor.GetParameters()
+            if uint32(indexForDefault) < uint32(ctorParameters.Length) {
+                let openParameter = ClrNullability.GetOpenParameterDefinition(ctorParameters[indexForDefault])
+                let openParameterType = openParameter.ParameterType
+                let substitutedArgIsNullable = openParameterType.IsGenericParameter &&
+                    openParameterType.DeclaringMethod == nil &&
+                    !owner
+                    .TypeArguments
+                    .IsDefault &&
+                    uint32(openParameterType.GenericParameterPosition) < uint32(owner.TypeArguments.Length) &&
+                    owner.TypeArguments[openParameterType.GenericParameterPosition] is NullableTypeSymbol
+                // Brace/spread literals synthesize legal collection zero values rather than
+                // using optional `= null!` / `= default!` defaults on non-nullable slots (#5419).
+                if !substitutedArgIsNullable && ClrNullability.HasOptionalNullDefault(openParameter) &&
+                    ClrNullability.GetParameterDeclaredState(openParameter, 0) == ClrNullabilityState.NotAnnotated {
+                    type = liftedNullable.UnderlyingType
+                }
+            }
+        }
         if type.ReferenceNullability == ReferenceNullabilityKind.Nullable || NullableLifting.IsAnyValueTypeNullable(
             type as NullableTypeSymbol
         ) {
