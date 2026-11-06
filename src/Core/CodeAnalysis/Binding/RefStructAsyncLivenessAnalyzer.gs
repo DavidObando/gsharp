@@ -177,14 +177,57 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
 
         protected override func VisitVariableDeclaration(node BoundVariableDeclaration) {
-            if node.Variable is LocalVariableSymbol local &&
+            Record(node.Variable)
+            base.VisitVariableDeclaration(node)
+        }
+
+        protected override func VisitIsExpression(node BoundIsExpression) {
+            Record(node.InputVariable)
+            base.VisitIsExpression(node)
+        }
+
+        override func VisitPattern(node BoundPattern?) {
+            if node == nil {
+                return
+            }
+            switch node {
+                case BoundDiscardPattern{Variable: {} variable} {
+                    Record(variable)
+                }
+                case tp is BoundTypePattern {
+                    if tp.HasBinding || tp.PropertyPattern != nil {
+                        Record(tp.Variable)
+                    }
+                }
+                case pp is BoundPropertyPattern {
+                    Record(pp.InputVariable)
+                    Record(pp.UnwrappedVariable)
+                    for field in pp.Fields {
+                        Record(field.ValueVariable)
+                    }
+                }
+                case rp is BoundRelationalPattern {
+                    Record(rp.InputVariable)
+                    Record(rp.ValueVariable)
+                }
+                case lp is BoundListPattern {
+                    Record(lp.InputVariable)
+                }
+                case slice is BoundSlicePattern {
+                    Record(slice.Variable)
+                }
+            }
+            base.VisitPattern(node)
+        }
+
+        private func Record(variable VariableSymbol?) {
+            if variable is LocalVariableSymbol local &&
                 (
                 RefStructAsyncLivenessAnalyzer.IsNativeRefAlias(local) ||
                     (collectByRefLikeLocals && TypeSymbol.IsByRefLike(local.Type))
             ) {
                 Locals.Add(local)
             }
-            base.VisitVariableDeclaration(node)
         }
     }
 
@@ -198,10 +241,15 @@ internal shared class RefStructAsyncLivenessAnalyzer {
 
         init(interesting HashSet[VariableSymbol]) {
             Reads = HashSet[VariableSymbol]()
+            PatternKills = HashSet[VariableSymbol]()
             this.interesting = interesting
         }
 
         prop Reads HashSet[VariableSymbol] {
+            get;
+        }
+
+        prop PatternKills HashSet[VariableSymbol] {
             get;
         }
 
@@ -223,6 +271,111 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         protected override func VisitAwaitExpression(node BoundAwaitExpression) {
             ContainsAwait = true
             base.VisitAwaitExpression(node)
+        }
+
+        protected override func VisitSwitchExpression(node BoundSwitchExpression) {
+            let discrCollector = ReadAndAwaitCollector(interesting)
+            discrCollector.VisitExpression(node.Discriminant)
+            Reads.UnionWith(discrCollector.Reads)
+            PatternKills.UnionWith(discrCollector.PatternKills)
+            if discrCollector.ContainsAwait {
+                ContainsAwait = true
+            }
+            let switchPatternBindings = HashSet[VariableSymbol]()
+            for arm in node.Arms {
+                let armBindings = HashSet[VariableSymbol]()
+                RefStructAsyncLivenessAnalyzer.CollectPatternBindings(arm.Pattern, interesting, armBindings)
+                switchPatternBindings.UnionWith(armBindings)
+                let patternCollector = ReadAndAwaitCollector(interesting)
+                if arm.Pattern != nil {
+                    patternCollector.VisitPattern(arm.Pattern)
+                }
+                let guardCollector = ReadAndAwaitCollector(interesting)
+                if arm.Guard != nil {
+                    guardCollector.VisitExpression(arm.Guard)
+                }
+                let resultCollector = ReadAndAwaitCollector(interesting)
+                resultCollector.VisitExpression(arm.Result)
+                if patternCollector.ContainsAwait || guardCollector.ContainsAwait || resultCollector.ContainsAwait {
+                    ContainsAwait = true
+                }
+                for v in patternCollector.Reads {
+                    if !armBindings.Contains(v) || patternCollector.ContainsAwait {
+                        Reads.Add(v)
+                    }
+                }
+                for v in guardCollector.Reads {
+                    if !armBindings.Contains(v) || patternCollector.ContainsAwait || guardCollector.ContainsAwait {
+                        Reads.Add(v)
+                    }
+                }
+                for v in resultCollector.Reads {
+                    if !armBindings.Contains(v) ||
+                        patternCollector.ContainsAwait ||
+                        guardCollector.ContainsAwait ||
+                        resultCollector.ContainsAwait {
+                        Reads.Add(v)
+                    }
+                }
+                for killed in patternCollector.PatternKills {
+                    if !discrCollector.Reads.Contains(killed) {
+                        PatternKills.Add(killed)
+                    }
+                }
+                for killed in guardCollector.PatternKills {
+                    if !discrCollector.Reads.Contains(killed) && !patternCollector.Reads.Contains(killed) {
+                        PatternKills.Add(killed)
+                    }
+                }
+                for killed in resultCollector.PatternKills {
+                    if !discrCollector.Reads.Contains(killed) && !patternCollector.Reads.Contains(killed) &&
+                        !guardCollector
+                        .Reads
+                        .Contains(killed) {
+                        PatternKills.Add(killed)
+                    }
+                }
+            }
+            for v in switchPatternBindings {
+                if !discrCollector.Reads.Contains(v) {
+                    PatternKills.Add(v)
+                }
+            }
+        }
+
+        protected override func VisitIsExpression(node BoundIsExpression) {
+            let leftCollector = ReadAndAwaitCollector(interesting)
+            leftCollector.VisitExpression(node.Expression)
+            Reads.UnionWith(leftCollector.Reads)
+            PatternKills.UnionWith(leftCollector.PatternKills)
+            if leftCollector.ContainsAwait {
+                ContainsAwait = true
+            }
+            let isBindings = HashSet[VariableSymbol]()
+            if node.InputVariable != nil && interesting.Contains(node.InputVariable) {
+                isBindings.Add(node.InputVariable)
+            }
+            RefStructAsyncLivenessAnalyzer.CollectPatternBindings(node.Pattern, interesting, isBindings)
+            let patternCollector = ReadAndAwaitCollector(interesting)
+            patternCollector.VisitPattern(node.Pattern)
+            if patternCollector.ContainsAwait {
+                ContainsAwait = true
+            }
+            for v in patternCollector.Reads {
+                if !isBindings.Contains(v) || patternCollector.ContainsAwait {
+                    Reads.Add(v)
+                }
+            }
+            for killed in patternCollector.PatternKills {
+                if !leftCollector.Reads.Contains(killed) {
+                    PatternKills.Add(killed)
+                }
+            }
+            for v in isBindings {
+                if !leftCollector.Reads.Contains(v) {
+                    PatternKills.Add(v)
+                }
+            }
         }
     }
 
@@ -525,6 +678,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                     if killTarget != nil {
                         live.Remove(killTarget)
                     }
+                    for killed in collector.PatternKills {
+                        live.Remove(killed)
+                    }
                 }
             }
             case ys is BoundYieldStatement {
@@ -649,6 +805,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
     ) {
         let afterSwitch = HashSet[VariableSymbol](live)
         let union = HashSet[VariableSymbol]()
+        let switchPatternBindings = HashSet[VariableSymbol]()
         var hasDefault = false
         for arm in switchStmt.Arms {
             if arm.IsDefault {
@@ -656,16 +813,94 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             }
             let armLiveIn = AnalyzeRegion(arm.Body, afterSwitch, HashSet[VariableSymbol](), interesting, diagnostics)
             if arm.Guard != nil {
-                ApplyExpression(arm.Guard, armLiveIn, interesting, diagnostics, nil)
+                ApplyExpression(arm.Guard, armLiveIn, interesting, diagnostics, switchStmt)
+            }
+            if arm.Pattern != nil {
+                let armBindings = HashSet[VariableSymbol]()
+                CollectPatternBindings(arm.Pattern, interesting, armBindings)
+                armLiveIn.ExceptWith(armBindings)
+                let patternCollector = ReadAndAwaitCollector(interesting)
+                patternCollector.VisitPattern(arm.Pattern)
+                for v in patternCollector.Reads {
+                    if !armBindings.Contains(v) || patternCollector.ContainsAwait {
+                        armLiveIn.Add(v)
+                    }
+                }
+                if patternCollector.ContainsAwait {
+                    ReportIfUnsafe(armLiveIn, excludedSelfKill: nil, diagnostics, switchStmt, "await")
+                }
+                armLiveIn.ExceptWith(armBindings)
+                armLiveIn.ExceptWith(patternCollector.PatternKills)
+                switchPatternBindings.UnionWith(armBindings)
             }
             union.UnionWith(armLiveIn)
         }
         if !hasDefault {
             union.UnionWith(afterSwitch)
         }
+        union.ExceptWith(switchPatternBindings)
         live.Clear()
         live.UnionWith(union)
-        ApplyExpression(switchStmt.Discriminant, live, interesting, diagnostics, nil)
+        ApplyExpression(switchStmt.Discriminant, live, interesting, diagnostics, switchStmt)
+    }
+
+    private func CollectPatternBindings(
+        pattern BoundPattern?,
+        interesting HashSet[VariableSymbol],
+        sink HashSet[VariableSymbol]
+    ) {
+        if pattern == nil {
+            return
+        }
+        let Record = (variable VariableSymbol?) -> {
+            if variable != nil && interesting.Contains(variable) {
+                sink.Add(variable)
+            }
+        }
+        switch pattern {
+            case BoundDiscardPattern{Variable: {} variable} {
+                Record(variable)
+            }
+            case tp is BoundTypePattern {
+                if tp.HasBinding || tp.PropertyPattern != nil {
+                    Record(tp.Variable)
+                }
+                if tp.PropertyPattern != nil {
+                    CollectPatternBindings(tp.PropertyPattern, interesting, sink)
+                }
+            }
+            case pp is BoundPropertyPattern {
+                Record(pp.InputVariable)
+                Record(pp.UnwrappedVariable)
+                for field in pp.Fields {
+                    Record(field.ValueVariable)
+                    CollectPatternBindings(field.Pattern, interesting, sink)
+                }
+            }
+            case rp is BoundRelationalPattern {
+                Record(rp.InputVariable)
+                Record(rp.ValueVariable)
+            }
+            case lp is BoundListPattern {
+                Record(lp.InputVariable)
+                for elem in lp.Elements {
+                    CollectPatternBindings(elem, interesting, sink)
+                }
+            }
+            case slice is BoundSlicePattern {
+                Record(slice.Variable)
+                if slice.Pattern != nil {
+                    CollectPatternBindings(slice.Pattern, interesting, sink)
+                }
+            }
+            case bp is BoundBinaryPattern {
+                CollectPatternBindings(bp.Left, interesting, sink)
+                CollectPatternBindings(bp.Right, interesting, sink)
+            }
+            case np is BoundNotPattern {
+                CollectPatternBindings(np.Pattern, interesting, sink)
+            }
+        }
     }
 
     /// Applies one expression's backward transfer to [`live`](paramref):
@@ -732,6 +967,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
         }
         if killTarget != nil {
             live.Remove(killTarget)
+        }
+        for killed in collector.PatternKills {
+            live.Remove(killed)
         }
     }
 

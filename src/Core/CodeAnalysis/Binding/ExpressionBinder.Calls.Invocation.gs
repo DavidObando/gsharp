@@ -2556,6 +2556,17 @@ internal partial class ExpressionBinder {
                 ) {
                     return inheritedCall!!
                 }
+                if TryBindClrDelegateMemberInvocation(
+                    receiver!!,
+                    inheritedBaseClr,
+                    methodName,
+                    arguments,
+                    ce,
+                    argumentNames,
+                    out var inheritedDelegateCall
+                ) {
+                    return inheritedDelegateCall!!
+                }
             }
             // Issue #1218: an enum value is a CLR value type whose base chain is
             // System.Enum -> System.ValueType -> System.Object. Its inherited

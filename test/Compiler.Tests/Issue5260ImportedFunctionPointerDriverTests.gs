@@ -782,6 +782,109 @@ unsafe func Main() {
         )
     }
 
+    @Fact
+    func Issue5381_ImportedFunctionPointerCallBinding_InvokesMembersAndPassesArguments() {
+        const gapContract = `#nullable enable
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+namespace Gap {
+    public unsafe class Api {
+        public delegate*<nint, nint> Managed = &AddOne;
+        public delegate*<nint, nint> ManagedProp => Managed;
+        public delegate*<nint, nint> ProtectedGetterProp { protected get => Managed; set { } }
+        public delegate*<nint, nint> WriteOnlyInstanceProp { private get => Managed; set { } }
+        public static delegate*<nint, nint> StaticManaged = &AddOne;
+        public static delegate*<nint, nint> WriteOnlyStaticProp { private get => StaticManaged; set { } }
+        public static delegate*<string?> NullableString = &GetNullableString;
+        public static delegate*<string> NonNullString = &GetNonNullString;
+        public static delegate* unmanaged[Cdecl]<nint, nint> Echo(delegate* unmanaged[Cdecl]<nint, nint> value) => value;
+        public delegate*<nint, nint> EchoManaged(delegate*<nint, nint> value) => value;
+        public nint ConsumeIn(in delegate*<nint, nint> value) => value((nint)1);
+        public static void ReplaceNullableReturn(ref delegate*<string?> value) => value = &GetNullableString;
+        public static void ReplaceCdecl(ref delegate* unmanaged[Cdecl]<nint, nint> value) { }
+        public static void ConsumeSeq(System.Collections.Generic.IEnumerable<delegate*<string>[]> seq) { }
+        public static nint AcceptNullableArray(delegate*<nint, nint>[]? pointers) => pointers == null ? (nint)2 : (nint)0;
+        public static delegate*<string> EchoNonNullString(delegate*<string> value) => value;
+        public static nint AddOne(nint value) => value + 1;
+        public static string? GetNullableString() => null;
+        public static string GetNonNullString() => "ok";
+    }
+}`
+        using let fixture = CSharpFixture(gapContract, assemblyName: "Gap", allowUnsafe: true)
+        const source = `import System
+import Gap
+class DerivedApi : Api {
+    unsafe func CallProtected() nint -> this.ProtectedGetterProp(nint(9))
+}
+unsafe func Probe(api Api) nint {
+    let value = api.Managed(nint(41))
+    let propValue = api.ManagedProp(value)
+    let staticValue = Api.StaticManaged(propValue)
+    let pointer = cast[unmanaged[Cdecl](nint) -> nint](nint(0))
+    let result = Api.Echo(pointer)
+    let echoedManaged = api.EchoManaged(api.Managed)
+    let consumedIn = api.ConsumeIn(api.Managed)
+    let protectedIn = DerivedApi().CallProtected()
+    let nullableArr []?*func(nint) nint = nil
+    let acceptedNil = Api.AcceptNullableArray(nil) + Api.AcceptNullableArray(nullableArr)
+    return echoedManaged(staticValue) + consumedIn + protectedIn + acceptedNil + (if result == nil { nint(1) } else { nint(0) })
+}
+func Main() {
+    Console.Write(Probe(Api()))
+}`
+        let consumer = Compile(fixture.DirectoryPath, "Consumer5381", source, fixture.AssemblyPath)
+        Assert.True(consumer.Code == 0, consumer.Diagnostics)
+        Assert.Equal(Encoding.UTF8.GetBytes("62"), Run(consumer.Path))
+
+        let rejected = Compile(fixture.DirectoryPath, "Rejected5381", `import Gap
+unsafe func Bad() {
+    let wrong = cast[unmanaged[Stdcall](nint) -> nint](nint(0))
+    let _ = Api.Echo(wrong)
+}`, fixture.AssemblyPath, executable: false)
+        Assert.NotEqual(0, rejected.Code)
+        Assert.False(File.Exists(rejected.Path))
+        let error = Assert.Single(Regex.Matches(rejected.Diagnostics, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`))
+        Assert.Equal("GS0159", error.Groups[5].Value)
+        Assert.Equal("4", error.Groups[1].Value)
+        Assert.Equal("17", error.Groups[2].Value)
+        Assert.Equal("4", error.Groups[3].Value)
+        Assert.Equal("28", error.Groups[4].Value)
+
+        let rejectedNullability = Compile(fixture.DirectoryPath, "RejectedNullability5381", `import Gap
+class Box5381[T] {}
+unsafe func SwapBox(ref box Box5381[[]*func() string?]) {}
+unsafe func BadNullability(api Api, seq sequence[[]*func() string?]) {
+    let direct *func() string = Api.NullableString
+    let _ = Api.EchoNonNullString(Api.NullableString)
+    let sliceSrc = [] *func() string? { Api.NullableString }
+    let sliceDst [] *func() string = sliceSrc
+    var nonNullLocal *func() string = Api.NonNullString
+    Api.ReplaceNullableReturn(&nonNullLocal)
+    var stdcallLocal = cast[unmanaged[Stdcall](nint) -> nint](nint(0))
+    Api.ReplaceCdecl(&stdcallLocal)
+    let _ = api.WriteOnlyInstanceProp(nint(1))
+    let _ = Api.WriteOnlyStaticProp(nint(1))
+    var nonNullBox = Box5381[[]*func() string]()
+    SwapBox(&nonNullBox)
+    Api.ConsumeSeq(seq)
+    let _ = api.ProtectedGetterProp(nint(1))
+}`, fixture.AssemblyPath, executable: false)
+        Assert.NotEqual(0, rejectedNullability.Code)
+        Assert.False(File.Exists(rejectedNullability.Path))
+        let nullErrors = Regex.Matches(rejectedNullability.Diagnostics, `error (GS\d+):`)
+        Assert.Equal(10, nullErrors.Count)
+        Assert.Equal("GS0156", nullErrors[0].Groups[1].Value)
+        Assert.Equal("GS0159", nullErrors[1].Groups[1].Value)
+        Assert.Equal("GS0155", nullErrors[2].Groups[1].Value)
+        Assert.Equal("GS0154", nullErrors[3].Groups[1].Value)
+        Assert.Equal("GS0154", nullErrors[4].Groups[1].Value)
+        Assert.Equal("GS0159", nullErrors[5].Groups[1].Value)
+        Assert.Equal("GS0472", nullErrors[6].Groups[1].Value)
+        Assert.Equal("GS0154", nullErrors[7].Groups[1].Value)
+        Assert.Equal("GS0159", nullErrors[8].Groups[1].Value)
+        Assert.Equal("GS0159", nullErrors[9].Groups[1].Value)
+    }
+
     shared {
         private const TupleOverrideContract string = `#nullable enable
 namespace TupleOverrides {

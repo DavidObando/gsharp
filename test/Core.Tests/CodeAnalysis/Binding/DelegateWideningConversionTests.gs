@@ -46,6 +46,87 @@ open class DelegateWideningConversionTests {
         Assert.False(conversion.Exists)
     }
 
+    @Fact
+    func SourceElementFunctionDelegateAndChannel_WidenToObject_AndImportedFuncConvertsToArrow() {
+        let animal = StructSymbol(
+            "Animal",
+            ImmutableArray[FieldSymbol].Empty,
+            Accessibility.Public,
+            nil,
+            "probe",
+            true,
+            false,
+            true
+        )
+        let dog = StructSymbol(
+            "Dog",
+            ImmutableArray[FieldSymbol].Empty,
+            Accessibility.Public,
+            nil,
+            "probe",
+            false,
+            false,
+            true
+        )
+        dog.SetBaseClass(animal)
+        let handler = DelegateTypeSymbol(
+            "Handler",
+            "probe",
+            Accessibility.Public,
+            ImmutableArray.Create(ParameterSymbol("x", dog)),
+            dog,
+            nil
+        )
+        let arrow = FunctionTypeSymbol.Get(ImmutableArray.Create[TypeSymbol](dog), dog)
+        let channel = ChannelTypeSymbol.Get(dog)
+        for source in[]TypeSymbol{arrow, handler, channel} {
+            let toObject = Conversion.Classify(source, TypeSymbol.Object)
+            Assert.True(toObject.IsImplicit)
+            Assert.False(toObject.IsIdentity)
+            let toNullableObject = Conversion.Classify(source, NullableTypeSymbol.Get(TypeSymbol.Object))
+            Assert.True(toNullableObject.IsImplicit)
+        }
+        let funcDog = ImportedTypeSymbol.GetConstructed(
+            typeof(Func[object]),
+            typeof(Func[_]),
+            ImmutableArray.Create[TypeSymbol](dog)
+        )
+        let funcAnimal = ImportedTypeSymbol.GetConstructed(
+            typeof(Func[object]),
+            typeof(Func[_]),
+            ImmutableArray.Create[TypeSymbol](animal)
+        )
+        let actionAnimal = ImportedTypeSymbol.GetConstructed(
+            typeof(Action[object]),
+            typeof(Action[_]),
+            ImmutableArray.Create[TypeSymbol](animal)
+        )
+        let actionDog = ImportedTypeSymbol.GetConstructed(
+            typeof(Action[object]),
+            typeof(Action[_]),
+            ImmutableArray.Create[TypeSymbol](dog)
+        )
+        let arrowDog = FunctionTypeSymbol.Get(ImmutableArray[TypeSymbol].Empty, dog)
+        let arrowAnimal = FunctionTypeSymbol.Get(ImmutableArray[TypeSymbol].Empty, animal)
+        let arrowVoidDog = FunctionTypeSymbol.Get(ImmutableArray.Create[TypeSymbol](dog), TypeSymbol.Void)
+        let arrowVoidAnimal = FunctionTypeSymbol.Get(ImmutableArray.Create[TypeSymbol](animal), TypeSymbol.Void)
+        let arrowVoidObject = FunctionTypeSymbol.Get(
+            ImmutableArray.Create[TypeSymbol](TypeSymbol.Object),
+            TypeSymbol.Void
+        )
+        Assert.True(Conversion.Classify(funcDog, arrowDog).IsImplicit)
+        Assert.True(Conversion.Classify(funcDog, arrowAnimal).IsImplicit)
+        Assert.True(Conversion.Classify(actionAnimal, arrowVoidDog).IsImplicit)
+        Assert.True(Conversion.ReusesFunctionValueDelegate(funcDog, arrowDog))
+        Assert.True(Conversion.ReusesFunctionValueDelegate(funcDog, arrowAnimal))
+        Assert.True(Conversion.ReusesFunctionValueDelegate(actionAnimal, arrowVoidDog))
+        Assert.False(Conversion.Classify(funcAnimal, arrowDog).IsImplicit)
+        Assert.False(Conversion.Classify(actionDog, arrowVoidAnimal).IsImplicit)
+        let downcastToObject = Conversion.Classify(actionDog, arrowVoidObject)
+        Assert.True(downcastToObject.Exists)
+        Assert.False(downcastToObject.IsImplicit)
+    }
+
     shared {
         func DelegateBaseTypes() TheoryData[Type] -> TheoryData[Type]{typeof(Delegate), typeof(MulticastDelegate)}
     }

@@ -142,13 +142,49 @@ internal shared class ByRefStorageMatching {
         }
         let bareStorage = storage.StripToBareShape()
         let bareParameter = parameter.StripToBareShape()
+        if bareStorage is FunctionPointerTypeSymbol || bareParameter is FunctionPointerTypeSymbol {
+            return bareStorage is FunctionPointerTypeSymbol storagePointer &&
+                bareParameter is FunctionPointerTypeSymbol parameterPointer &&
+                storagePointer.SignatureEquals(parameterPointer, Conversion.HaveIdenticalTypeArgumentContracts)
+        }
         if bareStorage is NullableTypeSymbol || bareParameter is NullableTypeSymbol {
             return bareStorage is NullableTypeSymbol storageNullable &&
                 bareParameter is NullableTypeSymbol parameterNullable &&
                 IsSameRuntimeType(storageNullable.UnderlyingType, parameterNullable.UnderlyingType)
         }
-        if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(bareStorage, bareParameter) {
+        if !TypeSymbol.ContainsFunctionPointer(bareStorage) && !TypeSymbol.ContainsFunctionPointer(bareParameter) &&
+            TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(bareStorage, bareParameter) {
             return true
+        }
+        if bareStorage is PointerTypeSymbol storagePtr && bareParameter is PointerTypeSymbol parameterPtr {
+            return IsSameRuntimeType(storagePtr.PointeeType, parameterPtr.PointeeType)
+        }
+        if bareStorage is StructSymbol storageStruct && bareParameter is StructSymbol parameterStruct {
+            return object.ReferenceEquals(
+                storageStruct.Definition ?? storageStruct,
+                parameterStruct.Definition ?? parameterStruct
+            ) &&
+                AreSameRuntimeElementSequence(
+                Conversion.GetEffectiveStructTypeArguments(storageStruct),
+                Conversion.GetEffectiveStructTypeArguments(parameterStruct)
+            )
+        }
+        if bareStorage is InterfaceSymbol storageInterface && bareParameter is InterfaceSymbol parameterInterface {
+            return object.ReferenceEquals(
+                storageInterface.Definition ?? storageInterface,
+                parameterInterface.Definition ?? parameterInterface
+            ) &&
+                AreSameRuntimeElementSequence(
+                Conversion.GetEffectiveInterfaceTypeArguments(storageInterface),
+                Conversion.GetEffectiveInterfaceTypeArguments(parameterInterface)
+            )
+        }
+        if bareStorage is DelegateTypeSymbol storageDelegate && bareParameter is DelegateTypeSymbol parameterDelegate {
+            return object.ReferenceEquals(
+                storageDelegate.Definition ?? storageDelegate,
+                parameterDelegate.Definition ?? parameterDelegate
+            ) &&
+                AreSameRuntimeElementSequence(storageDelegate.TypeArguments, parameterDelegate.TypeArguments)
         }
         if bareStorage is ArrayTypeSymbol || bareParameter is ArrayTypeSymbol {
             if bareStorage is ArrayTypeSymbol storageFixed && bareParameter is ArrayTypeSymbol parameterFixed {
@@ -696,7 +732,8 @@ internal shared class ByRefStorageMatching {
     }
 
     private func HasErasedRuntimeShape(type TypeSymbol) bool -> TypeSymbol.ContainsSameCompilationUserType(type) ||
-        TypeSymbol.ContainsTypeParameter(type) || TypeSymbol.ContainsFixedLengthArray(type)
+        TypeSymbol.ContainsTypeParameter(type) || TypeSymbol.ContainsFixedLengthArray(type) ||
+        TypeSymbol.ContainsFunctionPointer(type)
 
     /// Whether any element or type-argument position of the two types differs
     /// in stated reference nullability, at any depth.

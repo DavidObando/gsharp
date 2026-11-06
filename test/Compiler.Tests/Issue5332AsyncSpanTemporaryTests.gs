@@ -121,23 +121,91 @@ async func Read(PARAMETER) int32 -> Consume(Make(), {
     @Fact
     func PreparationFailureReportsSourceAnchoredDiagnosticThroughDriver() {
         using let fixture = NativeSliceLanguageTests.Fixture()
-        let source = `package GuardDiagnostic
+        let validGuardSource = `package GuardDiagnostic
+import System
 import System.Threading.Tasks
 async func Read(pending Task[bool]) int32 {
     return switch 1 {
         case 1 when await pending: 10
         default: 0
     }
+}
+func Main() {
+    Console.WriteLine(Read(Task.FromResult(true)).GetAwaiter().GetResult())
+    Console.WriteLine(Read(Task.FromResult(false)).GetAwaiter().GetResult())
 }`
-        let (code, output) = fixture.TryCompile(source, "GuardDiagnostic", false)
+        let validAssembly = fixture.Compile(validGuardSource, "GuardDiagnosticValid", true)
+        Assert.Equal("10\n0\n", fixture.Run(validAssembly))
+        let invalidSpanSource = `package GuardDiagnostic
+import System
+import System.Threading.Tasks
+func Make() ReadOnlySpan[byte] -> ReadOnlySpan[byte]([]byte{65})
+func Consume(value ReadOnlySpan[byte], extra int32) int32 -> value.Length * 100 + extra
+async func Read(pending Task[bool]) int32 {
+    return Consume(Make(), switch 1 {
+        case 1 when await pending: 10
+        default: 0
+    })
+}`
+        let (code, output) = fixture.TryCompile(invalidSpanSource, "GuardDiagnostic", false)
         Assert.NotEqual(0, code)
-        Assert.Contains(".gs(5,21,5,34): error GS9998:", output, StringComparison.Ordinal)
-        Assert.Contains(
-            "'await' inside a switch-expression 'when' guard is not yet supported",
-            output,
-            StringComparison.Ordinal
-        )
+        Assert.Contains(".gs(8,21,8,34): error GS0219:", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "GuardDiagnostic.dll")))
+        for statementForm in[]bool{false, true} {
+            let switchBody = if statementForm {
+                `switch Make() {
+        case var s when await pending {
+            return s.Length
+        }
+        default {
+            return 0
+        }
+    }`
+            } else {
+                `return switch Make() {
+        case var s when await pending: s.Length
+        default: 0
+    }`
+            }
+            let patternBindingSource = `package GuardPatternDiagnostic
+import System
+import System.Threading.Tasks
+func Make() ReadOnlySpan[byte] -> ReadOnlySpan[byte]([]byte{65})
+async func Read(pending Task[bool]) int32 {
+    ` + "$switchBody" + `
+}`
+            let (patternCode, patternOutput) = fixture.TryCompile(patternBindingSource, "GuardPatternDiagnostic", false)
+            Assert.NotEqual(0, patternCode)
+            Assert.Contains(".gs(7,18,7,19): error GS0219:", patternOutput, StringComparison.Ordinal)
+            Assert.DoesNotContain("GS9998", patternOutput, StringComparison.Ordinal)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "GuardPatternDiagnostic.dll")))
+        }
+        for consumer in[]string{
+            "return switch n {\n        case > s.Length: 1\n        default: 0\n    }",
+            "return if n is > s.Length { 1 } else { 0 }"
+        } {
+            let relationalOperandSource = `package PatternOperandDiagnostic
+import System
+import System.Threading.Tasks
+func Make() ReadOnlySpan[byte] -> ReadOnlySpan[byte]([]byte{65})
+async func Read(n int32, pending Task[bool]) int32 {
+    let s = Make()
+    if !await pending {
+        return -1
+    }
+    ` + "$consumer" + `
+}`
+            let (operandCode, operandOutput) = fixture.TryCompile(
+                relationalOperandSource,
+                "PatternOperandDiagnostic",
+                false
+            )
+            Assert.NotEqual(0, operandCode)
+            Assert.Contains(".gs(6,9,6,10): error GS0219:", operandOutput, StringComparison.Ordinal)
+            Assert.DoesNotContain("GS9998", operandOutput, StringComparison.Ordinal)
+            Assert.False(File.Exists(Path.Combine(fixture.Directory, "PatternOperandDiagnostic.dll")))
+        }
     }
 
     @Theory

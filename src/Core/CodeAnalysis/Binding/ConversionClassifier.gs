@@ -857,6 +857,7 @@ internal class ConversionClassifier {
             return BoundErrorExpression(expression.Syntax)
         }
         var resolvedUserMethodGroup BoundMethodGroupExpression? = expression as BoundMethodGroupExpression
+        let isUserMethodGroupSource = resolvedUserMethodGroup != nil
         if resolvedUserMethodGroup != nil && !MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out _) {
             resolvedUserMethodGroup = BoundMethodGroupExpression(
                 resolvedUserMethodGroup.Syntax,
@@ -985,8 +986,14 @@ internal class ConversionClassifier {
         }
         var conversion = Conversion.Classify(expression.Type, type!!)
         conversion = ClassifyConvertedDelegate(expression, type!!, conversion)
+        if isUserMethodGroupSource &&
+            !conversion.IsImplicit &&
+            !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(expression.Type, type) {
+            conversion = Conversion.None
+        }
         if !conversion.Exists &&
             allowExplicit &&
+            !isUserMethodGroupSource &&
             (
             (
                 Conversion.HasCheckedReferenceConversion(expression.Type, type) &&
@@ -5587,7 +5594,7 @@ internal class ConversionClassifier {
                 mapped != TypeSymbol.Error &&
                 (
                 allowConcreteSymbolic || TypeSymbol.ContainsTypeParameter(mapped) ||
-                    TypeSymbol.ContainsSameCompilationUserType(mapped)
+                    TypeSymbol.ContainsSameCompilationUserType(mapped) || TypeSymbol.ContainsFunctionPointer(mapped)
             ) {
                 mapped
             } else {
@@ -6065,6 +6072,9 @@ internal class ConversionClassifier {
             if substitutedTarget != nil && from == substitutedTarget {
                 return false
             }
+            if from is FunctionPointerTypeSymbol && targetParameterType.IsFunctionPointer {
+                return false
+            }
             // FunctionTypeSymbol carries no ClrType but always needs delegate
             // materialisation when handed to a CLR delegate parameter.
             if from.ClrType == nil {
@@ -6250,6 +6260,11 @@ internal class ConversionClassifier {
             target TypeSymbol,
             conversion Conversion
         ) Conversion {
+            if (expression is BoundMethodGroupExpression or BoundClrMethodGroupExpression) &&
+                !conversion.IsImplicit &&
+                !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(expression.Type, target) {
+                return Conversion.None
+            }
             if !conversion.Exists || conversion.IsIdentity || KeepsConvertedDelegate(expression, target) {
                 return conversion
             }
@@ -6828,13 +6843,14 @@ internal class ConversionClassifier {
             field FieldSymbol,
             @NotNullWhen(true) out initializer BoundExpression?
         ) bool {
-            if type.InstanceFieldInitializers.TryGetValue(field, out initializer) {
+            if type.InstanceFieldInitializers.TryGetValue(field, out var stored) {
+                initializer = BoundTreeRewriter.Clone(stored)
                 return true
             }
             if type.Definition != nil {
                 for candidate in type.Definition!!.InstanceFieldInitializers {
                     if string.Equals(candidate.Key.Name, field.Name, StringComparison.Ordinal) {
-                        initializer = candidate.Value
+                        initializer = BoundTreeRewriter.Clone(candidate.Value)
                         return true
                     }
                 }
@@ -6928,7 +6944,7 @@ internal class ConversionClassifier {
             }
             if !(mapped is ImportedTypeSymbol{OpenDefinition: {} mappedOpen} mappedImported) ||
                 !(expected is ImportedTypeSymbol{OpenDefinition: {} expectedOpen} expectedImported) ||
-                mappedOpen != expectedOpen ||
+                !ClrTypeUtilities.AreSame(mappedOpen, expectedOpen) ||
                 mappedImported
                 .TypeArguments
                 .Length != expectedImported
