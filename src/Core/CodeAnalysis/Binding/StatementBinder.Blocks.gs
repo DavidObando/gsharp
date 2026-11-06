@@ -1965,7 +1965,8 @@ internal partial class StatementBinder {
             .Emit
             .ReflectionMetadataEmitter
             .IsValueTypeSymbol(type) ||
-            type is TypeParameterSymbol{HasReferenceTypeConstraint: false, ClassConstraint: nil}
+            type is TypeParameterSymbol &&
+            !Binder.IsReferenceTypeForConstraint(type)
     )
 
     private func BindGoStatement(syntax GoStatementSyntax) BoundStatement {

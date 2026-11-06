@@ -25,7 +25,7 @@ A pointer dereference captures the pointer eagerly and preserves its selected lo
 Managed pointer captures remain scoped aliases and obey the existing suspension-liveness restrictions.
 Static readonly value fields are captured by value; cleanup must not take an illegal writable field address.
 Binding probes the location before evaluating arguments, so an invalid location fails at the `defer` statement.
-An unconstrained generic receiver captures reference-type instantiations by value and preserves value-type storage.
+A generic receiver captures reference-type instantiations by value and preserves value-type storage, including with a `System.Object` constraint.
 A reference slot narrowed to a boxed value type captures the selected box, not the mutable reference slot.
 Ref-returning receivers preserve their readonly capability, including through generic receiver reconstruction.
 An immutable `let` binding does not create a readonly reference to its struct receiver.

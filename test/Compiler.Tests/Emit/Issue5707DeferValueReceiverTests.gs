@@ -500,6 +500,44 @@ Console.WriteLine(reference.n)`, "1\n2\n2\n")
     }
 
     @Fact
+    func ObjectConstrainedReceivers_PreserveStructStorageAndSnapshotReferenceValues() {
+        AssertRuns(`import System
+struct Counter {
+    var n int32
+    override func GetHashCode() int32 {
+        n++
+        return n
+    }
+}
+class RefCounter {
+    var n int32
+    override func GetHashCode() int32 {
+        n++
+        return n
+    }
+}
+func Run[T System.Object](ref value T) { defer value.GetHashCode() }
+func Forwarded[A class, T A](ref value T) { defer value.GetHashCode() }
+func Element[T System.Object](values []T, replacement T) {
+    defer values[0].GetHashCode()
+    values[0] = replacement
+}
+var value = Counter{}
+Run[Counter](ref value)
+Forwarded[object, Counter](ref value)
+Console.WriteLine(value.n)
+let values = []Counter{Counter{}}
+Element(values, Counter{n: 10})
+Console.WriteLine(values[0].n)
+var reference = RefCounter()
+Run[RefCounter](ref reference)
+let references = []RefCounter{reference}
+Element(references, RefCounter())
+Console.WriteLine(reference.n)
+Console.WriteLine(references[0].n)`, "2\n11\n2\n0\n")
+    }
+
+    @Fact
     func GenericStaticReadonlyReceivers_UseValueCopiesRatherThanIllegalFieldAddresses() {
         AssertRuns(`import System
 interface ICounter { func Bump(); }
