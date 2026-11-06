@@ -127,6 +127,20 @@ func Use(inner R.Inner) int32 -> inner.Value()
 `)
         Assert.Empty(implicitPackageAliasDiagnostics)
 
+        let explicitPackageRelativeAliasDiagnostics = Bind(`package App
+
+import R = Outer
+
+class Outer {
+    public class Inner {
+        public func Value() int32 -> 11
+    }
+}
+
+func Use(inner R.Inner) int32 -> inner.Value()
+`)
+        Assert.Empty(explicitPackageRelativeAliasDiagnostics)
+
         let lexicalNestedDiagnostics = Bind(`package App
 
 import R = System.Text

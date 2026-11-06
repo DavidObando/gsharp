@@ -6550,7 +6550,7 @@ partial class Binder {
                 !binderCtx.HasUnclosedEnclosingTypeParameters(explicitSourceAlias, function) {
                 return explicitSourceAlias
             }
-            if $scope.TryLookupQualifiedSourceType(aliasTarget, preferredArity, out var aliasedSourceType) &&
+            if $scope.TryLookupSourceTypeAliasTarget(aliasImport!!, preferredArity, out var aliasedSourceType) &&
                 !binderCtx.HasUnclosedEnclosingTypeParameters(aliasedSourceType, function) {
                 return aliasedSourceType
             }

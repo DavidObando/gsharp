@@ -3021,7 +3021,7 @@ partial class CSharpToGSharpTranslator {
                 if CanWrapSuppressedStatementRun(ordered, index, end, runStatements) {
                     statements.Add(BlockStatement(runStatements){SuppressedDiagnostics = gsaIds})
                     for directiveMap in runDirectives {
-                        this.RecordConsumedGsaPragmas(directiveMap)
+                        this.RecordConsumedGsaPragmas(statement.SyntaxTree, directiveMap)
                     }
                 } else {
                     for var k = index; k <= end; k++ {
@@ -3030,7 +3030,7 @@ partial class CSharpToGSharpTranslator {
                         let directiveMap = runDirectives[k - index]
                         if CanWrapSuppressedStatementRun(ordered, k, k, translated) {
                             statements.Add(BlockStatement(translated){SuppressedDiagnostics = gsaIds})
-                            this.RecordConsumedGsaPragmas(directiveMap)
+                            this.RecordConsumedGsaPragmas(current.SyntaxTree, directiveMap)
                         } else if CanAnnotateLocalDeclarationsInPlace(current, translated) {
                             for item in translated {
                                 if item is LocalDeclarationStatement local {
@@ -3041,10 +3041,10 @@ partial class CSharpToGSharpTranslator {
                                 }
                             }
                             statements.AddRange(translated)
-                            this.RecordConsumedGsaPragmas(directiveMap)
+                            this.RecordConsumedGsaPragmas(current.SyntaxTree, directiveMap)
                         } else {
                             statements.AddRange(translated)
-                            this.RecordDroppedGsaPragmas(directiveMap)
+                            this.RecordDroppedGsaPragmas(current.SyntaxTree, directiveMap)
                         }
                     }
                 }

@@ -33,12 +33,14 @@ partial class CSharpToGSharpTranslator {
             init(
                 spanStart int32,
                 isDisable bool,
+                isRestoreAll bool,
                 ids List[string],
                 gsaOnlyIds List[string],
                 directive PragmaWarningDirectiveTriviaSyntax
             ) {
                 SpanStart = spanStart
                 IsDisable = isDisable
+                IsRestoreAll = isRestoreAll
                 Ids = ids
                 GsaOnlyIds = gsaOnlyIds
                 Directive = directive
@@ -49,6 +51,10 @@ partial class CSharpToGSharpTranslator {
             }
 
             prop IsDisable bool {
+                get;
+            }
+
+            prop IsRestoreAll bool {
                 get;
             }
 
@@ -65,8 +71,42 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        private let consumedGsaPragmas HashSet[(int32, string)] = HashSet[(int32, string)]()
-        private let droppedGsaPragmas HashSet[(int32, string)] = HashSet[(int32, string)]()
+        private let consumedGsaPragmas HashSet[(Microsoft.CodeAnalysis.SyntaxTree, int32, string)] = HashSet[
+            (Microsoft.CodeAnalysis.SyntaxTree, int32, string)
+        ]()
+        private let droppedGsaPragmas HashSet[(Microsoft.CodeAnalysis.SyntaxTree, int32, string)] = HashSet[
+            (Microsoft.CodeAnalysis.SyntaxTree, int32, string)
+        ]()
+        private let translatedAggregateParts Dictionary[Microsoft.CodeAnalysis.SyntaxTree, List[TextSpan]] = Dictionary[
+            Microsoft.CodeAnalysis.SyntaxTree,
+            List[TextSpan]
+        ]()
+        private let translatedAggregateTrees List[Microsoft.CodeAnalysis.SyntaxTree] = List[
+            Microsoft.CodeAnalysis.SyntaxTree
+        ]()
+        private let skippedAggregateParts Dictionary[Microsoft.CodeAnalysis.SyntaxTree, List[TextSpan]] = Dictionary[
+            Microsoft.CodeAnalysis.SyntaxTree,
+            List[TextSpan]
+        ]()
+
+        internal func RecordTranslatedAggregatePart(node TypeDeclarationSyntax) {
+            let tree = node.SyntaxTree
+            if !this.translatedAggregateParts.TryGetValue(tree, out var spans) {
+                spans = List[TextSpan]()
+                this.translatedAggregateParts[tree] = spans
+                this.translatedAggregateTrees.Add(tree)
+            }
+            spans.Add(node.Span)
+        }
+
+        internal func RecordSkippedAggregatePart(node TypeDeclarationSyntax) {
+            let tree = node.SyntaxTree
+            if !this.skippedAggregateParts.TryGetValue(tree, out var spans) {
+                spans = List[TextSpan]()
+                this.skippedAggregateParts[tree] = spans
+            }
+            spans.Add(node.Span)
+        }
 
         /// Appends a `@SuppressDiagnostic` annotation to
         /// [`translated`](paramref) for every `GSA` identifier whose
@@ -81,15 +121,19 @@ partial class CSharpToGSharpTranslator {
             let ids = CoveringGsaSuppressions(source, out var activeDirectives, out var interruptedDirectives)
             for interrupted in interruptedDirectives {
                 if !activeDirectives.ContainsKey(interrupted.Id) &&
-                    !IsPositionInsideDescendantBlock(source, interrupted.InterruptionPosition) {
-                    this.droppedGsaPragmas.Add((interrupted.DisableStart, interrupted.Id))
+                    !IsInterruptionHandledInDescendantBlock(
+                    source,
+                    interrupted.DisableStart,
+                    interrupted.InterruptionPosition
+                ) {
+                    this.droppedGsaPragmas.Add((source.SyntaxTree, interrupted.DisableStart, interrupted.Id))
                 }
             }
             let attributes List[AttributeUse]? = GetMemberAttributeList(translated)
             if attributes == nil || ids.Count == 0 {
                 return
             }
-            this.RecordConsumedGsaPragmas(activeDirectives)
+            this.RecordConsumedGsaPragmas(source.SyntaxTree, activeDirectives)
             attributes.Add(
                 AttributeUse(
                     "SuppressDiagnostic",
@@ -98,27 +142,34 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        internal func RecordConsumedGsaPragmas(activeDirectives Dictionary[string, int32]) {
+        internal func RecordConsumedGsaPragmas(
+            tree Microsoft.CodeAnalysis.SyntaxTree,
+            activeDirectives Dictionary[string, int32]
+        ) {
             for entry in activeDirectives {
                 if entry.Key.StartsWith("GSA", StringComparison.Ordinal) {
-                    this.consumedGsaPragmas.Add((entry.Value, entry.Key))
+                    this.consumedGsaPragmas.Add((tree, entry.Value, entry.Key))
                 }
             }
         }
 
-        internal func RecordDroppedGsaPragmas(activeDirectives Dictionary[string, int32]) {
+        internal func RecordDroppedGsaPragmas(
+            tree Microsoft.CodeAnalysis.SyntaxTree,
+            activeDirectives Dictionary[string, int32]
+        ) {
             for entry in activeDirectives {
                 if entry.Key.StartsWith("GSA", StringComparison.Ordinal) {
-                    this.droppedGsaPragmas.Add((entry.Value, entry.Key))
+                    this.droppedGsaPragmas.Add((tree, entry.Value, entry.Key))
                 }
             }
         }
 
         /// Issues #4447 / #3824: reports a `CS2GS-PRAGMA-DROPPED` warning for
         /// every `#pragma warning disable GSA####` directive in [`root`](paramref)
-        /// belonging to this unit that did not cover a whole member or a
-        /// statement range that could be annotated with `@SuppressDiagnostic`, or
-        /// that partially cut a construct in half.
+        /// (or in a secondary partial-part tree merged into this unit) belonging
+        /// to this unit that did not cover a whole member or a statement range
+        /// that could be annotated with `@SuppressDiagnostic`, or that partially
+        /// cut a construct in half.
         internal func ReportDroppedGsaPragmas(
             root SyntaxNode,
             allTopLevelDeclarations IReadOnlyList[MemberDeclarationSyntax],
@@ -128,10 +179,8 @@ partial class CSharpToGSharpTranslator {
             packageFilter string?,
             includeGlobalNamespace bool
         ) {
+            let rootTree = root.SyntaxTree
             let directives = GetCachedPragmaWarningDirectives(root)
-            if directives.Count == 0 {
-                return
-            }
             for var i = 0; i < directives.Count; i++ {
                 let cached = directives[i]
                 if !cached.IsDisable || cached.GsaOnlyIds.Count == 0 {
@@ -151,21 +200,68 @@ partial class CSharpToGSharpTranslator {
                     ) {
                         continue
                     }
-                    let key = (cached.SpanStart, id)
+                    if this.IsPragmaRegionSkippedInTree(rootTree, cached.SpanStart, regionEnd) {
+                        continue
+                    }
+                    let key = (rootTree, cached.SpanStart, id)
                     if this.droppedGsaPragmas.Contains(key) || !this.consumedGsaPragmas.Contains(key) {
-                        let message = "'#pragma warning disable $id' does not cover a whole declaration or statement " +
-                            "range that G# can annotate with '@SuppressDiagnostic(\"$id\")' and was dropped."
-                        this.context.Report(
-                            TranslationDiagnostic(
-                                "pragma-suppression",
-                                message,
-                                cached.Directive.GetLocation(),
-                                TranslationSeverity.Warning
-                            ){DiagnosticId = PragmaSuppressionDroppedDiagnosticId}
-                        )
+                        this.ReportDroppedGsaPragmaDirective(cached.Directive, id)
                     }
                 }
             }
+            for foreignTree in this.translatedAggregateTrees {
+                if foreignTree == rootTree {
+                    continue
+                }
+                let foreignSpans = this.translatedAggregateParts[foreignTree]
+                let foreignRoot = foreignTree.GetRoot()
+                let foreignDirectives = GetCachedPragmaWarningDirectives(foreignRoot)
+                for var i = 0; i < foreignDirectives.Count; i++ {
+                    let cached = foreignDirectives[i]
+                    if !cached.IsDisable || cached.GsaOnlyIds.Count == 0 {
+                        continue
+                    }
+                    for id in cached.GsaOnlyIds {
+                        let regionEnd = FindGsaRegionEnd(foreignDirectives, i, id, foreignRoot.FullSpan.End)
+                        if !OverlapsAnySpan(foreignSpans, cached.SpanStart, regionEnd) {
+                            continue
+                        }
+                        let key = (foreignTree, cached.SpanStart, id)
+                        if this.droppedGsaPragmas.Contains(key) || !this.consumedGsaPragmas.Contains(key) {
+                            this.ReportDroppedGsaPragmaDirective(cached.Directive, id)
+                        }
+                    }
+                }
+            }
+        }
+
+        private func ReportDroppedGsaPragmaDirective(directive PragmaWarningDirectiveTriviaSyntax, id string) {
+            let message = "'#pragma warning disable $id' does not cover a whole declaration or statement " +
+                "range that G# can annotate with '@SuppressDiagnostic(\"$id\")' and was dropped."
+            this.context.Report(
+                TranslationDiagnostic(
+                    "pragma-suppression",
+                    message,
+                    directive.GetLocation(),
+                    TranslationSeverity.Warning
+                ){DiagnosticId = PragmaSuppressionDroppedDiagnosticId}
+            )
+        }
+
+        private func IsPragmaRegionSkippedInTree(
+            tree Microsoft.CodeAnalysis.SyntaxTree,
+            regionStart int32,
+            regionEnd int32
+        ) bool {
+            if !this.skippedAggregateParts.TryGetValue(tree, out var skippedSpans) ||
+                !OverlapsAnySpan(skippedSpans, regionStart, regionEnd) {
+                return false
+            }
+            if this.translatedAggregateParts.TryGetValue(tree, out var translatedSpans) &&
+                OverlapsAnySpan(translatedSpans, regionStart, regionEnd) {
+                return false
+            }
+            return true
         }
 
         /// Issue #4447: returns the `GSA` identifiers disabled across the
@@ -190,8 +286,12 @@ partial class CSharpToGSharpTranslator {
                 out var interruptedDirectives
             )
             for interrupted in interruptedDirectives {
-                if !IsPositionInsideDescendantBlock(statement, interrupted.InterruptionPosition) {
-                    this.droppedGsaPragmas.Add((interrupted.DisableStart, interrupted.Id))
+                if !IsInterruptionHandledInDescendantBlock(
+                    statement,
+                    interrupted.DisableStart,
+                    interrupted.InterruptionPosition
+                ) {
+                    this.droppedGsaPragmas.Add((statement.SyntaxTree, interrupted.DisableStart, interrupted.Id))
                 }
             }
             if candidates.Count == 0 {
@@ -315,8 +415,7 @@ partial class CSharpToGSharpTranslator {
             }
 
             /// Returns the `GSA` identifiers disabled across the entire span of
-            /// [`source`](paramref) (or across the member's own direct expression
-            /// body when it has no block or accessor list).
+            /// [`source`](paramref).
             private func CoveringGsaSuppressions(
                 source MemberDeclarationSyntax?,
                 out activeDirectives Dictionary[string, int32],
@@ -329,51 +428,45 @@ partial class CSharpToGSharpTranslator {
                 if directives.Count == 0 {
                     return EmptyStringList
                 }
-                let result = CoveringSpanSuppressions(
+                return CoveringSpanSuppressions(
                     directives,
                     source!!.Span,
                     includeNullability: true,
                     out activeDirectives,
                     out interruptedDirectives
                 )
-                let expressionBody ArrowExpressionClauseSyntax? = GetMemberExpressionBody(source!!)
-                if expressionBody != nil {
-                    for id in CoveringSpanSuppressions(
-                        directives,
-                        expressionBody.Expression.Span,
-                        includeNullability: false,
-                        out var exprDirectives,
-                        out _
-                    ) {
-                        if !activeDirectives.ContainsKey(id) {
-                            if object.ReferenceEquals(activeDirectives, EmptyDirectiveMap) {
-                                activeDirectives = Dictionary[string, int32](StringComparer.Ordinal)
-                            }
-                            result.Add(id)
-                            activeDirectives[id] = exprDirectives[id]
-                        }
-                    }
-                    result.Sort(StringComparer.Ordinal)
+            }
+
+            private func IsInterruptionHandledInDescendantBlock(
+                node SyntaxNode,
+                disableStart int32,
+                interruptionPosition int32
+            ) bool {
+                if node is BlockSyntax selfBlock {
+                    return selfBlock.Span.Start <= interruptionPosition && interruptionPosition <= selfBlock.Span.End
                 }
-                return result
-            }
-
-            private func GetMemberExpressionBody(
-                source MemberDeclarationSyntax
-            ) ArrowExpressionClauseSyntax? -> switch source {
-                case m is MethodDeclarationSyntax: m.ExpressionBody
-                case p is Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax: p.ExpressionBody
-                case i is IndexerDeclarationSyntax: i.ExpressionBody
-                case o is OperatorDeclarationSyntax: o.ExpressionBody
-                case c is ConversionOperatorDeclarationSyntax: c.ExpressionBody
-                case ctor is Microsoft.CodeAnalysis.CSharp.Syntax.ConstructorDeclarationSyntax: ctor.ExpressionBody
-                case d is DestructorDeclarationSyntax: d.ExpressionBody
-                default: default(ArrowExpressionClauseSyntax?)
-            }
-
-            private func IsPositionInsideDescendantBlock(node SyntaxNode, position int32) bool {
                 for block in node.DescendantNodes().OfType[BlockSyntax]() {
-                    if block.Span.Start <= position && position <= block.Span.End {
+                    if block
+                        .Span
+                        .Start <= disableStart &&
+                        disableStart <= block
+                        .Span
+                        .End &&
+                        block
+                        .Span
+                        .Start <= interruptionPosition &&
+                        interruptionPosition <= block
+                        .Span
+                        .End {
+                        return true
+                    }
+                }
+                return false
+            }
+
+            private func OverlapsAnySpan(spans List[TextSpan], regionStart int32, regionEnd int32) bool {
+                for span in spans {
+                    if span.End > regionStart && span.Start < regionEnd {
                         return true
                     }
                 }
@@ -387,7 +480,7 @@ partial class CSharpToGSharpTranslator {
                 fullSpanEnd int32
             ) int32 {
                 for var j = startIndex + 1; j < directives.Count; j++ {
-                    if directives[j].GsaOnlyIds.Contains(id) {
+                    if directives[j].IsRestoreAll || directives[j].GsaOnlyIds.Contains(id) {
                         return directives[j].SpanStart
                     }
                 }
@@ -544,19 +637,15 @@ partial class CSharpToGSharpTranslator {
                 }
                 let cached = List[CachedPragmaDirective](raw.Count)
                 for directive in raw {
+                    let isDisable = directive.DisableOrRestoreKeyword.IsKind(SyntaxKind.DisableKeyword)
+                    let isRestoreAll = !isDisable && directive.ErrorCodes.Count == 0
                     let ids = DirectiveIds(directive, includeNullability: true).ToList()
                     let gsaOnlyIds = DirectiveIds(directive, includeNullability: false).ToList()
-                    if ids.Count == 0 && gsaOnlyIds.Count == 0 {
+                    if !isRestoreAll && ids.Count == 0 && gsaOnlyIds.Count == 0 {
                         continue
                     }
                     cached.Add(
-                        CachedPragmaDirective(
-                            directive.SpanStart,
-                            directive.DisableOrRestoreKeyword.IsKind(SyntaxKind.DisableKeyword),
-                            ids,
-                            gsaOnlyIds,
-                            directive
-                        )
+                        CachedPragmaDirective(directive.SpanStart, isDisable, isRestoreAll, ids, gsaOnlyIds, directive)
                     )
                 }
                 return if cached.Count == 0 {
@@ -583,6 +672,30 @@ partial class CSharpToGSharpTranslator {
                 let directiveStarts = Dictionary[string, int32](StringComparer.Ordinal)
                 let interrupted = HashSet[string](StringComparer.Ordinal)
                 for directive in directives {
+                    if directive.IsRestoreAll {
+                        let keys = state.Keys.OrderBy((k string) -> k, StringComparer.Ordinal).ToList()
+                        if directive.SpanStart <= span.Start {
+                            for key in keys {
+                                state[key] = false
+                            }
+                            directiveStarts.Clear()
+                        } else if directive.SpanStart < span.End {
+                            for key in keys {
+                                if state[key] {
+                                    interrupted.Add(key)
+                                    if key.StartsWith("GSA", StringComparison.Ordinal) && directiveStarts.TryGetValue(
+                                        key,
+                                        out var activeStart
+                                    ) {
+                                        interruptedDirectives.Add((activeStart, key, directive.SpanStart))
+                                    }
+                                    state[key] = false
+                                    directiveStarts.Remove(key)
+                                }
+                            }
+                        }
+                        continue
+                    }
                     let disable = directive.IsDisable
                     let ids = if includeNullability {
                         directive.Ids

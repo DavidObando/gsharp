@@ -1002,6 +1002,36 @@ partial class BoundScope {
         return type != nil
     }
 
+    internal func GetImportDeclaringPackage($import ImportSymbol) string? {
+        if $import.Declaration?.SyntaxTree is {} tree {
+            let packageSyntax PackageSyntax? = tree.Root.Members.OfType[PackageSyntax]().FirstOrDefault()
+            if packageSyntax != nil {
+                return string.Concat(packageSyntax.IdentifiersWithDots.Select((t SyntaxToken) -> t.ValueText))
+            }
+        }
+        return GetCurrentDeclaringPackage()
+    }
+
+    internal func TryLookupSourceTypeAliasTarget(
+        $import ImportSymbol,
+        preferredArity int32,
+        @NotNullWhen(true) out type TypeSymbol?
+    ) bool {
+        if GetImportDeclaringPackage($import) is {Length: > 0} declaringPackage && !string.Equals(
+            declaringPackage,
+            "Default",
+            StringComparison.Ordinal
+        ) {
+            for var end = declaringPackage.Length; end > 0; end = declaringPackage.LastIndexOf('.', end - 1) {
+                let prefix = declaringPackage.Substring(0, end)
+                if TryLookupQualifiedSourceType(prefix + "." + $import.Target, preferredArity, out type) {
+                    return true
+                }
+            }
+        }
+        return TryLookupQualifiedSourceType($import.Target, preferredArity, out type)
+    }
+
     /// Resolves an explicit import alias whose target is a same-compilation
     /// source type rather than a CLR type.
     /// @param name The visible alias name.
@@ -1016,6 +1046,14 @@ partial class BoundScope {
         type = nil
         if !TryLookupImport(name, out var import_) || !import_!!.IsAlias {
             return false
+        }
+        let requestedArity = if preferredArity > 0 {
+            preferredArity
+        } else {
+            0
+        }
+        if TryLookupSourceTypeAliasTarget(import_!!, requestedArity, out type) {
+            return true
         }
         var match TypeSymbol? = nil
         let seen = HashSet[TypeSymbol]()
