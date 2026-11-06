@@ -8302,10 +8302,10 @@ internal partial class StatementBinder {
             }
             substitution = inferred
         }
-        let expectedReceiver = if substitution != nil {
+        let expectedReceiver = if substitution is {} receiverSubstitution {
             Binder.SubstituteType(
                 candidate.Parameters[0].Type,
-                substitution,
+                receiverSubstitution,
                 $scope.References!!.MapClrTypeToReferences
             )
         } else {
