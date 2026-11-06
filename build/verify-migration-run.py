@@ -19,7 +19,10 @@ from typing import Any
 
 def expected_apps(repo: Path) -> set[str]:
     """Independently derive the migrated corpus: tracked C# projects minus the gate's exclusions."""
-    common = (repo / "build" / "selfmig-common.sh").read_text(encoding="utf-8")
+    common_path = repo / "build" / "selfmig-common.sh"
+    if not common_path.is_file():
+        common_path = Path(__file__).resolve().parent / "selfmig-common.sh"
+    common = common_path.read_text(encoding="utf-8")
     block = re.search(r"selfmig_project_filters=\((.*?)^\)", common, re.S | re.M)
     if block is None:
         raise ValueError("cannot find selfmig_project_filters in build/selfmig-common.sh")

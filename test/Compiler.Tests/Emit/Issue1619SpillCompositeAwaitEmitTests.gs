@@ -13,20 +13,16 @@ import Xunit
 import GSharp.Compiler
 import GSharp.Compiler.Tests
 
-/// Issue #1619: `SpillSequenceSpiller` treated ~40 composite expression
+/// Issue #1619 / #5363: `SpillSequenceSpiller` treated ~40 composite expression
 /// kinds (ternary, index, CLR static/ctor calls, array/tuple/struct/map
 /// literals, switch expressions, and more) as await-free leaves, returning
 /// them unchanged via `Trivial(...)`. Any await nested inside one of
 /// these leaked past the spiller to the emitter, which threw a mislocated
 /// `GS9998` ICE at (1,1). The fix gives each mechanical composite kind a
 /// real spill path (mirroring `SpillCall`/`SpillBinary`), and the
-/// ternary, switch expression, null-conditional access, and conditional
-/// address-of a genuine if/else control-flow expansion so only the taken
-/// branch's await actually runs. The one remaining diagnostic-gated shape is
-/// an `await` inside a switch-expression `when` guard (see
-/// `SpillSwitch` in `SpillSequenceSpiller.cs` for why that specific
-/// shape cannot be mechanically spilled without duplicating the whole
-/// pattern-matching decision tree).
+/// ternary, switch expression (including `when` guards across suspension),
+/// null-conditional access, and conditional address-of a genuine if/else
+/// control-flow expansion so only the taken branch's await actually runs.
 ///
 /// Each test here compiles the offending shape, IL-verifies the emitted
 /// assembly, runs it, and asserts the correct result.
@@ -313,32 +309,88 @@ result = c.Pick(1).Result`
     }
 
     @Fact
-    func Await_Inside_Switch_Expression_Guard_Reports_Anchored_Diagnostic_Not_ICE() {
-        // A `when`-guard containing await is the one shape this pass still
-        // cannot mechanically spill: a false guard must fall through to the
-        // next arm's pattern test, which would require re-implementing the
-        // whole pattern-match decision tree as bound-tree control flow rather
-        // than reusing the existing emitter's pattern dispatch.
+    func Await_Inside_Switch_Expression_Guard_Compiles_Verifies_And_Runs() {
+        // Issue #5363: `await` inside a switch-expression `when` guard lowers
+        // to sequential per-arm pattern tests and spilled guard branches so a
+        // false guard falls through to the next arm after suspension, pattern
+        // bindings survive across `await` in both the guard and arm result,
+        // and the discriminant is evaluated once.
         let source = `package P1619J
 
 import System.Threading.Tasks
 
+func evalDiscr(v int32) int32 {
+    discrRuns = discrRuns + 1
+    return v
+}
+
+async func checkGuard1(x int32, pass bool) bool {
+    guard1Runs = guard1Runs + 1
+    await Task.Yield()
+    return pass && x > 0
+}
+
+async func checkGuard2(x int32, pass bool) bool {
+    guard2Runs = guard2Runs + 1
+    await Task.Yield()
+    return pass && x == 1
+}
+
+async func addAsync(x int32, bonus int32) int32 {
+    await Task.Yield()
+    return x + bonus
+}
+
 class C {
     init() {}
 
-    async func Pick(n int32, t Task[bool]) int32 {
-        let x = switch n {
-            case 1 when await t: 10
+    async func Pick(n int32, g1 bool, g2 bool) int32 {
+        return switch evalDiscr(n) {
+            case x is int32 when await checkGuard1(x, g1): await addAsync(x, 10)
+            case 1 when await checkGuard2(n, g2): 20
             default: 0
         }
-        return x
     }
-}`
-        let (compileExit, stdout, stderr) = TryCompile(source)
-        Assert.NotEqual(0, compileExit)
-        let combined = stdout + stderr
-        Assert.Contains("GS9998", combined)
-        Assert.Contains("'await' inside a switch-expression 'when' guard is not yet supported", combined)
+
+    async func PickStmt(n int32, g1 bool, g2 bool) int32 {
+        switch evalDiscr(n) {
+            case x is int32 when await checkGuard1(x, g1) {
+                return await addAsync(x, 100)
+            }
+            case 1 when await checkGuard2(n, g2) {
+                return 200
+            }
+            default {
+                return -1
+            }
+        }
+    }
+}
+
+public var discrRuns = 0
+public var guard1Runs = 0
+public var guard2Runs = 0
+let c = C()
+public var r1 = c.Pick(1, true, true).Result
+public var r2 = c.Pick(1, false, true).Result
+public var r3 = c.Pick(1, false, false).Result
+public var r4 = c.Pick(2, false, true).Result
+public var s1 = c.PickStmt(1, true, true).Result
+public var s2 = c.PickStmt(1, false, true).Result
+public var s3 = c.PickStmt(2, false, true).Result`
+        let assembly = CompileAndInvokeEntry(source)
+        let program = assembly.GetTypes().Single((t Type) -> t.Name == "<Program>")
+        Assert.Equal(11, ReadInt(program, "r1"))
+        Assert.Equal(20, ReadInt(program, "r2"))
+        Assert.Equal(0, ReadInt(program, "r3"))
+        Assert.Equal(0, ReadInt(program, "r4"))
+        Assert.Equal(101, ReadInt(program, "s1"))
+        Assert.Equal(200, ReadInt(program, "s2"))
+        Assert.Equal(-1, ReadInt(program, "s3"))
+        Assert.Equal(7, ReadInt(program, "discrRuns"))
+        Assert.Equal(7, ReadInt(program, "guard1Runs"))
+        // Guard 2 only runs when pattern `case 1` matches AND arm 1's guard was false (r2, r3, s2).
+        Assert.Equal(3, ReadInt(program, "guard2Runs"))
     }
 
     @Fact

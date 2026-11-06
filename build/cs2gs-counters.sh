@@ -111,7 +111,7 @@ cs2gs_find_translated_sources() {
 # translator (ADR-0176/ADR-0177 retired it; see the git history of this file
 # for the investigation). This exclusion reuses cs2gs_lexed_scan's
 # raw_string_flags lexer below rather than a second hand-rolled one, matching
-# issue #4082's "fidelity to Lexer.cs is the whole point" lesson: a per-line
+# issue #4082's "fidelity to Lexer.gs is the whole point" lesson: a per-line
 # backtick-parity toggle is exactly the bug #4082 already found and fixed once.
 #
 # This can only ever REMOVE lines from the "code" bucket that used to be
@@ -135,7 +135,7 @@ cs2gs_raw_lines() {
 # Shared Python driver for cs2gs_code_lines (mode "code-lines") and
 # cs2gs_long_line_counts (mode "long-lines"). Both need the SAME per-line
 # lexical state — whether a line starts inside a backtick raw string — parsed
-# with fidelity to src/Core/CodeAnalysis/Syntax/Lexer.cs, so raw_string_flags
+# with fidelity to src/Core/CodeAnalysis/Syntax/Lexer.gs, so raw_string_flags
 # lives here ONCE and both modes call it, instead of each counter keeping its
 # own copy that can quietly drift out of sync with the real lexer (that drift
 # is exactly what issue #4082 was, and what left cs2gs_code_lines with an
@@ -176,10 +176,10 @@ cs2gs_raw_lines() {
 # multiline interpolation holes genuinely do span newlines and are carried
 # across, matching the real lexer.)
 #
-# Fidelity to Lexer.cs is the whole point, so the two places this scanner
+# Fidelity to Lexer.gs is the whole point, so the two places this scanner
 # initially diverged from it are fixed even though neither moves a count on
-# today's tree: `$$` escaping to a literal `$` (Lexer.cs:905-915) and multiline
-# `${...}` holes (Lexer.cs:824-830). A scanner that mishandles a construct the
+# today's tree: `$$` escaping to a literal `$` (Lexer.gs:905-915) and multiline
+# `${...}` holes (Lexer.gs:824-830). A scanner that mishandles a construct the
 # real lexer accepts is the same class of latent, input-dependent corruption
 # #4082 was, and the count being right today is luck rather than design.
 cs2gs_lexed_scan() {
@@ -249,7 +249,7 @@ def raw_string_flags(lines):
                 if char == "\\":
                     index += 1
                 elif char == "$" and nxt == "$":
-                    # `$$` is the escape for a literal `$` (Lexer.cs:905-915),
+                    # `$$` is the escape for a literal `$` (Lexer.gs:905-915),
                     # so the second `$` cannot open a hole: in "$${" the brace
                     # is an ordinary character and the literal runs on. Reading
                     # it as an opener instead swallows the literal's own closing
@@ -274,13 +274,13 @@ def raw_string_flags(lines):
                     index += 1
             index += 1
         if state not in ("raw", "block"):
-            # A "..." or '...' literal cannot span a newline -- Lexer.cs:824-830
+            # A "..." or '...' literal cannot span a newline -- Lexer.gs:824-830
             # reports a diagnostic for one that tries -- so the line boundary
             # ends it and a misread costs one line, not the rest of the file.
             state = "code"
 
         # `holes`/`depth` deliberately SURVIVE the boundary. ADR-0055 holes are
-        # scanned by a sub-scanner that permits newlines (Lexer.cs:824-830,
+        # scanned by a sub-scanner that permits newlines (Lexer.gs:824-830,
         # samples/InterpolatedStringRichHoles.gs:17-19), so a `${` opened on one
         # line may close on a later one. Clearing the stack here left the
         # continuation's `}` unable to restore `dq`, and the rest of that line

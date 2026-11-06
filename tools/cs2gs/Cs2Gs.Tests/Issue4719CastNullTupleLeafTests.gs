@@ -4700,6 +4700,253 @@ public static class Obj {
         Assert.False(slot.IsReferenceType)
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func TupleContractEligibility_ParameterContractsSynchronizeOrLockAcrossComponent(nativeLocked bool) {
+        let fixture = this.EmitFixture()
+        let lockedDecl = if nativeLocked {
+            `public sealed class Locked : TupleIndexerBase, ISourceIndexer {
+    public override int this[(string Required, int Code) row] => row.Code;
+}`
+        } else {
+            `public sealed class Locked : ISourceIndexer {
+    public int this[(string Required, int Code) row] => row.Code;
+}`
+        }
+        let printed = Translate((`using System;
+using Issue4719Fixture;
+public interface ISourceIndexer {
+    int this[(string Required, int Code) row] { get; }
+}
+` + "$lockedDecl" + `
+public sealed class Tainted : ISourceIndexer {
+    public int this[(string Required, int Code) row] => row.Required == null ? -1 : row.Code;
+}
+public static class Obj {
+    public static bool Missing;
+    #nullable enable
+    public static string? Text => Missing ? null : "keep";
+    #nullable disable
+    public static void Main() {
+        ISourceIndexer first = new Locked();
+        Tainted second = new Tainted();
+        ISourceIndexer viaContract = second;
+        Missing = false;
+        bool valid = first[("keep", 2)] == 2 && second[(Text, 3)] == 3 && viaContract[("keep", 5)] == 5;
+        Missing = true;
+        bool asserted = false;
+        int nilResult = 0;
+        try {
+            nilResult = second[(Text, 4)];
+        }
+        catch (NullReferenceException) { asserted = true; }
+        Console.WriteLine(valid && (` + "${(if nativeLocked { "asserted" } else { "!asserted && nilResult == -1" })}" + `) ? 15 : -1);
+    }
+}`), fixture)
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15")
+        if nativeLocked {
+            Assert.DoesNotContain("Required string?", printed)
+            Assert.Contains("Text!!", printed)
+        } else {
+            Assert.Equal(3, Regex.Matches(printed, "row \\(Required string\\?, Code int32\\)").Count)
+            Assert.DoesNotContain("Text!!", printed)
+        }
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func TupleContractEligibility_GenericEnvelopeParameterSubstitutesMethodTypeParameters(
+        baseClass bool,
+        nativeLocked bool
+    ) {
+        let fixture = this.EmitFixture()
+        let contractDecl = if baseClass {
+            `public class SourceEnvelopeBase {
+    public virtual int Accept<T>(System.Collections.Generic.Dictionary<(string Required, T Value), int> rows, T value) => 0;
+}`
+        } else {
+            `public interface ISourceEnvelope {
+    int Accept<T>(System.Collections.Generic.Dictionary<(string Required, T Value), int> rows, T value);
+}`
+        }
+        let contractType = if baseClass {
+            "SourceEnvelopeBase"
+        } else {
+            "ISourceEnvelope"
+        }
+        let modifier = if baseClass {
+            "override "
+        } else {
+            string.Empty
+        }
+        let lockedHeader = if nativeLocked {
+            (
+                if baseClass {
+                    "GenericEnvelopeParameterBase, ISourceEnvelope"
+                } else {
+                    "ISourceEnvelope, IGenericEnvelopeParameter"
+                }
+            )
+        } else {
+            contractType
+        }
+        let extraInterface = if baseClass && nativeLocked {
+            `public interface ISourceEnvelope {
+    int Accept<T>(System.Collections.Generic.Dictionary<(string Required, T Value), int> rows, T value);
+}`
+        } else {
+            string.Empty
+        }
+        let dispatchType = if baseClass && nativeLocked {
+            "ISourceEnvelope"
+        } else {
+            contractType
+        }
+        let printed = Translate((`using System;
+using System.Collections.Generic;
+using Issue4719Fixture;
+` + "$contractDecl" + `
+` + "$extraInterface" + `
+public sealed class Locked : ` + "$lockedHeader" + ` {
+    public ` + "$modifier" + `int Accept<TItem>(Dictionary<(string Required, TItem Value), int> rows, TItem value) => rows.Count;
+}
+public sealed class Tainted : ` + "$dispatchType" + ` {
+    public ` + "${(if baseClass && !nativeLocked { "override " } else { "" })}" + `int Accept<TValue>(Dictionary<(string Required, TValue Value), int> rows, TValue value) {
+        var key = (Obj.Text, value);
+        rows[key] = 1;
+        return key.Item1 == null ? -1 : rows.Count;
+    }
+}
+public static class Obj {
+    public static bool Missing;
+    #nullable enable
+    public static string? Text => Missing ? null : "keep";
+    #nullable disable
+    public static void Main() {
+        ` + "$dispatchType" + ` first = new Locked();
+        Tainted second = new Tainted();
+        ` + "$dispatchType" + ` viaContract = second;
+        Missing = false;
+        bool valid = first.Accept(new Dictionary<(string Required, int Value), int>(), 1) == 0
+            && second.Accept(new Dictionary<(string Required, int Value), int>(), 2) == 1
+            && viaContract.Accept(new Dictionary<(string Required, int Value), int>(), 3) == 1;
+        Missing = true;
+        bool asserted = false;
+        int nilResult = 0;
+        try {
+            nilResult = second.Accept(new Dictionary<(string Required, int Value), int>(), 4);
+        }
+        catch (NullReferenceException) { asserted = true; }
+        Console.WriteLine(valid && (` + "${(if nativeLocked { "asserted" } else { "!asserted && nilResult == -1" })}" + `) ? 15 : -1);
+    }
+}`), fixture)
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15")
+        if nativeLocked {
+            Assert.DoesNotContain("Required string?", printed)
+            Assert.Contains("key.Item1!!", printed)
+        } else {
+            Assert.Contains("(Required string?, Value T)", printed)
+            Assert.Contains("(Required string?, Value TItem)", printed)
+            Assert.Contains("(Required string?, Value TValue)", printed)
+            Assert.DoesNotContain("key.Item1!!", printed)
+        }
+    }
+
+    @Theory
+    @InlineData(false, "oblivious")
+    @InlineData(true, "oblivious")
+    @InlineData(false, "annotated")
+    @InlineData(true, "annotated")
+    @InlineData(false, "imported")
+    @InlineData(true, "imported")
+    func TupleContractEligibility_VoidDelegateParameterContractsSynchronizeOrLock(lambdaForm bool, mode string) {
+        let fixture = this.EmitFixture()
+        let strict = mode != "oblivious"
+        let lockDelegateType = if mode == "imported" {
+            "NativeTupleSlots.Consumer"
+        } else {
+            "StrictConsumer"
+        }
+        let strictDelegateDecl = if mode == "annotated" {
+            `#nullable enable
+public delegate void StrictConsumer((NullableResultBox Required, int Code) row);
+#nullable disable`
+        } else {
+            string.Empty
+        }
+        let lockBinding = if strict {
+            "$lockDelegateType locked = Keep; locked((\"keep\", 1));"
+        } else {
+            string.Empty
+        }
+        let seedNullInTarget = if strict {
+            string.Empty
+        } else {
+            "if (row.Code < 0) { row = ((NullableResultBox)null, row.Code); } "
+        }
+        let targetSetup = if lambdaForm {
+            "RowConsumer primary = ((NullableResultBox Required, int Code) row) => { " +
+                seedNullInTarget +
+                "Last = row.Required == null ? -1 : row.Code; };"
+        } else {
+            "RowConsumer primary = Handle;"
+        }
+        let callArg = if strict {
+            "(\"miss\", 4)"
+        } else {
+            "((NullableResultBox)null, 4)"
+        }
+        let printed = Translate((`using System;
+using Issue4719Fixture;
+` + "$strictDelegateDecl" + `
+public delegate void RowConsumer((NullableResultBox Required, int Code) row);
+public static class Obj {
+    public static int Last;
+    public static void Handle((NullableResultBox Required, int Code) row) {
+        ` + "$seedNullInTarget" + `
+        Last = row.Required == null ? -1 : row.Code;
+    }
+    public static void Keep((NullableResultBox Required, int Code) row) {
+        Last = row.Code;
+    }
+    public static void Main() {
+        Probe.Reset();
+        ` + "$lockBinding" + `
+        ` + "$targetSetup" + `
+        RowConsumer secondary = Keep;
+        primary(("keep", 3));
+        bool valid = Last == 3;
+        secondary(("keep", 5));
+        valid = valid && Last == 5;
+        bool asserted = false;
+        try {
+            primary(` + "$callArg" + `);
+        }
+        catch (NullReferenceException) { asserted = true; }
+        Console.WriteLine(valid && (` + "${(if strict { "asserted" } else { "!asserted && Last == -1" })}" + `) ? 15 : -1);
+    }
+}`), fixture)
+        AssertRealDriverVerifiesAndRuns(printed, fixture, "15")
+        if strict {
+            Assert.DoesNotContain("Required NullableResultBox?", printed)
+            Assert.Contains("NullableResultBox?(\"miss\")!!", printed)
+        } else {
+            let expectedPromoted = if lambdaForm {
+                4
+            } else {
+                3
+            }
+            Assert.Equal(
+                expectedPromoted,
+                Regex.Matches(printed, "row \\(Required NullableResultBox\\?, Code int32\\)").Count
+            )
+        }
+    }
+
     private func EmitFixture() string {
         Directory.CreateDirectory(this.fixtureDirectory)
         let path = Path.Combine(this.fixtureDirectory, "Issue4719Fixture.dll")
@@ -4855,6 +5102,13 @@ public static class Obj {
         public static (NullableResultBox Required, int Code) Property { get; set; }
         public static int Accept((NullableResultBox Required, int Code) row) => row.Code;
         public delegate (NullableResultBox Required, int Code) Factory(string value);
+        public delegate void Consumer((NullableResultBox Required, int Code) row);
+    }
+    public interface IGenericEnvelopeParameter {
+        int Accept<T>(System.Collections.Generic.Dictionary<(string Required, T Value), int> rows, T value);
+    }
+    public abstract class GenericEnvelopeParameterBase {
+        public abstract int Accept<T>(System.Collections.Generic.Dictionary<(string Required, T Value), int> rows, T value);
     }
     public interface IAlwaysRowsTask {
         System.Threading.Tasks.Task<(MaybeBox Value, int Code)> Read(string value);
