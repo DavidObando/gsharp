@@ -955,8 +955,8 @@ public class Demo
     }
 
     /// gsc binds the `else` branch of an `if` from the state before the `then` branch (#5650, #5654), so a loop or a
-    /// field write in the `then` branch leaves a read in the `else` branch bare, while a loop in an earlier `switch`
-    /// section reaches a later section.
+    /// field write in the `then` branch leaves a read in the `else` branch bare.
+    /// ADR-0208 R4 also isolates switch section bodies when no goto can enter another section.
     @Fact
     func RefParameter_ReadInAnElseAfterALoopInTheThenBranch_StaysBare() {
         let printed = AssertRunsLikeCSharp(`
@@ -1143,9 +1143,9 @@ public class Demo
         Assert.Contains("return s.Length + 1", printed)
         Assert.Contains("return s.Length + 2", printed)
         Assert.Contains("return s.Length + 3", printed)
-        Assert.Contains("return s!!.Length + 4", printed)
+        Assert.Contains("return s.Length + 4", printed)
         Assert.Contains("return s.Length + 5", printed)
-        Assert.Contains("return s!!.Length + 6", printed)
+        Assert.Contains("return s.Length + 6", printed)
         Assert.Contains("return s.Length + 7", printed)
         Assert.Contains("return s.Length + 8", printed)
         Assert.Contains("return s!!.Length + 9", printed)

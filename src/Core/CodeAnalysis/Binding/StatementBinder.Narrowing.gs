@@ -1387,9 +1387,19 @@ internal partial class StatementBinder {
 
     private func CanStatementListCompleteNormally(statements ImmutableArray[BoundStatement]) bool {
         var fallsThrough = true
+        let targets = HashSet[BoundLabel]()
         for statement in statements {
-            fallsThrough = (fallsThrough || HasInternallyReachableFallthrough(statement)) &&
-                CanCompleteNormally(statement)
+            let reachable = fallsThrough ||
+                HasInternallyReachableFallthrough(statement) ||
+                (statement is BoundLabelStatement label && targets.Contains(label.Label))
+            if reachable {
+                if statement is BoundGotoStatement jump {
+                    targets.Add(jump.Label)
+                } else if statement is BoundConditionalGotoStatement conditional {
+                    targets.Add(conditional.Label)
+                }
+            }
+            fallsThrough = reachable && CanCompleteNormally(statement)
         }
         return fallsThrough
     }

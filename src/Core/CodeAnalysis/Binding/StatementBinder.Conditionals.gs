@@ -1393,7 +1393,7 @@ internal partial class StatementBinder {
     ) BoundStatement {
         let inheritedFallthrough = currentStatementListFallsThrough
         if frame != nil {
-            binderCtx.PushNarrowingFrame(frame)
+            PushConditionNarrowingFrame(frame)
         }
         try {
             let entry = binderCtx.Narrowing
@@ -1423,7 +1423,7 @@ internal partial class StatementBinder {
         if frame == nil {
             return bindExpressionWithTargetType(syntax, TypeSymbol.Bool)
         }
-        binderCtx.PushNarrowingFrame(frame)
+        PushConditionNarrowingFrame(frame)
         try {
             return bindExpressionWithTargetType(syntax, TypeSymbol.Bool)
         } finally {

@@ -73,7 +73,31 @@ internal partial class StatementBinder {
         if elseNarrow == nil {
             return entry
         }
-        return entry.WithAll(elseNarrow)
+        return RefineConditionEntry(entry, elseNarrow)
+    }
+
+    private func RefineConditionEntry(
+        entry NarrowingState,
+        facts IReadOnlyDictionary[AccessPath, TypeSymbol]
+    ) NarrowingState {
+        var result = entry
+        for fact in facts {
+            let held = result.NarrowedType(fact.Key)
+            // Condition effects already removed stale facts. A weaker proof cannot replace a surviving refinement.
+            if IsNullableWidening(fact.Key, fact.Value) || held == nil || !IsWeakerOrEqual(held, fact.Value) {
+                result = result.With(fact.Key, fact.Value)
+            }
+        }
+        return result
+    }
+
+    private func PushConditionNarrowingFrame(facts Dictionary[AccessPath, TypeSymbol]) {
+        let entry = RefineConditionEntry(binderCtx.Narrowing, facts)
+        let refined = Dictionary[AccessPath, TypeSymbol]()
+        for fact in facts {
+            refined[fact.Key] = entry.NarrowedType(fact.Key)!!
+        }
+        binderCtx.PushNarrowingFrame(refined)
     }
 
     private func IntersectBranchEntry(state NarrowingState) {

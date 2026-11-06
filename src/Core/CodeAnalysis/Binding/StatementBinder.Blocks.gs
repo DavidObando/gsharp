@@ -411,7 +411,7 @@ internal partial class StatementBinder {
         let testedEntry = if frame == nil {
             binderCtx.Narrowing
         } else {
-            binderCtx.Narrowing.WithAll(frame)
+            RefineConditionEntry(binderCtx.Narrowing, frame)
         }
         let entry = testedEntry.Join(incomingFallthrough)
         IntersectBranchEntry(entry)

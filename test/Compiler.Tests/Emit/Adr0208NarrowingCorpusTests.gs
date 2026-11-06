@@ -268,6 +268,8 @@ open class Adr0208NarrowingCorpusTests {
                 "m18_5301_goto_into_if_condition_after_return_in_branch_does_not_lift_R6",
                 "m19_5301_dead_block_bodied_arrow_lambda_label_does_not_leak_reachability_R6",
                 "m1_unrelated_interface_refinement",
+                "n10_5130_nil_recheck_keeps_stronger_fact",
+                "n11_5130_internal_if_let_labels_keep_normal_exits",
                 "n1_boxed_value_type_test",
                 "n2_5130_sibling_type_refinement",
                 "n3_5130_nullable_widening_unbraced_call",
@@ -1994,6 +1996,14 @@ func Run(x Animal?) string {
     return x.Bark()
 }
 func Main() { Console.WriteLine(Run(Dog{})) }`, "", "run", "woof", ""}
+            yield[]object{"n11_5130_internal_if_let_labels_keep_normal_exits", `func Run(flag bool, s string?, t string?) int32 {
+    var text string? = nil
+    if flag {
+        if let a = s, let b = t { } else { }
+    } else { text = "ok" }
+    return text.Length
+}
+func Main() { Console.WriteLine(Run(true, "s", "t")) }`, "GS0158@6:17", "reject", "", ""}
             yield[]object{"n9_5130_finally_discharges_nullable_widening", `import System.Collections.Generic
 func Run(dict Dictionary[string, string]) int32 {
     var value string = ""
@@ -2002,6 +2012,15 @@ func Run(dict Dictionary[string, string]) int32 {
     return value.Length
 }
 func Main() { Console.WriteLine(Run(Dictionary[string, string]())) }`, "", "run", "4", ""}
+            yield[]object{"n10_5130_nil_recheck_keeps_stronger_fact", `open class Animal { }
+class Dog : Animal { func Bark() string { return "woof" } }
+func Run(x Animal?) string {
+    if x !is Dog { return "" }
+    if x != nil { }
+    if x == nil { }
+    return x.Bark()
+}
+func Main() { Console.WriteLine(Run(Dog{})) }`, "", "run", "woof", ""}
             yield[]object{"n1_boxed_value_type_test", `func Run(x object?) int32 {
     if x == nil { return 0 }
     if x is int32 {

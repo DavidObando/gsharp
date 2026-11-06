@@ -24,6 +24,25 @@ import Xunit
 /// must still block narrowing, an `else if` chain, and post-if
 /// re-nullable-ization.
 open class Issue2159IfJoinNarrowingTests {
+    @Theory
+    @InlineData("if x != nil { }")
+    @InlineData("if x == nil { }")
+    @InlineData("if var n = 1; x != nil && n == 1 { }")
+    func NilRecheck_PreservesTheStrongerSubtype(recheck string) {
+        let result = Evaluate(`package T
+open class Animal { }
+class Dog : Animal { func Bark() string { return "woof" } }
+func Run(x Animal?) string {
+    if x !is Dog { return "" }
+    ` + recheck + `
+    return x.Bark()
+}
+Console.WriteLine(Run(Dog{}))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("woof\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
     @Fact
     func BranchRefinement_DoesNotChangeTheSiblingEntry() {
         let result = Evaluate(`package T
