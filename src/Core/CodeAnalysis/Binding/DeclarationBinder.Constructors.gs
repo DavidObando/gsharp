@@ -417,7 +417,7 @@ internal partial class DeclarationBinder {
                 }
             )
             let sliceType = symbolicParamsSlice ?? SliceTypeSymbol.Get(elementTypeSymbol)
-            let tailCount = boundArguments.Count - paramsIndex
+            let tailCount = Math.Max(0, boundArguments.Count - paramsIndex)
             let packed = ImmutableArray.CreateBuilder[BoundExpression](tailCount)
             for var j = 0; j < tailCount; j++ {
                 let srcIndex = paramsIndex + j
@@ -451,7 +451,13 @@ internal partial class DeclarationBinder {
             let arrayExpr = BoundArrayCreationExpression(syntax: nil, sliceType, packed.MoveToImmutable())
             let expandedBuilder = ImmutableArray.CreateBuilder[BoundExpression](ctorParams.Length)
             for var i = 0; i < paramsIndex; i++ {
-                expandedBuilder.Add(boundArguments[i])
+                expandedBuilder.Add(
+                    if i < boundArguments.Count {
+                        boundArguments[i]
+                    } else {
+                        ConversionClassifier.CreateOptionalDefaultArgument(ctorParams[i])
+                    }
+                )
             }
             expandedBuilder.Add(arrayExpr)
             orderedArgs = expandedBuilder.MoveToImmutable()
@@ -471,6 +477,21 @@ internal partial class DeclarationBinder {
         for var i = 0; i < ctorParams.Length; i++ {
             let clrParamType = ctorParams[i].ParameterType
             if clrParamType.IsByRef {
+                if i >= boundArguments.Count && ConversionClassifier.IsImplicitInClrParameter(ctorParams[i]) &&
+                    TryProjectSymbolicBaseInPointeeType(
+                    openBaseCtorParams,
+                    openBaseDefinition,
+                    baseTypeArguments,
+                    i
+                ) is {} optionalPointee {
+                    orderedArgs = orderedArgs.SetItem(
+                        i,
+                        ConversionClassifier.CreateOptionalDefaultArgument(
+                            ctorParams[i],
+                            parameterType: optionalPointee
+                        )
+                    )
+                }
                 let refKind = RefCapabilities.GetParameterRefKind(ctorParams[i])
                 refKindsBuilder.Add(refKind)
                 // Issue #4400: a plain argument at an imported `in` base

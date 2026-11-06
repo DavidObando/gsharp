@@ -1108,7 +1108,13 @@ internal class TypeDefEmitter {
         let invokeParamHandles = ImmutableArray.CreateBuilder[ParameterHandle](delegateSym.Parameters.Length)
         for var i = 0; i < delegateSym.Parameters.Length; i++ {
             let p = delegateSym.Parameters[i]
-            let paramHandle = ParameterMetadataEmitter.AddParameter(this.emitCtx, p, i + 1, fallbackName: "arg${i + 1}")
+            let paramHandle = ParameterMetadataEmitter.AddParameter(
+                this.emitCtx,
+                this.getTypeReference,
+                p,
+                i + 1,
+                fallbackName: "arg${i + 1}"
+            )
             invokeParamHandles.Add(paramHandle)
             if p.RefKind == RefKind.In {
                 this.emitIsReadOnlyAttributeOnParameter(paramHandle)
@@ -1389,7 +1395,7 @@ internal class TypeDefEmitter {
         let handles = ImmutableArray.CreateBuilder[ParameterHandle](parameters.Length)
         for var i = 0; i < parameters.Length; i++ {
             let p = parameters[i]
-            let paramHandle = ParameterMetadataEmitter.AddParameter(this.emitCtx, p, i + 1)
+            let paramHandle = ParameterMetadataEmitter.AddParameter(this.emitCtx, this.getTypeReference, p, i + 1)
             handles.Add(paramHandle)
             if p.RefKind == RefKind.In {
                 this.emitIsReadOnlyAttributeOnParameter(paramHandle)
@@ -1789,7 +1795,7 @@ internal class TypeDefEmitter {
         let handles = ImmutableArray.CreateBuilder[ParameterHandle](parameters.Length)
         for var i = 0; i < parameters.Length; i++ {
             let p = parameters[i]
-            let paramHandle = ParameterMetadataEmitter.AddParameter(this.emitCtx, p, i + 1)
+            let paramHandle = ParameterMetadataEmitter.AddParameter(this.emitCtx, this.getTypeReference, p, i + 1)
             handles.Add(paramHandle)
             if p.IsVariadic {
                 // ADR-0173: array carriers keep [ParamArray]; collection

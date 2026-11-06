@@ -85,6 +85,8 @@ Optional and required parameters may therefore be interleaved. A call is applica
 
 These restrictions are deliberate. They preserve faithful CLR emission (`Optional`/`HasDefault` plus a Constant row) while keeping omitted-argument lowering purely compile-time. A value-type `default(T)` (and the equivalent zero-value `T()` form) is also accepted (issue #1182): primitive defaults emit their typed-zero Constant, while arbitrary value types (BCL or user `data struct`) and `Nullable<T>` emit a nullref Constant and materialize the all-zero value at omitted call sites via a `BoundDefaultExpression` (`initobj` in IL), matching C#. Non-constant defaults, defaults that reference earlier parameters, and other generalized expressions remain deferred.
 
+Issue #5714 clarifies nullable defaults: `T? = default(T?)` is missing, but `T? = default(T)` retains a present default value. Primitive and enum defaults use the underlying zero Constant; decimal zero uses `DecimalConstantAttribute`. A non-simple struct's present nullable default cannot use CLR parameter metadata and reports `GS0265`, matching C#'s `CS1770`, rather than silently recording a missing value. Source `in` optional declarations remain prohibited; imported `in` and `ref readonly` optional parameters use readonly temporaries at every omitted call site.
+
 ### 4. Call-site semantics
 
 Optional parameters are **call-site sugar**. When binding a call that omits optional arguments, the binder synthesizes explicit bound constant expressions for each unsupplied optional parameter slot, just as it already does for imported CLR optional parameters.

@@ -2093,7 +2093,10 @@ internal partial class ExpressionBinder {
                 let staticArguments = OverloadResolver.BuildOrderedCallArguments(
                     staticConvertedArgs,
                     staticDownstreamMapping,
-                    staticParameters
+                    staticParameters,
+                    method: staticFn!!.Method,
+                    receiverType: classSymbol.ConstructedReceiver ?? receiver?.Type,
+                    symbolicMethodTypeArgs: staticTypeArgSymbolsForCall
                 )
                 let refKinds = ComputeArgumentRefKinds(staticParameters)
                 overloads.ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location)
@@ -3257,7 +3260,10 @@ internal partial class ExpressionBinder {
                         let instArguments = OverloadResolver.BuildOrderedCallArguments(
                             instConvertedArgs,
                             instDownstreamMapping,
-                            instParameters
+                            instParameters,
+                            method: method,
+                            receiverType: effectiveReceiverType,
+                            symbolicMethodTypeArgs: instTypeArgSymbolsForCall
                         )
                         let instRefKinds = ComputeArgumentRefKinds(instParameters)
                         overloads.ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location)
