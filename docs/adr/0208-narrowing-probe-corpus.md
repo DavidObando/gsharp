@@ -171,6 +171,12 @@ The fallback must not replay a pre-statement proof after such a join removes it.
 The separate unsupported-jump diagnostic gap remains tracked in [#5588](https://github.com/DavidObando/gsharp/issues/5588).
 Cleanup facts do not overwrite stronger facts that survived its effects; assignment summaries preserve execution order.
 
+`Issue2159IfJoinNarrowingTests` and `Issue5498And5502NarrowingTests` cover assignments nested inside property, field, and index writes.
+A non-null assignment discharges a failed dictionary lookup's nullable widening before the branch joins.
+The same operand transfer establishes nullable-local facts and applies setter effects after the right-hand side.
+A setter callback that writes the local still removes its proof.
+The positive probes fail on the preceding product; omitting setter effects kills the negative controls.
+
 ## Experiments on the deferred loop rule
 
 These measured the loop kill set that ADR-0208 section 10 defers to the

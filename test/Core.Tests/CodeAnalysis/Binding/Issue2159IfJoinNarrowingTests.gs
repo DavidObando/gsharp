@@ -25,6 +25,85 @@ import Xunit
 /// re-nullable-ization.
 open class Issue2159IfJoinNarrowingTests {
     @Fact
+    func DictionaryAssignmentValue_DischargesTheFailedLookupWidening() {
+        let result = Evaluate(`package T
+import System.Collections.Generic
+func Run(dict Dictionary[string, HashSet[string]]) int32 {
+    if !dict.TryGetValue("key", out var set) {
+        dict["key"] = (set = HashSet[string]())
+    }
+    set.Add("ok")
+    return set.Count
+}
+let dict = Dictionary[string, HashSet[string]]()
+Console.WriteLine(Run(dict))
+Console.WriteLine(Run(dict))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("1\n1\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Theory
+    @InlineData(`dict["key"] = (value = "safe")`)
+    @InlineData(`items[0] = (value = "safe")`)
+    @InlineData(`holder.Field = (value = "safe")`)
+    @InlineData(`holder.Value = (value = "safe")`)
+    @InlineData(`holder[0] = (value = "safe")`)
+    @InlineData(`info.ReasonPhrase = (value = "safe")`)
+    @InlineData(`other = (value = "safe")`)
+    func AssignmentValueWrappers_EstablishNullableLocalFacts(assignment string) {
+        let result = Evaluate(`package T
+import System.Collections.Generic
+import System.Net.Http
+class Holder {
+    var Field string? = nil
+    prop Value string? { set { } }
+    prop this[index int32] string? { set { } }
+}
+func Run() int32 {
+    let dict = Dictionary[string, string?]()
+    var items = []string?{nil}
+    let holder = Holder{}
+    let info = HttpResponseMessage()
+    var other string? = nil
+    var value string? = nil
+    ` + assignment + `
+    return value.Length
+}
+Console.WriteLine(Run())
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("4\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Theory
+    @InlineData(`holder.Value = (value = "safe")`)
+    @InlineData(`holder[0] = (value = "safe")`)
+    func AssignmentValueSetterCallback_DoesNotDischargeWidening(assignment string) {
+        let result = Evaluate(`package T
+import System.Collections.Generic
+class Holder {
+    var Callback () -> void
+    prop Value string { set { Callback() } }
+    prop this[index int32] string { set { Callback() } }
+}
+func Run() int32 {
+    let dict = Dictionary[string, string]()
+    var value string = ""
+    let holder = Holder{}
+    holder.Callback = func() { dict.TryGetValue("missing", &value) }
+    if !dict.TryGetValue("key", &value) {
+        ` + assignment + `
+    }
+    return value.Length
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
     func ExpressionLabel_DoesNotRestoreThePreStatementProof() {
         let result = Evaluate(`package T
 func Run(jump bool) {

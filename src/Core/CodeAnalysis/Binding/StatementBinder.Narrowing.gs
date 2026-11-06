@@ -1158,6 +1158,39 @@ internal partial class StatementBinder {
                 )
             )
         }
+        if statement is BoundExpressionStatement expressionStatement &&
+            TryClassifyNestedAssignmentNarrowings(expressionStatement.Expression) is {} assignments {
+            for entry in assignments {
+                SetPersistentNarrowing(persistentFrame, entry.Key, entry.Value)
+            }
+        }
+    }
+
+    private func TryClassifyNestedAssignmentNarrowings(expression BoundExpression) Dictionary[AccessPath, TypeSymbol]? {
+        var value = expression
+        while value is BoundConversionExpression conversion {
+            value = conversion.Expression
+        }
+        if value is BoundAssignmentExpression assignment {
+            value = assignment.Expression
+            while value is BoundConversionExpression conversion {
+                value = conversion.Expression
+            }
+        }
+        if value is not(
+            BoundAssignmentExpression or
+                BoundIndexAssignmentExpression or
+                BoundClrIndexAssignmentExpression or
+                BoundFieldAssignmentExpression or
+                BoundPropertyAssignmentExpression or
+                BoundClrPropertyAssignmentExpression or
+                BoundBlockExpression
+        ) ||
+            ContainsUserLabel(expression) {
+            return nil
+        }
+        // The operand transfer also applies setter effects after the assigned value.
+        return TryClassifyConditionNonNullAssignments(expression)
     }
 
     /// Issue #4519 / ADR-0213 section 11: joins the current narrowing state with forward jumps that
@@ -1611,7 +1644,12 @@ internal partial class StatementBinder {
             object.ReferenceEquals(targetVar.Variable, path.Root) {
             return AssignmentTypePreservesNarrowing(expr.Type, underlying)
         }
-        return CallDischargesNullableWidening(expr, path.Root, underlying)
+        let assignments = TryClassifyNestedAssignmentNarrowings(expr)
+        return (
+            assignments != nil && assignments.TryGetValue(path, out var assignedType) &&
+                AssignmentTypePreservesNarrowing(assignedType, underlying)
+        ) ||
+            CallDischargesNullableWidening(expr, path.Root, underlying)
     }
 
     private func CallDischargesNullableWidening(
@@ -2534,6 +2572,32 @@ internal partial class StatementBinder {
             case assign is BoundAssignmentExpression {
                 CollectConditionNonNullAssignments(assign.Expression, state, aliases, processed, exitAliases)
             }
+            case assign is BoundIndexAssignmentExpression {
+                CollectConditionNonNullAssignments(assign.TargetExpression, state, aliases, processed, exitAliases)
+                for index in assign.Indices {
+                    CollectConditionNonNullAssignments(index, state, aliases, processed, exitAliases)
+                }
+                CollectConditionNonNullAssignments(assign.Value, state, aliases, processed, exitAliases)
+            }
+            case assign is BoundClrIndexAssignmentExpression {
+                CollectConditionNonNullAssignments(assign.TargetExpression, state, aliases, processed, exitAliases)
+                for index in assign.Arguments {
+                    CollectConditionNonNullAssignments(index, state, aliases, processed, exitAliases)
+                }
+                CollectConditionNonNullAssignments(assign.Value, state, aliases, processed, exitAliases)
+            }
+            case assign is BoundFieldAssignmentExpression {
+                CollectConditionNonNullAssignments(assign.ReceiverExpression, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(assign.Value, state, aliases, processed, exitAliases)
+            }
+            case assign is BoundPropertyAssignmentExpression {
+                CollectConditionNonNullAssignments(assign.Receiver, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(assign.Value, state, aliases, processed, exitAliases)
+            }
+            case assign is BoundClrPropertyAssignmentExpression {
+                CollectConditionNonNullAssignments(assign.Receiver, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(assign.Value, state, aliases, processed, exitAliases)
+            }
             case tupleLit is BoundTupleLiteralExpression {
                 for elem in tupleLit.Elements {
                     CollectConditionNonNullAssignments(elem, state, aliases, processed, exitAliases)
@@ -2608,11 +2672,9 @@ internal partial class StatementBinder {
         let nextAliases = ApplyExpressionEffects(node, state, aliases, processed, exitAliases)
         aliases.Clear()
         aliases.UnionWith(nextAliases)
-        if node is BoundAssignmentExpression assigned && !(assigned.Variable.Type is NullableTypeSymbol) {
-            let path = AccessPath.ForVariable(assigned.Variable)
-            if DischargesNullableWidening(assigned, path, NullableTypeSymbol.Get(assigned.Variable.Type)) {
-                state[path] = assigned.Variable.Type
-            }
+        if node is BoundAssignmentExpression assigned &&
+            TryClassifyNonNullAssignment(assigned, out var variable, out var type, includeNonNullableStorage: true) {
+            state[AccessPath.ForVariable(variable!!)] = type!!
         } else if node.Syntax is NullCoalescingAssignmentExpressionSyntax &&
             node is BoundBlockExpression{
             Expression: BoundBinaryExpression{

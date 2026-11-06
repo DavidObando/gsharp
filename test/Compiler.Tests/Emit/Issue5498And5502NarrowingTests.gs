@@ -95,6 +95,37 @@ open class Issue5498And5502NarrowingTests {
         private const RunTimeout int32 = 30000
 
         public func Rows() IEnumerable[[]object] {
+            yield[]object{"nested_assignment_discharges_failed_dictionary_lookup", `import System
+import System.Collections.Generic
+func Run(dict Dictionary[string, HashSet[string]]) int32 {
+    if !dict.TryGetValue("key", out var set) {
+        dict["key"] = (set = HashSet[string]())
+    }
+    set.Add("ok")
+    return set.Count
+}
+func Main() {
+    let dict = Dictionary[string, HashSet[string]]()
+    Console.WriteLine(Run(dict))
+    Console.WriteLine(Run(dict))
+}`, "", "run", "1|1"}
+            yield[]object{"nested_assignment_setter_callback_keeps_widening", `import System
+import System.Collections.Generic
+class Holder {
+    var Callback () -> void
+    prop Value string { set { Callback() } }
+}
+func Run() int32 {
+    let dict = Dictionary[string, string]()
+    var value string = ""
+    let holder = Holder{}
+    holder.Callback = func() { dict.TryGetValue("missing", &value) }
+    if !dict.TryGetValue("key", &value) {
+        holder.Value = (value = "safe")
+    }
+    return value.Length
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@15:18", "reject", ""}
             yield[]object{"repro_5498_or_chain_trailing_and_operand_does_not_restore_fact", `import System
 
 class C {

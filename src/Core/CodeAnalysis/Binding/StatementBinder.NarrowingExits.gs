@@ -162,6 +162,10 @@ internal partial class StatementBinder {
             TryClassifyNonNullAssignment(assignment, out var variable, out var type) {
             exit = exit.With(AccessPath.ForVariable(variable!!), type!!)
         }
+        if statement is BoundExpressionStatement expressionStatement &&
+            TryClassifyNestedAssignmentNarrowings(expressionStatement.Expression) is {} assignments {
+            exit = exit.WithAll(assignments)
+        }
         if loopExitFacts.TryGetValue(syntax, out var loopFacts) {
             exit = exit.WithAll(loopFacts)
         }
