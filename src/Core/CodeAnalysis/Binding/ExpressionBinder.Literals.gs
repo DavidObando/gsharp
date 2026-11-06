@@ -4329,6 +4329,8 @@ internal partial class ExpressionBinder {
         let spanOpen = this.binderCtx.References.MapClrTypeToReferences(typeof(System.Span[_]))
         let elementClr = if elementType.ClrType != nil {
             this.binderCtx.References.MapClrTypeToReferences(elementType.ClrType)!!
+        } else if elementType is EnumSymbol {
+            this.binderCtx.References.GetCoreType("System.Int32")
         } else {
             this.binderCtx.References.GetCoreType("System.Object")
         }

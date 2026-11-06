@@ -1023,7 +1023,7 @@ internal partial class MethodBodyEmitter {
             // map, channel, or function: the synthesized non-generic
             // `IEnumerator.Current` getter converts the strongly-typed reified
             // `<>2__current` field to `object`.
-            if (a is MapTypeSymbol || a is FunctionTypeSymbol || a is ChannelTypeSymbol) &&
+            if a != nil && !(a is TypeParameterSymbol) && Conversion.IsReferenceLikeTarget(a) &&
                 (b?.ClrType.IsSameAs(typeof(object)) == true || b == TypeSymbol.Object) {
                 return true
             }
@@ -1113,8 +1113,10 @@ internal partial class MethodBodyEmitter {
             // System.MulticastDelegate as a no-op reference upcast.
             if b?.ClrType != nil &&
                 IsSystemDelegateHostType(b!!.ClrType) &&
-                a?.ClrType != nil &&
-                ClrTypeUtilities.IsDelegateType(a!!.ClrType) {
+                (
+                (a is FunctionTypeSymbol or DelegateTypeSymbol) ||
+                    (a?.ClrType != nil && ClrTypeUtilities.IsDelegateType(a!!.ClrType))
+            ) {
                 return true
             }
             // Issue #2523: constructed imported reference types can preserve their

@@ -4612,7 +4612,9 @@ internal partial class ExpressionBinder {
             // is produced and the raw value is pushed. Treating "a projection would
             // have been possible" as acceptance here would therefore accept exactly
             // the pairs that emit the invalid IL this check exists to stop.
-            return !Conversion.Classify(sourceType, targetType).Exists
+            return !Conversion.Classify(sourceType, targetType)
+                .Exists &&
+                !ConversionClassifier.HasUserDefinedImplicitConversionForTypes(sourceType, targetType)
         }
 
         /// Issue #3989 / #4006: whether [`type`](paramref) carries one of
@@ -4706,6 +4708,10 @@ internal partial class ExpressionBinder {
                 // argument that happens to carry a user enum — measured to break
                 // `Issue2889`'s `enumAction(List[Mode]{…})`, an imported delegate
                 // whose invocation is not this gate's business at all.
+                if type is EnumSymbol {
+                    surrogates.Add(typeof(int32))
+                    return
+                }
                 if type is StructSymbol &&
                     type.IsClass == true &&
                     type.ClrType == nil &&

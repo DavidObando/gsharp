@@ -1248,6 +1248,20 @@ open partial class TypeSymbol : Symbol {
                     )
                 )
             }
+            if left is ImportedTypeSymbol &&
+                right is ImportedTypeSymbol &&
+                left.ClrType != nil &&
+                right.ClrType != nil &&
+                (
+                ManagedReferenceTypes.IsDefinition(left.ClrType, out _) || NativeSliceTypes.IsDefinition(
+                    left.ClrType,
+                    out _
+                )
+            ) &&
+                !RequiresSymbolicProjection(left) &&
+                !RequiresSymbolicProjection(right) {
+                return ClrTypeUtilities.AreSame(left.ClrType, right.ClrType)
+            }
             if left.GetType() != right.GetType() {
                 return MemberLookup.IsNaturalStructuralDelegateTarget(left, right) ||
                     MemberLookup.IsNaturalStructuralDelegateTarget(right, left)
