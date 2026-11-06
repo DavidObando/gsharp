@@ -1436,6 +1436,9 @@ internal partial class ExpressionBinder {
         if syntax is ParenthesizedExpressionSyntax parenthesized {
             return BindExpression(parenthesized.Expression, targetType)
         }
+        if syntax is CheckedExpressionSyntax checkedExpression {
+            return BindCheckedExpression(checkedExpression, targetType)
+        }
         // ADR-0124 / issue #1024: a `stackalloc [n]T` initialising an
         // unmanaged-pointer target (`*T`, only spellable in an unsafe context)
         // yields the raw `T*` pointer rather than the default `Span<T>`. The
@@ -1874,6 +1877,11 @@ internal partial class ExpressionBinder {
     private func BindCheckedExpression(syntax CheckedExpressionSyntax, canBeVoid bool) BoundExpression {
         using let scope_ = binderCtx.PushCheckedContext(syntax.IsChecked)
         return BindExpression(syntax.Expression, canBeVoid)
+    }
+
+    private func BindCheckedExpression(syntax CheckedExpressionSyntax, targetType TypeSymbol) BoundExpression {
+        using let scope_ = binderCtx.PushCheckedContext(syntax.IsChecked)
+        return BindExpression(syntax.Expression, targetType)
     }
 
     private func BindNameExpression(syntax NameExpressionSyntax) BoundExpression {

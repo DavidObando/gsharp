@@ -270,6 +270,14 @@ func Run(token Token) {
     return f()
 }`, "(nil, 1)")
             yield Row("nil-literal-return", `func Run() () -> string -> () -> nil`, "nil")
+            yield Row("checked-wrapper-local-let", `func Run() string {
+    let f () -> string = checked(() -> Maybe())
+    return f()
+}`, "Maybe()")
+            yield Row("unchecked-wrapper-local-let", `func Run() string {
+    let f () -> string = unchecked(() -> Maybe())
+    return f()
+}`, "Maybe()")
         }
 
         func AcceptedRows() sequence[[]object] {
