@@ -284,6 +284,83 @@ for value in Iterate(host) { Console.WriteLine(value) }
 Console.WriteLine(host.counter.n)`, "1\n1\n2\n")
     }
 
+    @Fact
+    func NarrowedBoxes_CaptureTheSelectedReferenceNotTheMutableSlot() {
+        AssertRuns(`import System
+struct Counter {
+    var n int32
+    func Bump() { n++ }
+}
+class Box {
+    let value object
+    init(value object) { this.value = value }
+}
+func Run(replacement object) {
+    var value object = Counter{}
+    let original = value
+    if value is Counter {
+        defer value.Bump()
+        value = replacement
+    }
+    if original is Counter c { Console.WriteLine(c.n) }
+    if replacement is Counter c { Console.WriteLine(c.n) }
+}
+Run("changed")
+Run(Counter{n: 10})
+let box = Box(Counter{})
+if box.value is Counter {
+    defer box.value.Bump()
+}
+if box.value is Counter c { Console.WriteLine(c.n) }`, "1\n1\n10\n1\n")
+    }
+
+    @Fact
+    func BlockValues_WithRefReturningTailsStillCopyTheValue() {
+        AssertRuns(`import System
+struct Counter {
+    var n int32
+    func Bump() { n++ }
+}
+class Host { var counter Counter }
+func Get(h Host) ref Counter { return ref h.counter }
+func Run() {
+    let host = Host()
+    {
+        defer ({ Get(host) }).Bump()
+        host.counter.n = 10
+    }
+    Console.WriteLine(host.counter.n)
+    { defer (*&({ Get(host) })).Bump() }
+    Console.WriteLine(host.counter.n)
+}
+Run()`, "10\n11\n")
+    }
+
+    @Fact
+    func ReadOnlyRefReturns_KeepNativeImportedAndGenericReferentsReadOnly() {
+        AssertRuns(`import System
+interface ICounter { func Bump(); }
+struct Counter : ICounter {
+    var n int32
+    func Bump() { n++ }
+}
+class Host[T] { var value T }
+func Read(h Host[Counter]) ref readonly Counter { return ref h.value }
+func ReadGeneric[T](h Host[T]) ref readonly T { return ref h.value }
+func Generic[T ICounter](h Host[T]) { defer ReadGeneric(h).Bump() }
+func Run() {
+    let host = Host[Counter]()
+    { defer Read(host).Bump() }
+    Generic(host)
+    Console.WriteLine(host.value.n)
+    let items = []Counter{Counter{n: 4}}
+    let view = ReadOnlySpan[Counter](items)
+    { defer view[0].Bump() }
+    Console.WriteLine(items[0].n)
+}
+Run()`, "0\n4\n")
+    }
+
     shared {
         private func AssertRuns(source string, expected string) {
             let directory = Path.Combine(AppContext.BaseDirectory, "Issue5707", Guid.NewGuid().ToString("N"))

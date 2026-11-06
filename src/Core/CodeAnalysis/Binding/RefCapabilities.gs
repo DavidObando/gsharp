@@ -680,7 +680,10 @@ internal shared class RefCapabilities {
             .Variable
             .IsReadOnly &&
             Binder.IsReferenceTypeForConstraint(receiver.Type)
-        case variable is BoundVariableExpression: variable.Variable.IsReadOnly
+        case variable is BoundVariableExpression: variable
+            .Variable
+            .IsReadOnly ||
+            variable.Variable is LocalVariableSymbol{RefKind: RefKind.RefReadOnly or RefKind.In}
         case tuple is BoundTupleElementAccessExpression: IsReadOnlyValueReceiver(tuple.Receiver)
         case block is BoundBlockExpression: IsReadOnlyStorage(block.Expression)
         case conditional is BoundConditionalExpression: IsReadOnlyStorage(conditional.WhenTrue) ||

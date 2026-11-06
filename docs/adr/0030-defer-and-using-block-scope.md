@@ -23,6 +23,9 @@ For an array element, binding captures the array and indices eagerly and preserv
 Locals, parameters, `ref` aliases, globals, and static fields keep their storage.
 Binding probes the location before evaluating arguments, so an invalid location fails at the `defer` statement.
 An unconstrained generic receiver captures reference-type instantiations by value and preserves value-type storage.
+A reference slot narrowed to a boxed value type captures the selected box, not the mutable reference slot.
+Ref-returning receivers preserve their readonly capability, including through generic receiver reconstruction.
+A user block expression remains a value even when its final expression returns by reference.
 The deferred method body runs only at block exit; only the eager operands affect narrowing at the `defer` statement.
 
 `defer` is block-scoped and LIFO. A `defer` runs when the enclosing block exits normally or exceptionally. Multiple `defer` statements in the same block lower to nested `try/finally` statements so later source declarations execute first at exit.

@@ -1393,6 +1393,51 @@ internal partial class StatementBinder {
         if !MayBeValueType(receiver.Type) {
             return CaptureReceiverOperand(receiver, prefix, retainedVariables, retainRemaining, isDefer)
         }
+        if isDefer && receiver is BoundBlockExpression{Syntax: BlockExpressionSyntax} {
+            return CaptureExpression(receiver, prefix)
+        }
+        let storageView = switch receiver {
+            case variable is BoundVariableExpression when variable.NarrowedType != nil:
+            cast[BoundExpression](BoundVariableExpression(variable.Syntax, variable.Variable))
+            case field is BoundFieldAccessExpression when field.NarrowedType != nil:
+            if field.InterfaceType is {} owner {
+                BoundFieldAccessExpression(field.Syntax, field.Field, owner, field.SubstitutedType, narrowedType: nil)
+            } else {
+                BoundFieldAccessExpression(
+                    field.Syntax,
+                    field.Receiver,
+                    field.StructType,
+                    field.Field,
+                    field.SubstitutedType,
+                    narrowedType: nil
+                )
+            }
+            case field is BoundClrPropertyAccessExpression when field.Member is FieldInfo info:
+            BoundClrPropertyAccessExpression(
+                field.Syntax,
+                field.Receiver,
+                field.Member,
+                MemberLookup.GetClrFieldTypeSymbol(
+                    field.Receiver?.Type ?? field.StaticContainerType ?? TypeSymbol.Error,
+                    info
+                ),
+                field.StaticContainerType,
+                field.ConstrainedReceiverTypeParameter,
+                field.ConstrainedInterfaceType,
+                field.IsAddressableStaticField,
+                field.IsReadOnlySubmissionGlobal
+            )
+            default: receiver
+        }
+        if !object.ReferenceEquals(storageView, receiver) && Binder.IsReferenceTypeForConstraint(storageView.Type) {
+            receiver.CopyStaticQualifierTo(storageView)
+            let captured = CaptureReceiverOperand(storageView, prefix, retainedVariables, retainRemaining, isDefer)
+            return if captured is BoundVariableExpression snapshot {
+                BoundVariableExpression(receiver.Syntax, snapshot.Variable, receiver.Type)
+            } else {
+                receiver
+            }
+        }
         if GSharp.Core.CodeAnalysis.Lowering.SideEffectSpiller.IsOpaqueStorageReceiver(receiver) {
             let local = LocalVariableSymbol(
                 if isDefer {
@@ -1414,6 +1459,16 @@ internal partial class StatementBinder {
         }
         switch receiver {
             case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
+                if isDefer && address.Operand is BoundBlockExpression block {
+                    prefix.AddRange(block.Statements)
+                    return CaptureCallReceiverCore(
+                        block.Expression,
+                        prefix,
+                        retainedVariables,
+                        retainRemaining,
+                        isDefer
+                    )
+                }
                 return CaptureCallReceiverCore(address.Operand, prefix, retainedVariables, retainRemaining, isDefer)
             }
             case block is BoundBlockExpression when isDefer && block.Syntax is not BlockExpressionSyntax {

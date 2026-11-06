@@ -776,9 +776,20 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             statements ImmutableArray[BoundStatement].Builder,
             local LocalVariableSymbol
         ) BoundExpression {
-            local.RefKind = RefKind.Ref
+            let isReadOnly = RefCapabilities.IsReadOnlyReference(storage)
+            local.RefKind = if isReadOnly {
+                RefKind.RefReadOnly
+            } else {
+                RefKind.Ref
+            }
             local.ManagedReferenceOrigin = storage
-            statements.Add(BoundVariableDeclaration(anchor, local, BoundAddressOfExpression(anchor, storage)))
+            statements.Add(
+                BoundVariableDeclaration(
+                    anchor,
+                    local,
+                    BoundAddressOfExpression(anchor, storage, unmanaged: false, isReadOnly: isReadOnly)
+                )
+            )
             return BoundVariableExpression(storage.Syntax, local)
         }
 
