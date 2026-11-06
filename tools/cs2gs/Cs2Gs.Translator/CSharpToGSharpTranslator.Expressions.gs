@@ -3481,11 +3481,11 @@ partial class CSharpToGSharpTranslator {
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) bool -> switch targetSymbol {
             case namedType is INamedTypeSymbol: !ContainsTypeParameter(namedType)
-            case field is IFieldSymbol: !ContainsTypeParameter(
-                EffectiveDeclaredSlotType(field.OriginalDefinition.Type, value)
-            )
-            case property is IPropertySymbol: !ContainsTypeParameter(
-                EffectiveDeclaredSlotType(property.OriginalDefinition.Type, value)
+            case field is IFieldSymbol: this.MemberSlotIsDeclared(field.OriginalDefinition.Type, field.Type, value)
+            case property is IPropertySymbol: this.MemberSlotIsDeclared(
+                property.OriginalDefinition.Type,
+                property.Type,
+                value
             )
             case parameter is IParameterSymbol: this.ParameterSlotIsDeclared(parameter, value)
             case local is ILocalSymbol: this.LocalSlotIsDeclared(local)
@@ -3494,21 +3494,79 @@ partial class CSharpToGSharpTranslator {
                     .context
                     .GetTypeInfo(lambda)
                     .ConvertedType is INamedTypeSymbol{DelegateInvokeMethod: {}} &&
-                    this
-                    .SlotTypeIsDeclared(
-                    this.ResolveValueSink(lambda) ??
-                        (
-                        this.FindResultLambda(lambda) is {} enclosingLambda ? this.GetLambdaTargetDelegateType(
-                            enclosingLambda
-                        )
-                            ?.DelegateInvokeMethod: default(IMethodSymbol?)
-                    ),
-                    lambda
+                    (
+                    this.LambdaFeedsDeclaredCollectionElement(lambda) || this.SlotTypeIsDeclared(
+                        this.ResolveValueSink(lambda) ??
+                            (
+                            this.FindResultLambda(lambda) is {} enclosingLambda ? this.GetLambdaTargetDelegateType(
+                                enclosingLambda
+                            )
+                                ?.DelegateInvokeMethod: default(IMethodSymbol?)
+                        ),
+                        lambda
+                    )
                 )
             } else {
                 true
             }
             default: false
+        }
+
+        private func MemberSlotIsDeclared(
+            declaredType ITypeSymbol?,
+            constructedType ITypeSymbol?,
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            let effectiveDeclared = EffectiveDeclaredSlotType(declaredType, value)
+            if !ContainsTypeParameter(effectiveDeclared) {
+                return true
+            }
+            let effectiveConstructed = EffectiveDeclaredSlotType(constructedType, value)
+            if ContainsTypeParameter(effectiveConstructed) {
+                return false
+            }
+            if value == nil {
+                return false
+            }
+            let storeNodes = List[Microsoft.CodeAnalysis.SyntaxNode]()
+            OutermostTransparentNode(value, storeNodes: storeNodes)
+            if storeNodes.Count == 0 ||
+                storeNodes[0].Parent is not Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .AssignmentExpressionSyntax assignment {
+                return false
+            }
+            if assignment.Parent is InitializerExpressionSyntax{Parent: BaseObjectCreationExpressionSyntax creation} {
+                return this.ReceiverTypeArgumentsAreDeclared(creation)
+            }
+            return this.MemberReceiverTypeArgumentsAreDeclared(effectiveDeclared, effectiveConstructed, assignment.Left)
+        }
+
+        private func LambdaFeedsDeclaredCollectionElement(lambda AnonymousFunctionExpressionSyntax) bool {
+            let converted = this.context.GetTypeInfo(lambda).ConvertedType as INamedTypeSymbol
+            if converted?.DelegateInvokeMethod == nil ||
+                ContainsTypeParameter(converted!!.DelegateInvokeMethod!!.ReturnType) {
+                return false
+            }
+            var initializer = OutermostTransparentNode(lambda)?.Parent as InitializerExpressionSyntax
+            while initializer?.Parent is InitializerExpressionSyntax outerInitializer {
+                initializer = outerInitializer
+            }
+            return switch initializer?.Parent {
+                case arrayCreation is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ArrayCreationExpressionSyntax: this
+                    .context
+                    .GetTypeInfo(arrayCreation)
+                    .Type is IArrayTypeSymbol arrayType &&
+                    !ContainsTypeParameter(arrayType.ElementType)
+                case creation is BaseObjectCreationExpressionSyntax: this.ReceiverTypeArgumentsAreDeclared(creation)
+                default: false
+            }
         }
 
         private func ParameterSlotIsDeclared(

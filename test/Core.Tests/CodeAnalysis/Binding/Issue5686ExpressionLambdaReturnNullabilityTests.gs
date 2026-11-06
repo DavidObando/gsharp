@@ -281,6 +281,16 @@ func Run(token Token) {
     let f () -> string = unchecked(() -> Maybe())
     return f()
 }`, "Maybe()")
+            yield Row("checked-wrapper-assignment", `func Run() string {
+    var f () -> string = () -> "ok"
+    f = checked(() -> Maybe())
+    return f()
+}`, "Maybe()")
+            yield Row("unchecked-wrapper-assignment", `func Run() string {
+    var f () -> string = () -> "ok"
+    f = unchecked(() -> Maybe())
+    return f()
+}`, "Maybe()")
             yield Row(
                 "mixed-delegate-and-expression-tree-overload",
                 `func Run() string -> StrictSink5686.Pick(() -> Maybe(), 1)`,

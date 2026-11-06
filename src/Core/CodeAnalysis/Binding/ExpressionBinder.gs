@@ -1681,7 +1681,14 @@ internal partial class ExpressionBinder {
         // Preserve the regular conversion diagnostic for nullable delegate
         // targets instead of replacing it with target-parameter diagnostics.
         bound = nil
-        let lambda LambdaExpressionSyntax? = OverloadResolver.GetLambdaArgumentSyntax(syntax)
+        if syntax is ParenthesizedExpressionSyntax parenthesized {
+            return TryBindLambdaExpressionWithTargetType(parenthesized.Expression, targetType, out bound)
+        }
+        if syntax is CheckedExpressionSyntax checkedExpression {
+            using let scope_ = binderCtx.PushCheckedContext(checkedExpression.IsChecked)
+            return TryBindLambdaExpressionWithTargetType(checkedExpression.Expression, targetType, out bound)
+        }
+        let lambda LambdaExpressionSyntax? = syntax as LambdaExpressionSyntax
         if lambda == nil || targetType == nil {
             return false
         }
