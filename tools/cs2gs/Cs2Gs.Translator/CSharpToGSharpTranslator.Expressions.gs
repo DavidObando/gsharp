@@ -11470,12 +11470,11 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             let receiverSymbol ISymbol? = this.context.GetSymbolInfo(elementAccess.Expression).Symbol
-            if !((receiverSymbol is IFieldSymbol || receiverSymbol is IPropertySymbol)) {
-                return false
-            }
             let receiverType ITypeSymbol? = switch receiverSymbol {
                 case field is IFieldSymbol: field.Type
                 case property is IPropertySymbol: property.Type
+                case local is ILocalSymbol: local.Type
+                case receiverParameter is IParameterSymbol: receiverParameter.Type
                 default: default(ITypeSymbol?)
             }
             if receiverType is not INamedTypeSymbol namedReceiver ||
