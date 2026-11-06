@@ -6087,21 +6087,7 @@ internal partial class StatementBinder {
         // its call sites in Binder.cs) and reports ReportByRefLikeEscape only
         // for a local actually proven live across a suspension (including via
         // unsafe try/finally interaction).
-        if TypeSymbol.IsByRefLike(variableType) {
-            if function == nil || function!!.IsTopLevelEntryPoint {
-                Diagnostics.ReportByRefLikeEscape(
-                    syntax.Identifier.Location,
-                    variableType,
-                    "be declared as a top-level variable (it would be emitted as a heap-rooted static field)"
-                )
-            } else if !function!!.IsAsync && isIteratorReturnType(function!!.Type) {
-                Diagnostics.ReportByRefLikeEscape(
-                    syntax.Identifier.Location,
-                    variableType,
-                    "be declared as a local in an iterator (it would be hoisted into the state machine)"
-                )
-            }
-        }
+        ReportByRefLikeDeconstructOutputEscapeIfNeeded(syntax.Identifier, variableType, isDiscard: false)
         // Issue #187 / ADR-0047 §3: bind any `@Foo` annotations and attach
         // them to the variable symbol so #175 use-site diagnostics
         // (e.g. `@Obsolete`) fire when the variable is read or written.
@@ -6786,8 +6772,7 @@ internal partial class StatementBinder {
         let receiverScoped = HasFunctionLocalEscapeScope(receiver) ||
             (
             (method.HasUnscopedRef || method.ThisParameter?.IsUnscopedRefReceiver == true) &&
-                !Binder.IsReferenceTypeForConstraint(receiver.Type) &&
-                (HasFunctionLocalRefScope(receiver) || RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(receiver))
+                HasLocalOrSpilledReceiverStorageScope(receiver, bareReceiverType)
         )
         for var i = 0; i < identifiers.Count; i++ {
             let parameter = method.Parameters[i + parameterOffset]
@@ -6811,7 +6796,9 @@ internal partial class StatementBinder {
             temp.IsScoped = outputScoped
             $scope.TryDeclareVariable(temp)
             arguments.Add(BoundAddressOfExpression(nil, BoundVariableExpression(nil, temp)))
-            if !IsDiscard(identifiers[i]) {
+            let isDiscard = IsDiscard(identifiers[i])
+            ReportByRefLikeDeconstructOutputEscapeIfNeeded(identifiers[i], elementType, isDiscard)
+            if !isDiscard {
                 let variable = bindLocalVariable(identifiers[i], isReadOnly, elementType)
                 if outputScoped && variable is LocalVariableSymbol localVariable {
                     localVariable.IsScoped = true
@@ -6847,6 +6834,59 @@ internal partial class StatementBinder {
         result.AddRange(declarations)
         statements = result.ToImmutable()
         return true
+    }
+
+    private func HasLocalOrSpilledReceiverStorageScope(
+        receiver BoundExpression,
+        bareReceiverType TypeSymbol,
+        isReadOnlyMember bool = false
+    ) bool {
+        if Binder.IsReferenceTypeForConstraint(receiver.Type) {
+            return false
+        }
+        if HasFunctionLocalRefScope(receiver) || RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(
+            receiver,
+            isReadOnlyMember && bareReceiverType is not TypeParameterSymbol
+        ) {
+            return true
+        }
+        if !RefCapabilities.IsDirectlyAddressableForImplicitIn(receiver) {
+            let unboxedInPlace = (
+                bareReceiverType is StructSymbol{IsClass: false} || bareReceiverType.ClrType?.IsValueType == true
+            ) &&
+                receiver is BoundVariableExpression{NarrowedType: not nil} bve &&
+                Binder.IsReferenceTypeForConstraint(bve.Variable.Type)
+            if !unboxedInPlace {
+                return true
+            }
+        }
+        if bareReceiverType is TypeParameterSymbol && receiver is BoundClrPropertyAccessExpression{Member: FieldInfo} {
+            return true
+        }
+        return false
+    }
+
+    private func ReportByRefLikeDeconstructOutputEscapeIfNeeded(
+        identifier SyntaxToken,
+        elementType TypeSymbol,
+        isDiscard bool
+    ) {
+        if !TypeSymbol.IsByRefLike(elementType) {
+            return
+        }
+        if !isDiscard && (function == nil || function!!.IsTopLevelEntryPoint) {
+            Diagnostics.ReportByRefLikeEscape(
+                identifier.Location,
+                elementType,
+                "be declared as a top-level variable (it would be emitted as a heap-rooted static field)"
+            )
+        } else if function != nil && !function!!.IsAsync && isIteratorReturnType(function!!.Type) {
+            Diagnostics.ReportByRefLikeEscape(
+                identifier.Location,
+                elementType,
+                "be declared as a local in an iterator (it would be hoisted into the state machine)"
+            )
+        }
     }
 
     private func AddUniqueInterfaceDeconstructMatch(
@@ -6994,7 +7034,9 @@ internal partial class StatementBinder {
             temp.IsScoped = outputScoped
             $scope.TryDeclareVariable(temp)
             arguments.Add(BoundAddressOfExpression(nil, BoundVariableExpression(nil, temp)))
-            if !IsDiscard(identifiers[i]) {
+            let isDiscard = IsDiscard(identifiers[i])
+            ReportByRefLikeDeconstructOutputEscapeIfNeeded(identifiers[i], elementType, isDiscard)
+            if !isDiscard {
                 let variable = bindLocalVariable(identifiers[i], isReadOnly, elementType)
                 if outputScoped && variable is LocalVariableSymbol localVariable {
                     localVariable.IsScoped = true
@@ -7285,15 +7327,15 @@ internal partial class StatementBinder {
                 )
                 refKinds.Add(RefKind.None)
             }
+            let bareReceiverType = receiver.Type.StripToBareShape()
             let receiverScoped = if receiverOffset == 0 {
                 HasFunctionLocalEscapeScope(receiver) ||
                     (
-                    RefCapabilities.HasUnscopedRef(method) && !Binder.IsReferenceTypeForConstraint(receiver.Type) &&
-                        (
-                        HasFunctionLocalRefScope(receiver) || RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(
-                            receiver,
-                            RefCapabilities.IsReadOnlyMethod(method)
-                        )
+                    RefCapabilities.HasUnscopedRef(method) &&
+                        HasLocalOrSpilledReceiverStorageScope(
+                        receiver,
+                        bareReceiverType,
+                        RefCapabilities.IsReadOnlyMethod(method)
                     )
                 )
             } else {
@@ -7336,7 +7378,9 @@ internal partial class StatementBinder {
                 $scope.TryDeclareVariable(temp)
                 arguments.Add(BoundAddressOfExpression(nil, BoundVariableExpression(nil, temp)))
                 refKinds.Add(RefKind.Out)
-                if !IsDiscard(identifiers[i]) {
+                let isDiscard = IsDiscard(identifiers[i])
+                ReportByRefLikeDeconstructOutputEscapeIfNeeded(identifiers[i], elementType, isDiscard)
+                if !isDiscard {
                     let variable = bindLocalVariable(identifiers[i], isReadOnly, elementType)
                     if outputScoped && variable is LocalVariableSymbol localVariable {
                         localVariable.IsScoped = true

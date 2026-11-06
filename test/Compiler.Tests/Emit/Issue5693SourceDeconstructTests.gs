@@ -451,7 +451,24 @@ func LeakExtension(scoped s Span[int32]) Span[int32] {
     let (head, _) = s
     return head
 }
-Console.WriteLine(0)`, "GS0219@11:12 GS0219@15:12 GS0219@19:12 GS0219@42:12 GS0219@46:12", "reject", ""}
+func LeakNarrowedConstrainedRefLocal[T IUnscopedDeconstruct[int32]](ref obj object) Span[int32] {
+    let ref alias = obj
+    if alias is T {
+        let (s, _) = alias
+        return s
+    }
+    return Span[int32].Empty
+}
+func LeakNarrowedConstrainedRefParam[T IUnscopedDeconstruct[int32]](ref obj object) Span[int32] {
+    if obj is T {
+        let (s, _) = obj
+        return s
+    }
+    return Span[int32].Empty
+}
+let (topInstSpan, _) = UnscopedHolder{Value: 7}
+let (topExtSpan, _) = Span[int32].Empty
+Console.WriteLine(0)`, "GS0219@11:12 GS0219@15:12 GS0219@19:12 GS0219@42:12 GS0219@46:12 GS0219@52:16 GS0219@59:16 GS0219@63:6 GS0219@64:6", "reject", ""}
             yield[]object{"overloaded_deconstruct_selects_matching_arity", `import System
 struct Multi {
     var A int32
