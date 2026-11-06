@@ -491,12 +491,14 @@ class Program {
         source.Append("    let ch = Chan.Unbounded[string]()\n")
         source.Append("    Console.Write(").Append(NestSelectReceiveReturnLiterals(24)).Append(")\n")
         oracle.Append("        Console.Write(\"O\");\n")
-        // Review of PR #5803: a generic local function `Get[T]` capturing `s` keeps nested conditional-return
-        // literals cached even when a child block shadows `s`.
-        source.Append("    let Get[T] = func (x T) string { return s ?? \"s\" }\n")
+        // Review of PR #5803: a generic local function `Get[T]` calling outer `Helper[T]` (which captures `s`)
+        // keeps nested conditional-return literals cached even when a child block shadows both `s` and `Helper`.
+        source.Append("    let Helper[T] = func (x T) string { return s ?? \"s\" }\n")
+        source.Append("    let Get[T] = func (x T) string { return Helper(x) }\n")
         source.Append("    {\n")
         source.Append("        let s = 1\n")
-        source.Append("        let _ = s\n")
+        source.Append("        let Helper = 1\n")
+        source.Append("        let _ = s + Helper\n")
         source
             .Append("        Console.Write(")
             .Append(NestConditionalReturnLiterals("Calls.M(|, 1)", 24, "() -> { return ", " }", leafValue: "Get(0)"))

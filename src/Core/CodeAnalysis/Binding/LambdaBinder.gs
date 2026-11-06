@@ -125,6 +125,10 @@ internal class LambdaBinder {
     Dictionary[FunctionSymbol, ImmutableArray[VariableSymbol]]()
     private let localFunctionReferencedFunctions Dictionary[FunctionSymbol, ImmutableArray[FunctionSymbol]] =
     Dictionary[FunctionSymbol, ImmutableArray[FunctionSymbol]]()
+    private let localFunctionLexicalScopes Dictionary[FunctionSymbol, BoundScope] = Dictionary[
+        FunctionSymbol,
+        BoundScope
+    ]()
 
     /// Initializes a new instance of the (cref:LambdaBinder)
     /// class.
@@ -931,7 +935,7 @@ internal class LambdaBinder {
             for var pass = 0; pass < maxPasses; pass++ {
                 var changed = false
                 for literal in literals {
-                    let recomputed = CollectCapturedVariables(literal.Body, literal.Function)
+                    let recomputed = CollectCapturedVariables(literal.Body, literal.Function, recordLexicalScope: false)
                     if !HashSet[VariableSymbol](literal.CapturedVariables).SetEquals(recomputed) {
                         literal.CapturedVariables = recomputed
                         changed = true
@@ -1949,6 +1953,9 @@ internal class LambdaBinder {
         if localFunctionReferencedFunctions.TryGetValue(literal.Function, out var referencedFunctions) {
             localFunctionReferencedFunctions[adapterFunction] = referencedFunctions
         }
+        if localFunctionLexicalScopes.TryGetValue(literal.Function, out var lexicalScope) {
+            localFunctionLexicalScopes[adapterFunction] = lexicalScope
+        }
         if localFunctionDirectCapturedVariables.TryGetValue(literal.Function, out var directCapturedVariables) {
             localFunctionDirectCapturedVariables[adapterFunction] = directCapturedVariables
         }
@@ -2792,6 +2799,9 @@ internal class LambdaBinder {
         if entry.KeptNaturalType && acceptsNaturalType != nil && !acceptsNaturalType(entry.Bound.Type) {
             return false
         }
+        if entry.Bound is BoundFunctionLiteralExpression reusedLiteral {
+            localFunctionLexicalScopes[reusedLiteral.Function] = Scope
+        }
         if discardedTargetDiagnostics != nil && !entry.DiscardedTargetDiagnostics.IsDefaultOrEmpty {
             for item in entry.DiscardedTargetDiagnostics {
                 discardedTargetDiagnostics.Add(item)
@@ -2895,15 +2905,15 @@ internal class LambdaBinder {
             let worklist = Stack[FunctionSymbol]()
             for var i = referencedFunctions.Length - 1; i >= 0; i-- {
                 let item = referencedFunctions[i]
+                if !LocalFunctionMatchesScope(item, $scope) {
+                    return false
+                }
                 if visited.Add(item) {
                     worklist.Push(item)
                 }
             }
             while worklist.Count > 0 {
                 let referenced = worklist.Pop()
-                if !LocalFunctionMatchesScope(referenced, $scope) {
-                    return false
-                }
                 if localFunctionCapturedVariables.TryGetValue(referenced, out var calleeCaptured) {
                     for calleeVar in calleeCaptured {
                         if calleeVar is not GlobalVariableSymbol && !literal.CapturedVariables.Contains(calleeVar) {
@@ -2914,8 +2924,16 @@ internal class LambdaBinder {
                 if localFunctionReferencedFunctions.TryGetValue(referenced, out var nestedReferenced) &&
                     !nestedReferenced
                     .IsDefaultOrEmpty {
+                    let referencedScope = if localFunctionLexicalScopes.TryGetValue(referenced, out var recordedScope) {
+                        recordedScope
+                    } else {
+                        $scope
+                    }
                     for var i = nestedReferenced.Length - 1; i >= 0; i-- {
                         let nested = nestedReferenced[i]
+                        if !LocalFunctionMatchesScope(nested, referencedScope) {
+                            return false
+                        }
                         if visited.Add(nested) {
                             worklist.Push(nested)
                         }
@@ -3252,7 +3270,11 @@ internal class LambdaBinder {
         }
     }
 
-    private func CollectCapturedVariables(body BoundStatement, function FunctionSymbol) ImmutableArray[VariableSymbol] {
+    private func CollectCapturedVariables(
+        body BoundStatement,
+        function FunctionSymbol,
+        recordLexicalScope bool = true
+    ) ImmutableArray[VariableSymbol] {
         let paramSet = HashSet[VariableSymbol](function.Parameters)
         let seen = HashSet[VariableSymbol]()
         let captured = ImmutableArray.CreateBuilder[VariableSymbol]()
@@ -3291,6 +3313,9 @@ internal class LambdaBinder {
         localFunctionCapturedVariables[function] = result
         localFunctionDirectCapturedVariables[function] = directCaptured.ToImmutable()
         localFunctionReferencedFunctions[function] = referencedFunctions.ToImmutable()
+        if recordLexicalScope {
+            localFunctionLexicalScopes[function] = Scope
+        }
         return result
     }
 
