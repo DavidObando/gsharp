@@ -3194,7 +3194,7 @@ partial class CSharpToGSharpTranslator {
             let rightConst = this.context.SemanticModel.GetConstantValue(binary.Right).HasValue
             // Prefer the minimal, faithful form: a constant expression is retyped to
             // the other (non-constant) operand's G# type so both operands share a
-            // type (e.g. `channelCount == (2 as uint16?)`). This mirrors C#'s
+            // type (e.g. `channelCount == uint16?(2)`). This mirrors C#'s
             // constant-expression narrowing conversions (C# §10.2.11), which are
             // defined ONLY between integral types (int/long constants narrowing to
             // a smaller/differently-signed integral type) — never between a
@@ -4286,13 +4286,10 @@ partial class CSharpToGSharpTranslator {
             return (whenTrue, whenFalse)
         }
 
-        // non-nullable value type target (e.g. `uint8`, `int32`) G# rejects
-        // `(expr as T)` with GS0270 ("the 'as' operator requires the target type to
-        // be a reference type or a nullable value type"); the canonical G# form is
-        // the width-bearing conversion-call `T(expr)`. Only a reference type or a
-        // nullable value type target (where `as` is valid) keeps the `as` form.
+        // Value targets need conversion calls, including lifted numeric conversions to `T?` (#5676).
+        // `as T?` tests the boxed source type instead of converting its value.
         private func CoerceOperandTo(expression GExpression?, targetType ITypeSymbol?, location Location) GExpression {
-            if IsNonNullableValueType(targetType) {
+            if targetType?.IsValueType == true {
                 let conversionTarget GTypeReference? = this.typeMapper.Map(targetType, this.context, location)
                 return ConversionExpression(conversionTarget, expression)
             }

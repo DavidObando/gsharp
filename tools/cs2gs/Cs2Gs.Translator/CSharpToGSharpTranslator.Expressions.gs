@@ -4879,7 +4879,7 @@ partial class CSharpToGSharpTranslator {
                 )
             )
                 .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]() {
-                if nullCheck.SpanStart >= expression.SpanStart || !this.TryGetNullComparisonNonNullPolarity(
+                if nullCheck.SpanStart >= expression.SpanStart || !this.TryGetBinaryTestNonNullPolarity(
                     nullCheck,
                     symbol,
                     out var whenTrue
@@ -5414,11 +5414,20 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
-        private func TryGetNullComparisonNonNullPolarity(
+        private func TryGetBinaryTestNonNullPolarity(
             comparison Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax,
             symbol ISymbol?,
             out whenTrue bool
         ) bool {
+            if comparison.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression) && !this.IsTypeReferencePattern(
+                comparison.Right
+            ) {
+                whenTrue = true
+                return this.BindsToGuardSymbol(comparison.Left, symbol) && this.UsesNativeConstantPatternTest(
+                    this.GetPatternScrutineeUnderlyingType(comparison.Left)
+                ) &&
+                    !this.IsNullPatternValue(comparison.Right)
+            }
             if !comparison.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression) && !comparison.IsKind(
                 Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression
             ) {
@@ -6954,7 +6963,7 @@ partial class CSharpToGSharpTranslator {
             if current.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binary && binary.IsKind(
                 Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression
             ) &&
-                object.ReferenceEquals(binary.Left, current) {
+                this.IsTypeReferencePattern(binary.Right) && object.ReferenceEquals(binary.Left, current) {
                 return true
             }
             return current.Parent is IsPatternExpressionSyntax isPattern && object.ReferenceEquals(
@@ -7269,7 +7278,9 @@ partial class CSharpToGSharpTranslator {
                 switch node {
                     case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when binary.IsKind(
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression
-                    ) {
+                    ) &&
+                        this
+                        .IsTypeReferencePattern(binary.Right) {
                         if this.ExpressionNamesSymbol(binary.Left, symbol) &&
                             (
                             insideRegion || this.OuterTypeTestReachesRegionEntry(
@@ -7524,7 +7535,8 @@ partial class CSharpToGSharpTranslator {
                 switch node {
                     case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when binary.IsKind(
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression
-                    ) {
+                    ) &&
+                        this.IsTypeReferencePattern(binary.Right) {
                         if this.ExpressionNamesLocal(binary.Left, local) {
                             return true
                         }
@@ -7637,7 +7649,8 @@ partial class CSharpToGSharpTranslator {
                 switch node {
                     case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when binary.IsKind(
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression
-                    ) {
+                    ) &&
+                        this.IsTypeReferencePattern(binary.Right) {
                         if !IsPlainIdentifierSubject(binary.Left) {
                             return true
                         }
@@ -8831,10 +8844,24 @@ partial class CSharpToGSharpTranslator {
                         return TryGetNumericKind(shiftLeft.Type, out var shiftKind) &&
                             TryGetNumericKind(shiftLeft.ConvertedType, out var shiftConverted) &&
                             shiftKind != shiftConverted &&
-                            IsNonNullableValueType(shiftLeft.ConvertedType)
+                            shiftLeft
+                            .ConvertedType
+                            ?.IsValueType == true
                     }
                     let leftInfo = this.context.GetTypeInfo(binary.Left)
                     let rightInfo = this.context.GetTypeInfo(binary.Right)
+                    if binary.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression) &&
+                        !this
+                        .IsTypeReferencePattern(binary.Right) {
+                        return TryGetNumericKind(leftInfo.Type, out var receiverKind) &&
+                            TryGetNumericKind(rightInfo.Type, out var constantKind) &&
+                            receiverKind != constantKind &&
+                            this
+                            .context
+                            .SemanticModel
+                            .GetConstantValue(binary.Right)
+                            .HasValue
+                    }
                     if binary.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression) {
                         let resultType = this.context.GetTypeInfo(binary).Type
                         if this.ExpressionEmitsCovariantArrayConversion(binary.Left, leftInfo.ConvertedType) ||
@@ -8862,24 +8889,28 @@ partial class CSharpToGSharpTranslator {
                         bothIntegral &&
                         (isComparison || !this.OperandWidenedToConstantType(binary.Left, rightUnderlying)) &&
                         this.IntegralConstantFits(binary.Right, leftUnderlying) {
-                        return IsNonNullableValueType(leftInfo.Type)
+                        return leftInfo.Type?.IsValueType == true
                     }
                     if leftConst &&
                         !rightConst &&
                         bothIntegral &&
                         (isComparison || !this.OperandWidenedToConstantType(binary.Right, leftUnderlying)) &&
                         this.IntegralConstantFits(binary.Left, rightUnderlying) {
-                        return IsNonNullableValueType(rightInfo.Type)
+                        return rightInfo.Type?.IsValueType == true
                     }
                     return (
                         TryGetNumericKind(leftInfo.ConvertedType, out var leftConv) &&
                             leftConv != leftUnderlying &&
-                            IsNonNullableValueType(leftInfo.ConvertedType)
+                            leftInfo
+                            .ConvertedType
+                            ?.IsValueType == true
                     ) ||
                         (
                         TryGetNumericKind(rightInfo.ConvertedType, out var rightConv) &&
                             rightConv != rightUnderlying &&
-                            IsNonNullableValueType(rightInfo.ConvertedType)
+                            rightInfo
+                            .ConvertedType
+                            ?.IsValueType == true
                     )
                 }
                 case conditional is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax {
@@ -8904,7 +8935,9 @@ partial class CSharpToGSharpTranslator {
                     if TryGetNumericKind(info.Type, out var armSource) &&
                         TryGetNumericKind(info.ConvertedType, out var armConverted) &&
                         armSource != armConverted &&
-                        IsNonNullableValueType(info.ConvertedType) {
+                        info
+                        .ConvertedType
+                        ?.IsValueType == true {
                         return true
                     }
                     if info.Type is {} valueArmType &&
@@ -8949,14 +8982,18 @@ partial class CSharpToGSharpTranslator {
                                 TryGetNumericKind(info.ConvertedType, out var litTarget) &&
                                 litSource != litTarget &&
                                 !this.TargetsConcreteNumericParameter(argument) &&
-                                IsNonNullableValueType(info.ConvertedType)
+                                info
+                                .ConvertedType
+                                ?.IsValueType == true
                         ) ||
                             this.ExpressionEmitsUnsignedConstantOrPointerConversion(argument.Expression)
                     }
                     return TryGetNumericKind(info.Type, out var argSource) &&
                         TryGetNumericKind(info.ConvertedType, out var argTarget) &&
                         argSource != argTarget &&
-                        IsNonNullableValueType(info.ConvertedType)
+                        info
+                        .ConvertedType
+                        ?.IsValueType == true
                 }
                 default {
                     return false
@@ -8973,7 +9010,7 @@ partial class CSharpToGSharpTranslator {
             }
             let receiverType = this.GetPatternComparisonReceiverType(pattern)
             return receiverType != nil &&
-                IsNonNullableValueType(receiverType) &&
+                receiverType.IsValueType &&
                 TryGetNumericKind(receiverType, out var receiverKind) &&
                 TryGetNumericKind(this.context.GetTypeInfo(operand).Type, out var operandKind) &&
                 receiverKind != operandKind &&

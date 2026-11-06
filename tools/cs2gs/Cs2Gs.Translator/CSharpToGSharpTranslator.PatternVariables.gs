@@ -857,7 +857,9 @@ partial class CSharpToGSharpTranslator {
                 if IsNullLiteral(constant.Expression) {
                     return (nil, nil, nil, underlyingType)
                 }
-                return if underlyingType?.SpecialType == SpecialType.System_Object {
+                return if this.UsesNativeConstantPatternTest(underlyingType) && !this.IsNullPatternValue(
+                    constant.Expression
+                ) {
                     (underlyingType, nil, nil, nil)
                 } else {
                     (nil, nil, nil, nil)

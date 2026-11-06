@@ -48,6 +48,19 @@ partial class CSharpToGSharpTranslator {
                 case identifier is IdentifierNameSyntax {
                     return this.TranslateIdentifierName(identifier)
                 }
+                case qualified is QualifiedNameSyntax when this.context.GetSymbolInfo(qualified).Symbol is
+                IFieldSymbol{IsConst: true} constantField {
+                    // The older `is` syntax parses qualified constants as names, not member-access expressions.
+                    let name = if this.InAnalyzerApiMode {
+                        this.nameAllocator.GetName(this.MapAnalyzerMemberName(qualified, constantField.Name))
+                    } else {
+                        this.EmittedName(constantField, constantField.Name)
+                    }
+                    return MemberAccessExpression(
+                        this.StaticQualifierReceiver(constantField.ContainingType, qualified.GetLocation()),
+                        name
+                    )
+                }
                 case refExpression is RefExpressionSyntax {
                     return this.TranslateRefExpression(refExpression)
                 }
@@ -113,6 +126,14 @@ partial class CSharpToGSharpTranslator {
                 case binary is BinaryExpressionSyntax when binary.IsKind(SyntaxKind.AsExpression) || binary.IsKind(
                     SyntaxKind.IsExpression
                 ) {
+                    // A name after `is` can bind to a constant instead of a type (#5675).
+                    if binary.IsKind(SyntaxKind.IsExpression) && !this.IsTypeReferencePattern(binary.Right) {
+                        return this.TranslateConstantPatternTest(
+                            this.TranslateExpression(binary.Left),
+                            binary.Right,
+                            this.context.GetTypeInfo(binary.Left).Type
+                        )
+                    }
                     // Issue #4173: a BARE `expr is Type` with no designator,
                     // pattern combinator, or subpattern parses as this OLDER
                     // BinaryExpressionSyntax/IsExpression node, not a pattern —
@@ -1560,29 +1581,8 @@ partial class CSharpToGSharpTranslator {
                     // to a TYPE, so it is a type test, not an equality. `x is T`.
                     return this.BuildTypeTestExpression(receiver, constant.Expression, constant)
                 }
-                case constant is ConstantPatternSyntax when receiverType?.SpecialType == SpecialType.System_Object {
-                    // Issue #3501: an `object?`-typed receiver (`token.Value is
-                    // true`) has no `==` against the constant's type (GS0129),
-                    // but gsc binds the constant PATTERN over object natively —
-                    // keep the `is` form.
-                    return BinaryExpression(receiver, "is", this.TranslateExpression(constant.Expression))
-                }
                 case constant is ConstantPatternSyntax {
-                    // `x is 0` / `x is "moov"` / `x is true` lowers to an equality
-                    // test (ADR-0115 §B). gsc does not narrow it, so a test whose
-                    // narrowing C# relies on keeps the native form instead
-                    // (RequiresNativePatternNarrowing, issue #5626). A numeric literal is retyped to the receiver's
-                    // type so `uint8? is 11` → `b == (11 as uint8?)` (G# has no
-                    // implicit numeric promotion: a bare `b == 11` is GS0129).
-                    return BinaryExpression(
-                        receiver,
-                        "==",
-                        this.CoercePatternConstant(
-                            constant.Expression,
-                            this.TranslateExpression(constant.Expression),
-                            receiverType
-                        )
-                    )
+                    return this.TranslateConstantPatternTest(receiver, constant.Expression, receiverType)
                 }
                 case relational is RelationalPatternSyntax {
                     // `x is > 0` → `x > 0` (with the same numeric retyping).
@@ -2065,13 +2065,35 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        // Retypes a constant/relational pattern's literal operand to the receiver's
-        // numeric type so the lowered `==`/`!=`/`<`… comparison type-checks. G# has
-        // no implicit numeric promotion, so `uint8? is 11` lowered to `b == 11`
-        // (where `11` is `int32`) is GS0129; coercing the literal yields the
-        // accepted `b == (11 as uint8?)`. Mirrors the constant branch of
-        // <see cref="TranslateBinaryExpression"/>. Non-numeric receivers/literals
-        // (string/enum/type tests) are left untouched.
+        // Both Roslyn syntax forms use this decision. An equality does not narrow its input (#5626).
+        private func TranslateConstantPatternTest(
+            receiver GExpression?,
+            constantSyntax ExpressionSyntax,
+            receiverType ITypeSymbol?
+        ) GExpression {
+            var constant GExpression? = this.TranslateExpression(constantSyntax)
+            // An object input needs a native constant pattern, not an equality across different types (#3501).
+            if this.UsesNativeConstantPatternTest(receiverType) {
+                let value = this.context.SemanticModel.GetConstantValue(constantSyntax)
+                let constantType = this.context.GetTypeInfo(constantSyntax).Type
+                if constantSyntax is not LiteralExpressionSyntax && value.HasValue {
+                    // A bare name after `is` is parsed as a type. Keep the constant's value and numeric width.
+                    constant = this.MapConstantValue(value.Value, constantType, constantSyntax, "constant pattern") ??
+                        LiteralExpression.Null()
+                    if TryGetNumericKind(constantType, out var kind) && kind != SpecialType.System_Int32 {
+                        constant = this.CoerceOperandTo(constant, constantType, constantSyntax.GetLocation())
+                    }
+                }
+                return PatternTestExpression(receiver, ConstantPattern(constant))
+            }
+            return BinaryExpression(receiver, "==", this.CoercePatternConstant(constantSyntax, constant, receiverType))
+        }
+
+        private func UsesNativeConstantPatternTest(
+            receiverType ITypeSymbol?
+        ) bool -> receiverType?.SpecialType == SpecialType.System_Object
+
+        // Convert numeric pattern constants to the receiver's numeric type without a runtime downcast (#5676).
         private func CoercePatternConstant(
             constantSyntax ExpressionSyntax,
             constant GExpression?,

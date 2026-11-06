@@ -251,7 +251,7 @@ namespace Demo
         public bool IsStereo(Entry? e) => e?.ChannelCount == 2;
     }
 }`)
-        Assert.Contains("(2 as uint16?)", printed)
+        Assert.Contains("uint16?(2)", printed)
     }
 
     /// Negative/regression control: the pre-existing byte-vs-int-literal
