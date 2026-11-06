@@ -565,7 +565,7 @@ public class ImportedInIdxSource
 public static class MixedInOverloads
 {
     public static int M(in int a, long b) => 1;
-    public static int M(long a, int b) => 2;
+    public static int M(long a, in int b) => 2;
 }
 
 public class SetOnlyArityOverloads
