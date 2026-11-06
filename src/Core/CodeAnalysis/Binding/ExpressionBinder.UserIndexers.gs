@@ -216,10 +216,16 @@ internal partial class ExpressionBinder {
         }
         boundArguments = bindArguments()
         for argument in boundArguments {
-            if argument is BoundErrorExpression ||
+            if !IsDeferredBranchyArgumentPlaceholder(argument, out _) &&
                 (
-                argument.Type == TypeSymbol.Error &&
-                    !(argument is BoundDefaultExpression && argument.Syntax is DefaultExpressionSyntax{TypeClause: nil})
+                argument is BoundErrorExpression ||
+                    (
+                    argument.Type == TypeSymbol.Error &&
+                        !(
+                        argument is BoundDefaultExpression &&
+                            argument.Syntax is DefaultExpressionSyntax{TypeClause: nil}
+                    )
+                )
             ) {
                 reported = true
                 return false
@@ -397,6 +403,8 @@ internal partial class ExpressionBinder {
                 default(ParameterSymbol?)
             }
             bound = BindRefArgumentExpression(refArgument, placeholder)
+        } else if IsTargetDependentBlockArgumentSyntax(syntax) {
+            return BoundErrorExpression(syntax)
         } else if IsTargetTypedBranchyArgumentSyntax(syntax) {
             let previous = binderCtx.DeferTargetlessConditional
             this.binderCtx.DeferTargetlessConditional = true
@@ -404,6 +412,9 @@ internal partial class ExpressionBinder {
                 bound = BindExpression(syntax)
             } finally {
                 this.binderCtx.DeferTargetlessConditional = previous
+            }
+            if IsDeferredBranchyArgumentPlaceholder(bound, out _) {
+                return bound
             }
         } else {
             bound = BindExpression(syntax)
@@ -450,8 +461,10 @@ internal partial class ExpressionBinder {
             }
         } else if parameter.RefKind == RefKind.In {
             var bound BoundExpression
-            if preBound != nil {
+            if preBound != nil && !IsDeferredBranchyArgumentPlaceholder(preBound, out _) {
                 bound = preBound
+            } else if preBound != nil {
+                bound = conversions.BindConversion(location, preBound, parameterType, callParameter: parameter)
             } else if syntax is BlockExpressionSyntax ||
                 syntax is DefaultExpressionSyntax ||
                 syntax is InterpolatedStringExpressionSyntax {

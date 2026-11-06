@@ -469,6 +469,16 @@ struct MutablePair {
             }
         }
     }
+}
+
+open class LengthBase {
+    private var items []int32 = []int32{10, 20, 30}
+    prop Length int32 -> 3
+    prop this[index int32] int32 {
+        get { return items[index] }
+        set { items[index] = value }
+    }
+    func Slice(start int32, length int32) int32 -> start * 10 + length
 }`)
         let source = `package P
 import MutableLib
@@ -549,6 +559,10 @@ open class FormattableList : List[int32] {
     }
 }
 
+open class CountSubclass : LengthBase {
+    prop Count int32 -> 1
+}
+
 let list = MyList()
 list.Add("a")
 list.Add("bc")
@@ -565,6 +579,14 @@ custom[^1] = 7
 Console.WriteLine(custom.Writes.ToString() + ":" + custom[^1].ToString())
 custom[default] = 4
 Console.WriteLine(custom.Writes.ToString() + ":" + custom[default].ToString())
+custom[{
+    let n = 0
+    default
+}] = 6
+Console.WriteLine(custom[{
+    let n = 0
+    default
+}].ToString())
 let ranged = CustomRangeList()
 ranged.Add("a")
 ranged.Add("b")
@@ -609,7 +631,16 @@ let _ = ordered[ordered.NextRange()]
 Console.WriteLine(ordered.Log)
 let fmt = FormattableList()
 fmt["k=${7}"] = "v"
-Console.WriteLine(fmt["n=${42}"])`
+Console.WriteLine(fmt["n=${42}"])
+let comp = OrderList()
+comp.Add(10)
+comp.Add(20)
+comp[^1] += 5
+let post = comp[^1]++
+Console.WriteLine(comp.Log + ":" + post.ToString() + ":" + comp[1].ToString())
+let csub = CountSubclass()
+csub[^1] = 99
+Console.WriteLine(csub[2].ToString() + ":" + csub[^1].ToString() + ":" + csub[..].ToString())`
         Assert.Equal(
             string.Join(
                 Environment.NewLine,
@@ -617,6 +648,7 @@ Console.WriteLine(fmt["n=${42}"])`
                 "2:bcz",
                 "1:172",
                 "2:140",
+                "160",
                 "own:1|own:2",
                 "9:9",
                 "5:7",
@@ -625,7 +657,9 @@ Console.WriteLine(fmt["n=${42}"])`
                 "str:abc",
                 "99:3",
                 "bound|len|range|len|",
-                "n={0}:42:k={0}=7=v"
+                "n={0}:42:k={0}=7=v",
+                "len|len|:25:26",
+                "99:99:3"
             ) +
                 Environment.NewLine,
             CompileAndRun(source, libraryPath)

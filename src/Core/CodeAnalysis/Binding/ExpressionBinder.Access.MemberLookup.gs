@@ -1840,7 +1840,7 @@ internal partial class ExpressionBinder {
             !(indexSyntax is DefaultExpressionSyntax) &&
             !(indexSyntax is InterpolatedStringExpressionSyntax) {
             boundIndex = BindIndexArgumentExpression(indexSyntax)
-            if boundIndex is BoundErrorExpression {
+            if boundIndex is BoundErrorExpression && !IsDeferredBranchyArgumentPlaceholder(boundIndex, out _) {
                 return boundIndex
             }
             if IsSystemRangeType(boundIndex.Type) {
@@ -1880,7 +1880,7 @@ internal partial class ExpressionBinder {
             // index (matching C#). `boundIndex` is non-null for every non-
             // default/interpolated index; those two carry no natural type and
             // keep the historical int32 conversion driven by the target type.
-            let index = if boundIndex != nil {
+            let index = if boundIndex != nil && !IsDeferredBranchyArgumentPlaceholder(boundIndex, out _) {
                 ConvertArrayElementIndex(indexSyntax.Location, boundIndex, target.Type)
             } else {
                 ConvertIndex(TypeSymbol.Int32)
@@ -1896,7 +1896,7 @@ internal partial class ExpressionBinder {
         // lowers a `BoundIndexExpression` whose target is `string` to `get_Chars`
         // (#537).
         if target.Type == TypeSymbol.String {
-            let index = if boundIndex != nil {
+            let index = if boundIndex != nil && !IsDeferredBranchyArgumentPlaceholder(boundIndex, out _) {
                 ConvertStringCharIndex(indexSyntax.Location, boundIndex)
             } else {
                 ConvertIndex(TypeSymbol.Int32)
@@ -2346,7 +2346,24 @@ internal partial class ExpressionBinder {
                 return indexRead
             }
             var indexRequiresSuspensionFreeCapture = false
-            if sharedIndex == nil &&
+            var sharedCountedOffset BoundExpression? = nil
+            let isCountedIndexBlock = indexRead is BoundBlockExpression{Syntax: nil}
+            if isCountedIndexBlock &&
+                TryCaptureCompoundIndexArgument(
+                &indexRead,
+                statements,
+                out var capturedCountedOffset,
+                out indexRequiresSuspensionFreeCapture
+            ) {
+                sharedCountedOffset = capturedCountedOffset
+                if sharedIndex == nil {
+                    let indexSym = TypeSymbol.FromClrTypeWithoutNullability(
+                        typeof(Index),
+                        NullabilityFreeReason.TypeLiteral
+                    )
+                    sharedIndex = BoundDefaultExpression(nil, indexSym)
+                }
+            } else if sharedIndex == nil &&
                 TryCaptureCompoundIndexArgument(
                 &indexRead,
                 statements,
@@ -2479,7 +2496,8 @@ internal partial class ExpressionBinder {
                         userCompoundTarget,
                         diagnosticLocation,
                         sharedIndex,
-                        boundReceiver
+                        boundReceiver,
+                        sharedCountedOffset
                     )
                     if previousValue != nil {
                         statements.Add(BoundExpressionStatement(outerSyntax, writeBack))
@@ -2565,7 +2583,8 @@ internal partial class ExpressionBinder {
                     combined,
                     diagnosticLocation,
                     sharedIndex,
-                    boundReceiver
+                    boundReceiver,
+                    sharedCountedOffset
                 )
             }
         } else if boundValueOverride != nil {
@@ -2602,6 +2621,22 @@ internal partial class ExpressionBinder {
     ) bool {
         requiresSuspensionFreeCapture = false
         switch indexRead {
+            case block is BoundBlockExpression when block.Syntax == nil && block.Expression is {} innerExpr {
+                var unwrappedInner = innerExpr
+                let innerStatements = ImmutableArray.CreateBuilder[BoundStatement]()
+                innerStatements.AddRange(block.Statements)
+                if !TryCaptureCompoundIndexArgument(
+                    &unwrappedInner,
+                    innerStatements,
+                    out capturedIndex,
+                    out requiresSuspensionFreeCapture
+                ) {
+                    return false
+                }
+                statements.AddRange(innerStatements)
+                indexRead = unwrappedInner
+                return true
+            }
             case clrIndex is BoundClrIndexExpression when clrIndex.Arguments.Length == 1 {
                 requiresSuspensionFreeCapture = RequiresSuspensionFreeAddressCapture(clrIndex.Arguments[0])
                 capturedIndex = CaptureUserIndexerArgument(clrIndex.Arguments[0], statements)
@@ -2710,7 +2745,8 @@ internal partial class ExpressionBinder {
         boundValue BoundExpression,
         diagnosticLocation TextLocation,
         boundIndexOverride BoundExpression? = nil,
-        receiverCapabilitySource BoundExpression? = nil
+        receiverCapabilitySource BoundExpression? = nil,
+        boundCountedOffsetOverride BoundExpression? = nil
     ) BoundExpression {
         return BindIndexedAssignmentToVariableCore(
             variable,
@@ -2719,7 +2755,8 @@ internal partial class ExpressionBinder {
             boundValueOverride: boundValue,
             diagnosticLocation,
             boundIndexOverride,
-            receiverCapabilitySource
+            receiverCapabilitySource,
+            boundCountedOffsetOverride
         )
     }
 
@@ -2730,7 +2767,8 @@ internal partial class ExpressionBinder {
         boundValueOverride BoundExpression?,
         diagnosticLocation TextLocation,
         boundIndexOverride BoundExpression? = nil,
-        receiverCapabilitySource BoundExpression? = nil
+        receiverCapabilitySource BoundExpression? = nil,
+        boundCountedOffsetOverride BoundExpression? = nil
     ) BoundExpression {
         // Issue #2488: direct indexed writes bypass the ordinary name-expression
         // read binder, so explicitly reuse its narrowed receiver construction.
@@ -2874,7 +2912,8 @@ internal partial class ExpressionBinder {
                 BindValue,
                 diagnosticLocation,
                 isReadOnlyReceiver,
-                applyLengthEffects: false
+                applyLengthEffects: false,
+                precomputedCountedOffset: boundCountedOffsetOverride
             )
         }
         if boundIndexOverride == nil && TryBindSystemIndexValue(indexSyntax, out var systemIndex) {
@@ -3450,7 +3489,10 @@ internal partial class ExpressionBinder {
             )
             return true
         }
-        if syntax is RefArgumentExpressionSyntax {
+        if syntax is RefArgumentExpressionSyntax ||
+            IsTargetDependentBlockArgumentSyntax(syntax) ||
+            unwrappedSyntax is DefaultExpressionSyntax ||
+            unwrappedSyntax is InterpolatedStringExpressionSyntax {
             indexValue = nil
             return false
         }
@@ -3592,14 +3634,16 @@ internal partial class ExpressionBinder {
         bindValue(TypeSymbol) -> BoundExpression,
         diagnosticLocation TextLocation,
         isReadOnlyReceiver bool,
-        applyLengthEffects bool = true
+        applyLengthEffects bool = true,
+        precomputedCountedOffset BoundExpression? = nil
     ) BoundExpression {
         var target = target
         var hasNarrowedTarget = hasNarrowedTarget
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         let element TypeSymbol? = GetArraySliceElementType(targetType)
         if element != nil {
-            let idx = BuildSystemIndexOffset(indexValue, BoundLenExpression(nil, target), statements)
+            let idx = precomputedCountedOffset ??
+                BuildSystemIndexOffset(indexValue, BoundLenExpression(nil, target), statements)
             let assignment = if hasNarrowedTarget {
                 BoundIndexAssignmentExpression.WithExpressionTarget(nil, target, idx, bindValue(element), element)
             } else {
@@ -3701,22 +3745,31 @@ internal partial class ExpressionBinder {
             if TryFindIndexIndexer(clrType, out indexer) {
                 arguments = ImmutableArray.Create(indexValue)
             } else if TryFindCountedIntIndexer(clrType, out var lengthMember, out indexer) {
-                if !ReflectionMetadataEmitter.IsValueTypeSymbol(targetType) {
-                    let srcLocal = DeclareRangeTemp("src", targetType, target, statements)
-                    target = BoundVariableExpression(nil, srcLocal)
-                    hasNarrowedTarget = true
+                var offsetExpr BoundExpression
+                if precomputedCountedOffset != nil {
+                    offsetExpr = if precomputedCountedOffset is BoundAddressOfExpression addrOffset {
+                        addrOffset.Operand
+                    } else {
+                        precomputedCountedOffset
+                    }
+                } else {
+                    if !ReflectionMetadataEmitter.IsValueTypeSymbol(targetType) {
+                        let srcLocal = DeclareRangeTemp("src", targetType, target, statements)
+                        target = BoundVariableExpression(nil, srcLocal)
+                        hasNarrowedTarget = true
+                    }
+                    if !TryBuildCountedReceiverLength(
+                        target,
+                        lengthMember,
+                        diagnosticLocation,
+                        indexSyntax,
+                        out var lengthExpr,
+                        applyLengthEffects
+                    ) {
+                        return BoundErrorExpression(nil)
+                    }
+                    offsetExpr = BuildSystemIndexOffset(indexValue, lengthExpr!!, statements)
                 }
-                if !TryBuildCountedReceiverLength(
-                    target,
-                    lengthMember,
-                    diagnosticLocation,
-                    indexSyntax,
-                    out var lengthExpr,
-                    applyLengthEffects
-                ) {
-                    return BoundErrorExpression(nil)
-                }
-                let offsetExpr = BuildSystemIndexOffset(indexValue, lengthExpr!!, statements)
                 if (targetType is StructSymbol || targetType is InterfaceSymbol) &&
                     TryGetUserIndexerTaking(
                     targetType,
@@ -3887,7 +3940,11 @@ internal partial class ExpressionBinder {
         applyLengthEffects bool = true
     ) bool {
         if receiver.Type is StructSymbol structReceiver {
-            let names = []string{"Length", "Count"}
+            let names = if string.Equals(clrLengthMember.Name, "Length", StringComparison.Ordinal) {
+                []string{"Length"}
+            } else {
+                []string{"Length", "Count"}
+            }
             for name in names {
                 if TryFindInstanceCountProperty(structReceiver, name, out var prop, out var propOwner) &&
                     SubstituteIndexerType(prop!!.Type, LevelSubstitution(propOwner!!, outer: nil)) == TypeSymbol
