@@ -1396,14 +1396,13 @@ internal partial class StatementBinder {
             PushConditionNarrowingFrame(frame)
         }
         try {
-            let entry = binderCtx.Narrowing
             let aliasesAtEntry = externalCallableAliases.ToArray()
             let bound = Invariant.Required(
                 BindStatement(syntax),
                 "a narrowed statement has a bound statement",
                 expression: "BindStatement(syntax)"
             )
-            RecordFallbackExit(bound, entry, aliasesAtEntry, syntax)
+            RecordFallbackExit(bound, aliasesAtEntry, syntax)
             return bound
         } finally {
             if frame != nil {

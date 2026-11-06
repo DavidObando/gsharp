@@ -147,14 +147,14 @@ internal partial class StatementBinder {
 
     private func RecordFallbackExit(
         statement BoundStatement,
-        entry NarrowingState,
         aliases IReadOnlyCollection[VariableSymbol],
         syntax SyntaxNode
     ) {
         if object.ReferenceEquals(exitOwner, statement) {
             return
         }
-        var exit = KillExitEffects(entry, statement, aliases, syntax)
+        // Labels inside expressions can join new predecessors while the statement binds.
+        var exit = KillExitEffects(binderCtx.Narrowing, statement, aliases, syntax)
         let postconditions = NarrowingFrame()
         ApplyMemberNotNullNarrowings(statement, postconditions)
         exit = exit.WithAll(postconditions.Entries)

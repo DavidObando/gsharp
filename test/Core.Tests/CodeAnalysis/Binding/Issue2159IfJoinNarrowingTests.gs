@@ -24,6 +24,24 @@ import Xunit
 /// must still block narrowing, an `else if` chain, and post-if
 /// re-nullable-ization.
 open class Issue2159IfJoinNarrowingTests {
+    @Fact
+    func ExpressionLabel_DoesNotRestoreThePreStatementProof() {
+        let result = Evaluate(`package T
+func Run(jump bool) {
+    var x string? = nil
+    if jump { goto L }
+    if x == nil { return } else let unused = ({
+        L: var marker = 0
+        0
+    })
+    Console.WriteLine(x.Length)
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
     @Theory
     @InlineData("if x != nil { }")
     @InlineData("if x == nil { }")

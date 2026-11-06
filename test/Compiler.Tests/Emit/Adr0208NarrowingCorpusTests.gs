@@ -270,6 +270,7 @@ open class Adr0208NarrowingCorpusTests {
                 "m1_unrelated_interface_refinement",
                 "n10_5130_nil_recheck_keeps_stronger_fact",
                 "n11_5130_internal_if_let_labels_keep_normal_exits",
+                "n12_5130_expression_label_does_not_restore_entry",
                 "n1_boxed_value_type_test",
                 "n2_5130_sibling_type_refinement",
                 "n3_5130_nullable_widening_unbraced_call",
@@ -2004,6 +2005,16 @@ func Main() { Console.WriteLine(Run(Dog{})) }`, "", "run", "woof", ""}
     return text.Length
 }
 func Main() { Console.WriteLine(Run(true, "s", "t")) }`, "GS0158@6:17", "reject", "", ""}
+            yield[]object{"n12_5130_expression_label_does_not_restore_entry", `func Run(jump bool) {
+    var x string? = nil
+    if jump { goto L }
+    if x == nil { return } else let unused = ({
+        L: var marker = 0
+        0
+    })
+    Console.WriteLine(x.Length)
+}
+func Main() { Run(true) }`, "GS0158@8:25", "reject", "", ""}
             yield[]object{"n9_5130_finally_discharges_nullable_widening", `import System.Collections.Generic
 func Run(dict Dictionary[string, string]) int32 {
     var value string = ""

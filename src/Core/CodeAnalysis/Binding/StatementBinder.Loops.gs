@@ -1131,7 +1131,6 @@ internal partial class StatementBinder {
         if !IsLabelableLoop(inner) {
             let reachableOnEntry = currentStatementListFallsThrough
             let userLabel = DefineUserLabel(labelName, syntax.LabelIdentifier.Location, syntax)
-            let labelEntry = binderCtx.Narrowing
             let labelAliases = externalCallableAliases.ToArray()
             let boundInner = Invariant.Required(
                 BindStatement(inner),
@@ -1142,7 +1141,7 @@ internal partial class StatementBinder {
                 syntax,
                 ImmutableArray.Create[BoundStatement](BoundLabelStatement(syntax, userLabel), boundInner)
             )
-            RecordFallbackExit(boundInner, labelEntry, labelAliases, inner)
+            RecordFallbackExit(boundInner, labelAliases, inner)
             RecordJoinExits(labeledStatement, exitPredecessors)
             if !reachableOnEntry && currentStatementListFallsThrough && !EndsInUnconditionalExit(boundInner) {
                 internallyReachableFallthroughStatements.Add(labeledStatement)

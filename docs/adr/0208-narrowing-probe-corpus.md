@@ -165,6 +165,10 @@ Condition facts refine the post-effect entry state; they do not replace a strong
 
 Row `n11_5130` keeps normal paths through internal `if let` labels in the enclosing join.
 An unmatched binding can leave a nullable local unchanged.
+
+Row `n12_5130` preserves the joined state of a label inside an unbraced declaration's initializer.
+The fallback must not replay a pre-statement proof after such a join removes it.
+The separate unsupported-jump diagnostic gap remains tracked in [#5588](https://github.com/DavidObando/gsharp/issues/5588).
 Cleanup facts do not overwrite stronger facts that survived its effects; assignment summaries preserve execution order.
 
 ## Experiments on the deferred loop rule
