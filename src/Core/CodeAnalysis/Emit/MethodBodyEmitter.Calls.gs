@@ -88,10 +88,6 @@ internal partial class MethodBodyEmitter {
         // bare `callvirt` on the unboxed type parameter corrupts the stack and
         // crashes at runtime.
         if call.IsConstrainedTypeParameterCall {
-            this.EmitConstrainedTypeParameterReceiver(call.Receiver)
-            for var i = 0; i < call.Arguments.Length; i++ {
-                this.EmitExpression(call.Arguments[i])
-            }
             let constraintInterface InterfaceSymbol? = (call.ConstrainedInterfaceType as InterfaceSymbol) ??
                 (call.Method.ReceiverType as InterfaceSymbol)
             let constraintClass StructSymbol? = call.ConstrainedReceiverTypeParameter!!.ClassConstraint as StructSymbol
@@ -99,6 +95,18 @@ internal partial class MethodBodyEmitter {
                 ResolveUserInstanceMethodOwner(constraintClass, call.Method)
             } else {
                 default(StructSymbol?)
+            }
+            let referenceOwner TypeSymbol? = if constraintInterface != nil {
+                constraintInterface
+            } else {
+                constraintOwner
+            }
+            let boxed = this.TryEmitBoxedTypeParameterReceiver(call.Receiver, referenceOwner)
+            if !boxed {
+                this.EmitConstrainedTypeParameterReceiver(call.Receiver)
+            }
+            for var i = 0; i < call.Arguments.Length; i++ {
+                this.EmitExpression(call.Arguments[i])
             }
             var constrainedMethodToken EntityHandle
             if constraintInterface != nil {
@@ -121,8 +129,10 @@ internal partial class MethodBodyEmitter {
                     .userTokens
                     .BuildMethodSpecForGenericInstanceCall(constrainedMethodToken, call)
             }
-            this.il.OpCode(ILOpCode.Constrained)
-            this.il.Token(this.outer.memberRefs.GetElementTypeToken(call.ConstrainedReceiverTypeParameter!!))
+            if !boxed {
+                this.il.OpCode(ILOpCode.Constrained)
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(call.ConstrainedReceiverTypeParameter!!))
+            }
             this.il.OpCode(ILOpCode.Callvirt)
             this.il.Token(constrainedMethodToken)
             return

@@ -764,6 +764,50 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
     }
 
     shared {
+        internal func GetReceiverStorageView(receiver BoundExpression) BoundExpression -> switch receiver {
+            case variable is BoundVariableExpression when variable.NarrowedType != nil:
+            cast[BoundExpression](BoundVariableExpression(variable.Syntax, variable.Variable))
+            case field is BoundFieldAccessExpression when field.NarrowedType != nil:
+            if field.InterfaceType is {} owner {
+                BoundFieldAccessExpression(field.Syntax, field.Field, owner, field.SubstitutedType, narrowedType: nil)
+            } else {
+                BoundFieldAccessExpression(
+                    field.Syntax,
+                    field.Receiver,
+                    field.StructType,
+                    field.Field,
+                    field.SubstitutedType,
+                    narrowedType: nil
+                )
+            }
+            case field is BoundClrPropertyAccessExpression when field.Member is FieldInfo info:
+            BoundClrPropertyAccessExpression(
+                field.Syntax,
+                field.Receiver,
+                field.Member,
+                MemberLookup.GetClrFieldTypeSymbol(
+                    field.Receiver?.Type ?? field.StaticContainerType ?? TypeSymbol.Error,
+                    info
+                ),
+                field.StaticContainerType,
+                field.ConstrainedReceiverTypeParameter,
+                field.ConstrainedInterfaceType,
+                field.IsAddressableStaticField,
+                field.IsReadOnlySubmissionGlobal
+            )
+            default: receiver
+        }
+
+        internal func IsBoxedTypeParameterReceiver(receiver BoundExpression) bool {
+            if receiver.Type is not TypeParameterSymbol {
+                return false
+            }
+            let storage = GetReceiverStorageView(receiver)
+            return !object.ReferenceEquals(storage, receiver) && BindingBinder.IsReferenceTypeForConstraint(
+                storage.Type.StripToBareShape()
+            )
+        }
+
         internal func SubstituteReceiver(
             tree BoundExpression,
             receiver BoundExpression,
@@ -822,7 +866,8 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             statements ImmutableArray[BoundStatement].Builder,
             declareLocal(string, bool, TypeSymbol) -> LocalVariableSymbol
         ) BoundExpression {
-            if storage.Type is not TypeParameterSymbol parameter ||
+            if IsBoxedTypeParameterReceiver(storage) ||
+                storage.Type is not TypeParameterSymbol parameter ||
                 parameter.HasValueTypeConstraint ||
                 BindingBinder.IsReferenceTypeForConstraint(parameter) ||
                 IsCapturedRuntimeGenericStorageReceiver(storage) {

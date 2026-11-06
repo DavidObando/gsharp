@@ -25,6 +25,8 @@ Binding probes the location before evaluating arguments, so an invalid location 
 An unconstrained generic receiver captures reference-type instantiations by value and preserves value-type storage.
 A reference slot narrowed to a boxed value type captures the selected box, not the mutable reference slot.
 Ref-returning receivers preserve their readonly capability, including through generic receiver reconstruction.
+An immutable `let` binding does not create a readonly reference to its struct receiver.
+Calls on a box narrowed to a type parameter use the selected interface or CLR base member with the captured reference.
 A user block expression remains a value even when its final expression returns by reference.
 The deferred method body runs only at block exit; only the eager operands affect narrowing at the `defer` statement.
 

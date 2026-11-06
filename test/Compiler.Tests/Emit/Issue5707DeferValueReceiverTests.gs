@@ -398,6 +398,70 @@ try {
     }
 
     @Fact
+    func GenericBoxViews_UseTypedAddressesForValueAndReferenceInstantiations() {
+        AssertRuns(`import System
+import System.Threading.Tasks
+interface ICounter { func Bump(); }
+struct Counter : ICounter {
+    var n int32
+    func Bump() { n++ }
+}
+class RefCounter : ICounter {
+    var n int32
+    func Bump() { n++ }
+}
+func Run[T ICounter](input object, replacement object) {
+    var value = input
+    if value is T {
+        defer value.Bump()
+        value = replacement
+    }
+}
+func RunStruct[T ICounter struct](value object) {
+    if value is T { defer value.Bump() }
+}
+async func RunAsync[T ICounter](value object) Task {
+    if value is T {
+        defer value.Bump()
+        await Task.Delay(1)
+    }
+}
+var boxed object = Counter{}
+Run[Counter](boxed, "changed")
+if boxed is Counter c { Console.WriteLine(c.n) }
+RunStruct[Counter](boxed)
+if boxed is Counter c { Console.WriteLine(c.n) }
+RunAsync[Counter](boxed).GetAwaiter().GetResult()
+if boxed is Counter c { Console.WriteLine(c.n) }
+let original = RefCounter()
+let other = RefCounter()
+Run[RefCounter](original, other)
+Console.WriteLine(original.n)
+Console.WriteLine(other.n)`, "1\n2\n3\n1\n0\n")
+    }
+
+    @Fact
+    func GenericLetBindings_KeepTheirShallowReferenceCapability() {
+        AssertRuns(`import System
+interface ICounter { func Bump(); }
+struct Counter : ICounter {
+    var n int32
+    func Bump() { n++ }
+}
+class RefCounter : ICounter {
+    var n int32
+    func Bump() { n++ }
+}
+func Local[T ICounter](value T) T {
+    let local = value
+    { defer local.Bump() }
+    return local
+}
+Console.WriteLine(Local[Counter](Counter{}).n)
+Console.WriteLine(Local[RefCounter](RefCounter()).n)`, "1\n1\n")
+    }
+
+    @Fact
     func NullableBoxedReceivers_CaptureVariableAndSourceFieldReferences() {
         using let fixture = CSharpFixture(`#nullable enable
 namespace Imported5707 {

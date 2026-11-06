@@ -1671,6 +1671,7 @@ internal partial class MethodBodyEmitter {
     /// a value type or a reference type — the `constrained.` opcode handles
     /// both. Addressable variables (parameters, locals, globals) load directly;
     /// non-addressable rvalue receivers are spilled to a pre-planned local.
+    /// Calls on boxed references first use (cref:TryEmitBoxedTypeParameterReceiver).
     /// @remarks Issue #2335 (audit follow-up): a NARROWED variable receiver
     /// (ADR-0069 smart-cast — `bve.NarrowedType != null`, e.g. `if x is
     /// T { x.ToString() }` narrowing an `object`-typed
@@ -1737,6 +1738,30 @@ internal partial class MethodBodyEmitter {
         }
         this.il.StoreLocal(slot)
         this.il.LoadLocalAddress(slot)
+    }
+
+    private func TryEmitBoxedTypeParameterReceiver(receiver BoundExpression, referenceOwner TypeSymbol?) bool {
+        // Interface or base dispatch preserves boxed value storage without constructing a generic managed pointer.
+        if referenceOwner == nil ||
+            !GSharp
+            .Core
+            .CodeAnalysis
+            .Binding
+            .Binder
+            .IsReferenceTypeForConstraint(referenceOwner.StripToBareShape()) ||
+            !GSharp
+            .Core
+            .CodeAnalysis
+            .Lowering
+            .SideEffectSpiller
+            .IsBoxedTypeParameterReceiver(receiver) {
+            return false
+        }
+        let storage = GSharp.Core.CodeAnalysis.Lowering.SideEffectSpiller.GetReceiverStorageView(receiver)
+        this.EmitExpression(storage)
+        this.il.OpCode(ILOpCode.Castclass)
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(referenceOwner))
+        return true
     }
 
     /// Returns `true` when [`fa`](paramref) is addressable —

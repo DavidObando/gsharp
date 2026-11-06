@@ -1397,39 +1397,7 @@ internal partial class StatementBinder {
         if isDefer && receiver is BoundBlockExpression{Syntax: BlockExpressionSyntax} {
             return CaptureExpression(receiver, prefix)
         }
-        let storageView = switch receiver {
-            case variable is BoundVariableExpression when variable.NarrowedType != nil:
-            cast[BoundExpression](BoundVariableExpression(variable.Syntax, variable.Variable))
-            case field is BoundFieldAccessExpression when field.NarrowedType != nil:
-            if field.InterfaceType is {} owner {
-                BoundFieldAccessExpression(field.Syntax, field.Field, owner, field.SubstitutedType, narrowedType: nil)
-            } else {
-                BoundFieldAccessExpression(
-                    field.Syntax,
-                    field.Receiver,
-                    field.StructType,
-                    field.Field,
-                    field.SubstitutedType,
-                    narrowedType: nil
-                )
-            }
-            case field is BoundClrPropertyAccessExpression when field.Member is FieldInfo info:
-            BoundClrPropertyAccessExpression(
-                field.Syntax,
-                field.Receiver,
-                field.Member,
-                MemberLookup.GetClrFieldTypeSymbol(
-                    field.Receiver?.Type ?? field.StaticContainerType ?? TypeSymbol.Error,
-                    info
-                ),
-                field.StaticContainerType,
-                field.ConstrainedReceiverTypeParameter,
-                field.ConstrainedInterfaceType,
-                field.IsAddressableStaticField,
-                field.IsReadOnlySubmissionGlobal
-            )
-            default: receiver
-        }
+        let storageView = SideEffectSpiller.GetReceiverStorageView(receiver)
         if !object.ReferenceEquals(storageView, receiver) && Binder.IsReferenceTypeForConstraint(
             storageView.Type.StripToBareShape()
         ) {
