@@ -47,9 +47,11 @@ class Issue5714OptionalInAndDefaultValueEmitTests {
     @InlineData("Defaults.Named(last: 9)", "7:9")
     @InlineData("Defaults.Variadic() + \"|\" + Defaults.Variadic(tail: []int32{1, 2})", "7:0|7:2")
     @InlineData("Defaults.Readonly()", "7")
-    @InlineData("Holder()[1]", "1:B:7:1.25:0:0:B:nil:hi")
-    @InlineData("Holder().Text", "B:7:1.25:0:0:B:nil:hi")
-    @InlineData("Derived().Text", "B:7:1.25:0:0:B:nil:hi")
+    @InlineData("Defaults.Boxed() + \"|\" + Defaults.BoxedValue()", "Int32:7|Int32:7")
+    @InlineData("WriteOnly()", "1:zero:set")
+    @InlineData("Holder()[1]", "1:B:7:1.25:0:0:B:nil:hi:Int32:7")
+    @InlineData("Holder().Text", "B:7:1.25:0:0:B:nil:hi:Int32:7")
+    @InlineData("Derived().Text", "B:7:1.25:0:0:B:nil:hi:Int32:7")
     @InlineData("DerivedVariadic().Text", "7:0")
     @InlineData("GenericHolder[int32]().Text", "0")
     func ImportedReadonlyDefaults_AreValuesPassedByAddress(call string, expected string) {
@@ -75,6 +77,13 @@ struct Point { var X int32 }
                         } else if call == "DerivedVariadic().Text" {
                             `class DerivedVariadic : VariadicBase {
     init() : base() { }
+}
+`
+                        } else if call == "WriteOnly()" {
+                            `func WriteOnly() string {
+    let writer = SetterOnly[Point]()
+    writer[1] = "set"
+    return writer.Text
 }
 `
                         } else {
@@ -104,7 +113,7 @@ class Calls {
         Issue5714.Defaults.Missing() + ":" + Issue5714.Defaults.Money();
 }`, Path.Combine(directory, "Issue5714.Consumer.dll"), referenceLibrary)
                 Assert.Equal(
-                    "True:0|True:0|False|True:0|True:0|False|True:0|True:0|True:0:True:0:False:True:0",
+                    "True:0|True:0|False|True:0|True:0|False|True:0|True:0|False|False|True:0:True:0:False:True:0",
                     Invoke(library, consumer, "Consumer")
                 )
                 let importedCaller = Path.Combine(directory, "Issue5714.Reimport.dll")
@@ -128,6 +137,8 @@ struct Point { var X int32 }
 func PointDefault(x Point? = default(Point)) bool -> x.HasValue
 func DateDefault(x DateTime? = default(DateTime)) bool -> x.HasValue
 func NullableToValue(x int32 = default(int32?)) int32 -> x
+func StructDefault[T struct](x T? = default(T)) bool -> x.HasValue
+func UnmanagedDefault[T unmanaged](x T? = default(T)) bool -> x.HasValue
 `
         using let resolver = ReferenceResolver.WithReferences(Array.Empty[string]())
         let compilation = GsCompilation(resolver, GsSyntaxTree.Parse(SourceText.From(source))){IsLibrary = true}
@@ -138,10 +149,12 @@ func NullableToValue(x int32 = default(int32?)) int32 -> x
             .Diagnostics
             .Where((diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.Id == "GS0265")
             .ToArray()
-        Assert.Equal(3, diagnostics.Length)
+        Assert.Equal(5, diagnostics.Length)
         Assert.Equal(3, diagnostics[0].Location.StartLine)
         Assert.Equal(4, diagnostics[1].Location.StartLine)
         Assert.Equal(5, diagnostics[2].Location.StartLine)
+        Assert.Equal(6, diagnostics[3].Location.StartLine)
+        Assert.Equal(7, diagnostics[4].Location.StartLine)
     }
 
     shared {
@@ -169,19 +182,23 @@ namespace Issue5714Imported {
         public static string Named(in int x = 7, int last = 8) => $"{x}:{last}";
         public static string Variadic(in int x = 7, params int[] tail) => $"{x}:{tail.Length}";
         public static string Readonly(ref readonly int x = 7) => $"{x}";
+        public static string Boxed([Optional, DefaultParameterValue(7)] in object x) => $"{x.GetType().Name}:{x}";
+        public static string BoxedValue([Optional, DefaultParameterValue(7)] object x) => $"{x.GetType().Name}:{x}";
         public static string ReadExtension(this Api api, in Choice x = Choice.B) => $"{x}";
     }
     public class Holder {
         public string Text;
-        public Holder(in Choice? c = Choice.B, in int i = 7, in decimal d = 1.25m,
+        public Holder([Optional, DefaultParameterValue(7)] in object boxed,
+            in Choice? c = Choice.B, in int i = 7, in decimal d = 1.25m,
             in DateTime dt = default, in CustomStruct s = default, in Choice e = Choice.B,
             in Choice? missing = null, in string? text = "hi") {
-            Text = $"{c}:{i}:{d}:{dt.Ticks}:{s.Value}:{e}:{(missing.HasValue ? missing.Value.ToString() : "nil")}:{text}";
+            Text = $"{c}:{i}:{d}:{dt.Ticks}:{s.Value}:{e}:{(missing.HasValue ? missing.Value.ToString() : "nil")}:{text}:{boxed.GetType().Name}:{boxed}";
         }
-        public string this[int n, in Choice? c = Choice.B, in int i = 7, in decimal d = 1.25m,
+        public string this[int n, [Optional, DefaultParameterValue(7)] in object boxed,
+            in Choice? c = Choice.B, in int i = 7, in decimal d = 1.25m,
             in DateTime dt = default, in CustomStruct s = default, in Choice e = Choice.B,
             in Choice? missing = null, in string? text = "hi"] =>
-            $"{n}:{c}:{i}:{d}:{dt.Ticks}:{s.Value}:{e}:{(missing.HasValue ? missing.Value.ToString() : "nil")}:{text}";
+            $"{n}:{c}:{i}:{d}:{dt.Ticks}:{s.Value}:{e}:{(missing.HasValue ? missing.Value.ToString() : "nil")}:{text}:{boxed.GetType().Name}:{boxed}";
     }
     public class GenericHolder<T> {
         public string Text;
@@ -199,6 +216,12 @@ namespace Issue5714Imported {
     public class VariadicBase {
         public string Text;
         public VariadicBase(in int x = 7, params int[] tail) { Text = $"{x}:{tail.Length}"; }
+    }
+    public class SetterOnly<T> {
+        public string Text = "";
+        public string this[int i, in T x = default!] {
+            set { Text = $"{i}:{Defaults.Zero(x)}:{value}"; }
+        }
     }
 }`
 
@@ -222,9 +245,11 @@ class Defaults {
         func Enum(x Choice? = default(Choice)) string -> "${x.HasValue}:${int32(x ?? Choice.B)}"
         func Missing(x int32? = default(int32?)) bool -> x.HasValue
         func Money(x decimal? = default(decimal)) string -> "${x.HasValue}:$x"
+        func GenericMissing[T struct](x T? = default(T?)) bool -> x.HasValue
+        func UnmanagedMissing[T unmanaged](x T? = default(T?)) bool -> x.HasValue
         func Run() string {
             let local Read = (x int32?) -> "${x.HasValue}:$x"
-            return "${Integer()}|${Enum()}|${Missing()}|${Holder().Text}|${Holder()[1]}|${Missing(default(int32?))}|${local()}|${Money()}"
+            return "${Integer()}|${Enum()}|${Missing()}|${Holder().Text}|${Holder()[1]}|${Missing(default(int32?))}|${local()}|${Money()}|${GenericMissing[int32]()}|${UnmanagedMissing[int32]()}"
         }
     }
 }`

@@ -5003,8 +5003,9 @@ internal class ConversionClassifier {
             }
             if TryGetConstantParameterDefault(parameter, out var constant) {
                 let literal = BoundLiteralExpression(nil, constant)
+                // Metadata constants retain their value type; object slots therefore require boxing.
                 return LiftOptionalDefaultValue(
-                    if valueClrType.IsEnum {
+                    if literal.Type != valueTypeSymbol {
                         cast[BoundExpression](BoundConversionExpression(nil, valueTypeSymbol, literal))
                     } else {
                         cast[BoundExpression](literal)
@@ -6870,18 +6871,9 @@ internal class ConversionClassifier {
             return string.Equals(defType.Name, paramType.Name, StringComparison.Ordinal)
         }
 
-        // Issue #1182: recognises value-type parameter symbols whose all-zero default is a
-        // valid optional default — including user `data struct` / enum / tuple symbols that
-        // carry no CLR backing type before emit.
-        private func IsValueTypeForDefault(type TypeSymbol) bool {
-            if type is StructSymbol s && !s.IsClass {
-                return true
-            }
-            if type is EnumSymbol || type is TupleTypeSymbol {
-                return true
-            }
-            return type?.ClrType is {IsValueType: true}
-        }
+        // Use the shared type-kind classifier for concrete values and constrained type parameters.
+        private func IsValueTypeForDefault(type TypeSymbol) bool ->
+        NullabilityImportRule.ClassifyArgument(type) == TypeArgumentKind.Value
 
         // Issue #1182: returns the typed CLR zero for a primitive value-type symbol so a
         // `default(T)` optional default emits the same CLR Constant row as `= 0`.

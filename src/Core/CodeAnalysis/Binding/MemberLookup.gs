@@ -258,7 +258,7 @@ internal class MemberLookup {
                         boundArguments,
                         default(ImmutableArray[int32]),
                         indexer!!.GetIndexParameters(),
-                        method: indexer!!.GetMethod,
+                        method: indexer!!.GetMethod ?? indexer!!.SetMethod,
                         receiverType: targetType
                     )
                     return ClrIndexerResolutionOutcome.Resolved
