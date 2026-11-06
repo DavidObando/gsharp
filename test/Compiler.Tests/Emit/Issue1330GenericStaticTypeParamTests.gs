@@ -116,6 +116,110 @@ class C[TResult IComparable[TResult]] {
         CompileLibrary(source)
     }
 
+    /// Issue #4627: `ImmutableArray[TypeSymbol].CastUp(candidate.TypeParameters)`
+    /// infers `TDerived = TypeParameterSymbol` on the constructed generic receiver
+    /// `ImmutableArray[TypeSymbol]`, compiles, passes ILVerify, and executes.
+    @Fact
+    func StaticGenericMethod_OnConstructedSymbolicReceiver_InfersMethodTypeArgAndExecutes() {
+        let source = `package P
+import System
+import System.Collections.Immutable
+
+open class TypeSym {
+    public let Name string
+    init(name string) { Name = name }
+}
+
+class TypeParamSym : TypeSym {
+    init(name string) : base(name) { }
+}
+
+func Upcast(items ImmutableArray[TypeParamSym]) ImmutableArray[TypeSym] {
+    return ImmutableArray[TypeSym].CastUp(items)
+}
+
+let derived = ImmutableArray.Create(TypeParamSym("T"), TypeParamSym("U"))
+let baseItems = Upcast(derived)
+Console.WriteLine("${baseItems.Length}:${baseItems[0].Name},${baseItems[1].Name}")`
+        Assert.Equal("2:T,U${Environment.NewLine}", CompileVerifyAndRun(source))
+    }
+
+    /// Issue #4690: `List[string]{ Branch("x") }` with a `string?` element is
+    /// rejected with GS0155 by the compiler driver, while `List[string?]{ Branch("x") }`
+    /// compiles, verifies, and runs.
+    @Fact
+    func Issue4690_CollectionLiteralWithNullableElement_RejectedOnNonNullableAndAcceptedOnNullable() {
+        let rejectedSource = `package P
+import System
+import System.Collections.Generic
+
+class C {
+    shared {
+        func Built() int32 {
+            let list List[string] = List[string]{ Branch("x") }
+            return list.Count
+        }
+
+        private func Branch(value string) string? -> if value.Length > 1 { value } else { default(string?) }
+    }
+}
+Console.WriteLine(C.Built())`
+        let tempDir = Directory.CreateTempSubdirectory("gs_issue4690_").FullName
+        try {
+            let srcPath = Path.Combine(tempDir, "test.gs")
+            let outPath = Path.Combine(tempDir, "test.dll")
+            File.WriteAllText(srcPath, rejectedSource)
+            let runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
+            let args = List[string]{"/out:" + outPath, "/target:exe", "/targetframework:net10.0", "/lib:" + runtimeDir}
+            for refName in[]string{
+                "System.Runtime.dll",
+                "System.Private.CoreLib.dll",
+                "System.Collections.dll",
+                "System.Console.dll"
+            } {
+                args.Add("/reference:" + Path.Combine(runtimeDir, refName))
+            }
+            args.Add(srcPath)
+            using let compileOut = StringWriter()
+            using let compileErr = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(compileOut)
+            Console.SetError(compileErr)
+            var compileExit int32
+            try {
+                compileExit = Program.Main(args.ToArray())
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            Assert.NotEqual(0, compileExit)
+            let combined = compileOut.ToString() + compileErr.ToString()
+            Assert.Contains("error GS0155:", combined, StringComparison.Ordinal)
+        } finally {
+            try {
+                Directory.Delete(tempDir, recursive: true)
+            } catch { }
+        }
+
+        let acceptedSource = `package P
+import System
+import System.Collections.Generic
+
+class C {
+    shared {
+        func Built() int32 {
+            let list List[string?] = List[string?]{ Branch("x") }
+            return list.Count
+        }
+
+        private func Branch(value string) string? -> if value.Length > 1 { value } else { default(string?) }
+    }
+}
+Console.WriteLine(C.Built())`
+        Assert.Equal("1${Environment.NewLine}", CompileVerifyAndRun(acceptedSource))
+    }
+
     shared {
         private func CompileVerifyAndRun(source string) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_issue1330_emit_").FullName
@@ -179,6 +283,7 @@ stderr:
                 "System.Runtime.dll",
                 "System.Private.CoreLib.dll",
                 "System.Collections.dll",
+                "System.Collections.Immutable.dll",
                 "System.Console.dll"
             } {
                 args.Add("/reference:" + Path.Combine(runtimeDir, refName))

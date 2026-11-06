@@ -432,12 +432,18 @@ internal class TypeDefEmitter {
             }
             let sigBlob = BlobBuilder()
             this.encodeTypeSymbol(BlobEncoder(sigBlob).FieldSignature(), prop.Type)
+            let backingName = if prop.HasExplicitInterfaceClause && prop.ExplicitInterfaceClauseTarget != nil {
+                "<" + ExplicitInterfaceMetadataNaming.GetMetadataName(prop.Name, prop.ExplicitInterfaceClauseTarget!!) +
+                    ">k__BackingField"
+            } else {
+                "<${prop.Name}>k__BackingField"
+            }
             let backingHandle = this
                 .emitCtx
                 .Metadata
                 .AddFieldDefinition(
                 attributes: FieldAttributes.Assembly | FieldAttributes.Static,
-                name: this.emitCtx.Metadata.GetOrAddString("<${prop.Name}>k__BackingField"),
+                name: this.emitCtx.Metadata.GetOrAddString(backingName),
                 signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob)
             )
             if firstField.IsNil {
@@ -456,12 +462,17 @@ internal class TypeDefEmitter {
             }
             let sigBlob = BlobBuilder()
             this.encodeTypeSymbol(BlobEncoder(sigBlob).FieldSignature(), ev.Type)
+            let backingName = if ev.HasExplicitInterfaceClause && ev.ExplicitInterfaceClauseTarget != nil {
+                ExplicitInterfaceMetadataNaming.GetMetadataName(ev.Name, ev.ExplicitInterfaceClauseTarget!!)
+            } else {
+                ev.BackingField!!.Name
+            }
             let backingHandle = this
                 .emitCtx
                 .Metadata
                 .AddFieldDefinition(
                 attributes: FieldAttributes.Private | FieldAttributes.Static,
-                name: this.emitCtx.Metadata.GetOrAddString(ev.BackingField!!.Name),
+                name: this.emitCtx.Metadata.GetOrAddString(backingName),
                 signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob)
             )
             if firstField.IsNil {

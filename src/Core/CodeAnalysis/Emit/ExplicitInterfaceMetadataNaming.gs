@@ -48,8 +48,13 @@ internal shared class ExplicitInterfaceMetadataNaming {
                 "${sourceInterface.PackageName}.$qualifiedInterfaceName.$memberName"
             }
         }
-        let interfaceName string? = if target is ImportedTypeSymbol imported && imported.OpenDefinition != nil {
-            imported.OpenDefinition.FullName
+        let interfaceName string? = if target is ImportedTypeSymbol imported &&
+            !imported
+            .TypeArguments
+            .IsDefaultOrEmpty {
+            FormatTypeArgument(imported)
+        } else if target is ImportedTypeSymbol importedOpen && importedOpen.OpenDefinition != nil {
+            importedOpen.OpenDefinition.FullName
         } else {
             target.ClrType?.FullName
         }

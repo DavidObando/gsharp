@@ -1009,7 +1009,7 @@ shared class TypeMemberModel {
     func TryGetStaticProperty(type TypeSymbol, name string, @NotNullWhen(true) out property PropertySymbol?) bool {
         if type is StructSymbol structSymbol {
             for p in structSymbol.StaticProperties {
-                if p.Name == name {
+                if !p.HasExplicitInterfaceClause && p.Name == name {
                     property = p
                     return true
                 }
@@ -1138,7 +1138,7 @@ shared class TypeMemberModel {
     func TryGetStaticEvent(type TypeSymbol, name string, @NotNullWhen(true) out event EventSymbol?) bool {
         if type is StructSymbol structSymbol {
             for e in structSymbol.StaticEvents {
-                if e.Name == name {
+                if !e.HasExplicitInterfaceClause && e.Name == name {
                     event = e
                     return true
                 }

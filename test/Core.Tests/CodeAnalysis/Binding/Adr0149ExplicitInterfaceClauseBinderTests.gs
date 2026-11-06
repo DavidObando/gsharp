@@ -6,8 +6,10 @@ package GSharp.Core.Tests.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import GSharp.Core.Tests
 import System.Collections.Generic
 import System.IO
 import Xunit
@@ -644,6 +646,127 @@ class Bad : IReadOnlyList[Shape] {
 `
         let diagnostics = GetDiagnostics(source)
         Assert.Contains(diagnostics, (d Diagnostic) -> d.Id == "GS0187" && d.Message.Contains("Item"))
+    }
+
+    /// Issue #4627: a static generic method on a constructed generic receiver
+    /// (`ImmutableArray[Base].CastUp(derivedItems)`) infers its method type
+    /// argument `TDerived` from a same-compilation derived type and projects
+    /// both its parameter and return types symbolically.
+    @Fact
+    func Issue4627_StaticGenericMethodOnConstructedGenericType_InfersMethodTypeArgument() {
+        let source = `
+package P
+import System.Collections.Immutable
+
+open class BaseSym { }
+class DerivedSym : BaseSym { }
+
+func Upcast(items ImmutableArray[DerivedSym]) ImmutableArray[BaseSym] {
+    return ImmutableArray[BaseSym].CastUp(items)
+}
+`
+        let diagnostics = GetDiagnostics(source)
+        Assert.Empty(diagnostics)
+    }
+
+    /// Issue #4625: a static explicit-interface clause targeting an imported CLR
+    /// interface (`IS`) resolves without GS0494, while a clause naming a
+    /// non-existent static member on that interface still reports GS0494.
+    @Fact
+    func Issue4625_StaticExplicitClauseOnImportedInterface_ResolvesValidSlotAndRejectsMissingSlot() {
+        using let library = CSharpFixture(`namespace Clib;
+public interface IS { static abstract int Z(); }
+public interface ISlots {
+    static abstract int P { get; }
+    static abstract event System.Action Changed;
+}`)
+        using let resolver = ReferenceResolver.WithReferences([]string{library.AssemblyPath})
+        let validSource = `
+package P
+import Clib
+
+struct W : IS {
+    shared {
+        func (IS) Z() int32 {
+            return 3
+        }
+    }
+}
+`
+        let validCompilation = Compilation(resolver, SyntaxTree.Parse(SourceText.From(validSource)))
+        Assert.Empty(validCompilation.GlobalScope.Diagnostics.AddRange(validCompilation.BoundProgram.Diagnostics))
+
+        let invalidSource = `
+package P
+import Clib
+
+struct W : IS {
+    shared {
+        func (IS) Z() int32 {
+            return 3
+        }
+        func (IS) DoesNotExist() int32 {
+            return 0
+        }
+    }
+}
+`
+        let invalidCompilation = Compilation(resolver, SyntaxTree.Parse(SourceText.From(invalidSource)))
+        let diagnostics = invalidCompilation
+            .GlobalScope
+            .Diagnostics
+            .AddRange(invalidCompilation.BoundProgram.Diagnostics)
+        Assert.Contains(diagnostics, (d Diagnostic) -> d.Id == "GS0494" && d.Message.Contains("DoesNotExist"))
+
+        let duplicateOrdinaryEventSource = `
+package P
+import System
+import Clib
+
+struct W : ISlots {
+    shared {
+        prop (ISlots) P int32 { get { return 1 } }
+        event (ISlots) Changed Action?
+        event Changed Action?
+        event Changed Action?
+    }
+}
+`
+        let dupCompilation = Compilation(resolver, SyntaxTree.Parse(SourceText.From(duplicateOrdinaryEventSource)))
+        let dupDiagnostics = dupCompilation.GlobalScope.Diagnostics.AddRange(dupCompilation.BoundProgram.Diagnostics)
+        let dupError = Assert.Single(dupDiagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0102", dupError.Id)
+
+        let directExplicitAccessSource = `
+package P
+import System
+import Clib
+
+struct W : ISlots {
+    shared {
+        prop (ISlots) P int32 { get { return 1 } }
+        event (ISlots) Changed Action?
+    }
+}
+
+func Probe() int32 {
+    W.Changed += () -> {}
+    return W.P
+}
+`
+        let accessCompilation = Compilation(resolver, SyntaxTree.Parse(SourceText.From(directExplicitAccessSource)))
+        let accessDiagnostics = accessCompilation
+            .GlobalScope
+            .Diagnostics
+            .AddRange(accessCompilation.BoundProgram.Diagnostics)
+        Assert.Contains(
+            accessDiagnostics,
+            (d Diagnostic) -> d.Id == "GS0158" && d.Message.Contains("Changed", StringComparison.Ordinal)
+        )
+        Assert.Contains(
+            accessDiagnostics,
+            (d Diagnostic) -> d.Id == "GS0158" && d.Message.Contains("P", StringComparison.Ordinal)
+        )
     }
 
     shared {

@@ -445,6 +445,7 @@ internal partial class ExpressionBinder {
         classSymbol ImportedClassSymbol,
         staticFn ImportedFunctionSymbol,
         arguments ImmutableArray[BoundExpression],
+        symbolicMethodTypeArgs ImmutableArray[TypeSymbol?],
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
@@ -464,11 +465,21 @@ internal partial class ExpressionBinder {
         }
         let openDef = symbolicReceiver!!.OpenDefinition
         let symbolicArgs = symbolicReceiver!!.TypeArguments
+        let effectiveMethodTypeArgs = MemberLookup.MergeSymbolicAndClosedMethodTypeArgs(
+            staticFn.Method,
+            symbolicMethodTypeArgs
+        )
         let convertedArgs = ImmutableArray.CreateBuilder[BoundExpression](arguments.Length)
         for var i = 0; i < arguments.Length; i++ {
             let argument = arguments[i]
             let openParamType = openParameters[i].ParameterType
-            let symbolicParamType = MemberLookup.GetClrOpenParameterTypeSymbol(openParameters[i], openDef, symbolicArgs)
+            let symbolicParamType = MemberLookup.GetClrOpenParameterTypeSymbol(
+                openParameters[i],
+                openDef,
+                symbolicArgs,
+                openMethod,
+                effectiveMethodTypeArgs
+            )
             // Nominal identity remains on the explicit symbolicDelegateParam
             // conversion below; only the mapped Invoke shape is needed here.
             if LambdaBinder.TryGetFunctionLiteral(argument, out var functionLiteral) &&
@@ -556,7 +567,12 @@ internal partial class ExpressionBinder {
                 )
             )
         }
-        let symbolicReturn = MemberLookup.GetClrOpenMethodReturnTypeSymbol(openMethod!!, openDef, symbolicArgs)
+        let symbolicReturn = MemberLookup.GetClrOpenMethodReturnTypeSymbol(
+            openMethod!!,
+            openDef,
+            symbolicArgs,
+            effectiveMethodTypeArgs
+        )
         let overriddenFn = ImportedFunctionSymbol(
             staticFn.Name,
             classSymbol,
@@ -574,7 +590,7 @@ internal partial class ExpressionBinder {
                 overriddenFn,
                 convertedArgs.MoveToImmutable(),
                 refKinds,
-                typeArgumentSymbols: default(ImmutableArray[TypeSymbol?]),
+                typeArgumentSymbols: symbolicMethodTypeArgs,
                 staticContainerType: symbolicReceiver
             )
         )
@@ -1969,31 +1985,6 @@ internal partial class ExpressionBinder {
                     classSymbol.SymbolicReceiver ?? receiver?.Type,
                     typeArgSymbols
                 )
-                // Issue #1330: when the receiver is a generic type constructed
-                // over an in-scope generic type parameter (`Comparer[TResult]`),
-                // bind the static call symbolically — substituting the receiver's
-                // symbolic arguments through the resolved method's parameter and
-                // return types — so a delegate parameter surfaces as
-                // `Comparison[TResult]` (the lambda flows through as an identity
-                // adapter hosted in the enclosing generic context rather than a
-                // type-erased `<object>` adapter referencing an out-of-scope
-                // type parameter), the call's result type is the symbolic
-                // `Comparer[TResult]`, and the emitter parents the call at the
-                // constructed `Comparer<!TResult>` TypeSpec. Yields verifiable IL
-                // exactly as the concrete-argument receiver does.
-                if classSymbol.SymbolicReceiver != nil &&
-                    argumentNames.IsDefault &&
-                    !staticIsExpanded &&
-                    staticMapping.IsDefault &&
-                    TryBindSymbolicImportedStaticCall(
-                    ce,
-                    classSymbol,
-                    staticFn!!,
-                    arguments,
-                    out var symbolicStaticCall
-                ) {
-                    return symbolicStaticCall!!
-                }
                 // Recover symbolic generic arguments before params expansion so
                 // the synthesized array uses the real element type rather than
                 // a live-reflection constraint placeholder.
@@ -2045,6 +2036,26 @@ internal partial class ExpressionBinder {
                     staticSymbolicTypeArgs
                 } else {
                     AsNullableElements(typeArgSymbols)
+                }
+                // Issue #1330 / #4627: when the receiver is a generic type constructed
+                // over an in-scope generic type parameter or source type (`Comparer[TResult]`,
+                // `ImmutableArray[TypeSymbol]`), bind the static call symbolically —
+                // substituting both the receiver's symbolic arguments and any inferred
+                // or explicit method type arguments through the resolved method's
+                // parameter and return types.
+                if classSymbol.SymbolicReceiver != nil &&
+                    argumentNames.IsDefault &&
+                    !staticIsExpanded &&
+                    staticMapping.IsDefault &&
+                    TryBindSymbolicImportedStaticCall(
+                    ce,
+                    classSymbol,
+                    staticFn!!,
+                    arguments,
+                    staticTypeArgSymbolsForCall,
+                    out var symbolicStaticCall
+                ) {
+                    return symbolicStaticCall!!
                 }
                 let staticParameters = staticFn!!.Method.GetParameters()
                 let staticDownstreamMapping = if staticIsExpanded {

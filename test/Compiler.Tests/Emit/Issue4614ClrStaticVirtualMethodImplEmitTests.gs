@@ -928,6 +928,7 @@ public interface IP { static abstract int P { get; } }
 public interface IP2 : IP { }
 public interface IPV { static virtual int P { get => 1; set { } } }
 public interface IPS { static abstract int Q { get; set; } }
+public interface ISP<T> { static abstract int P { get; set; } }
 
 public interface IGen { static abstract int Count<U>(U u); }
 
@@ -1368,6 +1369,86 @@ struct W : IA, IB {
 
 Console.WriteLine(typeof(W).GetInterfaceMap(typeof(IA)).TargetMethods[0].Invoke(nil, []object?{}))
 Console.WriteLine(typeof(W).GetInterfaceMap(typeof(IB)).TargetMethods[0].Invoke(nil, []object?{}))`, []string{"5", "4"}}
+            // Issue #4625: an explicit-interface clause on a static method,
+            // property or event targeting an imported CLR interface binds to
+            // that slot and takes precedence over an implicit same-name member.
+            yield[]object{"explicit-clause-targets-imported-static-virtual-slots", (`package P
+import System
+import System.Linq
+import Clib
+
+class Shape {
+    prop N int32 { get { return 6 } }
+}
+
+struct W : IS, IP, IPS, IEv, IH[Shape] {
+    shared {
+        var store int32 = 0
+        var hooked int32 = 0
+
+        func (IS) Z() int32 { return 3 }
+        func Z() int32 { return 99 }
+
+        prop (IP) P int32 { get { return 11 } }
+        prop P int32 { get { return 88 } }
+
+        prop (IPS) Q int32 {
+            get { return store }
+            set { store = value + 5 }
+        }
+
+        event (IEv) Changed Action? {
+            add { hooked = hooked + 1 }
+            remove { }
+        }
+
+        func (IH[Shape]) H(x Shape) int32 { return x.N * 7 }
+    }
+}
+
+Console.WriteLine(Probe.Z[W]())
+Console.WriteLine(W.Z())
+Console.WriteLine(Probe.P[W]())
+Console.WriteLine(W.P)
+Console.WriteLine(Probe.SetThenGet[W](10))
+Probe.Hook[W](() -> {})
+Console.WriteLine(W.hooked)
+let iface = typeof(W).GetInterfaces().Where((i Type) -> i.Name == "IH` + "`" + `1").First()
+Console.WriteLine(typeof(W).GetInterfaceMap(iface).TargetMethods[0].Invoke(nil, []object?{Shape()}))`), []string{
+                    "3",
+                    "99",
+                    "11",
+                    "88",
+                    "15",
+                    "1",
+                    "42"
+                }}
+            yield[]object{"explicit-static-auto-properties-on-distinct-symbolic-imported-interfaces", (`package P
+import System
+import System.Linq
+import System.Reflection
+import Clib
+
+class ShapeA { }
+class ShapeB { }
+
+struct W : ISP[ShapeA], ISP[ShapeB] {
+    shared {
+        prop (ISP[ShapeA]) P int32
+        prop (ISP[ShapeB]) P int32
+    }
+}
+
+let fields = typeof(W).GetFields(BindingFlags.Static | BindingFlags.NonPublic)
+Console.WriteLine(fields.Select((f FieldInfo) -> f.Name).Distinct().Count())
+let ifaceA = typeof(W).GetInterfaces().Where((i Type) -> i.GetGenericArguments()[0] == typeof(ShapeA)).First()
+let ifaceB = typeof(W).GetInterfaces().Where((i Type) -> i.GetGenericArguments()[0] == typeof(ShapeB)).First()
+let mapA = typeof(W).GetInterfaceMap(ifaceA)
+let mapB = typeof(W).GetInterfaceMap(ifaceB)
+mapA.TargetMethods[1].Invoke(nil, []object?{10})
+mapB.TargetMethods[1].Invoke(nil, []object?{20})
+Console.WriteLine(mapA.TargetMethods[0].Invoke(nil, []object?{}))
+Console.WriteLine(mapB.TargetMethods[0].Invoke(nil, []object?{}))`), []string{"2", "10", "20"}}
         }
 
         /// Shapes whose binding was already right and must stay so.

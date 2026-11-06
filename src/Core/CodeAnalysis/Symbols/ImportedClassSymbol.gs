@@ -635,7 +635,7 @@ class ImportedClassSymbol : Symbol {
                     returnOverride = MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(
                         bestMethod,
                         symbolicMethodTypeArgs,
-                        receiverType: nil
+                        receiverType: ConstructedReceiver ?? SymbolicReceiver
                     )
                 }
                 function = ImportedFunctionSymbol(text, this, bestMethod, callExpression, returnOverride)
