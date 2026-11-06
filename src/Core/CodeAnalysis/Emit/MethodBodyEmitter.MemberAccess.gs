@@ -1748,17 +1748,29 @@ internal partial class MethodBodyEmitter {
             .CodeAnalysis
             .Binding
             .Binder
-            .IsReferenceTypeForConstraint(referenceOwner.StripToBareShape()) ||
-            !GSharp
-            .Core
-            .CodeAnalysis
-            .Lowering
-            .SideEffectSpiller
-            .IsBoxedTypeParameterReceiver(receiver) {
+            .IsReferenceTypeForConstraint(referenceOwner.StripToBareShape()) {
             return false
         }
-        let storage = GSharp.Core.CodeAnalysis.Lowering.SideEffectSpiller.GetReceiverStorageView(receiver)
+        let storage = if GSharp.Core.CodeAnalysis.Lowering.SideEffectSpiller.IsBoxedTypeParameterReceiver(receiver) {
+            GSharp.Core.CodeAnalysis.Lowering.SideEffectSpiller.GetReceiverStorageView(receiver)
+        } else if GSharp
+            .Core
+            .CodeAnalysis
+            .Binding
+            .Binder
+            .IsReferenceTypeForConstraint(receiver.Type.StripToBareShape()) {
+            receiver
+        } else {
+            default(BoundExpression?)
+        }
+        if storage == nil {
+            return false
+        }
         this.EmitExpression(storage)
+        if storage.Type is TypeParameterSymbol {
+            this.il.OpCode(ILOpCode.Box)
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(storage.Type))
+        }
         this.il.OpCode(ILOpCode.Castclass)
         this.il.Token(this.outer.memberRefs.GetElementTypeToken(referenceOwner))
         return true

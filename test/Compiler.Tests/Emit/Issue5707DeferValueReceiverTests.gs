@@ -462,6 +462,44 @@ Console.WriteLine(Local[RefCounter](RefCounter()).n)`, "1\n1\n")
     }
 
     @Fact
+    func GenericBoxedObjectMembers_UseTheActualDeclaringReferenceTypeAcrossAwait() {
+        AssertRuns(`import System
+import System.Threading.Tasks
+struct Counter {
+    var n int32
+    override func GetHashCode() int32 {
+        n++
+        return n
+    }
+}
+class RefCounter {
+    var n int32
+    override func GetHashCode() int32 {
+        n++
+        return n
+    }
+}
+func Run[T](input object) {
+    if input is T { defer input.GetHashCode() }
+}
+async func RunAsync[T](input object) Task {
+    if input is T {
+        defer input.GetHashCode()
+        await Task.Delay(1)
+    }
+}
+let boxed object = Counter{}
+Run[Counter](boxed)
+if boxed is Counter c { Console.WriteLine(c.n) }
+RunAsync[Counter](boxed).GetAwaiter().GetResult()
+if boxed is Counter c { Console.WriteLine(c.n) }
+let reference = RefCounter()
+Run[RefCounter](reference)
+RunAsync[RefCounter](reference).GetAwaiter().GetResult()
+Console.WriteLine(reference.n)`, "1\n2\n2\n")
+    }
+
+    @Fact
     func NullableBoxedReceivers_CaptureVariableAndSourceFieldReferences() {
         using let fixture = CSharpFixture(`#nullable enable
 namespace Imported5707 {

@@ -201,8 +201,7 @@ internal partial class MethodBodyEmitter {
                     // `T : IComparable[T]`) emits a verifiable
                     // `constrained. !!T  callvirt IComparable`1<!!T>::M(...)`.
                     if instCall.IsConstrainedTypeParameterCall {
-                        let referenceOwner = instCall.ConstrainedInterfaceType ??
-                            MemberLookup.GetClrMemberDeclaringTypeSymbol(instCall.Receiver.Type, instCall.Method)
+                        let referenceOwner = instCall.ConstrainedInterfaceType ?? TypeSymbol.Object
                         let boxed = this.TryEmitBoxedTypeParameterReceiver(instCall.Receiver, referenceOwner)
                         if !boxed {
                             this.EmitConstrainedTypeParameterReceiver(instCall.Receiver)
