@@ -283,6 +283,11 @@ internal class BinderContext {
     /// declaring syntax, so the second pass reuses the same symbols when a cached function literal captures them.
     internal var RetriedValueVariables Dictionary[SyntaxNode, VariableSymbol]?
 
+    /// Issue #5578: the type-parameter lists and local-function symbols bound during the first pass of a retried
+    /// return value, so the second pass reuses the same symbols when a cached function literal references them.
+    internal var RetriedTypeParameters Dictionary[TypeParameterListSyntax, ImmutableArray[TypeParameterSymbol]]?
+    internal var RetriedLocalFunctions Dictionary[VariableDeclarationSyntax, FunctionSymbol]?
+
     /// Issue #5578: the function literals bound during the first pass of a retried return value, keyed by syntax
     /// and target signature, so the second pass reuses them without binding their bodies a second time.
     internal var RetriedFunctionLiterals Dictionary[

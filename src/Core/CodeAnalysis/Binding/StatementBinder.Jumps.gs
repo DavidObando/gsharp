@@ -259,13 +259,18 @@ internal partial class StatementBinder {
     }
 
     private var speculativeReturnDepth int32
+    private var currentSpeculativeLabelWatermark int32
     private let speculativeLabelUndoLog List[SpeculativeLabelSnapshot] = List[SpeculativeLabelSnapshot]()
+    private let speculativeLabelSnapshotIndex Dictionary[string, int32] = Dictionary[string, int32](
+        StringComparer.Ordinal
+    )
     private let speculativeFinallyLog List[FinallyClauseSyntax] = List[FinallyClauseSyntax]()
     private let speculativeFinallySummaryLog List[BoundStatement] = List[BoundStatement]()
     private let speculativeSpanEntryLog List[BackwardJumpSpan] = List[BackwardJumpSpan]()
 
     private sealed class SpeculativeLabelSnapshot {
         internal let LabelName string
+        internal let PreviousSnapshotIndex int32
         internal let WasDefined bool
         internal let HadUserLabel bool
         internal let UserLabel BoundLabel?
@@ -277,6 +282,7 @@ internal partial class StatementBinder {
 
         init(
             labelName string,
+            previousSnapshotIndex int32,
             wasDefined bool,
             hadUserLabel bool,
             userLabel BoundLabel?,
@@ -287,6 +293,7 @@ internal partial class StatementBinder {
             pendingJumps[]?NarrowingJumpState
         ) {
             LabelName = labelName
+            PreviousSnapshotIndex = previousSnapshotIndex
             WasDefined = wasDefined
             HadUserLabel = hadUserLabel
             UserLabel = userLabel
@@ -302,14 +309,55 @@ internal partial class StatementBinder {
         if speculativeReturnDepth == 0 {
             return
         }
-        speculativeLabelUndoLog.Add(CaptureLabelSnapshot(labelName))
+        var previousIndex = -1
+        if speculativeLabelSnapshotIndex.TryGetValue(labelName, out var existingIndex) {
+            if existingIndex >= currentSpeculativeLabelWatermark {
+                return
+            }
+            previousIndex = existingIndex
+        }
+        speculativeLabelSnapshotIndex[labelName] = speculativeLabelUndoLog.Count
+        speculativeLabelUndoLog.Add(CaptureLabelSnapshot(labelName, previousIndex))
     }
 
-    private func CaptureLabelSnapshot(labelName string) SpeculativeLabelSnapshot {
+    private func PopSpeculativeLabelSnapshotIndex(snapshot SpeculativeLabelSnapshot) {
+        if snapshot.PreviousSnapshotIndex >= 0 {
+            speculativeLabelSnapshotIndex[snapshot.LabelName] = snapshot.PreviousSnapshotIndex
+        } else {
+            speculativeLabelSnapshotIndex.Remove(snapshot.LabelName)
+        }
+    }
+
+    internal func DiscardSpeculativeLogs(
+        labelLogMark int32,
+        finallyLogMark int32,
+        finallySummaryLogMark int32,
+        spanEntryLogMark int32
+    ) {
+        for var i = speculativeLabelUndoLog.Count - 1; i >= labelLogMark; i-- {
+            PopSpeculativeLabelSnapshotIndex(speculativeLabelUndoLog[i])
+            speculativeLabelUndoLog.RemoveAt(i)
+        }
+        if speculativeFinallyLog.Count > finallyLogMark {
+            speculativeFinallyLog.RemoveRange(finallyLogMark, speculativeFinallyLog.Count - finallyLogMark)
+        }
+        if speculativeFinallySummaryLog.Count > finallySummaryLogMark {
+            speculativeFinallySummaryLog.RemoveRange(
+                finallySummaryLogMark,
+                speculativeFinallySummaryLog.Count - finallySummaryLogMark
+            )
+        }
+        if speculativeSpanEntryLog.Count > spanEntryLogMark {
+            speculativeSpanEntryLog.RemoveRange(spanEntryLogMark, speculativeSpanEntryLog.Count - spanEntryLogMark)
+        }
+    }
+
+    private func CaptureLabelSnapshot(labelName string, previousSnapshotIndex int32 = -1) SpeculativeLabelSnapshot {
         let pendingJumps = binderCtx.NarrowingFlow.CloneTarget(labelName)
         if labelName.StartsWith("#", StringComparison.Ordinal) {
             return SpeculativeLabelSnapshot(
                 labelName,
+                previousSnapshotIndex,
                 false,
                 false,
                 nil,
@@ -326,6 +374,7 @@ internal partial class StatementBinder {
         let hadHandlerRegions = userLabelHandlerRegions.TryGetValue(labelName, out var handlerRegions)
         return SpeculativeLabelSnapshot(
             labelName,
+            previousSnapshotIndex,
             wasDefined,
             hadUserLabel,
             userLabel,
@@ -671,7 +720,9 @@ internal partial class StatementBinder {
     private func RestoreSpeculativeBindState(state SpeculativeBindState) {
         ApplyBaseSpeculativeBindState(state)
         for var i = speculativeLabelUndoLog.Count - 1; i >= state.LabelLogMark; i-- {
-            RestoreLabelSnapshot(speculativeLabelUndoLog[i])
+            let snapshot = speculativeLabelUndoLog[i]
+            RestoreLabelSnapshot(snapshot)
+            PopSpeculativeLabelSnapshotIndex(snapshot)
             speculativeLabelUndoLog.RemoveAt(i)
         }
         if userGotoHandlerRegions.Count > state.GotoRegionCount {
@@ -711,7 +762,9 @@ internal partial class StatementBinder {
                 speculativeReturnDepth = 0
                 for snapshot in targetLabels {
                     if savedDepth > 0 {
-                        speculativeLabelUndoLog.Add(CaptureLabelSnapshot(snapshot.LabelName))
+                        speculativeReturnDepth = savedDepth
+                        NoteSpeculativeLabelTouched(snapshot.LabelName)
+                        speculativeReturnDepth = 0
                     }
                     RestoreLabelSnapshot(snapshot)
                 }
@@ -1496,14 +1549,26 @@ internal partial class StatementBinder {
                 .RetriedValueVariables = Dictionary[SyntaxNode, VariableSymbol](ReferenceEqualityComparer.Instance)
             this
                 .binderCtx
+                .RetriedTypeParameters = Dictionary[TypeParameterListSyntax, ImmutableArray[TypeParameterSymbol]](
+                ReferenceEqualityComparer.Instance
+            )
+            this
+                .binderCtx
+                .RetriedLocalFunctions = Dictionary[VariableDeclarationSyntax, FunctionSymbol](
+                ReferenceEqualityComparer.Instance
+            )
+            this
+                .binderCtx
                 .RetriedFunctionLiterals = Dictionary[
                 LambdaBinder.RetriedFunctionLiteralKey,
                 LambdaBinder.RetriedFunctionLiteralEntry
             ]()
         }
+        let savedLabelWatermark = currentSpeculativeLabelWatermark
         speculativeReturnDepth++
         try {
             let beforeValue = CaptureSpeculativeBindState()
+            currentSpeculativeLabelWatermark = beforeValue.LabelLogMark
             let targetTyped = BindReturnValuePass(
                 deferredReturns,
                 true,
@@ -1550,9 +1615,12 @@ internal partial class StatementBinder {
             deferredReturns.Hold(syntax, targetTyped, targetDiagnostics, naturalDiagnostics)
             return natural
         } finally {
+            currentSpeculativeLabelWatermark = savedLabelWatermark
             speculativeReturnDepth--
             if createdRetriedCaches {
                 this.binderCtx.RetriedValueVariables = nil
+                this.binderCtx.RetriedTypeParameters = nil
+                this.binderCtx.RetriedLocalFunctions = nil
                 this.binderCtx.RetriedFunctionLiterals = nil
             }
         }

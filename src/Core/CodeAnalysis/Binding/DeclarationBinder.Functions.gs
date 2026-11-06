@@ -1219,8 +1219,31 @@ internal partial class DeclarationBinder {
             return ImmutableArray[TypeParameterSymbol].Empty
         }
         let count = syntax.Parameters.Count
-        let symbols = ImmutableArray.CreateBuilder[TypeParameterSymbol](count)
         let seen = HashSet[string]()
+        for var i = 0; i < count; i++ {
+            let p = syntax.Parameters[i]
+            let name = p.Identifier.ValueText
+            if !seen.Add(name) {
+                Diagnostics.ReportSymbolAlreadyDeclared(p.Identifier.Location, name)
+            }
+        }
+        let retriedTypeParameters = binderCtx.RetriedTypeParameters
+        if retriedTypeParameters != nil && retriedTypeParameters.TryGetValue(syntax, out var existingSymbols) &&
+            existingSymbols.Length == count {
+            for symbol in existingSymbols {
+                symbol.Constraint = TypeParameterConstraint.Any
+                symbol.InterfaceConstraint = nil
+                symbol.ClrInterfaceConstraint = nil
+                symbol.ClassConstraint = nil
+                symbol.TypeParameterBound = nil
+                symbol.HasReferenceTypeConstraint = false
+                symbol.HasValueTypeConstraint = false
+                symbol.HasDefaultConstructorConstraint = false
+                symbol.HasUnmanagedConstraint = false
+            }
+            return existingSymbols
+        }
+        let symbols = ImmutableArray.CreateBuilder[TypeParameterSymbol](count)
         // Pass 1: create the bare type-parameter symbols (name, ordinal, variance)
         // so that a constraint clause appearing later in the list — or a
         // self-referential constraint such as `[T IComparable[T]]` (issue #943)
@@ -1229,9 +1252,6 @@ internal partial class DeclarationBinder {
         for var i = 0; i < count; i++ {
             let p = syntax.Parameters[i]
             let name = p.Identifier.ValueText
-            if !seen.Add(name) {
-                Diagnostics.ReportSymbolAlreadyDeclared(p.Identifier.Location, name)
-            }
             var variance = TypeParameterVariance.None
             if p.VarianceModifier != nil {
                 variance = if p.VarianceModifier.Text == "in" {
@@ -1242,7 +1262,11 @@ internal partial class DeclarationBinder {
             }
             symbols.Add(TypeParameterSymbol(name, i, TypeParameterConstraint.Any, variance))
         }
-        return symbols.MoveToImmutable()
+        let created = symbols.MoveToImmutable()
+        if retriedTypeParameters != nil {
+            retriedTypeParameters[syntax] = created
+        }
+        return created
     }
 
     private func ResolveTypeParameterConstraints(

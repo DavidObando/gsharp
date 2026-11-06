@@ -121,6 +121,8 @@ internal class LambdaBinder {
         FunctionSymbol,
         ImmutableArray[VariableSymbol]
     ]()
+    private let localFunctionReferencedFunctions Dictionary[FunctionSymbol, ImmutableArray[FunctionSymbol]] =
+    Dictionary[FunctionSymbol, ImmutableArray[FunctionSymbol]]()
 
     /// Initializes a new instance of the (cref:LambdaBinder)
     /// class.
@@ -359,24 +361,43 @@ internal class LambdaBinder {
             if pname != "_" && !seen.Add(pname) {
                 Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname)
             }
-            let lambdaParam = ParameterSymbol(
+            let refKind = conversions.BindAndValidateParameterRefKind(
+                p,
                 pname,
                 parameterType,
                 isVariadic,
-                declaringSyntax: p.Identifier,
-                isScoped: p.IsScoped,
-                refKind: conversions.BindAndValidateParameterRefKind(
-                    p,
+                if syntax.IsAsync {
+                    "async"
+                } else {
+                    default(string?)
+                }
+            )
+            let retriedVariables = binderCtx.RetriedValueVariables
+            var lambdaParam ParameterSymbol
+            if p.Identifier != nil && retriedVariables != nil && retriedVariables.TryGetValue(
+                p.Identifier,
+                out var existingParam
+            ) &&
+                existingParam is ParameterSymbol reusedParam &&
+                reusedParam.Name == pname &&
+                reusedParam.Type == parameterType &&
+                reusedParam.IsVariadic == isVariadic &&
+                reusedParam.IsScoped == p.IsScoped &&
+                reusedParam.RefKind == refKind {
+                lambdaParam = reusedParam
+            } else {
+                lambdaParam = ParameterSymbol(
                     pname,
                     parameterType,
                     isVariadic,
-                    if syntax.IsAsync {
-                        "async"
-                    } else {
-                        default(string?)
-                    }
+                    declaringSyntax: p.Identifier,
+                    isScoped: p.IsScoped,
+                    refKind: refKind
                 )
-            )
+                if p.Identifier != nil && retriedVariables != nil {
+                    retriedVariables[p.Identifier] = lambdaParam
+                }
+            }
             // ADR-0063 §5: function-literal (lambda) parameters can declare a
             // default value; lambdas can be invoked through their delegate type
             // which honors the default at the call site.
@@ -755,9 +776,18 @@ internal class LambdaBinder {
             if signature == nil {
                 return () -> BoundBlockStatement(syntax, ImmutableArray[BoundStatement].Empty)
             }
-            let (function, functionType) = signature
+            var (function, functionType) = signature
             function.TypeParameters = typeParameters
             function.LocalDeclaration = syntax
+            let retriedLocalFunctions = binderCtx.RetriedLocalFunctions
+            if retriedLocalFunctions != nil {
+                if retriedLocalFunctions.TryGetValue(syntax, out var existingFunction) &&
+                    CanReuseLocalFunction(existingFunction, function) {
+                    function = existingFunction
+                } else {
+                    retriedLocalFunctions[syntax] = function
+                }
+            }
             if !Scope.TryDeclareFunction(function) {
                 Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name)
             }
@@ -1391,16 +1421,16 @@ internal class LambdaBinder {
                     isScoped: p.IsScoped,
                     refKind: refKind
                 )
-                // ADR-0063 §5: arrow-lambda parameters can also declare a default
-                // value; the conversion classifier validates the constant-folded
-                // default at bind time the same way it does for function-literal
-                // parameters.
-                conversions.BindAndAttachParameterDefaultValue(p, lambdaParam)
-                AttachParameterAttributes(p, lambdaParam)
                 if p.Identifier != nil && retriedVariables != nil {
                     retriedVariables[p.Identifier] = lambdaParam
                 }
             }
+            // ADR-0063 §5: arrow-lambda parameters can also declare a default
+            // value; the conversion classifier validates the constant-folded
+            // default at bind time the same way it does for function-literal
+            // parameters.
+            conversions.BindAndAttachParameterDefaultValue(p, lambdaParam)
+            AttachParameterAttributes(p, lambdaParam)
             parameterSymbols.Add(lambdaParam)
             parameterTypes.Add(parameterType)
         }
@@ -1913,6 +1943,9 @@ internal class LambdaBinder {
         if adapterPrefix.Count > 0 {
             adapterPrefix.AddRange(body.Statements)
             body = BoundBlockStatement(body.Syntax, adapterPrefix.ToImmutable())
+        }
+        if localFunctionReferencedFunctions.TryGetValue(literal.Function, out var referencedFunctions) {
+            localFunctionReferencedFunctions[adapterFunction] = referencedFunctions
         }
         return BoundFunctionLiteralExpression(
             literal.Syntax,
@@ -2786,6 +2819,38 @@ internal class LambdaBinder {
         cache[key] = RetriedFunctionLiteralEntry(bound, Diagnostics.VisibleSince(startMark), discarded, keptNaturalType)
     }
 
+    private func CanReuseLocalFunction(existing FunctionSymbol, candidate FunctionSymbol) bool {
+        if existing.Name != candidate.Name ||
+            existing.Type != candidate.Type ||
+            existing.IsAsync != candidate.IsAsync ||
+            existing.IsAsyncVoid != candidate.IsAsyncVoid ||
+            existing.AsyncReturnsValueTask != candidate.AsyncReturnsValueTask ||
+            existing.ReturnRefKind != candidate.ReturnRefKind ||
+            existing
+            .TypeParameters
+            .Length != candidate
+            .TypeParameters
+            .Length ||
+            existing
+            .Parameters
+            .Length != candidate
+            .Parameters
+            .Length {
+            return false
+        }
+        for var i = 0; i < existing.TypeParameters.Length; i++ {
+            if !object.ReferenceEquals(existing.TypeParameters[i], candidate.TypeParameters[i]) {
+                return false
+            }
+        }
+        for var i = 0; i < existing.Parameters.Length; i++ {
+            if !object.ReferenceEquals(existing.Parameters[i], candidate.Parameters[i]) {
+                return false
+            }
+        }
+        return true
+    }
+
     private func CapturedVariablesMatchScope(bound BoundExpression, $scope BoundScope) bool {
         if bound is not BoundFunctionLiteralExpression literal {
             return true
@@ -2793,6 +2858,13 @@ internal class LambdaBinder {
         for captured in literal.CapturedVariables {
             if !object.ReferenceEquals($scope.TryLookupSymbol(captured.Name), captured) {
                 return false
+            }
+        }
+        if localFunctionReferencedFunctions.TryGetValue(literal.Function, out var referencedFunctions) {
+            for referenced in referencedFunctions {
+                if !object.ReferenceEquals($scope.TryLookupSymbol(referenced.Name), referenced) {
+                    return false
+                }
             }
         }
         return true
@@ -3138,6 +3210,9 @@ internal class LambdaBinder {
         // declared by a nested lambda stay in that lambda's scope.
         let outVarCollector = InlineOutVarDeclarationCollector()
         outVarCollector.RewriteStatement(body)
+        let declaredFunctions = HashSet[FunctionSymbol](outVarCollector.DeclaredFunctions)
+        declaredFunctions.Add(function)
+        let referencedFunctions = ImmutableArray.CreateBuilder[FunctionSymbol]()
         // Issue #4221: fold in the already-known captures of any local
         // function this body calls directly (see localFunctionCapturedVariables).
         let collector = CapturedVariableCollector(
@@ -3145,11 +3220,15 @@ internal class LambdaBinder {
             seen,
             captured,
             outVarCollector.Declared,
-            localFunctionCapturedVariables
+            localFunctionCapturedVariables,
+            declaredFunctions,
+            referencedFunctions,
+            localFunctionReferencedFunctions
         )
         collector.RewriteStatement(body)
         let result = captured.ToImmutable()
         localFunctionCapturedVariables[function] = result
+        localFunctionReferencedFunctions[function] = referencedFunctions.ToImmutable()
         return result
     }
 
@@ -3218,10 +3297,20 @@ internal class LambdaBinder {
     private class InlineOutVarDeclarationCollector : BoundTreeRewriter {
         init() {
             Declared = HashSet[VariableSymbol]()
+            DeclaredFunctions = HashSet[FunctionSymbol]()
         }
 
         prop Declared HashSet[VariableSymbol] {
             get;
+        }
+
+        prop DeclaredFunctions HashSet[FunctionSymbol] {
+            get;
+        }
+
+        protected override func RewriteLocalFunctionDeclaration(node BoundLocalFunctionDeclaration) BoundStatement {
+            this.DeclaredFunctions.Add(node.Literal.Function)
+            return node
         }
 
         protected override func RewriteAddressOfExpression(node BoundAddressOfExpression) BoundExpression {
@@ -3774,13 +3863,20 @@ internal class LambdaBinder {
         private let declared HashSet[VariableSymbol]
         private let captured ImmutableArray[VariableSymbol].Builder
         private let calleeCapturedVariables IReadOnlyDictionary[FunctionSymbol, ImmutableArray[VariableSymbol]]?
+        private let declaredFunctions HashSet[FunctionSymbol]?
+        private let seenFunctions HashSet[FunctionSymbol] = HashSet[FunctionSymbol]()
+        private let referencedFunctions ImmutableArray[FunctionSymbol].Builder?
+        private let calleeReferencedFunctions IReadOnlyDictionary[FunctionSymbol, ImmutableArray[FunctionSymbol]]?
 
         init(
             parameters HashSet[VariableSymbol],
             seen HashSet[VariableSymbol],
             captured ImmutableArray[VariableSymbol].Builder,
             preDeclared IEnumerable[VariableSymbol]? = nil,
-            calleeCapturedVariables IReadOnlyDictionary[FunctionSymbol, ImmutableArray[VariableSymbol]]? = nil
+            calleeCapturedVariables IReadOnlyDictionary[FunctionSymbol, ImmutableArray[VariableSymbol]]? = nil,
+            declaredFunctions HashSet[FunctionSymbol]? = nil,
+            referencedFunctions ImmutableArray[FunctionSymbol].Builder? = nil,
+            calleeReferencedFunctions IReadOnlyDictionary[FunctionSymbol, ImmutableArray[FunctionSymbol]]? = nil
         ) {
             this.parameters = parameters
             this.seen = seen
@@ -3791,6 +3887,32 @@ internal class LambdaBinder {
             }
             this.captured = captured
             this.calleeCapturedVariables = calleeCapturedVariables
+            this.declaredFunctions = declaredFunctions
+            this.referencedFunctions = referencedFunctions
+            this.calleeReferencedFunctions = calleeReferencedFunctions
+        }
+
+        private func RecordFunctionReference(callee FunctionSymbol?) {
+            let referencedFunctions = this.referencedFunctions
+            if callee == nil || referencedFunctions == nil {
+                return
+            }
+            if callee.LocalDeclaration != nil && this.declaredFunctions?.Contains(callee) != true &&
+                this
+                .seenFunctions
+                .Add(callee) {
+                referencedFunctions.Add(callee)
+            }
+            if this.calleeReferencedFunctions != nil && this.calleeReferencedFunctions.TryGetValue(
+                callee,
+                out var nestedReferenced
+            ) {
+                for nested in nestedReferenced {
+                    if this.declaredFunctions?.Contains(nested) != true && this.seenFunctions.Add(nested) {
+                        referencedFunctions.Add(nested)
+                    }
+                }
+            }
         }
 
         /// Issue #4221: a call to a local function is a
@@ -3805,6 +3927,7 @@ internal class LambdaBinder {
         /// body will need to rebuild the callee's closure instance at the
         /// call site (`MethodBodyEmitter.EmitGenericLocalClosureInstance`).
         protected override func RewriteCallExpression(node BoundCallExpression) BoundExpression {
+            this.RecordFunctionReference(node.Function)
             if this.calleeCapturedVariables != nil && this.calleeCapturedVariables.TryGetValue(
                 node.Function,
                 out var calleeCaptured
@@ -3822,6 +3945,19 @@ internal class LambdaBinder {
                 }
             }
             return base.RewriteCallExpression(node)
+        }
+
+        protected override func RewriteMethodGroupExpression(node BoundMethodGroupExpression) BoundExpression {
+            for candidate in node.Candidates {
+                this.RecordFunctionReference(candidate)
+            }
+            return base.RewriteMethodGroupExpression(node)
+        }
+
+        protected override func RewriteLocalFunctionDeclaration(node BoundLocalFunctionDeclaration) BoundStatement {
+            this.declaredFunctions?.Add(node.Literal.Function)
+            this.RecordFunctionReference(node.Literal.Function)
+            return node
         }
 
         protected override func RewriteVariableDeclaration(node BoundVariableDeclaration) BoundStatement {
@@ -4012,6 +4148,7 @@ internal class LambdaBinder {
         }
 
         protected override func RewriteFunctionLiteralExpression(node BoundFunctionLiteralExpression) BoundExpression {
+            this.RecordFunctionReference(node.Function)
             // Issue #503 follow-up: a nested function literal's captures
             // must transitively contribute to the *outer* literal's capture
             // set whenever they're satisfied by neither outer parameters

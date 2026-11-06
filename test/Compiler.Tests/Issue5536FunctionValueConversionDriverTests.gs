@@ -646,25 +646,58 @@ func Main() {
         }
         return "x${Calls.M(() -> 1, 1)}"
     }, 1))
+    Console.Write(Calls.Pa(() -> { return true ? {
+    let Id[T] = func (x T) T { return x }
+    Calls.Pa(() -> { return Id("s") }, 1)
+    } : "t" }, 1))
+    Console.Write(Calls.Pa(() -> {
+    L: if !flag {
+        return "done"
+    }
+    return true ? {
+        if !flag {
+            goto L
+        }
+        Calls.Pa(() -> {
+            return flag ? {
+                goto L
+                L: let s = "s"
+                s
+            } : "t"
+        }, 1)
+    } : "u"
+    }, 1))
 }
 `, `using System;
 using FunctionControl;
 class Program {
     static void Main() {
-        var k = 1;
-        var flag = true;
-        Console.Write(Calls.M(() => { return true ? Calls.M(() => { return "s"; }, 1) : "t"; }, 1));
-        Console.Write(Calls.In(() => { return true ? Calls.M(() => { return "s"; }, 1) : "t"; }, 1));
-        Console.Write(new C(() => { return true ? Calls.M(() => { return "s"; }, 1) : "t"; }, 1).Kind);
-        Console.Write(new InCtor(() => { return true ? Calls.M(() => { return "s"; }, 1) : "t"; }, 1).Kind);
-        Console.Write(Calls.In(() => { return true ? Calls.M(() => 1, 1) : "t"; }, 1));
-        Console.Write(Calls.M(() => { return k switch { 1 => Calls.M(() => { return "s"; }, 1), _ => "b" }; }, 1));
-        Console.Write(Calls.In(() => { return true ? Calls.M(() => { return "s"; }, 1) : "b"; }, 1));
-        Console.Write(Calls.M(() => { var q = "s"; return Calls.M(() => { return q; }, 1); }, 1));
-        Console.Write(Calls.Fm(() => { if (!flag) { return "s"; } return $"x{Calls.M(() => 1, 1)}"; }, 1));
+    var k = 1;
+    var flag = true;
+    Console.Write(Calls.M(() => { return true ? Calls.M(() => { return "s"; }, 1) : "t"; }, 1));
+    Console.Write(Calls.In(() => { return true ? Calls.M(() => { return "s"; }, 1) : "t"; }, 1));
+    Console.Write(new C(() => { return true ? Calls.M(() => { return "s"; }, 1) : "t"; }, 1).Kind);
+    Console.Write(new InCtor(() => { return true ? Calls.M(() => { return "s"; }, 1) : "t"; }, 1).Kind);
+    Console.Write(Calls.In(() => { return true ? Calls.M(() => 1, 1) : "t"; }, 1));
+    Console.Write(Calls.M(() => { return k switch { 1 => Calls.M(() => { return "s"; }, 1), _ => "b" }; }, 1));
+    Console.Write(Calls.In(() => { return true ? Calls.M(() => { return "s"; }, 1) : "b"; }, 1));
+    Console.Write(Calls.M(() => { var q = "s"; return Calls.M(() => { return q; }, 1); }, 1));
+    Console.Write(Calls.Fm(() => { if (!flag) { return "s"; } return $"x{Calls.M(() => 1, 1)}"; }, 1));
+    Console.Write(Calls.Pa(() => { if (true) { T Id<T>(T x) => x; return Calls.Pa(() => { return Id("s"); }, 1); } return "t"; }, 1));
+    Console.Write(Calls.Pa(() => {
+        L: if (!flag) { return "done"; }
+        if (true) {
+            if (!flag) { goto L; }
+            return Calls.Pa(() => {
+                if (flag) { goto L2; L2: return "s"; }
+                return "t";
+            }, 1);
+        }
+        return "u";
+    }, 1));
     }
 }
-`, "OOOOOOOOO<xF>")
+`, "OOOOOOOOO<xF>P<P<s>>P<P<s>>")
         let errors = RejectConsumerErrors(fixture, `import System
 import FunctionControl
 func Main() {
@@ -672,6 +705,14 @@ func Main() {
 }
 `)
         Assert.Equal([](Code string, Line int32, Column int32){("GS0155", 4, 51), ("GS0155", 4, 86)}, errors)
+        let badDefaultErrors = RejectConsumerErrors(fixture, `import System
+func Pick(f () -> (int32) -> int64, x int32) string -> "F"
+func Pick(o object, x int64) string -> "O"
+func Main() {
+    Console.Write(Pick(() -> { return true ? ((x int32 = "bad") -> "s") : ((x int32) -> "t") }, 1))
+}
+`)
+        Assert.Equal([](Code string, Line int32, Column int32){("GS0265", 5, 58)}, badDefaultErrors)
     }
 
     /// Issue #5569: an explicit parameter type or a parameter count that the delegate does not accept makes the
@@ -2882,6 +2923,11 @@ class Program {
                     .Append(i)
                     .Append("\" : \"t\"; }\n")
             }
+            builder.Append("            if (flag) {\n")
+            for var i = 0; i < count / 2; i++ {
+                builder.Append("                if (!flag) { goto Forward; }\n")
+            }
+            builder.Append("                Forward: return \"u\";\n            }\n")
             builder.Append("            return \"u\";\n        }")
         } else {
             builder.Append("() -> {\n")
@@ -2893,7 +2939,11 @@ class Program {
                     .Append(i)
                     .Append("\" : \"t\" }\n")
             }
-            builder.Append("        return \"u\"\n    }")
+            builder.Append("        return {\n")
+            for var i = 0; i < count / 2; i++ {
+                builder.Append("            if !flag { goto Forward }\n")
+            }
+            builder.Append("            Forward: let result = \"u\"\n            result\n        }\n    }")
         }
         return builder.ToString()
     }
