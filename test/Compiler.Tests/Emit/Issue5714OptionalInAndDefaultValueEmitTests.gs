@@ -47,9 +47,9 @@ class Issue5714OptionalInAndDefaultValueEmitTests {
     @InlineData("Defaults.Named(last: 9)", "7:9")
     @InlineData("Defaults.Variadic() + \"|\" + Defaults.Variadic(tail: []int32{1, 2})", "7:0|7:2")
     @InlineData("Defaults.Readonly()", "7")
-    @InlineData("Holder()[1]", "1:B:7:1.25:0:0")
-    @InlineData("Holder().Text", "B:7:1.25:0:0")
-    @InlineData("Derived().Text", "B:7:1.25:0:0")
+    @InlineData("Holder()[1]", "1:B:7:1.25:0:0:B:nil:hi")
+    @InlineData("Holder().Text", "B:7:1.25:0:0:B:nil:hi")
+    @InlineData("Derived().Text", "B:7:1.25:0:0:B:nil:hi")
     @InlineData("DerivedVariadic().Text", "7:0")
     @InlineData("GenericHolder[int32]().Text", "0")
     func ImportedReadonlyDefaults_AreValuesPassedByAddress(call string, expected string) {
@@ -174,11 +174,14 @@ namespace Issue5714Imported {
     public class Holder {
         public string Text;
         public Holder(in Choice? c = Choice.B, in int i = 7, in decimal d = 1.25m,
-            in DateTime dt = default, in CustomStruct s = default) {
-            Text = $"{c}:{i}:{d}:{dt.Ticks}:{s.Value}";
+            in DateTime dt = default, in CustomStruct s = default, in Choice e = Choice.B,
+            in Choice? missing = null, in string? text = "hi") {
+            Text = $"{c}:{i}:{d}:{dt.Ticks}:{s.Value}:{e}:{(missing.HasValue ? missing.Value.ToString() : "nil")}:{text}";
         }
         public string this[int n, in Choice? c = Choice.B, in int i = 7, in decimal d = 1.25m,
-            in DateTime dt = default, in CustomStruct s = default] => $"{n}:{c}:{i}:{d}:{dt.Ticks}:{s.Value}";
+            in DateTime dt = default, in CustomStruct s = default, in Choice e = Choice.B,
+            in Choice? missing = null, in string? text = "hi"] =>
+            $"{n}:{c}:{i}:{d}:{dt.Ticks}:{s.Value}:{e}:{(missing.HasValue ? missing.Value.ToString() : "nil")}:{text}";
     }
     public class GenericHolder<T> {
         public string Text;
