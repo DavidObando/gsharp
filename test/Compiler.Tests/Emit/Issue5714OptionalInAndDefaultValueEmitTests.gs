@@ -45,8 +45,7 @@ class Issue5714OptionalInAndDefaultValueEmitTests {
     @InlineData("Api().Read()", "7")
     @InlineData("Api().ReadExtension()", "B")
     @InlineData("Defaults.Named(last: 9)", "7:9")
-    @InlineData("Defaults.Variadic()", "7:0")
-    @InlineData("Defaults.Variadic(tail: []int32{1, 2})", "7:2")
+    @InlineData("Defaults.Variadic() + \"|\" + Defaults.Variadic(tail: []int32{1, 2})", "7:0|7:2")
     @InlineData("Defaults.Readonly()", "7")
     @InlineData("Holder()[1]", "1:B:7:1.25:0:0")
     @InlineData("Holder().Text", "B:7:1.25:0:0")
@@ -218,8 +217,8 @@ class Defaults {
         func Missing(x int32? = default(int32?)) bool -> x.HasValue
         func Money(x decimal? = default(decimal)) string -> "${x.HasValue}:$x"
         func Run() string {
-            func Local(x int32? = default(int32)) string -> "${x.HasValue}:$x"
-            return "${Integer()}|${Enum()}|${Missing()}|${Holder().Text}|${Holder()[1]}|${Missing(default(int32?))}|${Local()}|${Money()}"
+            let local = func(x int32? = default(int32)) string { return "${x.HasValue}:$x" }
+            return "${Integer()}|${Enum()}|${Missing()}|${Holder().Text}|${Holder()[1]}|${Missing(default(int32?))}|${local()}|${Money()}"
         }
     }
 }`
