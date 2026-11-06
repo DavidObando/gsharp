@@ -79,6 +79,14 @@ internal sealed class NarrowingFrameStack : IReadOnlyList[NarrowingFrame] {
         threaded = NarrowingState.Empty
     }
 
+    /// Gets or sets a callback notified before a frame entry on this stack is mutated.
+    internal var OnFrameEntryChanging((NarrowingFrame, AccessPath, bool, TypeSymbol?) -> void)?
+
+    /// Called by a frame that this stack holds before a write to [`path`](paramref).
+    internal func FrameEntryChanging(frame NarrowingFrame, path AccessPath, hadValue bool, previousType TypeSymbol?) {
+        OnFrameEntryChanging?(frame, path, hadValue, previousType)
+    }
+
     /// Called by a frame that this stack holds after a write to [`path`](paramref).
     internal func FrameChanged(path AccessPath) {
         Recompute(path)

@@ -113,12 +113,12 @@ open class IncrementalSemanticModelTests {
         let hoverPos = LanguageServerTestHelpers.PositionOf(source, "partial class Binder")
         let targetPos = Position(hoverPos.Line, hoverPos.Character + "partial class ".Length)
 
-        let sw = Stopwatch.StartNew()
         let model = SemanticLookup.BuildModelForTest(
             ServerCompilation.Create(content.SyntaxTree),
             useIncrementalCaches: true
         )
         Assert.NotNull(model)
+        let sw = Stopwatch.StartNew()
         let document = SemanticTokensDocument(SemanticTokensHandler.Legend)
         let builder = document.Create()
         SemanticTokensComputer.Tokenize(builder, content, cts.Token)
@@ -138,6 +138,7 @@ open class IncrementalSemanticModelTests {
         let holes = string.Concat(Enumerable.Repeat("$${\"$$item\"} $$item-", 600))
         let source = "package P\nfunc Format(item int32) string {\n    return \"" + holes + "\"\n}\n"
         let content = LanguageServerTestHelpers.Content(source)
+        let _ = ServerCompilation.Create(content.SyntaxTree)
         let sw = Stopwatch.StartNew()
         let document = SemanticTokensDocument(SemanticTokensHandler.Legend)
         let builder = document.Create()

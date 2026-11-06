@@ -268,7 +268,8 @@ partial class CSharpToGSharpTranslator {
 
         /// Member-access-level analyzer idioms that need more than a rename:
         /// `name.Identifier` on a Roslyn name node becomes
-        /// `expr.GetLastToken()`, because G#'s
+        /// `expr.GetFirstToken()` on an accessor's right-nested `RightPart`
+        /// (or `expr.GetLastToken()` on a standalone name), because G#'s
         /// `AccessorExpressionSyntax.RightPart` is an expression with no
         /// Identifier property.
         private func TryTranslateAnalyzerMemberAccess(
@@ -547,8 +548,24 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
+            let tokenAccessor = if member.Expression is MemberAccessExpressionSyntax{
+                Name: {Identifier: {Text: "Name"}}
+            } nameAccess &&
+                this
+                .context
+                .GetSymbolInfo(nameAccess)
+                .Symbol is IPropertySymbol{Name: "Name"} nameProperty &&
+                (
+                RoslynTypeMetadataName(nameProperty.ContainingType) is
+                "Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax" or
+                    "Microsoft.CodeAnalysis.CSharp.Syntax.MemberBindingExpressionSyntax"
+            ) {
+                "GetFirstToken"
+            } else {
+                "GetLastToken"
+            }
             result = InvocationExpression(
-                MemberAccessExpression(this.TranslateExpression(member.Expression), "GetLastToken", isArrow: false)
+                MemberAccessExpression(this.TranslateExpression(member.Expression), tokenAccessor, isArrow: false)
             )
             return true
         }

@@ -49,6 +49,8 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
 
     internal prop SuppressionCount int32 -> reboundSuppressionLog.Count
 
+    internal prop SiblingRebindDepth int32 -> siblingRebindDepth
+
     internal func EnterSiblingRebind() {
         siblingRebindDepth++
     }

@@ -481,6 +481,9 @@ internal partial class StatementBinder {
         if syntax.FinallyClause != nil {
             InvalidateNarrowingsForEnclosingFilters(enclosingFilters)
             RestoreExternalCallableAliases(callableFinallyEntries)
+            if speculativeReturnDepth > 0 {
+                speculativeFinallyLog.Add(syntax.FinallyClause!!)
+            }
             finallyEntryExternalCallableAliases[syntax.FinallyClause!!] = callableExits?.ToImmutableArray() ??
                 ImmutableArray[VariableSymbol].Empty
             let inheritedReachability = currentStatementListFallsThrough
@@ -884,12 +887,33 @@ internal partial class StatementBinder {
     internal func BindNestedFunctionBody[T](bind() -> T) T {
         let inheritedFallthrough = currentStatementListFallsThrough
         let inheritedReachabilityGeneration = internalReachabilityGeneration
+        let inheritedSpeculativeReturnDepth = speculativeReturnDepth
+        let savedFrameWatermark = currentSpeculativeFrameWatermark
+        let savedLabelWatermark = currentSpeculativeLabelWatermark
+        let savedFrameLogMark = speculativeFrameUndoLog.Count
+        let savedLabelLogMark = speculativeLabelUndoLog.Count
+        let savedFinallyLogMark = speculativeFinallyLog.Count
+        let savedFinallySummaryLogMark = speculativeFinallySummaryLog.Count
+        let savedSpanEntryLogMark = speculativeSpanEntryLog.Count
         currentStatementListFallsThrough = true
+        speculativeReturnDepth = 0
+        currentSpeculativeFrameWatermark = savedFrameLogMark
+        currentSpeculativeLabelWatermark = savedLabelLogMark
         try {
             return OutsideExceptionHandlers(bind)
         } finally {
+            DiscardSpeculativeLogs(
+                savedFrameLogMark,
+                savedLabelLogMark,
+                savedFinallyLogMark,
+                savedFinallySummaryLogMark,
+                savedSpanEntryLogMark
+            )
+            currentSpeculativeFrameWatermark = savedFrameWatermark
+            currentSpeculativeLabelWatermark = savedLabelWatermark
             currentStatementListFallsThrough = inheritedFallthrough
             internalReachabilityGeneration = inheritedReachabilityGeneration
+            speculativeReturnDepth = inheritedSpeculativeReturnDepth
         }
     }
 
@@ -2112,15 +2136,7 @@ internal partial class StatementBinder {
                         expression: "chan"
                     )
                         .ElementType
-                    variable = LocalVariableSymbol(
-                        identifier.ValueText,
-                        isReadOnly: true,
-                        bindElement,
-                        declaringSyntax: identifier
-                    )
-                    if !$scope.TryDeclareVariable(variable) {
-                        Diagnostics.ReportSymbolAlreadyDeclared(identifier.Location, identifier.ValueText)
-                    }
+                    variable = bindLocalVariable(identifier, true, bindElement)
                     body = Invariant.Required(
                         BindStatement(caseSyntax.Body),
                         "a receive-bind select case has a bound body",
@@ -2220,15 +2236,7 @@ internal partial class StatementBinder {
             "an await-bind select case has an identifier",
             expression: "caseSyntax.Identifier"
         )
-        let variable = LocalVariableSymbol(
-            identifier.ValueText,
-            isReadOnly: true,
-            result ?? TypeSymbol.Error,
-            declaringSyntax: identifier
-        )
-        if !$scope.TryDeclareVariable(variable) {
-            Diagnostics.ReportSymbolAlreadyDeclared(identifier.Location, identifier.ValueText)
-        }
+        let variable = bindLocalVariable(identifier, true, result ?? TypeSymbol.Error)
         let body = Invariant.Required(
             BindStatement(caseSyntax.Body),
             "an await-bind select case has a bound body",

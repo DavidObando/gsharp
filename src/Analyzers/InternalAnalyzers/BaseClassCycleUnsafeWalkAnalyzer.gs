@@ -169,7 +169,7 @@ class BaseClassCycleUnsafeWalkAnalyzer : GSharpDiagnosticAnalyzer {
             if expression is AccessorExpressionSyntax{IsNullConditional: false} memberAccess &&
                 memberAccess
                 .RightPart
-                .GetLastToken()
+                .GetFirstToken()
                 .Text == BaseClassPropertyName {
                 // Issue #4173: cs2gs's nullable-lifting inserts a null-forgiving
                 // wrapper around a nullable receiver that has no equivalent

@@ -84,6 +84,14 @@ public static partial class Native
     [LibraryImport("libc", EntryPoint = "getpid")]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     public static partial int GetPid();
+
+    public static int MidExpressionPragma(int x)
+    {
+        return x +
+#pragma warning disable GSA0007
+            1;
+#pragma warning restore GSA0007
+    }
 }`)
         let outRoot = NewOutputRoot("translate-libraryimport-warnings")
         let options = PipelineOptions{GscPath: compiler, OutputRoot: outRoot}
@@ -99,6 +107,8 @@ public static partial class Native
         Assert.Contains("GetEnv", translateLog)
         Assert.Contains(CSharpToGSharpTranslator.LibraryImportCallConvDiagnosticId, translateLog)
         Assert.Contains("GetPid", translateLog)
+        Assert.Contains(CSharpToGSharpTranslator.PragmaSuppressionDroppedDiagnosticId, translateLog)
+        Assert.Contains("GSA0007", translateLog)
     }
 
     shared {

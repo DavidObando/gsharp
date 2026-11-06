@@ -1056,9 +1056,16 @@ partial class CSharpToGSharpTranslator {
             if !this.preservePartialParts && symbol != nil && this.partialTypeParts.TryGetValue(symbol, out var parts) {
                 let isPrimaryPart = parts[0].SyntaxTree == node.SyntaxTree && parts[0].Span == node.Span
                 if !isPrimaryPart {
+                    this.RecordSkippedAggregatePart(node)
                     return nil
                 }
                 otherParts = parts.Skip(1).ToList()
+            }
+            this.RecordTranslatedAggregatePart(node)
+            if otherParts != nil {
+                for part in otherParts {
+                    this.RecordTranslatedAggregatePart(part)
+                }
             }
             // Synthetic instance helpers are scoped to their owning aggregate;
             // nested type translation must not leak them outward.
