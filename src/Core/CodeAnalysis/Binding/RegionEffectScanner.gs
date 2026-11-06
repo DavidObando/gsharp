@@ -470,6 +470,12 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.GuardLetStatement {
                 let guardLet = cast[GuardLetStatementSyntax](node)
+                let isStandalone = guardLet.Parent is not BlockStatementSyntax and
+                    not GlobalStatementSyntax and
+                    not StaticInitializerBlockSyntax
+                if isStandalone {
+                    Push()
+                }
                 // The binder binds the else branch after each binding, so a name in it can be an enclosing one (a
                 // binding that fails before the name is declared) or a binding. Visiting it before and after the
                 // bindings covers every prefix.
@@ -478,6 +484,9 @@ internal sealed class RegionEffectScanner {
                 VisitBindings(guardLet.Bindings)
                 VisitCondition(guardLet.Guard)
                 Visit(guardLet.ElseStatement)
+                if isStandalone {
+                    Pop()
+                }
             }
             case SyntaxKind.VariableDeclaration {
                 VisitVariableDeclaration(cast[VariableDeclarationSyntax](node))
@@ -989,9 +998,26 @@ internal sealed class RegionEffectScanner {
         statement.Kind == SyntaxKind.GotoStatement
 
     // ADR-0166: `if c { exit }`, a direct statement of a block with no initializer and no else, declares the
-    // variables that `c` assigns when false in the block after it, unless the function has a user label. The
-    // kind `leaked|Type` leaves that test to the consumer, which knows the function.
+    // variables that `c` assigns when false in the block after it, unless the function has a user label.
+    // A `guard let ... && g else { exit }` likewise declares the variables that `g` assigns when true (#4968).
+    // The kind `leaked|Type` leaves that test to the consumer, which knows the function.
     private func DeclareLeakedPatternNames(statement StatementSyntax) {
+        if statement is GuardLetStatementSyntax guardLet {
+            if guardLet.Guard == nil || !EndsInExit(guardLet.ElseStatement) {
+                return
+            }
+            for pair in ClassifyCondition(guardLet.Guard).WhenTrue {
+                DeclareName(
+                    pair.Key,
+                    if pair.Value.StartsWith("pattern|", StringComparison.Ordinal) {
+                        "leaked|" + pair.Value.Substring("pattern|".Length)
+                    } else {
+                        "pattern"
+                    }
+                )
+            }
+            return
+        }
         if statement is not IfStatementSyntax ifStatement ||
             ifStatement.Initializer != nil ||
             ifStatement.ElseClause != nil ||
@@ -1134,23 +1160,15 @@ internal sealed class RegionEffectScanner {
     }
 
     // The bindings of `if let`, `guard let` or `while let`. A typed binding converts its initializer to the binding's
-    // type. An `if let` or `guard let` initializer sees the earlier bindings; a `while let` initializer is bound in
-    // the enclosing scope (`BindWhileLetBindingClause`), so its bindings are declared after all initializers.
-    private func VisitBindings(bindings SeparatedSyntaxList[IfLetBindingClauseSyntax], declareAfterAll bool = false) {
+    // type, and each later initializer sees the earlier bindings (#4968).
+    private func VisitBindings(bindings SeparatedSyntaxList[IfLetBindingClauseSyntax]) {
         for binding in bindings {
             NodesVisited++
             Visit(binding.Initializer)
             if Active() && binding.TypeClause != nil {
                 RecordConversion(binding.Initializer, TypeOrigin(binding.TypeClause))
             }
-            if !declareAfterAll {
-                Declare(binding.Identifier, "binding")
-            }
-        }
-        if declareAfterAll {
-            for binding in bindings {
-                Declare(binding.Identifier, "binding")
-            }
+            Declare(binding.Identifier, "binding")
         }
     }
 
@@ -1604,8 +1622,9 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.WhileLetStatement {
                 let loop = cast[WhileLetStatementSyntax](node)
                 Push()
-                VisitBindings(loop.Bindings, declareAfterAll: true)
+                VisitBindings(loop.Bindings)
                 VisitCondition(loop.Guard)
+                RetypePatternNames(ClassifyCondition(loop.Guard).WhenTrue)
                 Visit(loop.Body)
                 Pop()
             }

@@ -702,6 +702,7 @@ internal partial class StatementBinder {
         }
         if !anyRootAssigned &&
             !dropAllMemberPaths &&
+            (statementCollector == nil || !statementCollector.MayMutateReferenceStorage) &&
             !dropAllRoots &&
             !dropGlobalRoots &&
             !runsEscapedClosure &&
@@ -950,16 +951,14 @@ internal partial class StatementBinder {
                 return false
             }
             case CallExpressionSyntax,
-            MemberFieldAssignmentExpressionSyntax,
             MemberIndexAssignmentExpressionSyntax,
             IndexAssignmentExpressionSyntax,
             CompoundIndexAssignmentExpressionSyntax,
             IndirectAssignmentExpressionSyntax,
-            IndirectCompoundAssignmentExpressionSyntax,
-            FieldAssignmentExpressionSyntax {
+            IndirectCompoundAssignmentExpressionSyntax {
                 mayMutateMemberPaths = true
             }
-            case AssignmentExpressionSyntax { }
+            case AssignmentExpressionSyntax, FieldAssignmentExpressionSyntax, MemberFieldAssignmentExpressionSyntax { }
             case EventSubscriptionExpressionSyntax{IsIncrementDecrement: true} inc {
                 mayMutateMemberPaths = inc.LeftHandSide is not NameExpressionSyntax
             }
@@ -4659,11 +4658,9 @@ internal partial class StatementBinder {
                 }
                 return
             }
-            if StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) {
+            if StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) &&
+                node is not BoundPropertyAssignmentExpression {
                 MayMutateMemberPaths = true
-            }
-            if StatementBinder.IsMemberStorageWriteExpression(node.Kind) {
-                HasMemberStorageWrite = true
             }
             if StatementBinder.IsMemberStorageWriteExpression(node.Kind) ||
                 (
@@ -4673,10 +4670,20 @@ internal partial class StatementBinder {
             ) {
                 MayMutateReferenceStorage = true
             }
-            // ADR-0208 R14 (#5215, #5599): a source accessor with user code is a call.
+            // ADR-0208 R14 (#5215, #5599, #5786): a source accessor with user code is a call.
+            // A constructor or init-accessor write to a get-only or init-only auto property can also
+            // overwrite a stable property link (SmartCastStability.IsStableProperty).
             let sourcePropertyRunsUserCode = StatementBinder.SourcePropertyAccessRunsUserCode(node)
-            if sourcePropertyRunsUserCode && node is BoundPropertyAccessExpression {
+            let writesStableAutoProperty = node is BoundPropertyAssignmentExpression propAssign &&
+                (!propAssign.Property.HasSetter || propAssign.Property.IsInitOnly)
+            if sourcePropertyRunsUserCode || writesStableAutoProperty {
                 MayMutateMemberPaths = true
+            }
+            if StatementBinder.IsMemberStorageWriteExpression(node.Kind) &&
+                (
+                node is not BoundPropertyAssignmentExpression || sourcePropertyRunsUserCode || writesStableAutoProperty
+            ) {
+                HasMemberStorageWrite = true
             }
             var runsEscapedClosureHere = false
             // ADR-0208 R16 and R17 (#5231, #5532): an imported accessor that is not on the stable list is a call,
@@ -5789,6 +5796,8 @@ internal partial class StatementBinder {
                 allEntryCallableState.RestoreFrom(joinedAllEntry ?? finallyEntries)
             }
         }
+
+        internal func HasEscapingJump() bool -> HasEscapingRegionJump(0, 0)
 
         private func HasEscapingRegionJump(declaredStart int32, jumpedStart int32) bool {
             if jumpedRegionLabels.Count <= jumpedStart {
@@ -9036,7 +9045,8 @@ internal partial class StatementBinder {
             mayMutateReferenceStorage bool
         ) bool -> (path.HasMembers && mayMutateMemberPaths) ||
             (
-            IsExternalStorageAlias(path.Root) &&
+            !path.HasMembers &&
+                IsExternalStorageAlias(path.Root) &&
                 (mayMutateReferenceStorage || (mayMutateMemberPaths && CallsMayWriteAliasedStorage(path.Root)))
         )
 

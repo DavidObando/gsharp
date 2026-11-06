@@ -964,16 +964,6 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         actualType
     )
 
-    /// Issue #4961 / ADR-0201: GS0625 — a `guard let` or `while let` header
-    /// has a `&&` guard, which only `if let` supports.
-    /// @param location The source location of the `&&` token.
-    /// @param form The form's spelling (`guard let` or `while let`).
-    func ReportLetBindingGuardNotSupported(location TextLocation, form string) -> Report(
-        location,
-        DiagnosticDescriptors.LetBindingGuardNotSupported,
-        form
-    )
-
     /// Issue #4961 / ADR-0201: GS0626 — a top-level `||` follows a
     /// `let`-binding list, where only `&&` may introduce a guard.
     /// @param location The source location of the `||` token.

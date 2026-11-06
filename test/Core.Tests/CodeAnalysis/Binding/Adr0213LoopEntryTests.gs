@@ -2928,13 +2928,13 @@ func Run(s0 string?) int32 {
     var s = s0
     if s == nil { return 0 }
     var n = 0
-    while let s = Next(s.Length), let other = Keep(s = nil) {
+    while let other = Next(s.Length), let s = Keep(s = nil) {
         n++
         if n > 3 { break }
     }
     return n
 }
-func Main() { }`, "GS0158@8:26")
+func Main() { }`, "GS0158@8:30")
             Add("static-access-selects-static-candidates (A3)", `package T
 import System
 class Sink {
