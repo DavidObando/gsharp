@@ -2515,10 +2515,11 @@ internal partial class ExpressionBinder {
             // handles an arbitrary qualified `receiver.Method(...)` call, so
             // without this check protected inherited members would be
             // callable through any receiver expression, leaking accessibility.
-            let allowProtectedInherited = IsCurrentThisReceiver(receiver)
             let inheritedDerived StructSymbol? = receiver?.Type as StructSymbol
             if inheritedDerived != nil {
                 let inheritedBaseClr = GetInheritedClrBaseType(inheritedDerived) ?? typeof(object)
+                let allowProtectedInherited = IsCurrentThisReceiver(receiver) ||
+                    IsFamilyAccessibleClrMember(inheritedBaseClr, receiver)
                 if TryBindInheritedClrInstanceCall(
                     receiver!!,
                     inheritedBaseClr,
@@ -2846,7 +2847,8 @@ internal partial class ExpressionBinder {
                     clrType,
                     methodName,
                     includeInternal: receiverGrantsInternals,
-                    includeExplicitInterfaceMembers: isSynthesizedCollectionAdd || anyArgumentIsErased
+                    includeExplicitInterfaceMembers: isSynthesizedCollectionAdd || anyArgumentIsErased,
+                    canAccessInternals: CanAccessInternalsOf
                 ),
                 instSymbolicArgs,
                 if argumentNames.IsDefault {
@@ -3480,6 +3482,15 @@ internal partial class ExpressionBinder {
         ) {
             return BoundErrorExpression(nil)
         }
+        if TryReportProtectedClrInstanceMethodCall(
+            clrType,
+            methodName,
+            arguments.Length,
+            candidates.Count,
+            ce.Identifier.Location
+        ) {
+            return BoundErrorExpression(nil)
+        }
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName)
         return BoundErrorExpression(nil)
     }
@@ -3861,7 +3872,8 @@ internal partial class ExpressionBinder {
                 explicitTypeArgs,
                 typeArgSymbols,
                 argumentNames,
-                allowProtectedInherited: IsCurrentThisReceiver(receiver)
+                allowProtectedInherited: IsCurrentThisReceiver(receiver) ||
+                    IsFamilyAccessibleClrMember(inheritedBaseClr, receiver)
             ) {
                 return Succeeded(inheritedCall!!)
             }

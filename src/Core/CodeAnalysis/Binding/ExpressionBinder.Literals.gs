@@ -3535,7 +3535,10 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         // The object-initializer lowering needs a constructed instance; require a
         // public parameterless constructor (the C# object-initializer contract).
-        let parameterlessCtor ConstructorInfo? = FindPublicParameterlessConstructor(clrType)
+        let parameterlessCtor ConstructorInfo? = FindPublicParameterlessConstructor(
+            clrType,
+            CanAccessInternalsOf(clrType)
+        )
         if parameterlessCtor == nil {
             Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, syntax.TypeIdentifier.ValueText)
             for badElement in syntax.Elements {
@@ -3588,7 +3591,7 @@ internal partial class ExpressionBinder {
             clrType,
             NullabilityFreeReason.TypeStructure
         )
-        var constructor ConstructorInfo? = FindPublicParameterlessConstructor(clrType)
+        var constructor ConstructorInfo? = FindPublicParameterlessConstructor(clrType, CanAccessInternalsOf(clrType))
         let arguments = ImmutableArray.CreateBuilder[BoundExpression]()
         let argumentStatements = ImmutableArray.CreateBuilder[BoundStatement]()
         let constructorMembers = HashSet[string](StringComparer.Ordinal)
@@ -5081,12 +5084,15 @@ internal partial class ExpressionBinder {
             return true
         }
 
-        private func FindPublicParameterlessConstructor(clrType Type) ConstructorInfo? {
+        private func FindPublicParameterlessConstructor(clrType Type, includeInternal bool = false) ConstructorInfo? {
             for constructor in ClrTypeUtilities.SafeGetConstructors(
                 clrType,
-                BindingFlags.Public | BindingFlags.Instance
+                ClrMemberVisibility.Widen(BindingFlags.Public | BindingFlags.Instance, includeInternal)
             ) {
-                if constructor.GetParameters().Length == 0 {
+                if constructor.GetParameters().Length == 0 && ClrMemberVisibility.IsVisible(
+                    constructor,
+                    includeInternal
+                ) {
                     return constructor
                 }
             }

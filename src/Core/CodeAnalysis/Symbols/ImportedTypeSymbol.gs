@@ -552,14 +552,13 @@ class ImportedTypeSymbol : TypeSymbol {
                 !ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(type, out semantics) {
                 return nil
             }
-            let includeInternal = ImportedAssemblySemantics.GrantsInternalAccessTo(type.Assembly, consumerAssemblyName)
             let bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
             let dataMembers = ClrTypeUtilities.SafeGetNearestDataMembers(
                 type,
                 bindingFlags,
                 (member MemberInfo) -> switch member {
                     case field is FieldInfo: !field.IsStatic &&
-                        IsVisible(field, includeInternal) &&
+                        IsVisible(field, GrantsInternalAccess(field.DeclaringType, consumerAssemblyName)) &&
                         !field.IsSpecialName &&
                         !field
                         .Name
@@ -568,19 +567,20 @@ class ImportedTypeSymbol : TypeSymbol {
                         .Length == 0 &&
                         (
                         property.GetMethod is {} getter &&
-                            IsVisible(getter, includeInternal) ||
+                            IsVisible(getter, GrantsInternalAccess(getter.DeclaringType, consumerAssemblyName)) ||
                             property.SetMethod is {} setter &&
-                            IsVisible(setter, includeInternal)
+                            IsVisible(setter, GrantsInternalAccess(setter.DeclaringType, consumerAssemblyName))
                     )
                     default: false
                 }
             )
             let fieldBuilder = ImmutableArray.CreateBuilder[FieldSymbol]()
             for field in dataMembers.OfType[FieldInfo]() {
+                let fieldIncludeInternal = GrantsInternalAccess(field.DeclaringType, consumerAssemblyName)
                 let fieldSymbol = FieldSymbol(
                     field.Name,
                     ClrNullability.GetFieldTypeSymbol(field),
-                    MapAccessibility(field),
+                    MapAccessibility(field, fieldIncludeInternal),
                     isReadOnly: field.IsInitOnly
                 )
                 fieldSymbol.ImportedMember = field
@@ -589,7 +589,9 @@ class ImportedTypeSymbol : TypeSymbol {
             let propertyBuilder = ImmutableArray.CreateBuilder[PropertySymbol]()
             for property in dataMembers.OfType[PropertyInfo]() {
                 let getter MethodInfo? = property.GetMethod
-                let setter MethodInfo? = property.SetMethod
+                let setter MethodInfo? = property.GetSetMethod(nonPublic: true)
+                let getterIncludeInternal = GrantsInternalAccess(getter?.DeclaringType, consumerAssemblyName)
+                let setterIncludeInternal = GrantsInternalAccess(setter?.DeclaringType, consumerAssemblyName)
                 let propertyType = ClrNullability.GetPropertyTypeSymbol(property)
                 let propertySymbol =
                 PropertySymbol(
@@ -599,9 +601,9 @@ class ImportedTypeSymbol : TypeSymbol {
                     } else {
                         propertyType
                     },
-                    GetPropertyAccessibility(property),
-                    hasGetter: getter != nil && IsVisible(getter, includeInternal),
-                    hasSetter: setter != nil && IsVisible(setter, includeInternal),
+                    GetPropertyAccessibility(property, consumerAssemblyName),
+                    hasGetter: getter != nil && IsVisible(getter, getterIncludeInternal),
+                    hasSetter: setter != nil && IsVisible(setter, setterIncludeInternal),
                     isAutoProperty: false,
                     isVirtual: (getter ?? setter)?.IsVirtual == true,
                     isOverride: (getter ?? setter) is {} accessor && ClrTypeUtilities.SafeIsOverride(accessor),
@@ -643,19 +645,20 @@ class ImportedTypeSymbol : TypeSymbol {
                     ) is PropertyInfo inheritedProp {
                         let getter = inheritedProp.GetGetMethod(nonPublic: true)
                         let setter = inheritedProp.GetSetMethod(nonPublic: true)
+                        let setterIncludeInternal = GrantsInternalAccess(setter?.DeclaringType, consumerAssemblyName)
                         let synthesized = PropertySymbol(
                             parameter.Name,
                             parameter.Type,
                             Accessibility.Protected,
                             hasGetter: getter != nil,
-                            hasSetter: setter != nil && IsVisible(setter, includeInternal),
+                            hasSetter: setter != nil && IsVisible(setter, setterIncludeInternal),
                             isAutoProperty: false,
                             isVirtual: (getter ?? setter)?.IsVirtual == true,
                             isOverride: (getter ?? setter) is {} accessor && ClrTypeUtilities.SafeIsOverride(accessor),
                             isStatic: false,
                             isInitOnly: setter != nil && IsInitOnlySetter(setter),
                             getterAccessibility: Accessibility.Protected,
-                            setterAccessibility: if setter != nil && IsVisible(setter, includeInternal) {
+                            setterAccessibility: if setter != nil && IsVisible(setter, setterIncludeInternal) {
                                 Accessibility.Public
                             } else {
                                 Accessibility.Protected
@@ -670,8 +673,8 @@ class ImportedTypeSymbol : TypeSymbol {
                     aggregate.SetInheritedPositionalProperties(inheritedPositionalBuilder.ToImmutable())
                 }
             }
-            aggregate.SetMethods(BuildMethods(type, aggregate, includeInternal))
-            aggregate.SetStaticMethods(BuildStaticMethods(type, aggregate, includeInternal))
+            aggregate.SetMethods(BuildMethods(type, aggregate, consumerAssemblyName))
+            aggregate.SetStaticMethods(BuildStaticMethods(type, aggregate, consumerAssemblyName))
             let instanceInitBuilder = ImmutableDictionary.CreateBuilder[FieldSymbol, BoundExpression]()
             // Issue #3329: a value struct's ADR-0159 magic-collection field zero
             // value is normally recorded on the DECLARING compilation's own
@@ -878,7 +881,13 @@ class ImportedTypeSymbol : TypeSymbol {
             }
         }
 
-        private func BuildMethods(type Type, aggregate StructSymbol, includeInternal bool) ImmutableArray[
+        private func GrantsInternalAccess(declaringType Type?, consumerAssemblyName string) bool ->
+        declaringType != nil && ImportedAssemblySemantics.GrantsInternalAccessTo(
+            declaringType.Assembly,
+            consumerAssemblyName
+        )
+
+        private func BuildMethods(type Type, aggregate StructSymbol, consumerAssemblyName string) ImmutableArray[
             FunctionSymbol
         ] {
             let methods = ClrTypeUtilities.SafeGetMethods(
@@ -887,15 +896,16 @@ class ImportedTypeSymbol : TypeSymbol {
             )
             let builder = ImmutableArray.CreateBuilder[FunctionSymbol]()
             for method in methods {
+                let includeInternal = GrantsInternalAccess(method.DeclaringType, consumerAssemblyName)
                 if method.IsSpecialName || !IsVisible(method, includeInternal) {
                     continue
                 }
-                builder.Add(BuildMethodSymbol(method, aggregate, isStatic: false))
+                builder.Add(BuildMethodSymbol(method, aggregate, isStatic: false, includeInternal))
             }
             return builder.ToImmutable()
         }
 
-        private func BuildStaticMethods(type Type, aggregate StructSymbol, includeInternal bool) ImmutableArray[
+        private func BuildStaticMethods(type Type, aggregate StructSymbol, consumerAssemblyName string) ImmutableArray[
             FunctionSymbol
         ] {
             let methods = ClrTypeUtilities.SafeGetMethods(
@@ -904,10 +914,11 @@ class ImportedTypeSymbol : TypeSymbol {
             )
             let builder = ImmutableArray.CreateBuilder[FunctionSymbol]()
             for method in methods {
+                let includeInternal = GrantsInternalAccess(method.DeclaringType, consumerAssemblyName)
                 if method.IsSpecialName || !IsVisible(method, includeInternal) {
                     continue
                 }
-                let symbol = BuildMethodSymbol(method, aggregate, isStatic: true)
+                let symbol = BuildMethodSymbol(method, aggregate, isStatic: true, includeInternal)
                 symbol.IsStatic = true
                 symbol.StaticOwnerType = aggregate
                 builder.Add(symbol)
@@ -915,7 +926,12 @@ class ImportedTypeSymbol : TypeSymbol {
             return builder.ToImmutable()
         }
 
-        private func BuildMethodSymbol(method MethodInfo, aggregate StructSymbol, isStatic bool) FunctionSymbol {
+        private func BuildMethodSymbol(
+            method MethodInfo,
+            aggregate StructSymbol,
+            isStatic bool,
+            includeInternal bool
+        ) FunctionSymbol {
             let reflectedParameters = method.GetParameters()
             let parameterBuilder = ImmutableArray.CreateBuilder[ParameterSymbol](reflectedParameters.Length)
             for parameter in reflectedParameters {
@@ -939,7 +955,7 @@ class ImportedTypeSymbol : TypeSymbol {
                 },
                 declaration: nil,
                 $package: nil,
-                accessibility: MapAccessibility(method),
+                accessibility: MapAccessibility(method, includeInternal),
                 receiverType: if isStatic {
                     default(StructSymbol?)
                 } else {
@@ -948,18 +964,22 @@ class ImportedTypeSymbol : TypeSymbol {
             ){ReturnRefKind = RefCapabilities.GetReturnRefKind(method), ImportedMember = method}
         }
 
-        private func IsVisible(field FieldInfo, includeInternal bool) bool -> field.IsPublic ||
-            (includeInternal && field.IsAssembly)
+        private func IsVisible(field FieldInfo, includeInternal bool) bool -> ClrMemberVisibility.IsVisible(
+            field,
+            includeInternal
+        )
 
-        private func IsVisible(method MethodBase, includeInternal bool) bool -> method.IsPublic ||
-            (includeInternal && method.IsAssembly)
+        private func IsVisible(method MethodBase, includeInternal bool) bool -> ClrMemberVisibility.IsVisible(
+            method,
+            includeInternal
+        )
 
         private func MapTypeAccessibility(type Type) Accessibility {
             if type.IsNested {
                 if type.IsNestedPublic {
                     return Accessibility.Public
                 }
-                if type.IsNestedAssembly {
+                if type.IsNestedAssembly || type.IsNestedFamORAssem {
                     return Accessibility.Internal
                 }
                 if type.IsNestedFamily {
@@ -974,15 +994,15 @@ class ImportedTypeSymbol : TypeSymbol {
             }
         }
 
-        private func MapAccessibility(field FieldInfo) Accessibility -> if field.IsPublic {
+        private func MapAccessibility(field FieldInfo, includeInternal bool) Accessibility -> if field.IsPublic {
             Accessibility.Public
         } else {
             (
-                if field.IsAssembly {
+                if field.IsAssembly || (includeInternal && field.IsFamilyOrAssembly) {
                     Accessibility.Internal
                 } else {
                     (
-                        if field.IsFamily {
+                        if field.IsFamily || field.IsFamilyOrAssembly {
                             Accessibility.Protected
                         } else {
                             Accessibility.Private
@@ -992,15 +1012,15 @@ class ImportedTypeSymbol : TypeSymbol {
             )
         }
 
-        private func MapAccessibility(method MethodBase) Accessibility -> if method.IsPublic {
+        private func MapAccessibility(method MethodBase, includeInternal bool) Accessibility -> if method.IsPublic {
             Accessibility.Public
         } else {
             (
-                if method.IsAssembly {
+                if method.IsAssembly || (includeInternal && method.IsFamilyOrAssembly) {
                     Accessibility.Internal
                 } else {
                     (
-                        if method.IsFamily {
+                        if method.IsFamily || method.IsFamilyOrAssembly {
                             Accessibility.Protected
                         } else {
                             Accessibility.Private
@@ -1010,12 +1030,12 @@ class ImportedTypeSymbol : TypeSymbol {
             )
         }
 
-        private func GetPropertyAccessibility(property PropertyInfo) Accessibility {
-            let accessor MethodInfo? = property.GetMethod ?? property.SetMethod
+        private func GetPropertyAccessibility(property PropertyInfo, consumerAssemblyName string) Accessibility {
+            let accessor MethodInfo? = property.GetMethod ?? property.GetSetMethod(nonPublic: true)
             return if accessor == nil {
                 Accessibility.Private
             } else {
-                MapAccessibility(accessor)
+                MapAccessibility(accessor, GrantsInternalAccess(accessor.DeclaringType, consumerAssemblyName))
             }
         }
     }

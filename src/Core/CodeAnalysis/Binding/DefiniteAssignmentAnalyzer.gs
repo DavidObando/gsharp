@@ -84,7 +84,8 @@ internal shared class DefiniteAssignmentAnalyzer {
     private data struct ExpressionFlowContext(
         OutParams ImmutableArray[ParameterSymbol],
         Function FunctionSymbol,
-        MethodExitLabel BoundLabel?
+        MethodExitLabel BoundLabel?,
+        EnclosingSyntax SyntaxNode? = nil
     ) : IEquatable[ExpressionFlowContext] { }
 
     /// One entry of (cref:NestedRegionCache): the result of probing one region from one input state.
@@ -178,6 +179,7 @@ internal shared class DefiniteAssignmentAnalyzer {
         private let diagnostics DiagnosticBag?
         private let pointerAliases Dictionary[VariableSymbol, VariableSymbol]
         private let flowContext ExpressionFlowContext?
+        private var enclosingSyntax SyntaxNode?
 
         init(
             assigned HashSet[VariableSymbol],
@@ -191,59 +193,145 @@ internal shared class DefiniteAssignmentAnalyzer {
             this.diagnostics = diagnostics
             this.pointerAliases = pointerAliases
             this.flowContext = flowContext
+            this.enclosingSyntax = flowContext?.EnclosingSyntax
+        }
+
+        override func VisitStatement(node BoundStatement?) {
+            let outerSyntax = enclosingSyntax
+            enclosingSyntax = node?.Syntax ?? enclosingSyntax
+            try {
+                base.VisitStatement(node)
+            } finally {
+                enclosingSyntax = outerSyntax
+            }
         }
 
         override func VisitExpression(node BoundExpression?) {
             if node == nil {
                 return
             }
-            switch node {
-                case literal is BoundFunctionLiteralExpression {
-                    {
-                        if diagnostics == nil {
+            let outerSyntax = enclosingSyntax
+            enclosingSyntax = node.Syntax ?? enclosingSyntax
+            try {
+                switch node {
+                    case literal is BoundFunctionLiteralExpression {
+                        {
+                            if diagnostics == nil {
+                                return
+                            }
+                            let diagnostics = diagnostics!!
+                            let lowered = BodyFacts.LowerLambdaBody(literal.Body)
+                            DefiniteAssignmentAnalyzer.AnalyzeWithCaptured(
+                                lowered.PreEmitAnalysisBody ?? lowered,
+                                literal.Function,
+                                diagnostics,
+                                literal.CapturedVariables.Where(
+                                    (variable VariableSymbol) -> assigned.Contains(variable)
+                                ),
+                                literal.CapturedVariables.Where((variable VariableSymbol) -> tracked.Contains(variable))
+                            )
                             return
                         }
-                        let diagnostics = diagnostics!!
-                        let lowered = BodyFacts.LowerLambdaBody(literal.Body)
-                        DefiniteAssignmentAnalyzer.AnalyzeWithCaptured(
-                            lowered.PreEmitAnalysisBody ?? lowered,
-                            literal.Function,
+                    }
+                    case read is BoundVariableExpression {
+                        DefiniteAssignmentAnalyzer.CheckTrackedUse(
+                            read,
+                            assigned,
+                            tracked,
                             diagnostics,
-                            literal.CapturedVariables.Where((variable VariableSymbol) -> assigned.Contains(variable)),
-                            literal.CapturedVariables.Where((variable VariableSymbol) -> tracked.Contains(variable))
+                            enclosingSyntax
                         )
                         return
                     }
+                    case BoundAddressOfExpression,
+                    BoundBlockExpression,
+                    BoundCallExpression,
+                    BoundImportedCallExpression,
+                    BoundImportedInstanceCallExpression,
+                    BoundConstrainedStaticCallExpression,
+                    BoundConstructorCallExpression,
+                    BoundConstructorChainingExpression,
+                    BoundUserInstanceCallExpression,
+                    BoundBaseInterfaceCallExpression,
+                    BoundBaseClassCallExpression,
+                    BoundIndirectCallExpression,
+                    BoundClrConstructorCallExpression,
+                    BoundClrConversionCallExpression,
+                    BoundClrIndexExpression,
+                    BoundClrIndexAssignmentExpression,
+                    BoundAssignmentExpression,
+                    BoundIndirectAssignmentExpression,
+                    BoundBinaryExpression,
+                    BoundConditionalExpression,
+                    BoundConditionalAddressExpression,
+                    BoundSwitchExpression,
+                    BoundIsExpression,
+                    BoundThrowExpression,
+                    BoundNullConditionalAccessExpression {
+                        DefiniteAssignmentAnalyzer.ProcessExpression(
+                            node,
+                            assigned,
+                            diagnostics,
+                            pointerAliases,
+                            tracked,
+                            if flowContext is {} ctx {
+                                ExpressionFlowContext(ctx.OutParams, ctx.Function, ctx.MethodExitLabel, enclosingSyntax)
+                            } else {
+                                default(ExpressionFlowContext?)
+                            }
+                        )
+                        return
+                    }
+                    default {
+                        base.VisitExpression(node)
+                        return
+                    }
                 }
-                case read is BoundVariableExpression {
-                    DefiniteAssignmentAnalyzer.CheckTrackedUse(read, assigned, tracked, diagnostics)
-                    return
-                }
-                case BoundAddressOfExpression {
-                    return
-                }
-                case BoundBlockExpression,
-                BoundBinaryExpression,
-                BoundConditionalExpression,
-                BoundConditionalAddressExpression,
-                BoundSwitchExpression,
-                BoundIsExpression,
-                BoundNullConditionalAccessExpression {
-                    DefiniteAssignmentAnalyzer.ProcessExpression(
-                        node,
-                        assigned,
-                        diagnostics,
-                        pointerAliases,
-                        tracked,
-                        flowContext
-                    )
-                    return
-                }
-                default {
-                    base.VisitExpression(node)
-                    return
-                }
+            } finally {
+                enclosingSyntax = outerSyntax
             }
+        }
+
+        protected override func VisitFieldAssignmentExpression(node BoundFieldAssignmentExpression) {
+            if node.ReceiverExpression == nil {
+                if node.Receiver != nil && !ReflectionMetadataEmitter.IsValueTypeSymbol(node.Receiver.Type) {
+                    DefiniteAssignmentAnalyzer.CheckTrackedUse(
+                        BoundVariableExpression(node.Syntax ?? enclosingSyntax, node.Receiver),
+                        assigned,
+                        tracked,
+                        diagnostics,
+                        enclosingSyntax
+                    )
+                }
+            } else if !DefiniteAssignmentAnalyzer.IsValueTypeFieldReceiverChain(node.ReceiverExpression) {
+                VisitExpression(node.ReceiverExpression)
+            }
+            VisitExpression(node.Value)
+        }
+
+        protected override func VisitClrPropertyAssignmentExpression(node BoundClrPropertyAssignmentExpression) {
+            if node.Receiver != nil &&
+                !(
+                node.Member is System.Reflection.FieldInfo && DefiniteAssignmentAnalyzer.IsValueTypeFieldReceiverChain(
+                    node.Receiver
+                )
+            ) {
+                VisitExpression(node.Receiver)
+            }
+            VisitExpression(node.Value)
+        }
+
+        protected override func VisitIndexAssignmentExpression(node BoundIndexAssignmentExpression) {
+            if node.TargetExpression == nil && node.Target != nil {
+                DefiniteAssignmentAnalyzer.CheckTrackedUse(
+                    BoundVariableExpression(node.Syntax ?? enclosingSyntax, node.Target),
+                    assigned,
+                    tracked,
+                    diagnostics,
+                    enclosingSyntax
+                )
+            }
+            base.VisitIndexAssignmentExpression(node)
         }
     }
 
@@ -292,6 +380,9 @@ internal shared class DefiniteAssignmentAnalyzer {
         // use inside the literal reports against the state at the capture
         // point (the C# model).
         let tracked = TrackedLocals()
+        for op in outParams {
+            tracked.Add(op)
+        }
         if capturedTracked != nil {
             tracked.UnionWith(capturedTracked)
         }
@@ -934,7 +1025,7 @@ internal shared class DefiniteAssignmentAnalyzer {
         tracked HashSet[VariableSymbol],
         methodExitLabel BoundLabel?
     ) {
-        let flowContext = ExpressionFlowContext(outParams, function, methodExitLabel)
+        let flowContext = ExpressionFlowContext(outParams, function, methodExitLabel, statement.Syntax)
         switch statement {
             case es is BoundExpressionStatement {
                 ProcessExpression(es.Expression, assigned, diagnostics, pointerAliases, tracked, flowContext)
@@ -1394,29 +1485,29 @@ internal shared class DefiniteAssignmentAnalyzer {
         read BoundVariableExpression,
         assigned HashSet[VariableSymbol],
         tracked HashSet[VariableSymbol],
-        diagnostics DiagnosticBag?
+        diagnostics DiagnosticBag?,
+        fallbackSyntax SyntaxNode? = nil
     ) {
         if diagnostics == nil || read.Variable == nil || !tracked.Contains(read.Variable) || assigned.Contains(
             read.Variable
         ) {
             return
         }
-        if NativeProtocolMetadata.IsProtocol(read.Variable.Type) {
+        let location = read.Syntax?.Location ?? fallbackSyntax?.Location ?? default(TextLocation)
+        if read.Variable is ParameterSymbol{RefKind: RefKind.Out} {
+            diagnostics.ReportVariableNotAssignedBeforeRef(location, read.Variable.Name)
+        } else if NativeProtocolMetadata.IsProtocol(read.Variable.Type) {
             diagnostics.ReportNativeProtocol(
-                read.Syntax?.Location ?? default(TextLocation),
+                location,
                 "'${read.Variable.Name}' must contain a present protocol value on every path before use"
             )
         } else if ManagedReferenceTypes.TryGetElement(read.Variable.Type, out _, out _) {
             diagnostics.ReportManagedReference(
-                read.Syntax?.Location ?? default(TextLocation),
+                location,
                 "'${read.Variable.Name}' must be assigned on every path before use"
             )
         } else {
-            diagnostics.ReportChannelLocalUsedBeforeAssignment(
-                read.Syntax?.Location ?? default(TextLocation),
-                read.Variable.Name,
-                read.Variable.Type.Name
-            )
+            diagnostics.ReportChannelLocalUsedBeforeAssignment(location, read.Variable.Name, read.Variable.Type.Name)
         }
     }
 
@@ -1430,6 +1521,15 @@ internal shared class DefiniteAssignmentAnalyzer {
     ) {
         if expression == nil {
             return
+        }
+        var flowContext = flowContext
+        if expression.Syntax != nil && flowContext is {} currentContext {
+            flowContext = ExpressionFlowContext(
+                currentContext.OutParams,
+                currentContext.Function,
+                currentContext.MethodExitLabel,
+                expression.Syntax
+            )
         }
         switch expression {
             case block is BoundBlockExpression when flowContext is {} context {
@@ -1464,7 +1564,7 @@ internal shared class DefiniteAssignmentAnalyzer {
                 // local. (Reads nested inside expression kinds without an
                 // explicit case here are found by FunctionLiteralAndUseWalker
                 // via the default arm.)
-                CheckTrackedUse(read, assigned, tracked, diagnostics)
+                CheckTrackedUse(read, assigned, tracked, diagnostics, flowContext?.EnclosingSyntax)
             }
             case call is BoundCallExpression {
                 ProcessCallArguments(
@@ -1626,14 +1726,61 @@ internal shared class DefiniteAssignmentAnalyzer {
             case call is BoundClrConversionCallExpression {
                 ProcessExpression(call.Source, assigned, diagnostics, pointerAliases, tracked, flowContext)
             }
+            case clrIndex is BoundClrIndexExpression {
+                ProcessExpression(clrIndex.Target, assigned, diagnostics, pointerAliases, tracked, flowContext)
+                ProcessClrIndexerArguments(
+                    clrIndex.Arguments,
+                    clrIndex.Indexer,
+                    assigned,
+                    diagnostics,
+                    pointerAliases,
+                    tracked,
+                    clrIndex.Syntax,
+                    flowContext
+                )
+            }
+            case clrIndexAssign is BoundClrIndexAssignmentExpression {
+                if clrIndexAssign.TargetExpression != nil {
+                    ProcessExpression(
+                        clrIndexAssign.TargetExpression,
+                        assigned,
+                        diagnostics,
+                        pointerAliases,
+                        tracked,
+                        flowContext
+                    )
+                } else if clrIndexAssign.Target != nil {
+                    CheckTrackedUse(
+                        BoundVariableExpression(
+                            clrIndexAssign.Syntax ?? flowContext?.EnclosingSyntax,
+                            clrIndexAssign.Target
+                        ),
+                        assigned,
+                        tracked,
+                        diagnostics,
+                        flowContext?.EnclosingSyntax
+                    )
+                }
+                ProcessClrIndexerArguments(
+                    clrIndexAssign.Arguments,
+                    clrIndexAssign.Indexer,
+                    assigned,
+                    diagnostics,
+                    pointerAliases,
+                    tracked,
+                    clrIndexAssign.Syntax,
+                    flowContext
+                )
+                ProcessExpression(clrIndexAssign.Value, assigned, diagnostics, pointerAliases, tracked, flowContext)
+            }
             case assign is BoundAssignmentExpression {
                 ProcessExpression(assign.Expression, assigned, diagnostics, pointerAliases, tracked, flowContext)
                 assigned.Add(assign.Variable)
                 TrackPointerAlias(assign.Variable, assign.Expression, pointerAliases)
             }
             case indirect is BoundIndirectAssignmentExpression {
-                ProcessExpression(indirect.Value, assigned, diagnostics, pointerAliases, tracked, flowContext)
                 ProcessExpression(indirect.Pointer, assigned, diagnostics, pointerAliases, tracked, flowContext)
+                ProcessExpression(indirect.Value, assigned, diagnostics, pointerAliases, tracked, flowContext)
                 if TryResolvePointerTarget(indirect.Pointer, pointerAliases, out var indirectTarget) {
                     if indirectTarget != nil {
                         assigned.Add(indirectTarget)
@@ -1881,7 +2028,7 @@ internal shared class DefiniteAssignmentAnalyzer {
                 ProcessExpression(un.Operand, assigned, diagnostics, pointerAliases, tracked, flowContext)
             }
             case aof is BoundAddressOfExpression {
-                ProcessExpression(aof.Operand, assigned, diagnostics, pointerAliases, tracked, flowContext)
+                ProcessAddressEvaluation(aof.Operand, assigned, diagnostics, pointerAliases, tracked, flowContext)
             }
             case deref is BoundDereferenceExpression {
                 ProcessExpression(deref.Operand, assigned, diagnostics, pointerAliases, tracked, flowContext)
@@ -2228,6 +2375,7 @@ internal shared class DefiniteAssignmentAnalyzer {
         } else {
             0
         }
+        var pendingAssigned List[VariableSymbol]? = nil
         for var i = 0; i < arguments.Length; i++ {
             let refKind = if i + offset < parameters.Length {
                 parameters[i + offset].RefKind
@@ -2243,8 +2391,20 @@ internal shared class DefiniteAssignmentAnalyzer {
                 tracked,
                 callSyntax,
                 flowContext,
-                i + 1
+                i + 1,
+                out var assignedAfterCall
             )
+            if assignedAfterCall != nil {
+                if pendingAssigned == nil {
+                    pendingAssigned = List[VariableSymbol](1)
+                }
+                pendingAssigned.Add(assignedAfterCall)
+            }
+        }
+        if pendingAssigned != nil {
+            for variable in pendingAssigned {
+                assigned.Add(variable)
+            }
         }
     }
 
@@ -2258,6 +2418,7 @@ internal shared class DefiniteAssignmentAnalyzer {
         callSyntax SyntaxNode?,
         flowContext ExpressionFlowContext?
     ) {
+        var pendingAssigned List[VariableSymbol]? = nil
         for var i = 0; i < arguments.Length; i++ {
             let refKind = if !refKinds.IsDefault && i < refKinds.Length {
                 refKinds[i]
@@ -2273,8 +2434,64 @@ internal shared class DefiniteAssignmentAnalyzer {
                 tracked,
                 callSyntax,
                 flowContext,
-                i + 1
+                i + 1,
+                out var assignedAfterCall
             )
+            if assignedAfterCall != nil {
+                if pendingAssigned == nil {
+                    pendingAssigned = List[VariableSymbol](1)
+                }
+                pendingAssigned.Add(assignedAfterCall)
+            }
+        }
+        if pendingAssigned != nil {
+            for variable in pendingAssigned {
+                assigned.Add(variable)
+            }
+        }
+    }
+
+    private func ProcessClrIndexerArguments(
+        arguments ImmutableArray[BoundExpression],
+        indexer System.Reflection.PropertyInfo,
+        assigned HashSet[VariableSymbol],
+        diagnostics DiagnosticBag?,
+        pointerAliases Dictionary[VariableSymbol, VariableSymbol],
+        tracked HashSet[VariableSymbol],
+        callSyntax SyntaxNode?,
+        flowContext ExpressionFlowContext?
+    ) {
+        let parameters = indexer.GetIndexParameters()
+        var pendingAssigned List[VariableSymbol]? = nil
+        for var i = 0; i < arguments.Length; i++ {
+            let refKind = if i < parameters.Length {
+                RefCapabilities.GetParameterRefKind(parameters[i])
+            } else {
+                RefKind.None
+            }
+            ProcessCallArgument(
+                arguments[i],
+                refKind,
+                assigned,
+                diagnostics,
+                pointerAliases,
+                tracked,
+                callSyntax,
+                flowContext,
+                i + 1,
+                out var assignedAfterCall
+            )
+            if assignedAfterCall != nil {
+                if pendingAssigned == nil {
+                    pendingAssigned = List[VariableSymbol](1)
+                }
+                pendingAssigned.Add(assignedAfterCall)
+            }
+        }
+        if pendingAssigned != nil {
+            for variable in pendingAssigned {
+                assigned.Add(variable)
+            }
         }
     }
 
@@ -2287,8 +2504,10 @@ internal shared class DefiniteAssignmentAnalyzer {
         tracked HashSet[VariableSymbol],
         callSyntax SyntaxNode?,
         flowContext ExpressionFlowContext?,
-        argumentNumber int32
+        argumentNumber int32,
+        out assignedAfterCall VariableSymbol?
     ) {
+        assignedAfterCall = nil
         // Issue #4400 fail-safe: every call path should have turned the
         // argument of a by-ref slot into an address (an implicit `in`
         // reference, or GS0235 for `ref`/`out`). Should some binding path
@@ -2318,6 +2537,20 @@ internal shared class DefiniteAssignmentAnalyzer {
             ProcessExpression(inAddress.Operand, assigned, diagnostics, pointerAliases, tracked, flowContext)
             return
         }
+        if refKind == RefKind.Out && argument is BoundAddressOfExpression outAddress {
+            ProcessAddressEvaluation(outAddress.Operand, assigned, diagnostics, pointerAliases, tracked, flowContext)
+            if TryGetSingleAddressedVariable(outAddress.Operand, out var outVariable) {
+                assignedAfterCall = outVariable
+            }
+            return
+        }
+        if refKind == RefKind.Out && argument is BoundConditionalAddressExpression outConditionalAddress {
+            ProcessAddressEvaluation(outConditionalAddress, assigned, diagnostics, pointerAliases, tracked, flowContext)
+            if TryGetSingleAddressedVariable(outConditionalAddress, out var outCondVariable) {
+                assignedAfterCall = outCondVariable
+            }
+            return
+        }
         if refKind != RefKind.None &&
             argument is BoundAddressOfExpression address &&
             TryGetSingleAddressedVariable(address.Operand, out var variable) {
@@ -2329,11 +2562,32 @@ internal shared class DefiniteAssignmentAnalyzer {
                 )
             }
             if refKind == RefKind.Ref || refKind == RefKind.Out {
-                assigned.Add(variable!!)
+                assignedAfterCall = variable!!
             }
             return
         }
+        if refKind == RefKind.Ref && argument is BoundAddressOfExpression refAddress {
+            ProcessExpression(refAddress.Operand, assigned, diagnostics, pointerAliases, tracked, flowContext)
+            return
+        }
+        if refKind == RefKind.Ref &&
+            argument is BoundConditionalAddressExpression refConditionalAddress &&
+            TryGetSingleAddressedVariable(refConditionalAddress, out var refCondVariable) {
+            assignedAfterCall = refCondVariable
+        }
         ProcessExpression(argument, assigned, diagnostics, pointerAliases, tracked, flowContext)
+    }
+
+    private func IsValueTypeFieldReceiverChain(expression BoundExpression?) bool -> switch expression {
+        case BoundVariableExpression{Variable: {} variable}: ReflectionMetadataEmitter.IsValueTypeSymbol(variable.Type)
+        case BoundFieldAccessExpression{Receiver: {} inner, Field: {IsStatic: false}} fieldAccess:
+        ReflectionMetadataEmitter.IsValueTypeSymbol(fieldAccess.Type) && IsValueTypeFieldReceiverChain(inner)
+        case BoundClrPropertyAccessExpression{
+            Receiver: {} inner,
+            Member: System.Reflection.FieldInfo{IsStatic: false}
+        } clrFieldAccess:
+        ReflectionMetadataEmitter.IsValueTypeSymbol(clrFieldAccess.Type) && IsValueTypeFieldReceiverChain(inner)
+        default: false
     }
 
     private func TryGetSingleAddressedVariable(
@@ -2355,6 +2609,15 @@ internal shared class DefiniteAssignmentAnalyzer {
                 TryGetSingleAddressedVariable(conditional.WhenFalse, out var whenFalse) &&
                 object.ReferenceEquals(whenTrue, whenFalse) {
                 variable = whenTrue
+                return true
+            }
+            case conditionalAddress is BoundConditionalAddressExpression when TryGetSingleAddressedVariable(
+                conditionalAddress.WhenTrueOperand,
+                out var whenTrueOperand
+            ) &&
+                TryGetSingleAddressedVariable(conditionalAddress.WhenFalseOperand, out var whenFalseOperand) &&
+                object.ReferenceEquals(whenTrueOperand, whenFalseOperand) {
+                variable = whenTrueOperand
                 return true
             }
             default {
@@ -2440,6 +2703,53 @@ internal shared class DefiniteAssignmentAnalyzer {
                         []Dictionary[VariableSymbol, VariableSymbol]{whenTrueAliases, whenFalseAliases}
                     )
                 }
+            }
+            case conditionalAddress is BoundConditionalAddressExpression {
+                {
+                    let (whenTrueAssigned, whenTrueAliases, whenFalseAssigned, whenFalseAliases) =
+                    ClassifyConditionAssignments(
+                        conditionalAddress.Condition,
+                        assigned,
+                        pointerAliases,
+                        diagnostics,
+                        tracked,
+                        flowContext
+                    )
+                    ProcessAddressEvaluation(
+                        conditionalAddress.WhenTrueOperand,
+                        whenTrueAssigned,
+                        diagnostics,
+                        whenTrueAliases,
+                        tracked,
+                        flowContext
+                    )
+                    ProcessAddressEvaluation(
+                        conditionalAddress.WhenFalseOperand,
+                        whenFalseAssigned,
+                        diagnostics,
+                        whenFalseAliases,
+                        tracked,
+                        flowContext
+                    )
+                    MergeConditionalFlow(
+                        assigned,
+                        pointerAliases,
+                        []HashSet[VariableSymbol]{whenTrueAssigned, whenFalseAssigned},
+                        []Dictionary[VariableSymbol, VariableSymbol]{whenTrueAliases, whenFalseAliases}
+                    )
+                }
+            }
+            case BoundFieldAccessExpression{
+                Receiver: {} fieldReceiver,
+                Field: {IsStatic: false}
+            } when IsValueTypeFieldReceiverChain(fieldReceiver) {
+                ProcessAddressEvaluation(fieldReceiver, assigned, diagnostics, pointerAliases, tracked, flowContext)
+            }
+            case BoundClrPropertyAccessExpression{
+                Receiver: {} clrFieldReceiver,
+                Member: System.Reflection.FieldInfo{IsStatic: false}
+            } when IsValueTypeFieldReceiverChain(clrFieldReceiver) {
+                ProcessAddressEvaluation(clrFieldReceiver, assigned, diagnostics, pointerAliases, tracked, flowContext)
             }
             case BoundVariableExpression { }
             default {

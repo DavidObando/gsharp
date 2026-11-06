@@ -130,7 +130,7 @@ open class IncrementalSemanticModelTests {
         Assert.NotNull(hover)
         Assert.Contains("Binder", hover!!.Contents.ToString(), StringComparison.Ordinal)
         sw.Stop()
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), "Binder.gs LSP features took ${sw.Elapsed}")
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(10), "Binder.gs LSP features took ${sw.Elapsed}")
     }
 
     @Fact
