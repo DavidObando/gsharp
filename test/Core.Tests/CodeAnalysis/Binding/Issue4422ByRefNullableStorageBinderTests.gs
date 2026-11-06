@@ -28,6 +28,7 @@ import System
 open class Issue4422ByRefNullableStorageBinderTests {
     @Theory
     @InlineData("Write(&value)")
+    @InlineData("Write(&{ let marker = 0\nvalue })")
     @InlineData("Writer().Write(&value)")
     @InlineData("let sink = Sink(&value)")
     func OutParameter_UsesDeclaredNullableStorageAfterAnExitingWrite(call string) {
@@ -52,6 +53,31 @@ Console.WriteLine(Run("before"))
 `)
         Assert.Empty(result.Diagnostics)
         Assert.Equal("True", result.Output.Trim())
+    }
+
+    @Fact
+    func OutOverload_PrefersTheDeclaredNullableStorage() {
+        let result = EmittedOracle.Evaluate(`
+func Pick(out target string) string {
+    target = "non-null"
+    return "non-null"
+}
+func Pick(out target string?) string {
+    target = nil
+    return "nullable"
+}
+func Run(input string?) string {
+    var value string? = input
+    if value == nil {
+        value = "unused"
+        return ""
+    }
+    return Pick(&value)
+}
+Console.WriteLine(Run("before"))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("nullable", result.Output.Trim())
     }
 
     @Theory

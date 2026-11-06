@@ -3281,8 +3281,8 @@ internal class ConversionClassifier {
         parameterType TypeSymbol,
         argument BoundExpression? = nil
     ) bool {
-        let checkedStorageType = if parameter.RefKind == RefKind.Out && argument is BoundAddressOfExpression address {
-            ExpressionBinder.AddressedLeafStorageType(address.Operand, useEffectiveNullability: false)
+        let checkedStorageType = if parameter.RefKind == RefKind.Out {
+            ByRefStorageMatching.TryGetStorageType(argument, parameter.RefKind) ?? storageType
         } else {
             storageType
         }

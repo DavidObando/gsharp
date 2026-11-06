@@ -256,9 +256,10 @@ internal partial class StatementBinder {
             exit = RestrictConditionalExit(exit, conditional, aliasesAtEntry, binderCtx.Narrowing)
         }
         IntersectBranchEntry(exit)
+        let surviving = binderCtx.Narrowing
         for path in exit.Paths {
             let joined = exit.NarrowedType(path)
-            if joined != nil {
+            if joined != nil && !object.Equals(surviving.NarrowedType(path), joined) {
                 SetPersistentNarrowing(persistentFrame, path, joined)
             }
         }

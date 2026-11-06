@@ -27,6 +27,35 @@ import Xunit
 /// too. Each test translates the C#, compiles the G# with the repository's `gsc.dll`, runs it, and compares the
 /// output with the output of the C#.
 open class Issue5617ByReferenceAccessorNarrowingTests {
+    @Fact
+    func RefParameter_AdjacentGotoCase_KeepsThePrecedingSectionEffects() {
+        let printed = AssertRunsLikeCSharp(`
+public sealed class Box { public int F; }
+public class Demo
+{
+    public static int Read(ref string? s, Box box, int k)
+    {
+        if (s == null) return 0;
+        switch (k)
+        {
+            case 0:
+                box.F = 1;
+                goto case 1;
+            case 1:
+                return s.Length;
+            default:
+                return 0;
+        }
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        return Read(ref text, new Box(), 0).ToString();
+    }
+}`)
+        Assert.Contains("return s!!.Length", printed)
+    }
+
     /// The issue shape: `Lazy<T>.Value` is an imported getter that is not on the stable list (R16).
     @Fact
     func RefParameter_ReadAfterAnUnlistedImportedGetter_IsAsserted() {

@@ -6139,6 +6139,7 @@ partial class CSharpToGSharpTranslator {
                                 node.Span
                             )
                         ) &&
+                            !this.HasGotoIntoSwitchSection(switchStatement) &&
                             this
                             .GetScopeGotoIndex($scope)
                             .Jumps
