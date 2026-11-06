@@ -2122,7 +2122,7 @@ internal partial class OverloadResolver {
             return default(ImmutableArray[string])
         }
 
-        private func TryBuildReceiverSubstitution(receiverType TypeSymbol) Dictionary[
+        internal func TryBuildReceiverSubstitution(receiverType TypeSymbol) Dictionary[
             TypeParameterSymbol,
             TypeSymbol
         ]? {
