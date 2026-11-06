@@ -252,6 +252,18 @@ internal partial class OverloadResolver {
         )
     }
 
+    internal func IsUserCallableApplicable(
+        candidate FunctionSymbol,
+        argumentCount int32,
+        boundArguments ImmutableArray[BoundExpression]
+    ) bool {
+        let builder = ImmutableArray.CreateBuilder[BoundExpression](boundArguments.Length)
+        builder.AddRange(boundArguments)
+        return IsApplicableUserCallable(candidate, argumentCount, default(ImmutableArray[string])) &&
+            IsRefKindApplicable(candidate, argumentCount, default(ImmutableArray[string]), builder, callSyntax: nil) &&
+            IsConvertibilityApplicable(candidate, argumentCount, default(ImmutableArray[string]), builder)
+    }
+
     private func SelectBestUserOverloadCore(
         candidates ImmutableArray[FunctionSymbol],
         argumentCount int32,
@@ -1136,6 +1148,15 @@ internal partial class OverloadResolver {
             }
             // Unknown argument or parameter type — be conservative, do not reject.
             if argType == nil || paramType == nil {
+                continue
+            }
+            if boundArguments[i] is BoundDefaultExpression &&
+                argType == TypeSymbol.Error &&
+                boundArguments[i].Syntax is DefaultExpressionSyntax{TypeClause: nil} {
+                continue
+            }
+            if boundArguments[i]?.Syntax is InterpolatedStringExpressionSyntax &&
+                isFormattableStringTargetType(paramType) {
                 continue
             }
             // Issue #1627: the #1552 point-fix gate that used to live here

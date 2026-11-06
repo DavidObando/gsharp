@@ -284,6 +284,44 @@ class ViaBaseResult : BoundTreeRewriter
     }
 }`
 
+        private const ChainedReadModel string = `class Node { }
+
+class MethodGroupNode : Node
+{
+    public MethodGroupNode(Node receiver, string[] candidates, string method) { Receiver = receiver; Candidates = candidates; Method = method; }
+
+    public MethodGroupNode(Node receiver, string method) { Receiver = receiver; Candidates = new[] { method }; Method = method; }
+
+    public Node Receiver { get; }
+
+    public string[] Candidates { get; }
+
+    public string Method { get; }
+}
+
+class BoundTreeRewriter
+{
+    protected virtual Node RewriteMethodGroup(MethodGroupNode node)
+    {
+        return new MethodGroupNode(node.Receiver, node.Candidates, node.Method);
+    }
+}`
+
+        private const ReadsThroughChainedMemberAccess string = `
+class ViaChainedMemberAccess : BoundTreeRewriter
+{
+    protected override Node RewriteMethodGroup(MethodGroupNode node)
+    {
+        var rewritten = (MethodGroupNode)base.RewriteMethodGroup(node);
+        if (rewritten.Candidates.Length != 1)
+        {
+            return rewritten;
+        }
+
+        return new MethodGroupNode(rewritten.Receiver, rewritten.Method);
+    }
+}`
+
         /// The fixture's snippets, each with the number of GSA0005 diagnostics the
         /// REAL Roslyn analyzer produces. The count is asserted against Roslyn too,
         /// so a wrong expectation fails on the C# side rather than silently
@@ -298,6 +336,7 @@ class ViaBaseResult : BoundTreeRewriter
             values.Add("IgnoresMembersEveryConstructorRequires", Model + ReplacesEveryFormsMember, 0)
             values.Add("AcceptsReadsReachedThroughAHelper", Model + ReadsThroughAHelper, 0)
             values.Add("AcceptsReadsThroughTheRewrittenBaseResult", Model + ReadsThroughTheRewrittenBaseResult, 0)
+            values.Add("AcceptsReadsThroughChainedMemberAccess", ChainedReadModel + ReadsThroughChainedMemberAccess, 0)
             values
         }
 

@@ -121,6 +121,14 @@ internal class LambdaBinder {
         FunctionSymbol,
         ImmutableArray[VariableSymbol]
     ]()
+    private let localFunctionDirectCapturedVariables Dictionary[FunctionSymbol, ImmutableArray[VariableSymbol]] =
+    Dictionary[FunctionSymbol, ImmutableArray[VariableSymbol]]()
+    private let localFunctionReferencedFunctions Dictionary[FunctionSymbol, ImmutableArray[FunctionSymbol]] =
+    Dictionary[FunctionSymbol, ImmutableArray[FunctionSymbol]]()
+    private let localFunctionLexicalScopes Dictionary[FunctionSymbol, BoundScope] = Dictionary[
+        FunctionSymbol,
+        BoundScope
+    ]()
 
     /// Initializes a new instance of the (cref:LambdaBinder)
     /// class.
@@ -281,6 +289,12 @@ internal class LambdaBinder {
         explicitName string? = nil,
         onSignatureBound((FunctionSymbol, FunctionTypeSymbol) -> void)? = nil
     ) BoundExpression {
+        let canCache = explicitName == nil && onSignatureBound == nil
+        let key = RetriedFunctionLiteralKey(syntax, nil, false, false)
+        if canCache && TryReuseRetriedFunctionLiteral(key, nil, nil, out var cached) {
+            return cached!!
+        }
+        let startMark = Diagnostics.Count
         // Issue #4219 (umbrella remainder): this general entry point is used
         // for a plain lambda argument, a `var`-declared literal, and the
         // ordinary (non-group) `let f = func ...` self-recursion path — none
@@ -290,11 +304,19 @@ internal class LambdaBinder {
         // reports GS0588 instead of silently accepting it.
         let signature = PrepareFunctionLiteralSignature(syntax, explicitName, allowRefReturn: false)
         if signature == nil {
-            return BoundErrorExpression(syntax)
+            let error = BoundErrorExpression(syntax)
+            if canCache {
+                RecordRetriedFunctionLiteral(key, error, startMark, nil, 0, false)
+            }
+            return error
         }
         let (synthetic, fnType) = signature
         onSignatureBound?(synthetic, fnType)
-        return BindFunctionLiteralBody(syntax, synthetic, fnType)
+        let bound = BindFunctionLiteralBody(syntax, synthetic, fnType)
+        if canCache {
+            RecordRetriedFunctionLiteral(key, bound, startMark, nil, 0, false)
+        }
+        return bound
     }
 
     private func PrepareFunctionLiteralSignature(
@@ -345,24 +367,43 @@ internal class LambdaBinder {
             if pname != "_" && !seen.Add(pname) {
                 Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname)
             }
-            let lambdaParam = ParameterSymbol(
+            let refKind = conversions.BindAndValidateParameterRefKind(
+                p,
                 pname,
                 parameterType,
                 isVariadic,
-                declaringSyntax: p.Identifier,
-                isScoped: p.IsScoped,
-                refKind: conversions.BindAndValidateParameterRefKind(
-                    p,
+                if syntax.IsAsync {
+                    "async"
+                } else {
+                    default(string?)
+                }
+            )
+            let retriedVariables = binderCtx.RetriedValueVariables
+            var lambdaParam ParameterSymbol
+            if p.Identifier != nil && retriedVariables != nil && retriedVariables.TryGetValue(
+                p.Identifier,
+                out var existingParam
+            ) &&
+                existingParam is ParameterSymbol reusedParam &&
+                reusedParam.Name == pname &&
+                reusedParam.Type == parameterType &&
+                reusedParam.IsVariadic == isVariadic &&
+                reusedParam.IsScoped == p.IsScoped &&
+                reusedParam.RefKind == refKind {
+                lambdaParam = reusedParam
+            } else {
+                lambdaParam = ParameterSymbol(
                     pname,
                     parameterType,
                     isVariadic,
-                    if syntax.IsAsync {
-                        "async"
-                    } else {
-                        default(string?)
-                    }
+                    declaringSyntax: p.Identifier,
+                    isScoped: p.IsScoped,
+                    refKind: refKind
                 )
-            )
+                if p.Identifier != nil && retriedVariables != nil {
+                    retriedVariables[p.Identifier] = lambdaParam
+                }
+            }
             // ADR-0063 §5: function-literal (lambda) parameters can declare a
             // default value; lambdas can be invoked through their delegate type
             // which honors the default at the call site.
@@ -741,9 +782,18 @@ internal class LambdaBinder {
             if signature == nil {
                 return () -> BoundBlockStatement(syntax, ImmutableArray[BoundStatement].Empty)
             }
-            let (function, functionType) = signature
+            var (function, functionType) = signature
             function.TypeParameters = typeParameters
             function.LocalDeclaration = syntax
+            let retriedLocalFunctions = binderCtx.RetriedLocalFunctions
+            if retriedLocalFunctions != nil {
+                if retriedLocalFunctions.TryGetValue(syntax, out var existingFunction) &&
+                    CanReuseLocalFunction(existingFunction, function) {
+                    function = existingFunction
+                } else {
+                    retriedLocalFunctions[syntax] = function
+                }
+            }
             if !Scope.TryDeclareFunction(function) {
                 Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name)
             }
@@ -885,7 +935,7 @@ internal class LambdaBinder {
             for var pass = 0; pass < maxPasses; pass++ {
                 var changed = false
                 for literal in literals {
-                    let recomputed = CollectCapturedVariables(literal.Body, literal.Function)
+                    let recomputed = CollectCapturedVariables(literal.Body, literal.Function, recordLexicalScope: false)
                     if !HashSet[VariableSymbol](literal.CapturedVariables).SetEquals(recomputed) {
                         literal.CapturedVariables = recomputed
                         changed = true
@@ -995,6 +1045,45 @@ internal class LambdaBinder {
         acceptsNaturalType((TypeSymbol) -> bool)? = nil,
         discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]? = nil
     ) BoundExpression {
+        let key = RetriedFunctionLiteralKey(
+            syntax,
+            targetFunctionType,
+            inferReturnTypeFromBody,
+            acceptsNaturalType != nil
+        )
+        if TryReuseRetriedFunctionLiteral(key, acceptsNaturalType, discardedTargetDiagnostics, out var cached) {
+            return cached!!
+        }
+        let startMark = Diagnostics.Count
+        let discardedStart = discardedTargetDiagnostics?.Count ?? 0
+        var keptNaturalType = false
+        let result = BindLambdaExpressionCore(
+            syntax,
+            targetFunctionType,
+            inferReturnTypeFromBody,
+            acceptsNaturalType,
+            discardedTargetDiagnostics,
+            &keptNaturalType
+        )
+        RecordRetriedFunctionLiteral(
+            key,
+            result,
+            startMark,
+            discardedTargetDiagnostics,
+            discardedStart,
+            keptNaturalType
+        )
+        return result
+    }
+
+    private func BindLambdaExpressionCore(
+        syntax LambdaExpressionSyntax,
+        targetFunctionType FunctionTypeSymbol?,
+        inferReturnTypeFromBody bool,
+        acceptsNaturalType((TypeSymbol) -> bool)?,
+        discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]?,
+        ref keptNaturalType bool
+    ) BoundExpression {
         let startMark = Diagnostics.Count
         if bindLambdaBodyExpression == nil {
             throw InvalidOperationException(
@@ -1031,6 +1120,7 @@ internal class LambdaBinder {
                 discardedTargetDiagnostics,
                 out var natural
             ) {
+                keptNaturalType = true
                 return natural!!
             }
             Diagnostics.AddRange(arityDiagnostics)
@@ -1315,14 +1405,32 @@ internal class LambdaBinder {
             if pname != "_" && !seen.Add(pname) {
                 Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname)
             }
-            let lambdaParam = ParameterSymbol(
-                pname,
-                parameterType,
-                isVariadic,
-                declaringSyntax: p.Identifier,
-                isScoped: p.IsScoped,
-                refKind: refKind
-            )
+            let retriedVariables = binderCtx.RetriedValueVariables
+            var lambdaParam ParameterSymbol
+            if p.Identifier != nil && retriedVariables != nil && retriedVariables.TryGetValue(
+                p.Identifier,
+                out var existingParam
+            ) &&
+                existingParam is ParameterSymbol reusedParam &&
+                reusedParam.Name == pname &&
+                reusedParam.Type == parameterType &&
+                reusedParam.IsVariadic == isVariadic &&
+                reusedParam.IsScoped == p.IsScoped &&
+                reusedParam.RefKind == refKind {
+                lambdaParam = reusedParam
+            } else {
+                lambdaParam = ParameterSymbol(
+                    pname,
+                    parameterType,
+                    isVariadic,
+                    declaringSyntax: p.Identifier,
+                    isScoped: p.IsScoped,
+                    refKind: refKind
+                )
+                if p.Identifier != nil && retriedVariables != nil {
+                    retriedVariables[p.Identifier] = lambdaParam
+                }
+            }
             // ADR-0063 §5: arrow-lambda parameters can also declare a default
             // value; the conversion classifier validates the constant-folded
             // default at bind time the same way it does for function-literal
@@ -1343,6 +1451,7 @@ internal class LambdaBinder {
                     discardedTargetDiagnostics,
                     out var natural
                 ) {
+                    keptNaturalType = true
                     return natural!!
                 }
                 Diagnostics.AddRange(held)
@@ -1541,6 +1650,7 @@ internal class LambdaBinder {
                     naturalReturnType
                 )
             ) {
+                keptNaturalType = true
                 discardedTargetDiagnostics?.Add(targetDiagnostics)
                 Diagnostics.AddRange(deferredReturns.NaturalDiagnostics())
                 returnType = naturalReturnType
@@ -1839,6 +1949,18 @@ internal class LambdaBinder {
         if adapterPrefix.Count > 0 {
             adapterPrefix.AddRange(body.Statements)
             body = BoundBlockStatement(body.Syntax, adapterPrefix.ToImmutable())
+        }
+        if localFunctionReferencedFunctions.TryGetValue(literal.Function, out var referencedFunctions) {
+            localFunctionReferencedFunctions[adapterFunction] = referencedFunctions
+        }
+        if localFunctionLexicalScopes.TryGetValue(literal.Function, out var lexicalScope) {
+            localFunctionLexicalScopes[adapterFunction] = lexicalScope
+        }
+        if localFunctionDirectCapturedVariables.TryGetValue(literal.Function, out var directCapturedVariables) {
+            localFunctionDirectCapturedVariables[adapterFunction] = directCapturedVariables
+        }
+        if localFunctionCapturedVariables.TryGetValue(literal.Function, out var capturedVariables) {
+            localFunctionCapturedVariables[adapterFunction] = capturedVariables
         }
         return BoundFunctionLiteralExpression(
             literal.Syntax,
@@ -2615,6 +2737,213 @@ internal class LambdaBinder {
         return false
     }
 
+    internal struct RetriedFunctionLiteralKey : IEquatable[RetriedFunctionLiteralKey] {
+        internal let Syntax SyntaxNode
+        internal let Target FunctionTypeSymbol?
+        internal let InferReturn bool
+        internal let Speculative bool
+
+        init(syntax SyntaxNode, target FunctionTypeSymbol?, inferReturn bool, speculative bool) {
+            Syntax = syntax
+            Target = target
+            InferReturn = inferReturn
+            Speculative = speculative
+        }
+
+        func Equals(other RetriedFunctionLiteralKey) bool -> object.ReferenceEquals(Syntax, other.Syntax) &&
+            object.Equals(Target, other.Target) && InferReturn == other.InferReturn && Speculative == other.Speculative
+
+        override func Equals(obj object?) bool -> obj is RetriedFunctionLiteralKey other && Equals(other)
+
+        override func GetHashCode() int32 -> HashCode.Combine(
+            ReferenceEqualityComparer.Instance.GetHashCode(Syntax),
+            Target,
+            InferReturn,
+            Speculative
+        )
+    }
+
+    internal sealed class RetriedFunctionLiteralEntry {
+        internal let Bound BoundExpression
+        internal let Diagnostics ImmutableArray[Diagnostic]
+        internal let DiscardedTargetDiagnostics ImmutableArray[ImmutableArray[Diagnostic]]
+        internal let KeptNaturalType bool
+
+        init(
+            bound BoundExpression,
+            diagnostics ImmutableArray[Diagnostic],
+            discardedTargetDiagnostics ImmutableArray[ImmutableArray[Diagnostic]],
+            keptNaturalType bool
+        ) {
+            Bound = bound
+            Diagnostics = diagnostics
+            DiscardedTargetDiagnostics = discardedTargetDiagnostics
+            KeptNaturalType = keptNaturalType
+        }
+    }
+
+    private func TryReuseRetriedFunctionLiteral(
+        key RetriedFunctionLiteralKey,
+        acceptsNaturalType((TypeSymbol) -> bool)?,
+        discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]?,
+        @NotNullWhen(true) out bound BoundExpression?
+    ) bool {
+        bound = nil
+        let cache = binderCtx.RetriedFunctionLiterals
+        if cache == nil || !cache.TryGetValue(key, out var entry) {
+            return false
+        }
+        if !CapturedVariablesMatchScope(entry.Bound, Scope) {
+            return false
+        }
+        if entry.KeptNaturalType && acceptsNaturalType != nil && !acceptsNaturalType(entry.Bound.Type) {
+            return false
+        }
+        if entry.Bound is BoundFunctionLiteralExpression reusedLiteral {
+            localFunctionLexicalScopes[reusedLiteral.Function] = Scope
+        }
+        if discardedTargetDiagnostics != nil && !entry.DiscardedTargetDiagnostics.IsDefaultOrEmpty {
+            for item in entry.DiscardedTargetDiagnostics {
+                discardedTargetDiagnostics.Add(item)
+            }
+        }
+        Diagnostics.AddRange(entry.Diagnostics)
+        bound = entry.Bound
+        return true
+    }
+
+    private func RecordRetriedFunctionLiteral(
+        key RetriedFunctionLiteralKey,
+        bound BoundExpression,
+        startMark int32,
+        discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]?,
+        discardedStart int32,
+        keptNaturalType bool
+    ) {
+        let cache = binderCtx.RetriedFunctionLiterals
+        if cache == nil {
+            return
+        }
+        var discarded = ImmutableArray[ImmutableArray[Diagnostic]].Empty
+        if discardedTargetDiagnostics != nil && discardedTargetDiagnostics.Count > discardedStart {
+            let builder = ImmutableArray.CreateBuilder[ImmutableArray[Diagnostic]](
+                discardedTargetDiagnostics.Count - discardedStart
+            )
+            for var i = discardedStart; i < discardedTargetDiagnostics.Count; i++ {
+                builder.Add(discardedTargetDiagnostics[i])
+            }
+            discarded = builder.MoveToImmutable()
+        }
+        cache[key] = RetriedFunctionLiteralEntry(bound, Diagnostics.VisibleSince(startMark), discarded, keptNaturalType)
+    }
+
+    private func CanReuseLocalFunction(existing FunctionSymbol, candidate FunctionSymbol) bool {
+        if existing.Name != candidate.Name ||
+            existing.Type != candidate.Type ||
+            existing.IsAsync != candidate.IsAsync ||
+            existing.IsAsyncVoid != candidate.IsAsyncVoid ||
+            existing.AsyncReturnsValueTask != candidate.AsyncReturnsValueTask ||
+            existing.ReturnRefKind != candidate.ReturnRefKind ||
+            existing
+            .TypeParameters
+            .Length != candidate
+            .TypeParameters
+            .Length ||
+            existing
+            .Parameters
+            .Length != candidate
+            .Parameters
+            .Length {
+            return false
+        }
+        for var i = 0; i < existing.TypeParameters.Length; i++ {
+            if !object.ReferenceEquals(existing.TypeParameters[i], candidate.TypeParameters[i]) {
+                return false
+            }
+        }
+        for var i = 0; i < existing.Parameters.Length; i++ {
+            if !object.ReferenceEquals(existing.Parameters[i], candidate.Parameters[i]) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func LocalFunctionMatchesScope(referenced FunctionSymbol, $scope BoundScope) bool {
+        if $scope.TryLookupSymbol(referenced.Name) is not FunctionSymbol {
+            return false
+        }
+        for candidate in $scope.TryLookupFunctions(referenced.Name) {
+            if object.ReferenceEquals(candidate, referenced) {
+                return true
+            }
+            if BoundScope.FunctionSignaturesEqual(candidate, referenced) {
+                return false
+            }
+        }
+        return false
+    }
+
+    private func CapturedVariablesMatchScope(bound BoundExpression, $scope BoundScope) bool {
+        if bound is not BoundFunctionLiteralExpression literal {
+            return true
+        }
+        let directCaptured = if localFunctionDirectCapturedVariables.TryGetValue(literal.Function, out var direct) {
+            direct
+        } else {
+            literal.CapturedVariables
+        }
+        for captured in directCaptured {
+            if !object.ReferenceEquals($scope.TryLookupSymbol(captured.Name), captured) {
+                return false
+            }
+        }
+        if localFunctionReferencedFunctions.TryGetValue(literal.Function, out var referencedFunctions) &&
+            !referencedFunctions
+            .IsDefaultOrEmpty {
+            let visited = HashSet[FunctionSymbol](ReferenceEqualityComparer.Instance)
+            let worklist = Stack[FunctionSymbol]()
+            for var i = referencedFunctions.Length - 1; i >= 0; i-- {
+                let item = referencedFunctions[i]
+                if !LocalFunctionMatchesScope(item, $scope) {
+                    return false
+                }
+                if visited.Add(item) {
+                    worklist.Push(item)
+                }
+            }
+            while worklist.Count > 0 {
+                let referenced = worklist.Pop()
+                if localFunctionCapturedVariables.TryGetValue(referenced, out var calleeCaptured) {
+                    for calleeVar in calleeCaptured {
+                        if calleeVar is not GlobalVariableSymbol && !literal.CapturedVariables.Contains(calleeVar) {
+                            return false
+                        }
+                    }
+                }
+                if localFunctionReferencedFunctions.TryGetValue(referenced, out var nestedReferenced) &&
+                    !nestedReferenced
+                    .IsDefaultOrEmpty {
+                    let referencedScope = if localFunctionLexicalScopes.TryGetValue(referenced, out var recordedScope) {
+                        recordedScope
+                    } else {
+                        $scope
+                    }
+                    for var i = nestedReferenced.Length - 1; i >= 0; i-- {
+                        let nested = nestedReferenced[i]
+                        if !LocalFunctionMatchesScope(nested, referencedScope) {
+                            return false
+                        }
+                        if visited.Add(nested) {
+                            worklist.Push(nested)
+                        }
+                    }
+                }
+            }
+        }
+        return true
+    }
+
     /// Issue #5569: the target-typed return values of a speculative literal body whose target typing failed.
     /// Each such return statement binds its value again with the natural type, so the body can give either
     /// function type after one bind of its statements. Issue #5603: a lambda body whose result type the lambda binder
@@ -2630,23 +2959,28 @@ internal class LambdaBinder {
 
         private let operands List[
             (
+                Syntax SyntaxNode,
                 Value BoundExpression,
                 Diagnostics ImmutableArray[Diagnostic],
                 NaturalDiagnostics ImmutableArray[Diagnostic]
             )
         ] = List[
             (
+                Syntax SyntaxNode,
                 Value BoundExpression,
                 Diagnostics ImmutableArray[Diagnostic],
                 NaturalDiagnostics ImmutableArray[Diagnostic]
             )
         ]()
 
-        // The target-typed value of each held return statement, by syntax identity.
-        private let targetValues Dictionary[ReturnStatementSyntax, BoundExpression] = Dictionary[
-            ReturnStatementSyntax,
-            BoundExpression
-        ](ReferenceEqualityComparer.Instance)
+        // The target-typed value of each held return statement or trailing expression, by syntax identity.
+        private let targetValues Dictionary[SyntaxNode, BoundExpression] = Dictionary[SyntaxNode, BoundExpression](
+            ReferenceEqualityComparer.Instance
+        )
+
+        private let conversionHistory List[
+            (Source BoundExpression, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
+        ] = List[(Source BoundExpression, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])]()
 
         // The target conversion of each return value, by bound value identity, so each pass's value keeps its own.
         private let targetConversions Dictionary[
@@ -2656,25 +2990,29 @@ internal class LambdaBinder {
             ReferenceEqualityComparer.Instance
         )
 
-        /// Records the target-typed value of a return statement and the diagnostics of both passes.
-        /// @param syntax The return statement.
+        internal prop OperandCount int32 -> operands.Count
+
+        internal prop ConversionCount int32 -> conversionHistory.Count
+
+        /// Records the target-typed value of a return statement or trailing expression and the diagnostics of both passes.
+        /// @param syntax The return statement or trailing expression.
         /// @param value The target-typed value.
         /// @param diagnostics The diagnostics of the target pass.
         /// @param naturalDiagnostics The diagnostics of the natural pass.
         internal func Hold(
-            syntax ReturnStatementSyntax,
+            syntax SyntaxNode,
             value BoundExpression,
             diagnostics ImmutableArray[Diagnostic],
             naturalDiagnostics ImmutableArray[Diagnostic]
         ) {
-            operands.Add((value, diagnostics, naturalDiagnostics))
+            operands.Add((syntax, value, diagnostics, naturalDiagnostics))
             targetValues[syntax] = value
         }
 
-        /// Gets a value indicating whether a return statement has a held target-typed value.
-        /// @param syntax The return statement.
+        /// Gets a value indicating whether a return statement or trailing expression has a held target-typed value.
+        /// @param syntax The return statement or trailing expression.
         /// @returns `true` when (cref:Hold) recorded a value for it.
-        internal func Holds(syntax ReturnStatementSyntax) bool -> targetValues.ContainsKey(syntax)
+        internal func Holds(syntax SyntaxNode) bool -> targetValues.ContainsKey(syntax)
 
         /// Records the conversion of a return value to the target, bound where the return value binds, as an eager
         /// bind converts it.
@@ -2686,6 +3024,7 @@ internal class LambdaBinder {
             converted BoundExpression,
             diagnostics ImmutableArray[Diagnostic]
         ) {
+            conversionHistory.Add((value, converted, diagnostics))
             targetConversions[value] = (converted, diagnostics)
         }
 
@@ -2714,27 +3053,70 @@ internal class LambdaBinder {
             return false
         }
 
-        /// Captures the held values and conversions, for a binder that discards a bind (see
-        /// `StatementBinder.CaptureSpeculativeBindState`).
-        /// @returns The captured collections.
-        internal func Capture() DeferredReturnSnapshot -> DeferredReturnSnapshot(
-            operands.ToArray(),
-            targetValues.ToArray(),
-            targetConversions.ToArray()
-        )
-
-        /// Puts back the collections that (cref:Capture) captured.
-        /// @param snapshot The captured collections.
-        internal func Restore(snapshot DeferredReturnSnapshot) {
-            operands.Clear()
-            operands.AddRange(snapshot.Operands)
-            targetValues.Clear()
-            for entry in snapshot.TargetValues {
-                targetValues.Add(entry.Key, entry.Value)
+        /// Rolls back operands and conversions added after the given watermarks.
+        internal func TruncateTo(operandCount int32, conversionCount int32) {
+            while operands.Count > operandCount {
+                let lastIndex = operands.Count - 1
+                targetValues.Remove(operands[lastIndex].Syntax)
+                operands.RemoveAt(lastIndex)
             }
-            targetConversions.Clear()
-            for entry in snapshot.TargetConversions {
-                targetConversions.Add(entry.Key, entry.Value)
+            while conversionHistory.Count > conversionCount {
+                let lastIndex = conversionHistory.Count - 1
+                targetConversions.Remove(conversionHistory[lastIndex].Source)
+                conversionHistory.RemoveAt(lastIndex)
+            }
+        }
+
+        /// Captures only the operands and conversions added since the given watermarks.
+        internal func CaptureDelta(operandCount int32, conversionCount int32) DeferredReturnSnapshot {
+            let addedOperands = if operands.Count > operandCount {
+                let slice = [operands.Count - operandCount](
+                    Syntax SyntaxNode,
+                    Value BoundExpression,
+                    Diagnostics ImmutableArray[Diagnostic],
+                    NaturalDiagnostics ImmutableArray[Diagnostic]
+                )
+                operands.CopyTo(operandCount, slice, 0, slice.Length)
+                slice
+            } else {
+                default(
+                    []?(
+                        Syntax SyntaxNode,
+                        Value BoundExpression,
+                        Diagnostics ImmutableArray[Diagnostic],
+                        NaturalDiagnostics ImmutableArray[Diagnostic]
+                    )
+                )
+            }
+            let addedConversions = if conversionHistory.Count > conversionCount {
+                let slice = [conversionHistory.Count - conversionCount](
+                    Source BoundExpression,
+                    Value BoundExpression,
+                    Diagnostics ImmutableArray[Diagnostic]
+                )
+                conversionHistory.CopyTo(conversionCount, slice, 0, slice.Length)
+                slice
+            } else {
+                default([]?(Source BoundExpression, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic]))
+            }
+            return DeferredReturnSnapshot(operandCount, conversionCount, addedOperands, addedConversions)
+        }
+
+        /// Puts back the delta that (cref:CaptureDelta) captured.
+        /// @param snapshot The captured delta.
+        internal func Restore(snapshot DeferredReturnSnapshot) {
+            TruncateTo(snapshot.OperandCount, snapshot.ConversionCount)
+            if snapshot.AddedOperands != nil {
+                for item in snapshot.AddedOperands {
+                    operands.Add(item)
+                    targetValues[item.Syntax] = item.Value
+                }
+            }
+            if snapshot.AddedConversions != nil {
+                for item in snapshot.AddedConversions {
+                    conversionHistory.Add(item)
+                    targetConversions[item.Source] = (item.Value, item.Diagnostics)
+                }
             }
         }
 
@@ -2765,35 +3147,39 @@ internal class LambdaBinder {
             if operands.Count == 0 {
                 return body
             }
+            let bodySyntax = body.Syntax
+            if bodySyntax != nil && targetValues.TryGetValue(bodySyntax, out var targetBody) {
+                return targetBody
+            }
             let rewriter = TargetOperandRewriter(targetValues)
             if body is BoundBlockExpression block {
                 let statements = ImmutableArray.CreateBuilder[BoundStatement](block.Statements.Length)
                 for statement in block.Statements {
                     statements.Add(rewriter.RewriteStatement(statement))
                 }
-                return BoundBlockExpression(
-                    block.Syntax,
-                    statements.ToImmutable(),
+                let tailSyntax = block.Expression.Syntax
+                let tail = if tailSyntax != nil && targetValues.TryGetValue(tailSyntax, out var targetTail) {
+                    targetTail
+                } else {
                     rewriter.RewriteTail(block.Expression)
-                )
+                }
+                return BoundBlockExpression(block.Syntax, statements.ToImmutable(), tail)
             }
             return rewriter.RewriteTail(body)
         }
 
         private class TargetOperandRewriter : BoundTreeRewriter {
-            private let targetValues Dictionary[ReturnStatementSyntax, BoundExpression]
+            private let targetValues Dictionary[SyntaxNode, BoundExpression]
 
-            init(targetValues Dictionary[ReturnStatementSyntax, BoundExpression]) {
+            init(targetValues Dictionary[SyntaxNode, BoundExpression]) {
                 this.targetValues = targetValues
             }
 
             internal func RewriteTail(node BoundExpression) BoundExpression -> RewriteExpression(node)
 
             protected override func RewriteReturnStatement(node BoundReturnStatement) BoundStatement {
-                if node.Syntax is ReturnStatementSyntax returnSyntax && targetValues.TryGetValue(
-                    returnSyntax,
-                    out var value
-                ) {
+                let returnSyntax = node.Syntax
+                if returnSyntax != nil && targetValues.TryGetValue(returnSyntax, out var value) {
                     return BoundReturnStatement(node.Syntax, value, node.IsRef)
                 }
                 return base.RewriteReturnStatement(node)
@@ -2801,34 +3187,37 @@ internal class LambdaBinder {
         }
     }
 
-    /// Issue #5569: the collections of a (cref:DeferredReturnState) at one point of a body bind.
+    /// Issue #5569 / #5604: the operand-local delta of a (cref:DeferredReturnState) across one pass of a return value.
     internal sealed class DeferredReturnSnapshot {
-        internal let Operands[](
+        internal let OperandCount int32
+        internal let ConversionCount int32
+        internal let AddedOperands[]?(
+            Syntax SyntaxNode,
             Value BoundExpression,
             Diagnostics ImmutableArray[Diagnostic],
             NaturalDiagnostics ImmutableArray[Diagnostic]
         )
-        internal let TargetValues[]KeyValuePair[ReturnStatementSyntax, BoundExpression]
-        internal let TargetConversions[]KeyValuePair[
-            BoundExpression,
-            (Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
-        ]
+        internal let AddedConversions[]?(
+            Source BoundExpression,
+            Value BoundExpression,
+            Diagnostics ImmutableArray[Diagnostic]
+        )
 
         init(
-            operands[](
+            operandCount int32,
+            conversionCount int32,
+            addedOperands[]?(
+                Syntax SyntaxNode,
                 Value BoundExpression,
                 Diagnostics ImmutableArray[Diagnostic],
                 NaturalDiagnostics ImmutableArray[Diagnostic]
             ),
-            targetValues[]KeyValuePair[ReturnStatementSyntax, BoundExpression],
-            targetConversions[]KeyValuePair[
-                BoundExpression,
-                (Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
-            ]
+            addedConversions[]?(Source BoundExpression, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
         ) {
-            Operands = operands
-            TargetValues = targetValues
-            TargetConversions = targetConversions
+            OperandCount = operandCount
+            ConversionCount = conversionCount
+            AddedOperands = addedOperands
+            AddedConversions = addedConversions
         }
     }
 
@@ -2881,10 +3270,16 @@ internal class LambdaBinder {
         }
     }
 
-    private func CollectCapturedVariables(body BoundStatement, function FunctionSymbol) ImmutableArray[VariableSymbol] {
+    private func CollectCapturedVariables(
+        body BoundStatement,
+        function FunctionSymbol,
+        recordLexicalScope bool = true
+    ) ImmutableArray[VariableSymbol] {
         let paramSet = HashSet[VariableSymbol](function.Parameters)
         let seen = HashSet[VariableSymbol]()
         let captured = ImmutableArray.CreateBuilder[VariableSymbol]()
+        let directSeen = HashSet[VariableSymbol]()
+        let directCaptured = ImmutableArray.CreateBuilder[VariableSymbol]()
         // Issue #1451: pre-seed the collector's `declared` set with every inline
         // `out var x` local declared *in this body*. Loop lowering (while/for/do)
         // emits the loop body before the controlling condition, so the out-var's
@@ -2895,6 +3290,9 @@ internal class LambdaBinder {
         // declared by a nested lambda stay in that lambda's scope.
         let outVarCollector = InlineOutVarDeclarationCollector()
         outVarCollector.RewriteStatement(body)
+        let declaredFunctions = HashSet[FunctionSymbol](outVarCollector.DeclaredFunctions)
+        declaredFunctions.Add(function)
+        let referencedFunctions = ImmutableArray.CreateBuilder[FunctionSymbol]()
         // Issue #4221: fold in the already-known captures of any local
         // function this body calls directly (see localFunctionCapturedVariables).
         let collector = CapturedVariableCollector(
@@ -2902,11 +3300,22 @@ internal class LambdaBinder {
             seen,
             captured,
             outVarCollector.Declared,
-            localFunctionCapturedVariables
+            localFunctionCapturedVariables,
+            localFunctionDirectCapturedVariables,
+            directSeen,
+            directCaptured,
+            declaredFunctions,
+            referencedFunctions,
+            localFunctionReferencedFunctions
         )
         collector.RewriteStatement(body)
         let result = captured.ToImmutable()
         localFunctionCapturedVariables[function] = result
+        localFunctionDirectCapturedVariables[function] = directCaptured.ToImmutable()
+        localFunctionReferencedFunctions[function] = referencedFunctions.ToImmutable()
+        if recordLexicalScope {
+            localFunctionLexicalScopes[function] = Scope
+        }
         return result
     }
 
@@ -2975,10 +3384,20 @@ internal class LambdaBinder {
     private class InlineOutVarDeclarationCollector : BoundTreeRewriter {
         init() {
             Declared = HashSet[VariableSymbol]()
+            DeclaredFunctions = HashSet[FunctionSymbol]()
         }
 
         prop Declared HashSet[VariableSymbol] {
             get;
+        }
+
+        prop DeclaredFunctions HashSet[FunctionSymbol] {
+            get;
+        }
+
+        protected override func RewriteLocalFunctionDeclaration(node BoundLocalFunctionDeclaration) BoundStatement {
+            this.DeclaredFunctions.Add(node.Literal.Function)
+            return node
         }
 
         protected override func RewriteAddressOfExpression(node BoundAddressOfExpression) BoundExpression {
@@ -3531,13 +3950,26 @@ internal class LambdaBinder {
         private let declared HashSet[VariableSymbol]
         private let captured ImmutableArray[VariableSymbol].Builder
         private let calleeCapturedVariables IReadOnlyDictionary[FunctionSymbol, ImmutableArray[VariableSymbol]]?
+        private let calleeDirectCapturedVariables IReadOnlyDictionary[FunctionSymbol, ImmutableArray[VariableSymbol]]?
+        private let directSeen HashSet[VariableSymbol]?
+        private let directCaptured ImmutableArray[VariableSymbol].Builder?
+        private let declaredFunctions HashSet[FunctionSymbol]?
+        private let seenFunctions HashSet[FunctionSymbol] = HashSet[FunctionSymbol]()
+        private let referencedFunctions ImmutableArray[FunctionSymbol].Builder?
+        private let calleeReferencedFunctions IReadOnlyDictionary[FunctionSymbol, ImmutableArray[FunctionSymbol]]?
 
         init(
             parameters HashSet[VariableSymbol],
             seen HashSet[VariableSymbol],
             captured ImmutableArray[VariableSymbol].Builder,
             preDeclared IEnumerable[VariableSymbol]? = nil,
-            calleeCapturedVariables IReadOnlyDictionary[FunctionSymbol, ImmutableArray[VariableSymbol]]? = nil
+            calleeCapturedVariables IReadOnlyDictionary[FunctionSymbol, ImmutableArray[VariableSymbol]]? = nil,
+            calleeDirectCapturedVariables IReadOnlyDictionary[FunctionSymbol, ImmutableArray[VariableSymbol]]? = nil,
+            directSeen HashSet[VariableSymbol]? = nil,
+            directCaptured ImmutableArray[VariableSymbol].Builder? = nil,
+            declaredFunctions HashSet[FunctionSymbol]? = nil,
+            referencedFunctions ImmutableArray[FunctionSymbol].Builder? = nil,
+            calleeReferencedFunctions IReadOnlyDictionary[FunctionSymbol, ImmutableArray[FunctionSymbol]]? = nil
         ) {
             this.parameters = parameters
             this.seen = seen
@@ -3548,6 +3980,68 @@ internal class LambdaBinder {
             }
             this.captured = captured
             this.calleeCapturedVariables = calleeCapturedVariables
+            this.calleeDirectCapturedVariables = calleeDirectCapturedVariables
+            this.directSeen = directSeen
+            this.directCaptured = directCaptured
+            this.declaredFunctions = declaredFunctions
+            this.referencedFunctions = referencedFunctions
+            this.calleeReferencedFunctions = calleeReferencedFunctions
+        }
+
+        private func RecordDirectFunctionReference(callee FunctionSymbol?) {
+            let referencedFunctions = this.referencedFunctions
+            if callee == nil || referencedFunctions == nil {
+                return
+            }
+            if callee.LocalDeclaration != nil && this.declaredFunctions?.Contains(callee) != true &&
+                this
+                .seenFunctions
+                .Add(callee) {
+                referencedFunctions.Add(callee)
+            }
+        }
+
+        private func RecordNestedBodyFunctionReferences(callee FunctionSymbol?) {
+            let referencedFunctions = this.referencedFunctions
+            if callee == nil || referencedFunctions == nil {
+                return
+            }
+            if this.calleeReferencedFunctions != nil && this.calleeReferencedFunctions.TryGetValue(
+                callee,
+                out var nestedReferenced
+            ) {
+                for nested in nestedReferenced {
+                    if this.declaredFunctions?.Contains(nested) != true && this.seenFunctions.Add(nested) {
+                        referencedFunctions.Add(nested)
+                    }
+                }
+            }
+        }
+
+        private func RecordDirectReferencesFrom(callee FunctionSymbol, fallback ImmutableArray[VariableSymbol]) {
+            let directCaptured = this.directCaptured
+            let directSeen = this.directSeen
+            if directCaptured == nil || directSeen == nil {
+                return
+            }
+            let direct = if this.calleeDirectCapturedVariables != nil && this.calleeDirectCapturedVariables.TryGetValue(
+                callee,
+                out var recordedDirect
+            ) {
+                recordedDirect
+            } else {
+                fallback
+            }
+            for variable in direct {
+                if variable is GlobalVariableSymbol {
+                    continue
+                }
+                if !this.parameters.Contains(variable) && !this.declared.Contains(variable) && directSeen.Add(
+                    variable
+                ) {
+                    directCaptured.Add(variable)
+                }
+            }
         }
 
         /// Issue #4221: a call to a local function is a
@@ -3562,6 +4056,7 @@ internal class LambdaBinder {
         /// body will need to rebuild the callee's closure instance at the
         /// call site (`MethodBodyEmitter.EmitGenericLocalClosureInstance`).
         protected override func RewriteCallExpression(node BoundCallExpression) BoundExpression {
+            this.RecordDirectFunctionReference(node.Function)
             if this.calleeCapturedVariables != nil && this.calleeCapturedVariables.TryGetValue(
                 node.Function,
                 out var calleeCaptured
@@ -3577,8 +4072,25 @@ internal class LambdaBinder {
                         this.captured.Add(calleeVariable)
                     }
                 }
+                if this.declaredFunctions?.Contains(node.Function) == true {
+                    this.RecordDirectReferencesFrom(node.Function, calleeCaptured)
+                }
             }
             return base.RewriteCallExpression(node)
+        }
+
+        protected override func RewriteMethodGroupExpression(node BoundMethodGroupExpression) BoundExpression {
+            for candidate in node.Candidates {
+                this.RecordDirectFunctionReference(candidate)
+            }
+            return base.RewriteMethodGroupExpression(node)
+        }
+
+        protected override func RewriteLocalFunctionDeclaration(node BoundLocalFunctionDeclaration) BoundStatement {
+            this.declaredFunctions?.Add(node.Literal.Function)
+            this.RecordNestedBodyFunctionReferences(node.Literal.Function)
+            this.RecordDirectReferencesFrom(node.Literal.Function, node.Literal.CapturedVariables)
+            return node
         }
 
         protected override func RewriteVariableDeclaration(node BoundVariableDeclaration) BoundStatement {
@@ -3769,6 +4281,8 @@ internal class LambdaBinder {
         }
 
         protected override func RewriteFunctionLiteralExpression(node BoundFunctionLiteralExpression) BoundExpression {
+            this.RecordNestedBodyFunctionReferences(node.Function)
+            this.RecordDirectReferencesFrom(node.Function, node.CapturedVariables)
             // Issue #503 follow-up: a nested function literal's captures
             // must transitively contribute to the *outer* literal's capture
             // set whenever they're satisfied by neither outer parameters
@@ -3797,8 +4311,13 @@ internal class LambdaBinder {
             if variable is GlobalVariableSymbol {
                 return
             }
-            if !this.parameters.Contains(variable) && !this.declared.Contains(variable) && this.seen.Add(variable) {
-                this.captured.Add(variable)
+            if !this.parameters.Contains(variable) && !this.declared.Contains(variable) {
+                if this.seen.Add(variable) {
+                    this.captured.Add(variable)
+                }
+                if this.directSeen?.Add(variable) == true {
+                    this.directCaptured?.Add(variable)
+                }
             }
         }
     }

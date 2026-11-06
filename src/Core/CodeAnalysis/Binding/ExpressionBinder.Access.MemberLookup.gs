@@ -1537,6 +1537,7 @@ internal partial class ExpressionBinder {
         )
         ApplySubExpressionNarrowingEffects(targetAnchor, target)
         let rectangular RectangularArrayTypeSymbol? = GetRectangularArrayTypeForBinding(target.Type)
+        var preBoundMultiArguments = default(ImmutableArray[BoundExpression])
         if rectangular == nil && (target.Type is StructSymbol or InterfaceSymbol) {
             // ADR-0187 / issue #4350: a multi-parameter user indexer
             // (`this[index int32, fromEnd bool]`) is read with the same
@@ -1587,24 +1588,38 @@ internal partial class ExpressionBinder {
             if multiReported {
                 return BoundErrorExpression(nil)
             }
+            preBoundMultiArguments = multiArguments
         }
+        let multiClrTarget Type? = target
+            .Type
+            .ClrType ??
+            (
+            if target.Type is StructSymbol multiStruct {
+                GetInheritedClrBaseType(multiStruct)
+            } else {
+                default(Type?)
+            }
+        )
         if rectangular == nil &&
             (target.Type is ImportedTypeSymbol or StructSymbol or NullabilityAnnotatedTypeSymbol) &&
-            target
-            .Type
-            .ClrType is {} multiClrTarget {
+            multiClrTarget != nil {
             // Issue #4350: a multi-parameter IMPORTED indexer — the runtime's
             // `Slice<T>.this[int index, bool fromEnd]`, reached through the
             // native `slice[T]` view — resolves through the same CLR indexer
             // overload resolution as a single index.
-            let multiClrArguments = ImmutableArray.CreateBuilder[BoundExpression](indexSyntaxes.Count)
-            for indexSyntax in indexSyntaxes {
-                multiClrArguments.Add(BindIndexArgumentExpression(indexSyntax))
+            let multiClrArguments = if !preBoundMultiArguments.IsDefault {
+                preBoundMultiArguments
+            } else {
+                let builder = ImmutableArray.CreateBuilder[BoundExpression](indexSyntaxes.Count)
+                for indexSyntax in indexSyntaxes {
+                    builder.Add(BindIndexArgumentExpression(indexSyntax))
+                }
+                builder.MoveToImmutable()
             }
             let multiOutcome = this.memberLookup.TryResolveClrIndexer(
                 target.Type,
                 multiClrTarget,
-                multiClrArguments.MoveToImmutable(),
+                multiClrArguments,
                 out var multiClrIndexer,
                 out var multiResolvedArguments
             )
@@ -1804,7 +1819,7 @@ internal partial class ExpressionBinder {
         // Issue #1022: a from-end index (`a[^n]`) reads the single element
         // `length - n`.
         if boundIndexOverride != nil && ClrTypeUtilities.AreSame(boundIndexOverride.Type?.ClrType, typeof(Index)) {
-            return BindSystemIndexAccess(target, boundIndexOverride, targetLocation)
+            return BindSystemIndexAccess(target, boundIndexOverride, targetLocation, indexSyntax)
         }
         var unwrappedIndexSyntax = indexSyntax
         while unwrappedIndexSyntax is ParenthesizedExpressionSyntax parenthesized {
@@ -1825,14 +1840,14 @@ internal partial class ExpressionBinder {
             !(indexSyntax is DefaultExpressionSyntax) &&
             !(indexSyntax is InterpolatedStringExpressionSyntax) {
             boundIndex = BindIndexArgumentExpression(indexSyntax)
-            if boundIndex is BoundErrorExpression {
+            if boundIndex is BoundErrorExpression && !IsDeferredBranchyArgumentPlaceholder(boundIndex, out _) {
                 return boundIndex
             }
             if IsSystemRangeType(boundIndex.Type) {
-                return BindRangeValueSlice(target, boundIndex, targetLocation)
+                return BindRangeValueSlice(target, boundIndex, targetLocation, indexSyntax)
             }
             if ClrTypeUtilities.AreSame(boundIndex.Type.ClrType, typeof(Index)) {
-                return BindSystemIndexAccess(target, boundIndex, targetLocation)
+                return BindSystemIndexAccess(target, boundIndex, targetLocation, indexSyntax)
             }
         }
         let ConvertIndex = func (conversionTargetType TypeSymbol) BoundExpression {
@@ -1842,8 +1857,14 @@ internal partial class ExpressionBinder {
                 conversions.BindConversion(indexSyntax, conversionTargetType)
             }
         }
+        var cachedBoundIndexArg BoundExpression? = boundIndex
         let BoundIndexArg = func () BoundExpression {
-            return boundIndex ?? BindIndexArgumentExpression(indexSyntax)
+            if cachedBoundIndexArg != nil {
+                return cachedBoundIndexArg
+            }
+            let bound = BindIndexArgumentExpression(indexSyntax)
+            cachedBoundIndexArg = bound
+            return bound
         }
         // Phase 3.A.4: map indexing `m[k]` — key bound to K, result type V.
         // The Go convention "zero value if missing" applies at evaluation;
@@ -1859,7 +1880,7 @@ internal partial class ExpressionBinder {
             // index (matching C#). `boundIndex` is non-null for every non-
             // default/interpolated index; those two carry no natural type and
             // keep the historical int32 conversion driven by the target type.
-            let index = if boundIndex != nil {
+            let index = if boundIndex != nil && !IsDeferredBranchyArgumentPlaceholder(boundIndex, out _) {
                 ConvertArrayElementIndex(indexSyntax.Location, boundIndex, target.Type)
             } else {
                 ConvertIndex(TypeSymbol.Int32)
@@ -1875,7 +1896,7 @@ internal partial class ExpressionBinder {
         // lowers a `BoundIndexExpression` whose target is `string` to `get_Chars`
         // (#537).
         if target.Type == TypeSymbol.String {
-            let index = if boundIndex != nil {
+            let index = if boundIndex != nil && !IsDeferredBranchyArgumentPlaceholder(boundIndex, out _) {
                 ConvertStringCharIndex(indexSyntax.Location, boundIndex)
             } else {
                 ConvertIndex(TypeSymbol.Int32)
@@ -1967,39 +1988,6 @@ internal partial class ExpressionBinder {
             }
             clrIndexerOutcome = outcome
         }
-        let clrTarget Type? = target.Type.ClrType
-        if (target.Type is ImportedTypeSymbol || target.Type is StructSymbol) && clrTarget != nil {
-            let idxArgs = ImmutableArray.Create(BoundIndexArg())
-            let outcome = this.memberLookup.TryResolveClrIndexer(
-                target.Type,
-                clrTarget,
-                idxArgs,
-                out var idxProp,
-                out var resolvedIdxArgs
-            )
-            if outcome == ClrIndexerResolutionOutcome.Resolved {
-                // A successful CLR indexer resolution establishes a non-null property.
-                if ClrMemberVisibility.GetVisibleGetter(
-                    idxProp!!,
-                    CanAccessInternalsOf(idxProp!!.DeclaringType)
-                ) == nil {
-                    Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type)
-                    return BoundErrorExpression(nil)
-                }
-                let elementType = ResolveIndexerElementType(target.Type, idxProp!!)
-                let convertedIdxArgs = BindClrIndexerArguments(
-                    target.Type,
-                    idxProp!!,
-                    resolvedIdxArgs,
-                    indexSyntax.Location,
-                    singleIndexSyntax: indexSyntax
-                )
-                return ConversionClassifier.AutoDereferenceRefReturn(
-                    BoundClrIndexExpression(nil, target, idxProp!!, convertedIdxArgs, elementType)
-                )
-            }
-            clrIndexerOutcome = outcome
-        }
         // ADR-0118 / issue #944: index access on a user-defined type that
         // declares an indexer member (`prop this[i T] U`). Binds `obj[i]` to a
         // call of the indexer getter (`obj.get_Item(i)`). ADR-0149 follow-up
@@ -2053,6 +2041,48 @@ internal partial class ExpressionBinder {
             if readReported {
                 return BoundErrorExpression(nil)
             }
+        }
+        let clrTarget Type? = target
+            .Type
+            .ClrType ??
+            (
+            if target.Type is StructSymbol structTarget {
+                GetInheritedClrBaseType(structTarget)
+            } else {
+                default(Type?)
+            }
+        )
+        if (target.Type is ImportedTypeSymbol || target.Type is StructSymbol) && clrTarget != nil {
+            let idxArgs = ImmutableArray.Create(BoundIndexArg())
+            let outcome = this.memberLookup.TryResolveClrIndexer(
+                target.Type,
+                clrTarget,
+                idxArgs,
+                out var idxProp,
+                out var resolvedIdxArgs
+            )
+            if outcome == ClrIndexerResolutionOutcome.Resolved {
+                // A successful CLR indexer resolution establishes a non-null property.
+                if ClrMemberVisibility.GetVisibleGetter(
+                    idxProp!!,
+                    CanAccessInternalsOf(idxProp!!.DeclaringType)
+                ) == nil {
+                    Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type)
+                    return BoundErrorExpression(nil)
+                }
+                let elementType = ResolveIndexerElementType(target.Type, idxProp!!)
+                let convertedIdxArgs = BindClrIndexerArguments(
+                    target.Type,
+                    idxProp!!,
+                    resolvedIdxArgs,
+                    indexSyntax.Location,
+                    singleIndexSyntax: indexSyntax
+                )
+                return ConversionClassifier.AutoDereferenceRefReturn(
+                    BoundClrIndexExpression(nil, target, idxProp!!, convertedIdxArgs, elementType)
+                )
+            }
+            clrIndexerOutcome = outcome
         }
         if !ReportClrIndexerResolutionFailure(clrIndexerOutcome, indexSyntax.Location) &&
             target.Type != TypeSymbol.Error {
@@ -2316,7 +2346,24 @@ internal partial class ExpressionBinder {
                 return indexRead
             }
             var indexRequiresSuspensionFreeCapture = false
-            if sharedIndex == nil &&
+            var sharedCountedOffset BoundExpression? = nil
+            let isCountedIndexBlock = indexRead is BoundBlockExpression{Syntax: nil}
+            if isCountedIndexBlock &&
+                TryCaptureCompoundIndexArgument(
+                &indexRead,
+                statements,
+                out var capturedCountedOffset,
+                out indexRequiresSuspensionFreeCapture
+            ) {
+                sharedCountedOffset = capturedCountedOffset
+                if sharedIndex == nil {
+                    let indexSym = TypeSymbol.FromClrTypeWithoutNullability(
+                        typeof(Index),
+                        NullabilityFreeReason.TypeLiteral
+                    )
+                    sharedIndex = BoundDefaultExpression(nil, indexSym)
+                }
+            } else if sharedIndex == nil &&
                 TryCaptureCompoundIndexArgument(
                 &indexRead,
                 statements,
@@ -2449,7 +2496,8 @@ internal partial class ExpressionBinder {
                         userCompoundTarget,
                         diagnosticLocation,
                         sharedIndex,
-                        boundReceiver
+                        boundReceiver,
+                        sharedCountedOffset
                     )
                     if previousValue != nil {
                         statements.Add(BoundExpressionStatement(outerSyntax, writeBack))
@@ -2535,7 +2583,8 @@ internal partial class ExpressionBinder {
                     combined,
                     diagnosticLocation,
                     sharedIndex,
-                    boundReceiver
+                    boundReceiver,
+                    sharedCountedOffset
                 )
             }
         } else if boundValueOverride != nil {
@@ -2572,6 +2621,22 @@ internal partial class ExpressionBinder {
     ) bool {
         requiresSuspensionFreeCapture = false
         switch indexRead {
+            case block is BoundBlockExpression when block.Syntax == nil && block.Expression is {} innerExpr {
+                var unwrappedInner = innerExpr
+                let innerStatements = ImmutableArray.CreateBuilder[BoundStatement]()
+                innerStatements.AddRange(block.Statements)
+                if !TryCaptureCompoundIndexArgument(
+                    &unwrappedInner,
+                    innerStatements,
+                    out capturedIndex,
+                    out requiresSuspensionFreeCapture
+                ) {
+                    return false
+                }
+                statements.AddRange(innerStatements)
+                indexRead = unwrappedInner
+                return true
+            }
             case clrIndex is BoundClrIndexExpression when clrIndex.Arguments.Length == 1 {
                 requiresSuspensionFreeCapture = RequiresSuspensionFreeAddressCapture(clrIndex.Arguments[0])
                 capturedIndex = CaptureUserIndexerArgument(clrIndex.Arguments[0], statements)
@@ -2680,7 +2745,8 @@ internal partial class ExpressionBinder {
         boundValue BoundExpression,
         diagnosticLocation TextLocation,
         boundIndexOverride BoundExpression? = nil,
-        receiverCapabilitySource BoundExpression? = nil
+        receiverCapabilitySource BoundExpression? = nil,
+        boundCountedOffsetOverride BoundExpression? = nil
     ) BoundExpression {
         return BindIndexedAssignmentToVariableCore(
             variable,
@@ -2689,7 +2755,8 @@ internal partial class ExpressionBinder {
             boundValueOverride: boundValue,
             diagnosticLocation,
             boundIndexOverride,
-            receiverCapabilitySource
+            receiverCapabilitySource,
+            boundCountedOffsetOverride
         )
     }
 
@@ -2700,7 +2767,8 @@ internal partial class ExpressionBinder {
         boundValueOverride BoundExpression?,
         diagnosticLocation TextLocation,
         boundIndexOverride BoundExpression? = nil,
-        receiverCapabilitySource BoundExpression? = nil
+        receiverCapabilitySource BoundExpression? = nil,
+        boundCountedOffsetOverride BoundExpression? = nil
     ) BoundExpression {
         // Issue #2488: direct indexed writes bypass the ordinary name-expression
         // read binder, so explicitly reuse its narrowed receiver construction.
@@ -2844,7 +2912,8 @@ internal partial class ExpressionBinder {
                 BindValue,
                 diagnosticLocation,
                 isReadOnlyReceiver,
-                applyLengthEffects: false
+                applyLengthEffects: false,
+                precomputedCountedOffset: boundCountedOffsetOverride
             )
         }
         if boundIndexOverride == nil && TryBindSystemIndexValue(indexSyntax, out var systemIndex) {
@@ -2861,12 +2930,14 @@ internal partial class ExpressionBinder {
                 applyLengthEffects: true
             )
         }
+        var cachedIndexValue BoundExpression? = boundIndexOverride
         let BindIndexValue = func () BoundExpression {
-            if boundIndexOverride != nil {
-                return boundIndexOverride
+            if cachedIndexValue != nil {
+                return cachedIndexValue
             }
             let bound = BindIndexArgumentExpression(indexSyntax)
             ApplySubExpressionNarrowingEffects(indexSyntax, bound)
+            cachedIndexValue = bound
             return bound
         }
         let ConvertIndexValue = func (targetType TypeSymbol) BoundExpression {
@@ -3009,96 +3080,6 @@ internal partial class ExpressionBinder {
                 )
             }
             clrIndexerOutcome = outcome
-        } else if (targetType is ImportedTypeSymbol || targetType is StructSymbol) &&
-            targetType.ClrType is Type clrTarget {
-            let idxArgs = ImmutableArray.Create(BindIndexValue())
-            let outcome = this.memberLookup.TryResolveClrIndexer(
-                targetType,
-                clrTarget,
-                idxArgs,
-                out var idxProp,
-                out var resolvedIdxArgs
-            )
-            if outcome == ClrIndexerResolutionOutcome.Resolved {
-                // A successful CLR indexer resolution establishes a non-null property.
-                let convertedIdxArgs = BindClrIndexerArguments(
-                    targetType,
-                    idxProp!!,
-                    resolvedIdxArgs,
-                    indexSyntax.Location,
-                    singleIndexSyntax: indexSyntax
-                )
-                for convertedIdxArg in convertedIdxArgs {
-                    ApplySubExpressionNarrowingEffects(indexSyntax, convertedIdxArg)
-                }
-                // ADR-0056 §2: span element write. `Span[T]` has no `set_Item`; its
-                // indexer is a `ref T`-returning getter and writes go through that
-                // managed pointer. Detect the ref-returning getter and store through
-                // it. A `ReadOnlySpan[T]` getter is `ref readonly T` — writing is a
-                // hard error (GS0226).
-                if ClrMemberVisibility.GetVisibleSetter(
-                    idxProp!!,
-                    CanAccessInternalsOf(idxProp!!.DeclaringType)
-                ) == nil {
-                    let refGetter MethodInfo? = GetVisibleGetter(idxProp!!)
-                    if refGetter != nil && refGetter.ReturnType.IsByRef {
-                        if IsReadOnlyRefReturn(idxProp!!) {
-                            Diagnostics.ReportCannotAssignReadOnlySpanElement(diagnosticLocation, targetType)
-                            return BoundErrorExpression(nil)
-                        }
-                        let resolvedElementType = if targetType is ImportedTypeSymbol importedRefReturn {
-                            MapErasedIndexerElementType(importedRefReturn, idxProp!!)
-                        } else {
-                            ResolveIndexerElementType(targetType, idxProp!!)
-                        }
-                        let pointeeType = if resolvedElementType is ByRefTypeSymbol byRef {
-                            byRef.PointeeType
-                        } else {
-                            (
-                                if ClrNullability.GetReturnTypeSymbol(refGetter) is ByRefTypeSymbol readByRef {
-                                    readByRef.PointeeType
-                                } else {
-                                    TypeSymbol.Error
-                                }
-                            )
-                        }
-                        let refValue = BindValue(pointeeType)
-                        return MakeClrIndexAssignment(
-                            idxProp!!,
-                            convertedIdxArgs,
-                            refValue,
-                            pointeeType,
-                            constrainedReceiverTypeParameter: nil,
-                            constrainedInterfaceType: nil
-                        )
-                    }
-                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType)
-                    return BoundErrorExpression(nil)
-                }
-                // Issue #968: recover the symbolic element type the same way
-                // the READ path does (MapErasedIndexerElementType). On a
-                // `List[T]` whose element `T` is the enclosing type's generic
-                // parameter, `idxProp.PropertyType` is the type-erased CLR
-                // `object` (T -> object). Typing the write value as `object`
-                // here would reject the assignment `_items[i] = value` (where
-                // `value: T`) with GS0155 ("Cannot convert type 'T' to
-                // 'object'"). Substituting the open `set_Item` value parameter
-                // back through the receiver's symbolic type arguments yields the
-                // real element type (`T`), so the `T` value binds without a
-                // spurious boxing conversion — the WRITE-path counterpart to the
-                // READ-path element-type recovery (issues #313 / #671 / #957).
-                let valueType = ResolveIndexerElementType(targetType, idxProp!!)
-                let boundValue = BindValue(valueType)
-                return MakeClrIndexAssignment(
-                    idxProp!!,
-                    convertedIdxArgs,
-                    boundValue,
-                    valueType,
-                    constrainedReceiverTypeParameter: nil,
-                    constrainedInterfaceType: nil
-                )
-            }
-            clrIndexerOutcome = outcome
         }
         // ADR-0118 / issue #944: index assignment on a user-defined type that
         // declares an indexer member. Binds `obj[i] = v` to a call of the
@@ -3218,6 +3199,107 @@ internal partial class ExpressionBinder {
             if writeReported {
                 return BoundErrorExpression(nil)
             }
+        }
+        let clrWriteTarget Type? = targetType.ClrType ??
+            (
+            if targetType is StructSymbol structWriteTarget {
+                GetInheritedClrBaseType(structWriteTarget)
+            } else {
+                default(Type?)
+            }
+        )
+        if !(targetType is TypeParameterSymbol) &&
+            !(targetType is NullabilityAnnotatedTypeSymbol) &&
+            (targetType is ImportedTypeSymbol || targetType is StructSymbol) &&
+            clrWriteTarget is Type clrTarget {
+            let idxArgs = ImmutableArray.Create(BindIndexValue())
+            let outcome = this.memberLookup.TryResolveClrIndexer(
+                targetType,
+                clrTarget,
+                idxArgs,
+                out var idxProp,
+                out var resolvedIdxArgs
+            )
+            if outcome == ClrIndexerResolutionOutcome.Resolved {
+                // A successful CLR indexer resolution establishes a non-null property.
+                let convertedIdxArgs = BindClrIndexerArguments(
+                    targetType,
+                    idxProp!!,
+                    resolvedIdxArgs,
+                    indexSyntax.Location,
+                    singleIndexSyntax: indexSyntax
+                )
+                for convertedIdxArg in convertedIdxArgs {
+                    ApplySubExpressionNarrowingEffects(indexSyntax, convertedIdxArg)
+                }
+                // ADR-0056 §2: span element write. `Span[T]` has no `set_Item`; its
+                // indexer is a `ref T`-returning getter and writes go through that
+                // managed pointer. Detect the ref-returning getter and store through
+                // it. A `ReadOnlySpan[T]` getter is `ref readonly T` — writing is a
+                // hard error (GS0226).
+                if ClrMemberVisibility.GetVisibleSetter(
+                    idxProp!!,
+                    CanAccessInternalsOf(idxProp!!.DeclaringType)
+                ) == nil {
+                    let refGetter MethodInfo? = GetVisibleGetter(idxProp!!)
+                    if refGetter != nil && refGetter.ReturnType.IsByRef {
+                        if IsReadOnlyRefReturn(idxProp!!) {
+                            Diagnostics.ReportCannotAssignReadOnlySpanElement(diagnosticLocation, targetType)
+                            return BoundErrorExpression(nil)
+                        }
+                        let resolvedElementType = if targetType is ImportedTypeSymbol importedRefReturn {
+                            MapErasedIndexerElementType(importedRefReturn, idxProp!!)
+                        } else {
+                            ResolveIndexerElementType(targetType, idxProp!!)
+                        }
+                        let pointeeType = if resolvedElementType is ByRefTypeSymbol byRef {
+                            byRef.PointeeType
+                        } else {
+                            (
+                                if ClrNullability.GetReturnTypeSymbol(refGetter) is ByRefTypeSymbol readByRef {
+                                    readByRef.PointeeType
+                                } else {
+                                    TypeSymbol.Error
+                                }
+                            )
+                        }
+                        let refValue = BindValue(pointeeType)
+                        return MakeClrIndexAssignment(
+                            idxProp!!,
+                            convertedIdxArgs,
+                            refValue,
+                            pointeeType,
+                            constrainedReceiverTypeParameter: nil,
+                            constrainedInterfaceType: nil
+                        )
+                    }
+                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType)
+                    return BoundErrorExpression(nil)
+                }
+                // Issue #968: recover the symbolic element type the same way
+                // the READ path does (MapErasedIndexerElementType). On a
+                // `List[T]` whose element `T` is the enclosing type's generic
+                // parameter, `idxProp.PropertyType` is the type-erased CLR
+                // `object` (T -> object). Typing the write value as `object`
+                // here would reject the assignment `_items[i] = value` (where
+                // `value: T`) with GS0155 ("Cannot convert type 'T' to
+                // 'object'"). Substituting the open `set_Item` value parameter
+                // back through the receiver's symbolic type arguments yields the
+                // real element type (`T`), so the `T` value binds without a
+                // spurious boxing conversion — the WRITE-path counterpart to the
+                // READ-path element-type recovery (issues #313 / #671 / #957).
+                let valueType = ResolveIndexerElementType(targetType, idxProp!!)
+                let boundValue = BindValue(valueType)
+                return MakeClrIndexAssignment(
+                    idxProp!!,
+                    convertedIdxArgs,
+                    boundValue,
+                    valueType,
+                    constrainedReceiverTypeParameter: nil,
+                    constrainedInterfaceType: nil
+                )
+            }
+            clrIndexerOutcome = outcome
         }
         if !ReportClrIndexerResolutionFailure(clrIndexerOutcome, indexSyntax.Location) &&
             targetType != TypeSymbol.Error {
@@ -3383,7 +3465,7 @@ internal partial class ExpressionBinder {
         if !TryBindSystemIndexValue(fromEnd, out var indexValue) {
             return BoundErrorExpression(nil)
         }
-        return BindSystemIndexAccess(target, indexValue!!, targetLocation)
+        return BindSystemIndexAccess(target, indexValue!!, targetLocation, fromEnd)
     }
 
     private func TryBindSystemIndexValue(
@@ -3400,7 +3482,7 @@ internal partial class ExpressionBinder {
             let offset = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32)
             ApplySubExpressionNarrowingEffects(fromEnd.Operand, offset)
             indexValue = BoundClrConstructorCallExpression(
-                nil,
+                fromEnd,
                 typeof(Index),
                 indexCtor!!,
                 ImmutableArray.Create[BoundExpression](offset, BoundLiteralExpression(nil, true)),
@@ -3408,7 +3490,10 @@ internal partial class ExpressionBinder {
             )
             return true
         }
-        if syntax is RefArgumentExpressionSyntax {
+        if syntax is RefArgumentExpressionSyntax ||
+            IsTargetDependentBlockArgumentSyntax(syntax) ||
+            unwrappedSyntax is DefaultExpressionSyntax ||
+            unwrappedSyntax is InterpolatedStringExpressionSyntax {
             indexValue = nil
             return false
         }
@@ -3429,7 +3514,8 @@ internal partial class ExpressionBinder {
     private func BindSystemIndexAccess(
         target BoundExpression,
         indexValue BoundExpression,
-        targetLocation TextLocation
+        targetLocation TextLocation,
+        indexSyntax SyntaxNode? = nil
     ) BoundExpression {
         let element TypeSymbol? = GetArraySliceElementType(target.Type)
         if element != nil {
@@ -3443,33 +3529,6 @@ internal partial class ExpressionBinder {
             let read = BoundIndexExpression(nil, BoundVariableExpression(nil, srcLocal), idx, element)
             return BoundBlockExpression(nil, statements.ToImmutable(), read)
         }
-        let clrType Type? = target.Type.ClrType
-        if clrType != nil {
-            if TryFindIndexIndexer(clrType, out var indexIndexer) {
-                let resultType = ResolveIndexerElementType(target.Type, indexIndexer)
-                return ConversionClassifier.AutoDereferenceRefReturn(
-                    BoundClrIndexExpression(nil, target, indexIndexer, ImmutableArray.Create(indexValue), resultType)
-                )
-            }
-            if TryFindCountedIntIndexer(clrType, out var lengthMember, out var intIndexer) {
-                let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-                let srcLocal = DeclareRangeTemp("src", target.Type, target, statements)
-                let srcRef = BoundVariableExpression(nil, srcLocal)
-                let lengthExpr = BoundClrPropertyAccessExpression(nil, srcRef, lengthMember, TypeSymbol.Int32)
-                let idx = BuildSystemIndexOffset(indexValue, lengthExpr, statements)
-                let resultType = ResolveIndexerElementType(target.Type, intIndexer)
-                let read = ConversionClassifier.AutoDereferenceRefReturn(
-                    BoundClrIndexExpression(
-                        nil,
-                        BoundVariableExpression(nil, srcLocal),
-                        intIndexer,
-                        ImmutableArray.Create[BoundExpression](idx),
-                        resultType
-                    )
-                )
-                return BoundBlockExpression(nil, statements.ToImmutable(), read)
-            }
-        }
         // ADR-0187 / issue #4350: a user type that declares a
         // `this[System.Index]` indexer (among possibly several overloads)
         // receives the Index value directly, as C# binds it.
@@ -3480,8 +3539,7 @@ internal partial class ExpressionBinder {
             out var userIndexer,
             out var substitution,
             out var indexView
-        ) &&
-            userIndexer!!.GetterSymbol != nil {
+        ) {
             return BindUserIndexerRead(
                 ViewIndexerReceiver(target, indexView, targetLocation),
                 userIndexer!!,
@@ -3495,6 +3553,73 @@ internal partial class ExpressionBinder {
                 ),
                 targetLocation
             )
+        }
+        let clrType Type? = target
+            .Type
+            .ClrType ??
+            (
+            if target.Type is StructSymbol structIndexTarget {
+                GetInheritedClrBaseType(structIndexTarget)
+            } else {
+                default(Type?)
+            }
+        )
+        if clrType != nil {
+            if TryFindIndexIndexer(clrType, out var indexIndexer) {
+                let resultType = ResolveIndexerElementType(target.Type, indexIndexer)
+                return ConversionClassifier.AutoDereferenceRefReturn(
+                    BoundClrIndexExpression(nil, target, indexIndexer, ImmutableArray.Create(indexValue), resultType)
+                )
+            }
+            if TryFindCountedIntIndexer(clrType, out var lengthMember, out var intIndexer) {
+                let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+                let srcLocal = DeclareRangeTemp("src", target.Type, target, statements)
+                let srcRef = BoundVariableExpression(nil, srcLocal)
+                if !TryBuildCountedReceiverLength(
+                    srcRef,
+                    lengthMember,
+                    targetLocation,
+                    indexSyntax ?? indexValue.Syntax ?? target.Syntax,
+                    out var lengthExpr
+                ) {
+                    return BoundErrorExpression(nil)
+                }
+                let idx = BuildSystemIndexOffset(indexValue, lengthExpr!!, statements)
+                if (target.Type is StructSymbol or InterfaceSymbol) &&
+                    TryGetUserIndexerTaking(
+                    target.Type,
+                    typeof(int32),
+                    out var userIntIndexer,
+                    out var intSubstitution,
+                    out var intView
+                ) {
+                    let userRead = BindUserIndexerRead(
+                        ViewIndexerReceiver(srcRef, intView, targetLocation),
+                        userIntIndexer!!,
+                        intSubstitution,
+                        (i int32, parameterType TypeSymbol) -> conversions.BindCallArgumentWithRefKind(
+                            targetLocation,
+                            idx,
+                            parameterType,
+                            userIntIndexer!!.Parameters[i],
+                            i + 1
+                        ),
+                        targetLocation
+                    )
+                    return BoundBlockExpression(nil, statements.ToImmutable(), userRead)
+                }
+                let resultType = ResolveIndexerElementType(target.Type, intIndexer)
+                let read = ConversionClassifier.AutoDereferenceRefReturn(
+                    BoundClrIndexExpression(
+                        nil,
+                        BoundVariableExpression(nil, srcLocal),
+                        intIndexer,
+                        ImmutableArray.Create[BoundExpression](idx),
+                        resultType
+                    )
+                )
+                return BoundBlockExpression(nil, statements.ToImmutable(), read)
+            }
         }
         Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type)
         return BoundErrorExpression(nil)
@@ -3510,72 +3635,20 @@ internal partial class ExpressionBinder {
         bindValue(TypeSymbol) -> BoundExpression,
         diagnosticLocation TextLocation,
         isReadOnlyReceiver bool,
-        applyLengthEffects bool = true
+        applyLengthEffects bool = true,
+        precomputedCountedOffset BoundExpression? = nil
     ) BoundExpression {
         var target = target
+        var hasNarrowedTarget = hasNarrowedTarget
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         let element TypeSymbol? = GetArraySliceElementType(targetType)
         if element != nil {
-            let idx = BuildSystemIndexOffset(indexValue, BoundLenExpression(nil, target), statements)
+            let idx = precomputedCountedOffset ??
+                BuildSystemIndexOffset(indexValue, BoundLenExpression(nil, target), statements)
             let assignment = if hasNarrowedTarget {
                 BoundIndexAssignmentExpression.WithExpressionTarget(nil, target, idx, bindValue(element), element)
             } else {
                 BoundIndexAssignmentExpression(nil, variable, idx, bindValue(element), element)
-            }
-            return BoundBlockExpression(nil, statements.ToImmutable(), assignment)
-        }
-        let clrType Type? = targetType.ClrType
-        if clrType != nil {
-            var indexer PropertyInfo?
-            var arguments ImmutableArray[BoundExpression]
-            if TryFindIndexIndexer(clrType, out indexer) {
-                arguments = ImmutableArray.Create(indexValue)
-            } else if TryFindCountedIntIndexer(clrType, out var lengthMember, out indexer) {
-                let lengthExpr = BoundClrPropertyAccessExpression(nil, target, lengthMember, TypeSymbol.Int32)
-                if applyLengthEffects {
-                    ApplySubExpressionNarrowingEffects(indexSyntax, lengthExpr)
-                }
-                arguments = ImmutableArray.Create(BuildSystemIndexOffset(indexValue, lengthExpr, statements))
-            } else {
-                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType)
-                return BoundErrorExpression(nil)
-            }
-            // Either indexer lookup succeeded, so the property is present here.
-            let getter MethodInfo? = ClrMemberVisibility.GetVisibleGetter(
-                indexer,
-                CanAccessInternalsOf(indexer.DeclaringType)
-            )
-            var valueType = ResolveIndexerElementType(targetType, indexer)
-            if indexer.SetMethod != nil && isReadOnlyReceiver {
-                Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]")
-                return BoundErrorExpression(indexValue.Syntax)
-            }
-            if !indexer.CanWrite {
-                if getter == nil || !getter.ReturnType.IsByRef {
-                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType)
-                    return BoundErrorExpression(nil)
-                }
-                if IsReadOnlyRefReturn(indexer) {
-                    Diagnostics.ReportCannotAssignReadOnlySpanElement(diagnosticLocation, targetType)
-                    return BoundErrorExpression(nil)
-                }
-                valueType = if valueType is ByRefTypeSymbol byRef {
-                    byRef.PointeeType
-                } else {
-                    valueType
-                }
-            }
-            let assignment = if hasNarrowedTarget {
-                BoundClrIndexAssignmentExpression.WithExpressionTarget(
-                    nil,
-                    target,
-                    indexer,
-                    arguments,
-                    bindValue(valueType),
-                    valueType
-                )
-            } else {
-                BoundClrIndexAssignmentExpression(nil, variable, indexer, arguments, bindValue(valueType), valueType)
             }
             return BoundBlockExpression(nil, statements.ToImmutable(), assignment)
         }
@@ -3656,9 +3729,263 @@ internal partial class ExpressionBinder {
                     value
                 )
             }
+            Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType)
+            return BoundErrorExpression(nil)
+        }
+        let clrType Type? = targetType.ClrType ??
+            (
+            if targetType is StructSymbol structIndexAssignTarget {
+                GetInheritedClrBaseType(structIndexAssignTarget)
+            } else {
+                default(Type?)
+            }
+        )
+        if clrType != nil {
+            var indexer PropertyInfo?
+            var arguments ImmutableArray[BoundExpression]
+            if TryFindIndexIndexer(clrType, out indexer) {
+                arguments = ImmutableArray.Create(indexValue)
+            } else if TryFindCountedIntIndexer(clrType, out var lengthMember, out indexer) {
+                var offsetExpr BoundExpression
+                if precomputedCountedOffset != nil {
+                    offsetExpr = if precomputedCountedOffset is BoundAddressOfExpression addrOffset {
+                        addrOffset.Operand
+                    } else {
+                        precomputedCountedOffset
+                    }
+                } else {
+                    if !ReflectionMetadataEmitter.IsValueTypeSymbol(targetType) {
+                        let srcLocal = DeclareRangeTemp("src", targetType, target, statements)
+                        target = BoundVariableExpression(nil, srcLocal)
+                        hasNarrowedTarget = true
+                    }
+                    if !TryBuildCountedReceiverLength(
+                        target,
+                        lengthMember,
+                        diagnosticLocation,
+                        indexSyntax,
+                        out var lengthExpr,
+                        applyLengthEffects
+                    ) {
+                        return BoundErrorExpression(nil)
+                    }
+                    offsetExpr = BuildSystemIndexOffset(indexValue, lengthExpr!!, statements)
+                }
+                if (targetType is StructSymbol || targetType is InterfaceSymbol) &&
+                    TryGetUserIndexerTaking(
+                    targetType,
+                    typeof(int32),
+                    out var userIntIndexer,
+                    out var intSubstitution,
+                    out var intView
+                ) {
+                    let offsetLocal = DeclareRangeTemp("offset", TypeSymbol.Int32, offsetExpr, statements)
+                    let userTarget = ViewIndexerReceiver(target, intView, diagnosticLocation)
+                    let intParameterType = SubstituteIndexerType(userIntIndexer!!.Parameters[0].Type, intSubstitution)
+                    let convertedOffset = conversions.BindCallArgumentWithRefKind(
+                        diagnosticLocation,
+                        BoundVariableExpression(nil, offsetLocal),
+                        intParameterType,
+                        userIntIndexer!!.Parameters[0],
+                        1
+                    )
+                    if userIntIndexer!!.SetterSymbol != nil {
+                        if isReadOnlyReceiver {
+                            Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]")
+                            return BoundErrorExpression(nil)
+                        }
+                        let intValueType = SubstituteIndexerType(
+                            userIntIndexer!!.SetterSymbol!!.Parameters[^1].Type,
+                            intSubstitution
+                        )
+                        let value = bindValue(intValueType)
+                        if !CheckUserIndexerAccessibility(
+                            userIntIndexer!!,
+                            requireGetter: false,
+                            requireSetter: true,
+                            diagnosticLocation
+                        ) {
+                            return BoundErrorExpression(nil)
+                        }
+                        let resultName = "<idxAsnValue${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
+                        let result = LocalVariableSymbol(resultName, isReadOnly: true, intValueType)
+                        $scope.TryDeclareVariable(result)
+                        let resultRead = BoundVariableExpression(nil, result)
+                        let call = BoundUserInstanceCallExpression(
+                            nil,
+                            userTarget,
+                            userIntIndexer!!.SetterSymbol!!,
+                            ImmutableArray.Create(convertedOffset, resultRead)
+                        )
+                        statements.Add(BoundVariableDeclaration(nil, result, value))
+                        statements.Add(BoundExpressionStatement(nil, call))
+                        return BoundBlockExpression(nil, statements.ToImmutable(), resultRead)
+                    }
+                    if targetType is StructSymbol &&
+                        userIntIndexer!!.GetterSymbol is {ReturnRefKind: RefKind.Ref} refIntGetter {
+                        if isReadOnlyReceiver {
+                            Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]")
+                            return BoundErrorExpression(nil)
+                        }
+                        let refElementType = SubstituteIndexerType(refIntGetter.Type, intSubstitution)
+                        let value = bindValue(refElementType)
+                        if !CheckUserIndexerAccessibility(
+                            userIntIndexer!!,
+                            requireGetter: true,
+                            requireSetter: false,
+                            diagnosticLocation
+                        ) {
+                            return BoundErrorExpression(nil)
+                        }
+                        let refGetCall = BoundUserInstanceCallExpression(
+                            nil,
+                            userTarget,
+                            refIntGetter,
+                            ImmutableArray.Create(convertedOffset),
+                            refElementType
+                        )
+                        let assignment = BoundIndirectAssignmentExpression(
+                            nil,
+                            BoundAddressOfExpression(nil, refGetCall, unmanaged: false),
+                            value
+                        )
+                        return BoundBlockExpression(nil, statements.ToImmutable(), assignment)
+                    }
+                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType)
+                    return BoundErrorExpression(nil)
+                }
+                arguments = ImmutableArray.Create(offsetExpr)
+            } else {
+                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType)
+                return BoundErrorExpression(nil)
+            }
+            // Either indexer lookup succeeded, so the property is present here.
+            let getter MethodInfo? = ClrMemberVisibility.GetVisibleGetter(
+                indexer,
+                CanAccessInternalsOf(indexer.DeclaringType)
+            )
+            var valueType = ResolveIndexerElementType(targetType, indexer)
+            if indexer.SetMethod != nil && isReadOnlyReceiver {
+                Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]")
+                return BoundErrorExpression(indexValue.Syntax)
+            }
+            if !indexer.CanWrite {
+                if getter == nil || !getter.ReturnType.IsByRef {
+                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType)
+                    return BoundErrorExpression(nil)
+                }
+                if IsReadOnlyRefReturn(indexer) {
+                    Diagnostics.ReportCannotAssignReadOnlySpanElement(diagnosticLocation, targetType)
+                    return BoundErrorExpression(nil)
+                }
+                valueType = if valueType is ByRefTypeSymbol byRef {
+                    byRef.PointeeType
+                } else {
+                    valueType
+                }
+            }
+            let assignment = if hasNarrowedTarget {
+                BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                    nil,
+                    target,
+                    indexer,
+                    arguments,
+                    bindValue(valueType),
+                    valueType
+                )
+            } else {
+                BoundClrIndexAssignmentExpression(nil, variable, indexer, arguments, bindValue(valueType), valueType)
+            }
+            return BoundBlockExpression(nil, statements.ToImmutable(), assignment)
         }
         Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType)
         return BoundErrorExpression(nil)
+    }
+
+    private func TryFindInstanceCountProperty(
+        structReceiver StructSymbol,
+        name string,
+        @NotNullWhen(true) out property PropertySymbol?,
+        @NotNullWhen(true) out declaringType StructSymbol?
+    ) bool {
+        for c in structReceiver.GetHierarchy() {
+            for p in c.Properties {
+                if !p.IsStatic && !p.IsIndexer && !p.HasExplicitInterfaceClause && p.Name == name {
+                    property = p
+                    declaringType = c
+                    return true
+                }
+            }
+        }
+        if TypeMemberModel.TryGetProperty(structReceiver, name, out var inheritedProp, out var inheritedOwner) &&
+            inheritedProp != nil &&
+            !inheritedProp.IsStatic &&
+            !inheritedProp.IsIndexer &&
+            !inheritedProp.HasExplicitInterfaceClause &&
+            inheritedOwner != nil {
+            property = inheritedProp
+            declaringType = inheritedOwner
+            return true
+        }
+        property = nil
+        declaringType = nil
+        return false
+    }
+
+    private func TryBuildCountedReceiverLength(
+        receiver BoundExpression,
+        clrLengthMember MemberInfo,
+        location TextLocation,
+        syntax SyntaxNode?,
+        @NotNullWhen(true) out lengthExpr BoundExpression?,
+        applyLengthEffects bool = true
+    ) bool {
+        if receiver.Type is StructSymbol structReceiver {
+            let names = if string.Equals(clrLengthMember.Name, "Length", StringComparison.Ordinal) {
+                []string{"Length"}
+            } else {
+                []string{"Length", "Count"}
+            }
+            for name in names {
+                if TryFindInstanceCountProperty(structReceiver, name, out var prop, out var propOwner) &&
+                    SubstituteIndexerType(prop!!.Type, LevelSubstitution(propOwner!!, outer: nil)) == TypeSymbol
+                    .Int32 {
+                    if !prop!!.HasGetter {
+                        Diagnostics.ReportCannotAssign(location, name)
+                        lengthExpr = nil
+                        return false
+                    }
+                    if !AccessibilityChecker.IsAccessible(prop!!.GetterAccessibility, propOwner!!, this.function) {
+                        Diagnostics.ReportMemberInaccessible(
+                            location,
+                            prop!!.Name,
+                            propOwner!!.Name,
+                            prop!!.GetterAccessibility
+                        )
+                        lengthExpr = nil
+                        return false
+                    }
+                    let propAccess = BoundPropertyAccessExpression(
+                        syntax,
+                        receiver,
+                        structReceiver,
+                        prop!!,
+                        TypeSymbol.Int32
+                    )
+                    if applyLengthEffects {
+                        ApplySubExpressionNarrowingEffects(syntax, propAccess)
+                    }
+                    lengthExpr = propAccess
+                    return true
+                }
+            }
+        }
+        let clrAccess = BoundClrPropertyAccessExpression(syntax, receiver, clrLengthMember, TypeSymbol.Int32)
+        if applyLengthEffects {
+            ApplySubExpressionNarrowingEffects(syntax, clrAccess)
+        }
+        lengthExpr = clrAccess
+        return true
     }
 
     private func BuildSystemIndexOffset(
@@ -3709,7 +4036,39 @@ internal partial class ExpressionBinder {
         if target.Type == TypeSymbol.String {
             return BindStringSlice(target, $range)
         }
-        let clrType Type? = target.Type.ClrType
+        if (target.Type is StructSymbol or InterfaceSymbol) &&
+            TryGetUserIndexerTaking(
+            target.Type,
+            typeof(Range),
+            out var userRangeIndexer,
+            out var rangeSubstitution,
+            out var rangeView
+        ) {
+            let rangeValue = BuildSystemRangeValue($range)
+            return BindUserIndexerRead(
+                ViewIndexerReceiver(target, rangeView, targetLocation),
+                userRangeIndexer!!,
+                rangeSubstitution,
+                (i int32, parameterType TypeSymbol) -> conversions.BindCallArgumentWithRefKind(
+                    $range.Location,
+                    rangeValue,
+                    parameterType,
+                    userRangeIndexer!!.Parameters[i],
+                    i + 1
+                ),
+                targetLocation
+            )
+        }
+        let clrType Type? = target
+            .Type
+            .ClrType ??
+            (
+            if target.Type is StructSymbol structSliceTarget {
+                GetInheritedClrBaseType(structSliceTarget)
+            } else {
+                default(Type?)
+            }
+        )
         if clrType != nil {
             if TryFindRangeIndexer(clrType, out var rangeIndexer) {
                 return BindRangeIndexerSlice(target, $range, rangeIndexer)
@@ -3753,21 +4112,19 @@ internal partial class ExpressionBinder {
         let SrcRef = func () BoundExpression {
             return BoundVariableExpression(nil, srcLocal)
         }
-        // Compute the source length once; required for open upper bounds and for
-        // any from-end (`^n`) bound, and harmless otherwise.
+        let lower = BindRangeBound($range.LowerBound, statements)
+        let upper = BindRangeBound($range.UpperBound, statements)
+        // Compute the source length once after the receiver and written bounds;
+        // required for open upper bounds and for any from-end (`^n`) bound, and
+        // harmless otherwise.
         let srcLenLocal = DeclareRangeTemp("srclen", TypeSymbol.Int32, lengthOf(SrcRef()), statements)
         let SrcLenRef = func () BoundExpression {
             return BoundVariableExpression(nil, srcLenLocal)
         }
-        let lowerBound = BindRangeBoundValue(
-            BindRangeBound($range.LowerBound),
-            SrcLenRef,
-            BoundLiteralExpression(nil, 0),
-            statements
-        )
+        let lowerBound = BindRangeBoundValue(lower, SrcLenRef, BoundLiteralExpression(nil, 0), statements)
         let startLocal = DeclareRangeTemp("start", TypeSymbol.Int32, lowerBound, statements)
         let startRef = BoundVariableExpression(nil, startLocal)
-        let upperBound = BindRangeBoundValue(BindRangeBound($range.UpperBound), SrcLenRef, SrcLenRef(), statements)
+        let upperBound = BindRangeBoundValue(upper, SrcLenRef, SrcLenRef(), statements)
         let subtractOp = BoundBinaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.Int32, TypeSymbol.Int32)!!
         let lengthExpr = BoundBinaryExpression(nil, upperBound, subtractOp, startRef)
         let lenLocal = DeclareRangeTemp("len", TypeSymbol.Int32, lengthExpr, statements)
@@ -3783,28 +4140,38 @@ internal partial class ExpressionBinder {
     // resolve it against the source length; a bound that is already a
     // `System.Index` value (`i..j` over saved indices, `(^1)..`) is kept as an
     // Index; any other bound converts to an int32 from-start offset.
-    private func BindRangeBound(boundSyntax ExpressionSyntax?) RangeBound? {
+    private func BindRangeBound(
+        boundSyntax ExpressionSyntax?,
+        statements ImmutableArray[BoundStatement].Builder? = nil
+    ) RangeBound? {
         if boundSyntax == nil {
             return nil
+        }
+        let Capture = func (bound RangeBound) RangeBound {
+            if statements == nil || bound.Value is BoundLiteralExpression {
+                return bound
+            }
+            let local = DeclareRangeTemp("bound", bound.Value.Type, bound.Value, statements)
+            return RangeBound(BoundVariableExpression(nil, local), bound.FromEnd, bound.IsIndexValue)
         }
         if boundSyntax is FromEndIndexExpressionSyntax fromEnd {
             let convertedFromEnd = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32)
             ApplySubExpressionNarrowingEffects(fromEnd.Operand, convertedFromEnd)
-            return RangeBound(convertedFromEnd, FromEnd: true, IsIndexValue: false)
+            return Capture(RangeBound(convertedFromEnd, FromEnd: true, IsIndexValue: false))
         }
         if (boundSyntax is DefaultExpressionSyntax or InterpolatedStringExpressionSyntax) {
             let convertedSpecial = conversions.BindConversion(boundSyntax, TypeSymbol.Int32)
             ApplySubExpressionNarrowingEffects(boundSyntax, convertedSpecial)
-            return RangeBound(convertedSpecial, FromEnd: false, IsIndexValue: false)
+            return Capture(RangeBound(convertedSpecial, FromEnd: false, IsIndexValue: false))
         }
         let bound = BindExpression(boundSyntax)
         if !(bound is BoundErrorExpression) && ClrTypeUtilities.AreSame(bound.Type?.ClrType, typeof(Index)) {
             ApplySubExpressionNarrowingEffects(boundSyntax, bound)
-            return RangeBound(bound, FromEnd: false, IsIndexValue: true)
+            return Capture(RangeBound(bound, FromEnd: false, IsIndexValue: true))
         }
         let converted = conversions.BindConversion(boundSyntax.Location, bound, TypeSymbol.Int32)
         ApplySubExpressionNarrowingEffects(boundSyntax, converted)
-        return RangeBound(converted, FromEnd: false, IsIndexValue: false)
+        return Capture(RangeBound(converted, FromEnd: false, IsIndexValue: false))
     }
 
     // Issue #1022: resolve a bound range bound to an int32 offset. A from-end
@@ -3885,17 +4252,22 @@ internal partial class ExpressionBinder {
         sliceMethod MethodInfo
     ) BoundExpression {
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-        let lengthOf(BoundExpression) -> BoundExpression = (src BoundExpression) -> BoundClrPropertyAccessExpression(
-            nil,
-            src,
-            lengthMember,
-            TypeSymbol.Int32
-        )
+        var lengthReported = false
+        let lengthOf(BoundExpression) -> BoundExpression = (src BoundExpression) -> {
+            if TryBuildCountedReceiverLength(src, lengthMember, $range.Location, $range, out var lengthExpr) {
+                return lengthExpr!!
+            }
+            lengthReported = true
+            return BoundLiteralExpression(nil, 0)
+        }
         let (srcRef, startRef, lenRef) = BuildSliceBounds(target, $range, lengthOf, statements)
+        if lengthReported {
+            return BoundErrorExpression(nil)
+        }
         let returnType = SliceResultType(
             target,
             sliceMethod.ReturnType,
-            ClrNullability.GetReturnTypeSymbol(sliceMethod)
+            MemberLookup.GetClrMethodReturnTypeSymbol(target.Type, sliceMethod)
         )
         let call = BoundImportedInstanceCallExpression(
             nil,
@@ -3913,7 +4285,11 @@ internal partial class ExpressionBinder {
         indexer PropertyInfo
     ) BoundExpression {
         let rangeValue = BuildSystemRangeValue($range)
-        let resultType = SliceResultType(target, indexer.PropertyType, ClrNullability.GetPropertyTypeSymbol(indexer))
+        let resultType = SliceResultType(
+            target,
+            indexer.PropertyType,
+            MemberLookup.GetClrPropertyTypeSymbol(target.Type, indexer)
+        )
         return BoundClrIndexExpression($range, target, indexer, ImmutableArray.Create(rangeValue), resultType)
     }
 
@@ -3963,7 +4339,8 @@ internal partial class ExpressionBinder {
     private func BindRangeValueSlice(
         target BoundExpression,
         rangeValue BoundExpression,
-        targetLocation TextLocation
+        targetLocation TextLocation,
+        indexSyntax SyntaxNode? = nil
     ) BoundExpression {
         let arrayElement TypeSymbol? = GetArraySliceElementType(target.Type)
         if arrayElement != nil {
@@ -4006,26 +4383,72 @@ internal partial class ExpressionBinder {
             )
             return BoundBlockExpression(nil, statements.ToImmutable(), call)
         }
-        let clrType Type? = target.Type.ClrType
+        if (target.Type is StructSymbol or InterfaceSymbol) &&
+            TryGetUserIndexerTaking(
+            target.Type,
+            typeof(Range),
+            out var userRangeIndexer,
+            out var rangeSubstitution,
+            out var rangeView
+        ) {
+            return BindUserIndexerRead(
+                ViewIndexerReceiver(target, rangeView, targetLocation),
+                userRangeIndexer!!,
+                rangeSubstitution,
+                (i int32, parameterType TypeSymbol) -> conversions.BindCallArgumentWithRefKind(
+                    targetLocation,
+                    rangeValue,
+                    parameterType,
+                    userRangeIndexer!!.Parameters[i],
+                    i + 1
+                ),
+                targetLocation
+            )
+        }
+        let clrType Type? = target
+            .Type
+            .ClrType ??
+            (
+            if target.Type is StructSymbol structRangeValueTarget {
+                GetInheritedClrBaseType(structRangeValueTarget)
+            } else {
+                default(Type?)
+            }
+        )
         if clrType != nil {
             if TryFindRangeIndexer(clrType, out var rangeIndexer) {
                 let resultType = SliceResultType(
                     target,
                     rangeIndexer.PropertyType,
-                    ClrNullability.GetPropertyTypeSymbol(rangeIndexer)
+                    MemberLookup.GetClrPropertyTypeSymbol(target.Type, rangeIndexer)
                 )
                 return BoundClrIndexExpression(nil, target, rangeIndexer, ImmutableArray.Create(rangeValue), resultType)
             }
             if TryFindSliceShape(clrType, out var lengthMember, out var sliceMethod) {
                 let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-                let lengthOf(BoundExpression) -> BoundExpression = (
-                    src BoundExpression
-                ) -> BoundClrPropertyAccessExpression(nil, src, lengthMember!!, TypeSymbol.Int32)
+                var lengthReported = false
+                let sliceSyntax = indexSyntax ?? rangeValue.Syntax ?? target.Syntax
+                let lengthOf(BoundExpression) -> BoundExpression = (src BoundExpression) -> {
+                    if TryBuildCountedReceiverLength(
+                        src,
+                        lengthMember!!,
+                        targetLocation,
+                        sliceSyntax,
+                        out var lengthExpr
+                    ) {
+                        return lengthExpr!!
+                    }
+                    lengthReported = true
+                    return BoundLiteralExpression(nil, 0)
+                }
                 let (srcRef, startRef, lenRef) = BuildRangeValueBounds(target, rangeValue, lengthOf, statements)
+                if lengthReported {
+                    return BoundErrorExpression(nil)
+                }
                 let returnType = SliceResultType(
                     target,
                     sliceMethod.ReturnType,
-                    ClrNullability.GetReturnTypeSymbol(sliceMethod)
+                    MemberLookup.GetClrMethodReturnTypeSymbol(target.Type, sliceMethod)
                 )
                 let call = BoundImportedInstanceCallExpression(
                     nil,
@@ -4059,13 +4482,13 @@ internal partial class ExpressionBinder {
         let SrcRef = func () BoundExpression {
             return BoundVariableExpression(nil, srcLocal)
         }
-        let srcLenLocal = DeclareRangeTemp("srclen", TypeSymbol.Int32, lengthOf(SrcRef()), statements)
-        let SrcLenRef = func () BoundExpression {
-            return BoundVariableExpression(nil, srcLenLocal)
-        }
         let rngLocal = DeclareRangeTemp("rng", rangeValue.Type, rangeValue, statements)
         let RngRef = func () BoundExpression {
             return BoundVariableExpression(nil, rngLocal)
+        }
+        let srcLenLocal = DeclareRangeTemp("srclen", TypeSymbol.Int32, lengthOf(SrcRef()), statements)
+        let SrcLenRef = func () BoundExpression {
+            return BoundVariableExpression(nil, srcLenLocal)
         }
         // Resolve Start/End (System.Index) into addressable locals so the
         // struct-receiver GetOffset call has an address to load.

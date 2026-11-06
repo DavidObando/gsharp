@@ -662,6 +662,11 @@ internal class MemberLookup {
         return classes
     }
 
+    internal func HasVisibleClrIndexer(targetType TypeSymbol, clrTarget Type) bool -> CollectVisibleClrIndexers(
+        targetType,
+        clrTarget
+    ).Length != 0
+
     private func CollectVisibleClrIndexers(targetType TypeSymbol, clrTarget Type)[]PropertyInfo {
         let declaringTypes = if clrTarget.IsInterface {
             EnumerateSelfAndInterfaces(clrTarget)
@@ -7270,6 +7275,14 @@ internal class MemberLookup {
             IsImplicit bool,
             IsIdentity bool
         ) {
+            if source is BoundDefaultExpression &&
+                source.Type == TypeSymbol.Error &&
+                source.Syntax is DefaultExpressionSyntax{TypeClause: nil} {
+                return (target != TypeSymbol.Error && target != TypeSymbol.Void, false)
+            }
+            if ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(source, out var deferredSyntax) {
+                return (ExpressionBinder.CanTargetDependentBlockArgument(deferredSyntax, target), false)
+            }
             var sourceType = source.Type
             if sourceType is ByRefTypeSymbol sourceByRef {
                 sourceType = sourceByRef.PointeeType

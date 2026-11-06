@@ -1274,6 +1274,39 @@ internal class PatternBinder {
         return BoundSlicePattern(syntax, discriminantType, elementType, variable, subPattern)
     }
 
+    /// ADR-0166: creates the local that receives a pattern's matched value. A
+    /// designation bound in a boolean `is` is a
+    /// (cref:PatternVariableSymbol) so later passes can recognise a
+    /// single-assignment binding whose every visible use is dominated by the
+    /// match (closure capture snapshots it instead of boxing it).
+    private func CreatePatternVariable(
+        name string,
+        type TypeSymbol,
+        declaringSyntax SyntaxToken?,
+        isExpressionBinding bool
+    ) LocalVariableSymbol {
+        let retriedVariables = binderCtx.RetriedValueVariables
+        if declaringSyntax != nil && retriedVariables != nil && retriedVariables.TryGetValue(
+            declaringSyntax,
+            out var existing
+        ) &&
+            existing is LocalVariableSymbol existingLocal &&
+            (existingLocal is PatternVariableSymbol) == isExpressionBinding &&
+            existingLocal.Name == name &&
+            existingLocal.Type == type {
+            return existingLocal
+        }
+        let created = if isExpressionBinding {
+            cast[LocalVariableSymbol](PatternVariableSymbol(name, type, declaringSyntax))
+        } else {
+            LocalVariableSymbol(name, isReadOnly: true, type, declaringSyntax)
+        }
+        if declaringSyntax != nil && retriedVariables != nil {
+            retriedVariables[declaringSyntax] = created
+        }
+        return created
+    }
+
     shared {
         private func TryGetGuaranteedNarrowingValue(
             pattern BoundPattern,
@@ -1386,22 +1419,6 @@ internal class PatternBinder {
                 case n is nuint: BigInteger(uint64(n))
                 default: default(BigInteger)
             }
-        }
-
-        /// ADR-0166: creates the local that receives a pattern's matched value. A
-        /// designation bound in a boolean `is` is a
-        /// (cref:PatternVariableSymbol) so later passes can recognise a
-        /// single-assignment binding whose every visible use is dominated by the
-        /// match (closure capture snapshots it instead of boxing it).
-        private func CreatePatternVariable(
-            name string,
-            type TypeSymbol,
-            declaringSyntax SyntaxToken?,
-            isExpressionBinding bool
-        ) LocalVariableSymbol -> if isExpressionBinding {
-            cast[LocalVariableSymbol](PatternVariableSymbol(name, type, declaringSyntax))
-        } else {
-            LocalVariableSymbol(name, isReadOnly: true, type, declaringSyntax)
         }
 
         private func SupportsPropertyPattern(type TypeSymbol) bool {
