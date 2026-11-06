@@ -491,9 +491,21 @@ class Program {
         source.Append("    let ch = Chan.Unbounded[string]()\n")
         source.Append("    Console.Write(").Append(NestSelectReceiveReturnLiterals(24)).Append(")\n")
         oracle.Append("        Console.Write(\"O\");\n")
+        // Review of PR #5803: a generic local function `Get[T]` capturing `s` keeps nested conditional-return
+        // literals cached even when a child block shadows `s`.
+        source.Append("    let Get[T] = func (x T) string { return s ?? \"s\" }\n")
+        source.Append("    {\n")
+        source.Append("        let s = 1\n")
+        source.Append("        let _ = s\n")
+        source
+            .Append("        Console.Write(")
+            .Append(NestConditionalReturnLiterals("Calls.M(|, 1)", 24, "() -> { return ", " }", leafValue: "Get(0)"))
+            .Append(")\n")
+        source.Append("    }\n")
+        oracle.Append("        Console.Write(\"O\");\n")
         source.Append("}\n")
         oracle.Append("    }\n}\n")
-        Check(fixture, source.ToString(), oracle.ToString(), "OOOOOOOOOOOOOOOOOOO")
+        Check(fixture, source.ToString(), oracle.ToString(), "OOOOOOOOOOOOOOOOOOOO")
     }
 
     /// Issue #5604: sequential retried returns capture and restore operand-local deltas (including forward jumps
@@ -521,7 +533,7 @@ class Program {
         output.WriteLine(
             "SequentialRetriedReturns rollback work: R=200=" + work200.ToString() + ", R=800=" + work800.ToString()
         )
-        Assert.Equal(4_800L, work200)
+        Assert.Equal(11_200L, work200)
         Assert.Equal(work200 * 4, work800)
     }
 
@@ -3037,20 +3049,20 @@ class Program {
             }
             builder.Append("            Forward: return \"u\";\n        }")
         } else {
-            builder.Append("() -> {\n        var m string? = \"a\"\n")
+            builder.Append("() -> {\n        var m string? = \"a\"\n        var b string? = \"a\"\n")
             for var i = 0; i < count; i++ {
                 builder
-                    .Append("        m = \"a\"\n        let s")
+                    .Append("        m = \"a\"\n        b = \"a\"\n        let s")
                     .Append(i)
                     .Append(" string? = \"a\"\n        L")
                     .Append(i)
                     .Append(": if s")
                     .Append(i)
                     .Append(
-                    " == nil { return {\n            m = nil\n            if !flag { goto Forward }\n            flag ? \"s"
+                    " == nil { return {\n            m = nil\n            if !flag { goto Forward }\n            flag ? {\n                b = nil\n                \"s"
                 )
                     .Append(i)
-                    .Append("\" : \"t\"\n        } }\n")
+                    .Append("\"\n            } : \"t\"\n        } }\n")
             }
             builder.Append("        Forward: return \"u\"\n    }")
         }

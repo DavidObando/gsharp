@@ -1514,12 +1514,7 @@ internal partial class ExpressionBinder {
         } else {
             default(
                 List[
-                    (
-                        Id int32,
-                        Frame NarrowingFrame?,
-                        Entries Dictionary[AccessPath, TypeSymbol]?,
-                        Aliases HashSet[VariableSymbol]
-                    )
+                    (Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])
                 ]?
             )
         }

@@ -121,6 +121,8 @@ internal class LambdaBinder {
         FunctionSymbol,
         ImmutableArray[VariableSymbol]
     ]()
+    private let localFunctionDirectCapturedVariables Dictionary[FunctionSymbol, ImmutableArray[VariableSymbol]] =
+    Dictionary[FunctionSymbol, ImmutableArray[VariableSymbol]]()
     private let localFunctionReferencedFunctions Dictionary[FunctionSymbol, ImmutableArray[FunctionSymbol]] =
     Dictionary[FunctionSymbol, ImmutableArray[FunctionSymbol]]()
 
@@ -1947,6 +1949,12 @@ internal class LambdaBinder {
         if localFunctionReferencedFunctions.TryGetValue(literal.Function, out var referencedFunctions) {
             localFunctionReferencedFunctions[adapterFunction] = referencedFunctions
         }
+        if localFunctionDirectCapturedVariables.TryGetValue(literal.Function, out var directCapturedVariables) {
+            localFunctionDirectCapturedVariables[adapterFunction] = directCapturedVariables
+        }
+        if localFunctionCapturedVariables.TryGetValue(literal.Function, out var capturedVariables) {
+            localFunctionCapturedVariables[adapterFunction] = capturedVariables
+        }
         return BoundFunctionLiteralExpression(
             literal.Syntax,
             adapterFunction,
@@ -2870,7 +2878,12 @@ internal class LambdaBinder {
         if bound is not BoundFunctionLiteralExpression literal {
             return true
         }
-        for captured in literal.CapturedVariables {
+        let directCaptured = if localFunctionDirectCapturedVariables.TryGetValue(literal.Function, out var direct) {
+            direct
+        } else {
+            literal.CapturedVariables
+        }
+        for captured in directCaptured {
             if !object.ReferenceEquals($scope.TryLookupSymbol(captured.Name), captured) {
                 return false
             }
@@ -2879,6 +2892,13 @@ internal class LambdaBinder {
             for referenced in referencedFunctions {
                 if !LocalFunctionMatchesScope(referenced, $scope) {
                     return false
+                }
+                if localFunctionCapturedVariables.TryGetValue(referenced, out var calleeCaptured) {
+                    for calleeVar in calleeCaptured {
+                        if calleeVar is not GlobalVariableSymbol && !literal.CapturedVariables.Contains(calleeVar) {
+                            return false
+                        }
+                    }
                 }
             }
         }
@@ -3215,6 +3235,8 @@ internal class LambdaBinder {
         let paramSet = HashSet[VariableSymbol](function.Parameters)
         let seen = HashSet[VariableSymbol]()
         let captured = ImmutableArray.CreateBuilder[VariableSymbol]()
+        let directSeen = HashSet[VariableSymbol]()
+        let directCaptured = ImmutableArray.CreateBuilder[VariableSymbol]()
         // Issue #1451: pre-seed the collector's `declared` set with every inline
         // `out var x` local declared *in this body*. Loop lowering (while/for/do)
         // emits the loop body before the controlling condition, so the out-var's
@@ -3236,6 +3258,9 @@ internal class LambdaBinder {
             captured,
             outVarCollector.Declared,
             localFunctionCapturedVariables,
+            localFunctionDirectCapturedVariables,
+            directSeen,
+            directCaptured,
             declaredFunctions,
             referencedFunctions,
             localFunctionReferencedFunctions
@@ -3243,6 +3268,7 @@ internal class LambdaBinder {
         collector.RewriteStatement(body)
         let result = captured.ToImmutable()
         localFunctionCapturedVariables[function] = result
+        localFunctionDirectCapturedVariables[function] = directCaptured.ToImmutable()
         localFunctionReferencedFunctions[function] = referencedFunctions.ToImmutable()
         return result
     }
@@ -3878,6 +3904,9 @@ internal class LambdaBinder {
         private let declared HashSet[VariableSymbol]
         private let captured ImmutableArray[VariableSymbol].Builder
         private let calleeCapturedVariables IReadOnlyDictionary[FunctionSymbol, ImmutableArray[VariableSymbol]]?
+        private let calleeDirectCapturedVariables IReadOnlyDictionary[FunctionSymbol, ImmutableArray[VariableSymbol]]?
+        private let directSeen HashSet[VariableSymbol]?
+        private let directCaptured ImmutableArray[VariableSymbol].Builder?
         private let declaredFunctions HashSet[FunctionSymbol]?
         private let seenFunctions HashSet[FunctionSymbol] = HashSet[FunctionSymbol]()
         private let referencedFunctions ImmutableArray[FunctionSymbol].Builder?
@@ -3889,6 +3918,9 @@ internal class LambdaBinder {
             captured ImmutableArray[VariableSymbol].Builder,
             preDeclared IEnumerable[VariableSymbol]? = nil,
             calleeCapturedVariables IReadOnlyDictionary[FunctionSymbol, ImmutableArray[VariableSymbol]]? = nil,
+            calleeDirectCapturedVariables IReadOnlyDictionary[FunctionSymbol, ImmutableArray[VariableSymbol]]? = nil,
+            directSeen HashSet[VariableSymbol]? = nil,
+            directCaptured ImmutableArray[VariableSymbol].Builder? = nil,
             declaredFunctions HashSet[FunctionSymbol]? = nil,
             referencedFunctions ImmutableArray[FunctionSymbol].Builder? = nil,
             calleeReferencedFunctions IReadOnlyDictionary[FunctionSymbol, ImmutableArray[FunctionSymbol]]? = nil
@@ -3902,6 +3934,9 @@ internal class LambdaBinder {
             }
             this.captured = captured
             this.calleeCapturedVariables = calleeCapturedVariables
+            this.calleeDirectCapturedVariables = calleeDirectCapturedVariables
+            this.directSeen = directSeen
+            this.directCaptured = directCaptured
             this.declaredFunctions = declaredFunctions
             this.referencedFunctions = referencedFunctions
             this.calleeReferencedFunctions = calleeReferencedFunctions
@@ -3926,6 +3961,32 @@ internal class LambdaBinder {
                     if this.declaredFunctions?.Contains(nested) != true && this.seenFunctions.Add(nested) {
                         referencedFunctions.Add(nested)
                     }
+                }
+            }
+        }
+
+        private func RecordDirectReferencesFrom(callee FunctionSymbol, fallback ImmutableArray[VariableSymbol]) {
+            let directCaptured = this.directCaptured
+            let directSeen = this.directSeen
+            if directCaptured == nil || directSeen == nil {
+                return
+            }
+            let direct = if this.calleeDirectCapturedVariables != nil && this.calleeDirectCapturedVariables.TryGetValue(
+                callee,
+                out var recordedDirect
+            ) {
+                recordedDirect
+            } else {
+                fallback
+            }
+            for variable in direct {
+                if variable is GlobalVariableSymbol {
+                    continue
+                }
+                if !this.parameters.Contains(variable) && !this.declared.Contains(variable) && directSeen.Add(
+                    variable
+                ) {
+                    directCaptured.Add(variable)
                 }
             }
         }
@@ -3958,6 +4019,9 @@ internal class LambdaBinder {
                         this.captured.Add(calleeVariable)
                     }
                 }
+                if this.declaredFunctions?.Contains(node.Function) == true {
+                    this.RecordDirectReferencesFrom(node.Function, calleeCaptured)
+                }
             }
             return base.RewriteCallExpression(node)
         }
@@ -3972,6 +4036,7 @@ internal class LambdaBinder {
         protected override func RewriteLocalFunctionDeclaration(node BoundLocalFunctionDeclaration) BoundStatement {
             this.declaredFunctions?.Add(node.Literal.Function)
             this.RecordFunctionReference(node.Literal.Function)
+            this.RecordDirectReferencesFrom(node.Literal.Function, node.Literal.CapturedVariables)
             return node
         }
 
@@ -4164,6 +4229,7 @@ internal class LambdaBinder {
 
         protected override func RewriteFunctionLiteralExpression(node BoundFunctionLiteralExpression) BoundExpression {
             this.RecordFunctionReference(node.Function)
+            this.RecordDirectReferencesFrom(node.Function, node.CapturedVariables)
             // Issue #503 follow-up: a nested function literal's captures
             // must transitively contribute to the *outer* literal's capture
             // set whenever they're satisfied by neither outer parameters
@@ -4192,8 +4258,13 @@ internal class LambdaBinder {
             if variable is GlobalVariableSymbol {
                 return
             }
-            if !this.parameters.Contains(variable) && !this.declared.Contains(variable) && this.seen.Add(variable) {
-                this.captured.Add(variable)
+            if !this.parameters.Contains(variable) && !this.declared.Contains(variable) {
+                if this.seen.Add(variable) {
+                    this.captured.Add(variable)
+                }
+                if this.directSeen?.Add(variable) == true {
+                    this.directCaptured?.Add(variable)
+                }
             }
         }
     }

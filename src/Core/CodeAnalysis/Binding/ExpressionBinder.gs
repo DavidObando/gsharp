@@ -150,43 +150,15 @@ internal partial class ExpressionBinder {
     )
     private var expressionExitSnapshots Dictionary[
         BoundExpression,
-        List[
-            (
-                Id int32,
-                Frame NarrowingFrame?,
-                Entries Dictionary[AccessPath, TypeSymbol]?,
-                Aliases HashSet[VariableSymbol]
-            )
-        ]?
+        List[(Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])]?
     ] = Dictionary[
         BoundExpression,
-        List[
-            (
-                Id int32,
-                Frame NarrowingFrame?,
-                Entries Dictionary[AccessPath, TypeSymbol]?,
-                Aliases HashSet[VariableSymbol]
-            )
-        ]?
+        List[(Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])]?
     ](ReferenceEqualityComparer.Instance)
     private let tupleConversionExitSnapshots Stack[
-        List[
-            (
-                Id int32,
-                Frame NarrowingFrame?,
-                Entries Dictionary[AccessPath, TypeSymbol]?,
-                Aliases HashSet[VariableSymbol]
-            )
-        ]?
+        List[(Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])]?
     ] = Stack[
-        List[
-            (
-                Id int32,
-                Frame NarrowingFrame?,
-                Entries Dictionary[AccessPath, TypeSymbol]?,
-                Aliases HashSet[VariableSymbol]
-            )
-        ]?
+        List[(Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])]?
     ]()
     private var boundSiblingExpressions List[
         (
@@ -231,12 +203,7 @@ internal partial class ExpressionBinder {
             ExitSnapshots Dictionary[
                 BoundExpression,
                 List[
-                    (
-                        Id int32,
-                        Frame NarrowingFrame?,
-                        Entries Dictionary[AccessPath, TypeSymbol]?,
-                        Aliases HashSet[VariableSymbol]
-                    )
+                    (Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])
                 ]?
             ],
             Siblings List[
@@ -272,12 +239,7 @@ internal partial class ExpressionBinder {
             ExitSnapshots Dictionary[
                 BoundExpression,
                 List[
-                    (
-                        Id int32,
-                        Frame NarrowingFrame?,
-                        Entries Dictionary[AccessPath, TypeSymbol]?,
-                        Aliases HashSet[VariableSymbol]
-                    )
+                    (Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])
                 ]?
             ],
             Siblings List[
@@ -654,14 +616,7 @@ internal partial class ExpressionBinder {
         expressionScopes = Dictionary[BoundExpression, BoundScope](ReferenceEqualityComparer.Instance)
         expressionExitSnapshots = Dictionary[
             BoundExpression,
-            List[
-                (
-                    Id int32,
-                    Frame NarrowingFrame?,
-                    Entries Dictionary[AccessPath, TypeSymbol]?,
-                    Aliases HashSet[VariableSymbol]
-                )
-            ]?
+            List[(Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])]?
         ](ReferenceEqualityComparer.Instance)
         boundSiblingExpressions = List[
             (
@@ -826,18 +781,13 @@ internal partial class ExpressionBinder {
     }
 
     private func CaptureExpressionNarrowingFrames(recordSiblingCount bool = true) List[
-        (Id int32, Frame NarrowingFrame?, Entries Dictionary[AccessPath, TypeSymbol]?, Aliases HashSet[VariableSymbol])
+        (Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])
     ]? {
         if !HasActiveExpressionNarrowings() {
             return nil
         }
         let snapshot = List[
-            (
-                Id int32,
-                Frame NarrowingFrame?,
-                Entries Dictionary[AccessPath, TypeSymbol]?,
-                Aliases HashSet[VariableSymbol]
-            )
+            (Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])
         ](expressionNarrowingFrames.Count + binderCtx.NarrowedVariables.Count)
         for stmtFrame in binderCtx.NarrowedVariables {
             if stmtFrame.Owner != nil && !IsTrackedExpressionFrame(stmtFrame) {
@@ -864,12 +814,7 @@ internal partial class ExpressionBinder {
 
     private func TruncateBranchSiblingExpressions(
         snapshot List[
-            (
-                Id int32,
-                Frame NarrowingFrame?,
-                Entries Dictionary[AccessPath, TypeSymbol]?,
-                Aliases HashSet[VariableSymbol]
-            )
+            (Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])
         ]?
     ) {
         if snapshot == nil || boundSiblingExpressions.Count == 0 {
@@ -883,12 +828,7 @@ internal partial class ExpressionBinder {
 
     private func RestoreExpressionNarrowingFrames(
         snapshot List[
-            (
-                Id int32,
-                Frame NarrowingFrame?,
-                Entries Dictionary[AccessPath, TypeSymbol]?,
-                Aliases HashSet[VariableSymbol]
-            )
+            (Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])
         ]?,
         truncateSiblings bool = true
     ) {
@@ -902,14 +842,8 @@ internal partial class ExpressionBinder {
             if frame != nil && frame.Owner == nil {
                 continue
             }
-            if frame != nil && !object.ReferenceEquals(frame.Entries, entries) &&
-                !(frame.Count == 0 && entries == nil) {
-                frame.Clear()
-                if entries != nil {
-                    for kv in entries {
-                        frame.Add(kv.Key, kv.Value)
-                    }
-                }
+            if frame != nil {
+                frame.RestoreTo(entries)
             }
             for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
                 if expressionNarrowingFrames[i].Id == id {
@@ -933,12 +867,7 @@ internal partial class ExpressionBinder {
 
     private func MergeBranchExpressionNarrowingFrames(
         snapshot List[
-            (
-                Id int32,
-                Frame NarrowingFrame?,
-                Entries Dictionary[AccessPath, TypeSymbol]?,
-                Aliases HashSet[VariableSymbol]
-            )
+            (Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])
         ]?
     ) {
         if snapshot == nil {
@@ -949,28 +878,27 @@ internal partial class ExpressionBinder {
             if frame != nil && frame.Owner == nil {
                 continue
             }
-            if frame != nil && !object.ReferenceEquals(frame.Entries, branchEntries) &&
-                !(frame.Count == 0 && branchEntries == nil) {
-                if branchEntries != nil {
-                    for kv in frame.Entries.ToArray() {
-                        if !StatementBinder.IsNullableWidening(kv.Key, kv.Value) && !branchEntries.ContainsKey(kv.Key) {
-                            recordExpressionNarrowingKill(frame, kv.Key, kv.Value)
-                            frame.Remove(kv.Key)
+            if frame != nil {
+                frame.ForEachChangedKey(
+                    branchEntries,
+                    (
+                        key AccessPath,
+                        currentExists bool,
+                        currentType TypeSymbol?,
+                        otherExists bool,
+                        otherType TypeSymbol?
+                    ) -> {
+                        if currentExists && !otherExists && !StatementBinder.IsNullableWidening(key, currentType!!) {
+                            recordExpressionNarrowingKill(frame, key, currentType!!)
+                            frame.Remove(key)
+                        } else if !currentExists && otherExists && StatementBinder.IsNullableWidening(
+                            key,
+                            otherType!!
+                        ) {
+                            frame[key] = otherType!!
                         }
                     }
-                    for bkv in branchEntries {
-                        if StatementBinder.IsNullableWidening(bkv.Key, bkv.Value) && !frame.ContainsKey(bkv.Key) {
-                            frame[bkv.Key] = bkv.Value
-                        }
-                    }
-                } else if frame.Count > 0 {
-                    for kv in frame.Entries.ToArray() {
-                        if !StatementBinder.IsNullableWidening(kv.Key, kv.Value) {
-                            recordExpressionNarrowingKill(frame, kv.Key, kv.Value)
-                            frame.Remove(kv.Key)
-                        }
-                    }
-                }
+                )
             }
             for var i = expressionNarrowingFrames.Count - 1; i >= 0; i-- {
                 if expressionNarrowingFrames[i].Id == id {
@@ -993,20 +921,10 @@ internal partial class ExpressionBinder {
 
     private func JoinConditionalBranchExpressionNarrowingFrames(
         thenExit List[
-            (
-                Id int32,
-                Frame NarrowingFrame?,
-                Entries Dictionary[AccessPath, TypeSymbol]?,
-                Aliases HashSet[VariableSymbol]
-            )
+            (Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])
         ]?,
         falseExit List[
-            (
-                Id int32,
-                Frame NarrowingFrame?,
-                Entries Dictionary[AccessPath, TypeSymbol]?,
-                Aliases HashSet[VariableSymbol]
-            )
+            (Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])
         ]?,
         trueCompletes bool,
         falseCompletes bool
