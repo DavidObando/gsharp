@@ -1449,6 +1449,20 @@ mapA.TargetMethods[1].Invoke(nil, []object?{10})
 mapB.TargetMethods[1].Invoke(nil, []object?{20})
 Console.WriteLine(mapA.TargetMethods[0].Invoke(nil, []object?{}))
 Console.WriteLine(mapB.TargetMethods[0].Invoke(nil, []object?{}))`), []string{"2", "10", "20"}}
+            yield[]object{"generic-owner-explicit-static-auto-property-and-field-like-event", `package P
+import System
+import Clib
+
+class GenW[T] : IPS, IEv {
+    shared {
+        prop (IPS) Q int32
+        event (IEv) Changed Action?
+    }
+}
+
+Console.WriteLine(Probe.SetThenGet[GenW[int32]](33))
+Probe.Hook[GenW[int32]](() -> {})
+Console.WriteLine("ok")`, []string{"33", "ok"}}
         }
 
         /// Shapes whose binding was already right and must stay so.

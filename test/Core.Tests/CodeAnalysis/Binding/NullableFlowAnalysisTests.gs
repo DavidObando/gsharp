@@ -715,6 +715,37 @@ b.Run(b)
         Assert.Equal("GS0158", diagnostic.Id)
     }
 
+    @Fact
+    func MemberNotNull_GenericReceiverConstructedOtherWrite_InvalidatesBareFieldNarrowing() {
+        let result = Evaluate(`
+import System.Diagnostics.CodeAnalysis
+
+open class Base {
+    var Value int32 = 5
+}
+
+class Box[T Base] {
+    var Field T?
+
+    @MemberNotNull("Field")
+    func EnsureInit(seed T) {
+        Field = seed
+    }
+
+    func Run(seed T, other Box[Base]) int32 {
+        this.EnsureInit(seed)
+        other.Field = nil
+        return Field.Value
+    }
+}
+
+let b = Box[Base]{}
+b.Run(Base{}, b)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+    }
+
     shared {
         private func Evaluate(source string) EmittedOracleResult {
             return EmittedOracle.Evaluate(source)

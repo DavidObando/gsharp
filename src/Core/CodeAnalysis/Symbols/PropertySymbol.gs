@@ -78,6 +78,11 @@ class PropertySymbol : Symbol {
         internal set;
     }
 
+    internal prop OriginalDefinition PropertySymbol? {
+        get;
+        init;
+    }
+
     override prop Kind SymbolKind -> SymbolKind.Property
 
     /// Gets the property type.
@@ -268,7 +273,8 @@ class PropertySymbol : Symbol {
             GetterBodySyntax = GetterBodySyntax,
             SetterBodySyntax = SetterBodySyntax,
             ReturnRefKind = ReturnRefKind,
-            ImportedMember = ImportedMember
+            ImportedMember = ImportedMember,
+            OriginalDefinition = OriginalDefinition ?? this
         }
         // The documentation is binder-attached state, not part of the declaration.
         if this.GetDocumentation() is {} documentation {

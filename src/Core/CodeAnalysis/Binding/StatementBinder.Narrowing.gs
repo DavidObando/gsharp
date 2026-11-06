@@ -5016,16 +5016,26 @@ internal partial class StatementBinder {
                 SharesStorageWithAssignedRoot(root) ||
                 (
                 root is ImplicitFieldVariableSymbol field &&
-                    (assignedFields.Contains(field.Field) || AssignsRoot(field.Receiver))
+                    (
+                    assignedFields.Contains(field.Field.OriginalDefinition ?? field.Field) ||
+                        AssignsRoot(field.Receiver)
+                )
             ) ||
-                (root is ImplicitStaticFieldVariableSymbol staticField && assignedFields.Contains(staticField.Field)) ||
+                (
+                root is ImplicitStaticFieldVariableSymbol staticField && assignedFields.Contains(
+                    staticField.Field.OriginalDefinition ?? staticField.Field
+                )
+            ) ||
                 (
                 root is ImplicitPropertyVariableSymbol property &&
-                    (assignedProperties.Contains(property.Property) || AssignsRoot(property.Receiver))
+                    (
+                    assignedProperties.Contains(property.Property.OriginalDefinition ?? property.Property) ||
+                        AssignsRoot(property.Receiver)
+                )
             ) ||
                 (
                 root is ImplicitStaticPropertyVariableSymbol staticProperty && assignedProperties.Contains(
-                    staticProperty.Property
+                    staticProperty.Property.OriginalDefinition ?? staticProperty.Property
                 )
             )
         }
@@ -6255,7 +6265,7 @@ internal partial class StatementBinder {
                 return
             }
             if expression is BoundFieldAccessExpression fieldAccess && fieldAccess.Field != nil {
-                assignedFields.Add(fieldAccess.Field)
+                assignedFields.Add(fieldAccess.Field.OriginalDefinition ?? fieldAccess.Field)
             }
             if !SmartCastStability.TryGetStableMemberPath(expression, out var path, out _) {
                 if expression is BoundIndexExpression || expression is BoundClrIndexExpression {
@@ -6284,12 +6294,12 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitFieldAssignmentExpression(node BoundFieldAssignmentExpression) {
-            assignedFields.Add(node.Field)
+            assignedFields.Add(node.Field.OriginalDefinition ?? node.Field)
             base.VisitFieldAssignmentExpression(node)
         }
 
         protected open override func VisitPropertyAssignmentExpression(node BoundPropertyAssignmentExpression) {
-            assignedProperties.Add(node.Property)
+            assignedProperties.Add(node.Property.OriginalDefinition ?? node.Property)
             base.VisitPropertyAssignmentExpression(node)
         }
 

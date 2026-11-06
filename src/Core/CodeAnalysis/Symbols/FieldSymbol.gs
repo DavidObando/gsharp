@@ -56,6 +56,11 @@ class FieldSymbol : Symbol {
         internal set;
     }
 
+    internal prop OriginalDefinition FieldSymbol? {
+        get;
+        init;
+    }
+
     override prop Kind SymbolKind -> SymbolKind.Field
 
     /// Gets the declaring field or primary-constructor parameter syntax, or `null` for imported and

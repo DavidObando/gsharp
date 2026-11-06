@@ -6975,6 +6975,30 @@ internal class MemberLookup {
             SymbolicInferenceConflict
         )
 
+        internal func ValidateSymbolicMethodConstraintsWithReceiver(
+            receiverType TypeSymbol?,
+            closedOrOpenMethod MethodInfo,
+            recovered ImmutableArray[TypeSymbol?]
+        ) ImmutableArray[TypeSymbol?] {
+            if recovered.IsDefaultOrEmpty ||
+                receiverType is not ImportedTypeSymbol symRecv ||
+                symRecv.OpenDefinition == nil ||
+                symRecv
+                .TypeArguments
+                .IsDefaultOrEmpty {
+                return recovered
+            }
+            if !ClrOverloadResolution.SatisfiesMethodConstraintsWithReceiver(
+                symRecv.OpenDefinition,
+                symRecv.TypeArguments,
+                closedOrOpenMethod,
+                recovered
+            ) {
+                return ImmutableArray.Create[TypeSymbol?](SymbolicInferenceConflict)
+            }
+            return recovered
+        }
+
         internal func TryMapConstructedTypeArgumentsThroughHierarchy(
             source ImportedTypeSymbol,
             targetOpenDefinition Type,
@@ -8249,7 +8273,7 @@ internal class MemberLookup {
         /// @param openDeclaringType The receiver's open generic type definition.
         /// @param genericMethod The method to re-project onto [`openDeclaringType`](paramref).
         /// @returns The fully open method, or `null` when no match is found.
-        private func TryGetOpenMethodOnDeclaringType(openDeclaringType Type?, genericMethod MethodInfo?) MethodInfo? {
+        internal func TryGetOpenMethodOnDeclaringType(openDeclaringType Type?, genericMethod MethodInfo?) MethodInfo? {
             if openDeclaringType == nil || genericMethod == nil {
                 return nil
             }

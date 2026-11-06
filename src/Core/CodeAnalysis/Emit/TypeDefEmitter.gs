@@ -432,12 +432,10 @@ internal class TypeDefEmitter {
             }
             let sigBlob = BlobBuilder()
             this.encodeTypeSymbol(BlobEncoder(sigBlob).FieldSignature(), prop.Type)
-            let backingName = if prop.HasExplicitInterfaceClause && prop.ExplicitInterfaceClauseTarget != nil {
-                "<" + ExplicitInterfaceMetadataNaming.GetMetadataName(prop.Name, prop.ExplicitInterfaceClauseTarget!!) +
-                    ">k__BackingField"
-            } else {
-                "<${prop.Name}>k__BackingField"
-            }
+            let backingName = ExplicitInterfaceMetadataNaming.GetBackingFieldMetadataName(
+                structSym,
+                prop.BackingField!!
+            )
             let backingHandle = this
                 .emitCtx
                 .Metadata
@@ -462,11 +460,7 @@ internal class TypeDefEmitter {
             }
             let sigBlob = BlobBuilder()
             this.encodeTypeSymbol(BlobEncoder(sigBlob).FieldSignature(), ev.Type)
-            let backingName = if ev.HasExplicitInterfaceClause && ev.ExplicitInterfaceClauseTarget != nil {
-                ExplicitInterfaceMetadataNaming.GetMetadataName(ev.Name, ev.ExplicitInterfaceClauseTarget!!)
-            } else {
-                ev.BackingField!!.Name
-            }
+            let backingName = ExplicitInterfaceMetadataNaming.GetBackingFieldMetadataName(structSym, ev.BackingField!!)
             let backingHandle = this
                 .emitCtx
                 .Metadata

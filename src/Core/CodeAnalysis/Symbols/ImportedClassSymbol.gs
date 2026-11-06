@@ -537,13 +537,18 @@ class ImportedClassSymbol : Symbol {
             argumentNames,
             (closed MethodInfo, isExpanded bool) -> {
                 let refined = refineSymbolicMethodGroupArgs?(closed, isExpanded, symbolicArgVector)
-                return MemberLookup.BuildSymbolicMethodTypeArgs(
+                let recovered = MemberLookup.BuildSymbolicMethodTypeArgs(
                     closed,
                     typeArgSymbols,
                     refined?.Item1 ?? symbolicArgVector,
                     isExpanded,
                     argumentNames,
                     refined?.Item2 ?? default(ImmutableArray[bool])
+                )
+                return MemberLookup.ValidateSymbolicMethodConstraintsWithReceiver(
+                    ConstructedReceiver ?? SymbolicReceiver,
+                    closed,
+                    recovered
                 )
             },
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,

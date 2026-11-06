@@ -469,6 +469,14 @@ internal partial class ExpressionBinder {
             staticFn.Method,
             symbolicMethodTypeArgs
         )
+        if !ClrOverloadResolution.SatisfiesMethodConstraintsWithReceiver(
+            openDef,
+            symbolicArgs,
+            staticFn.Method,
+            effectiveMethodTypeArgs
+        ) {
+            return false
+        }
         let convertedArgs = ImmutableArray.CreateBuilder[BoundExpression](arguments.Length)
         for var i = 0; i < arguments.Length; i++ {
             let argument = arguments[i]

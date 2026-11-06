@@ -1288,17 +1288,17 @@ shared class TypeMemberModel {
             return true
         }
         for property in type.StaticProperties {
-            if property.Name == name {
+            if !property.HasExplicitInterfaceClause && property.Name == name {
                 return true
             }
         }
         for event in type.StaticEvents {
-            if event.Name == name {
+            if !event.HasExplicitInterfaceClause && event.Name == name {
                 return true
             }
         }
         for method in type.StaticMethods {
-            if method.Name == name {
+            if !method.HasExplicitInterfaceClause && method.Name == name {
                 return true
             }
         }

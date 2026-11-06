@@ -7676,19 +7676,98 @@ internal shared class ClrOverloadResolution {
         out _
     )
 
+    internal func SatisfiesMethodConstraintsWithReceiver(
+        openDeclaringType Type?,
+        receiverTypeArgs ImmutableArray[TypeSymbol],
+        closedOrOpenMethod MethodInfo?,
+        methodTypeArgSymbols ImmutableArray[TypeSymbol?]
+    ) bool {
+        if openDeclaringType == nil ||
+            receiverTypeArgs.IsDefaultOrEmpty ||
+            closedOrOpenMethod == nil ||
+            !closedOrOpenMethod.IsGenericMethod {
+            return true
+        }
+        let methodDef = if closedOrOpenMethod.IsGenericMethodDefinition {
+            closedOrOpenMethod
+        } else {
+            closedOrOpenMethod.GetGenericMethodDefinition()
+        }
+        let openMethod = MemberLookup.TryGetOpenMethodOnDeclaringType(openDeclaringType, methodDef)
+        if openMethod == nil || !openMethod.IsGenericMethodDefinition {
+            return true
+        }
+        var declaringTypeParams[]Type
+        var methodTypeParams[]Type
+        try {
+            declaringTypeParams = openDeclaringType.GetGenericArguments()
+            methodTypeParams = openMethod.GetGenericArguments()
+        } catch (ex Exception) when IsMetadataLoadFailure(ex) {
+            return true
+        }
+        if declaringTypeParams.Length != receiverTypeArgs.Length {
+            return true
+        }
+        let effectiveMethodSymbols = MemberLookup.MergeSymbolicAndClosedMethodTypeArgs(
+            closedOrOpenMethod,
+            methodTypeArgSymbols
+        )
+        if effectiveMethodSymbols.IsDefaultOrEmpty || effectiveMethodSymbols.Length != methodTypeParams.Length {
+            return true
+        }
+        let closedMethodArgs = if closedOrOpenMethod.IsGenericMethodDefinition {
+            methodTypeParams
+        } else {
+            closedOrOpenMethod.GetGenericArguments()
+        }
+        let totalCount = declaringTypeParams.Length + methodTypeParams.Length
+        let combinedParams = [totalCount]Type
+        let combinedClrArgs = [totalCount]Type
+        let combinedSymbols = ImmutableArray.CreateBuilder[TypeSymbol?](totalCount)
+        let contextObject = ResolveObjectInSameContext(openDeclaringType) ?? typeof(object)
+        for var i = 0; i < declaringTypeParams.Length; i++ {
+            combinedParams[i] = declaringTypeParams[i]
+            combinedClrArgs[i] = receiverTypeArgs[i]?.ClrType ?? contextObject
+            combinedSymbols.Add(receiverTypeArgs[i])
+        }
+        for var j = 0; j < methodTypeParams.Length; j++ {
+            let idx = declaringTypeParams.Length + j
+            combinedParams[idx] = methodTypeParams[j]
+            combinedClrArgs[idx] = effectiveMethodSymbols[j]?.ClrType ??
+                (
+                if j < closedMethodArgs.Length {
+                    closedMethodArgs[j]
+                } else {
+                    contextObject
+                }
+            )
+            combinedSymbols.Add(effectiveMethodSymbols[j])
+        }
+        let combinedSymbolsImmutable = combinedSymbols.MoveToImmutable()
+        return SatisfiesDeclaredConstraints(
+            combinedParams,
+            NormaliseErasedTypeArgsForConstraintCheck(combinedClrArgs, combinedSymbolsImmutable),
+            combinedSymbolsImmutable,
+            out _,
+            out _,
+            startIndex: declaringTypeParams.Length
+        )
+    }
+
     private func SatisfiesDeclaredConstraints(
         typeParams[]Type,
         typeArgs[]Type,
         typeArgSymbols ImmutableArray[TypeSymbol?],
         out failedIndex int32,
-        out failedConstraint Type?
+        out failedConstraint Type?,
+        startIndex int32 = 0
     ) bool {
         failedIndex = -1
         failedConstraint = nil
         if typeParams.Length != typeArgs.Length {
             return true
         }
-        for var i = 0; i < typeParams.Length; i++ {
+        for var i = startIndex; i < typeParams.Length; i++ {
             failedIndex = i
             failedConstraint = nil
             let param = typeParams[i]

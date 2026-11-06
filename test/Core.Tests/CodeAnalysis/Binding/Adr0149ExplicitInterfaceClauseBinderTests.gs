@@ -667,6 +667,23 @@ func Upcast(items ImmutableArray[DerivedSym]) ImmutableArray[BaseSym] {
 `
         let diagnostics = GetDiagnostics(source)
         Assert.Empty(diagnostics)
+
+        let unrelatedSource = `
+package P
+import System.Collections.Immutable
+
+class ShapeA { }
+class ShapeB { }
+
+func BadUpcast(items ImmutableArray[ShapeB]) ImmutableArray[ShapeA] {
+    return ImmutableArray[ShapeA].CastUp(items)
+}
+`
+        let unrelatedDiagnostics = GetDiagnostics(unrelatedSource)
+        Assert.Contains(
+            unrelatedDiagnostics,
+            (d Diagnostic) -> d.IsError && d.Message.Contains("CastUp", StringComparison.Ordinal)
+        )
     }
 
     /// Issue #4625: a static explicit-interface clause targeting an imported CLR
@@ -766,6 +783,38 @@ func Probe() int32 {
         Assert.Contains(
             accessDiagnostics,
             (d Diagnostic) -> d.Id == "GS0158" && d.Message.Contains("P", StringComparison.Ordinal)
+        )
+
+        let inheritedStaticNotHiddenByExplicitSource = `
+package P
+import System
+import Clib
+
+open class Base {
+    shared {
+        public prop P int32 { get { return 77 } }
+        public event Changed Action?
+    }
+}
+
+class Derived : Base, ISlots {
+    shared {
+        prop (ISlots) P int32 { get { return 1 } }
+        event (ISlots) Changed Action?
+    }
+}
+
+func ReadInherited() int32 {
+    Derived.Changed += () -> {}
+    return Derived.P
+}
+`
+        let inheritedCompilation = Compilation(
+            resolver,
+            SyntaxTree.Parse(SourceText.From(inheritedStaticNotHiddenByExplicitSource))
+        )
+        Assert.Empty(
+            inheritedCompilation.GlobalScope.Diagnostics.AddRange(inheritedCompilation.BoundProgram.Diagnostics)
         )
     }
 
