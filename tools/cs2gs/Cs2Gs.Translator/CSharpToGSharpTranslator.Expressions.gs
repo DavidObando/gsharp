@@ -3545,6 +3545,12 @@ partial class CSharpToGSharpTranslator {
                 }: elementAccess.Expression
                 default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
             }
+            return this.ReceiverTypeArgumentsAreDeclared(receiver)
+        }
+
+        private func ReceiverTypeArgumentsAreDeclared(
+            receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
             let unwrapped = Unparenthesize(receiver)
             if unwrapped == nil {
                 return false
@@ -3552,10 +3558,27 @@ partial class CSharpToGSharpTranslator {
             if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ObjectCreationExpressionSyntax {
                 return !this.MentionsValueNilableOnlyInEmittedGSharp(unwrapped)
             }
-            return this.context.GetSymbolInfo(unwrapped).Symbol is {} symbol && this.SlotTypeIsDeclared(
-                symbol,
-                unwrapped
-            )
+            if unwrapped is InvocationExpressionSyntax invocation {
+                let receiverMethod = this.context.GetSymbolInfo(invocation).Symbol as IMethodSymbol
+                if receiverMethod == nil || ContainsTypeParameter(receiverMethod.ReturnType) {
+                    return false
+                }
+                let declaredReturn = receiverMethod.OriginalDefinition.ReturnType
+                if !ContainsTypeParameter(declaredReturn) {
+                    return true
+                }
+                if MentionedTypeParameterKind(declaredReturn, TypeParameterKind.Method) &&
+                    !HasExplicitTypeArguments(invocation.Expression) {
+                    return false
+                }
+                if MentionedTypeParameterKind(declaredReturn, TypeParameterKind.Type) {
+                    return invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
+                        this.ReceiverTypeArgumentsAreDeclared(memberAccess.Expression)
+                }
+                return true
+            }
+            let symbol = this.context.GetSymbolInfo(unwrapped).Symbol
+            return symbol != nil && !(symbol is IMethodSymbol) && this.SlotTypeIsDeclared(symbol, unwrapped)
         }
 
         private func MentionedTypeParameterKind(type ITypeSymbol?, kind TypeParameterKind) bool -> switch type {
