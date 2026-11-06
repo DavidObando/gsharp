@@ -1504,10 +1504,10 @@ internal shared class DefiniteAssignmentAnalyzer {
                 )
             }
             case call is BoundConstrainedStaticCallExpression {
-                if call.InterfaceMethod != nil {
+                if call.InterfaceMethod is {} interfaceMethod {
                     ProcessCallArguments(
                         call.Arguments,
-                        call.InterfaceMethod.Parameters,
+                        interfaceMethod.Parameters,
                         assigned,
                         diagnostics,
                         pointerAliases,

@@ -759,9 +759,9 @@ internal class ReflectionMetadataEmitter {
         let pendingRows = this.emitCtx.PendingGenericParameters
         for var gi = gpRowStart; gi < pendingRows.Count; gi++ {
             let gpRow = pendingRows[gi]
-            if gpRow.InterfaceConstraintType != nil && gpRow.PreResolvedConstraintHandle == nil {
+            if gpRow.InterfaceConstraintType is {} constraintType && gpRow.PreResolvedConstraintHandle == nil {
                 pendingRows[gi] = gpRow with{
-                    PreResolvedConstraintHandle = this.memberRefs.GetElementTypeToken(gpRow.InterfaceConstraintType)
+                    PreResolvedConstraintHandle = this.memberRefs.GetElementTypeToken(constraintType)
                 }
             }
         }

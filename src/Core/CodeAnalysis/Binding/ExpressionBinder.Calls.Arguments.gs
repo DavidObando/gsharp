@@ -320,6 +320,146 @@ internal partial class ExpressionBinder {
         return nil
     }
 
+    private var activePreCallArgumentsNarrowing StatementBinder.NarrowingBindSnapshot?
+    private var lastSelectedCallablePropertyLoad BoundExpression?
+
+    private func ApplyCallableMemberNarrowing(load BoundExpression) BoundExpression {
+        if activePreCallArgumentsNarrowing is not{} saved {
+            return ApplyMemberNarrowing(load)
+        }
+        let current = CaptureNarrowingBindSnapshot()
+        RestoreNarrowingBindSnapshot(saved)
+        let narrowed = ApplyMemberNarrowing(load)
+        RestoreNarrowingBindSnapshot(current)
+        return narrowed
+    }
+
+    internal func ApplyPreArgumentsCallablePropertyEffects(
+        receiver BoundExpression?,
+        ownerType TypeSymbol?,
+        classSymbol ImportedClassSymbol?,
+        methodName string,
+        ce CallExpressionSyntax,
+        isStatic bool
+    ) bool {
+        var clrType = if isStatic {
+            classSymbol?.ClassType
+        } else {
+            ownerType?.ClrType
+        }
+        if ownerType is {} nonNullOwner && (nonNullOwner is StructSymbol or InterfaceSymbol) {
+            let query = if isStatic {
+                if nonNullOwner is StructSymbol {
+                    MemberQuery.InheritedStatic(MemberKinds.Method)
+                } else {
+                    MemberQuery.Static(MemberKinds.Method)
+                }
+            } else {
+                MemberQuery.Instance(MemberKinds.Method)
+            }
+            if !TypeMemberModel.GetMethods(nonNullOwner, methodName, query).IsDefaultOrEmpty {
+                return false
+            }
+            if isStatic {
+                if nonNullOwner is StructSymbol staticFieldStruct &&
+                    TypeMemberModel.TryGetStaticFieldIncludingInherited(
+                    staticFieldStruct,
+                    methodName,
+                    out var matchedStaticField,
+                    out _
+                ) &&
+                    matchedStaticField != nil {
+                    return false
+                }
+                if nonNullOwner is InterfaceSymbol staticFieldIface &&
+                    (staticFieldIface.Definition ?? staticFieldIface).GetStaticField(methodName) != nil {
+                    return false
+                }
+            } else if nonNullOwner is StructSymbol instStruct {
+                for current in instStruct.GetHierarchy() {
+                    if current.TryGetField(methodName, out _) {
+                        return false
+                    }
+                }
+            }
+            var property PropertySymbol? = nil
+            var declaringOwner TypeSymbol? = nil
+            var foundProperty = false
+            if isStatic {
+                if nonNullOwner is StructSymbol staticStruct {
+                    foundProperty = TypeMemberModel.TryGetStaticPropertyIncludingInherited(
+                        staticStruct,
+                        methodName,
+                        out property,
+                        out var declaringStruct
+                    )
+                    declaringOwner = declaringStruct
+                } else if nonNullOwner is InterfaceSymbol staticIface {
+                    let propOwner = staticIface.Definition ?? staticIface
+                    property = propOwner.Properties.FirstOrDefault(
+                        (candidate PropertySymbol) -> candidate.IsStatic &&
+                            !candidate.IsIndexer &&
+                            candidate.Name == methodName &&
+                            candidate.HasGetter &&
+                            candidate.GetterSymbol != nil
+                    )
+                    foundProperty = property != nil
+                    declaringOwner = propOwner
+                }
+            } else {
+                foundProperty = TypeMemberModel.TryGetPropertyWithOwner(
+                    nonNullOwner,
+                    methodName,
+                    out property,
+                    out declaringOwner
+                )
+            }
+            if foundProperty && property is {} matchedProp && matchedProp.HasGetter {
+                let propAccess = BoundPropertyAccessExpression(
+                    ce.Identifier,
+                    receiver,
+                    declaringOwner as StructSymbol,
+                    matchedProp,
+                    matchedProp.Type,
+                    narrowedType: nil,
+                    interfaceType: declaringOwner as InterfaceSymbol
+                )
+                ApplySubExpressionNarrowingEffects(ce.Identifier, propAccess)
+                return true
+            }
+            if nonNullOwner is StructSymbol inheritedStruct {
+                clrType = TypeMemberModel.GetNearestImportedBase(inheritedStruct)?.ClrType
+            } else {
+                return false
+            }
+        }
+        if clrType == nil {
+            return false
+        }
+        let flags = BindingFlags.Public | (
+            if isStatic {
+                BindingFlags.Static
+            } else {
+                BindingFlags.Instance
+            }
+        )
+        if ClrTypeUtilities.SafeGetMethods(clrType, flags).Any((m MethodInfo) -> m.Name == methodName) {
+            return false
+        }
+        if ClrTypeUtilities.SafeGetField(clrType, methodName, flags) != nil {
+            return false
+        }
+        if ClrTypeUtilities.SafeGetProperty(clrType, methodName, flags) is PropertyInfo prop &&
+            prop
+            .GetIndexParameters().Length == 0 && prop.CanRead {
+            let propType = MemberLookup.GetClrMemberValueTypeSymbol(prop)
+            let clrAccess = BoundClrPropertyAccessExpression(ce.Identifier, receiver, prop, propType)
+            ApplySubExpressionNarrowingEffects(ce.Identifier, clrAccess)
+            return true
+        }
+        return false
+    }
+
     private func TryBindUserCallableMemberInvocation(
         receiver BoundExpression?,
         receiverType TypeSymbol,
@@ -476,7 +616,10 @@ internal partial class ExpressionBinder {
         } else {
             return false
         }
-        memberLoad = ApplyMemberNarrowing(memberLoad)
+        memberLoad = ApplyCallableMemberNarrowing(memberLoad)
+        if matchedProperty != nil {
+            lastSelectedCallablePropertyLoad = memberLoad
+        }
         let effectiveMemberType = switch memberLoad {
             case BoundFieldAccessExpression{NarrowedType: TypeSymbol narrowedField}: narrowedField
             case BoundPropertyAccessExpression{NarrowedType: TypeSymbol narrowedProperty}: narrowedProperty
@@ -560,6 +703,7 @@ internal partial class ExpressionBinder {
                 return false
             }
             memberLoad = indexedValue!!
+            lastSelectedCallablePropertyLoad = memberLoad
             callableType = indexedType
         }
         if !(callableType is FunctionTypeSymbol) &&
@@ -856,9 +1000,12 @@ internal partial class ExpressionBinder {
                 default: MemberLookup.GetClrMemberValueTypeSymbol(member)
             }
         }
-        var delegateLoad = ApplyMemberNarrowing(
+        var delegateLoad = ApplyCallableMemberNarrowing(
             BoundClrPropertyAccessExpression(nil, receiver, member, memberTypeSymbol)
         )
+        if member is PropertyInfo {
+            lastSelectedCallablePropertyLoad = delegateLoad
+        }
         let initialEffectiveType = switch delegateLoad {
             case unwrap is BoundUnaryExpression when unwrap.Op.Kind == BoundUnaryOperatorKind.NullAssertion: unwrap.Type
             default: delegateLoad.Type
@@ -1025,9 +1172,12 @@ internal partial class ExpressionBinder {
             result = BoundErrorExpression(nil)
             return true
         }
-        var delegateLoad = ApplyMemberNarrowing(
+        var delegateLoad = ApplyCallableMemberNarrowing(
             BoundClrPropertyAccessExpression(nil, nil, member!!, memberTypeSymbol, classSymbol.SymbolicReceiver)
         )
+        if member is PropertyInfo {
+            lastSelectedCallablePropertyLoad = delegateLoad
+        }
         let initialEffectiveType = switch delegateLoad {
             case unwrap is BoundUnaryExpression when unwrap.Op.Kind == BoundUnaryOperatorKind.NullAssertion: unwrap.Type
             default: delegateLoad.Type
@@ -2598,7 +2748,9 @@ internal partial class ExpressionBinder {
         // position, etc.) to surface in the same pass.
         let boundArguments = ImmutableArray.CreateBuilder[BoundExpression](syntax.Arguments.Count)
         for var i = 0; i < syntax.Arguments.Count; i++ {
-            boundArguments.Add(BindExpression(syntax.Arguments[i]))
+            let boundArg = BindExpression(syntax.Arguments[i])
+            ApplySubExpressionNarrowingEffects(syntax.Arguments[i], boundArg)
+            boundArguments.Add(boundArg)
         }
         // The selector must denote an interface.
         if ifaceType is not InterfaceSymbol ifaceSym {
@@ -2801,7 +2953,15 @@ internal partial class ExpressionBinder {
         let callSyntax SyntaxNode = syntaxOverride ?? ce
         let frame = CallCandidateRecorder.Begin(callSyntax)
         try {
-            let bound = BindBaseClassCallCore(ce, baseLocation, explicitBaseType, selectorLocation, callSyntax)
+            var bound = BindBaseClassCallCore(ce, baseLocation, explicitBaseType, selectorLocation, callSyntax)
+            if verifyCallArgumentsAfterConversions != nil {
+                bound = verifyCallArgumentsAfterConversions!!(
+                    ce.Arguments,
+                    bound,
+                    () -> BindBaseClassCallCore(ce, baseLocation, explicitBaseType, selectorLocation, callSyntax)
+                ) ??
+                    bound
+            }
             CallCandidateRecorder.Stamp(frame, bound)
             return bound
         } finally {
@@ -2930,13 +3090,14 @@ internal partial class ExpressionBinder {
         let boundArguments = ImmutableArray.CreateBuilder[BoundExpression](ce.Arguments.Count)
         for argument in ce.Arguments {
             let argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argument)
-            boundArguments.Add(
-                if argSyntax is RefArgumentExpressionSyntax refArgument {
-                    BindRefArgumentExpression(refArgument, parameter: nil)
-                } else {
-                    BindExpression(argSyntax)
-                }
-            )
+            recordDeferredArgumentSnapshot?(argSyntax)
+            let boundArg = if argSyntax is RefArgumentExpressionSyntax refArgument {
+                BindRefArgumentExpression(refArgument, parameter: nil)
+            } else {
+                BindArgumentDeferringBranchy(argSyntax)
+            }
+            ApplySubExpressionNarrowingEffects(argSyntax, boundArg)
+            boundArguments.Add(boundArg)
         }
         return boundArguments.ToImmutable()
     }

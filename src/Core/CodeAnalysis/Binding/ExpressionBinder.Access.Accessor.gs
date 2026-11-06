@@ -1482,6 +1482,7 @@ internal partial class ExpressionBinder {
         }
         // Create a synthetic capture local. Name is not user-visible; we
         // include a leading `$` so it cannot collide with user identifiers.
+        ApplySubExpressionNarrowingEffects(receiver.Syntax, receiver)
         let captureName = "$$ncap_" + (binderCtx.NullConditionalCaptureCounter += 1).ToString(
             CultureInfo.InvariantCulture
         )
@@ -2029,22 +2030,24 @@ internal partial class ExpressionBinder {
             result = BoundErrorExpression(nil)
             return true
         }
-        let boundArguments = ImmutableArray.CreateBuilder[BoundExpression](ce.Arguments.Count)
+        let preArgumentsDiagMark = Diagnostics.Count
+        let preArgumentsNarrowing = CaptureNarrowingBindSnapshot()
+        let probeArgumentsBuilder = ImmutableArray.CreateBuilder[BoundExpression](ce.Arguments.Count)
         for argument in ce.Arguments {
             let argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argument)
-            boundArguments.Add(
-                if argSyntax is RefArgumentExpressionSyntax refArg {
-                    BindRefArgumentExpression(refArg, parameter: nil)
-                } else {
-                    BindArgumentDeferringBranchy(argSyntax)
-                }
-            )
+            let boundArg = if argSyntax is RefArgumentExpressionSyntax refArg {
+                BindRefArgumentExpression(refArg, parameter: nil)
+            } else {
+                BindArgumentDeferringBranchy(argSyntax)
+            }
+            ApplySubExpressionNarrowingEffects(argSyntax, boundArg)
+            probeArgumentsBuilder.Add(boundArg)
         }
-        let arguments = boundArguments.ToImmutable()
+        let probeArguments = probeArgumentsBuilder.ToImmutable()
         let unified = instanceGroup.AddRange(staticGroup)
         let method FunctionSymbol? = overloads.SelectInstanceOverloadOrReport(
             unified,
-            arguments,
+            probeArguments,
             ce,
             methodName,
             argumentNames
@@ -2053,6 +2056,9 @@ internal partial class ExpressionBinder {
             result = BoundErrorExpression(nil)
             return true
         }
+        Diagnostics.TruncateTo(preArgumentsDiagMark)
+        $scope.RemoveVariablesDeclaredInSpan(ce.SyntaxTree, ce.Span)
+        RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
         if method.IsStatic {
             // Static overload selected: bind as a static member call on the type
             // (re-resolves the static group, applying optional/variadic/generic
@@ -2061,14 +2067,56 @@ internal partial class ExpressionBinder {
             return true
         }
         // Instance overload selected: materialize the value (property / field /
-        // local / parameter) as the receiver and dispatch the instance call with
-        // the already-bound arguments.
+        // local / parameter) as the receiver in the entry narrowing state, apply
+        // its effects, and then bind the arguments.
         let receiver = BindNameExpression(leftName)
         if receiver is BoundErrorExpression {
             result = receiver
             return true
         }
-        result = overloads.BindUserInstanceCall(receiver, method, arguments, ce, argumentNames)
+        ApplySubExpressionNarrowingEffects(leftName, receiver)
+        let BindSelectedInstanceCall = func () BoundExpression {
+            let boundArguments = ImmutableArray.CreateBuilder[BoundExpression](ce.Arguments.Count)
+            for argument in ce.Arguments {
+                let argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argument)
+                recordDeferredArgumentSnapshot?(argSyntax)
+                let boundArg = if argSyntax is RefArgumentExpressionSyntax refArg {
+                    BindRefArgumentExpression(refArg, parameter: nil)
+                } else {
+                    BindArgumentDeferringBranchy(argSyntax)
+                }
+                ApplySubExpressionNarrowingEffects(argSyntax, boundArg)
+                boundArguments.Add(boundArg)
+            }
+            let arguments = boundArguments.ToImmutable()
+            var selectedMethod FunctionSymbol? = method
+            for var i = 0; i < arguments.Length; i++ {
+                if !object.ReferenceEquals(arguments[i].Type, probeArguments[i].Type) {
+                    selectedMethod = overloads.SelectInstanceOverloadOrReport(
+                        instanceGroup,
+                        arguments,
+                        ce,
+                        methodName,
+                        argumentNames
+                    )
+                    break
+                }
+            }
+            if selectedMethod == nil {
+                return BoundErrorExpression(nil)
+            }
+            return overloads.BindUserInstanceCall(receiver, selectedMethod, arguments, ce, argumentNames)
+        }
+        var instanceCall = BindSelectedInstanceCall()
+        if verifyCallArgumentsAfterConversions != nil {
+            instanceCall = verifyCallArgumentsAfterConversions!!(
+                ce.Arguments,
+                instanceCall,
+                BindSelectedInstanceCall
+            ) ??
+                instanceCall
+        }
+        result = instanceCall
         return true
     }
 
@@ -2272,12 +2320,12 @@ internal partial class ExpressionBinder {
                     // Enums use the same explicit conversion as an unqualified
                     // T(value), retaining the resolved owner rather than a homonym.
                     if nestedConversionType != nil {
-                        if ce.TypeArgumentList != nil {
+                        if ce.TypeArgumentList is {} typeArgumentList {
                             Diagnostics.ReportWrongTypeArgumentCount(
-                                ce.TypeArgumentList.Location,
+                                typeArgumentList.Location,
                                 nestedConversionType.Name,
                                 0,
-                                ce.TypeArgumentList.Arguments.Count
+                                typeArgumentList.Arguments.Count
                             )
                             return BoundErrorExpression(ce)
                         }
@@ -3910,7 +3958,15 @@ internal partial class ExpressionBinder {
     internal func BindUserTypeStaticCall(ownerType TypeSymbol, ce CallExpressionSyntax) BoundExpression {
         let frame = CallCandidateRecorder.Begin(ce, ownerType)
         try {
-            let bound = BindUserTypeStaticCallCore(ownerType, ce)
+            var bound = BindUserTypeStaticCallCore(ownerType, ce)
+            if verifyCallArgumentsAfterConversions != nil {
+                bound = verifyCallArgumentsAfterConversions!!(
+                    ce.Arguments,
+                    bound,
+                    () -> BindUserTypeStaticCallCore(ownerType, ce)
+                ) ??
+                    bound
+            }
             CallCandidateRecorder.Stamp(frame, bound)
             return bound
         } finally {
@@ -3925,62 +3981,104 @@ internal partial class ExpressionBinder {
         if !overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames) {
             return BoundErrorExpression(nil)
         }
-        let boundArguments = ImmutableArray.CreateBuilder[BoundExpression]()
-        var deferredStaticLambdaIndices List[int32]? = nil
-        var staticArgIndex = 0
-        for argument in ce.Arguments {
-            let inner = OverloadResolver.UnwrapNamedArgumentValue(argument)
-            var boundArgument BoundExpression? = nil
-            let refArgument RefArgumentExpressionSyntax? = inner as RefArgumentExpressionSyntax
-            if refArgument != nil {
-                boundArgument = BindRefArgumentExpression(refArgument, parameter: nil)
-            }
-            if boundArgument == nil && IsUntypedArrowLambda(inner) {
-                // Issue #951: defer un-typed arrow lambdas until the static
-                // method overload (and its delegate-typed parameters) is known.
-                (
-                    (
-                        if deferredStaticLambdaIndices == nil {
-                            (deferredStaticLambdaIndices = List[int32]())
-                        } else {
-                            deferredStaticLambdaIndices
-                        }
-                    )!!
-                ).Add(staticArgIndex)
-                boundArgument = BoundErrorExpression(inner)
-            }
-            if boundArgument == nil {
-                boundArgument = BindExpression(inner)
-            }
-            boundArguments.Add(boundArgument)
-            staticArgIndex++
-        }
-        let initialArguments = boundArguments.ToImmutable()
-        let overloadDiagMark = Diagnostics.Count
-        var result = BindUserTypeStaticCallAfterArguments(
+        let preArgumentsNarrowing = CaptureNarrowingBindSnapshot()
+        let preAppliedCallableProperty = ApplyPreArgumentsCallablePropertyEffects(
+            receiver: nil,
             ownerType,
-            structSym,
-            ifaceSym,
+            classSymbol: nil,
             methodName,
             ce,
-            argumentNames,
-            initialArguments,
-            deferredStaticLambdaIndices
+            isStatic: true
         )
-        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
-            Diagnostics.TruncateNonReboundSince(overloadDiagMark)
-            result = BindUserTypeStaticCallAfterArguments(
-                ownerType,
-                structSym,
-                ifaceSym,
-                methodName,
-                ce,
-                argumentNames,
-                refreshedArguments,
-                deferredStaticLambdaIndices
-            )
+        let bindStaticArgumentsAndDispatch = func () BoundExpression {
+            let boundArguments = ImmutableArray.CreateBuilder[BoundExpression]()
+            var deferredStaticLambdaIndices List[int32]? = nil
+            var staticArgIndex = 0
+            for argument in ce.Arguments {
+                let inner = OverloadResolver.UnwrapNamedArgumentValue(argument)
+                var boundArgument BoundExpression? = nil
+                let refArgument RefArgumentExpressionSyntax? = inner as RefArgumentExpressionSyntax
+                if refArgument != nil {
+                    boundArgument = BindRefArgumentExpression(refArgument, parameter: nil)
+                }
+                if boundArgument == nil && IsUntypedArrowLambda(inner) {
+                    (
+                        (
+                            if deferredStaticLambdaIndices == nil {
+                                (deferredStaticLambdaIndices = List[int32]())
+                            } else {
+                                deferredStaticLambdaIndices
+                            }
+                        )!!
+                    ).Add(staticArgIndex)
+                    boundArgument = BoundErrorExpression(inner)
+                }
+                if boundArgument == nil {
+                    boundArgument = BindArgumentDeferringBranchy(inner)
+                }
+                ApplySubExpressionNarrowingEffects(inner, boundArgument)
+                boundArguments.Add(boundArgument)
+                staticArgIndex++
+            }
+            let initialArguments = boundArguments.ToImmutable()
+            let overloadDiagMark = Diagnostics.Count
+            let prevPreArgsNarrowing = activePreCallArgumentsNarrowing
+            activePreCallArgumentsNarrowing = preArgumentsNarrowing
+            try {
+                var bound = BindUserTypeStaticCallAfterArguments(
+                    ownerType,
+                    structSym,
+                    ifaceSym,
+                    methodName,
+                    ce,
+                    argumentNames,
+                    initialArguments,
+                    deferredStaticLambdaIndices
+                )
+                if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+                    Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+                    bound = BindUserTypeStaticCallAfterArguments(
+                        ownerType,
+                        structSym,
+                        ifaceSym,
+                        methodName,
+                        ce,
+                        argumentNames,
+                        refreshedArguments,
+                        deferredStaticLambdaIndices
+                    )
+                }
+                return bound
+            } finally {
+                activePreCallArgumentsNarrowing = prevPreArgsNarrowing
+            }
         }
-        return result
+        let prevSelectedProp = lastSelectedCallablePropertyLoad
+        lastSelectedCallablePropertyLoad = nil
+        try {
+            var result = bindStaticArgumentsAndDispatch()
+            if !preAppliedCallableProperty &&
+                lastSelectedCallablePropertyLoad is {} selectedPropLoad &&
+                ce
+                .Arguments
+                .Count > 0 {
+                lastSelectedCallablePropertyLoad = nil
+                result = Diagnostics.ReplaceDiagnosticsIn(
+                    ce.Location,
+                    () -> {
+                        for arg in ce.Arguments {
+                            $scope.RemoveVariablesDeclaredInSpan(arg.SyntaxTree, arg.Span)
+                        }
+                        RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
+                        ApplySubExpressionNarrowingEffects(ce.Identifier, selectedPropLoad)
+                        return bindStaticArgumentsAndDispatch()
+                    }
+                )
+            }
+            return result
+        } finally {
+            lastSelectedCallablePropertyLoad = prevSelectedProp
+        }
     }
 
     private func BindUserTypeStaticCallAfterArguments(

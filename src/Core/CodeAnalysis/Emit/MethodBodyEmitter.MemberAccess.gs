@@ -429,11 +429,11 @@ internal partial class MethodBodyEmitter {
             fieldContainer = this.enclosingClosure!!.ConstructedClassSym
         }
         var fieldHandle EntityHandle
-        if fa.InterfaceType != nil {
+        if fa.InterfaceType is {} interfaceType {
             // ADR-0089 / issue #1030: interface static field read. A generic
             // interface routes through a TypeSpec-parented MemberRef (per
             // construction); a non-generic interface uses the bare FieldDef.
-            fieldHandle = this.outer.userTokens.ResolveInterfaceFieldToken(fa.InterfaceType, fa.Field)
+            fieldHandle = this.outer.userTokens.ResolveInterfaceFieldToken(interfaceType, fa.Field)
         } else if fieldContainer != nil {
             fieldHandle = this.outer.userTokens.ResolveFieldToken(fieldContainer, fa.Field)
         } else if fa.Receiver?.Type is StructSymbol receiverStruct {
@@ -525,10 +525,10 @@ internal partial class MethodBodyEmitter {
             fieldContainer = this.enclosingClosure!!.ConstructedClassSym
         }
         var fieldHandle EntityHandle
-        if fas.InterfaceType != nil {
+        if fas.InterfaceType is {} interfaceType {
             // ADR-0089 / issue #1030: interface static field write — generic
             // interface via TypeSpec MemberRef, non-generic via bare FieldDef.
-            fieldHandle = this.outer.userTokens.ResolveInterfaceFieldToken(fas.InterfaceType, fas.Field)
+            fieldHandle = this.outer.userTokens.ResolveInterfaceFieldToken(interfaceType, fas.Field)
         } else if fieldContainer != nil {
             fieldHandle = this.outer.userTokens.ResolveFieldToken(fieldContainer, fas.Field)
         } else if fas.Receiver?.Type is StructSymbol receiverStruct {
@@ -799,11 +799,11 @@ internal partial class MethodBodyEmitter {
         // parameter is read with the substitution applied. The non-generic case
         // keeps using the plain accessor MethodDef.
         var getterHandle EntityHandle
-        if access.InterfaceType != nil {
+        if access.InterfaceType is {} interfaceType {
             getterHandle = this
                 .outer
                 .userTokens
-                .ResolveUserPropertyAccessorToken(access.InterfaceType, access.Property, wantSetter: false)
+                .ResolveUserPropertyAccessorToken(interfaceType, access.Property, wantSetter: false)
         } else {
             let getterContainer StructSymbol? = ResolvePropertyReferenceContainer(
                 access.StructType as StructSymbol,
@@ -886,11 +886,11 @@ internal partial class MethodBodyEmitter {
         // Issue #989: route generic constructed receivers through the
         // TypeSpec-parented MemberRef (mirrors EmitPropertyAccess).
         var setterHandle EntityHandle
-        if assn.InterfaceType != nil {
+        if assn.InterfaceType is {} interfaceType {
             setterHandle = this
                 .outer
                 .userTokens
-                .ResolveUserPropertyAccessorToken(assn.InterfaceType, assn.Property, wantSetter: true)
+                .ResolveUserPropertyAccessorToken(interfaceType, assn.Property, wantSetter: true)
         } else {
             let setterContainer StructSymbol? = ResolvePropertyReferenceContainer(
                 assn.StructType as StructSymbol,
@@ -1137,8 +1137,8 @@ internal partial class MethodBodyEmitter {
                 this.EmitErasedObjectReturnWidening(getter.ReturnType, access.Type)
             }
             case field is FieldInfo {
-                let fieldRef = if access.StaticContainerType != nil {
-                    this.outer.memberRefs.GetFieldReference(field, access.StaticContainerType)
+                let fieldRef = if access.StaticContainerType is {} staticContainerType {
+                    this.outer.memberRefs.GetFieldReference(field, staticContainerType)
                 } else {
                     this.outer.memberRefs.GetFieldReference(field)
                 }
@@ -1257,8 +1257,8 @@ internal partial class MethodBodyEmitter {
                     }
                 )
                 this.il.Token(
-                    if assn.StaticContainerType != nil {
-                        this.outer.memberRefs.GetFieldReference(field, assn.StaticContainerType)
+                    if assn.StaticContainerType is {} staticContainerType {
+                        this.outer.memberRefs.GetFieldReference(field, staticContainerType)
                     } else {
                         this.outer.memberRefs.GetFieldReference(field)
                     }

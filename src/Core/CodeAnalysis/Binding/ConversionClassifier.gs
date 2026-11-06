@@ -234,6 +234,16 @@ internal class ConversionClassifier {
         return true
     }
 
+    private let rebindDeferredArgumentWithSnapshot((SyntaxNode, () -> BoundExpression) -> BoundExpression)?
+    private let recordConvertedArgument((BoundExpression?, BoundExpression?) -> void)?
+    private let verifyCallArgumentsAfterConversions(
+        (
+            GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
+            BoundExpression?,
+            (() -> BoundExpression)?
+        ) -> BoundExpression?
+    )?
+
     /// Initializes a new instance of the (cref:ConversionClassifier)
     /// class.
     /// @param binderCtx The shared binder context that exposes the
@@ -295,7 +305,16 @@ internal class ConversionClassifier {
         refKindToString(RefKind) -> string,
         bindNativeProtocolConversion(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression,
         canConvertNativeProtocol(TypeSymbol, TypeSymbol) -> bool,
-        getCurrentFunction() -> FunctionSymbol?
+        getCurrentFunction() -> FunctionSymbol?,
+        rebindDeferredArgumentWithSnapshot((SyntaxNode, () -> BoundExpression) -> BoundExpression)? = nil,
+        recordConvertedArgument((BoundExpression?, BoundExpression?) -> void)? = nil,
+        verifyCallArgumentsAfterConversions(
+            (
+                GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
+                BoundExpression?,
+                (() -> BoundExpression)?
+            ) -> BoundExpression?
+        )? = nil
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.getCurrentFunction = getCurrentFunction
@@ -320,6 +339,9 @@ internal class ConversionClassifier {
         this.refKindToString = refKindToString ?? throw ArgumentNullException("refKindToString")
         this.bindNativeProtocolConversion = bindNativeProtocolConversion
         this.canConvertNativeProtocol = canConvertNativeProtocol
+        this.rebindDeferredArgumentWithSnapshot = rebindDeferredArgumentWithSnapshot
+        this.recordConvertedArgument = recordConvertedArgument
+        this.verifyCallArgumentsAfterConversions = verifyCallArgumentsAfterConversions
     }
 
     internal func ClassifyArgumentConversion(source TypeSymbol, target TypeSymbol) Conversion {
@@ -492,6 +514,7 @@ internal class ConversionClassifier {
             ReportOutOfRangeFloatingConstantConversion(diagnosticLocation, result)
         }
         onConversionBound?.Invoke(expression, result, beforeVersion)
+        recordConvertedArgument?(expression, result)
         return result
     }
 
@@ -640,10 +663,19 @@ internal class ConversionClassifier {
         // covers every call/constructor argument site routed through
         // BindConversion.
         if ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(expression, out var branchySyntax) {
-            if type == nil || type == TypeSymbol.Error || type == TypeSymbol.Void {
-                return bindExpression(branchySyntax)
+            let syntaxToBind ExpressionSyntax = branchySyntax
+            let rebind() -> BoundExpression = () -> if type == nil ||
+                type == TypeSymbol.Error ||
+                type == TypeSymbol.Void {
+                bindExpression(syntaxToBind)
+            } else {
+                bindExpressionWithTargetType(syntaxToBind, type)
             }
-            return bindExpressionWithTargetType(branchySyntax, type)
+            return if rebindDeferredArgumentWithSnapshot != nil {
+                rebindDeferredArgumentWithSnapshot!!(syntaxToBind, rebind)
+            } else {
+                rebind()
+            }
         }
         // Issue #1018: a throw-expression has the bottom (`never`) type and is
         // implicitly convertible to any target. Return it unwrapped — there is
@@ -2391,6 +2423,7 @@ internal class ConversionClassifier {
             out var liftedOwner
         ) {
             converted = BoundClrConversionCallExpression(nil, argument, liftedMethod!!, liftedOwner, expectedType!!)
+            recordConvertedArgument?(argument, converted)
             return true
         }
         // Issue #4350: resolve symbolic generic pairs before the erased CLR
@@ -2400,6 +2433,7 @@ internal class ConversionClassifier {
             BoundClrConversionCallExpression
             .CanApplyImplicitClrConversion(argument.Type, expectedType!!, symbolicConvMethod!!) {
             converted = BoundClrConversionCallExpression(nil, argument, symbolicConvMethod!!, expectedType!!)
+            recordConvertedArgument?(argument, converted)
             return true
         }
         if argument
@@ -2417,6 +2451,7 @@ internal class ConversionClassifier {
             BoundClrConversionCallExpression
             .CanApplyImplicitClrConversion(argument.Type, expectedType!!, convMethod!!) {
             converted = BoundClrConversionCallExpression(nil, argument, convMethod!!, expectedType!!)
+            recordConvertedArgument?(argument, converted)
             return true
         }
         // Issue #3932: an IMPORTED conversion operator whose declaring generic
@@ -2434,6 +2469,7 @@ internal class ConversionClassifier {
             BoundClrConversionCallExpression
             .CanApplyImplicitClrConversion(argument.Type, expectedType, openConvMethod!!) {
             converted = BoundClrConversionCallExpression(nil, argument, openConvMethod!!, expectedType)
+            recordConvertedArgument?(argument, converted)
             return true
         }
         // Issue #1017: same-package user-defined implicit conversion operators
@@ -2457,6 +2493,7 @@ internal class ConversionClassifier {
                 userConvOwner!!,
                 allowExplicit: false
             )
+            recordConvertedArgument?(argument, converted)
             return true
         }
         converted = argument
@@ -3981,7 +4018,40 @@ internal class ConversionClassifier {
             } finally {
                 leaveTupleConversion?.Invoke()
             }
-            return BoundTupleLiteralExpression(expression.Syntax, targetTuple, convertedLiteralElements.ToImmutable())
+            var resultTuple BoundExpression = BoundTupleLiteralExpression(
+                expression.Syntax,
+                targetTuple,
+                convertedLiteralElements.ToImmutable()
+            )
+            if expression.Syntax is TupleLiteralExpressionSyntax tupleSyntax &&
+                tupleSyntax
+                .Elements
+                .Count == arity &&
+                verifyCallArgumentsAfterConversions != nil {
+                resultTuple = verifyCallArgumentsAfterConversions!!(
+                    tupleSyntax.Elements,
+                    resultTuple,
+                    () -> {
+                        let reboundSource = if rebindTupleElement != nil {
+                            rebindTupleElement!!(expression, tupleSyntax)
+                        } else {
+                            bindExpression(tupleSyntax)
+                        }
+                        if reboundSource.Type is TupleTypeSymbol reboundSourceTuple {
+                            return BindTupleConversion(
+                                diagnosticLocation,
+                                reboundSource,
+                                reboundSourceTuple,
+                                targetTuple,
+                                allowExplicit
+                            )
+                        }
+                        return reboundSource
+                    }
+                ) ??
+                    resultTuple
+            }
+            return resultTuple
         }
         // Issue #4316: a `(nil, int32)` source cannot be spilled into a temp of its own type.
         if sourceTuple.HasNilElement &&
@@ -4512,7 +4582,7 @@ internal class ConversionClassifier {
                 explicitReads
             )
             var assignment BoundExpression
-            if slot.TargetField != nil {
+            if slot.TargetField is {} targetField {
                 assignment = BoundFieldAssignmentExpression(
                     expression.Syntax,
                     targetTemp,
@@ -4521,10 +4591,10 @@ internal class ConversionClassifier {
                         "a user field projection has a declaring type",
                         expression: "slot.TargetDeclaringType"
                     ),
-                    slot.TargetField,
+                    targetField,
                     value
                 )
-            } else if slot.TargetProperty != nil {
+            } else if slot.TargetProperty is {} targetProperty {
                 assignment = BoundPropertyAssignmentExpression(
                     expression.Syntax,
                     receiver,
@@ -4533,7 +4603,7 @@ internal class ConversionClassifier {
                         "a user property projection has a declaring type",
                         expression: "slot.TargetDeclaringType"
                     ),
-                    slot.TargetProperty,
+                    targetProperty,
                     value
                 )
             } else {
