@@ -204,6 +204,7 @@ open class DiagnosticIdUniquenessTests {
             ["GS0317"] = "Retired",
             ["GS0410"] = "Retired",
             ["GS0419"] = "Reserved",
+            ["GS0625"] = "Retired",
             ["GS9100"] = "Warning",
             ["GS9200"] = "Error",
             ["GS9201"] = "Reserved",

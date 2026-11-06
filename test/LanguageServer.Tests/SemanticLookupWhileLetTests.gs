@@ -98,6 +98,46 @@ class SemanticLookupWhileLetTests {
         )
     }
 
+    @Fact
+    func WhileLetAndGuardLet_GuardAndLaterInitializerUsesResolveToBindings() {
+        const Source = `func Len(s string) int32? { return s.Length }
+func Run(maybe string?) int32 {
+    while let text = maybe, let n = Len(text) && text.Length > 0 && n > 0 {
+        let bodyText = text
+        break
+    }
+    guard let other = maybe, let m = Len(other) && other.Length > 0 && m > 0 else {
+        return 0
+    }
+    return other.Length + m
+}`
+        let tree = SyntaxTree.Parse(Source)
+        let compilation = Compilation(tree)
+        let whileDecl Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "text", occurrence: 1))
+        let whileInitUse Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "text", occurrence: 2))
+        let whileGuardUse Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "text", occurrence: 3))
+        let whileBodyUse Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "text", occurrence: 4))
+        Assert.IsAssignableFrom[VariableSymbol](whileDecl)
+        Assert.Same(whileDecl, whileInitUse)
+        Assert.Same(whileDecl, whileGuardUse)
+        Assert.Same(whileDecl, whileBodyUse)
+
+        let guardDecl Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "other", occurrence: 1))
+        let guardInitUse Symbol? = SemanticLookup.ResolveSymbol(compilation, IdentifierAt(tree, "other", occurrence: 2))
+        let guardGuardUse Symbol? = SemanticLookup.ResolveSymbol(
+            compilation,
+            IdentifierAt(tree, "other", occurrence: 3)
+        )
+        let guardAfterUse Symbol? = SemanticLookup.ResolveSymbol(
+            compilation,
+            IdentifierAt(tree, "other", occurrence: 4)
+        )
+        Assert.IsAssignableFrom[VariableSymbol](guardDecl)
+        Assert.Same(guardDecl, guardInitUse)
+        Assert.Same(guardDecl, guardGuardUse)
+        Assert.Same(guardDecl, guardAfterUse)
+    }
+
     shared {
         private func IdentifierAt(tree SyntaxTree, text string, occurrence int32) SyntaxToken? {
             var seen = 0

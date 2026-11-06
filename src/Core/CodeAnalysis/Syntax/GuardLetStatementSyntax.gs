@@ -56,9 +56,8 @@ partial class GuardLetStatementSyntax : StatementSyntax {
         get;
     }
 
-    /// Issue #4961 / ADR-0201: gets the optional guard expression; `null`
-    /// when absent. `guard let` does not support a guard;
-    /// the parser reports GS0625 when one is present and the binder ignores it.
+    /// Issue #4961 / #4968 / ADR-0201: gets the optional guard expression;
+    /// `null` when absent.
     prop Guard ExpressionSyntax? {
         get;
     }

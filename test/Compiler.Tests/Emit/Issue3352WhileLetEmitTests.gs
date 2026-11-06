@@ -87,7 +87,7 @@ while let left = First(), let right = Second() {
         let program = assembly.GetTypes().Single((type Type) -> type.Name == "<Program>")
         Assert.Equal("AB", ReadStatic[string](program, "trace"))
         Assert.Equal(2, ReadStatic[int32](program, "firstCalls"))
-        Assert.Equal(2, ReadStatic[int32](program, "secondCalls"))
+        Assert.Equal(1, ReadStatic[int32](program, "secondCalls"))
     }
 
     @Fact

@@ -77,14 +77,17 @@ when every binding is non-nil. Header initializers bind in the enclosing scope,
 so a binding introduced by one clause is not available to another clause.
 This differs from the value-producing ADR-0151 `if let` expression, whose
 binding chain short-circuits and permits a later initializer to consume an
-earlier narrowed binding. (*Since [ADR-0201](0201-align-if-let-statement-and-expression.md)
-statement-form `if let` also short-circuits, so the eager sequencing here is
-specific to `while let`; #4968 tracks aligning it.*)
+earlier narrowed binding. (*Amended by [ADR-0201](0201-align-if-let-statement-and-expression.md)
+and [#4968](https://github.com/DavidObando/gsharp/issues/4968): `while let`
+now short-circuits left to right, a later initializer sees earlier bindings
+narrowed, and an optional `&&` guard is accepted after the bindings.*)
 
 `while let` has no header-level `&&` guard. Statement-form binding initializers
-retain the full expression grammar, matching ADR-0071. (*Revised by
-[ADR-0201](0201-align-if-let-statement-and-expression.md): initializers end at
-a top-level `&&`/`||`, and a guard reports GS0625; #4968 tracks support.*) A migration tool can
+retain the full expression grammar, matching ADR-0071. (*Amended by
+[ADR-0201](0201-align-if-let-statement-and-expression.md) and
+[#4968](https://github.com/DavidObando/gsharp/issues/4968): initializers end at
+a top-level `&&`/`||`, and both `while let` and `guard let` accept an optional
+`&&` guard after their bindings, retiring GS0625.*) A migration tool can
 preserve `pattern && predicate` by placing a negated predicate guard at the
 start of the body, where the binding is in scope.
 

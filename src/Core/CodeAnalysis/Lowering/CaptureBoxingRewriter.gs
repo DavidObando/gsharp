@@ -211,6 +211,7 @@ internal shared class CaptureBoxingRewriter {
     private class BoxingRewriter : BoundTreeRewriter {
         private let boxInfo Dictionary[VariableSymbol, BoxedVariable]
         private let dropFromCapture HashSet[VariableSymbol]
+        private let sharedRewrittenLiterals Dictionary[BoundFunctionLiteralExpression, BoundFunctionLiteralExpression]
 
         // Issue #1453: boxed local originals whose box has already been
         // allocated (a `new Box()` statement emitted). Ordinary captured
@@ -220,10 +221,15 @@ internal shared class CaptureBoxingRewriter {
         // distinguishes the two so out-var boxes are allocated exactly once.
         private let allocated HashSet[VariableSymbol] = HashSet[VariableSymbol]()
 
-        init(boxInfo Dictionary[VariableSymbol, BoxedVariable], dropFromCapture HashSet[VariableSymbol]) {
+        init(
+            boxInfo Dictionary[VariableSymbol, BoxedVariable],
+            dropFromCapture HashSet[VariableSymbol],
+            sharedRewrittenLiterals Dictionary[BoundFunctionLiteralExpression, BoundFunctionLiteralExpression]
+        ) {
             RewrittenLambdaBodies = Dictionary[FunctionSymbol, BoundBlockStatement]()
             this.boxInfo = boxInfo
             this.dropFromCapture = dropFromCapture
+            this.sharedRewrittenLiterals = sharedRewrittenLiterals
         }
 
         /// Gets the lambda bodies rewritten during this pass. When the outer function's
@@ -712,6 +718,15 @@ internal shared class CaptureBoxingRewriter {
         /// <inheritdoc />
         /// ```
         protected override func RewriteFunctionLiteralExpression(node BoundFunctionLiteralExpression) BoundExpression {
+            let capturesEnclosingParameter = node.CapturedVariables.Any(
+                (cv VariableSymbol) -> cv is ParameterSymbol && this.boxInfo.ContainsKey(cv)
+            )
+            if !capturesEnclosingParameter && this.sharedRewrittenLiterals.TryGetValue(node, out var cachedLiteral) {
+                if !object.ReferenceEquals(cachedLiteral.Body, node.Body) {
+                    this.RewrittenLambdaBodies[node.Function] = cachedLiteral.Body
+                }
+                return cachedLiteral
+            }
             // Descend into the lambda's body so reads/writes of captured outer
             // variables become reads/writes through the box. The base
             // BoundTreeRewriter intentionally skips the body (separate
@@ -756,13 +771,17 @@ internal shared class CaptureBoxingRewriter {
             if !object.ReferenceEquals(newBody, node.Body) {
                 this.RewrittenLambdaBodies[node.Function] = newBody
             }
-            return BoundFunctionLiteralExpression(
+            let rewrittenLiteral = BoundFunctionLiteralExpression(
                 node.Syntax,
                 node.Function,
                 node.FunctionType,
                 newBody,
                 newCaptured.ToImmutable()
             )
+            if !capturesEnclosingParameter {
+                this.sharedRewrittenLiterals[node] = rewrittenLiteral
+            }
+            return rewrittenLiteral
         }
 
         protected override func RewriteLocalFunctionDeclaration(node BoundLocalFunctionDeclaration) BoundStatement {
@@ -859,6 +878,11 @@ internal shared class CaptureBoxingRewriter {
         let newFunctions = ImmutableDictionary.CreateBuilder[FunctionSymbol, BoundBlockStatement]()
         var changed = false
         let allLambdaUpdates = Dictionary[FunctionSymbol, BoundBlockStatement]()
+        let sharedBoxInfo = Dictionary[VariableSymbol, BoxedVariable]()
+        let sharedRewrittenLiterals = Dictionary[BoundFunctionLiteralExpression, BoundFunctionLiteralExpression](
+            ReferenceEqualityComparer.Instance
+        )
+        let boxedLocals = HashSet[VariableSymbol]()
         // Issue #4663: box classes are numbered in this loop, so it must not
         // follow the identity-hash order of program.Functions.
         for pair in BoundProgramOrder.Functions(program) {
@@ -871,6 +895,9 @@ internal shared class CaptureBoxingRewriter {
                 &counter,
                 mapClrType,
                 ImmutableArray[BoundExpression].Empty,
+                sharedBoxInfo,
+                sharedRewrittenLiterals,
+                boxedLocals,
                 out _,
                 out var prologue
             )
@@ -902,6 +929,9 @@ internal shared class CaptureBoxingRewriter {
                 &counter,
                 mapClrType,
                 arguments,
+                sharedBoxInfo,
+                sharedRewrittenLiterals,
+                boxedLocals,
                 out var rewrittenArguments,
                 out var prologue
             )
@@ -985,6 +1015,9 @@ internal shared class CaptureBoxingRewriter {
         ref counter int32,
         mapClrType((Type) -> Type)?,
         arguments ImmutableArray[BoundExpression],
+        sharedBoxInfo Dictionary[VariableSymbol, BoxedVariable],
+        sharedRewrittenLiterals Dictionary[BoundFunctionLiteralExpression, BoundFunctionLiteralExpression],
+        boxedLocals HashSet[VariableSymbol],
         out rewrittenArguments ImmutableArray[BoundExpression],
         out parameterPrologue ImmutableArray[BoundStatement]
     )(Body BoundBlockStatement, LambdaUpdates Dictionary[FunctionSymbol, BoundBlockStatement]) {
@@ -1036,7 +1069,12 @@ internal shared class CaptureBoxingRewriter {
                 dropFromCapture.Add(variable)
                 continue
             }
-            if !IsBoxable(variable, function, nestedParameters, persistentRoots) {
+            let isOuterParameter = variable is ParameterSymbol outerParam && function.Parameters.Contains(outerParam)
+            if !isOuterParameter && sharedBoxInfo.TryGetValue(variable, out var sharedBox) {
+                boxInfo[variable] = sharedBox
+                continue
+            }
+            if !IsBoxable(variable, function, nestedParameters, persistentRoots, boxedLocals) {
                 continue
             }
             counter++
@@ -1109,14 +1147,19 @@ internal shared class CaptureBoxingRewriter {
             } else {
                 LocalVariableSymbol("<>__capture_" + variable.Name, isReadOnly: true, type: retainedCaptureType)
             }
-            boxInfo[variable] = BoxedVariable(variable, boxLocal, boxReference, fieldSymbol, retainedCapture)
+            let boxed = BoxedVariable(variable, boxLocal, boxReference, fieldSymbol, retainedCapture)
+            boxInfo[variable] = boxed
+            boxedLocals.Add(boxLocal)
+            if !isOuterParameter {
+                sharedBoxInfo[variable] = boxed
+            }
             newStructs.Add(boxClass)
         }
         if boxInfo.Count == 0 && dropFromCapture.Count == 0 {
             return (body, emptyUpdates)
         }
         // Step 3: rewrite the body — locals, reads, writes, and lambdas.
-        let rewriter = BoxingRewriter(boxInfo, dropFromCapture)
+        let rewriter = BoxingRewriter(boxInfo, dropFromCapture, sharedRewrittenLiterals)
         rewrittenArguments = arguments.Select(rewriter.RewriteInitializer).ToImmutableArray()
         let rewritten = cast[BoundBlockStatement](rewriter.RewriteStatement(body))
         // Step 4: prepend per-parameter box allocation + seed.
@@ -1147,10 +1190,14 @@ internal shared class CaptureBoxingRewriter {
         variable VariableSymbol,
         function FunctionSymbol,
         nestedParameters HashSet[ParameterSymbol],
-        persistentRoots HashSet[VariableSymbol]
+        persistentRoots HashSet[VariableSymbol],
+        boxedLocals HashSet[VariableSymbol]
     ) bool {
         // Only locals and parameters (parameters are LocalVariableSymbols).
         if variable is not LocalVariableSymbol local {
+            return false
+        }
+        if boxedLocals.Contains(local) {
             return false
         }
         // The synthesized `this` parameter for instance methods is a stable

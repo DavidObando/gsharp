@@ -28,7 +28,7 @@ shared class InlayHintComputer {
         let hints = List[InlayHint]()
         var compilation Compilation
         try {
-            compilation = content.Project?.GetCompilation() ?? Compilation(tree)
+            compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(tree)
         } catch {
             return hints
         }

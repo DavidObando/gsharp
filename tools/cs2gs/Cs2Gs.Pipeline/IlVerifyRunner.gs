@@ -86,13 +86,18 @@ open class IlVerifyRunner {
         // The #4489 rule reads every method body, so load it only once a
         // parsed StackUnderflow needs it; a clean run skips that pass.
         var filterInFinallyRule IlVerifyFilterInFinallyRule? = nil
+        var droppedFilterInFinally = false
         let FilterFalsePositives = func (parsed IEnumerable[IlVerifyError]) IReadOnlyList[IlVerifyError] {
             let kept = FilterIgnored(parsed).ToList()
             if !kept.Any((e IlVerifyError) -> string.Equals(e.Code, "StackUnderflow", StringComparison.Ordinal)) {
                 return kept
             }
             filterInFinallyRule ??= IlVerifyFilterInFinallyRule.Load(assemblyPath)
-            return FilterKnownFalsePositives(filterInFinallyRule, kept)
+            let filtered = FilterKnownFalsePositives(filterInFinallyRule, kept)
+            if filtered.Count < kept.Count {
+                droppedFilterInFinally = true
+            }
+            return filtered
         }
         let errors = List[IlVerifyError](FilterFalsePositives(ParseErrors(output)))
         let excludedMembers = List[string]()
@@ -127,7 +132,33 @@ open class IlVerifyRunner {
             outputs.Add(output)
             errors.AddRange(FilterFalsePositives(ParseErrors(output)))
         }
-        let combinedOutput = CombineOutputs(outputs, excludedMembers)
+        var shadowVerified = true
+        var shadowExit = 0
+        var shadowOutput = string.Empty
+        if droppedFilterInFinally {
+            shadowVerified = this.VerifyShadowFilterInFinally(
+                assemblyPath!!,
+                verifierArgs,
+                excludedMembers,
+                usedGlobalTool,
+                globalToolExecutable,
+                out var shadowErrors,
+                out shadowOutput,
+                out shadowExit
+            )
+            if shadowErrors.Count > 0 {
+                errors.AddRange(shadowErrors)
+            }
+        }
+        var combinedOutput = CombineOutputs(outputs, excludedMembers)
+        if droppedFilterInFinally && !shadowVerified {
+            let shadowHeader = "[IlVerifyRunner] Shadow verification failed (exit $shadowExit)."
+            combinedOutput = if string.IsNullOrEmpty(shadowOutput) {
+                combinedOutput + Environment.NewLine + shadowHeader
+            } else {
+                combinedOutput + Environment.NewLine + shadowHeader + Environment.NewLine + shadowOutput
+            }
+        }
         let distinctErrors IReadOnlyList[IlVerifyError] = errors
             .GroupBy((e IlVerifyError) -> (e.Code, e.Method, e.RawLine))
             .Select((group IGrouping[(Code string, Method string, RawLine string), IlVerifyError]) -> group.First())
@@ -140,13 +171,26 @@ open class IlVerifyRunner {
         if initialExit == 2 &&
             initialParsedErrors.Count > 0 &&
             initialErrors.Count == 0 &&
+            distinctErrors.Count == 0 &&
+            shadowVerified &&
             ReadSummaryErrorCount(outputs[0]) == initialParsedErrors.Count {
             return IlVerifyResult.Passed(combinedOutput, distinctErrors)
         }
         if initialExit != 0 && initialExit != 2 {
             return IlVerifyResult.Incomplete(initialExit, combinedOutput, distinctErrors, excludedMembers)
         }
-        return IlVerifyResult.FromRun(initialExit, combinedOutput, distinctErrors)
+        if !shadowVerified && shadowExit != 0 && shadowExit != 2 {
+            return IlVerifyResult.Incomplete(shadowExit, combinedOutput, distinctErrors, excludedMembers)
+        }
+        return IlVerifyResult.FromRun(
+            if !shadowVerified && shadowExit != 0 {
+                shadowExit
+            } else {
+                initialExit
+            },
+            combinedOutput,
+            distinctErrors
+        )
     }
 
     /// Probes/restores the repo local `dotnet-ilverify` tool once per
@@ -209,6 +253,64 @@ open class IlVerifyRunner {
     ) {
         let result = ProcessRunner.Run(executablePath, arguments, this.RepoRoot, DotnetToolTimeout)
         return (result.ExitCode, result.Output)
+    }
+
+    private func VerifyShadowFilterInFinally(
+        assemblyPath string,
+        verifierArgs IReadOnlyList[string],
+        excludedMembers IReadOnlyList[string],
+        usedGlobalTool bool,
+        globalToolExecutable string?,
+        out shadowErrors IReadOnlyList[IlVerifyError],
+        out shadowOutput string,
+        out shadowExit int32
+    ) bool {
+        shadowErrors = Array.Empty[IlVerifyError]()
+        shadowOutput = string.Empty
+        shadowExit = -1
+        let shadowDir = Directory.CreateTempSubdirectory("gs_ilv_shadow_").FullName
+        let shadowPath = Path.Combine(shadowDir, Path.GetFileName(assemblyPath))
+        try {
+            if !IlVerifyFilterInFinallyRule.TryWritePatchedAssembly(assemblyPath, shadowPath) {
+                shadowOutput = "Could not construct shadow assembly for '$assemblyPath'."
+                return false
+            }
+            let shadowVerifierArgs = List[string](verifierArgs)
+            shadowVerifierArgs[0] = shadowPath
+            for member in excludedMembers {
+                shadowVerifierArgs.Add("--exclude")
+                shadowVerifierArgs.Add("^" + Regex.Escape(member) + "$$")
+            }
+            var rawShadowOutput string? = nil
+            if usedGlobalTool {
+                shadowExit, rawShadowOutput = this.RunGlobalTool(globalToolExecutable!!, shadowVerifierArgs)
+            } else {
+                let dotnetArgs = List[string]{"tool", "run", "ilverify"}
+                dotnetArgs.AddRange(shadowVerifierArgs)
+                shadowExit, rawShadowOutput = this.RunDotnet(dotnetArgs)
+            }
+            shadowOutput = (rawShadowOutput ?? string.Empty).Replace(
+                Path.GetFullPath(shadowPath),
+                assemblyPath,
+                StringComparison.Ordinal
+            )
+                .Replace(shadowPath, assemblyPath, StringComparison.Ordinal)
+            let parsed = ParseErrors(shadowOutput)
+            shadowErrors = FilterIgnored(parsed)
+            if shadowExit == 0 && shadowErrors.Count == 0 {
+                return true
+            }
+            return shadowExit == 2 &&
+                parsed.Count > 0 &&
+                shadowErrors.Count == 0 &&
+                ReadSummaryErrorCount(shadowOutput) == parsed.Count
+        } finally {
+            try {
+                if Directory.Exists(shadowDir) {
+                    Directory.Delete(shadowDir, recursive: true)
+                }
+            } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
     }
 
     shared {

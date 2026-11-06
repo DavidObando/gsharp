@@ -8,9 +8,14 @@ import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.LanguageServer
+import GSharp.LanguageServer.Protocol
+import GSharp.Tests
+import System
 import System.Collections.Generic
+import System.Diagnostics
 import System.IO
 import System.Linq
+import System.Threading
 import Xunit
 
 /// ADR-0106 — the incremental LSP `SemanticModel` build. These tests prove
@@ -96,6 +101,59 @@ open class IncrementalSemanticModelTests {
         let references = SemanticLookup.FindReferences(comp2, makeBox).ToList()
         Assert.Contains(references, (t SyntaxToken) -> Path.GetFileName(t.SyntaxTree.Text.FileName) == "b.gs")
         Assert.Contains(references, (t SyntaxToken) -> Path.GetFileName(t.SyntaxTree.Text.FileName) == "d.gs")
+    }
+
+    @Fact
+    func Issue4659_LargeBindingSource_ModelSemanticTokensInlayHintsAndHover_CompletePromptly() {
+        let binderPath = Path.Combine(LocateRepoRoot(), "src", "Core", "CodeAnalysis", "Binding", "Binder.gs")
+        let source = File.ReadAllText(binderPath)
+        Assert.True(source.Length > 100_000)
+        using let cts = CancellationTokenSource(TimeSpan.FromSeconds(15))
+        let content = LanguageServerTestHelpers.Content(source)
+        let hoverPos = LanguageServerTestHelpers.PositionOf(source, "partial class Binder")
+        let targetPos = Position(hoverPos.Line, hoverPos.Character + "partial class ".Length)
+
+        let sw = Stopwatch.StartNew()
+        let model = SemanticLookup.BuildModelForTest(
+            ServerCompilation.Create(content.SyntaxTree),
+            useIncrementalCaches: true
+        )
+        Assert.NotNull(model)
+        let document = SemanticTokensDocument(SemanticTokensHandler.Legend)
+        let builder = document.Create()
+        SemanticTokensComputer.Tokenize(builder, content, cts.Token)
+        builder.Commit()
+        Assert.NotEmpty(document.GetSemanticTokens().Data)
+        let hints = InlayHintComputer.ComputeHints(content, ct: cts.Token)
+        Assert.NotEmpty(hints)
+        let hover = HoverComputer.ComputeHover(content, targetPos, cts.Token)
+        Assert.NotNull(hover)
+        Assert.Contains("Binder", hover!!.Contents.ToString(), StringComparison.Ordinal)
+        sw.Stop()
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), "Binder.gs LSP features took ${sw.Elapsed}")
+    }
+
+    @Fact
+    func Issue4659_LargeMultiHoleInterpolatedString_TokenizeAndFindTokenAt_CompletePromptly() {
+        let holes = string.Concat(Enumerable.Repeat("$${\"$$item\"} $$item-", 600))
+        let source = "package P\nfunc Format(item int32) string {\n    return \"" + holes + "\"\n}\n"
+        let content = LanguageServerTestHelpers.Content(source)
+        let sw = Stopwatch.StartNew()
+        let document = SemanticTokensDocument(SemanticTokensHandler.Legend)
+        let builder = document.Create()
+        SemanticTokensComputer.Tokenize(builder, content)
+        builder.Commit()
+        let data = document.GetSemanticTokens().Data
+        Assert.True(data.Length >= 1200 * 5)
+        let lastHoleIndex = source.LastIndexOf("item", StringComparison.Ordinal)
+        let found = SemanticLookup.FindTokenAt(content.SyntaxTree, lastHoleIndex)
+        Assert.NotNull(found)
+        Assert.Equal("item", found!!.Text)
+        let resolved = SemanticLookup.ResolveSymbol(ServerCompilation.Create(content.SyntaxTree), found)
+        Assert.NotNull(resolved)
+        Assert.Equal("item", resolved!!.Name)
+        sw.Stop()
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), "multi-hole tokenization took ${sw.Elapsed}")
     }
 
     shared {
@@ -186,6 +244,17 @@ open class IncrementalSemanticModelTests {
                     yield descendant
                 }
             }
+        }
+
+        private func LocateRepoRoot() string {
+            for var directory DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory);
+                directory != nil;
+                directory = directory!!.Parent {
+                if RepositoryRootMarker.IsRoot(directory.FullName) {
+                    return directory.FullName
+                }
+            }
+            throw DirectoryNotFoundException("Unable to locate repository root")
         }
     }
 }

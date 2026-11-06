@@ -364,39 +364,51 @@ internal shared class RefCapabilities {
     ) bool -> !isReadOnlyMember &&
         IsReadOnlyReference(receiver)
 
-    internal func IsReadOnlyMethod(method MethodInfo) bool -> method.GetCustomAttributesData().Any(
-        (attribute CustomAttributeData) -> attribute
-            .AttributeType
-            .FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute"
-    ) ||
-        method
-        .DeclaringType
-        ?.GetCustomAttributesData()
-        .Any(
-        (attribute CustomAttributeData) -> attribute
-            .AttributeType
-            .FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute"
-    ) == true
+    internal func IsReadOnlyMethod(method MethodInfo) bool {
+        let metadataMethod = UnwrapMetadataMethod(method)
+        return SafeGetCustomAttributesData(metadataMethod).Any(
+            (attribute CustomAttributeData) -> attribute
+                .AttributeType
+                .FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute"
+        ) ||
+            SafeGetCustomAttributesData(metadataMethod.DeclaringType).Any(
+            (attribute CustomAttributeData) -> attribute
+                .AttributeType
+                .FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute"
+        )
+    }
 
     /// Returns whether an imported method advertises `[UnscopedRef]`.
     /// @param method The imported method.
     /// @returns `true` when the method carries the attribute.
     internal func HasUnscopedRef(method MethodInfo) bool {
-        if HasUnscopedRefAttribute(method.GetCustomAttributesData()) {
+        let metadataMethod = UnwrapMetadataMethod(method)
+        if HasUnscopedRefAttribute(SafeGetCustomAttributesData(metadataMethod)) {
             return true
         }
-        if !IsPropertyAccessor(method) || method.DeclaringType == nil {
+        if !IsPropertyAccessor(metadataMethod) || metadataMethod.DeclaringType == nil {
+            return false
+        }
+        let declaringType = if metadataMethod.DeclaringType!!.IsGenericType &&
+            !metadataMethod.DeclaringType!!.IsGenericTypeDefinition {
+            metadataMethod.DeclaringType!!.GetGenericTypeDefinition()
+        } else {
+            metadataMethod.DeclaringType!!
+        }
+        if ClrTypeUtilities.IsTypeBuilderInstantiation(declaringType) || ClrTypeUtilities.IsUnfinishedEmitType(
+            declaringType
+        ) {
             return false
         }
         return UnscopedRefPropertyAccessors.GetValue(
-            method.DeclaringType!!,
-            (declaringType Type) -> {
+            declaringType,
+            (owner Type) -> {
                 let accessors = HashSet[(Module Module, MetadataToken int32)]()
                 for property in ClrTypeUtilities.SafeGetProperties(
-                    declaringType,
+                    owner,
                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static
                 ) {
-                    if !HasUnscopedRefAttribute(property.GetCustomAttributesData()) {
+                    if !HasUnscopedRefAttribute(SafeGetCustomAttributesData(property)) {
                         continue
                     }
                     if property.GetMethod != nil {
@@ -409,7 +421,7 @@ internal shared class RefCapabilities {
                 return accessors
             }
         )
-            .Contains((method.Module, method.MetadataToken))
+            .Contains((metadataMethod.Module, metadataMethod.MetadataToken))
     }
 
     internal func IsPropertyAccessor(method MethodInfo) bool {
@@ -447,7 +459,7 @@ internal shared class RefCapabilities {
     /// Returns whether an imported parameter carries `[ScopedRef]`.
     /// @param parameter The imported parameter.
     /// @returns `true` when the parameter is explicitly scoped.
-    internal func IsScoped(parameter ParameterInfo) bool -> parameter.GetCustomAttributesData().Any(
+    internal func IsScoped(parameter ParameterInfo) bool -> SafeGetCustomAttributesData(parameter).Any(
         (attribute CustomAttributeData) -> KnownAttributes.IsScopedRef(attribute.AttributeType)
     )
 
@@ -455,7 +467,7 @@ internal shared class RefCapabilities {
     /// @param parameter The imported parameter.
     /// @returns `true` when the parameter is explicitly unscoped.
     internal func HasUnscopedRef(parameter ParameterInfo) bool -> HasUnscopedRefAttribute(
-        parameter.GetCustomAttributesData()
+        SafeGetCustomAttributesData(parameter)
     )
 
     /// Creates a parameter symbol that preserves imported ref-safety metadata.
@@ -790,6 +802,85 @@ internal shared class RefCapabilities {
         )
     )
         .ToImmutableArray()
+
+    private func UnwrapMetadataMethod(method MethodInfo) MethodInfo {
+        var current = if method.IsGenericMethod && !method.IsGenericMethodDefinition {
+            method.GetGenericMethodDefinition()
+        } else {
+            method
+        }
+        if ClrTypeUtilities.TryGetMappedOpenMethod(current, out var openMethod) {
+            return openMethod
+        }
+        return current
+    }
+
+    private func UnwrapMetadataParameter(parameter ParameterInfo) ParameterInfo {
+        if parameter.Member is MethodInfo method {
+            let unwrapped = UnwrapMetadataMethod(method)
+            if !object.ReferenceEquals(unwrapped, method) {
+                if parameter.Position < 0 {
+                    return unwrapped.ReturnParameter
+                }
+                let unwrappedParams = unwrapped.GetParameters()
+                if parameter.Position < unwrappedParams.Length {
+                    return unwrappedParams[parameter.Position]
+                }
+            }
+        }
+        return parameter
+    }
+
+    private func SafeGetCustomAttributesData(member MemberInfo?) IList[CustomAttributeData] {
+        if member == nil {
+            return Array.Empty[CustomAttributeData]()
+        }
+        let target = if member is Type type && type.IsGenericType && !type.IsGenericTypeDefinition {
+            type.GetGenericTypeDefinition()
+        } else if member is MethodInfo method {
+            UnwrapMetadataMethod(method)
+        } else {
+            member
+        }
+        if (
+            target is Type targetType &&
+                (
+                ClrTypeUtilities.IsTypeBuilderInstantiation(targetType) || ClrTypeUtilities.IsUnfinishedEmitType(
+                    targetType
+                )
+            )
+        ) ||
+            ClrTypeUtilities.IsTypeBuilderInstantiation(target.DeclaringType) || ClrTypeUtilities.IsUnfinishedEmitType(
+            target.DeclaringType
+        ) {
+            return Array.Empty[CustomAttributeData]()
+        }
+        try {
+            return target.GetCustomAttributesData()
+        } catch (exception Exception) when exception is NotImplementedException ||
+            exception is NotSupportedException ||
+            exception is InvalidOperationException {
+            return Array.Empty[CustomAttributeData]()
+        }
+    }
+
+    private func SafeGetCustomAttributesData(parameter ParameterInfo?) IList[CustomAttributeData] {
+        if parameter == nil {
+            return Array.Empty[CustomAttributeData]()
+        }
+        let target = UnwrapMetadataParameter(parameter)
+        if ClrTypeUtilities.IsTypeBuilderInstantiation(target.Member.DeclaringType) ||
+            ClrTypeUtilities.IsUnfinishedEmitType(target.Member.DeclaringType) {
+            return Array.Empty[CustomAttributeData]()
+        }
+        try {
+            return target.GetCustomAttributesData()
+        } catch (exception Exception) when exception is NotImplementedException ||
+            exception is NotSupportedException ||
+            exception is InvalidOperationException {
+            return Array.Empty[CustomAttributeData]()
+        }
+    }
 
     private func HasUnscopedRefAttribute(attributes IEnumerable[CustomAttributeData]?) bool -> attributes?.Any(
         (attribute CustomAttributeData) -> KnownAttributes.IsUnscopedRef(attribute.AttributeType)

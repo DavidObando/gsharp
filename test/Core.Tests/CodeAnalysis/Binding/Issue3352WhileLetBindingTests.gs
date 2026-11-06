@@ -55,13 +55,21 @@ func Run(first string?, second string?) string {
     }
 
     @Fact
-    func BindingsAreNotVisibleToLaterInitializers() {
-        let diagnostics = Bind(`func Run(first string?) {
+    func LaterInitializerSeesEarlierBindingNarrowed() {
+        let diagnostics = Bind(`func Len(s string) int32? { return s.Length }
+func Run(first string?) {
+    while let left = first, let right = Len(left) {
+        break
+    }
+}`).Diagnostics
+        Assert.Empty(diagnostics)
+
+        let nonNullable = Bind(`func Run(first string?) {
     while let left = first, let right = left {
         break
     }
 }`).Diagnostics
-        Assert.Contains(diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "GS0125")
+        Assert.Contains(nonNullable, (diagnostic Diagnostic) -> diagnostic.Id == "GS0296")
     }
 
     @Fact
