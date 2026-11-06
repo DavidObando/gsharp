@@ -30,9 +30,8 @@ import System.Linq
 ///
 /// Shapes G# cannot pair with a generated implementing part are
 /// reported, never rewritten: an interface or inline-struct owner (GS0607),
-/// the legacy merge mode's non-partial type (GS0608), and a nested owner
-/// (gsgen's stub renders only top-level types, so no implementing part is
-/// generated, GS0609).
+/// the legacy merge mode's non-partial type (GS0608), and an owner nested
+/// inside an interface.
 ///
 /// An entry class declaring one is kept as a class rather than hoisted
 /// to top-level funcs, which cannot be partial.
@@ -105,10 +104,8 @@ partial class CSharpToGSharpTranslator {
                     DescribeOwnerKind(ownerKind) +
                     ", which cannot " +
                     "declare a partial func (GS0607); only a class, struct, data class or data struct can"
-            } else if symbol.ContainingType?.ContainingType != nil {
-                problem = "its type is nested, and gsgen generates implementing parts only for top-level types " +
-                    "(the declaring part would have no implementation, GS0609); move the method to a " +
-                    "top-level partial type"
+            } else if HasEnclosingInterface(symbol.ContainingType) {
+                problem = "its type is nested inside an interface, which G# cannot declare"
             }
             if problem != nil {
                 let message = "[GeneratedRegex] method '${symbol.ContainingType?.Name}.${symbol.Name}' has no G# " +
@@ -163,6 +160,17 @@ partial class CSharpToGSharpTranslator {
         }
 
         shared {
+            private func HasEnclosingInterface(type INamedTypeSymbol?) bool {
+                for var current INamedTypeSymbol? = type?.ContainingType;
+                    current != nil;
+                    current = current!!.ContainingType {
+                    if current.TypeKind == TypeKind.Interface {
+                        return true
+                    }
+                }
+                return false
+            }
+
             private func DescribeOwnerKind(ownerKind TypeDeclarationKind) string -> switch ownerKind {
                 case TypeDeclarationKind.DataClass: "data class (a C# record)"
                 case TypeDeclarationKind.DataStruct: "data struct (a C# record struct)"

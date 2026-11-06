@@ -93,6 +93,27 @@ public static class BookLibrary
         Assert.Contains("book.PurchaseDate!!", printed, StringComparison.Ordinal)
     }
 
+    @Fact
+    func ExpressionTree_NullableParameterAndLocalReceivers_AreAssertedAndBind() {
+        let printed = Translate(`#nullable enable
+using System;
+using System.Collections.Generic;
+using System.Linq.Expressions;
+
+namespace Oahu.Core;
+
+public static class Probe
+{
+    public static Expression<Func<List<string>?, int>> FromParameter() =>
+        xs => xs.ConvertAll<int>(s => s.Length).Count;
+
+    public static Expression<Func<int>> FromLocal(List<string>? local) =>
+        () => local.Count;
+}`)
+        Assert.Contains("xs!!.ConvertAll[int32]((s string) -> s.Length).Count", printed, StringComparison.Ordinal)
+        Assert.Contains("() -> local!!.Count", printed, StringComparison.Ordinal)
+    }
+
     shared {
         private func Translate(source string, roundTripOnlyReason string? = nil) string {
             let project = CSharpProjectLoader.LoadInMemory([](string, source string){("BookLibrary.cs", source)})

@@ -220,61 +220,127 @@ shared class GeneratedDocTranslator {
         let members = List[GNode](unit.Members.Count)
         var changed = false
         for member in unit.Members {
-            let dataType StubDataType? = if member is TypeDeclaration{IsPartial: true} type {
-                dataTypes.FirstOrDefault(
-                    (candidate StubDataType) -> string.Equals(
-                        candidate.PackageName ?? string.Empty,
-                        unit.Package ?? string.Empty,
-                        StringComparison.Ordinal
-                    ) &&
-                        string.Equals(candidate.TypeName, type.Name, StringComparison.Ordinal) &&
-                        candidate.TypeArity == type.TypeParameters!!.Count
+            if member is TypeDeclaration type {
+                let rewritten = SpellDataTypeDeclaration(
+                    unit.Package,
+                    List[string](),
+                    type,
+                    dataTypes,
+                    diagnostics,
+                    out var typeChanged
                 )
+                members.Add(rewritten)
+                changed |= typeChanged
             } else {
-                default(StubDataType?)
-            }
-            if dataType == nil {
                 members.Add(member)
-                continue
             }
-            let part = cast[TypeDeclaration](member)
-            if part.PrimaryConstructorParameters != nil && dataType.PositionalList is TextLocation userList {
-                let message = "a generator declared a positional parameter list on '${part.Name}', which already has one; " +
-                    "only one part of a data type may state it"
-                diagnostics.Add(GeneratorHostDiagnostic(PositionalListConflictId, message, userList))
-            }
-            members.Add(
-                TypeDeclaration(
-                    if dataType.IsClass {
-                        TypeDeclarationKind.DataClass
-                    } else {
-                        TypeDeclarationKind.DataStruct
-                    },
-                    part.Name,
-                    part.TypeParameters,
-                    part.PrimaryConstructorParameters,
-                    part.BaseType,
-                    part.BaseConstructorArguments,
-                    part.Interfaces,
-                    part.Members,
-                    part.Visibility,
-                    isOpen: false,
-                    isSealed: false,
-                    isAbstract: part.IsAbstract,
-                    isPartial: true,
-                    part.HasBody,
-                    part.Attributes,
-                    part.IsUnsafe,
-                    part.IsRefLike
-                )
-            )
-            changed = true
         }
         return if changed {
             CompilationUnit(unit.Package, unit.Imports, members, unit.LeadingComments, unit.FileAttributes)
         } else {
             unit
         }
+    }
+
+    private func SpellDataTypeDeclaration(
+        packageName string?,
+        enclosingNames List[string],
+        part TypeDeclaration,
+        dataTypes IReadOnlyList[StubDataType],
+        diagnostics List[GeneratorHostDiagnostic],
+        out changed bool
+    ) TypeDeclaration {
+        changed = false
+        let arity = part.TypeParameters?.Count ?? 0
+        let metadataName = if arity > 0 {
+            part.Name + "`" + arity.ToString(CultureInfo.InvariantCulture)
+        } else {
+            part.Name
+        }
+        enclosingNames.Add(metadataName)
+        let typeKey = SemanticAbstractTypeKey.Format(packageName, enclosingNames)
+        let rewrittenMembers = List[GMember](part.Members.Count)
+        var membersChanged = false
+        for member in part.Members {
+            if member is TypeDeclaration nestedType {
+                rewrittenMembers.Add(
+                    SpellDataTypeDeclaration(
+                        packageName,
+                        enclosingNames,
+                        nestedType,
+                        dataTypes,
+                        diagnostics,
+                        out var nestedChanged
+                    )
+                )
+                membersChanged |= nestedChanged
+            } else {
+                rewrittenMembers.Add(member)
+            }
+        }
+        enclosingNames.RemoveAt(enclosingNames.Count - 1)
+        let dataType StubDataType? = if part.IsPartial {
+            dataTypes.FirstOrDefault(
+                (candidate StubDataType) -> string.Equals(candidate.TypeKey, typeKey, StringComparison.Ordinal)
+            )
+        } else {
+            default(StubDataType?)
+        }
+        if dataType == nil {
+            if !membersChanged {
+                return part
+            }
+            changed = true
+            return TypeDeclaration(
+                part.Kind,
+                part.Name,
+                part.TypeParameters,
+                part.PrimaryConstructorParameters,
+                part.BaseType,
+                part.BaseConstructorArguments,
+                part.Interfaces,
+                rewrittenMembers,
+                part.Visibility,
+                part.IsOpen,
+                part.IsSealed,
+                part.IsAbstract,
+                part.IsPartial,
+                part.HasBody,
+                part.Attributes,
+                part.IsUnsafe,
+                part.IsRefLike,
+                part.IsShared
+            )
+        }
+        if part.PrimaryConstructorParameters != nil && dataType.PositionalList is TextLocation userList {
+            let message = "a generator declared a positional parameter list on '${part.Name}', which already has one; " +
+                "only one part of a data type may state it"
+            diagnostics.Add(GeneratorHostDiagnostic(PositionalListConflictId, message, userList))
+        }
+        changed = true
+        return TypeDeclaration(
+            if dataType.IsClass {
+                TypeDeclarationKind.DataClass
+            } else {
+                TypeDeclarationKind.DataStruct
+            },
+            part.Name,
+            part.TypeParameters,
+            part.PrimaryConstructorParameters,
+            part.BaseType,
+            part.BaseConstructorArguments,
+            part.Interfaces,
+            rewrittenMembers,
+            part.Visibility,
+            isOpen: false,
+            isSealed: false,
+            isAbstract: part.IsAbstract,
+            isPartial: true,
+            part.HasBody,
+            part.Attributes,
+            part.IsUnsafe,
+            part.IsRefLike
+        )
     }
 
     /// The hint name of a secondary namespace unit split out of a generated

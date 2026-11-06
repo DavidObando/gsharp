@@ -6,10 +6,12 @@ package GSharp.GeneratorHost
 
 import System
 import System.Collections.Generic
+import System.Globalization
 import System.Linq
 import System.Text
 import Cs2Gs.CodeModel.Ast
 import Cs2Gs.CodeModel.Printing
+import Cs2Gs.Translator
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
@@ -159,34 +161,29 @@ internal shared class ImplementingPartHeaders {
     }
 
     // The declaring part an implementing part pairs with: same package, same
-    // top-level type (the stub renders only top-level types; `P` and `P[T]`
-    // are different types, so the arity is part of it), same name and
-    // parameter count. Overloads of one name with the same parameter count
-    // cannot be told apart by spelling (their types are what differs), so an
-    // ambiguous match copies nothing and the generated header stands.
+    // enclosing-to-nested type chain (`P` and `P[T]` are different types, so
+    // each level's arity is part of it), same name and parameter count.
+    // Overloads of one name with the same parameter count cannot be told apart
+    // by spelling (their types are what differs), so an ambiguous match copies
+    // nothing and the generated header stands.
     private func FindDeclaringPart(
         $package string,
         implementing FunctionDeclarationSyntax,
         definitions IReadOnlyList[StubPartialDefinition]
     ) StubPartialDefinition? {
-        let owner StructDeclarationSyntax? = EnclosingType(implementing)
-        if owner == nil || !(owner.Parent is CompilationUnitSyntax) {
+        let typeKey string? = EnclosingTypeKey($package, EnclosingType(implementing))
+        if typeKey == nil {
             return nil
         }
-        let typeName = owner.Identifier.ValueText
-        let typeArity = owner.TypeParameterList?.Parameters.Count ?? 0
         let name = implementing.Identifier.ValueText
         let methodArity = implementing.TypeParameterList?.Parameters.Count ?? 0
         var match StubPartialDefinition? = nil
         for definition in definitions {
-            if string.Equals(
-                definition.PackageName ?? string.Empty,
-                $package ?? string.Empty,
+            if string.Equals(definition.TypeKey, typeKey, StringComparison.Ordinal) && string.Equals(
+                definition.Declaration.Identifier.ValueText,
+                name,
                 StringComparison.Ordinal
             ) &&
-                string.Equals(definition.TypeName, typeName, StringComparison.Ordinal) &&
-                definition.TypeArity == typeArity &&
-                string.Equals(definition.Declaration.Identifier.ValueText, name, StringComparison.Ordinal) &&
                 (definition.Declaration.TypeParameterList?.Parameters.Count ?? 0) == methodArity &&
                 definition
                 .Declaration
@@ -201,6 +198,30 @@ internal shared class ImplementingPartHeaders {
             }
         }
         return match
+    }
+
+    private func EnclosingTypeKey($package string?, owner StructDeclarationSyntax?) string? {
+        if owner == nil {
+            return nil
+        }
+        let names = List[string]()
+        var current SyntaxNode? = owner
+        while current is StructDeclarationSyntax type {
+            let arity = type.TypeParameterList?.Parameters.Count ?? 0
+            names.Add(
+                if arity > 0 {
+                    type.Identifier.ValueText + "`" + arity.ToString(CultureInfo.InvariantCulture)
+                } else {
+                    type.Identifier.ValueText
+                }
+            )
+            current = type.Parent
+        }
+        if !(current is CompilationUnitSyntax) {
+            return nil
+        }
+        names.Reverse()
+        return SemanticAbstractTypeKey.Format($package, names)
     }
 
     private func EnclosingType(node SyntaxNode) StructDeclarationSyntax? {
