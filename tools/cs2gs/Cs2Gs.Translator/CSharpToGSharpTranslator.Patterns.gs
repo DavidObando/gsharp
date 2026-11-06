@@ -2277,6 +2277,13 @@ partial class CSharpToGSharpTranslator {
                 memberReceiver = this.BuildPatternNarrowingReplacement(receiver, receiverSyntax: nil, recursive.Type)
             }
             if recursive.PropertyPatternClause != nil {
+                let sharedPrefixes Dictionary[string, GExpression]? = if recursive.PropertyPatternClause!!
+                    .Subpatterns
+                    .Count((sub SubpatternSyntax) -> sub.NameColon == nil && sub.ExpressionColon != nil) > 1 {
+                    Dictionary[string, GExpression](StringComparer.Ordinal)
+                } else {
+                    nil
+                }
                 for sub in recursive.PropertyPatternClause!!.Subpatterns {
                     if sub.NameColon == nil && sub.ExpressionColon == nil {
                         this.context.ReportUnsupported(
@@ -2313,7 +2320,8 @@ partial class CSharpToGSharpTranslator {
                         memberTest = this.TranslateExtendedPropertyMemberTest(
                             sub.ExpressionColon!!.Expression,
                             sub.Pattern,
-                            memberReceiver
+                            memberReceiver,
+                            sharedPrefixes
                         )
                     }
                     test = if test == nil {
@@ -2540,7 +2548,8 @@ partial class CSharpToGSharpTranslator {
         private func TranslateExtendedPropertyMemberTest(
             memberPath ExpressionSyntax,
             leafPattern PatternSyntax,
-            receiver GExpression?
+            receiver GExpression?,
+            sharedPrefixes Dictionary[string, GExpression]? = nil
         ) GExpression {
             let names = SplitMemberPath(memberPath)
             // `intermediateExprs[i]` is the sub-expression whose runtime value
@@ -2558,7 +2567,15 @@ partial class CSharpToGSharpTranslator {
                 intermediateExprs[pos] = memberAccess.Expression
                 current = memberAccess.Expression
             }
-            return this.TranslateExtendedPropertyLink(names, intermediateExprs, 0, receiver, memberPath, leafPattern)
+            return this.TranslateExtendedPropertyLink(
+                names,
+                intermediateExprs,
+                0,
+                receiver,
+                memberPath,
+                leafPattern,
+                sharedPrefixes
+            )
         }
 
         // Issue #4356: one link of an extended property path. A nullable
@@ -2574,7 +2591,8 @@ partial class CSharpToGSharpTranslator {
             index int32,
             memberReceiver GExpression?,
             memberPath ExpressionSyntax,
-            leafPattern PatternSyntax
+            leafPattern PatternSyntax,
+            sharedPrefixes Dictionary[string, GExpression]? = nil
         ) GExpression {
             if index == names.Count - 1 {
                 let finalMemberAccess GExpression = MemberAccessExpression(memberReceiver, names[index])
@@ -2601,6 +2619,7 @@ partial class CSharpToGSharpTranslator {
             // conversion, #1943), so the next link reads it through `!!` —
             // safe, the guard just proved it has a value.
             let nullableValueLink = IsNullableValueType(declaredType)
+            let prefix = string.Join(".", names.Take(index + 1))
             if this.IsNullablePatternLink(declaredType, intermediateExprs[index]) {
                 if gsharpNullableLink {
                     this.state.GSharpNullablePatternReceivers.Add(link)
@@ -2612,15 +2631,25 @@ partial class CSharpToGSharpTranslator {
                         names,
                         intermediateExprs,
                         index + 1,
-                        if nullableValueLink {
+                        if nullableValueLink || this.state.StoredPatternCaptures.Contains(local) {
                             cast[GExpression](NonNullAssertionExpression(local))
                         } else {
                             local
                         },
                         memberPath,
-                        leafPattern
+                        leafPattern,
+                        sharedPrefixes
                     )
                 )
+                if sharedPrefixes != nil && sharedPrefixes.TryGetValue(prefix, out var previous) {
+                    return rest(previous)
+                }
+                let capture(GExpression) -> GExpression = func (local GExpression) GExpression {
+                    if sharedPrefixes != nil {
+                        sharedPrefixes[prefix] = local
+                    }
+                    return rest(local)
+                }
                 // A leaf that declares a designation (`Identifier.Text: var t`)
                 // leaves its binder's replacement reading through this local
                 // after the test, so the local must outlive the block: a `var`
@@ -2635,28 +2664,37 @@ partial class CSharpToGSharpTranslator {
                     // The binder's replacement reads the next link through this
                     // `var` AFTER the test, where the guard no longer narrows
                     // it, so that read asserts — safe, the guard proved it.
-                    return this.StorePatternMemberOnce(
-                        link,
-                        declaredType,
-                        gsharpNullableLink,
-                        declarations,
-                        func (local GExpression) GExpression {
-                            return BinaryExpression(
-                                BinaryExpression(local, "!=", LiteralExpression.Null()),
-                                "&&",
-                                this.TranslateExtendedPropertyLink(
-                                    names,
-                                    intermediateExprs,
-                                    index + 1,
-                                    NonNullAssertionExpression(local),
-                                    memberPath,
-                                    leafPattern
-                                )
-                            )
-                        }
+                    return this.StorePatternMemberOnce(link, declaredType, gsharpNullableLink, declarations, capture)
+                }
+                return this.BindPatternMemberOnce(link, capture)
+            }
+            if sharedPrefixes != nil {
+                if sharedPrefixes.TryGetValue(prefix, out var previous) {
+                    return this.TranslateExtendedPropertyLink(
+                        names,
+                        intermediateExprs,
+                        index + 1,
+                        previous,
+                        memberPath,
+                        leafPattern,
+                        sharedPrefixes
                     )
                 }
-                return this.BindPatternMemberOnce(link, rest)
+                return this.BindPatternMemberOnce(
+                    link,
+                    func (local GExpression) GExpression {
+                        sharedPrefixes[prefix] = local
+                        return this.TranslateExtendedPropertyLink(
+                            names,
+                            intermediateExprs,
+                            index + 1,
+                            local,
+                            memberPath,
+                            leafPattern,
+                            sharedPrefixes
+                        )
+                    }
+                )
             }
             return this.TranslateExtendedPropertyLink(
                 names,
@@ -2664,7 +2702,8 @@ partial class CSharpToGSharpTranslator {
                 index + 1,
                 link,
                 memberPath,
-                leafPattern
+                leafPattern,
+                sharedPrefixes
             )
         }
 

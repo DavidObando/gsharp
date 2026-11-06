@@ -2481,6 +2481,13 @@ partial class CSharpToGSharpTranslator {
                 this.SynthesizePatternDesignator(recursive, usedDesignators)
             }
             if recursive!!.PropertyPatternClause != nil {
+                let sharedPrefixes Dictionary[string, GExpression]? = if recursive!!.PropertyPatternClause!!
+                    .Subpatterns
+                    .Count((sub SubpatternSyntax) -> sub.NameColon == nil && sub.ExpressionColon != nil) > 1 {
+                    Dictionary[string, GExpression](StringComparer.Ordinal)
+                } else {
+                    nil
+                }
                 for sub in recursive!!.PropertyPatternClause!!.Subpatterns {
                     // Issue #4356: an extended subpattern (`Clause.Items.Count: > 0`)
                     // takes the same lowering as its `is`-expression spelling,
@@ -2515,7 +2522,8 @@ partial class CSharpToGSharpTranslator {
                             () -> this.TranslateExtendedPropertyMemberTest(
                                 sub.ExpressionColon!!.Expression,
                                 sub.Pattern,
-                                IdentifierExpression(designator)
+                                IdentifierExpression(designator),
+                                sharedPrefixes
                             ),
                             bindings,
                             guards,

@@ -531,6 +531,69 @@ namespace Demo
     }
 
     @Fact
+    func ExtendedPropertyFallback_ReusesCommonGetterPrefix() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public class Child
+    {
+        public object X => 3;
+        public object Y => 4;
+    }
+    public class Holder
+    {
+        public int Reads;
+        public Child? Child { get { Reads++; return Reads == 1 ? new Child() : null; } }
+    }
+    public static class P
+    {
+        static Holder Read(Holder value) => value;
+        public static string Run()
+        {
+            var value = new Holder();
+            return (Read(value) is { Child.X: 3, Child.Y: 4 }) + " " + value.Reads;
+        }
+    }
+}`, "True 1")
+    }
+
+    @Fact
+    func NestedTypedFallback_ClosureAssignedSubjectMatchesCSharp() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public class B
+    {
+        public Action? OnRead;
+        public int A { get { OnRead?.Invoke(); return 1; } }
+    }
+    public class Row
+    {
+        public object Child = new B();
+        public object Tag = 3;
+    }
+    public static class P
+    {
+        public static string Run()
+        {
+            var current = new Row();
+            var child = new B();
+            current.Child = child;
+            child.OnRead = () => { current = new Row { Tag = 0 }; };
+            if (current is { Child: B { A: 1 }, Tag: 3 })
+            {
+                return "True " + current.Tag;
+            }
+            return "False " + current.Tag;
+        }
+    }
+}`, "False 0")
+    }
+
+    @Fact
     func BindingPatternSnapshot_PreservesEagerOperandAndArgumentOrder() {
         Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
 #nullable enable
