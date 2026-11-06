@@ -297,7 +297,7 @@ class RewriterClonePreservationAnalyzer : GSharpDiagnosticAnalyzer {
                     } when access.LeftPart is NameExpressionSyntax target &&
                         target
                         .GetLastToken().Text == parameterName {
-                        reads.Add(access.RightPart.GetLastToken().Text)
+                        reads.Add(access.RightPart.GetFirstToken().Text)
                     }
                     case pattern is IsExpressionSyntax when pattern.Expression is NameExpressionSyntax target &&
                         target

@@ -176,6 +176,7 @@ internal shared class ImplementingPartHeaders {
         let typeName = owner.Identifier.ValueText
         let typeArity = owner.TypeParameterList?.Parameters.Count ?? 0
         let name = implementing.Identifier.ValueText
+        let methodArity = implementing.TypeParameterList?.Parameters.Count ?? 0
         var match StubPartialDefinition? = nil
         for definition in definitions {
             if string.Equals(
@@ -186,6 +187,7 @@ internal shared class ImplementingPartHeaders {
                 string.Equals(definition.TypeName, typeName, StringComparison.Ordinal) &&
                 definition.TypeArity == typeArity &&
                 string.Equals(definition.Declaration.Identifier.ValueText, name, StringComparison.Ordinal) &&
+                (definition.Declaration.TypeParameterList?.Parameters.Count ?? 0) == methodArity &&
                 definition
                 .Declaration
                 .Parameters
@@ -210,12 +212,23 @@ internal shared class ImplementingPartHeaders {
         return nil
     }
 
-    // Every parameter name must agree: the copied header's names replace the
-    // generated ones, and the body refers to the generated ones.
+    // Every type-parameter and value-parameter name must agree: the copied
+    // header's names replace the generated ones, and the body refers to the
+    // generated ones.
     private func ParameterNameMismatch(
         declaring FunctionDeclarationSyntax,
         implementing FunctionDeclarationSyntax
     ) string? {
+        let declaringTypeParameters = declaring.TypeParameterList?.Parameters
+        let implementingTypeParameters = implementing.TypeParameterList?.Parameters
+        let typeParameterCount = declaringTypeParameters?.Count ?? 0
+        for var i = 0; i < typeParameterCount; i++ {
+            let declared = declaringTypeParameters!![i].Identifier.ValueText
+            let generated = implementingTypeParameters!![i].Identifier.ValueText
+            if !string.Equals(declared, generated, StringComparison.Ordinal) {
+                return "type parameter ${i + 1} '$generated' where its declaring part names it '$declared'"
+            }
+        }
         for var i = 0; i < declaring.Parameters.Count; i++ {
             let declared string? = declaring.Parameters[i].Identifier?.ValueText
             let generated string? = implementing.Parameters[i].Identifier?.ValueText
@@ -329,6 +342,20 @@ internal shared class ImplementingPartHeaders {
                 continue
             }
             CollectReferences(child, identifiers)
+        }
+        if declaration.TypeParameterList != nil {
+            for typeParameter in declaration.TypeParameterList!!.Parameters {
+                identifiers.Remove(typeParameter.Identifier.ValueText)
+            }
+        }
+        for var owner StructDeclarationSyntax? = EnclosingType(declaration);
+            owner != nil;
+            owner = EnclosingType(owner!!) {
+            if owner.TypeParameterList != nil {
+                for typeParameter in owner.TypeParameterList!!.Parameters {
+                    identifiers.Remove(typeParameter.Identifier.ValueText)
+                }
+            }
         }
         return identifiers
     }

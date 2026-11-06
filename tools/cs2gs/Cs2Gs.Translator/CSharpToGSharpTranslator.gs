@@ -510,6 +510,9 @@ partial class CSharpToGSharpTranslator {
         // Top-level statements are appended after every declaration so the program
         // entry runs with all package types and funcs already in scope.
         members.AddRange(trailingStatements)
+        if this.packageFilter == nil || this.includeGlobalNamespace {
+            visitor.ReportDroppedGsaPragmas(root)
+        }
         // Issue #2211: a Roslyn source generator (and other fully-qualified,
         // no-`using` C# input) can reference a BCL/external type by its
         // fully-qualified name with no matching `using` directive. The type

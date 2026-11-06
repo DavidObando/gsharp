@@ -79,6 +79,38 @@ func F() {
         Assert.Empty(diagnostics)
     }
 
+    @Fact
+    func Namespace_Alias_Resolves_Inside_Same_Named_Nested_Class() {
+        // Issue #4455: `UIA.StringBuilder` and `UIA.Text.StringBuilder` inside
+        // a nested `class StringBuilder` (or `class UIA`) must resolve through
+        // the namespace alias rather than falling back to the enclosing nested class.
+        let directAliasDiagnostics = Bind(`import UIA = System.Text
+
+sealed class UIAPattern {
+    class StringBuilder : UIAPattern {
+        func DoFor(pattern UIA.StringBuilder) int32 {
+            return pattern.EnsureCapacity(16)
+        }
+    }
+}
+`)
+        Assert.Empty(directAliasDiagnostics)
+
+        let multiSegmentAliasDiagnostics = Bind(`import UIA = System
+
+sealed class UIA {
+    class StringBuilder : UIA {
+        func DoFor(pattern UIA.Text.StringBuilder, items UIA.Collections.Generic.List[int32].Enumerator) int32 {
+            var e = items
+            let _ = e.MoveNext()
+            return pattern.EnsureCapacity(16)
+        }
+    }
+}
+`)
+        Assert.Empty(multiSegmentAliasDiagnostics)
+    }
+
     shared {
         private func Bind(source string) ImmutableArray[Diagnostic] {
             let tree = SyntaxTree.Parse(SourceText.From(source))

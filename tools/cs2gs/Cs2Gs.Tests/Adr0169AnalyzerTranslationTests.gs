@@ -41,7 +41,7 @@ open class Adr0169AnalyzerTranslationTests {
         Assert.Contains("IndexExpressionSyntax", printed, StringComparison.Ordinal)
         Assert.Contains("AccessorExpressionSyntax", printed, StringComparison.Ordinal)
         Assert.Contains(".Target", printed, StringComparison.Ordinal)
-        Assert.Contains("GetLastToken().Text", printed, StringComparison.Ordinal)
+        Assert.Contains("GetFirstToken().Text", printed, StringComparison.Ordinal)
         Assert.Contains(".Location", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("GetLocation", printed, StringComparison.Ordinal)
         Assert.DoesNotContain(diagnostics, (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported)
@@ -1799,6 +1799,7 @@ public static class DiagnosticDescriptors
                 printed,
                 StringComparison.Ordinal
             )
+            Assert.Contains("access.RightPart.GetFirstToken().Text", printed, StringComparison.Ordinal)
         }
     }
 
