@@ -2300,8 +2300,7 @@ internal partial class ExpressionBinder {
             while unwrappedIndexSyntax is ParenthesizedExpressionSyntax parenthesized {
                 unwrappedIndexSyntax = parenthesized.Expression
             }
-            let isFromEndIndex = unwrappedIndexSyntax is FromEndIndexExpressionSyntax
-            if isFromEndIndex {
+            if unwrappedIndexSyntax is FromEndIndexExpressionSyntax {
                 if !TryBindSystemIndexValue(unwrappedIndexSyntax, out var boundSystemIndex) {
                     return BoundErrorExpression(nil)
                 }
@@ -2341,17 +2340,7 @@ internal partial class ExpressionBinder {
                 }
             }
             let compoundTarget = indexRead
-            if !isFromEndIndex || compoundTarget is not BoundBlockExpression {
-                ApplySubExpressionNarrowingEffects(indexSyntax, compoundTarget)
-            } else if compoundTarget is BoundBlockExpression{Expression: BoundClrIndexExpression clrIdx} &&
-                StatementBinder.ClrAccessRunsUserCode(clrIdx) {
-                ApplySubExpressionNarrowingEffects(indexSyntax, compoundTarget)
-            } else if compoundTarget is BoundBlockExpression{
-                Expression: BoundDereferenceExpression{Operand: BoundClrIndexExpression derefClrIdx}
-            } &&
-                StatementBinder.ClrAccessRunsUserCode(derefClrIdx) {
-                ApplySubExpressionNarrowingEffects(indexSyntax, compoundTarget)
-            }
+            ApplySubExpressionNarrowingEffects(indexSyntax, compoundTarget)
             if compoundRhsSyntax is not{} resolvedCompoundRhsSyntax {
                 return BoundErrorExpression(nil)
             }
@@ -2850,10 +2839,12 @@ internal partial class ExpressionBinder {
                 target,
                 targetType,
                 hasNarrowedTarget,
+                indexSyntax,
                 boundIndexOverride,
                 BindValue,
                 diagnosticLocation,
-                isReadOnlyReceiver
+                isReadOnlyReceiver,
+                applyLengthEffects: false
             )
         }
         if boundIndexOverride == nil && TryBindSystemIndexValue(indexSyntax, out var systemIndex) {
@@ -2862,10 +2853,12 @@ internal partial class ExpressionBinder {
                 target,
                 targetType,
                 hasNarrowedTarget,
+                indexSyntax,
                 systemIndex!!,
                 BindValue,
                 diagnosticLocation,
-                isReadOnlyReceiver
+                isReadOnlyReceiver,
+                applyLengthEffects: true
             )
         }
         let BindIndexValue = func () BoundExpression {
@@ -3511,10 +3504,12 @@ internal partial class ExpressionBinder {
         target BoundExpression,
         targetType TypeSymbol,
         hasNarrowedTarget bool,
+        indexSyntax ExpressionSyntax,
         indexValue BoundExpression,
         bindValue(TypeSymbol) -> BoundExpression,
         diagnosticLocation TextLocation,
-        isReadOnlyReceiver bool
+        isReadOnlyReceiver bool,
+        applyLengthEffects bool = true
     ) BoundExpression {
         var target = target
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -3536,6 +3531,9 @@ internal partial class ExpressionBinder {
                 arguments = ImmutableArray.Create(indexValue)
             } else if TryFindCountedIntIndexer(clrType, out var lengthMember, out indexer) {
                 let lengthExpr = BoundClrPropertyAccessExpression(nil, target, lengthMember, TypeSymbol.Int32)
+                if applyLengthEffects {
+                    ApplySubExpressionNarrowingEffects(indexSyntax, lengthExpr)
+                }
                 arguments = ImmutableArray.Create(BuildSystemIndexOffset(indexValue, lengthExpr, statements))
             } else {
                 Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType)

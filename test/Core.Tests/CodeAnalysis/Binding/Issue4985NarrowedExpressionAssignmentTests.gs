@@ -146,6 +146,32 @@ func Run(backing []int32, seed string?) int32 {
     return 0
 }
 Console.WriteLine(Run([]int32{1, 2}, "abc"))`, "GS0158", 6, 47}
+            yield[]object{"imported_list_subclass_with_effectful_length_compound_from_end_invalidates_rhs", `import System
+import GSharp.Core.Tests.CodeAnalysis.Binding
+class Box {
+    let Text string? = "abcd"
+}
+func Run(xs EffectfulLengthList4985, b Box) int32 {
+    if b.Text != nil {
+        xs[^1] += b.Text.Length
+        return xs[0]
+    }
+    return 0
+}
+Console.WriteLine(Run(EffectfulLengthList4985{}, Box{}))`, "GS0158", 8, 26}
+            yield[]object{"imported_list_subclass_with_effectful_length_plain_from_end_invalidates_rhs", `import System
+import GSharp.Core.Tests.CodeAnalysis.Binding
+class Box {
+    let Text string? = "abcd"
+}
+func Run(xs EffectfulLengthList4985, b Box) int32 {
+    if b.Text != nil {
+        xs[^1] = b.Text.Length
+        return xs[0]
+    }
+    return 0
+}
+Console.WriteLine(Run(EffectfulLengthList4985{}, Box{}))`, "GS0158", 8, 25}
         }
 
         func AcceptedControlShapes() IEnumerable[[]object] {
@@ -219,6 +245,28 @@ func Run(backing []int32, arr []int32, b Box) int32 {
 Console.WriteLine(Run([]int32{1, 2}, []int32{10, 20}, Box{}))`,
                 "22"
             }
+            yield[]object{"plain_array_and_list_compound_from_end_preserves_member_narrowing_for_rhs", `import System
+import System.Collections.Generic
+class Box {
+    let Text string? = "abcd"
+}
+func Run(arr []int32, b Box) int32 {
+    let xs = List[int32]{1, 2}
+    if b.Text != nil {
+        arr[^1] += b.Text.Length
+    }
+    if b.Text != nil {
+        xs[^1] += b.Text.Length
+    }
+    return arr[1] + xs[1]
+}
+Console.WriteLine(Run([]int32{10, 20}, Box{}))`, "30"}
         }
+    }
+}
+
+open class EffectfulLengthList4985 : List[int32] {
+    prop Length int32 {
+        get -> this.Count
     }
 }
