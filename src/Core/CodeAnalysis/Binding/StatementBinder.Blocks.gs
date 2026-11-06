@@ -888,23 +888,28 @@ internal partial class StatementBinder {
         let inheritedFallthrough = currentStatementListFallsThrough
         let inheritedReachabilityGeneration = internalReachabilityGeneration
         let inheritedSpeculativeReturnDepth = speculativeReturnDepth
+        let savedFrameWatermark = currentSpeculativeFrameWatermark
         let savedLabelWatermark = currentSpeculativeLabelWatermark
+        let savedFrameLogMark = speculativeFrameUndoLog.Count
         let savedLabelLogMark = speculativeLabelUndoLog.Count
         let savedFinallyLogMark = speculativeFinallyLog.Count
         let savedFinallySummaryLogMark = speculativeFinallySummaryLog.Count
         let savedSpanEntryLogMark = speculativeSpanEntryLog.Count
         currentStatementListFallsThrough = true
         speculativeReturnDepth = 0
+        currentSpeculativeFrameWatermark = savedFrameLogMark
         currentSpeculativeLabelWatermark = savedLabelLogMark
         try {
             return OutsideExceptionHandlers(bind)
         } finally {
             DiscardSpeculativeLogs(
+                savedFrameLogMark,
                 savedLabelLogMark,
                 savedFinallyLogMark,
                 savedFinallySummaryLogMark,
                 savedSpanEntryLogMark
             )
+            currentSpeculativeFrameWatermark = savedFrameWatermark
             currentSpeculativeLabelWatermark = savedLabelWatermark
             currentStatementListFallsThrough = inheritedFallthrough
             internalReachabilityGeneration = inheritedReachabilityGeneration

@@ -295,6 +295,26 @@ internal class BinderContext {
         LambdaBinder.RetriedFunctionLiteralEntry
     ]?
 
+    internal func IsolateRetriedFunctionLiterals() Dictionary[
+        LambdaBinder.RetriedFunctionLiteralKey,
+        LambdaBinder.RetriedFunctionLiteralEntry
+    ]? {
+        let saved = RetriedFunctionLiterals
+        if saved != nil {
+            RetriedFunctionLiterals = Dictionary[
+                LambdaBinder.RetriedFunctionLiteralKey,
+                LambdaBinder.RetriedFunctionLiteralEntry
+            ]()
+        }
+        return saved
+    }
+
+    internal func RestoreRetriedFunctionLiterals(
+        saved Dictionary[LambdaBinder.RetriedFunctionLiteralKey, LambdaBinder.RetriedFunctionLiteralEntry]?
+    ) {
+        RetriedFunctionLiterals = saved
+    }
+
     /// Gets or sets a value indicating whether the current function, lambda, or
     /// local-function body contains a user `goto` statement or non-loop `label:`
     /// declaration, computed syntactically once before that body binds (see

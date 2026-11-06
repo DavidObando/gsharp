@@ -17,7 +17,8 @@ import System.Linq
 /// @remarks A frame that is not on a stack has no owner and notifies nobody.
 /// The same frame can be on a stack more than once.
 internal sealed class NarrowingFrame : IEnumerable[KeyValuePair[AccessPath, TypeSymbol]] {
-    private let entries Dictionary[AccessPath, TypeSymbol]
+    private var entries Dictionary[AccessPath, TypeSymbol]
+    private var cowShared bool
 
     init() {
         entries = Dictionary[AccessPath, TypeSymbol]()
@@ -38,6 +39,26 @@ internal sealed class NarrowingFrame : IEnumerable[KeyValuePair[AccessPath, Type
     /// Gets a read-only view of the entries.
     prop Entries IReadOnlyDictionary[AccessPath, TypeSymbol] -> entries
 
+    /// Returns a copy-on-write snapshot reference to this frame's entries, or `nil` when empty.
+    internal func SnapshotEntries() Dictionary[AccessPath, TypeSymbol]? {
+        if entries.Count == 0 {
+            return nil
+        }
+        cowShared = true
+        return entries
+    }
+
+    internal func ReleaseSnapshot() {
+        cowShared = false
+    }
+
+    private func EnsureWritable() {
+        if cowShared {
+            entries = Dictionary[AccessPath, TypeSymbol](entries)
+            cowShared = false
+        }
+    }
+
     /// Gets the number of entries in this frame.
     prop Count int32 -> entries.Count
 
@@ -53,18 +74,23 @@ internal sealed class NarrowingFrame : IEnumerable[KeyValuePair[AccessPath, Type
     func TryGetValue(path AccessPath, out narrowedType TypeSymbol) bool -> entries.TryGetValue(path, out narrowedType)
 
     func Add(path AccessPath, narrowedType TypeSymbol) {
+        Owner?.FrameEntryChanging(this, path, entries.TryGetValue(path, out var previous), previous)
+        EnsureWritable()
         entries.Add(path, narrowedType)
         Version++
         Owner?.FrameChanged(path)
     }
 
     func Remove(path AccessPath) bool {
-        let removed = entries.Remove(path)
-        if removed {
-            Version++
-            Owner?.FrameChanged(path)
+        if !entries.TryGetValue(path, out var previous) {
+            return false
         }
-        return removed
+        Owner?.FrameEntryChanging(this, path, true, previous)
+        EnsureWritable()
+        entries.Remove(path)
+        Version++
+        Owner?.FrameChanged(path)
+        return true
     }
 
     func Clear() {
@@ -72,6 +98,10 @@ internal sealed class NarrowingFrame : IEnumerable[KeyValuePair[AccessPath, Type
             return
         }
         let paths = entries.Keys.ToArray()
+        for path in paths {
+            Owner?.FrameEntryChanging(this, path, true, entries[path])
+        }
+        EnsureWritable()
         entries.Clear()
         Version++
         for path in paths {
@@ -83,6 +113,8 @@ internal sealed class NarrowingFrame : IEnumerable[KeyValuePair[AccessPath, Type
     prop this[path AccessPath]TypeSymbol {
         get -> entries[path]
         set {
+            Owner?.FrameEntryChanging(this, path, entries.TryGetValue(path, out var previous), previous)
+            EnsureWritable()
             entries[path] = value
             Version++
             Owner?.FrameChanged(path)

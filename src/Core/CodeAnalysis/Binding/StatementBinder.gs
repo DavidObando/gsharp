@@ -168,6 +168,7 @@ internal partial class StatementBinder {
         this.bindRefArgumentExpression = bindRefArgumentExpression
         this.binderCtx.NarrowingFlow.OnTargetTouching = NoteSpeculativeLabelTouched
         this.binderCtx.NarrowingFlow.OnTargetRemoving = NoteSpeculativeLabelRemoving
+        this.binderCtx.NarrowedVariables.OnFrameEntryChanging = NoteSpeculativeFrameEntryChanging
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics

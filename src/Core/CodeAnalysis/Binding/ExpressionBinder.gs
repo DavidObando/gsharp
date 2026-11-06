@@ -812,6 +812,9 @@ internal partial class ExpressionBinder {
             reboundInvalidatedExpressions.Clear()
             snapshotSiblingCounts.Clear()
             expressionBindStep = 0
+            for stmtFrame in binderCtx.NarrowedVariables {
+                stmtFrame.ReleaseSnapshot()
+            }
             setCallableAliases(popped.Aliases)
         }
     }
@@ -841,22 +844,13 @@ internal partial class ExpressionBinder {
         ](expressionNarrowingFrames.Count + binderCtx.NarrowedVariables.Count)
         for stmtFrame in binderCtx.NarrowedVariables {
             if stmtFrame.Owner != nil && !IsTrackedExpressionFrame(stmtFrame) {
-                let stmtEntries = if stmtFrame.Count > 0 {
-                    Dictionary[AccessPath, TypeSymbol](stmtFrame.Entries)
-                } else {
-                    default(Dictionary[AccessPath, TypeSymbol]?)
-                }
-                snapshot.Add((-1, stmtFrame, stmtEntries, emptyCallableAliases))
+                snapshot.Add((-1, stmtFrame, stmtFrame.SnapshotEntries(), emptyCallableAliases))
             }
         }
         for entry in expressionNarrowingFrames {
             if IsExpressionFrameActive(entry) {
                 let frame = entry.Frame
-                let entries = if frame != nil && frame.Count > 0 {
-                    Dictionary[AccessPath, TypeSymbol](frame.Entries)
-                } else {
-                    default(Dictionary[AccessPath, TypeSymbol]?)
-                }
+                let entries = frame?.SnapshotEntries()
                 let aliases = if entry.Aliases.Count == 0 {
                     emptyCallableAliases
                 } else {
@@ -911,7 +905,8 @@ internal partial class ExpressionBinder {
             if frame != nil && frame.Owner == nil {
                 continue
             }
-            if frame != nil {
+            if frame != nil && !object.ReferenceEquals(frame.Entries, entries) &&
+                !(frame.Count == 0 && entries == nil) {
                 frame.Clear()
                 if entries != nil {
                     for kv in entries {
@@ -957,7 +952,8 @@ internal partial class ExpressionBinder {
             if frame != nil && frame.Owner == nil {
                 continue
             }
-            if frame != nil {
+            if frame != nil && !object.ReferenceEquals(frame.Entries, branchEntries) &&
+                !(frame.Count == 0 && branchEntries == nil) {
                 if branchEntries != nil {
                     for kv in frame.Entries.ToArray() {
                         if !StatementBinder.IsNullableWidening(kv.Key, kv.Value) && !branchEntries.ContainsKey(kv.Key) {
@@ -1322,6 +1318,7 @@ internal partial class ExpressionBinder {
     }
 
     internal func RebindInSavedScope(original BoundExpression, syntax ExpressionSyntax) BoundExpression {
+        let savedRetriedLiterals = binderCtx.IsolateRetriedFunctionLiterals()
         Diagnostics.EnterSiblingRebind()
         try {
             if expressionScopes.TryGetValue(original, out var savedScope) {
@@ -1336,6 +1333,7 @@ internal partial class ExpressionBinder {
             return BindInSavedCheckedContext(syntax, () -> BindExpression(syntax))
         } finally {
             Diagnostics.LeaveSiblingRebind()
+            binderCtx.RestoreRetriedFunctionLiterals(savedRetriedLiterals)
         }
     }
 
@@ -1387,6 +1385,7 @@ internal partial class ExpressionBinder {
                 if expressionScopes.TryGetValue(item.Bound, out var itemScope) {
                     $scope = itemScope
                 }
+                let savedRetriedLiterals = binderCtx.IsolateRetriedFunctionLiterals()
                 var rebound BoundExpression
                 try {
                     rebound = if item.TargetType is {} itemTargetType {
@@ -1395,6 +1394,7 @@ internal partial class ExpressionBinder {
                         BindExpression(item.Syntax, item.CanBeVoid)
                     }
                 } finally {
+                    binderCtx.RestoreRetriedFunctionLiterals(savedRetriedLiterals)
                     $scope = currentScope
                 }
                 expressionExitSteps[rebound] = item.ExitStep

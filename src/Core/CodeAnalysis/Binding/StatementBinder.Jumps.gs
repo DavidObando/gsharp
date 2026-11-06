@@ -259,7 +259,13 @@ internal partial class StatementBinder {
     }
 
     private var speculativeReturnDepth int32
+    private var currentSpeculativeFrameWatermark int32
     private var currentSpeculativeLabelWatermark int32
+    private let speculativeFrameUndoLog List[SpeculativeFrameEntrySnapshot] = List[SpeculativeFrameEntrySnapshot]()
+    private let speculativeFrameSnapshotIndex Dictionary[SpeculativeFrameKey, int32] = Dictionary[
+        SpeculativeFrameKey,
+        int32
+    ]()
     private let speculativeLabelUndoLog List[SpeculativeLabelSnapshot] = List[SpeculativeLabelSnapshot]()
     private let speculativeLabelSnapshotIndex Dictionary[string, int32] = Dictionary[string, int32](
         StringComparer.Ordinal
@@ -267,6 +273,55 @@ internal partial class StatementBinder {
     private let speculativeFinallyLog List[FinallyClauseSyntax] = List[FinallyClauseSyntax]()
     private let speculativeFinallySummaryLog List[BoundStatement] = List[BoundStatement]()
     private let speculativeSpanEntryLog List[BackwardJumpSpan] = List[BackwardJumpSpan]()
+
+    private struct SpeculativeFrameKey : IEquatable[SpeculativeFrameKey] {
+        internal let Frame NarrowingFrame
+        internal let Path AccessPath
+
+        init(frame NarrowingFrame, path AccessPath) {
+            Frame = frame
+            Path = path
+        }
+
+        func Equals(other SpeculativeFrameKey) bool -> object.ReferenceEquals(Frame, other.Frame) && Path.Equals(
+            other.Path
+        )
+
+        override func Equals(obj object?) bool -> obj is SpeculativeFrameKey other && Equals(other)
+
+        override func GetHashCode() int32 -> HashCode.Combine(
+            ReferenceEqualityComparer.Instance.GetHashCode(Frame),
+            Path.GetHashCode()
+        )
+    }
+
+    private struct SpeculativeFrameEntrySnapshot {
+        internal let Key SpeculativeFrameKey
+        internal let PreviousSnapshotIndex int32
+        internal let HadValue bool
+        internal let Value TypeSymbol?
+
+        init(key SpeculativeFrameKey, previousSnapshotIndex int32, hadValue bool, value TypeSymbol?) {
+            Key = key
+            PreviousSnapshotIndex = previousSnapshotIndex
+            HadValue = hadValue
+            Value = value
+        }
+    }
+
+    private struct SpeculativeTargetFrameDelta {
+        internal let Frame NarrowingFrame
+        internal let Path AccessPath
+        internal let HasValue bool
+        internal let Value TypeSymbol?
+
+        init(frame NarrowingFrame, path AccessPath, hasValue bool, value TypeSymbol?) {
+            Frame = frame
+            Path = path
+            HasValue = hasValue
+            Value = value
+        }
+    }
 
     private sealed class SpeculativeLabelSnapshot {
         internal let LabelName string
@@ -347,6 +402,36 @@ internal partial class StatementBinder {
         }
     }
 
+    internal func NoteSpeculativeFrameEntryChanging(
+        frame NarrowingFrame,
+        path AccessPath,
+        hadValue bool,
+        previousType TypeSymbol?
+    ) {
+        if speculativeReturnDepth == 0 {
+            return
+        }
+        let key = SpeculativeFrameKey(frame, path)
+        var previousIndex = -1
+        if speculativeFrameSnapshotIndex.TryGetValue(key, out var existingIndex) {
+            if existingIndex >= currentSpeculativeFrameWatermark {
+                return
+            }
+            previousIndex = existingIndex
+        }
+        RecordSpeculativeRollbackWork()
+        speculativeFrameSnapshotIndex[key] = speculativeFrameUndoLog.Count
+        speculativeFrameUndoLog.Add(SpeculativeFrameEntrySnapshot(key, previousIndex, hadValue, previousType))
+    }
+
+    private func PopSpeculativeFrameSnapshotIndex(snapshot SpeculativeFrameEntrySnapshot) {
+        if snapshot.PreviousSnapshotIndex >= 0 {
+            speculativeFrameSnapshotIndex[snapshot.Key] = snapshot.PreviousSnapshotIndex
+        } else {
+            speculativeFrameSnapshotIndex.Remove(snapshot.Key)
+        }
+    }
+
     internal func NoteSpeculativeLabelTouched(labelName string) {
         if speculativeReturnDepth == 0 {
             return
@@ -391,11 +476,16 @@ internal partial class StatementBinder {
     }
 
     internal func DiscardSpeculativeLogs(
+        frameLogMark int32,
         labelLogMark int32,
         finallyLogMark int32,
         finallySummaryLogMark int32,
         spanEntryLogMark int32
     ) {
+        for var i = speculativeFrameUndoLog.Count - 1; i >= frameLogMark; i-- {
+            PopSpeculativeFrameSnapshotIndex(speculativeFrameUndoLog[i])
+            speculativeFrameUndoLog.RemoveAt(i)
+        }
         for var i = speculativeLabelUndoLog.Count - 1; i >= labelLogMark; i-- {
             PopSpeculativeLabelSnapshotIndex(speculativeLabelUndoLog[i])
             speculativeLabelUndoLog.RemoveAt(i)
@@ -566,7 +656,7 @@ internal partial class StatementBinder {
     private sealed class SpeculativeBindState {
         internal let DiagnosticCount int32
         internal let SuppressionCount int32
-        internal let NarrowingFrames[](Version int32, Entries Dictionary[AccessPath, TypeSymbol]?)
+        internal let FrameLogMark int32
         internal let PendingEarlyExitFrames[]?KeyValuePair[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]]
         internal let PendingSwitchExitFrames[]?KeyValuePair[
             BoundPatternSwitchStatement,
@@ -590,7 +680,7 @@ internal partial class StatementBinder {
         init(
             diagnosticCount int32,
             suppressionCount int32,
-            narrowingFrames[](Version int32, Entries Dictionary[AccessPath, TypeSymbol]?),
+            frameLogMark int32,
             pendingEarlyExitFrames[]?KeyValuePair[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]],
             pendingSwitchExitFrames[]?KeyValuePair[BoundPatternSwitchStatement, Dictionary[AccessPath, TypeSymbol]],
             externalCallableAliases[]?VariableSymbol,
@@ -608,7 +698,7 @@ internal partial class StatementBinder {
         ) {
             DiagnosticCount = diagnosticCount
             SuppressionCount = suppressionCount
-            NarrowingFrames = narrowingFrames
+            FrameLogMark = frameLogMark
             PendingEarlyExitFrames = pendingEarlyExitFrames
             PendingSwitchExitFrames = pendingSwitchExitFrames
             ExternalCallableAliases = externalCallableAliases
@@ -631,6 +721,7 @@ internal partial class StatementBinder {
     /// Issue #5604: the operand-local delta produced by the target pass of a retried return value.
     private sealed class SpeculativeAfterTargetState {
         internal let BaseState SpeculativeBindState
+        internal let TargetFrames[]?SpeculativeTargetFrameDelta
         internal let TargetLabels[]?SpeculativeTargetLabelDelta
         internal let TargetUserLabels Dictionary[string, BoundLabel]?
         internal let AddedGotoRegions[]?(
@@ -650,6 +741,7 @@ internal partial class StatementBinder {
 
         init(
             baseState SpeculativeBindState,
+            targetFrames[]?SpeculativeTargetFrameDelta,
             targetLabels[]?SpeculativeTargetLabelDelta,
             targetUserLabels Dictionary[string, BoundLabel]?,
             addedGotoRegions[]?(LabelName string, Location TextLocation, SourceRegions ImmutableArray[SyntaxNode]),
@@ -664,6 +756,7 @@ internal partial class StatementBinder {
             deferredReturnDelta LambdaBinder.DeferredReturnSnapshot?
         ) {
             BaseState = baseState
+            TargetFrames = targetFrames
             TargetLabels = targetLabels
             TargetUserLabels = targetUserLabels
             AddedGotoRegions = addedGotoRegions
@@ -674,28 +767,12 @@ internal partial class StatementBinder {
         }
     }
 
-    private func CaptureNarrowingFrames()[](Version int32, Entries Dictionary[AccessPath, TypeSymbol]?) {
-        let count = binderCtx.NarrowedVariables.Count
-        let frames = [count](Version int32, Entries Dictionary[AccessPath, TypeSymbol]?)
-        for var i = 0; i < count; i++ {
-            let frame = binderCtx.NarrowedVariables[i]
-            let entries = if frame.Count == 0 {
-                default(Dictionary[AccessPath, TypeSymbol]?)
-            } else {
-                Dictionary[AccessPath, TypeSymbol](frame.Entries)
-            }
-            frames[i] = (frame.Version, entries)
-        }
-        return frames
-    }
-
-    /// Captures the binder state that (cref:RestoreSpeculativeBindState) puts back. Narrowing frames keep
-    /// their identity; only non-empty frame contents are copied.
+    /// Captures the binder state that (cref:RestoreSpeculativeBindState) puts back.
     /// @returns The captured state.
     private func CaptureSpeculativeBindState() SpeculativeBindState -> SpeculativeBindState(
         Diagnostics.Count,
         Diagnostics.SuppressionCount,
-        CaptureNarrowingFrames(),
+        speculativeFrameUndoLog.Count,
         if binderCtx.PendingEarlyExitFrames.Count == 0 {
             default([]?KeyValuePair[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]])
         } else {
@@ -738,6 +815,18 @@ internal partial class StatementBinder {
 
     private func CaptureSpeculativeAfterTarget(beforeValue SpeculativeBindState) SpeculativeAfterTargetState {
         let baseState = CaptureSpeculativeBindState()
+        var targetFrames[]?SpeculativeTargetFrameDelta = nil
+        if speculativeFrameUndoLog.Count > beforeValue.FrameLogMark {
+            let count = speculativeFrameUndoLog.Count - beforeValue.FrameLogMark
+            let deltas = [count]SpeculativeTargetFrameDelta
+            for var i = 0; i < count; i++ {
+                let key = speculativeFrameUndoLog[beforeValue.FrameLogMark + i].Key
+                let hasValue = key.Frame.TryGetValue(key.Path, out var currentType)
+                deltas[i] = SpeculativeTargetFrameDelta(key.Frame, key.Path, hasValue, currentType)
+            }
+            RecordSpeculativeRollbackWork(count)
+            targetFrames = deltas
+        }
         var targetLabels[]?SpeculativeTargetLabelDelta = nil
         var targetUserLabels Dictionary[string, BoundLabel]? = nil
         if speculativeLabelUndoLog.Count > beforeValue.LabelLogMark {
@@ -827,6 +916,7 @@ internal partial class StatementBinder {
         )
         return SpeculativeAfterTargetState(
             baseState,
+            targetFrames,
             targetLabels,
             targetUserLabels,
             addedGotoRegions,
@@ -840,20 +930,6 @@ internal partial class StatementBinder {
     private func ApplyBaseSpeculativeBindState(state SpeculativeBindState) {
         Diagnostics.TruncateTo(state.DiagnosticCount)
         Diagnostics.RestoreSuppressionsTo(state.SuppressionCount)
-        for var i = 0; i < state.NarrowingFrames.Length; i++ {
-            let frame = binderCtx.NarrowedVariables[i]
-            let saved = state.NarrowingFrames[i]
-            if frame.Version == saved.Version {
-                continue
-            }
-            frame.Clear()
-            let savedEntries = saved.Entries
-            if savedEntries != nil {
-                for entry in savedEntries {
-                    frame.Add(entry.Key, entry.Value)
-                }
-            }
-        }
         RestoreEntries(binderCtx.PendingEarlyExitFrames, state.PendingEarlyExitFrames)
         RestoreEntries(binderCtx.PendingSwitchExitFrames, state.PendingSwitchExitFrames)
         if externalCallableAliases.Count > 0 || state.ExternalCallableAliases != nil {
@@ -873,6 +949,25 @@ internal partial class StatementBinder {
     private func RestoreSpeculativeBindState(state SpeculativeBindState) {
         RecordSpeculativeRollbackWork()
         ApplyBaseSpeculativeBindState(state)
+        if speculativeFrameUndoLog.Count > state.FrameLogMark {
+            let savedDepth = speculativeReturnDepth
+            try {
+                speculativeReturnDepth = 0
+                for var i = speculativeFrameUndoLog.Count - 1; i >= state.FrameLogMark; i-- {
+                    let snapshot = speculativeFrameUndoLog[i]
+                    RecordSpeculativeRollbackWork()
+                    if snapshot.HadValue {
+                        snapshot.Key.Frame[snapshot.Key.Path] = snapshot.Value!!
+                    } else {
+                        snapshot.Key.Frame.Remove(snapshot.Key.Path)
+                    }
+                    PopSpeculativeFrameSnapshotIndex(snapshot)
+                    speculativeFrameUndoLog.RemoveAt(i)
+                }
+            } finally {
+                speculativeReturnDepth = savedDepth
+            }
+        }
         for var i = speculativeLabelUndoLog.Count - 1; i >= state.LabelLogMark; i-- {
             let snapshot = speculativeLabelUndoLog[i]
             RestoreLabelSnapshot(snapshot)
@@ -908,6 +1003,34 @@ internal partial class StatementBinder {
     ) {
         RestoreSpeculativeBindState(beforeValue)
         ApplyBaseSpeculativeBindState(afterTarget.BaseState)
+        let targetFrames = afterTarget.TargetFrames
+        if targetFrames != nil {
+            let savedDepth = speculativeReturnDepth
+            try {
+                speculativeReturnDepth = 0
+                for delta in targetFrames {
+                    RecordSpeculativeRollbackWork()
+                    if delta.HasValue {
+                        if savedDepth > 0 {
+                            let hadValue = delta.Frame.TryGetValue(delta.Path, out var previous)
+                            speculativeReturnDepth = savedDepth
+                            NoteSpeculativeFrameEntryChanging(delta.Frame, delta.Path, hadValue, previous)
+                            speculativeReturnDepth = 0
+                        }
+                        delta.Frame[delta.Path] = delta.Value!!
+                    } else {
+                        if savedDepth > 0 && delta.Frame.TryGetValue(delta.Path, out var previous) {
+                            speculativeReturnDepth = savedDepth
+                            NoteSpeculativeFrameEntryChanging(delta.Frame, delta.Path, true, previous)
+                            speculativeReturnDepth = 0
+                        }
+                        delta.Frame.Remove(delta.Path)
+                    }
+                }
+            } finally {
+                speculativeReturnDepth = savedDepth
+            }
+        }
         let targetLabels = afterTarget.TargetLabels
         if targetLabels != nil {
             let savedDepth = speculativeReturnDepth
@@ -1728,7 +1851,9 @@ internal partial class StatementBinder {
                 LambdaBinder.RetriedFunctionLiteralEntry
             ]()
         }
+        let savedFrameWatermark = currentSpeculativeFrameWatermark
         let savedLabelWatermark = currentSpeculativeLabelWatermark
+        let savedFrameLogMark = speculativeFrameUndoLog.Count
         let savedLabelLogMark = speculativeLabelUndoLog.Count
         let savedFinallyLogMark = speculativeFinallyLog.Count
         let savedFinallySummaryLogMark = speculativeFinallySummaryLog.Count
@@ -1736,6 +1861,7 @@ internal partial class StatementBinder {
         speculativeReturnDepth++
         try {
             let beforeValue = CaptureSpeculativeBindState()
+            currentSpeculativeFrameWatermark = beforeValue.FrameLogMark
             currentSpeculativeLabelWatermark = beforeValue.LabelLogMark
             let targetTyped = BindReturnValuePass(
                 deferredReturns,
@@ -1783,10 +1909,12 @@ internal partial class StatementBinder {
             deferredReturns.Hold(syntax, targetTyped, targetDiagnostics, naturalDiagnostics)
             return natural
         } finally {
+            currentSpeculativeFrameWatermark = savedFrameWatermark
             currentSpeculativeLabelWatermark = savedLabelWatermark
             speculativeReturnDepth--
             if speculativeReturnDepth == 0 {
                 DiscardSpeculativeLogs(
+                    savedFrameLogMark,
                     savedLabelLogMark,
                     savedFinallyLogMark,
                     savedFinallySummaryLogMark,

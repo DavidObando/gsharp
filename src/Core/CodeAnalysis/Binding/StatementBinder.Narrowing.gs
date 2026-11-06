@@ -146,7 +146,7 @@ internal partial class StatementBinder {
             for var i = 0; i < binderCtx.NarrowedVariables.Count; i++ {
                 let frame = binderCtx.NarrowedVariables[i]
                 if frame.Count > 0 {
-                    frames[i] = Dictionary[AccessPath, TypeSymbol](frame)
+                    frames[i] = frame.SnapshotEntries()
                 }
             }
         }
@@ -169,8 +169,16 @@ internal partial class StatementBinder {
         let count = binderCtx.NarrowedVariables.Count
         for var i = 0; i < count; i++ {
             let frame = binderCtx.NarrowedVariables[i]
+            let savedFrame = if snapshot.Frames != nil && i < snapshot.Frames.Length {
+                snapshot.Frames[i]
+            } else {
+                default(Dictionary[AccessPath, TypeSymbol]?)
+            }
+            if object.ReferenceEquals(frame.Entries, savedFrame) || (frame.Count == 0 && savedFrame == nil) {
+                continue
+            }
             frame.Clear()
-            if snapshot.Frames != nil && i < snapshot.Frames.Length && snapshot.Frames[i] is {} savedFrame {
+            if savedFrame != nil {
                 for entry in savedFrame {
                     frame.Add(entry.Key, entry.Value)
                 }
@@ -288,6 +296,9 @@ internal partial class StatementBinder {
                 other.Frames[i]
             } else {
                 default(Dictionary[AccessPath, TypeSymbol]?)
+            }
+            if object.ReferenceEquals(frame.Entries, otherFrame) || (frame.Count == 0 && otherFrame == nil) {
+                continue
             }
             if otherFrame == nil || otherFrame.Count == 0 {
                 if frame.Count > 0 {

@@ -2775,7 +2775,7 @@ internal class LambdaBinder {
     ) bool {
         bound = nil
         let cache = binderCtx.RetriedFunctionLiterals
-        if cache == nil || Diagnostics.SiblingRebindDepth > 0 || !cache.TryGetValue(key, out var entry) {
+        if cache == nil || !cache.TryGetValue(key, out var entry) {
             return false
         }
         if !CapturedVariablesMatchScope(entry.Bound, Scope) {
@@ -2803,7 +2803,7 @@ internal class LambdaBinder {
         keptNaturalType bool
     ) {
         let cache = binderCtx.RetriedFunctionLiterals
-        if cache == nil || Diagnostics.SiblingRebindDepth > 0 {
+        if cache == nil {
             return
         }
         var discarded = ImmutableArray[ImmutableArray[Diagnostic]].Empty

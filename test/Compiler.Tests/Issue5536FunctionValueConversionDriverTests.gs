@@ -474,9 +474,21 @@ class Program {
             NestConditionalReturnLiterals("Calls.M(|, 1)", 2, "() => { return ", "; }", leafValue: "Pick(\"s\")")
         )
             .Append(");\n")
+        // Review of PR #5803: sibling rebinding isolates the literal cache at the rebind boundary while keeping
+        // nested return retries cached within the rebound subtree.
+        source.Append("    var s string? = \"a\"\n")
+        source.Append("    if s != nil {\n")
+        source
+            .Append("        Console.Write(Calls.Pick(")
+            .Append(
+            NestConditionalReturnLiterals("Calls.M(|, 1)", 24, "() -> { return ", " }", leafValue: "s ?? \"x\"")
+        )
+            .Append(", {\n            s = nil\n            \"b\"\n        }))\n")
+        source.Append("    }\n")
+        oracle.Append("        Console.Write(\"O\");\n")
         source.Append("}\n")
         oracle.Append("    }\n}\n")
-        Check(fixture, source.ToString(), oracle.ToString(), "OOOOOOOOOOOOOOOOO")
+        Check(fixture, source.ToString(), oracle.ToString(), "OOOOOOOOOOOOOOOOOO")
     }
 
     /// Issue #5604: sequential retried returns capture and restore operand-local deltas (including forward jumps
@@ -504,7 +516,7 @@ class Program {
         output.WriteLine(
             "SequentialRetriedReturns rollback work: R=200=" + work200.ToString() + ", R=800=" + work800.ToString()
         )
-        Assert.Equal(3_200L, work200)
+        Assert.Equal(4_800L, work200)
         Assert.Equal(work200 * 4, work800)
     }
 
@@ -2967,27 +2979,38 @@ class Program {
     }
 
     /// Issue #5604: builds a block-bodied literal with [`count`](paramref) sequential labeled retried return blocks,
-    /// each containing a conditional forward `goto Forward` to one shared label after all returns.
+    /// each guarded by `if s_i == nil` (so the persistent narrowing frame grows at every step) and containing a
+    /// conditional forward `goto Forward` to one shared label after all returns.
     private func SequentialRetriedReturnsBody(count int32, isOracle bool) string {
         let builder = StringBuilder()
         if isOracle {
-            builder.Append("() => {\n")
+            builder.Append("() => {\n            string? m = \"a\";\n")
             for var i = 0; i < count; i++ {
                 builder
-                    .Append("            L")
+                    .Append("            m = \"a\";\n            string? s")
                     .Append(i)
-                    .Append(": if (!flag) { if (!flag) { goto Forward; } return flag ? \"s")
+                    .Append(" = \"a\";\n            L")
+                    .Append(i)
+                    .Append(": if (s")
+                    .Append(i)
+                    .Append(" == null) { m = null; if (!flag) { goto Forward; } return flag ? \"s")
                     .Append(i)
                     .Append("\" : \"t\"; }\n")
             }
             builder.Append("            Forward: return \"u\";\n        }")
         } else {
-            builder.Append("() -> {\n")
+            builder.Append("() -> {\n        var m string? = \"a\"\n")
             for var i = 0; i < count; i++ {
                 builder
-                    .Append("        L")
+                    .Append("        m = \"a\"\n        let s")
                     .Append(i)
-                    .Append(": if !flag { return {\n            if !flag { goto Forward }\n            flag ? \"s")
+                    .Append(" string? = \"a\"\n        L")
+                    .Append(i)
+                    .Append(": if s")
+                    .Append(i)
+                    .Append(
+                    " == nil { return {\n            m = nil\n            if !flag { goto Forward }\n            flag ? \"s"
+                )
                     .Append(i)
                     .Append("\" : \"t\"\n        } }\n")
             }
