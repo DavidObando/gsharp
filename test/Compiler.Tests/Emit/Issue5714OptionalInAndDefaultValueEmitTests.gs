@@ -97,11 +97,12 @@ class Calls {
             (directory string) -> {
                 let library = Path.Combine(directory, "Issue5714.Defaults.dll")
                 EmitGSharp(SourceDefaults, library, "Issue5714.Defaults", Array.Empty[string]())
+                let referenceLibrary = Path.Combine(directory, "ref", "Issue5714.Defaults.dll")
                 let consumer = EmitCSharp(`public static class Consumer {
     public static string Run() => Issue5714.Defaults.Run() + "|" +
         Issue5714.Defaults.Integer() + ":" + Issue5714.Defaults.Enum() + ":" +
         Issue5714.Defaults.Missing() + ":" + Issue5714.Defaults.Money();
-}`, Path.Combine(directory, "Issue5714.Consumer.dll"), library + ".ref.dll")
+}`, Path.Combine(directory, "Issue5714.Consumer.dll"), referenceLibrary)
                 Assert.Equal(
                     "True:0|True:0|False|True:0|True:0|False|True:0|True:0|True:0:True:0:False:True:0",
                     Invoke(library, consumer, "Consumer")
@@ -113,7 +114,7 @@ class Calls {
     shared {
         func Run() string -> "${Defaults.Integer()}|${Defaults.Enum()}|${Defaults.Missing()}|${Defaults.Money()}"
     }
-}`, importedCaller, "Issue5714.Reimport", []string{library + ".ref.dll"})
+}`, importedCaller, "Issue5714.Reimport", []string{referenceLibrary})
                 Assert.Equal("True:0|True:0|False|True:0", Invoke(library, importedCaller, "Issue5714Reimport.Calls"))
             }
         )
@@ -238,9 +239,10 @@ class Defaults {
         private func EmitGSharp(source string, outputPath string, assemblyName string, references[]string) {
             using let resolver = ReferenceResolver.WithReferences(references)
             let compilation = GsCompilation(resolver, GsSyntaxTree.Parse(SourceText.From(source))){IsLibrary = true}
+            let referenceDirectory = Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(outputPath)!!, "ref"))
             {
                 using let output = File.Create(outputPath)
-                using let reference = File.Create(outputPath + ".ref.dll")
+                using let reference = File.Create(Path.Combine(referenceDirectory.FullName, assemblyName + ".dll"))
                 let result = compilation.Emit(output, pdbStream: nil, refStream: reference, assemblyName: assemblyName)
                 Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics))
             }
