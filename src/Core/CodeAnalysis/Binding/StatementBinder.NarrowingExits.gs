@@ -43,7 +43,23 @@ internal partial class StatementBinder {
         if !CanCompleteNormally(branch) {
             exits.Add(NarrowingState.Unreachable)
         } else if object.ReferenceEquals(exitOwner, branch) {
-            exits.AddRange(exitPredecessors)
+            let conditional = JoinedConditional(branch)
+            var heldWidenings = NarrowingState.Empty
+            for path in binderCtx.Narrowing.Paths {
+                let type = binderCtx.Narrowing.NarrowedType(path)!!
+                if IsNullableWidening(path, type) {
+                    heldWidenings = heldWidenings.With(path, type)
+                }
+            }
+            for state in exitPredecessors {
+                exits.Add(
+                    if conditional == nil {
+                        state
+                    } else {
+                        RestrictConditionalExit(state, conditional, externalCallableAliases, heldWidenings)
+                    }
+                )
+            }
         } else {
             exits.Add(NarrowingState.Empty)
         }
@@ -105,6 +121,87 @@ internal partial class StatementBinder {
         exitPredecessors = exits
     }
 
+    private func RecordFallbackExit(
+        statement BoundStatement,
+        entry NarrowingState,
+        aliases IReadOnlyCollection[VariableSymbol],
+        syntax SyntaxNode
+    ) {
+        if object.ReferenceEquals(exitOwner, statement) {
+            return
+        }
+        var exit = KillExitEffects(entry, statement, aliases, syntax)
+        let postconditions = NarrowingFrame()
+        ApplyMemberNotNullNarrowings(statement, postconditions)
+        exit = exit.WithAll(postconditions.Entries)
+        if statement is BoundExpressionStatement{Expression: BoundAssignmentExpression assignment} &&
+            TryClassifyNonNullAssignment(assignment, out var variable, out var type) {
+            exit = exit.With(AccessPath.ForVariable(variable!!), type!!)
+        }
+        if loopExitFacts.TryGetValue(syntax, out var loopFacts) {
+            exit = exit.WithAll(loopFacts)
+        }
+        RecordJoinExits(statement, List[NarrowingState]{exit})
+    }
+
+    private func JoinedConditional(statement BoundStatement) BoundIfStatement? {
+        var statement = statement
+        while statement is BoundBlockStatement labeled &&
+            labeled.Syntax is LabeledStatementSyntax &&
+            labeled
+            .Statements
+            .Length == 2 &&
+            labeled.Statements[0] is BoundLabelStatement {
+            statement = labeled.Statements[1]
+        }
+        if statement is BoundIfStatement conditional {
+            return conditional
+        }
+        if statement is BoundBlockStatement initialized &&
+            initialized.Syntax is IfStatementSyntax &&
+            initialized
+            .Statements
+            .Length == 2 {
+            return initialized.Statements[1] as BoundIfStatement
+        }
+        return nil
+    }
+
+    private func RestrictConditionalExit(
+        state NarrowingState,
+        conditional BoundIfStatement,
+        aliases IReadOnlyCollection[VariableSymbol],
+        heldState NarrowingState
+    ) NarrowingState {
+        var state = state
+        var effects AssignedRootsCollector? = nil
+        for path in state.Paths {
+            let held = heldState.NarrowedType(path)
+            let joined = state.NarrowedType(path)!!
+            if (held == nil || !IsWeakerOrEqual(held, joined)) &&
+                (IsByReferenceRoot(path.Root) || IsExternalStorageAlias(path.Root)) {
+                if effects == nil {
+                    effects = NewCollector(nil, aliases)
+                    effects.VisitExpression(conditional.Condition)
+                }
+                let syntaxMutates = conditional.Condition.Syntax is {} syntax && SyntaxMayMutateMemberPaths(syntax)
+                if StatementKillsPath(
+                    effects,
+                    path,
+                    syntaxMutates || effects.MayMutateMemberPaths,
+                    syntaxMutates || effects.MayMutateReferenceStorage
+                ) {
+                    state = if held == nil {
+                        state.Remove(path)
+                    } else {
+                        state.With(path, held)
+                    }
+                }
+            }
+        }
+        return state
+    }
+
     /// Lifts the facts that the exit state of [`statement`](paramref) proves into
     /// [`persistentFrame`](paramref). Every lift goes through
     /// (cref:SetPersistentNarrowing), like the other lifts.
@@ -114,7 +211,7 @@ internal partial class StatementBinder {
         aliasesAtEntry IReadOnlyCollection[VariableSymbol]
     ) {
         var statement = statement
-        while statement is BoundBlockStatement labeledBlock &&
+        while statement is BoundBlockStatement labeledBlock && !object.ReferenceEquals(exitOwner, statement) &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
             labeledBlock
             .Statements
@@ -130,35 +227,9 @@ internal partial class StatementBinder {
         if exit.IsUnreachable || !CanCompleteNormally(statement) {
             return
         }
-        var conditionEffects AssignedRootsCollector? = nil
-        var conditional = statement as BoundIfStatement
-        if conditional == nil &&
-            statement is BoundBlockStatement initialized &&
-            initialized.Syntax is IfStatementSyntax &&
-            initialized
-            .Statements
-            .Length == 2 {
-            conditional = initialized.Statements[1] as BoundIfStatement
-        }
-        for path in exit.Paths {
-            if binderCtx.Narrowing.NarrowedType(path) == nil &&
-                (IsByReferenceRoot(path.Root) || IsExternalStorageAlias(path.Root)) &&
-                conditional != nil {
-                if conditionEffects == nil {
-                    conditionEffects = NewCollector(nil, aliasesAtEntry)
-                    conditionEffects.VisitExpression(conditional.Condition)
-                }
-                let syntaxMutates = conditional.Condition.Syntax is {} syntax && SyntaxMayMutateMemberPaths(syntax)
-                // Keep the existing condition-proof restriction for caller-owned storage (corpus l1).
-                if StatementKillsPath(
-                    conditionEffects,
-                    path,
-                    syntaxMutates || conditionEffects.MayMutateMemberPaths,
-                    syntaxMutates || conditionEffects.MayMutateReferenceStorage
-                ) {
-                    exit = exit.Remove(path)
-                }
-            }
+        let conditional = JoinedConditional(statement)
+        if conditional != nil {
+            exit = RestrictConditionalExit(exit, conditional, aliasesAtEntry, binderCtx.Narrowing)
         }
         IntersectBranchEntry(exit)
         for path in exit.Paths {

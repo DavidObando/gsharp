@@ -155,6 +155,9 @@ The shadow-join tests expect no R1–R6 disagreements for these probes.
 Rows `n2_5130` and `n3_5130` reject a sibling-only type refinement and an unbraced call that leaves an out value nullable.
 Refinements stay in the branch's own frame; they do not replace weaker enclosing facts.
 Nullable-widening facts survive effect kills unless the write proves non-nullness, and survive joins if any reachable predecessor carries them.
+Rows `n4_5130` and `n5_5130` keep nullable-widening controls across switch prefixes and deferred cleanup.
+Rows `n6_5130` and `n7_5130` reject a jump into an unbraced labeled branch and an unsafe caller-owned fact forwarded through `else if`.
+Labeled statements forward the label's joined exit, and each originating conditional applies the same caller-owned-storage restriction before forwarding.
 
 ## Experiments on the deferred loop rule
 
@@ -301,4 +304,3 @@ d06 when another fact is in force at the loop entry; the row now gets the same r
 | t09 | `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { total = total + x.Value + s.Length }` | rejected (`GS0158`) | accepted, prints `8` |
 | a09 | `if g == nil { return 0 }; while true { k = k + g.Value; if k > 3 { break }; switch k { case 1 { continue } default { } }; break }` (`C` a non-`open` class) | rejected (`GS0158`) | accepted, prints `2` |
 | q5d | `open class Base { var Count int32 }`, `class Derived : Base { prop Count int32 { get { clear(); return 0 } } }`; `if b is Derived { let c = b.Count }` in loop | rejected (`GS0158`) | rejected (`GS0158`) |
-

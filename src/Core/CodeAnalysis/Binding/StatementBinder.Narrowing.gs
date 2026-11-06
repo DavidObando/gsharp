@@ -1432,14 +1432,17 @@ internal partial class StatementBinder {
         }
         for frame in binderCtx.NarrowedVariables {
             for entry in frame.ToArray() {
-                if MayBeMutatedByUnknownWrite(summary.Mutations, entry.Key) || summary.Mutations.MayMutateGlobalRoot(
-                    entry.Key.Root,
-                    entry.Value
-                ) ||
-                    DropsOnMemberMutation(entry.Key, summary.Mutations) ||
-                    summary
-                    .Mutations
-                    .InvalidatesNarrowing(entry.Key.Root, entry.Value) {
+                if !IsNullableWidening(entry.Key, entry.Value) &&
+                    (
+                    MayBeMutatedByUnknownWrite(summary.Mutations, entry.Key) || summary.Mutations.MayMutateGlobalRoot(
+                        entry.Key.Root,
+                        entry.Value
+                    ) ||
+                        DropsOnMemberMutation(entry.Key, summary.Mutations) ||
+                        summary
+                        .Mutations
+                        .InvalidatesNarrowing(entry.Key.Root, entry.Value)
+                ) {
                     conditionKillJournal?.Add((frame, entry.Key, entry.Value))
                     frame.Remove(entry.Key)
                 }
@@ -1454,14 +1457,17 @@ internal partial class StatementBinder {
 
     private func ApplyFlowSummary(snapshot NarrowingJumpState, summary FinallyFlowSummary) {
         for entry in snapshot.NarrowedVariables.ToArray() {
-            if MayBeMutatedByUnknownWrite(summary.Mutations, entry.Key) || summary.Mutations.MayMutateGlobalRoot(
-                entry.Key.Root,
-                entry.Value
-            ) ||
-                DropsOnMemberMutation(entry.Key, summary.Mutations) ||
-                summary
-                .Mutations
-                .InvalidatesNarrowing(entry.Key.Root, entry.Value) {
+            if !IsNullableWidening(entry.Key, entry.Value) &&
+                (
+                MayBeMutatedByUnknownWrite(summary.Mutations, entry.Key) || summary.Mutations.MayMutateGlobalRoot(
+                    entry.Key.Root,
+                    entry.Value
+                ) ||
+                    DropsOnMemberMutation(entry.Key, summary.Mutations) ||
+                    summary
+                    .Mutations
+                    .InvalidatesNarrowing(entry.Key.Root, entry.Value)
+            ) {
                 snapshot.RemoveNarrowing(entry.Key)
             }
         }
@@ -1772,7 +1778,7 @@ internal partial class StatementBinder {
     }
 
     private func StatementDischargesNullableWidening(
-        statement BoundStatement?,
+        statement BoundNode?,
         path AccessPath,
         widenedType TypeSymbol
     ) bool {
@@ -1787,6 +1793,9 @@ internal partial class StatementBinder {
         }
         if current is BoundExpressionStatement exprStmt {
             return DischargesNullableWidening(exprStmt.Expression, path, widenedType)
+        }
+        if current is BoundExpression expression {
+            return DischargesNullableWidening(expression, path, widenedType)
         }
         if current is BoundIfStatement ifStmt {
             if EndsInUnconditionalExit(ifStmt.ThenStatement) ||

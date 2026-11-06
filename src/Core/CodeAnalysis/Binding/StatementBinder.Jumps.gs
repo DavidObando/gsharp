@@ -1028,7 +1028,10 @@ internal partial class StatementBinder {
                     (FilterWritesVariable(filterWrites, key.Root) || MayBeMutatedByUnknownCallable(key))
             ) ||
                 StatementKillsPath(collector, key, dropAllMemberPaths, collector.MayMutateReferenceStorage)
-            if drop {
+            if drop &&
+                (
+                !IsNullableWidening(key, entry.Value) || StatementDischargesNullableWidening(prefix, key, entry.Value)
+            ) {
                 snapshot.RemoveNarrowing(key)
             }
         }

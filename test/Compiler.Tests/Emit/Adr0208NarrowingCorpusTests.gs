@@ -271,6 +271,10 @@ open class Adr0208NarrowingCorpusTests {
                 "n1_boxed_value_type_test",
                 "n2_5130_sibling_type_refinement",
                 "n3_5130_nullable_widening_unbraced_call",
+                "n4_5130_nullable_widening_switch_prefix",
+                "n5_5130_nullable_widening_switch_cleanup",
+                "n6_5130_labeled_branch_entry",
+                "n7_5130_else_if_caller_owned_condition",
                 "o1_callback_after_test_replaces_root",
                 "o2_callback_in_or_arm_replaces_root",
                 "o3_callback_in_else_if_replaces_root",
@@ -1932,6 +1936,52 @@ func Run(dict Dictionary[string, string], flag bool) int32 {
     return 0
 }
 func Main() { Console.WriteLine(Run(Dictionary[string, string](), true)) }`, "GS0158@6:22", "reject", "", ""}
+            yield[]object{"n4_5130_nullable_widening_switch_prefix", `import System.Collections.Generic
+func Run(dict Dictionary[string, string]) int32 {
+    var value string = ""
+    if dict.TryGetValue("key", &value) { return 0 }
+    switch dict.TryGetValue("other", &value) {
+        case true { break }
+        case false { break }
+    }
+    return value.Length
+}
+func Main() { Console.WriteLine(Run(Dictionary[string, string]())) }`, "GS0158@9:18", "reject", "", ""}
+            yield[]object{"n5_5130_nullable_widening_switch_cleanup", `import System.Collections.Generic
+func Run(dict Dictionary[string, string], flag bool) int32 {
+    var value string = ""
+    if dict.TryGetValue("key", &value) { return 0 }
+    let clear = func() { dict.TryGetValue("other", &value) }
+    switch flag {
+        case true {
+            defer clear()
+            break
+        }
+        case false { return 0 }
+    }
+    return value.Length
+}
+func Main() { Console.WriteLine(Run(Dictionary[string, string](), true)) }`, "GS0158@13:18", "reject", "", ""}
+            yield[]object{"n6_5130_labeled_branch_entry", `func Run(jump bool) int32 {
+    var x string? = nil
+    if jump { goto L }
+    if x == nil { return 0 } else L: { }
+    return x.Length
+}
+func Main() { Console.WriteLine(Run(true)) }`, "GS0158@5:14", "reject", "", ""}
+            yield[]object{"n7_5130_else_if_caller_owned_condition", `class C { var Value int32 = 1 }
+func Clear(values []C?) bool {
+    values[0] = nil
+    return true
+}
+func Run(ref value C?, values []C?, skip bool) int32 {
+    if skip { return 0 } else if value != nil && Clear(values) { } else { return 0 }
+    return value.Value
+}
+func Main() {
+    var values = []C?{C{}}
+    Console.WriteLine(Run(ref values[0], values, false))
+}`, "GS0158@8:18", "reject", "", ""}
             yield[]object{"n1_boxed_value_type_test", `func Run(x object?) int32 {
     if x == nil { return 0 }
     if x is int32 {

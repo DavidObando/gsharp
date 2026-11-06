@@ -1403,17 +1403,7 @@ internal partial class StatementBinder {
                 "a narrowed statement has a bound statement",
                 expression: "BindStatement(syntax)"
             )
-            if !object.ReferenceEquals(exitOwner, bound) {
-                var exit = KillExitEffects(entry, bound, aliasesAtEntry, syntax)
-                if bound is BoundExpressionStatement{Expression: BoundAssignmentExpression assignment} &&
-                    TryClassifyNonNullAssignment(assignment, out var variable, out var type) {
-                    exit = exit.With(AccessPath.ForVariable(variable!!), type!!)
-                }
-                if loopExitFacts.TryGetValue(syntax, out var loopFacts) {
-                    exit = exit.WithAll(loopFacts)
-                }
-                RecordJoinExits(bound, List[NarrowingState]{exit})
-            }
+            RecordFallbackExit(bound, entry, aliasesAtEntry, syntax)
             return bound
         } finally {
             if frame != nil {
