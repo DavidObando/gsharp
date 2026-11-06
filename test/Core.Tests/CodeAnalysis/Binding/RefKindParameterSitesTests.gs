@@ -634,7 +634,7 @@ a * 100000 + b * 1000 + c + w1 * 10 + w2 + p + idxRead + idxWrite + idxInRead + 
         let mixedAmbiguous = Evaluate(`
 class Mixed {
     prop this[in a int32, b int64] int32 -> a
-    prop this[a int64, b int32] int32 -> b
+    prop this[a int64, in b int32] int32 -> b
 }
 let m = Mixed()
 m[1, 2]

@@ -854,6 +854,7 @@ internal class ConversionClassifier {
             return BoundErrorExpression(expression.Syntax)
         }
         var resolvedUserMethodGroup BoundMethodGroupExpression? = expression as BoundMethodGroupExpression
+        let isUserMethodGroupSource = resolvedUserMethodGroup != nil
         if resolvedUserMethodGroup != nil && !MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out _) {
             resolvedUserMethodGroup = BoundMethodGroupExpression(
                 resolvedUserMethodGroup.Syntax,
@@ -982,8 +983,14 @@ internal class ConversionClassifier {
         }
         var conversion = Conversion.Classify(expression.Type, type!!)
         conversion = ClassifyConvertedDelegate(expression, type!!, conversion)
+        if isUserMethodGroupSource &&
+            !conversion.IsImplicit &&
+            !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(expression.Type, type) {
+            conversion = Conversion.None
+        }
         if !conversion.Exists &&
             allowExplicit &&
+            !isUserMethodGroupSource &&
             (
             (
                 Conversion.HasCheckedReferenceConversion(expression.Type, type) &&
@@ -6091,6 +6098,11 @@ internal class ConversionClassifier {
             target TypeSymbol,
             conversion Conversion
         ) Conversion {
+            if (expression is BoundMethodGroupExpression or BoundClrMethodGroupExpression) &&
+                !conversion.IsImplicit &&
+                !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(expression.Type, target) {
+                return Conversion.None
+            }
             if !conversion.Exists || conversion.IsIdentity || KeepsConvertedDelegate(expression, target) {
                 return conversion
             }
@@ -6769,7 +6781,7 @@ internal class ConversionClassifier {
             }
             if !(mapped is ImportedTypeSymbol{OpenDefinition: {} mappedOpen} mappedImported) ||
                 !(expected is ImportedTypeSymbol{OpenDefinition: {} expectedOpen} expectedImported) ||
-                mappedOpen != expectedOpen ||
+                !ClrTypeUtilities.AreSame(mappedOpen, expectedOpen) ||
                 mappedImported
                 .TypeArguments
                 .Length != expectedImported
