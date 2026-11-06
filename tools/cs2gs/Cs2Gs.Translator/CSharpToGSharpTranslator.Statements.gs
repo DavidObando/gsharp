@@ -224,22 +224,18 @@ partial class CSharpToGSharpTranslator {
                         // Issue #1072: a non-nullable reference/array local that is
                         // null-checked or null-assigned in its scope is really nullable.
                         if this.context.GetDeclaredSymbol(declarator) is ILocalSymbol localSymbol {
-                            type = if localAcceptsNil {
-                                MakeNullable(type)
-                            } else {
+                            type = this.PromoteIfUsedAsNullable(type, localSymbol)
+                            if localAcceptsNil ||
                                 (
-                                    if declarator
-                                        .Initializer
-                                        ?.Value is {} localInitializer &&
-                                        IsNullOrSuppressedNull(localInitializer) &&
-                                        localSymbol
-                                        .Type
-                                        .IsReferenceType {
-                                        MakeNullable(type)
-                                    } else {
-                                        this.PromoteIfUsedAsNullable(type, localSymbol)
-                                    }
-                                )
+                                declarator
+                                    .Initializer
+                                    ?.Value is {} localInitializer &&
+                                    IsNullOrSuppressedNull(localInitializer) &&
+                                    localSymbol
+                                    .Type
+                                    .IsReferenceType
+                            ) {
+                                type = MakeNullable(type)
                             }
                         }
                     }

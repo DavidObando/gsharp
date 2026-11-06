@@ -289,6 +289,9 @@ partial class CSharpToGSharpTranslator {
             }
             type = this.PromoteTupleDeclarationIfTainted(type, declaredType, symbol)
             type = this.PromoteObliviousContainerStorage(type, symbol)
+            if symbol != nil {
+                type = this.PromoteArrayElementIfGeneratedNullElement(type, symbol)
+            }
             if type!!.IsNullable {
                 return type
             }
@@ -323,7 +326,8 @@ partial class CSharpToGSharpTranslator {
                 this.context.Compilation,
                 parameter,
                 this.context.RepositoryCompilations ?? this.context.SiblingCompilations
-            ) {
+            ) &&
+                !this.IsWidenedArrayElementStorage(parameter, "0") {
                 return type
             }
             return if elementNestedInArrayType && type is ArrayTypeReference array {
@@ -341,6 +345,9 @@ partial class CSharpToGSharpTranslator {
         private func PromoteReturnIfTainted(type GTypeReference?, symbol IMethodSymbol?) GTypeReference? {
             var type = type
             type = this.PromoteObliviousContainerStorage(type, symbol)
+            if type != nil && symbol != nil {
+                type = this.PromoteArrayElementIfGeneratedNullElement(type, symbol)
+            }
             if type == nil || type.IsNullable || symbol == nil {
                 return type
             }
@@ -1062,7 +1069,11 @@ partial class CSharpToGSharpTranslator {
                 .Annotated {
                 return elementType
             }
-            if literal != nil && this.IsGeneratedArrayElementPromotedSink(this.ResolveValueSink(literal)) {
+            if literal != nil &&
+                (
+                this.IsGeneratedArrayElementPromotedSink(this.ResolveValueSink(literal)) ||
+                    this.IsWidenedArrayCreationElement(literal)
+            ) {
                 return MakeNullable(elementType)
             }
             for element in elements {
@@ -1111,10 +1122,47 @@ partial class CSharpToGSharpTranslator {
         // compiler really did check the write (CS8601).
         private func PromoteArrayElementIfGeneratedNullElement(type GTypeReference?, symbol ISymbol) GTypeReference? {
             if !(type is ArrayTypeReference{ElementType: {IsNullable: false} element} array) ||
-                !this.IsGeneratedArrayElementPromotedSink(symbol) {
+                (!this.IsGeneratedArrayElementPromotedSink(symbol) && !this.IsWidenedArrayElementStorage(symbol)) {
                 return type
             }
             return ArrayTypeReference(MakeNullable(element), array.Rank){IsNullable = array.IsNullable}
+        }
+
+        private func ResolveArrayStorageSink(value ExpressionSyntax?)(Sink ISymbol?, ElementPosition string) {
+            if value == nil {
+                return (nil, "0")
+            }
+            var node ExpressionSyntax = value
+            while true {
+                if node.Parent is (ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax) {
+                    node = cast[ExpressionSyntax](node.Parent)
+                    continue
+                }
+                if node.Parent is ConditionalExpressionSyntax conditional &&
+                    (conditional.WhenTrue == node || conditional.WhenFalse == node) {
+                    node = conditional
+                    continue
+                }
+                if node.Parent is SwitchExpressionArmSyntax arm &&
+                    arm.Expression == node &&
+                    arm.Parent is SwitchExpressionSyntax switchExpression {
+                    node = switchExpression
+                    continue
+                }
+                if node is InitializerExpressionSyntax &&
+                    node.Parent is (ArrayCreationExpressionSyntax or ImplicitArrayCreationExpressionSyntax) {
+                    node = cast[ExpressionSyntax](node.Parent)
+                    continue
+                }
+                break
+            }
+            let (sink, prefix) = this.DirectValueSink(node)
+            return (sink, JoinPosition(prefix, "0"))
+        }
+
+        private func IsWidenedArrayCreationElement(value ExpressionSyntax?) bool {
+            let (sink, elementPosition) = this.ResolveArrayStorageSink(value)
+            return this.IsWidenedArrayElementStorage(sink, elementPosition)
         }
 
         private func IsGeneratedArrayElementPromotedSink(symbol ISymbol?) bool -> symbol != nil &&
@@ -2607,6 +2655,17 @@ partial class CSharpToGSharpTranslator {
                 }
                 case property is IPropertySymbol {
                     return property.ContainingType?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                }
+                case method is IMethodSymbol {
+                    if method.MethodKind == MethodKind.LocalFunction {
+                        return method
+                            .DeclaringSyntaxReferences
+                            .FirstOrDefault()
+                            ?.GetSyntax()
+                            .Ancestors()
+                            .FirstOrDefault((a SyntaxNode) -> a is BlockSyntax)
+                    }
+                    return method.ContainingType?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
                 }
                 case local is ILocalSymbol {
                     let declaration SyntaxNode? = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()

@@ -26,6 +26,10 @@ import System.Reflection.Metadata.Ecma335
 /// statement/expression dispatch, and small shared helpers).
 internal partial class MethodBodyEmitter {
     private func EmitConversion(conv BoundConversionExpression) {
+        if conv.Expression.Type == TypeSymbol.Never {
+            this.EmitExpression(conv.Expression)
+            return
+        }
         // ADR-0122 / issues #1014, #3268, and #3285: `nil` materialises a null
         // pointer as a zero native int. Emit it directly (the source `nil`
         // would otherwise push an object `ldnull`, which is not a pointer

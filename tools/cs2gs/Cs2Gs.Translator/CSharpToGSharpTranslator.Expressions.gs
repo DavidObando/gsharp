@@ -2898,6 +2898,8 @@ partial class CSharpToGSharpTranslator {
             let declared ITypeSymbol? = switch symbol {
                 case property is IPropertySymbol: property.Type
                 case field is IFieldSymbol: field.Type
+                case local is ILocalSymbol when this.IsWithinExpressionTreeLambda(recv): local.Type
+                case parameter is IParameterSymbol when this.IsWithinExpressionTreeLambda(recv): parameter.Type
                 default: default(ITypeSymbol?)
             }
             if !(declared != nil && declared.IsReferenceType == true) {
@@ -2907,7 +2909,8 @@ partial class CSharpToGSharpTranslator {
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated ||
-                this.ShouldPromoteToNullableReference(symbol)
+                this.ShouldPromoteToNullableReference(symbol) || this.IsTranslatorWidenedDeclaration(symbol) ||
+                this.IsInferredNullableLocal(symbol)
         }
 
         /// Issue #4356: whether [`symbol`](paramref) is a Roslyn property or

@@ -68,7 +68,8 @@ partial class CSharpToGSharpTranslator {
             // the over-match bug this round fixes.
             if !bareNonNullPattern &&
                 (
-                this.IsPlainAccessAnalyzerType(typeSyntax, out _) || this.IsConditionalAccessAnalyzerType(typeSyntax)
+                this.IsPlainAccessAnalyzerType(typeSyntax, out _) || this.IsConditionalAccessAnalyzerType(typeSyntax) ||
+                    this.IsVariableReferenceAnalyzerType(typeSyntax, out _)
             ) {
                 return false
             }
@@ -224,7 +225,8 @@ partial class CSharpToGSharpTranslator {
             // identical decline.
             if !bareNonNullPattern &&
                 (
-                this.IsPlainAccessAnalyzerType(typeSyntax, out _) || this.IsConditionalAccessAnalyzerType(typeSyntax)
+                this.IsPlainAccessAnalyzerType(typeSyntax, out _) || this.IsConditionalAccessAnalyzerType(typeSyntax) ||
+                    this.IsVariableReferenceAnalyzerType(typeSyntax, out _)
             ) {
                 return false
             }
@@ -453,7 +455,8 @@ partial class CSharpToGSharpTranslator {
                 // identical decline.
                 if this.IsPlainAccessAnalyzerType(typeSyntax, out _) || this.IsConditionalAccessAnalyzerType(
                     typeSyntax
-                ) {
+                ) ||
+                    this.IsVariableReferenceAnalyzerType(typeSyntax, out _) {
                     return false
                 }
                 let targetSymbol ITypeSymbol? = this.context.GetTypeInfo(typeSyntax).Type
@@ -550,7 +553,8 @@ partial class CSharpToGSharpTranslator {
                 // identical decline.
                 if this.IsPlainAccessAnalyzerType(typeSyntax, out _) || this.IsConditionalAccessAnalyzerType(
                     typeSyntax
-                ) {
+                ) ||
+                    this.IsVariableReferenceAnalyzerType(typeSyntax, out _) {
                     return false
                 }
                 let targetSymbol ITypeSymbol? = this.context.GetTypeInfo(typeSyntax).Type

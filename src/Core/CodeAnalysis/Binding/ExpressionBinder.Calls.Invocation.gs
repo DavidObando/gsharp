@@ -3307,6 +3307,7 @@ internal partial class ExpressionBinder {
         // call path in BindCallExpression at #325). This must come before the
         // extension-function fallbacks so an in-scope extension method does
         // not shadow a real delegate-typed member on the type.
+        let delegateMemberDiagnosticMark = Diagnostics.Count
         if receiver != nil &&
             TryBindClrDelegateMemberInvocation(
             receiver,
@@ -3320,7 +3321,16 @@ internal partial class ExpressionBinder {
             // Issue #4287: loading the delegate member dereferences the
             // receiver, and this fallback runs after the instance-method gate,
             // so it applies the gate itself (`x.F()` on an `Fns?`).
-            return if TryReportStatedNullableReceiverCall(receiver, receiverSyntax, receiverStart, ce) {
+            // Issue #4492: roll back any diagnostic reported by the delegate
+            // invocation itself (e.g. GS0503 on a nilable delegate member) so
+            // the outer receiver's GS0159 wins alone.
+            return if TryReportStatedNullableReceiverCall(
+                receiver,
+                receiverSyntax,
+                receiverStart,
+                ce,
+                delegateMemberDiagnosticMark
+            ) {
                 cast[BoundExpression](BoundErrorExpression(nil))
             } else {
                 delegateMemberCall!!
@@ -3683,7 +3693,8 @@ internal partial class ExpressionBinder {
         receiver BoundExpression,
         receiverSyntax ExpressionSyntax?,
         receiverStart int32?,
-        ce CallExpressionSyntax
+        ce CallExpressionSyntax,
+        rollbackDiagnosticMark int32 = -1
     ) bool {
         // Value-ness is asked of the SYMBOL, as SmartCastStability asks it, not
         // of `UnderlyingType.ClrType`: a receiver whose underlying type has no
@@ -3695,6 +3706,9 @@ internal partial class ExpressionBinder {
         ) ||
             NullableLifting.IsUserValueTypeNullable(nullableReceiver) {
             return false
+        }
+        if rollbackDiagnosticMark >= 0 {
+            Diagnostics.TruncateTo(rollbackDiagnosticMark)
         }
         Diagnostics.ReportNilableReceiverCall(
             ce.Location,

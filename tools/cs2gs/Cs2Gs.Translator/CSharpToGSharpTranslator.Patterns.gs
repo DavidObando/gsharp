@@ -157,6 +157,9 @@ partial class CSharpToGSharpTranslator {
                     ) {
                         return analyzerBareTypeTest
                     }
+                    if binary.IsKind(SyntaxKind.IsExpression) && this.InAnalyzerApiMode {
+                        return this.BuildTypeTestExpression(this.TranslateExpression(binary.Left), binary.Right, binary)
+                    }
                     // `e as T` / `e is T`: the right operand is a type. Render it as
                     // a type expression so array/qualified types map to canonical G#
                     // (e.g. `o as []object`, `o is []object`).
@@ -1578,6 +1581,8 @@ partial class CSharpToGSharpTranslator {
                             // receiver, relying on gsc's own flow-narrowing of the
                             // now-SUFFIXED type test to have proven `t`'s type.
                             this.state.PatternBindings[boundSymbol] = NarrowToType(receiver, sharedGsNodeName)
+                        } else if this.IsVariableReferenceAnalyzerType(declaration.Type, out _) {
+                            this.state.PatternBindings[boundSymbol] = NarrowToType(receiver, "BoundVariableExpression")
                         } else {
                             this.state.PatternBindings[boundSymbol] = this.BuildPatternNarrowingReplacement(
                                 receiver,
@@ -1977,6 +1982,11 @@ partial class CSharpToGSharpTranslator {
                         )
                     } else if this.IsPlainAccessAnalyzerType(declaration.Type, out var sharedGsNodeName) {
                         BindPatternDesignation(declaration.Designation, NarrowToType(receiver, sharedGsNodeName))
+                    } else if this.IsVariableReferenceAnalyzerType(declaration.Type, out _) {
+                        BindPatternDesignation(
+                            declaration.Designation,
+                            NarrowToType(receiver, "BoundVariableExpression")
+                        )
                     } else {
                         BindPatternDesignation(declaration.Designation, receiver)
                     }
@@ -2143,6 +2153,8 @@ partial class CSharpToGSharpTranslator {
                     )
                 } else if this.IsPlainAccessAnalyzerType(recursive.Type, out var sharedGsNodeName) {
                     this.state.PatternBindings[recBound] = NarrowToType(receiver, sharedGsNodeName)
+                } else if this.IsVariableReferenceAnalyzerType(recursive.Type, out _) {
+                    this.state.PatternBindings[recBound] = NarrowToType(receiver, "BoundVariableExpression")
                 } else {
                     this.state.PatternBindings[recBound] = this.BuildPatternNarrowingReplacement(
                         receiver,
@@ -3140,6 +3152,9 @@ partial class CSharpToGSharpTranslator {
                             .ToList()
                     )
                 }
+                if elementType != nil && !elementType.IsNullable && this.IsWidenedArrayCreationElement(creation) {
+                    elementType = MakeNullable(elementType)
+                }
                 elementType = this.PromoteObliviousArrayElement(elementType, elementTypeSymbol, creation)
                 return ArrayAllocationExpression(
                     elementType,
@@ -3203,14 +3218,11 @@ partial class CSharpToGSharpTranslator {
             } else {
                 length = LiteralExpression.Int("0")
             }
-            // Issue #4482: an element of this array passed by `out`/`ref` to a
+            // Issues #4482/#4491: an element of this array passed by `out`/`ref` to a
             // parameter cs2gs emits `T?` is storage the callee may write nil
             // into, and gsc requires by-ref storage to match the parameter's
             // nullability exactly (GS0612). Widen the ELEMENT (`[n]T?`).
-            if elementType != nil && elementType.IsNullable == false && this.ResolveValueSink(
-                creation
-            ) is ILocalSymbol arrayLocal &&
-                this.IsWidenedArrayElementLocal(arrayLocal) {
+            if elementType != nil && elementType.IsNullable == false && this.IsWidenedArrayCreationElement(creation) {
                 elementType = MakeNullable(elementType)
             }
             // Issue #5537: an array stored in oblivious container storage has its
@@ -3219,21 +3231,44 @@ partial class CSharpToGSharpTranslator {
             return ArrayAllocationExpression(elementType, length)
         }
 
-        // Issues #4482, #4500 and #4507: the one decision "this local's
-        // `new T[n]` allocation has a `T?` element". The allocation, its
-        // inferred local aliases, and every element read/write ask it, so they
-        // cannot disagree.
-        // Only a rank-1 allocation takes the widening branch in
-        // TranslateArrayCreation (a rectangular one returns earlier), and the
-        // initializer may be parenthesized.
-        private func IsWidenedArrayElementLocal(local ILocalSymbol) bool {
-            let owner ILocalSymbol? = this.GetArrayAllocationOwner(
+        // Issues #4482, #4491, #4500 and #4507: the one decision "this array
+        // storage symbol has a `T?` element". The declaration, every creation
+        // form, inferred local aliases, and every element read/write ask it,
+        // so they cannot disagree.
+        private func IsWidenedArrayElementStorage(symbol ISymbol?, position string = "0") bool {
+            if symbol == nil {
+                return false
+            }
+            if this.ObliviousContainerPositions(symbol)?.Contains(position) == true {
+                return true
+            }
+            let storageOwner ISymbol? = this.GetArrayStorageOwner(
+                symbol,
+                HashSet[ISymbol](SymbolEqualityComparer.Default)
+            )
+            if storageOwner != nil &&
+                (
+                this.ObliviousContainerPositions(storageOwner)?.Contains(position) == true ||
+                    this.ElementPassedToNullableByRefParameter(storageOwner, position)
+            ) {
+                return true
+            }
+            if position != "0" || symbol is not ILocalSymbol local {
+                return false
+            }
+            let allocationOwner ILocalSymbol? = this.GetArrayAllocationOwner(
                 local,
                 HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
             )
-            return owner != nil &&
-                (this.ElementPassedToNullableByRefParameter(owner) || this.ElementWrittenMaybeNil(owner))
+            return allocationOwner != nil &&
+                (
+                this.ObliviousContainerPositions(allocationOwner)?.Contains("0") == true || this.ElementWrittenMaybeNil(
+                    allocationOwner
+                )
+            )
         }
+
+        private func IsWidenedArrayElementLocal(local ILocalSymbol) bool -> this.IsWidenedArrayElementStorage(local)
 
         private func IsNullableArrayElementAccess(expression ExpressionSyntax?) bool {
             var expression = expression
@@ -3282,12 +3317,8 @@ partial class CSharpToGSharpTranslator {
                 (requireReferenceLikeElement && !this.IsReferenceLikeOrManagedReference(array.ElementType)) {
                 return false
             }
-            return this.GetMappedArrayElement(expression)
-                ?.IsNullable == true ||
-                (
-                this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local && this.IsWidenedArrayElementLocal(
-                    local
-                )
+            return this.GetMappedArrayElement(expression)?.IsNullable == true || this.IsWidenedArrayElementStorage(
+                this.context.GetSymbolInfo(expression).Symbol
             )
         }
 
@@ -3304,12 +3335,7 @@ partial class CSharpToGSharpTranslator {
             } else {
                 this.ApplyMappedArrayElementShape(array.ElementType, mappedElement)
             }
-            return if this
-                .context
-                .GetSymbolInfo(expression)
-                .Symbol is ILocalSymbol local &&
-                this
-                .IsWidenedArrayElementLocal(local) {
+            return if this.IsWidenedArrayElementStorage(this.context.GetSymbolInfo(expression).Symbol) {
                 projectedElement!!.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
             } else {
                 projectedElement
@@ -3599,6 +3625,71 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        private func GetArrayStorageOwner(symbol ISymbol?, visited HashSet[ISymbol]) ISymbol? {
+            if symbol == nil || ObliviousNullabilityAnalyzer.SymbolValueType(
+                symbol
+            ) is not IArrayTypeSymbol arrayType ||
+                !arrayType
+                .ElementType
+                .IsReferenceType ||
+                !visited.Add(symbol) {
+                return nil
+            }
+            if symbol is not ILocalSymbol local {
+                return if (symbol is IFieldSymbol or IPropertySymbol or IParameterSymbol or IMethodSymbol) {
+                    symbol.OriginalDefinition
+                } else {
+                    default(ISymbol?)
+                }
+            }
+            for reference in local.DeclaringSyntaxReferences {
+                let declaration = reference.GetSyntax()
+                if declaration is SingleVariableDesignationSyntax designation && this.GetDeconstructionAliasValue(
+                    designation
+                ) is {} deconstructedValue &&
+                    this
+                    .context
+                    .GetSymbolInfo(deconstructedValue)
+                    .Symbol is {} deconstructedSource {
+                    return this.GetArrayStorageOwner(deconstructedSource, visited) ?? local
+                }
+                if declaration is VariableDeclaratorSyntax{
+                    Initializer: {Value: {} initializer},
+                    Parent: VariableDeclarationSyntax{Type: {IsVar: true}}
+                } &&
+                    this
+                    .context
+                    .GetSymbolInfo(StripParentheses(initializer))
+                    .Symbol is {} source &&
+                    (source is ILocalSymbol or IFieldSymbol or IPropertySymbol or IParameterSymbol) {
+                    return this.GetArrayStorageOwner(source, visited) ?? local
+                }
+            }
+            return local
+        }
+
+        private func GetArrayStorageExpressionSymbol(expression ExpressionSyntax) ISymbol? {
+            let stripped = StripParentheses(expression)
+            if stripped is DeclarationExpressionSyntax{Designation: SingleVariableDesignationSyntax designation} {
+                return this.context.GetDeclaredSymbol(designation)
+            }
+            return if stripped != nil {
+                this.context.GetSymbolInfo(stripped).Symbol
+            } else {
+                nil
+            }
+        }
+
+        private func IsArrayStorageAlias(expression ExpressionSyntax, owner ISymbol?) bool -> SymbolEqualityComparer
+            .Default
+            .Equals(
+            this.GetArrayStorageOwner(
+                this.GetArrayStorageExpressionSymbol(expression),
+                HashSet[ISymbol](SymbolEqualityComparer.Default)
+            ),
+            owner
+        )
+
         private func IsArrayAllocationAlias(expression ExpressionSyntax, owner ILocalSymbol?) bool -> this
             .context
             .GetSymbolInfo(expression)
@@ -3607,40 +3698,170 @@ partial class CSharpToGSharpTranslator {
             .Default
             .Equals(this.GetArrayAllocationOwner(local, HashSet[ILocalSymbol](SymbolEqualityComparer.Default)), owner)
 
-        // Issue #4482: whether some `local[i]` in the local's scope is passed
-        // by `out`/`ref` to a parameter whose emitted type is `T?`.
-        private func ElementPassedToNullableByRefParameter(local ILocalSymbol?) bool {
-            let scope_ SyntaxNode? = this.GetNullabilityScope(local)
-            if scope_ == nil {
+        private func HasConcreteReferenceArrayPosition(owner ISymbol, position string) bool {
+            var current ITypeSymbol? = ObliviousNullabilityAnalyzer.SymbolValueType(owner)
+            for _ in position.Split('.') {
+                if current is not IArrayTypeSymbol array {
+                    return false
+                }
+                current = array.ElementType
+            }
+            return current != nil && current.IsReferenceType
+        }
+
+        // Issues #4482/#4491: whether some `owner[i]` in the storage symbol's
+        // scope is passed by `out`/`ref` to a parameter whose emitted type is `T?`,
+        // or `owner` flows as a whole array into storage whose element is widened.
+        private func ElementPassedToNullableByRefParameter(
+            owner ISymbol?,
+            position string = "0",
+            visited HashSet[(ISymbol, string)]? = nil
+        ) bool {
+            if owner == nil {
                 return false
             }
-            for argument in scope_.DescendantNodes().OfType[ArgumentSyntax]() {
-                if !argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) && !argument.RefKindKeyword.IsKind(
-                    SyntaxKind.RefKeyword
-                ) {
-                    continue
-                }
-                if argument.Expression is ElementAccessExpressionSyntax elementAccess && this.IsArrayAllocationAlias(
-                    elementAccess.Expression,
-                    local
-                ) &&
-                    this
-                    .context
-                    .SemanticModel
-                    .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
-                    parameter
-                    .Type
-                    .IsReferenceType &&
-                    (
-                    parameter
-                        .Type
-                        .NullableAnnotation == Microsoft
-                        .CodeAnalysis
-                        .NullableAnnotation
-                        .Annotated ||
-                        this.ShouldPromoteToNullableReference(parameter)
-                ) {
-                    return true
+            let normalizedOwner = owner.OriginalDefinition
+            if !this.HasConcreteReferenceArrayPosition(normalizedOwner, position) {
+                return false
+            }
+            let activeVisited = visited ?? HashSet[(ISymbol, string)]()
+            if !activeVisited.Add((normalizedOwner, position)) {
+                return false
+            }
+            let scope_ SyntaxNode? = if normalizedOwner is IParameterSymbol{
+                RefKind: RefKind.Out or RefKind.Ref,
+                ContainingSymbol: {ContainingType: {} containingType}
+            } {
+                containingType.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            } else {
+                this.GetNullabilityScope(normalizedOwner)
+            }
+            if scope_ == nil || !this.context.Compilation.ContainsSyntaxTree(scope_.SyntaxTree) {
+                return false
+            }
+            if scope_.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+                using let modelScope = this.context.UseSemanticModelFor(scope_.SyntaxTree)
+                activeVisited.Remove((normalizedOwner, position))
+                return this.ElementPassedToNullableByRefParameter(normalizedOwner, position, activeVisited)
+            }
+            for node in scope_.DescendantNodes() {
+                switch node {
+                    case argument is ArgumentSyntax {
+                        if (
+                            argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) || argument.RefKindKeyword.IsKind(
+                                SyntaxKind.RefKeyword
+                            )
+                        ) &&
+                            Unparenthesize(argument.Expression) is ElementAccessExpressionSyntax elementAccess {
+                            var target ExpressionSyntax = elementAccess
+                            var accessPosition = ""
+                            while target is ElementAccessExpressionSyntax currentAccess &&
+                                this
+                                .context
+                                .GetTypeInfo(currentAccess.Expression)
+                                .Type is IArrayTypeSymbol {
+                                accessPosition = JoinPosition("0", accessPosition)
+                                target = Unparenthesize(currentAccess.Expression)!!
+                            }
+                            if accessPosition == position && this.IsArrayStorageAlias(target, normalizedOwner) &&
+                                this
+                                .context
+                                .SemanticModel
+                                .GetOperation(argument) is IArgumentOperation{Parameter: {} parameter} &&
+                                parameter
+                                .Type
+                                .IsReferenceType &&
+                                (
+                                parameter
+                                    .Type
+                                    .NullableAnnotation == Microsoft
+                                    .CodeAnalysis
+                                    .NullableAnnotation
+                                    .Annotated ||
+                                    this.ShouldPromoteToNullableReference(parameter)
+                            ) {
+                                return true
+                            }
+                        }
+                        if normalizedOwner is IParameterSymbol{RefKind: RefKind.Out or RefKind.Ref} &&
+                            (
+                            argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) || argument.RefKindKeyword.IsKind(
+                                SyntaxKind.RefKeyword
+                            )
+                        ) &&
+                            this
+                            .context
+                            .SemanticModel
+                            .GetOperation(argument) is IArgumentOperation{Parameter: {} callParam} &&
+                            SymbolEqualityComparer
+                            .Default
+                            .Equals(callParam.OriginalDefinition, normalizedOwner) &&
+                            this.GetArrayStorageExpressionSymbol(argument.Expression) is {} callerStorage &&
+                            this.ElementPassedToNullableByRefParameter(callerStorage, position, activeVisited) {
+                            return true
+                        }
+                        if this.IsArrayStorageAlias(argument.Expression, normalizedOwner) {
+                            let (arrayParameter, argPrefix) = if argument.RefKindKeyword.IsKind(SyntaxKind.None) {
+                                ArgumentDestination(argument, this.context.SemanticModel)
+                            } else {
+                                (
+                                    (
+                                        this.context.SemanticModel.GetOperation(argument) as IArgumentOperation
+                                    )?.Parameter,
+                                    ""
+                                )
+                            }
+                            let mappedPosition = JoinPosition(argPrefix, position)
+                            if arrayParameter != nil && this.ElementPassedToNullableByRefParameter(
+                                arrayParameter,
+                                mappedPosition,
+                                activeVisited
+                            ) {
+                                return true
+                            }
+                        }
+                    }
+                    case assignment is AssignmentExpressionSyntax when assignment.IsKind(
+                        SyntaxKind.SimpleAssignmentExpression
+                    ) {
+                        if this.IsArrayStorageAlias(assignment.Right, normalizedOwner) &&
+                            this
+                            .context
+                            .GetSymbolInfo(assignment.Left)
+                            .Symbol is {} targetSymbol &&
+                            this.ElementPassedToNullableByRefParameter(targetSymbol, position, activeVisited) {
+                            return true
+                        }
+                    }
+                    case declarator is VariableDeclaratorSyntax when declarator.Initializer != nil {
+                        if this.IsArrayStorageAlias(declarator.Initializer!!.Value, normalizedOwner) &&
+                            this
+                            .context
+                            .GetDeclaredSymbol(declarator) is {} declaredSymbol &&
+                            this.ElementPassedToNullableByRefParameter(declaredSymbol, position, activeVisited) {
+                            return true
+                        }
+                    }
+                    case returnStatement is ReturnStatementSyntax when returnStatement.Expression != nil {
+                        if this.IsArrayStorageAlias(returnStatement.Expression!!, normalizedOwner) &&
+                            this
+                            .context
+                            .SemanticModel
+                            .GetEnclosingSymbol(returnStatement.SpanStart) is IMethodSymbol enclosingMethod &&
+                            this.ElementPassedToNullableByRefParameter(enclosingMethod, position, activeVisited) {
+                            return true
+                        }
+                    }
+                    case arrow is ArrowExpressionClauseSyntax {
+                        if this.IsArrayStorageAlias(arrow.Expression, normalizedOwner) &&
+                            this
+                            .context
+                            .SemanticModel
+                            .GetEnclosingSymbol(arrow.Expression.SpanStart) is IMethodSymbol arrowMethod &&
+                            this.ElementPassedToNullableByRefParameter(arrowMethod, position, activeVisited) {
+                            return true
+                        }
+                    }
                 }
             }
             return false

@@ -62,6 +62,19 @@ partial class CSharpToGSharpTranslator {
             return name != nil && PlainAccessAnalyzerTypes.TryGetValue(name, out gsNodeName)
         }
 
+        private func IsVariableReferenceAnalyzerType(typeSyntax ExpressionSyntax?, out isParameter bool) bool {
+            isParameter = false
+            let name string? = this.AnalyzerPatternTypeName(typeSyntax)
+            if name == "Microsoft.CodeAnalysis.Operations.ILocalReferenceOperation" {
+                return true
+            }
+            if name == "Microsoft.CodeAnalysis.Operations.IParameterReferenceOperation" {
+                isParameter = true
+                return true
+            }
+            return false
+        }
+
         private func IsConditionalAccessAnalyzerType(typeSyntax ExpressionSyntax?) bool -> this.AnalyzerPatternTypeName(
             typeSyntax
         ) == ConditionalAccessTypeName
@@ -109,6 +122,32 @@ partial class CSharpToGSharpTranslator {
                     ConstantPattern(LiteralExpression.Bool(false))
                 )
                 return NamedTypeReference(gsNodeName)
+            }
+            if this.IsVariableReferenceAnalyzerType(typeSyntax, out var isParameterReference) {
+                this.typeMapper.TrackSubstitutedNamespace("GSharp.Core.CodeAnalysis.Binding")
+                this.typeMapper.TrackSubstitutedNamespace("GSharp.Core.CodeAnalysis.Symbols")
+                let parameterPattern = TypePattern(
+                    "_",
+                    NamedTypeReference("ParameterSymbol"),
+                    designationAfterType: true
+                )
+                let variablePattern GPattern = if isParameterReference {
+                    cast[GPattern](parameterPattern)
+                } else {
+                    cast[GPattern](
+                        BinaryPattern(
+                            isConjunction: true,
+                            TypePattern("_", NamedTypeReference("LocalVariableSymbol"), designationAfterType: true),
+                            NotPattern(parameterPattern)
+                        )
+                    )
+                }
+                discriminator = PropertyPatternField("Variable", variablePattern)
+                return if typeSyntax is TypeSyntax variableType {
+                    this.MapTypeSyntax(variableType)
+                } else {
+                    this.MapTypeReferenceExpression(typeSyntax)
+                }
             }
             if this.IsConditionalAccessAnalyzerType(typeSyntax) {
                 // Reached only from a GPattern-only position (a switch label /
@@ -1657,7 +1696,9 @@ partial class CSharpToGSharpTranslator {
             var expanded = false
             var unexpandable = false
             let guardedKinds = List[string]()
+            let emittedKinds = HashSet[string](StringComparer.Ordinal)
             var handlerIndex = -1
+            var handlerSyntax ExpressionSyntax? = nil
             for argument in invocation.ArgumentList.Arguments {
                 if argument.Expression is MemberAccessExpressionSyntax kindAccess &&
                     this
@@ -1668,13 +1709,25 @@ partial class CSharpToGSharpTranslator {
                     RoslynAnalyzerApiMap
                     .TryMapOperationKindDispatch(kindField.Name, out var boundNodeKinds) {
                     expanded = true
-                    if (kindField.Name is "IsType" or "PropertyReference" or "MethodReference") {
+                    if (
+                        kindField.Name is "IsType" or
+                            "PropertyReference" or
+                            "MethodReference" or
+                            "LocalReference" or
+                            "ParameterReference"
+                    ) {
                         guardedKinds.Add(kindField.Name)
                     }
                     for boundNodeKind in boundNodeKinds {
-                        arguments.Add(
-                            MemberAccessExpression(IdentifierExpression("BoundNodeKind"), boundNodeKind, isArrow: false)
-                        )
+                        if emittedKinds.Add(boundNodeKind) {
+                            arguments.Add(
+                                MemberAccessExpression(
+                                    IdentifierExpression("BoundNodeKind"),
+                                    boundNodeKind,
+                                    isArrow: false
+                                )
+                            )
+                        }
                     }
                     continue
                 }
@@ -1702,6 +1755,7 @@ partial class CSharpToGSharpTranslator {
                     }
                 } else {
                     handlerIndex = arguments.Count
+                    handlerSyntax = argument.Expression
                 }
                 arguments.Add(this.TranslateExpression(argument.Expression)!!)
             }
@@ -1730,7 +1784,12 @@ partial class CSharpToGSharpTranslator {
                 }
             )
             if guardedKinds.Count > 0 && handlerIndex >= 0 {
-                arguments[handlerIndex] = this.GuardOperationHandler(arguments[handlerIndex], guardedKinds, invocation)
+                arguments[handlerIndex] = this.GuardOperationHandler(
+                    arguments[handlerIndex],
+                    handlerSyntax,
+                    guardedKinds,
+                    invocation
+                )
                 const GuardNote = "'RegisterOperationAction' registered as a wrapper lambda that drops the nodes G# shares with another Roslyn " +
                     "operation: a pattern 'is' (Roslyn's IsPattern) for IsType, an imported field read (Roslyn's " +
                     "FieldReference) for PropertyReference, and an empty method group for MethodReference."
@@ -1767,11 +1826,13 @@ partial class CSharpToGSharpTranslator {
         /// The guard rejects only those nodes, so it composes with any other
         /// kinds named in the same registration.
         /// @param handler The translated handler.
+        /// @param handlerSyntax The C# handler argument expression, if any.
         /// @param guardedKinds The guarded Roslyn kinds the registration names.
         /// @param site The registration site that owns the synthesized wrapper parameter.
         /// @returns The guarded wrapper lambda.
         private func GuardOperationHandler(
             handler GExpression,
+            handlerSyntax ExpressionSyntax?,
             guardedKinds List[string],
             site SyntaxNode
         ) GExpression {
@@ -1779,32 +1840,101 @@ partial class CSharpToGSharpTranslator {
             let context GExpression = IdentifierExpression(contextName)
             let ctxNode GExpression = MemberAccessExpression(context, "BoundNode", isArrow: false)
             var rejected GExpression? = nil
+            let hasLocalReference = guardedKinds.Contains("LocalReference")
+            let hasParameterReference = guardedKinds.Contains("ParameterReference")
+            var emittedVariableGuard = false
             for kind in guardedKinds {
-                let (type, member) = switch kind {
-                    case "IsType": ("BoundIsExpression", "TypeOperand")
-                    case "PropertyReference": ("BoundPropertyReferenceOperationExpression", "ReferencedProperty")
-                    default: ("BoundMethodReferenceOperationExpression", "Method")
-                }
-                let test GExpression = PatternTestExpression(
-                    ctxNode,
-                    TypePattern(
+                var test GExpression
+                if kind == "LocalReference" || kind == "ParameterReference" {
+                    if emittedVariableGuard {
+                        continue
+                    }
+                    emittedVariableGuard = true
+                    this.typeMapper.TrackSubstitutedNamespace("GSharp.Core.CodeAnalysis.Symbols")
+                    let notLocal = NotPattern(
+                        TypePattern("_", NamedTypeReference("LocalVariableSymbol"), designationAfterType: true)
+                    )
+                    let isParameter = TypePattern(
                         "_",
-                        NamedTypeReference(type),
-                        PropertyPattern(
-                            List[PropertyPatternField]{
-                                PropertyPatternField(member, ConstantPattern(LiteralExpression.Null()))
-                            }
-                        ),
+                        NamedTypeReference("ParameterSymbol"),
                         designationAfterType: true
                     )
-                )
+                    let rejectedVariablePattern GPattern = if hasLocalReference && hasParameterReference {
+                        cast[GPattern](notLocal)
+                    } else if hasParameterReference {
+                        cast[GPattern](NotPattern(isParameter))
+                    } else {
+                        cast[GPattern](BinaryPattern(isConjunction: false, notLocal, isParameter))
+                    }
+                    test = PatternTestExpression(
+                        ctxNode,
+                        TypePattern(
+                            "_",
+                            NamedTypeReference("BoundVariableExpression"),
+                            PropertyPattern(
+                                List[PropertyPatternField]{PropertyPatternField("Variable", rejectedVariablePattern)}
+                            ),
+                            designationAfterType: true
+                        )
+                    )
+                } else {
+                    let (type, member) = switch kind {
+                        case "IsType": ("BoundIsExpression", "TypeOperand")
+                        case "PropertyReference": ("BoundPropertyReferenceOperationExpression", "ReferencedProperty")
+                        default: ("BoundMethodReferenceOperationExpression", "Method")
+                    }
+                    test = PatternTestExpression(
+                        ctxNode,
+                        TypePattern(
+                            "_",
+                            NamedTypeReference(type),
+                            PropertyPattern(
+                                List[PropertyPatternField]{
+                                    PropertyPatternField(member, ConstantPattern(LiteralExpression.Null()))
+                                }
+                            ),
+                            designationAfterType: true
+                        )
+                    )
+                }
                 rejected = if rejected == nil {
                     test
                 } else {
                     cast[GExpression](BinaryExpression(rejected, "||", test))
                 }
             }
-            let handlerCall GExpression = InvocationExpression(handler, List[GExpression]{context})
+            let unparenthesizedHandler = if handlerSyntax != nil {
+                Unparenthesize(handlerSyntax)
+            } else {
+                default(ExpressionSyntax?)
+            }
+            let handlerSymbol = if unparenthesizedHandler != nil {
+                this.context.GetSymbolInfo(unparenthesizedHandler).Symbol
+            } else {
+                default(ISymbol?)
+            }
+            let isInvariantHandler = handler is LambdaExpression ||
+                (
+                handlerSymbol is IMethodSymbol method &&
+                    (
+                    unparenthesizedHandler is SimpleNameSyntax ||
+                        (
+                        unparenthesizedHandler is MemberAccessExpressionSyntax memberAccess &&
+                            (
+                            method.IsStatic ||
+                                Unparenthesize(memberAccess.Expression) is ThisExpressionSyntax or
+                                BaseExpressionSyntax
+                        )
+                    )
+                )
+            )
+            var callable GExpression = handler
+            var capturedName string? = nil
+            if !isInvariantHandler {
+                capturedName = this.AllocateSynthesizedLocalName("handler", site)
+                callable = IdentifierExpression(capturedName)
+            }
+            let handlerCall GExpression = InvocationExpression(callable, List[GExpression]{context})
             let body = BlockStatement(
                 List[GStatement]{
                     IfStatement(
@@ -1813,10 +1943,21 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
             )
-            return LambdaExpression(
+            let wrapperLambda = LambdaExpression(
                 List[Parameter]{Parameter(contextName, NamedTypeReference("BoundNodeAnalysisContext"))},
                 blockBody: body
             )
+            if capturedName != nil {
+                let capturedType = ArrowTypeReference(
+                    List[GTypeReference]{NamedTypeReference("BoundNodeAnalysisContext")},
+                    List[GTypeReference]()
+                )
+                return BlockExpression(
+                    List[GStatement]{LocalDeclarationStatement(BindingKind.Let, capturedName, capturedType, handler)},
+                    wrapperLambda
+                )
+            }
+            return wrapperLambda
         }
 
         /// Rewrites `RegisterSyntaxNodeAction(handler, SyntaxKind.ConditionalAccessExpression)`

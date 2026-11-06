@@ -2156,6 +2156,10 @@ public class Annotated
     public List<int>? MaybeNumbers { get; set; } = new List<int> { 1, 2, 3 };
 
     public string? MaybeText { get; set; } = "v";
+
+    public Func<string>? MaybeF;
+
+    public Func<string>? MaybeP { get; set; }
 }
 
 // The carve-out's other stated-nullable population: a plain generic ` + "`" + `T` + "`" + ` member whose
