@@ -2516,7 +2516,8 @@ partial class CSharpToGSharpTranslator {
                                 .Syntax
                                 .DiscardPatternSyntax
                         ) ||
-                            this.ExtendedPathHasNullableLink(sub.ExpressionColon!!.Expression)
+                            this.ExtendedPathHasNullableLink(sub.ExpressionColon!!.Expression) ||
+                            (sharedPrefixes != nil && sub.NameColon == nil)
                     ) {
                         this.AddTypedSubpatternGuard(
                             () -> this.TranslateExtendedPropertyMemberTest(

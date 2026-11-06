@@ -531,6 +531,38 @@ namespace Demo
     }
 
     @Fact
+    func TypedSwitch_ExtendedVarLeafReusesEarlierSharedPrefix() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public class Child
+    {
+        public object X => 3;
+        public object Y = 4;
+    }
+    public class Holder
+    {
+        public int Reads;
+        public Child Child { get { Reads++; return new Child { Y = Reads == 1 ? 4 : 9 }; } }
+    }
+    public static class P
+    {
+        static int Match(object value) => value switch
+        {
+            Holder { Child.X: 3, Child.Y: var y } => (int)y,
+            _ => -1,
+        };
+        public static string Run()
+        {
+            var value = new Holder();
+            return Match(value) + " " + value.Reads;
+        }
+    }
+}`, "4 1")
+    }
+
+    @Fact
     func SharedPrefixCaptures_OutliveEarlierBindingStorageBlocks() {
         Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
 #nullable enable
