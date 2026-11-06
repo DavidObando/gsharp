@@ -72,7 +72,7 @@ shared class SemanticTokensComputer {
         var compilation Compilation? = nil
         var declarationPositions HashSet[int32]? = nil
         try {
-            compilation = content.Project?.GetCompilation() ?? Compilation(tree)
+            compilation = content.Project?.GetCompilation() ?? ServerCompilation.Create(tree)
             declarationPositions = BuildDeclarationPositions(tree)
         } catch {
             // Fall back to syntax-only classification

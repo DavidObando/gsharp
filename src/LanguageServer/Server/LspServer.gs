@@ -1870,7 +1870,7 @@ class LspServer {
 
         private func TryGetCompilation(content DocumentContent) Compilation? {
             try {
-                return content.Project?.GetCompilation() ?? Compilation(content.SyntaxTree)
+                return content.Project?.GetCompilation() ?? ServerCompilation.Create(content.SyntaxTree)
             } catch {
                 return nil
             }

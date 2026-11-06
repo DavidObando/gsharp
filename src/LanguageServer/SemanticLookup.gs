@@ -118,6 +118,13 @@ shared class SemanticLookup {
 
         private var fieldAssignmentTokenSpans HashSet[(string, int32, int32)]
 
+        private var accessorsByTokenSpan Dictionary[(string, int32, int32), List[AccessorExpressionSyntax]]
+
+        private var fieldAssignmentsByTokenSpan Dictionary[
+            (string, int32, int32),
+            List[FieldAssignmentExpressionSyntax]
+        ]
+
         internal init(
             compilation Compilation,
             declarations Dictionary[SyntaxToken, Symbol],
@@ -150,6 +157,11 @@ shared class SemanticLookup {
             )
             this.memberAccessTokenSpans = HashSet[(string, int32, int32)]()
             this.fieldAssignmentTokenSpans = HashSet[(string, int32, int32)]()
+            this.accessorsByTokenSpan = Dictionary[(string, int32, int32), List[AccessorExpressionSyntax]]()
+            this.fieldAssignmentsByTokenSpan = Dictionary[
+                (string, int32, int32),
+                List[FieldAssignmentExpressionSyntax]
+            ]()
             for var i = 0; i < treeArray.Length; i++ {
                 let tree = treeArray[i]
                 let bucket = if bucketsByTree.TryGetValue(tree, out var b) {
@@ -157,13 +169,19 @@ shared class SemanticLookup {
                 } else {
                     SemanticLookup.GetNodeBuckets(tree, useCache: false)
                 }
-                this.cachedAccessorsByTree[tree] = bucket.Accessors.ToArray()
+                let sortedAccessors = bucket.Accessors.OrderBy((a AccessorExpressionSyntax) -> a.Span.Length).ToArray()
+                this.cachedAccessorsByTree[tree] = sortedAccessors
                 this.cachedFieldAssignmentsByTree[tree] = bucket.FieldAssignments.ToArray()
-                for accessor in bucket.Accessors {
+                for accessor in sortedAccessors {
                     for memberToken in EnumerateAccessorMemberTokens(accessor.RightPart) {
                         let key = SpanKey(memberToken)
                         if (key != nil) {
                             this.memberAccessTokenSpans.Add(key)
+                            if !this.accessorsByTokenSpan.TryGetValue(key, out var accessorList) {
+                                accessorList = List[AccessorExpressionSyntax]()
+                                this.accessorsByTokenSpan[key] = accessorList
+                            }
+                            accessorList.Add(accessor)
                         }
                     }
                 }
@@ -171,6 +189,11 @@ shared class SemanticLookup {
                     let key = SpanKey(assign.FieldIdentifier)
                     if (key != nil) {
                         this.fieldAssignmentTokenSpans.Add(key)
+                        if !this.fieldAssignmentsByTokenSpan.TryGetValue(key, out var assignList) {
+                            assignList = List[FieldAssignmentExpressionSyntax]()
+                            this.fieldAssignmentsByTokenSpan[key] = assignList
+                        }
+                        assignList.Add(assign)
                     }
                 }
             }
@@ -355,23 +378,34 @@ shared class SemanticLookup {
             ) {
                 return nil
             }
-            for accessor in this
-                .GetAccessorsForTree(tree)
-                .Where(
-                (a AccessorExpressionSyntax) -> a
-                    .RightPart
-                    .Span
-                    .Start <= token
-                    .Span
-                    .Start &&
-                    token
-                    .Span
-                    .End <= a
-                    .RightPart
-                    .Span
-                    .End
-            )
-                .OrderBy((a AccessorExpressionSyntax) -> a.Span.Length) {
+            let candidateAccessors IEnumerable[AccessorExpressionSyntax] = if this.cachedAccessorsByTree.ContainsKey(
+                tree
+            ) {
+                if this.accessorsByTokenSpan.TryGetValue(spanKey, out var indexedAccessors) {
+                    cast[IEnumerable[AccessorExpressionSyntax]](indexedAccessors)
+                } else {
+                    cast[IEnumerable[AccessorExpressionSyntax]](Array.Empty[AccessorExpressionSyntax]())
+                }
+            } else {
+                this
+                    .GetAccessorsForTree(tree)
+                    .Where(
+                    (a AccessorExpressionSyntax) -> a
+                        .RightPart
+                        .Span
+                        .Start <= token
+                        .Span
+                        .Start &&
+                        token
+                        .Span
+                        .End <= a
+                        .RightPart
+                        .Span
+                        .End
+                )
+                    .OrderBy((a AccessorExpressionSyntax) -> a.Span.Length)
+            }
+            for accessor in candidateAccessors {
                 if TryDriveAccessorTarget(
                     tree,
                     accessor.RightPart,
@@ -389,7 +423,18 @@ shared class SemanticLookup {
                     }
                 }
             }
-            for assign in this.GetFieldAssignmentsForTree(tree) {
+            let candidateAssignments IEnumerable[FieldAssignmentExpressionSyntax] = if this
+                .cachedFieldAssignmentsByTree
+                .ContainsKey(tree) {
+                if this.fieldAssignmentsByTokenSpan.TryGetValue(spanKey, out var indexedAssignments) {
+                    cast[IEnumerable[FieldAssignmentExpressionSyntax]](indexedAssignments)
+                } else {
+                    cast[IEnumerable[FieldAssignmentExpressionSyntax]](Array.Empty[FieldAssignmentExpressionSyntax]())
+                }
+            } else {
+                this.GetFieldAssignmentsForTree(tree)
+            }
+            for assign in candidateAssignments {
                 if !TokenMatches(assign.FieldIdentifier, token) {
                     continue
                 }
@@ -671,39 +716,138 @@ shared class SemanticLookup {
 
     private var nodeBucketCacheMisses int64
 
+    private class TreeTokenIndex {
+        init(leafTokens[]SyntaxToken, interpolatedTokens[]SyntaxToken, interpolatedParentIndex[]int32) {
+            LeafTokens = leafTokens
+            InterpolatedTokens = interpolatedTokens
+            InterpolatedParentIndex = interpolatedParentIndex
+        }
+
+        prop LeafTokens[]SyntaxToken {
+            get;
+        }
+
+        prop InterpolatedTokens[]SyntaxToken {
+            get;
+        }
+
+        prop InterpolatedParentIndex[]int32 {
+            get;
+        }
+    }
+
+    private let TokenIndexCache ConditionalWeakTable[SyntaxTree, TreeTokenIndex] = ConditionalWeakTable[
+        SyntaxTree,
+        TreeTokenIndex
+    ]()
+
     /// Gets the node-bucket memo (hit, miss) counts. Test hook for ADR-0106.
     internal prop NodeBucketCacheStats(Hits int64, Misses int64) {
         get -> (Interlocked.Read(&nodeBucketCacheHits), Interlocked.Read(&nodeBucketCacheMisses))
     }
 
     func FindTokenAt(tree SyntaxTree, position int32) SyntaxToken? {
+        let index = TokenIndexCache.GetValue(tree, (t SyntaxTree) -> BuildTreeTokenIndex(t.Root))
         var best SyntaxToken? = nil
-        for token in EnumerateTokens(tree.Root) {
+        let leafTokens = index.LeafTokens
+        let leafUpper = FindLastTokenStartingAtOrBefore(leafTokens, position)
+        if leafUpper >= 0 {
+            var leafLower = leafUpper
+            while leafLower > 0 && leafTokens[leafLower - 1].Span.End >= position {
+                leafLower--
+            }
+            for var i = leafLower; i <= leafUpper; i++ {
+                best = ConsiderTokenAt(best, leafTokens[i], position)
+            }
+        }
+        let interpolatedTokens = index.InterpolatedTokens
+        let interpUpper = FindLastTokenStartingAtOrBefore(interpolatedTokens, position)
+        if interpUpper >= 0 {
+            if interpUpper > 0 && interpolatedTokens[interpUpper - 1].Span.End >= position {
+                best = ConsiderTokenAt(best, interpolatedTokens[interpUpper - 1], position)
+            }
+            let parents = index.InterpolatedParentIndex
+            for var i = interpUpper; i >= 0; i = parents[i] {
+                best = ConsiderTokenAt(best, interpolatedTokens[i], position)
+            }
+        }
+        return best
+    }
+
+    private func FindLastTokenStartingAtOrBefore(tokens[]SyntaxToken, position int32) int32 {
+        var lo = 0
+        var hi = tokens.Length - 1
+        var upper = -1
+        while lo <= hi {
+            let mid = lo + ((hi - lo) / 2)
+            if tokens[mid].Span.Start <= position {
+                upper = mid
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+        return upper
+    }
+
+    private func ConsiderTokenAt(best SyntaxToken?, token SyntaxToken, position int32) SyntaxToken? {
+        if token.Span.Start > position || position > token.Span.End {
+            return best
+        }
+        if best == nil {
+            return token
+        }
+        // At a boundary the position is both the end of one token and the
+        // start of the next. Editors bind the caret to the token that starts
+        // there (right-biased, like Roslyn's FindToken), so prefer it; only
+        // then fall back to the smallest enclosing token.
+        let tokenStartsHere = token.Span.Start == position
+        let bestStartsHere = best.Span.Start == position
+        if tokenStartsHere && !bestStartsHere {
+            return token
+        }
+        if tokenStartsHere == bestStartsHere && token.Span.Length < best.Span.Length {
+            return token
+        }
+        return best
+    }
+
+    private func BuildTreeTokenIndex(root SyntaxNode) TreeTokenIndex {
+        let collectedLeaves = List[SyntaxToken]()
+        let collectedInterpolated = List[SyntaxToken]()
+        for token in EnumerateTokens(root) {
             // Issue #5277: a synthesized token is not written in source. It has a zero-width span at
             // the end of the token before it, so it must not win the caret there. Such a token has
             // text but a zero-width span; a token written in source spans exactly its text.
             if token.IsMissing || (token.Span.Length == 0 && (token.Text?.Length ?? 0) > 0) {
                 continue
             }
-            if token.Span.Start <= position && position <= token.Span.End {
-                if best == nil {
-                    best = token
-                    continue
-                }
-                // At a boundary the position is both the end of one token and the
-                // start of the next. Editors bind the caret to the token that starts
-                // there (right-biased, like Roslyn's FindToken), so prefer it; only
-                // then fall back to the smallest enclosing token.
-                let tokenStartsHere = token.Span.Start == position
-                let bestStartsHere = best!!.Span.Start == position
-                if tokenStartsHere && !bestStartsHere {
-                    best = token
-                } else if tokenStartsHere == bestStartsHere && token.Span.Length < best!!.Span.Length {
-                    best = token
-                }
+            if token.Kind == SyntaxKind.InterpolatedStringToken {
+                collectedInterpolated.Add(token)
+            } else {
+                collectedLeaves.Add(token)
             }
         }
-        return best
+        let leafTokens = collectedLeaves.OrderBy((t SyntaxToken) -> t.Span.Start).ToArray()
+        let interpolatedTokens = collectedInterpolated
+            .OrderBy((t SyntaxToken) -> t.Span.Start)
+            .ThenByDescending((t SyntaxToken) -> t.Span.Length)
+            .ToArray()
+        let parentIndex = [interpolatedTokens.Length]int32
+        let openStack = Stack[int32]()
+        for var i = 0; i < interpolatedTokens.Length; i++ {
+            let start = interpolatedTokens[i].Span.Start
+            while openStack.Count > 0 && interpolatedTokens[openStack.Peek()].Span.End <= start {
+                openStack.Pop()
+            }
+            parentIndex[i] = if openStack.Count > 0 {
+                openStack.Peek()
+            } else {
+                -1
+            }
+            openStack.Push(i)
+        }
+        return TreeTokenIndex(leafTokens, interpolatedTokens, parentIndex)
     }
 
     func ResolveSymbol(
