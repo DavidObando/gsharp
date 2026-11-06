@@ -41,6 +41,9 @@ internal partial class OverloadResolver {
     /// placeholders to close the selected generic method.
     /// @param paramsElementTypeOverride The reified params element type when a constrained generic
     /// receiver's reflected array element is erased.
+    /// @param method The resolved method, when available.
+    /// @param receiverType The symbolic receiver type.
+    /// @param parameterTypeOverrides Constructor parameter types recovered from symbolic type arguments.
     /// @returns An argument list of length [`parameters`](paramref).Length whose final element is the
     /// packed array.
     func ExpandParamsArguments(
@@ -50,7 +53,10 @@ internal partial class OverloadResolver {
         receiverArgCount int32 = 0,
         parameterMapping ImmutableArray[int32] = default(ImmutableArray[int32]),
         symbolicMethodTypeArgs ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?]),
-        paramsElementTypeOverride TypeSymbol? = nil
+        paramsElementTypeOverride TypeSymbol? = nil,
+        method MethodInfo? = nil,
+        receiverType TypeSymbol? = nil,
+        parameterTypeOverrides IReadOnlyDictionary[int32, TypeSymbol]? = nil
     ) ImmutableArray[BoundExpression] {
         let paramsIndex = parameters.Length - 1
         let paramArrayType = parameters[paramsIndex].ParameterType
@@ -128,7 +134,17 @@ internal partial class OverloadResolver {
                 paramsElementBuilder.ToImmutable()
             )
             for var i = 0; i < parameters.Length; i++ {
-                ordered[i] ??= ConversionClassifier.CreateOptionalDefaultArgument(parameters[i])
+                if ordered[i] == nil {
+                    var parameterType TypeSymbol? = nil
+                    parameterTypeOverrides?.TryGetValue(i, out parameterType)
+                    ordered[i] = ConversionClassifier.CreateOptionalDefaultArgument(
+                        parameters[i],
+                        method,
+                        receiverType,
+                        symbolicMethodTypeArgs,
+                        parameterType
+                    )
+                }
             }
             return ImmutableArray.Create(ordered)
         }
@@ -155,7 +171,17 @@ internal partial class OverloadResolver {
             result.Add(conversions.ResolveReboundSibling(arguments[i]))
         }
         for var i = suppliedFixedCount; i < fixedCount; i++ {
-            result.Add(ConversionClassifier.CreateOptionalDefaultArgument(parameters[i]))
+            var parameterType TypeSymbol? = nil
+            parameterTypeOverrides?.TryGetValue(i, out parameterType)
+            result.Add(
+                ConversionClassifier.CreateOptionalDefaultArgument(
+                    parameters[i],
+                    method,
+                    receiverType,
+                    symbolicMethodTypeArgs,
+                    parameterType
+                )
+            )
         }
         result.Add(arrayExpr)
         return result.MoveToImmutable()
@@ -1353,18 +1379,30 @@ internal partial class OverloadResolver {
         /// @param suppliedArguments Bound arguments in source order.
         /// @param parameterMapping Per-source-argument → parameter-position map; default for identity.
         /// @param parameters The resolved method's/constructor's full parameter list.
+        /// @param method The resolved method, when available.
+        /// @param receiverType The symbolic receiver type.
+        /// @param symbolicMethodTypeArgs The real method type arguments.
+        /// @param parameterTypeOverrides Constructor parameter types recovered from symbolic type arguments.
         /// @returns The argument array reordered into parameter positions, padded with defaults.
         func BuildOrderedCallArguments(
             suppliedArguments ImmutableArray[BoundExpression],
             parameterMapping ImmutableArray[int32],
-            parameters[]ParameterInfo
+            parameters[]ParameterInfo,
+            method MethodInfo? = nil,
+            receiverType TypeSymbol? = nil,
+            symbolicMethodTypeArgs ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?]),
+            parameterTypeOverrides IReadOnlyDictionary[int32, TypeSymbol]? = nil
         ) ImmutableArray[BoundExpression] {
             if parameterMapping.IsDefault {
                 // No named-argument reordering required — preserve the existing
                 // trailing-optional behaviour.
                 let orderedArguments = ConversionClassifier.AppendOmittedOptionalArguments(
                     suppliedArguments,
-                    parameters
+                    parameters,
+                    method,
+                    receiverType,
+                    symbolicMethodTypeArgs,
+                    parameterTypeOverrides
                 )
                 if !HasHandlerSourceForwarding(orderedArguments) {
                     return orderedArguments
@@ -1381,7 +1419,17 @@ internal partial class OverloadResolver {
                 ordered[slot] = suppliedArguments[i]
             }
             for var i = 0; i < parameters.Length; i++ {
-                ordered[i] ??= ConversionClassifier.CreateOptionalDefaultArgument(parameters[i])
+                if ordered[i] == nil {
+                    var parameterType TypeSymbol? = nil
+                    parameterTypeOverrides?.TryGetValue(i, out parameterType)
+                    ordered[i] = ConversionClassifier.CreateOptionalDefaultArgument(
+                        parameters[i],
+                        method,
+                        receiverType,
+                        symbolicMethodTypeArgs,
+                        parameterType
+                    )
+                }
             }
             return PreserveMappedArgumentEvaluationOrder(ImmutableArray.Create(ordered), parameterMapping)
         }

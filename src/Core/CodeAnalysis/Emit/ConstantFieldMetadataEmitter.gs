@@ -80,10 +80,15 @@ internal shared class ConstantFieldMetadataEmitter {
         value is float64 ||
         value is string
 
-    private func EmitDecimalConstantAttribute(
+    /// Emits a decimal default that cannot use the ECMA Constant table.
+    /// @param emitCtx The active metadata emit context.
+    /// @param getTypeReference Resolves the decimal attribute type reference.
+    /// @param parent The field or parameter receiving the constant.
+    /// @param value The decimal constant.
+    internal func EmitDecimalConstantAttribute(
         emitCtx EmitContext,
         getTypeReference(Type) -> TypeReferenceHandle,
-        field FieldDefinitionHandle,
+        parent EntityHandle,
         value decimal
     ) {
         let attributeType = typeof(DecimalConstantAttribute)
@@ -123,6 +128,6 @@ internal shared class ConstantFieldMetadataEmitter {
         attributeValue.WriteUInt32(unchecked(uint32(bits[1])))
         attributeValue.WriteUInt32(unchecked(uint32(bits[0])))
         attributeValue.WriteUInt16(0)
-        emitCtx.Metadata.AddCustomAttribute(field, ctor, emitCtx.Metadata.GetOrAddBlob(attributeValue))
+        emitCtx.Metadata.AddCustomAttribute(parent, ctor, emitCtx.Metadata.GetOrAddBlob(attributeValue))
     }
 }

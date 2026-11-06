@@ -3442,25 +3442,11 @@ internal class ConversionClassifier {
         ) {
             return BoundAddressOfExpression(value.Syntax, value, unmanaged: false, isReadOnly: true)
         }
-        // The temp is typed as the SLOT, not the value: an implicit reference
-        // conversion (`FormattableString` at `in IFormattable`) leaves the
-        // value's own type on the node, but the callee takes `IFormattable&`.
-        let tempType = if parameterType != TypeSymbol.Error {
-            parameterType
-        } else {
-            value.Type
-        }
-        let temp = LocalVariableSymbol(
-            "$ImplicitInTempPrefix${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
-            isReadOnly: true,
-            type: tempType
+        return CreateImplicitInTemporary(
+            value,
+            parameterType,
+            "$ImplicitInTempPrefix${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
         )
-        let spill = BoundBlockExpression(
-            value.Syntax,
-            ImmutableArray.Create[BoundStatement](BoundVariableDeclaration(value.Syntax, temp, value)),
-            BoundVariableExpression(value.Syntax, temp)
-        )
-        return BoundAddressOfExpression(value.Syntax, spill, unmanaged: false, isReadOnly: true)
     }
 
     /// Issue #4400: the final by-ref check for an argument that a call path's
@@ -4869,6 +4855,26 @@ internal class ConversionClassifier {
         // spilled into (see CreateImplicitInReference / IsImplicitInTemp).
         private const ImplicitInTempPrefix string = "<inArgument"
 
+        private func CreateImplicitInTemporary(
+            value BoundExpression,
+            parameterType TypeSymbol,
+            tempName string
+        ) BoundExpression {
+            // The slot determines the temporary's type after implicit reference conversions.
+            let tempType = if parameterType != TypeSymbol.Error {
+                parameterType
+            } else {
+                value.Type
+            }
+            let temp = LocalVariableSymbol(tempName, isReadOnly: true, type: tempType)
+            let spill = BoundBlockExpression(
+                value.Syntax,
+                ImmutableArray.Create[BoundStatement](BoundVariableDeclaration(value.Syntax, temp, value)),
+                BoundVariableExpression(value.Syntax, temp)
+            )
+            return BoundAddressOfExpression(value.Syntax, spill, unmanaged: false, isReadOnly: true)
+        }
+
         // ----- Pure static helpers (no instance state) -----
         /// Issue #327/#321: appends synthesized default-value arguments for any
         /// trailing optional parameters the call site omitted.
@@ -4881,11 +4887,19 @@ internal class ConversionClassifier {
         /// @param suppliedArguments Bound arguments mapped to the leading
         /// parameters.
         /// @param parameters The resolved method's full parameter list.
+        /// @param method The resolved method, when available.
+        /// @param receiverType The symbolic receiver type.
+        /// @param symbolicMethodTypeArgs The real method type arguments.
+        /// @param parameterTypeOverrides Constructor parameter types recovered from symbolic type arguments.
         /// @returns The argument array padded to the parameter count with
         /// defaults.
         func AppendOmittedOptionalArguments(
             suppliedArguments ImmutableArray[BoundExpression],
-            parameters[]ParameterInfo
+            parameters[]ParameterInfo,
+            method MethodInfo? = nil,
+            receiverType TypeSymbol? = nil,
+            symbolicMethodTypeArgs ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?]),
+            parameterTypeOverrides IReadOnlyDictionary[int32, TypeSymbol]? = nil
         ) ImmutableArray[BoundExpression] {
             if suppliedArguments.Length >= parameters.Length {
                 return suppliedArguments
@@ -4893,7 +4907,17 @@ internal class ConversionClassifier {
             let builder = ImmutableArray.CreateBuilder[BoundExpression](parameters.Length)
             builder.AddRange(suppliedArguments)
             for var i = suppliedArguments.Length; i < parameters.Length; i++ {
-                builder.Add(CreateOptionalDefaultArgument(parameters[i]))
+                var parameterType TypeSymbol? = nil
+                parameterTypeOverrides?.TryGetValue(i, out parameterType)
+                builder.Add(
+                    CreateOptionalDefaultArgument(
+                        parameters[i],
+                        method,
+                        receiverType,
+                        symbolicMethodTypeArgs,
+                        parameterType
+                    )
+                )
             }
             return builder.MoveToImmutable()
         }
@@ -4905,12 +4929,52 @@ internal class ConversionClassifier {
         /// `CancellationToken cancellationToken = default`) become the zero
         /// value of the parameter type.
         /// @param parameter The omitted optional parameter.
+        /// @param method The resolved method, when available.
+        /// @param receiverType The symbolic receiver type.
+        /// @param symbolicMethodTypeArgs The real method type arguments.
+        /// @param parameterType The recovered parameter value type, when available.
         /// @returns The bound default-value argument.
-        func CreateOptionalDefaultArgument(parameter ParameterInfo) BoundExpression {
-            let typeSymbol = ClrNullability.GetParameterTypeSymbol(parameter)
+        func CreateOptionalDefaultArgument(
+            parameter ParameterInfo,
+            method MethodInfo? = nil,
+            receiverType TypeSymbol? = nil,
+            symbolicMethodTypeArgs ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?]),
+            parameterType TypeSymbol? = nil
+        ) BoundExpression {
+            let typeSymbol = parameterType ??
+                (
+                if IsImplicitInClrParameter(parameter) {
+                    GetImplicitInClrPointeeType(
+                        parameter,
+                        parameter.Position,
+                        method,
+                        receiverType,
+                        symbolicMethodTypeArgs
+                    )
+                } else {
+                    ClrNullability.GetParameterTypeSymbol(parameter)
+                }
+            )
+            let value = CreateOptionalDefaultValueArgument(parameter, typeSymbol)
+            return if IsImplicitInClrParameter(parameter) {
+                CreateImplicitInTemporary(value, typeSymbol, "${ImplicitInTempPrefix}Default${parameter.Position}>")
+            } else {
+                value
+            }
+        }
+
+        private func CreateOptionalDefaultValueArgument(
+            parameter ParameterInfo,
+            typeSymbol TypeSymbol
+        ) BoundExpression {
             let valueTypeSymbol = GetOptionalDefaultValueType(typeSymbol)
-            let valueClrType = NullableLifting.GetValueTypeNullableUnderlyingClr(parameter.ParameterType) ??
+            let parameterValueType = if parameter.ParameterType.IsByRef {
+                parameter.ParameterType.GetElementType()!!
+            } else {
                 parameter.ParameterType
+            }
+            let valueClrType = NullableLifting.GetValueTypeNullableUnderlyingClr(parameterValueType) ??
+                parameterValueType
             if TryGetDateTimeParameterDefault(parameter, valueClrType, out var dateTime) {
                 let constructor ConstructorInfo? = valueClrType.GetConstructors().FirstOrDefault(
                     (candidate ConstructorInfo) -> candidate.GetParameters() is [
@@ -4939,8 +5003,9 @@ internal class ConversionClassifier {
             }
             if TryGetConstantParameterDefault(parameter, out var constant) {
                 let literal = BoundLiteralExpression(nil, constant)
+                // Metadata constants retain their value type; object slots therefore require boxing.
                 return LiftOptionalDefaultValue(
-                    if valueClrType.IsEnum {
+                    if literal.Type != valueTypeSymbol {
                         cast[BoundExpression](BoundConversionExpression(nil, valueTypeSymbol, literal))
                     } else {
                         cast[BoundExpression](literal)
@@ -6729,12 +6794,8 @@ internal class ConversionClassifier {
 
         // Issue #1182: extracts the constant default for a value-type `default(T)` /
         // zero-value `T()` optional default. The written `default(T)` must denote the
-        // parameter's own type. Primitive value types (numeric / bool / char) are
-        // recorded as their typed zero — identical to `= 0` — so a CLR Constant row is
-        // emitted; arbitrary value types (e.g. TimeSpan, user structs) and Nullable<T>
-        // record <see langword="null"/>, which the call site materializes as the
-        // all-zero value via a BoundDefaultExpression and the metadata encodes as a
-        // nullref Constant (matching C# `T x = default`).
+        // parameter's own type. Primitive and enum defaults record typed zero; decimal zero uses DecimalConstantAttribute.
+        // Non-simple structs use nullref metadata only for non-nullable parameters.
         private func TryExtractValueTypeDefaultConstant(
             def BoundDefaultExpression,
             parameterType TypeSymbol,
@@ -6753,25 +6814,39 @@ internal class ConversionClassifier {
             } else {
                 def.Type
             }
+            let defaultIsNullable = NullableLifting.IsAnyValueTypeNullable(def.Type as NullableTypeSymbol)
+            let parameterIsNullable = NullableLifting.IsAnyValueTypeNullable(parameterType as NullableTypeSymbol)
             // The written `default(T)` / `T()` must denote the parameter's own type;
             // no implicit conversion of a value-type default is supported.
-            if !DefaultTypeMatchesParameter(defUnderlying, paramUnderlying) {
+            if !DefaultTypeMatchesParameter(defUnderlying, paramUnderlying) ||
+                (defaultIsNullable && !parameterIsNullable) {
                 reason = "the default value 'default(${def.Type?.Name})' does not match the parameter type '${parameterType.Name}'."
                 return false
             }
-            // Nullable<T> or reference-type parameter: the default is the missing value
-            // (nil), already representable as a nullref Constant and materialized as nil.
-            if parameterType is NullableTypeSymbol || !IsValueTypeForDefault(paramUnderlying) {
+            // Only default(T?) is missing. default(T) must retain its value when lifted to T?.
+            if defaultIsNullable || !IsValueTypeForDefault(paramUnderlying) {
                 value = nil
                 return true
             }
             // Primitive value types are CLR Constant-table representable as their typed
             // zero — emit the same constant as the `= 0` form.
-            if TryGetPrimitiveZero(paramUnderlying, out var primitiveZero) {
+            if TryGetPrimitiveZero(paramUnderlying, out var primitiveZero) ||
+                (
+                TryGetIntegralMetadataTarget(paramUnderlying, out var integralType) &&
+                    TryGetPrimitiveZero(integralType, out primitiveZero)
+            ) {
                 value = primitiveZero
                 return true
             }
-            // Arbitrary value type (TimeSpan, user struct, enum, tuple): materialized at
+            if paramUnderlying.ClrType?.FullName == "System.Decimal" {
+                value = decimal.Zero
+                return true
+            }
+            if parameterIsNullable {
+                reason = "a non-null value-type default for '${parameterType.Name}' is not representable in CLR parameter metadata."
+                return false
+            }
+            // Arbitrary value type (TimeSpan, user struct, tuple): materialized at
             // the call site via BoundDefaultExpression; metadata Constant is nullref.
             value = nil
             return true
@@ -6796,18 +6871,9 @@ internal class ConversionClassifier {
             return string.Equals(defType.Name, paramType.Name, StringComparison.Ordinal)
         }
 
-        // Issue #1182: recognises value-type parameter symbols whose all-zero default is a
-        // valid optional default — including user `data struct` / enum / tuple symbols that
-        // carry no CLR backing type before emit.
-        private func IsValueTypeForDefault(type TypeSymbol) bool {
-            if type is StructSymbol s && !s.IsClass {
-                return true
-            }
-            if type is EnumSymbol || type is TupleTypeSymbol {
-                return true
-            }
-            return type?.ClrType is {IsValueType: true}
-        }
+        // Use the shared type-kind classifier for concrete values and constrained type parameters.
+        private func IsValueTypeForDefault(type TypeSymbol) bool ->
+        NullabilityImportRule.ClassifyArgument(type) == TypeArgumentKind.Value
 
         // Issue #1182: returns the typed CLR zero for a primitive value-type symbol so a
         // `default(T)` optional default emits the same CLR Constant row as `= 0`.

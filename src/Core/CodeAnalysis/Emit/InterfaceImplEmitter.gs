@@ -778,6 +778,7 @@ internal class InterfaceImplEmitter {
             }
             let bridgeRows = ParameterMetadataEmitter.AddSignatureRows(
                 this.emitCtx,
+                this.outer.memberRefs.GetTypeReference,
                 if bridge.IsSetter {
                     TypeSymbol.Void
                 } else {
@@ -981,6 +982,7 @@ internal class InterfaceImplEmitter {
         )
         let bridgeRows = ParameterMetadataEmitter.AddSignatureRows(
             this.emitCtx,
+            this.outer.memberRefs.GetTypeReference,
             TypeSymbol.Void,
             RefKind.None,
             ImmutableArray.Create(
@@ -1324,6 +1326,7 @@ internal class InterfaceImplEmitter {
         }
         let bridgeRows = ParameterMetadataEmitter.AddSignatureRows(
             this.emitCtx,
+            this.outer.memberRefs.GetTypeReference,
             returnTypeForMetadata,
             effectiveMethod.ReturnRefKind,
             effectiveMethod.EmittedParameters
@@ -1414,6 +1417,7 @@ internal class InterfaceImplEmitter {
         }
         let bridgeRows = ParameterMetadataEmitter.AddSignatureRows(
             this.emitCtx,
+            this.outer.memberRefs.GetTypeReference,
             if isSetter {
                 TypeSymbol.Void
             } else {
@@ -1495,6 +1499,7 @@ internal class InterfaceImplEmitter {
         )
         let bridgeRows = ParameterMetadataEmitter.AddSignatureRows(
             this.emitCtx,
+            this.outer.memberRefs.GetTypeReference,
             TypeSymbol.Void,
             RefKind.None,
             ImmutableArray.Create(ParameterSymbol("value", eventType))

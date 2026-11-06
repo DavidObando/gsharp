@@ -1713,7 +1713,10 @@ internal partial class ExpressionBinder {
                 let inheritedArguments = OverloadResolver.BuildOrderedCallArguments(
                     inheritedConvertedArgs,
                     inheritedDownstreamMapping,
-                    inheritedParameters
+                    inheritedParameters,
+                    method: best,
+                    receiverType: receiver.Type,
+                    symbolicMethodTypeArgs: inheritedTypeArgSymbolsForCall
                 )
                 let refKinds = ComputeArgumentRefKinds(inheritedParameters)
                 overloads.ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location)
@@ -2323,7 +2326,14 @@ internal partial class ExpressionBinder {
         // Issue #327 / #343: re-order arguments into parameter positions when
         // named arguments were used; otherwise fall through to the existing
         // trailing-optional fill.
-        bound = OverloadResolver.BuildOrderedCallArguments(bound, downstreamMapping, parameters)
+        bound = OverloadResolver.BuildOrderedCallArguments(
+            bound,
+            downstreamMapping,
+            parameters,
+            method: best,
+            receiverType: receiver.Type,
+            symbolicMethodTypeArgs: extensionTypeArgSymbolsForCall
+        )
         let refKinds = ComputeArgumentRefKinds(parameters)
         overloads.ValidateRefArguments(bound, refKinds, methodName, ce.Location)
         // ADR-0174 D4: an imported `[Suspending]` extension — the batch surface
@@ -2437,7 +2447,14 @@ internal partial class ExpressionBinder {
                 call,
                 receiverArgCount,
                 parameterMapping,
-                symbolicMethodTypeArgs
+                symbolicMethodTypeArgs,
+                method: method,
+                receiverType: if hasConversionReceiverTypeOverride {
+                    conversionReceiverType
+                } else {
+                    receiverType
+                },
+                parameterTypeOverrides: parameterTypeOverrides
             )
             parameterMapping = default(ImmutableArray[int32])
         }
@@ -4035,7 +4052,9 @@ internal partial class ExpressionBinder {
                 ce,
                 parameterMapping: downstreamMapping,
                 symbolicMethodTypeArgs: symbolicMethodTypeArgs,
-                paramsElementTypeOverride: symbolicParamsElement
+                paramsElementTypeOverride: symbolicParamsElement,
+                method: method,
+                receiverType: constraintType
             )
             downstreamMapping = default(ImmutableArray[int32])
         }
@@ -4092,7 +4111,14 @@ internal partial class ExpressionBinder {
                 expandedArgumentLocations
             )
         }
-        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, downstreamMapping, parameters)
+        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(
+            arguments,
+            downstreamMapping,
+            parameters,
+            method: method,
+            receiverType: constraintType,
+            symbolicMethodTypeArgs: symbolicMethodTypeArgs
+        )
         if resolution.IsExpanded {
             orderedArgs = OverloadResolver.PreserveExpandedArgumentEvaluationOrder(
                 orderedArgs,
@@ -4285,7 +4311,13 @@ internal partial class ExpressionBinder {
             method: method,
             receiverType: receiver.Type
         )
-        let orderedArgs = OverloadResolver.BuildOrderedCallArguments(convertedArgs, mapping, parameters)
+        let orderedArgs = OverloadResolver.BuildOrderedCallArguments(
+            convertedArgs,
+            mapping,
+            parameters,
+            method: method,
+            receiverType: receiver.Type
+        )
         let refKinds = ComputeArgumentRefKinds(parameters)
         result = BoundImportedInstanceCallExpression(
             ce,
@@ -4387,7 +4419,13 @@ internal partial class ExpressionBinder {
             method: method,
             receiverType: receiver.Type
         )
-        let orderedArgs = OverloadResolver.BuildOrderedCallArguments(convertedArgs, mapping, parameters)
+        let orderedArgs = OverloadResolver.BuildOrderedCallArguments(
+            convertedArgs,
+            mapping,
+            parameters,
+            method: method,
+            receiverType: receiver.Type
+        )
         let refKinds = ComputeArgumentRefKinds(parameters)
         result = BoundImportedInstanceCallExpression(
             ce,
