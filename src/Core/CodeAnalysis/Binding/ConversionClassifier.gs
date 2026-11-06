@@ -6820,7 +6820,8 @@ internal class ConversionClassifier {
                 return false
             }
             // Only default(T?) is missing. default(T) must retain its value when lifted to T?.
-            if NullableLifting.IsAnyValueTypeNullable(def.Type) || !IsValueTypeForDefault(paramUnderlying) {
+            if NullableLifting.IsAnyValueTypeNullable(def.Type as NullableTypeSymbol) ||
+                !IsValueTypeForDefault(paramUnderlying) {
                 value = nil
                 return true
             }
@@ -6838,7 +6839,7 @@ internal class ConversionClassifier {
                 value = decimal.Zero
                 return true
             }
-            if NullableLifting.IsAnyValueTypeNullable(parameterType) {
+            if NullableLifting.IsAnyValueTypeNullable(parameterType as NullableTypeSymbol) {
                 reason = "a non-null value-type default for '${parameterType.Name}' is not representable in CLR parameter metadata."
                 return false
             }
