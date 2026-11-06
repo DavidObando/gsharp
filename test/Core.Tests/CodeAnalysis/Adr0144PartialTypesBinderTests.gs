@@ -908,6 +908,77 @@ class Box {
         Assert.DoesNotContain(diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "GS0480")
     }
 
+    @Fact
+    func BindingTheSameSyntaxTreeTwice_WithNestedPartialTypes_DoesNotMutateSyntaxTree_Issue4399() {
+        let tree = SyntaxTree.Parse(SourceText.From(`package App
+import System
+
+class Outer {
+    partial class Inner {
+        var a int32 = 10
+    }
+    partial class Inner {
+        func Sum() int32 -> a + 5
+    }
+    class Mid {
+        partial struct Leaf {
+            var x int32
+        }
+        partial struct Leaf {
+            func Value() int32 -> x + 1
+        }
+    }
+}
+
+let inner = Outer.Inner()
+var leaf = Outer.Mid.Leaf{x: 6}
+Console.WriteLine(inner.Sum() + leaf.Value())
+`, "NestedPartials.gs"))
+        let outer = Assert.Single(tree.Root.Members.OfType[StructDeclarationSyntax]())
+        Assert.Equal(3, outer.NestedTypes.Length)
+        let firstInner = outer.NestedTypes[0]
+        let secondInner = outer.NestedTypes[1]
+        let mid = cast[StructDeclarationSyntax](outer.NestedTypes[2])
+        Assert.Equal(2, mid.NestedTypes.Length)
+        let firstLeaf = mid.NestedTypes[0]
+        let secondLeaf = mid.NestedTypes[1]
+
+        let firstOutput = CompileLoadInvokeCaptureStdout([]SyntaxTree{tree}, "Issue4399-Bind1")
+        let secondOutput = CompileLoadInvokeCaptureStdout([]SyntaxTree{tree}, "Issue4399-Bind2")
+        Assert.Contains("22", firstOutput)
+        Assert.Contains("22", secondOutput)
+
+        // The parsed syntax tree must remain untouched across compilations.
+        Assert.Equal(3, outer.NestedTypes.Length)
+        Assert.Same(firstInner, outer.NestedTypes[0])
+        Assert.Same(secondInner, outer.NestedTypes[1])
+        Assert.Same(mid, outer.NestedTypes[2])
+        Assert.Equal(2, mid.NestedTypes.Length)
+        Assert.Same(firstLeaf, mid.NestedTypes[0])
+        Assert.Same(secondLeaf, mid.NestedTypes[1])
+    }
+
+    @Fact
+    func BindingTheSameSyntaxTreeTwice_NestedPartialMissingModifier_ReportsGS0475BothTimes_Issue4399() {
+        let tree = SyntaxTree.Parse(SourceText.From(`package App
+
+class Outer {
+    partial class Inner {
+        var a int32
+    }
+    class Inner {
+        var b int32
+    }
+}
+`, "NestedMissingPartial.gs"))
+        using let firstStream = MemoryStream()
+        let firstResult = Compilation(tree){IsLibrary = true}.Emit(firstStream)
+        using let secondStream = MemoryStream()
+        let secondResult = Compilation(tree){IsLibrary = true}.Emit(secondStream)
+        Assert.Contains(firstResult.Diagnostics, (d Diagnostic) -> d.Id == "GS0475")
+        Assert.Contains(secondResult.Diagnostics, (d Diagnostic) -> d.Id == "GS0475")
+    }
+
     shared {
         // ─────────────────────────────────────────────────────────────────────────
         // Helpers

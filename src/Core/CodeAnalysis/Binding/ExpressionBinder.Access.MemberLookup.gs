@@ -2260,6 +2260,7 @@ internal partial class ExpressionBinder {
         if NativeSliceTypes.TryGetElement(boundReceiver.Type, out _, out _) &&
             compoundOperatorToken != nil &&
             compoundRhsSyntax != nil {
+            ApplySubExpressionNarrowingEffects(remainingChain, boundReceiver)
             return BindNativeSliceCompoundAssignment(
                 boundReceiver,
                 indexSyntax,
@@ -2295,6 +2296,7 @@ internal partial class ExpressionBinder {
                 if !TryBindSystemIndexValue(indexSyntax, out var boundSystemIndex) {
                     return BoundErrorExpression(nil)
                 }
+                ApplySubExpressionNarrowingEffects(indexSyntax, boundSystemIndex!!)
                 let indexLocal = DeclareRangeTemp("index", boundSystemIndex!!.Type, boundSystemIndex!!, statements)
                 sharedIndex = BoundVariableExpression(nil, indexLocal)
             }
@@ -2821,14 +2823,8 @@ internal partial class ExpressionBinder {
                 elementType
             )
         }
-        if NativeSliceTypes.TryGetElement(targetType, out var nativeElement, out _) {
-            return BindNativeSliceAssignment(
-                target,
-                indexSyntax,
-                BindValue(nativeElement),
-                diagnosticLocation,
-                boundIndexOverride
-            )
+        if NativeSliceTypes.TryGetElement(targetType, out _, out _) {
+            return BindNativeSliceAssignment(target, indexSyntax, BindValue, diagnosticLocation, boundIndexOverride)
         }
         if boundIndexOverride != nil && ClrTypeUtilities.AreSame(boundIndexOverride.Type?.ClrType, typeof(Index)) {
             return BindSystemIndexAssignment(
@@ -2843,6 +2839,7 @@ internal partial class ExpressionBinder {
             )
         }
         if boundIndexOverride == nil && TryBindSystemIndexValue(indexSyntax, out var systemIndex) {
+            ApplySubExpressionNarrowingEffects(indexSyntax, systemIndex!!)
             return BindSystemIndexAssignment(
                 variable,
                 target,

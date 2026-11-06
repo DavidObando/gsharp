@@ -716,12 +716,11 @@ internal shared class PartialTypeMerger {
         let merged = MergePartialNestedTypes(node.NestedTypes, diagnostics)
         // ImmutableArray<T>.Equals compares the backing-array reference, so this
         // is true only when MergePartialNestedTypes returned the same instance
-        // (nothing merged) — assign (and invalidate the cached span) only on a
-        // real change.
-        if !merged.Equals(node.NestedTypes) {
-            node.NestedTypes = merged
+        // (nothing merged). Never mutate the parsed node in place (issue #4399).
+        if merged.Equals(node.NestedTypes) {
+            return node
         }
-        return node
+        return node.WithMemberLists(node.Methods, node.SharedBlock, merged)
     }
 
     /// Merges the `partial` nested struct/interface declarations within a
@@ -762,13 +761,26 @@ internal shared class PartialTypeMerger {
         }
         // No nested partial group to merge at this level — but a lone nested
         // struct may still contain its OWN nested partials, so recurse into every
-        // nested struct (NormalizeNestedTypes mutates it in place) and return the
-        // same array instance so the caller skips rebuilding.
+        // nested struct and rebuild only when a child returned a copy (issue #4399).
         if mergedStructByName.Count == 0 && mergedInterfaceByName.Count == 0 {
-            for s in nested.OfType[StructDeclarationSyntax]() {
-                NormalizeNestedTypes(s, diagnostics)
+            var rebuilt ImmutableArray[MemberSyntax].Builder? = nil
+            for var i = 0; i < nested.Length; i++ {
+                if nested[i] is not StructDeclarationSyntax nestedStruct {
+                    rebuilt?.Add(nested[i])
+                    continue
+                }
+                let normalized = NormalizeNestedTypes(nestedStruct, diagnostics)
+                if rebuilt == nil && !object.ReferenceEquals(normalized, nestedStruct) {
+                    rebuilt = ImmutableArray.CreateBuilder[MemberSyntax](nested.Length)
+                    rebuilt.AddRange(nested, i)
+                }
+                rebuilt?.Add(normalized)
             }
-            return nested
+            return if rebuilt == nil {
+                nested
+            } else {
+                rebuilt.MoveToImmutable()
+            }
         }
         let emittedStruct = HashSet[(Name string, Arity int32)]()
         let emittedInterface = HashSet[(Name string, Arity int32)]()
