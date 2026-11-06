@@ -819,20 +819,33 @@ class ImportedClassSymbol : Symbol {
             return nested != nil &&
                 (
                 nested.IsNestedPublic ||
-                    (nested.IsNestedAssembly && References?.CanAccessInternalMembers(nested.Assembly) == true)
+                    (
+                    (nested.IsNestedAssembly || nested.IsNestedFamORAssem) && References?.CanAccessInternalMembers(
+                        nested.Assembly
+                    ) == true
+                )
             )
         } catch (ex Exception) when ClrTypeUtilities.IsMetadataLoadFailure(ex) {
             return false
         }
     }
 
-    private func IsVisibleToCurrentCompilation(method MethodBase) bool -> method.IsPublic ||
-        (method.IsAssembly && References?.CanAccessInternalMembers(method.DeclaringType?.Assembly) == true) ||
-        ((method.IsFamily || method.IsFamilyOrAssembly) && IsFamilyAccessible(method.DeclaringType))
+    private func IsVisibleToCurrentCompilation(method MethodBase) bool {
+        let includeInternal = References?.CanAccessInternalMembers(method.DeclaringType?.Assembly) == true
+        return ClrMemberVisibility.IsVisible(method, includeInternal) ||
+            (
+            ClrMemberVisibility.IsVisibleFromDerived(method, includeInternal) &&
+                IsFamilyAccessible(method.DeclaringType)
+        )
+    }
 
-    private func IsVisibleToCurrentCompilation(field FieldInfo) bool -> field.IsPublic ||
-        (field.IsAssembly && References?.CanAccessInternalMembers(field.DeclaringType?.Assembly) == true) ||
-        ((field.IsFamily || field.IsFamilyOrAssembly) && IsFamilyAccessible(field.DeclaringType))
+    private func IsVisibleToCurrentCompilation(field FieldInfo) bool {
+        let includeInternal = References?.CanAccessInternalMembers(field.DeclaringType?.Assembly) == true
+        return ClrMemberVisibility.IsVisible(field, includeInternal) ||
+            (
+            ClrMemberVisibility.IsVisibleFromDerived(field, includeInternal) && IsFamilyAccessible(field.DeclaringType)
+        )
+    }
 
     private func IsVisibleToCurrentCompilation(property PropertyInfo) bool {
         let getter MethodInfo? = property.GetMethod

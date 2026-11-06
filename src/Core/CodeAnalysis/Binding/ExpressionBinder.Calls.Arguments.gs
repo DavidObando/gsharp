@@ -965,7 +965,7 @@ internal partial class ExpressionBinder {
         // precedence used by the read path in BindAccessorStep (properties
         // first, fields fallback). Indexer properties (those with parameters)
         // are not member-style invocable, so skip them.
-        let fromDerivedType = IsCurrentThisReceiver(receiver)
+        let fromDerivedType = IsCurrentThisReceiver(receiver) || IsFamilyAccessibleClrMember(clrType, receiver)
         var member MemberInfo? = if fromDerivedType {
             ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrType, methodName, CanAccessInternalsOf)
         } else {
@@ -1606,10 +1606,17 @@ internal partial class ExpressionBinder {
                 // diagnostic G# already uses for a protected member accessed
                 // from outside its declaring/derived type, instead of
                 // silently binding it.
-                if !allowProtectedInherited &&
+                if !(
+                    allowProtectedInherited &&
+                        (
+                        IsCurrentThisReceiver(receiver) ||
+                            IsFamilyAccessibleClrMember(best.DeclaringType ?? importedBaseClr, receiver)
+                    )
+                ) &&
                     !nonVirtualBaseCall &&
-                    !best.IsPublic &&
-                    (best.IsFamily || best.IsFamilyOrAssembly || best.IsFamilyAndAssembly) {
+                    !ClrMemberVisibility.IsVisible(best, CanAccessInternalsOf(best.DeclaringType)) &&
+                    ClrMemberVisibility
+                    .IsVisibleFromDerived(best, CanAccessInternalsOf(best.DeclaringType)) {
                     Diagnostics.ReportProtectedMemberInaccessible(
                         ce.Identifier.Location,
                         methodName,

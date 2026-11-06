@@ -2085,17 +2085,21 @@ internal partial class ExpressionBinder {
                 )
             )
         }
-        return BuildNarrowedVariableRead(variable, syntax.IdentifierToken.Location)
+        return BuildNarrowedVariableRead(variable, syntax.IdentifierToken.Location, syntax)
     }
 
-    private func BuildNarrowedVariableRead(variable VariableSymbol, location TextLocation? = nil) BoundExpression {
+    private func BuildNarrowedVariableRead(
+        variable VariableSymbol,
+        location TextLocation? = nil,
+        syntax SyntaxNode? = nil
+    ) BoundExpression {
         let makeNarrowedVariable(TypeSymbol) -> BoundExpression = (narrowedType TypeSymbol) -> BoundVariableExpression(
-            nil,
+            syntax,
             variable,
             narrowedType
         )
         return BuildNarrowedRead(
-            BoundVariableExpression(nil, variable),
+            BoundVariableExpression(syntax, variable),
             variable.Type,
             TryGetNarrowedType(variable, location),
             makeNarrowedVariable
@@ -2686,7 +2690,7 @@ internal partial class ExpressionBinder {
             name,
             BindingFlags.Public | BindingFlags.Instance
         )
-        if property != nil || !CanAccessInternalsOf(clrReceiverType) {
+        if property != nil {
             return property
         }
         let candidate = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
@@ -2694,7 +2698,7 @@ internal partial class ExpressionBinder {
             name,
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
         )
-        return if ClrMemberVisibility.IsVisible(candidate, includeInternal: true) {
+        return if ClrMemberVisibility.IsVisible(candidate, CanAccessInternalsOf(candidate?.DeclaringType)) {
             candidate
         } else {
             default(PropertyInfo?)
@@ -2739,7 +2743,7 @@ internal partial class ExpressionBinder {
             name,
             BindingFlags.Public | BindingFlags.Instance
         )
-        if field != nil || !CanAccessInternalsOf(clrReceiverType) {
+        if field != nil {
             return field
         }
         let candidate = ClrTypeUtilities.SafeGetFieldIncludingInterfaces(
@@ -2747,7 +2751,7 @@ internal partial class ExpressionBinder {
             name,
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
         )
-        return if ClrMemberVisibility.IsVisible(candidate, includeInternal: true) {
+        return if ClrMemberVisibility.IsVisible(candidate, CanAccessInternalsOf(candidate?.DeclaringType)) {
             candidate
         } else {
             default(FieldInfo?)
@@ -3258,6 +3262,9 @@ internal partial class ExpressionBinder {
     /// class derives from an imported type.
     /// @returns The imported CLR base, or `null`.
     internal func GetFamilyAccessBase() Type? {
+        if function != nil && AccessibilityChecker.NormalizeAccessContext(function) == nil {
+            return nil
+        }
         let current = function
         let enclosing TypeSymbol? = current?.ReceiverType ??
             current?.StaticOwnerType ??
@@ -3280,6 +3287,176 @@ internal partial class ExpressionBinder {
     internal func WithFamilyAccess(
         classSymbol ImportedClassSymbol
     ) ImportedClassSymbol -> classSymbol.WithFamilyAccessBase(GetFamilyAccessBase())
+
+    /// Issue #4394 / #4463: whether the current class may reach an imported
+    /// `protected` member declared on [`declaringType`](paramref) through
+    /// [`receiver`](paramref): an enclosing class derives from the declaring
+    /// type and, for an instance member, the receiver is of that enclosing
+    /// class (or a class derived from it), the C# CS1540 rule.
+    private func IsFamilyAccessibleClrMember(declaringType Type?, receiver BoundExpression?) bool {
+        if declaringType == nil || (function != nil && AccessibilityChecker.NormalizeAccessContext(function) == nil) {
+            return false
+        }
+        let current = function
+        let start TypeSymbol? = current?.ReceiverType ??
+            current?.StaticOwnerType ??
+            current?.LexicalEnclosingType ??
+            GetEffectiveThisParameter()?.Type
+        for var type TypeSymbol? = start; type != nil; type = type!!.ContainingType {
+            if type is not StructSymbol{IsClass: true} enclosingClass ||
+                GetInheritedClrBaseType(enclosingClass) is not{} familyBase ||
+                !IsSameOrDerivedClrType(familyBase, declaringType) {
+                continue
+            }
+            if receiver == nil || AccessibilityChecker.IsReceiverWithinClass(receiver.Type, enclosingClass) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func CanReportProtectedClrInstanceAccess(declaringType Type?, receiver BoundExpression?) bool ->
+    receiver?.Type is StructSymbol || IsFamilyAccessibleClrMember(declaringType, receiver: nil)
+
+    private func TryReportProtectedClrInstanceDataMemberRead(
+        clrReceiverType Type?,
+        memberName string,
+        receiver BoundExpression?,
+        location TextLocation
+    ) bool {
+        if clrReceiverType == nil {
+            return false
+        }
+        let clrProp PropertyInfo? = ClrTypeUtilities.SafeGetInheritedInstanceProperty(
+            clrReceiverType,
+            memberName,
+            CanAccessInternalsOf
+        )
+        if clrProp != nil {
+            if GetVisibleGetter(clrProp, fromDerivedType: true) != nil &&
+                GetVisibleGetter(clrProp) == nil &&
+                CanReportProtectedClrInstanceAccess(clrProp.DeclaringType, receiver) &&
+                !IsFamilyAccessibleClrMember(clrProp.DeclaringType, receiver) {
+                Diagnostics.ReportProtectedMemberInaccessible(
+                    location,
+                    memberName,
+                    ClrTypeDisplayName(clrProp.DeclaringType ?? clrReceiverType)
+                )
+                return true
+            }
+            return false
+        }
+        let clrFld FieldInfo? = ClrTypeUtilities.SafeGetInheritedInstanceField(
+            clrReceiverType,
+            memberName,
+            CanAccessInternalsOf
+        )
+        if clrFld != nil && !ClrMemberVisibility.IsVisible(clrFld, CanAccessInternalsOf(clrFld.DeclaringType)) &&
+            CanReportProtectedClrInstanceAccess(clrFld.DeclaringType, receiver) &&
+            !IsFamilyAccessibleClrMember(clrFld.DeclaringType, receiver) {
+            Diagnostics.ReportProtectedMemberInaccessible(
+                location,
+                memberName,
+                ClrTypeDisplayName(clrFld.DeclaringType ?? clrReceiverType)
+            )
+            return true
+        }
+        return false
+    }
+
+    private func TryReportProtectedClrInstanceMemberWrite(
+        clrReceiverType Type?,
+        memberName string,
+        receiver BoundExpression?,
+        location TextLocation
+    ) bool {
+        if clrReceiverType == nil {
+            return false
+        }
+        let clrProp PropertyInfo? = ClrTypeUtilities.SafeGetInheritedInstanceProperty(
+            clrReceiverType,
+            memberName,
+            CanAccessInternalsOf
+        )
+        if clrProp != nil {
+            if GetVisibleSetter(clrProp) == nil &&
+                (GetVisibleSetter(clrProp, fromDerivedType: true) != nil || GetVisibleGetter(clrProp) == nil) &&
+                CanReportProtectedClrInstanceAccess(clrProp.DeclaringType, receiver) &&
+                !IsFamilyAccessibleClrMember(clrProp.DeclaringType, receiver) {
+                Diagnostics.ReportProtectedMemberInaccessible(
+                    location,
+                    memberName,
+                    ClrTypeDisplayName(clrProp.DeclaringType ?? clrReceiverType)
+                )
+                return true
+            }
+            return false
+        }
+        let clrFld FieldInfo? = ClrTypeUtilities.SafeGetInheritedInstanceField(
+            clrReceiverType,
+            memberName,
+            CanAccessInternalsOf
+        )
+        if clrFld != nil && !ClrMemberVisibility.IsVisible(clrFld, CanAccessInternalsOf(clrFld.DeclaringType)) &&
+            CanReportProtectedClrInstanceAccess(clrFld.DeclaringType, receiver) &&
+            !IsFamilyAccessibleClrMember(clrFld.DeclaringType, receiver) {
+            Diagnostics.ReportProtectedMemberInaccessible(
+                location,
+                memberName,
+                ClrTypeDisplayName(clrFld.DeclaringType ?? clrReceiverType)
+            )
+            return true
+        }
+        return false
+    }
+
+    private func TryReportProtectedClrInstanceMethodCall(
+        clrReceiverType Type?,
+        methodName string,
+        argumentCount int32,
+        publicCandidateCount int32,
+        location TextLocation
+    ) bool {
+        if clrReceiverType == nil {
+            return false
+        }
+        let protectedCandidates = CollectBaseClrMethodCandidates(clrReceiverType, methodName)
+        var firstProtected MethodInfo? = nil
+        for candidate in protectedCandidates {
+            if ClrMemberVisibility.IsVisible(candidate, CanAccessInternalsOf(candidate.DeclaringType)) ||
+                !IsFamilyAccessibleClrMember(candidate.DeclaringType, receiver: nil) {
+                continue
+            }
+            firstProtected ??= candidate
+            let parameters = candidate.GetParameters()
+            if argumentCount > parameters.Length {
+                continue
+            }
+            var requiredCount = 0
+            for var i = 0; i < parameters.Length; i++ {
+                if !parameters[i].IsOptional {
+                    requiredCount = i + 1
+                }
+            }
+            if argumentCount >= requiredCount {
+                Diagnostics.ReportProtectedMemberInaccessible(
+                    location,
+                    methodName,
+                    ClrTypeDisplayName(candidate.DeclaringType ?? clrReceiverType)
+                )
+                return true
+            }
+        }
+        if publicCandidateCount == 0 && firstProtected != nil {
+            Diagnostics.ReportProtectedMemberInaccessible(
+                location,
+                methodName,
+                ClrTypeDisplayName(firstProtected.DeclaringType ?? clrReceiverType)
+            )
+            return true
+        }
+        return false
+    }
 
     /// Requires a callable getter for a static property read through an
     /// imported class receiver: public, a friend assembly's internal, or
@@ -3585,19 +3762,32 @@ internal partial class ExpressionBinder {
         if declaringType == nil {
             return false
         }
-        let flags = BindingFlags.Public | (
-            if wantStatic {
-                BindingFlags.Static
-            } else {
-                BindingFlags.Instance
-            }
+        var includeInternal = CanAccessInternalsOf(declaringType)
+        for var ancestor Type? = declaringType.BaseType;
+            ancestor != nil &&
+            !includeInternal;
+            ancestor = ancestor?.BaseType {
+            includeInternal = CanAccessInternalsOf(ancestor)
+        }
+        let flags = ClrMemberVisibility.Widen(
+            BindingFlags.Public | (
+                if wantStatic {
+                    BindingFlags.Static
+                } else {
+                    BindingFlags.Instance
+                }
+            ),
+            includeInternal
         )
         let candidates = ImmutableArray.CreateBuilder[MethodInfo]()
         // Issue #529: use interface-aware method enumeration so that
         // methods declared on a base interface are included in the
         // method group for delegate conversions / member access.
         for method in ClrTypeUtilities.SafeGetMethodsIncludingInterfaces(declaringType, flags) {
-            if !ClrTypeUtilities.EmittedMemberNameMatches(method, name) {
+            if !ClrTypeUtilities.EmittedMemberNameMatches(method, name) || !ClrMemberVisibility.IsVisible(
+                method,
+                CanAccessInternalsOf(method.DeclaringType)
+            ) {
                 continue
             }
             // Open generic methods and special-name accessors (property/event
@@ -3607,6 +3797,23 @@ internal partial class ExpressionBinder {
                 continue
             }
             candidates.Add(method)
+        }
+        if !wantStatic {
+            for protectedCandidate in CollectBaseClrMethodCandidates(declaringType, name) {
+                if protectedCandidate.IsGenericMethodDefinition ||
+                    protectedCandidate.IsSpecialName ||
+                    (
+                    !ClrMemberVisibility.IsVisible(
+                        protectedCandidate,
+                        CanAccessInternalsOf(protectedCandidate.DeclaringType)
+                    ) &&
+                        !IsFamilyAccessibleClrMember(protectedCandidate.DeclaringType, receiver)
+                ) ||
+                    MemberLookup.HasSameSignature(candidates, protectedCandidate) {
+                    continue
+                }
+                candidates.Add(protectedCandidate)
+            }
         }
         if candidates.Count == 0 {
             return false

@@ -4384,7 +4384,8 @@ internal class ConversionClassifier {
                         resolvedPlan.Construction.ClrConstructor
                     } else {
                         default(ConstructorInfo?)
-                    }
+                    },
+                    targetType
                 )
                 if missingDeclarationShape {
                     Diagnostics.ReportNoApplicableOverload(

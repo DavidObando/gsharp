@@ -101,6 +101,61 @@ class Derived : Surface {
         }
     }
 
+    /// Issue #4463: imported `protected` instance fields, properties, methods,
+    /// and indexers are reachable through a receiver typed as the deriving
+    /// class or a subclass, and rejected with GS0379 through a receiver typed
+    /// as the imported base class or a sibling subclass.
+    @Theory
+    @InlineData("let v = r.ProtectedField")
+    @InlineData("r.ProtectedField = 7")
+    @InlineData("r.ProtectedField += 1")
+    @InlineData("let v = r.ProtectedProperty")
+    @InlineData("r.ProtectedProperty = 7")
+    @InlineData("r.ProtectedProperty += 1")
+    @InlineData("let v = r.ProtectedMethod()")
+    @InlineData("let v = r[1.5]")
+    @InlineData("r[1.5] = 7")
+    func ImportedProtectedInstanceMember_EnforcesReceiverRule_Issue4463(statement string) {
+        let directory = CreateOutputDirectory()
+        try {
+            let libraryPath = EmitCSharpLibrary(directory, LibraryAssemblyName, CSharpLibrarySource)
+            for allowedReceiver in[]string{"Derived", "SubDerived"} {
+                let okResult = CompileGSharp((`package ` + "$StrangerAssemblyName" + `
+import Issue3705.Library
+
+open class Derived : Surface {
+    func Probe(r ` + "$allowedReceiver" + `) {
+        ` + "$statement" + `
+    }
+}
+
+class SubDerived : Derived {
+}`), StrangerAssemblyName, libraryPath)
+                Assert.True(okResult.Success, "$allowedReceiver/$statement: ${Describe(okResult)}")
+            }
+            for rejectedReceiver in[]string{"Surface", "Sibling"} {
+                let badResult = CompileGSharp((`package ` + "$StrangerAssemblyName" + `
+import Issue3705.Library
+
+class Sibling : Surface {
+}
+
+class Derived : Surface {
+    func Probe(r ` + "$rejectedReceiver" + `) {
+        ` + "$statement" + `
+    }
+}`), StrangerAssemblyName, libraryPath)
+                Assert.False(badResult.Success, "$rejectedReceiver/$statement should fail")
+                Assert.Contains(
+                    badResult.Diagnostics,
+                    (d Issue3705MemberKindAccessibilityDifferentialTests.DiagnosticInfo) -> d.Id == "GS0379"
+                )
+            }
+        } finally {
+            DeleteOutputDirectory(directory)
+        }
+    }
+
     /// Friendship belongs to the member's declaring assembly, not the
     /// immediate imported base through which reflection found it.
     @Fact
@@ -114,35 +169,139 @@ public class Ancestor
 {
     internal int ValueField = 1;
     internal int ValueProperty => 2;
+    protected internal int ProtInternalMethod() => 4;
+}
+public record AncestorRecord(int A)
+{
+    protected internal int ProtInternalRecordProp { get; set; } = 5;
 }`)
             let neutralMiddle = EmitCSharpLibrary(
                 directory,
                 "Issue3705.NeutralMiddle",
-                "namespace Issue3705.NeutralMiddle;\npublic class Middle : Issue3705.FriendAncestor.Ancestor { }",
+                "namespace Issue3705.NeutralMiddle;\npublic class Middle : Issue3705.FriendAncestor.Ancestor { }\npublic record MiddleRecord(int A) : Issue3705.FriendAncestor.AncestorRecord(A);",
                 friendAncestor
             )
             let visible = CompileGSharp(`package Issue3705.Friend
+import System
 import Issue3705.NeutralMiddle
 class Derived : Middle {
     func Read() int32 -> this.ValueField + this.ValueProperty
+}
+func UnrelatedFriend(m Middle, r MiddleRecord) int32 {
+    let fn Func[int32] = m.ProtInternalMethod
+    return fn() + r.ProtInternalRecordProp
 }`, FriendAssemblyName, friendAncestor, neutralMiddle)
             Assert.True(visible.Success, Describe(visible))
+            let friendMiddleOverFriendAncestor = EmitCSharpLibrary(
+                directory,
+                "Issue3705.FriendMiddleOverFriendAncestor",
+                "using System.Runtime.CompilerServices;\n[assembly: InternalsVisibleTo(\"Issue3705.Friend\")]\nnamespace Issue3705.FriendMiddleOverFriendAncestor;\npublic class Middle : Issue3705.FriendAncestor.Ancestor { }",
+                friendAncestor
+            )
+            let bothFriendsVisible = CompileGSharp(`package Issue3705.Friend
+import Issue3705.FriendMiddleOverFriendAncestor
+func UnrelatedFriend(m Middle) int32 -> m.ProtInternalMethod()`, FriendAssemblyName, friendAncestor, friendMiddleOverFriendAncestor)
+            Assert.True(bothFriendsVisible.Success, Describe(bothFriendsVisible))
             let noFriendAncestor = EmitCSharpLibrary(directory, "Issue3705.NoFriendAncestor", `namespace Issue3705.NoFriendAncestor;
 public class Ancestor
 {
     internal int ValueField = 1;
     internal int ValueProperty => 2;
+    protected internal int ProtInternalField = 3;
+    protected internal int ProtInternalProperty { get; set; }
+    protected internal int ProtInternalMethod() => 4;
+    public event System.Action? ShadowedEvent;
+}
+public record AncestorRecord(int A)
+{
+    protected internal int ProtInternalRecordProp { get; set; } = 5;
+    protected internal int ProtInternalRecordMethod() => 6;
 }`)
             let friendlyMiddle = EmitCSharpLibrary(directory, "Issue3705.FriendlyMiddle", `using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Issue3705.Friend")]
 namespace Issue3705.FriendlyMiddle;
-public class Middle : Issue3705.NoFriendAncestor.Ancestor { }`, noFriendAncestor)
+public class Middle : Issue3705.NoFriendAncestor.Ancestor
+{
+    protected new event System.Action? ShadowedEvent;
+}
+public record MiddleRecord(int A) : Issue3705.NoFriendAncestor.AncestorRecord(A);`, noFriendAncestor)
+            let publicAncestorEventVisible = CompileGSharp(`package Issue3705.Friend
+import Issue3705.FriendlyMiddle
+func SubscribePublicAncestorEvent(m Middle) {
+    m.ShadowedEvent += () -> { }
+}`, FriendAssemblyName, noFriendAncestor, friendlyMiddle)
+            Assert.True(publicAncestorEventVisible.Success, Describe(publicAncestorEventVisible))
             let hidden = CompileGSharp(`package Issue3705.Friend
 import Issue3705.FriendlyMiddle
 class Derived : Middle {
     func Read() int32 -> this.ValueField + this.ValueProperty
 }`, FriendAssemblyName, noFriendAncestor, friendlyMiddle)
             Assert.False(hidden.Success)
+            for nonDerivedAccess in[]string{
+                "let v = m.ProtInternalField",
+                "m.ProtInternalProperty = 7",
+                "let v = m.ProtInternalMethod()",
+                "let v = r.ProtInternalRecordProp",
+                "r.ProtInternalRecordProp = 8",
+                "let v = r.ProtInternalRecordMethod()"
+            } {
+                let unrelatedFriend = CompileGSharp((`package ` + "$FriendAssemblyName" + `
+import Issue3705.FriendlyMiddle
+func Run(m Middle, r MiddleRecord) {
+    ` + "$nonDerivedAccess" + `
+}`), FriendAssemblyName, noFriendAncestor, friendlyMiddle)
+                Assert.False(unrelatedFriend.Success, "$nonDerivedAccess must not bind through FriendlyMiddle")
+            }
+        } finally {
+            DeleteOutputDirectory(directory)
+        }
+    }
+
+    @Fact
+    func ImportedIndexerAndRefIndexer_EnforceReceiverRule_AndInArgumentDA() {
+        let directory = CreateOutputDirectory()
+        try {
+            let lib = EmitCSharpLibrary(directory, "Issue4463.IdxLib", `namespace Issue4463.IdxLib;
+public class IndexedBase
+{
+    private int _storage = 10;
+    public int this[object key] => 1;
+    protected int this[string key] => 2;
+    protected ref int this[int index] => ref _storage;
+    public int this[in long key] => (int)key;
+}`)
+            // Unrelated caller indexing a G# subclass with a string uses the
+            // public `this[object]` overload rather than failing on `protected this[string]`.
+            // Inside the subclass, `d[0] = 7` writes through the `protected ref int` indexer.
+            let okResult = CompileGSharp(`package Consumer
+import Issue4463.IdxLib
+
+class Sub : IndexedBase {
+    func Mutate(d Sub) int32 {
+        d[0] = 7
+        return d["hi"] + d[0]
+    }
+}
+
+func Outside(s Sub) int32 -> s["hi"]`, "Consumer", lib)
+            Assert.True(okResult.Success, Describe(okResult))
+
+            // Unassigned `out` parameter passed to an imported `in` indexer reports GS0239.
+            for expr in[]string{"b[in x]", "b[x]"} {
+                let badIn = CompileGSharp((`package Consumer
+import Issue4463.IdxLib
+
+func Bad(b IndexedBase, out x int64) int32 {
+    let v = ` + "$expr" + `
+    x = 1
+    return v
+}`), "Consumer", lib)
+                Assert.False(badIn.Success, "$expr should report GS0239")
+                Assert.Contains(
+                    badIn.Diagnostics,
+                    (d Issue3705MemberKindAccessibilityDifferentialTests.DiagnosticInfo) -> d.Id == "GS0239"
+                )
+            }
         } finally {
             DeleteOutputDirectory(directory)
         }
@@ -185,6 +344,8 @@ public class Surface
     internal event Action InternalEvent;
     private event Action PrivateEvent;
     protected event Action ProtectedEvent;
+    protected internal event Action ProtectedInternalEvent;
+    private protected event Action PrivateProtectedEvent;
 
     public int PublicProperty { get; set; }
     internal int InternalProperty { get; set; }
@@ -205,10 +366,12 @@ public class Surface
     internal int this[string index] { get => 0; set { } }
     private int this[bool index] { get => 0; set { } }
     protected int this[double index] { get => 0; set { } }
+    protected internal int this[Guid index] { get => 0; set { } }
+    private protected int this[TimeSpan index] { get => 0; set { } }
 
     public int Touch()
-        => PrivateField + PrivateProperty + PrivateMethod() + this[true]
-            + (PrivateEvent == null ? 0 : 1);
+        => PrivateField + PrivateProperty + PrivateMethod() + this[true] + this[TimeSpan.Zero]
+            + (PrivateEvent == null ? 0 : 1) + (PrivateProtectedEvent == null ? 0 : 1);
 }`
 
         /// The differential matrix: member kind × accessibility × friend-vs-not.
@@ -216,7 +379,14 @@ public class Surface
         /// ALONE — the member kind never appears in the expectation.
         /// @returns The theory rows.
         func Matrix() sequence[[]object] {
-            let accessibilities[]string = []string{"Public", "Internal", "Private", "Protected"}
+            let accessibilities[]string = []string{
+                "Public",
+                "Internal",
+                "ProtectedInternal",
+                "PrivateProtected",
+                "Private",
+                "Protected"
+            }
             let kinds[]string = []string{
                 "MethodCall",
                 "PropertyRead",
@@ -225,12 +395,15 @@ public class Surface
                 "FieldWrite",
                 "EventSubscribe",
                 "IndexerRead",
-                "IndexerWrite"
+                "IndexerWrite",
+                "ObjectInitializerProperty",
+                "ObjectInitializerField"
             }
             for kind in kinds {
                 for accessibility in accessibilities {
                     for isFriend in[]bool{true, false} {
-                        let visible = accessibility == "Public" || (accessibility == "Internal" && isFriend)
+                        let visible = accessibility == "Public" ||
+                            ((accessibility == "Internal" || accessibility == "ProtectedInternal") && isFriend)
                         yield[]object{kind, accessibility, isFriend, visible}
                     }
                 }
@@ -373,10 +546,12 @@ public class Surface
 
         private func BuildSource(kind string, accessibility string, consumer string) string {
             // The index argument selects the overload whose accessibility is under
-            // test; each literal converts to exactly one of the four index types.
+            // test; each literal converts to exactly one of the index types.
             let indexArgument = switch accessibility {
                 case "Public": "1"
                 case "Internal": "\"key\""
+                case "ProtectedInternal": "System.Guid.Empty"
+                case "PrivateProtected": "System.TimeSpan.Zero"
                 case "Private": "true"
                 case "Protected": "1.5"
                 default: throw ArgumentOutOfRangeException("accessibility")
@@ -390,6 +565,8 @@ public class Surface
                 case "EventSubscribe": "    surface.${accessibility}Event += () -> { }"
                 case "IndexerRead": "    let value = surface[$indexArgument]"
                 case "IndexerWrite": "    surface[$indexArgument] = 7"
+                case "ObjectInitializerProperty": "    let copy = Surface{ ${accessibility}Property: 7 }"
+                case "ObjectInitializerField": "    let copy = Surface{ ${accessibility}Field: 7 }"
                 default: throw ArgumentOutOfRangeException("kind")
             }
             return (`package ` + "$consumer" + `
