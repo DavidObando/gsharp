@@ -1,6 +1,7 @@
 package GSharp.Compiler.Tests
 
 import GSharp.Compiler
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.Tests
 import Microsoft.CodeAnalysis
@@ -456,25 +457,36 @@ class Program {
                 .Append(NestConditionalReturnLiterals(OracleShape(shape), 2, "() => { return ", "; }"))
                 .Append(");\n")
         }
+        // Review of PR #5803: a nested conditional return calling a non-first local-function overload hits the
+        // literal cache at every level instead of rebinding exponentially.
+        source.Append("    let Pick[T] = func (x T, y T) T { return x }\n")
+        source.Append("    let Pick[T] = func (x T) T { return x }\n")
+        source
+            .Append("    Console.Write(")
+            .Append(
+            NestConditionalReturnLiterals("Calls.M(|, 1)", 24, "() -> { return ", " }", leafValue: "Pick(\"s\")")
+        )
+            .Append(")\n")
+        oracle.Append("        T Pick<T>(T x) => x;\n")
+        oracle
+            .Append("        Console.Write(")
+            .Append(
+            NestConditionalReturnLiterals("Calls.M(|, 1)", 2, "() => { return ", "; }", leafValue: "Pick(\"s\")")
+        )
+            .Append(");\n")
         source.Append("}\n")
         oracle.Append("    }\n}\n")
-        Check(fixture, source.ToString(), oracle.ToString(), "OOOOOOOOOOOOOOOO")
+        Check(fixture, source.ToString(), oracle.ToString(), "OOOOOOOOOOOOOOOOO")
     }
 
-    /// Issue #5604: sequential retried returns capture and restore operand-local deltas instead of copying the
-    /// accumulated labels and held returns of the body, so 800 sequential retried returns bind in linear time.
+    /// Issue #5604: sequential retried returns capture and restore operand-local deltas (including forward jumps
+    /// to a shared label after all returns) instead of copying the accumulated labels, pending jumps, and held
+    /// returns of the body, so 800 sequential retried returns bind in linear work.
     @Fact
     func SequentialRetriedReturns_BindInLinearWork() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
-        let body = SequentialRetriedReturnsBody(800, isOracle: false)
+        let source800 = SequentialRetriedReturnsSource(800)
         let oracleBody = SequentialRetriedReturnsBody(10, isOracle: true)
-        let source = "import System\nimport FunctionControl\nfunc Main() {\n    let flag = true\n" +
-            "    Console.Write(Calls.M(" +
-            body +
-            ", 1))\n" +
-            "    Console.Write(Calls.In(" +
-            body +
-            ", 1))\n}\n"
         let oracle = "using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n        var flag = true;\n" +
             "        Console.Write(Calls.M(" +
             oracleBody +
@@ -482,13 +494,18 @@ class Program {
             "        Console.Write(Calls.In(" +
             oracleBody +
             ", 1));\n    }\n}\n"
-        let watch = Stopwatch.StartNew()
-        Check(fixture, source, oracle, "OO")
-        watch.Stop()
-        Assert.True(
-            watch.Elapsed < TimeSpan.FromSeconds(15),
-            "Sequential retried returns took " + watch.Elapsed.ToString()
+        Check(fixture, source800, oracle, "OO")
+        StatementBinder.SpeculativeRollbackWorkCount = 0
+        Assert.Equal(0, CompileInProcess(fixture, SequentialRetriedReturnsSource(200)))
+        let work200 = StatementBinder.SpeculativeRollbackWorkCount
+        StatementBinder.SpeculativeRollbackWorkCount = 0
+        Assert.Equal(0, CompileInProcess(fixture, source800))
+        let work800 = StatementBinder.SpeculativeRollbackWorkCount
+        output.WriteLine(
+            "SequentialRetriedReturns rollback work: R=200=" + work200.ToString() + ", R=800=" + work800.ToString()
         )
+        Assert.Equal(3_200L, work200)
+        Assert.Equal(work200 * 4, work800)
     }
 
     /// Issue #5569 control (review of PR #5564): a literal whose parameter count no candidate's delegate accepts
@@ -650,6 +667,11 @@ func Main() {
     let Id[T] = func (x T) T { return x }
     Calls.Pa(() -> { return Id("s") }, 1)
     } : "t" }, 1))
+    Console.Write(Calls.Pa(() -> { return true ? {
+    let Pick[T] = func (x T, y T) T { return x }
+    let Pick[T] = func (x T) T { return x }
+    Calls.Pa(() -> { return true ? Calls.Pa(() -> { return Pick("s") }, 1) : "t" }, 1)
+    } : "u" }, 1))
     Console.Write(Calls.Pa(() -> {
     L: if !flag {
         return "done"
@@ -684,6 +706,7 @@ class Program {
     Console.Write(Calls.M(() => { var q = "s"; return Calls.M(() => { return q; }, 1); }, 1));
     Console.Write(Calls.Fm(() => { if (!flag) { return "s"; } return $"x{Calls.M(() => 1, 1)}"; }, 1));
     Console.Write(Calls.Pa(() => { if (true) { T Id<T>(T x) => x; return Calls.Pa(() => { return Id("s"); }, 1); } return "t"; }, 1));
+    Console.Write(Calls.Pa(() => { if (true) { T Pick<T>(T x) => x; return Calls.Pa(() => { return true ? Calls.Pa(() => { return Pick("s"); }, 1) : "t"; }, 1); } return "u"; }, 1));
     Console.Write(Calls.Pa(() => {
         L: if (!flag) { return "done"; }
         if (true) {
@@ -697,7 +720,7 @@ class Program {
     }, 1));
     }
 }
-`, "OOOOOOOOO<xF>P<P<s>>P<P<s>>")
+`, "OOOOOOOOO<xF>P<P<s>>P<P<P<s>>>P<P<s>>")
         let errors = RejectConsumerErrors(fixture, `import System
 import FunctionControl
 func Main() {
@@ -2902,15 +2925,49 @@ class Program {
 
     /// Issue #5578: nests a block-bodied literal [`depth`](paramref) times inside the true branch of a
     /// target-typed conditional `return` value.
-    private func NestConditionalReturnLiterals(shape string, depth int32, bodyStart string, bodyEnd string) string {
-        var call = shape.Replace("|", bodyStart + "true ? \"s\" : \"t\"" + bodyEnd)
+    private func NestConditionalReturnLiterals(
+        shape string,
+        depth int32,
+        bodyStart string,
+        bodyEnd string,
+        leafValue string = "\"s\""
+    ) string {
+        var call = shape.Replace("|", bodyStart + "true ? " + leafValue + " : \"t\"" + bodyEnd)
         for var level = 0; level < depth; level++ {
             call = shape.Replace("|", bodyStart + "true ? " + call + " : \"t\"" + bodyEnd)
         }
         return call
     }
 
-    /// Issue #5604: builds a block-bodied literal with [`count`](paramref) sequential labeled conditional returns.
+    private func SequentialRetriedReturnsSource(count int32) string {
+        let body = SequentialRetriedReturnsBody(count, isOracle: false)
+        return "import System\nimport FunctionControl\nfunc Main() {\n    let flag = true\n" +
+            "    Console.Write(Calls.M(" +
+            body +
+            ", 1))\n" +
+            "    Console.Write(Calls.In(" +
+            body +
+            ", 1))\n}\n"
+    }
+
+    private func CompileInProcess(fixture CSharpFixture, source string) int32 {
+        let path = Path.Combine(fixture.DirectoryPath, "InProcessConsumer.gs")
+        let outPath = Path.Combine(fixture.DirectoryPath, "InProcessConsumer.dll")
+        File.WriteAllText(path, source)
+        return Program.Main(
+            []string{
+                path,
+                "/target:exe",
+                "/targetframework:net10.0",
+                "/deterministic+",
+                "/out:" + outPath,
+                "/reference:" + fixture.AssemblyPath
+            }
+        )
+    }
+
+    /// Issue #5604: builds a block-bodied literal with [`count`](paramref) sequential labeled retried return blocks,
+    /// each containing a conditional forward `goto Forward` to one shared label after all returns.
     private func SequentialRetriedReturnsBody(count int32, isOracle bool) string {
         let builder = StringBuilder()
         if isOracle {
@@ -2919,31 +2976,22 @@ class Program {
                 builder
                     .Append("            L")
                     .Append(i)
-                    .Append(": if (!flag) { return flag ? \"s")
+                    .Append(": if (!flag) { if (!flag) { goto Forward; } return flag ? \"s")
                     .Append(i)
                     .Append("\" : \"t\"; }\n")
             }
-            builder.Append("            if (flag) {\n")
-            for var i = 0; i < count / 2; i++ {
-                builder.Append("                if (!flag) { goto Forward; }\n")
-            }
-            builder.Append("                Forward: return \"u\";\n            }\n")
-            builder.Append("            return \"u\";\n        }")
+            builder.Append("            Forward: return \"u\";\n        }")
         } else {
             builder.Append("() -> {\n")
             for var i = 0; i < count; i++ {
                 builder
                     .Append("        L")
                     .Append(i)
-                    .Append(": if !flag { return flag ? \"s")
+                    .Append(": if !flag { return {\n            if !flag { goto Forward }\n            flag ? \"s")
                     .Append(i)
-                    .Append("\" : \"t\" }\n")
+                    .Append("\" : \"t\"\n        } }\n")
             }
-            builder.Append("        return {\n")
-            for var i = 0; i < count / 2; i++ {
-                builder.Append("            if !flag { goto Forward }\n")
-            }
-            builder.Append("            Forward: let result = \"u\"\n            result\n        }\n    }")
+            builder.Append("        Forward: return \"u\"\n    }")
         }
         return builder.ToString()
     }

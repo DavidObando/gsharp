@@ -278,7 +278,9 @@ internal partial class StatementBinder {
         internal let UnresolvedLocation TextLocation
         internal let HadHandlerRegions bool
         internal let HandlerRegions ImmutableArray[SyntaxNode]
-        internal let PendingJumps[]?NarrowingJumpState
+        internal let PendingJumpCount int32
+        internal var RemovedPreExisting bool
+        internal var RemovedJumps[]?NarrowingJumpState
 
         init(
             labelName string,
@@ -290,7 +292,7 @@ internal partial class StatementBinder {
             unresolvedLocation TextLocation,
             hadHandlerRegions bool,
             handlerRegions ImmutableArray[SyntaxNode],
-            pendingJumps[]?NarrowingJumpState
+            pendingJumpCount int32
         ) {
             LabelName = labelName
             PreviousSnapshotIndex = previousSnapshotIndex
@@ -301,7 +303,47 @@ internal partial class StatementBinder {
             UnresolvedLocation = unresolvedLocation
             HadHandlerRegions = hadHandlerRegions
             HandlerRegions = handlerRegions
-            PendingJumps = pendingJumps
+            PendingJumpCount = pendingJumpCount
+        }
+    }
+
+    private sealed class SpeculativeTargetLabelDelta {
+        internal let LabelName string
+        internal let WasDefined bool
+        internal let HadUserLabel bool
+        internal let UserLabel BoundLabel?
+        internal let HadUnresolved bool
+        internal let UnresolvedLocation TextLocation
+        internal let HadHandlerRegions bool
+        internal let HandlerRegions ImmutableArray[SyntaxNode]
+        internal let RemovedPreExisting bool
+        internal let HadTargetList bool
+        internal let AddedJumps[]?NarrowingJumpState
+
+        init(
+            labelName string,
+            wasDefined bool,
+            hadUserLabel bool,
+            userLabel BoundLabel?,
+            hadUnresolved bool,
+            unresolvedLocation TextLocation,
+            hadHandlerRegions bool,
+            handlerRegions ImmutableArray[SyntaxNode],
+            removedPreExisting bool,
+            hadTargetList bool,
+            addedJumps[]?NarrowingJumpState
+        ) {
+            LabelName = labelName
+            WasDefined = wasDefined
+            HadUserLabel = hadUserLabel
+            UserLabel = userLabel
+            HadUnresolved = hadUnresolved
+            UnresolvedLocation = unresolvedLocation
+            HadHandlerRegions = hadHandlerRegions
+            HandlerRegions = handlerRegions
+            RemovedPreExisting = removedPreExisting
+            HadTargetList = hadTargetList
+            AddedJumps = addedJumps
         }
     }
 
@@ -318,6 +360,26 @@ internal partial class StatementBinder {
         }
         speculativeLabelSnapshotIndex[labelName] = speculativeLabelUndoLog.Count
         speculativeLabelUndoLog.Add(CaptureLabelSnapshot(labelName, previousIndex))
+    }
+
+    internal func NoteSpeculativeLabelRemoving(labelName string, states IReadOnlyList[NarrowingJumpState]) {
+        if speculativeReturnDepth == 0 {
+            return
+        }
+        NoteSpeculativeLabelTouched(labelName)
+        let snapshot = speculativeLabelUndoLog[speculativeLabelSnapshotIndex[labelName]]
+        if snapshot.RemovedPreExisting {
+            return
+        }
+        snapshot.RemovedPreExisting = true
+        if snapshot.PendingJumpCount > 0 {
+            RecordSpeculativeRollbackWork(snapshot.PendingJumpCount)
+            let copy = [snapshot.PendingJumpCount]NarrowingJumpState
+            for var i = 0; i < snapshot.PendingJumpCount; i++ {
+                copy[i] = states[i].Clone()
+            }
+            snapshot.RemovedJumps = copy
+        }
     }
 
     private func PopSpeculativeLabelSnapshotIndex(snapshot SpeculativeLabelSnapshot) {
@@ -353,7 +415,8 @@ internal partial class StatementBinder {
     }
 
     private func CaptureLabelSnapshot(labelName string, previousSnapshotIndex int32 = -1) SpeculativeLabelSnapshot {
-        let pendingJumps = binderCtx.NarrowingFlow.CloneTarget(labelName)
+        RecordSpeculativeRollbackWork()
+        let pendingJumpCount = binderCtx.NarrowingFlow.GetJumpCount(labelName)
         if labelName.StartsWith("#", StringComparison.Ordinal) {
             return SpeculativeLabelSnapshot(
                 labelName,
@@ -365,7 +428,7 @@ internal partial class StatementBinder {
                 default(TextLocation),
                 false,
                 default(ImmutableArray[SyntaxNode]),
-                pendingJumps
+                pendingJumpCount
             )
         }
         let wasDefined = binderCtx.DefinedUserLabels.Contains(labelName)
@@ -382,13 +445,62 @@ internal partial class StatementBinder {
             unresolvedLocation,
             hadHandlerRegions,
             handlerRegions,
-            pendingJumps
+            pendingJumpCount
+        )
+    }
+
+    private func CaptureTargetLabelDelta(beforeSnapshot SpeculativeLabelSnapshot) SpeculativeTargetLabelDelta {
+        let labelName = beforeSnapshot.LabelName
+        let currentCount = binderCtx.NarrowingFlow.GetJumpCount(labelName)
+        let startIndex = if beforeSnapshot.RemovedPreExisting || beforeSnapshot.PendingJumpCount < 0 {
+            0
+        } else {
+            beforeSnapshot.PendingJumpCount
+        }
+        let addedJumps = binderCtx.NarrowingFlow.CloneRange(labelName, startIndex)
+        RecordSpeculativeRollbackWork(1 + (addedJumps?.Length ?? 0))
+        if labelName.StartsWith("#", StringComparison.Ordinal) {
+            return SpeculativeTargetLabelDelta(
+                labelName,
+                false,
+                false,
+                nil,
+                false,
+                default(TextLocation),
+                false,
+                default(ImmutableArray[SyntaxNode]),
+                beforeSnapshot.RemovedPreExisting,
+                currentCount >= 0,
+                addedJumps
+            )
+        }
+        let wasDefined = binderCtx.DefinedUserLabels.Contains(labelName)
+        let hadUserLabel = binderCtx.UserLabels.TryGetValue(labelName, out var userLabel)
+        let hadUnresolved = binderCtx.UnresolvedGotoLabels.TryGetValue(labelName, out var unresolvedLocation)
+        let hadHandlerRegions = userLabelHandlerRegions.TryGetValue(labelName, out var handlerRegions)
+        return SpeculativeTargetLabelDelta(
+            labelName,
+            wasDefined,
+            hadUserLabel,
+            userLabel,
+            hadUnresolved,
+            unresolvedLocation,
+            hadHandlerRegions,
+            handlerRegions,
+            beforeSnapshot.RemovedPreExisting,
+            currentCount >= 0,
+            addedJumps
         )
     }
 
     private func RestoreLabelSnapshot(snapshot SpeculativeLabelSnapshot) {
+        RecordSpeculativeRollbackWork(1 + (snapshot.RemovedJumps?.Length ?? 0))
         let labelName = snapshot.LabelName
-        binderCtx.NarrowingFlow.RestoreTarget(labelName, snapshot.PendingJumps)
+        if snapshot.RemovedPreExisting {
+            binderCtx.NarrowingFlow.RestoreTarget(labelName, snapshot.RemovedJumps, snapshot.PendingJumpCount >= 0)
+        } else {
+            binderCtx.NarrowingFlow.TruncateTarget(labelName, snapshot.PendingJumpCount)
+        }
         if labelName.StartsWith("#", StringComparison.Ordinal) {
             return
         }
@@ -409,6 +521,41 @@ internal partial class StatementBinder {
         }
         if snapshot.HadHandlerRegions {
             userLabelHandlerRegions[labelName] = snapshot.HandlerRegions
+        } else {
+            userLabelHandlerRegions.Remove(labelName)
+        }
+    }
+
+    private func ApplyTargetLabelDelta(delta SpeculativeTargetLabelDelta) {
+        RecordSpeculativeRollbackWork(1 + (delta.AddedJumps?.Length ?? 0))
+        let labelName = delta.LabelName
+        if delta.RemovedPreExisting {
+            binderCtx.NarrowingFlow.RestoreTarget(labelName, delta.AddedJumps, delta.HadTargetList)
+        } else if !delta.HadTargetList {
+            binderCtx.NarrowingFlow.TruncateTarget(labelName, -1)
+        } else {
+            binderCtx.NarrowingFlow.AppendTarget(labelName, delta.AddedJumps)
+        }
+        if labelName.StartsWith("#", StringComparison.Ordinal) {
+            return
+        }
+        if delta.WasDefined {
+            binderCtx.DefinedUserLabels.Add(labelName)
+        } else {
+            binderCtx.DefinedUserLabels.Remove(labelName)
+        }
+        if delta.HadUserLabel {
+            binderCtx.UserLabels[labelName] = delta.UserLabel!!
+        } else {
+            binderCtx.UserLabels.Remove(labelName)
+        }
+        if delta.HadUnresolved {
+            binderCtx.UnresolvedGotoLabels[labelName] = delta.UnresolvedLocation
+        } else {
+            binderCtx.UnresolvedGotoLabels.Remove(labelName)
+        }
+        if delta.HadHandlerRegions {
+            userLabelHandlerRegions[labelName] = delta.HandlerRegions
         } else {
             userLabelHandlerRegions.Remove(labelName)
         }
@@ -484,7 +631,7 @@ internal partial class StatementBinder {
     /// Issue #5604: the operand-local delta produced by the target pass of a retried return value.
     private sealed class SpeculativeAfterTargetState {
         internal let BaseState SpeculativeBindState
-        internal let TargetLabels[]?SpeculativeLabelSnapshot
+        internal let TargetLabels[]?SpeculativeTargetLabelDelta
         internal let TargetUserLabels Dictionary[string, BoundLabel]?
         internal let AddedGotoRegions[]?(
             LabelName string,
@@ -503,7 +650,7 @@ internal partial class StatementBinder {
 
         init(
             baseState SpeculativeBindState,
-            targetLabels[]?SpeculativeLabelSnapshot,
+            targetLabels[]?SpeculativeTargetLabelDelta,
             targetUserLabels Dictionary[string, BoundLabel]?,
             addedGotoRegions[]?(LabelName string, Location TextLocation, SourceRegions ImmutableArray[SyntaxNode]),
             addedFinallyClauses[]?(
@@ -591,17 +738,15 @@ internal partial class StatementBinder {
 
     private func CaptureSpeculativeAfterTarget(beforeValue SpeculativeBindState) SpeculativeAfterTargetState {
         let baseState = CaptureSpeculativeBindState()
-        var targetLabels[]?SpeculativeLabelSnapshot = nil
+        var targetLabels[]?SpeculativeTargetLabelDelta = nil
         var targetUserLabels Dictionary[string, BoundLabel]? = nil
         if speculativeLabelUndoLog.Count > beforeValue.LabelLogMark {
-            let seen = HashSet[string](StringComparer.Ordinal)
-            let snapshots = List[SpeculativeLabelSnapshot]()
-            for var i = beforeValue.LabelLogMark; i < speculativeLabelUndoLog.Count; i++ {
-                let labelName = speculativeLabelUndoLog[i].LabelName
-                if !seen.Add(labelName) {
-                    continue
-                }
-                snapshots.Add(CaptureLabelSnapshot(labelName))
+            let count = speculativeLabelUndoLog.Count - beforeValue.LabelLogMark
+            let deltas = [count]SpeculativeTargetLabelDelta
+            for var i = 0; i < count; i++ {
+                let beforeSnapshot = speculativeLabelUndoLog[beforeValue.LabelLogMark + i]
+                let labelName = beforeSnapshot.LabelName
+                deltas[i] = CaptureTargetLabelDelta(beforeSnapshot)
                 if !labelName.StartsWith("#", StringComparison.Ordinal) && binderCtx.UserLabels.TryGetValue(
                     labelName,
                     out var userLabel
@@ -610,7 +755,7 @@ internal partial class StatementBinder {
                     targetUserLabels!![labelName] = userLabel
                 }
             }
-            targetLabels = snapshots.ToArray()
+            targetLabels = deltas
         }
         let addedGotoRegions = if userGotoHandlerRegions.Count > beforeValue.GotoRegionCount {
             let slice = [userGotoHandlerRegions.Count - beforeValue.GotoRegionCount](
@@ -672,6 +817,14 @@ internal partial class StatementBinder {
             beforeValue.DeferredOperandCount,
             beforeValue.DeferredConversionCount
         )
+        RecordSpeculativeRollbackWork(
+            (addedGotoRegions?.Length ?? 0) +
+                (addedFinallyClauses?.Length ?? 0) +
+                (addedFinallySummaries?.Length ?? 0) +
+                (addedSpanEntries?.Length ?? 0) +
+                ((beforeValue.DeferredReturns?.OperandCount ?? 0) - beforeValue.DeferredOperandCount) +
+                ((beforeValue.DeferredReturns?.ConversionCount ?? 0) - beforeValue.DeferredConversionCount)
+        )
         return SpeculativeAfterTargetState(
             baseState,
             targetLabels,
@@ -718,6 +871,7 @@ internal partial class StatementBinder {
     /// reported after it. The narrowing frames must be the frames of the capture.
     /// @param state The captured state.
     private func RestoreSpeculativeBindState(state SpeculativeBindState) {
+        RecordSpeculativeRollbackWork()
         ApplyBaseSpeculativeBindState(state)
         for var i = speculativeLabelUndoLog.Count - 1; i >= state.LabelLogMark; i-- {
             let snapshot = speculativeLabelUndoLog[i]
@@ -758,15 +912,25 @@ internal partial class StatementBinder {
         if targetLabels != nil {
             let savedDepth = speculativeReturnDepth
             try {
-                // RestoreLabelSnapshot mutates NarrowingFlow; do not log each internal step twice.
+                // ApplyTargetLabelDelta mutates NarrowingFlow; do not log each internal step twice.
                 speculativeReturnDepth = 0
-                for snapshot in targetLabels {
+                for delta in targetLabels {
                     if savedDepth > 0 {
                         speculativeReturnDepth = savedDepth
-                        NoteSpeculativeLabelTouched(snapshot.LabelName)
+                        NoteSpeculativeLabelTouched(delta.LabelName)
+                        if delta.RemovedPreExisting && speculativeLabelSnapshotIndex.TryGetValue(
+                            delta.LabelName,
+                            out var idx
+                        ) {
+                            let outerSnapshot = speculativeLabelUndoLog[idx]
+                            if !outerSnapshot.RemovedPreExisting {
+                                outerSnapshot.RemovedPreExisting = true
+                                outerSnapshot.RemovedJumps = binderCtx.NarrowingFlow.CloneRange(delta.LabelName, 0)
+                            }
+                        }
                         speculativeReturnDepth = 0
                     }
-                    RestoreLabelSnapshot(snapshot)
+                    ApplyTargetLabelDelta(delta)
                 }
             } finally {
                 speculativeReturnDepth = savedDepth
@@ -1565,6 +1729,10 @@ internal partial class StatementBinder {
             ]()
         }
         let savedLabelWatermark = currentSpeculativeLabelWatermark
+        let savedLabelLogMark = speculativeLabelUndoLog.Count
+        let savedFinallyLogMark = speculativeFinallyLog.Count
+        let savedFinallySummaryLogMark = speculativeFinallySummaryLog.Count
+        let savedSpanEntryLogMark = speculativeSpanEntryLog.Count
         speculativeReturnDepth++
         try {
             let beforeValue = CaptureSpeculativeBindState()
@@ -1617,6 +1785,14 @@ internal partial class StatementBinder {
         } finally {
             currentSpeculativeLabelWatermark = savedLabelWatermark
             speculativeReturnDepth--
+            if speculativeReturnDepth == 0 {
+                DiscardSpeculativeLogs(
+                    savedLabelLogMark,
+                    savedFinallyLogMark,
+                    savedFinallySummaryLogMark,
+                    savedSpanEntryLogMark
+                )
+            }
             if createdRetriedCaches {
                 this.binderCtx.RetriedValueVariables = nil
                 this.binderCtx.RetriedTypeParameters = nil
@@ -2229,6 +2405,14 @@ internal partial class StatementBinder {
     }
 
     shared {
+        internal var SpeculativeRollbackWorkCount int64
+
+        internal func RecordSpeculativeRollbackWork(units int32 = 1) {
+            if units > 0 {
+                Interlocked.Add(&SpeculativeRollbackWorkCount, units)
+            }
+        }
+
         /// Issue #4285: syntactic (pre-binding) check for whether
         /// [`node`](paramref) — a function/lambda/local-function BODY, or
         /// any subtree of one — contains any user-written `goto` statement

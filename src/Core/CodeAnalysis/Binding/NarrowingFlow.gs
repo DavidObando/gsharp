@@ -94,6 +94,9 @@ internal sealed class NarrowingFlow {
     /// Gets or sets a callback notified before a target's pending jump list is mutated.
     internal var OnTargetTouching((string) -> void)?
 
+    /// Gets or sets a callback notified before a target's pending jump list is removed by (cref:TakeJumps).
+    internal var OnTargetRemoving((string, IReadOnlyList[NarrowingJumpState]) -> void)?
+
     /// Records a `break` state on [`target`](paramref) with the cleanup regions still to run (ADR-0213 table 9, J1).
     func RecordBreak(target BoundLabel, state NarrowingJumpState) -> RecordJump("#" + target.Name, state)
 
@@ -112,32 +115,74 @@ internal sealed class NarrowingFlow {
 
     /// Removes and returns the recorded forward jump states for [`target`](paramref), or `nil`.
     func TakeJumps(target string) List[NarrowingJumpState]? {
-        if !pending.ContainsKey(target) {
-            return nil
-        }
-        OnTargetTouching?(target)
-        if pending.Remove(target, out var states) {
-            return states
-        }
-        return nil
-    }
-
-    /// Copies the recorded jump states for [`target`](paramref), or `nil`.
-    func CloneTarget(target string)[]?NarrowingJumpState {
         if !pending.TryGetValue(target, out var states) {
             return nil
         }
-        let copy = [states.Count]NarrowingJumpState
-        for var i = 0; i < states.Count; i++ {
-            copy[i] = states[i].Clone()
+        OnTargetTouching?(target)
+        OnTargetRemoving?(target, states)
+        pending.Remove(target)
+        return states
+    }
+
+    /// Returns the number of recorded jump states for [`target`](paramref), or `-1` when [`target`](paramref)
+    /// has no pending jump list.
+    func GetJumpCount(target string) int32 {
+        if pending.TryGetValue(target, out var states) {
+            return states.Count
+        }
+        return -1
+    }
+
+    /// Copies the recorded jump states for [`target`](paramref) starting at [`startIndex`](paramref), or `nil`.
+    func CloneRange(target string, startIndex int32)[]?NarrowingJumpState {
+        if !pending.TryGetValue(target, out var states) || startIndex >= states.Count {
+            return nil
+        }
+        let count = states.Count - startIndex
+        let copy = [count]NarrowingJumpState
+        for var i = 0; i < count; i++ {
+            copy[i] = states[startIndex + i].Clone()
         }
         return copy
     }
 
-    /// Replaces the recorded jump states for [`target`](paramref) with a cloned snapshot.
-    func RestoreTarget(target string, snapshot[]?NarrowingJumpState) {
-        if snapshot == nil {
+    /// Truncates the recorded jump states for [`target`](paramref) to [`count`](paramref), or removes the target
+    /// when [`count`](paramref) is negative.
+    func TruncateTarget(target string, count int32) {
+        if count < 0 {
             pending.Remove(target)
+            return
+        }
+        if !pending.TryGetValue(target, out var states) {
+            pending[target] = List[NarrowingJumpState]()
+            return
+        }
+        if states.Count > count {
+            states.RemoveRange(count, states.Count - count)
+        }
+    }
+
+    /// Appends cloned jump states to [`target`](paramref), creating the target list when needed.
+    func AppendTarget(target string, statesToAppend[]?NarrowingJumpState) {
+        if !pending.TryGetValue(target, out var states) {
+            states = List[NarrowingJumpState](statesToAppend?.Length ?? 0)
+            pending[target] = states
+        }
+        if statesToAppend != nil {
+            for state in statesToAppend {
+                states.Add(state.Clone())
+            }
+        }
+    }
+
+    /// Replaces the recorded jump states for [`target`](paramref) with a cloned snapshot.
+    func RestoreTarget(target string, snapshot[]?NarrowingJumpState, keepEmptyList bool = false) {
+        if snapshot == nil {
+            if keepEmptyList {
+                pending[target] = List[NarrowingJumpState]()
+            } else {
+                pending.Remove(target)
+            }
             return
         }
         let list = List[NarrowingJumpState](snapshot.Length)

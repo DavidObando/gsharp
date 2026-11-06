@@ -167,6 +167,7 @@ internal partial class StatementBinder {
         this.bindNullCoalescingAssignmentStatement = bindNullCoalescingAssignmentStatement
         this.bindRefArgumentExpression = bindRefArgumentExpression
         this.binderCtx.NarrowingFlow.OnTargetTouching = NoteSpeculativeLabelTouched
+        this.binderCtx.NarrowingFlow.OnTargetRemoving = NoteSpeculativeLabelRemoving
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics

@@ -2851,6 +2851,21 @@ internal class LambdaBinder {
         return true
     }
 
+    private func LocalFunctionMatchesScope(referenced FunctionSymbol, $scope BoundScope) bool {
+        if $scope.TryLookupSymbol(referenced.Name) is not FunctionSymbol {
+            return false
+        }
+        for candidate in $scope.TryLookupFunctions(referenced.Name) {
+            if object.ReferenceEquals(candidate, referenced) {
+                return true
+            }
+            if BoundScope.FunctionSignaturesEqual(candidate, referenced) {
+                return false
+            }
+        }
+        return false
+    }
+
     private func CapturedVariablesMatchScope(bound BoundExpression, $scope BoundScope) bool {
         if bound is not BoundFunctionLiteralExpression literal {
             return true
@@ -2862,7 +2877,7 @@ internal class LambdaBinder {
         }
         if localFunctionReferencedFunctions.TryGetValue(literal.Function, out var referencedFunctions) {
             for referenced in referencedFunctions {
-                if !object.ReferenceEquals($scope.TryLookupSymbol(referenced.Name), referenced) {
+                if !LocalFunctionMatchesScope(referenced, $scope) {
                     return false
                 }
             }
