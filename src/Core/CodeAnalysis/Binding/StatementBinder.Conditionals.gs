@@ -836,7 +836,7 @@ internal partial class StatementBinder {
                     elseCollector,
                     kv.Key,
                     elseDropAllMemberPaths,
-                    elseCollector.MayMutateReferenceStorage
+                    elseCollector.MayWriteStorageOf(kv.Key)
                 ) {
                     continue
                 }
@@ -1171,7 +1171,7 @@ internal partial class StatementBinder {
             collector,
             path!!,
             collector.MayMutateMemberPaths,
-            collector.MayMutateReferenceStorage
+            collector.MayWriteStorageOf(path!!)
         )
     }
 

@@ -69,6 +69,12 @@ internal class ConversionEmitter {
     /// @param il Destination instruction encoder.
     /// @param type GSharp type of the value currently on the evaluation stack.
     func EmitBoxIfNeeded(il InstructionEncoder, type TypeSymbol) {
+        if type is PointerTypeSymbol or FunctionPointerTypeSymbol {
+            il.OpCode(ILOpCode.Conv_i)
+            il.OpCode(ILOpCode.Box)
+            il.Token(this.getElementTypeToken(TypeSymbol.NInt))
+            return
+        }
         if ReflectionMetadataEmitter.IsValueTypeSymbol(type) {
             il.OpCode(ILOpCode.Box)
             il.Token(this.getElementTypeToken(type))
