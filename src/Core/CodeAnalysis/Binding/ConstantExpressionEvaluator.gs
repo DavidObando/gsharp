@@ -535,8 +535,9 @@ internal shared class ConstantExpressionEvaluator {
     }
 
     /// Replaces a bound conversion of a constant `float32` or `float64` operand with its folded value (#5767,
-    /// ADR-0219). The emitter and the expression-tree lowerer use it, so the conversion opcodes and
-    /// `Expression.Convert` of the host or target runtime do not calculate the value. The result is a literal of
+    /// ADR-0219). (cref:Lowering.ConstantConversionFolder) uses it before the other emit-pipeline passes, and the
+    /// emitter and the expression-tree lowerer use it too, so the conversion opcodes and `Expression.Convert` of the
+    /// host or target runtime do not calculate the value. The result is a literal of
     /// the integer storage type. For an enum target, a conversion of that literal to the enum follows. For a
     /// `Nullable<T>` target, the normal nullable lift of the `T` value follows. These conversions do not change
     /// the value.
@@ -565,6 +566,33 @@ internal shared class ConstantExpressionEvaluator {
         }
         folded = result
         return true
+    }
+
+    /// Whether [`expression`](paramref) contains a checked conversion of a constant `float32` or `float64` value
+    /// that is NaN or out of range for its integer, `char`, or enum target (#5767, ADR-0219). That conversion does
+    /// not fold, and the binder reports GS0635 for it, when the conversion is bound or when the const fixpoint
+    /// gives its operand a value. A const declaration whose initializer contains it does not also get GS0376.
+    /// @param expression The bound const initializer.
+    /// @returns `true` when the expression contains the conversion.
+    func ContainsCheckedOutOfRangeFloatingConstantConversion(expression BoundExpression) bool {
+        let finder = CheckedOutOfRangeFloatingConstantConversionFinder()
+        finder.VisitExpression(expression)
+        return finder.Found
+    }
+
+    private class CheckedOutOfRangeFloatingConstantConversionFinder : BoundTreeWalker {
+        var Found bool
+
+        protected override func VisitConversionExpression(node BoundConversionExpression) {
+            if Found {
+                return
+            }
+            if node.IsChecked && TryFoldFloatingConstantConversion(node, out _, out _, out var inRange) && !inRange {
+                Found = true
+                return
+            }
+            base.VisitConversionExpression(node)
+        }
     }
 
     /// Gets the integer storage type of a floating-point constant conversion target: the underlying type of a

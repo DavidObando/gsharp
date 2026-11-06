@@ -3998,14 +3998,12 @@ internal partial class DeclarationBinder {
         }
     }
 
-    /// Runs the deferred GS0635 checks of [`constField`](paramref) (#5767).
+    /// Runs the deferred GS0635 checks of [`constField`](paramref) one time (#5767).
     /// @param constField The const field.
-    /// @returns `true` when a check reported GS0635.
-    private func ReportDeferredFloatingConstantChecks(constField FieldSymbol) bool {
+    private func ReportDeferredFloatingConstantChecks(constField FieldSymbol) {
         if deferredFloatingConstantChecks.Remove(constField, out var checks) {
-            return conversions.ReportDeferredFloatingConstantChecks(checks)
+            conversions.ReportDeferredFloatingConstantChecks(checks)
         }
-        return false
     }
 
     private func BindConstFieldInitializerCore(
@@ -4410,9 +4408,12 @@ internal partial class DeclarationBinder {
             return
         }
         for (constField, bound, location) in pending {
-            // Issue #5767: a checked conversion of a value out of range does not fold. Its operand can be
-            // constant now, and GS0635 then gives the cause.
-            if !ReportDeferredFloatingConstantChecks(constField) && !(bound is BoundErrorExpression) {
+            // Issue #5767: a checked conversion of a value out of range does not fold. GS0635 gives the cause,
+            // reported when the initializer was bound or by the deferred check whose operand is constant now.
+            ReportDeferredFloatingConstantChecks(constField)
+            if !(bound is BoundErrorExpression) &&
+                !ConstantExpressionEvaluator
+                .ContainsCheckedOutOfRangeFloatingConstantConversion(bound) {
                 Diagnostics.ReportConstFieldInitializerNotConstant(location, constField.Name)
             }
         }

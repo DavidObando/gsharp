@@ -133,6 +133,32 @@ open class Issue5767FloatingConstantConversionTests {
         Assert.Equal(expected, result.ValueText)
     }
 
+    /// A `const` local keeps its folded conversion when a later emit pass moves the local: across an `await` or
+    /// a `yield` into a state-machine field, and into a box cell when a function literal or an expression tree
+    /// captures it. On .NET 10, the runtime conversion of the moved value gave 44 for each row.
+    @Theory
+    @InlineData(
+        "import System.Threading.Tasks\nasync func F() Task[int8] {\n    const d float64 = 300.5\n    await Task.Yield()\n    return unchecked(int8(d))\n}\nF().Result",
+        "127"
+    )
+    @InlineData(
+        "import System.Collections.Generic\nimport System.Linq\nfunc F() IEnumerable[int8] {\n    const d float64 = 300.5\n    yield 0\n    yield unchecked(int8(d))\n}\nF().Last()",
+        "127"
+    )
+    @InlineData(
+        "func F() int8 {\n    const d float64 = 300.5\n    let f = () -> unchecked(int8(d))\n    return f()\n}\nF()",
+        "127"
+    )
+    @InlineData(
+        "import System\nimport System.Linq.Expressions\nfunc F() int8 {\n    const d float64 = 300.5\n    let e Expression[Func[int8]] = () -> unchecked(int8(d))\n    return e.Compile()()\n}\nF()",
+        "127"
+    )
+    func MovedConstLocalConversion_EmitsFoldedValue(source string, expected string) {
+        let result = EmittedOracle.Evaluate(source)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(expected, result.ValueText)
+    }
+
     /// An expression tree contains the folded value, not `Expression.Convert` of the constant. On .NET 10,
     /// `Expression.Convert` gave 44 and 4464 for these rows.
     @Theory
@@ -158,7 +184,8 @@ open class Issue5767FloatingConstantConversionTests {
     }
 
     /// A const field can refer to a sibling or cross-type const that the const fixpoint folds later. Its GS0635
-    /// check runs when the field folds, in the overflow context of its own conversion.
+    /// check runs when the field folds, in the overflow context of its own conversion. A checked conversion out of
+    /// range does not fold, and its GS0635 replaces GS0376 for each const declaration.
     @Theory
     @InlineData(
         "class C {\n    shared {\n        const D float64 = 300.5\n        const A int8 = int8(D)\n    }\n}\nC.A"
@@ -178,7 +205,10 @@ open class Issue5767FloatingConstantConversionTests {
     @InlineData(
         "class C {\n    shared {\n        const A int8 = unchecked(checked(int8(D)))\n        const D float64 = 300.5\n    }\n}\nC.A"
     )
-    func OutOfRangeConversionOfDeferredConstField_ReportsGS0635Once(source string) {
+    @InlineData("class C {\n    shared {\n        const A int8 = checked(int8(300.5))\n    }\n}\nC.A")
+    @InlineData("struct S {\n    var X int32\n    shared {\n        const A int8 = checked(int8(300.5))\n    }\n}\nS.A")
+    @InlineData("const a int8 = checked(int8(300.5))\na")
+    func OutOfRangeConversionInConstInitializer_ReportsGS0635Once(source string) {
         let result = EmittedOracle.Evaluate(source)
         Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0635")
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0376")

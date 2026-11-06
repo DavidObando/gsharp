@@ -511,7 +511,7 @@ internal class ConversionClassifier {
         if !ConstantExpressionEvaluator.IsFloatingConstantConversionCandidate(conversion) {
             return
         }
-        if !TryReportOutOfRangeFloatingConstantConversion(location, conversion, out _) {
+        if !TryReportOutOfRangeFloatingConstantConversion(location, conversion) {
             deferredFloatingConstantChecks?.Add((location, conversion))
         }
     }
@@ -519,14 +519,11 @@ internal class ConversionClassifier {
     /// Reports GS0635 when the operand of [`conversion`](paramref) is a constant that is NaN or out of range.
     /// @param location The conversion location.
     /// @param conversion The bound conversion, bound outside an explicit `unchecked` context.
-    /// @param reported `true` when GS0635 was reported.
     /// @returns `false` when the operand is not constant.
     private func TryReportOutOfRangeFloatingConstantConversion(
         location TextLocation,
-        conversion BoundConversionExpression,
-        out reported bool
+        conversion BoundConversionExpression
     ) bool {
-        reported = false
         if !ConstantExpressionEvaluator.TryFoldFloatingConstantConversion(
             conversion,
             out var value,
@@ -541,7 +538,6 @@ internal class ConversionClassifier {
                 Convert.ToString(value, CultureInfo.InvariantCulture)!!,
                 conversion.Type
             )
-            reported = true
         }
         return true
     }
@@ -574,17 +570,12 @@ internal class ConversionClassifier {
     /// Runs the GS0635 checks that (cref:EndDeferredFloatingConstantChecks) returned, after the const fixpoint
     /// calculated the values that their operands refer to.
     /// @param checks The deferred checks.
-    /// @returns `true` when a check reported GS0635.
     func ReportDeferredFloatingConstantChecks(
         checks ImmutableArray[(Location TextLocation, Conversion BoundConversionExpression)]
-    ) bool {
-        var anyReported = false
+    ) {
         for (location, conversion) in checks {
-            if TryReportOutOfRangeFloatingConstantConversion(location, conversion, out var reported) && reported {
-                anyReported = true
-            }
+            TryReportOutOfRangeFloatingConstantConversion(location, conversion)
         }
-        return anyReported
     }
 
     /// Replaces a narrowed member read with its declared read when the conversion to [`target`](paramref)
