@@ -510,11 +510,15 @@ open class Derived : Base {
         if input is T { input.M() }
     }
     func Deferred[T Derived](input T) { defer input.M() }
+    func DeferredBox[T Derived](input object) {
+        if input is T { defer input.M() }
+    }
 }
 class More : Derived {}
 let value = More()
 value.Run[More](value)
-value.Deferred[More](value)`, "called\ncalled\n")
+value.Deferred[More](value)
+value.DeferredBox[More](value)`, "called\ncalled\ncalled\n")
     }
 
     @Fact
