@@ -353,7 +353,12 @@ internal class ReaderAgreementHarness {
                 position,
                 "projection",
                 func () TypeSymbol? {
-                    return ClrNullability.SymbolFromLayoutFlags(closedType, openType, flags)
+                    let projected = ClrNullability.SymbolFromLayoutFlags(closedType, openType, flags)
+                    return if position.OptionalNullDefault {
+                        NullabilityImportRule.ApplyNullDefaultLift(projected)
+                    } else {
+                        projected
+                    }
                 }
             )
         }
@@ -362,11 +367,16 @@ internal class ReaderAgreementHarness {
             position,
             "merge-symbolic",
             func () TypeSymbol? {
-                return NullableFlagsBuilder.MergeDeclarationNullability(
+                let merged = NullableFlagsBuilder.MergeDeclarationNullability(
                     this.MapSymbolic(context, openType),
                     openType,
                     flags
                 )
+                return if position.OptionalNullDefault {
+                    NullabilityImportRule.ApplyNullDefaultLift(merged)
+                } else {
+                    merged
+                }
             }
         )
         if context.Receiver != nil && !isGenericMethod && position.MemberSymbolic != nil {
@@ -403,7 +413,12 @@ internal class ReaderAgreementHarness {
                         ClrNullability.ProjectNullableFlags(closedType, openType, flags)
                     }
                     let annotated = NullabilityAnnotatedTypeSymbol(symbolicBase, projected)
-                    return ClrNullability.SymbolForState(annotated, ClrNullability.ClassifyPosition(projected, 0))
+                    let root = ClrNullability.SymbolForState(annotated, ClrNullability.ClassifyPosition(projected, 0))
+                    return if position.OptionalNullDefault {
+                        NullabilityImportRule.ApplyNullDefaultLift(root)
+                    } else {
+                        root
+                    }
                 }
             )
         }
@@ -695,32 +710,8 @@ internal class ReaderAgreementHarness {
                 } else {
                     default(((TypeSymbol) -> TypeSymbol)?)
                 },
-                HasOptionalNullDefault(closed)
+                ClrNullability.HasOptionalNullDefault($open)
             )
-
-            /// The condition under which `ClrNullability.GetParameterTypeSymbol`
-            /// lifts a reference parameter to `T?` for its `null` default.
-            private func HasOptionalNullDefault(parameter ParameterInfo) bool {
-                try {
-                    let type = if parameter.ParameterType.IsByRef {
-                        parameter.ParameterType.GetElementType()
-                    } else {
-                        parameter.ParameterType
-                    }
-                    if type?.IsValueType != false || !(parameter.HasDefaultValue || parameter.IsOptional) {
-                        return false
-                    }
-                    let value object? = parameter.RawDefaultValue
-                    return value == nil || object.ReferenceEquals(value, Missing.Value) || object.ReferenceEquals(
-                        value,
-                        DBNull.Value
-                    )
-                } catch (exception Exception) when exception is FormatException ||
-                    exception is InvalidOperationException ||
-                    exception is NotSupportedException {
-                    return false
-                }
-            }
 
             internal func IndexParameter(
                 $open ParameterInfo,
@@ -735,7 +726,7 @@ internal class ReaderAgreementHarness {
                 openIndexer,
                 () -> ClrNullability.GetParameterTypeSymbol(closed),
                 (receiver TypeSymbol) -> MemberLookup.GetIndexerParameterTypeSymbol(receiver, closedIndexer, index),
-                HasOptionalNullDefault(closed)
+                ClrNullability.HasOptionalNullDefault($open)
             )
 
             internal func Property($open PropertyInfo, closed PropertyInfo) Position -> Position(

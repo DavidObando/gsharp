@@ -281,7 +281,7 @@ unsafe func ok(out a int32) {
 }
 `
         let result = Compile(Source)
-        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0238")
+        Assert.Empty(result.Diagnostics)
     }
 
     @Fact
@@ -303,6 +303,149 @@ func bad(out a int32, cond bool) {
 `
         let result = Compile(Source)
         Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0238")
+    }
+
+    // Issue #4417 — reading an unassigned `out` parameter on any value-read
+    // path (call argument, explicit/implicit `in` argument, operator operand,
+    // member/index receiver, compound assignment, closure capture, or after a
+    // partial branch assignment) reports GS0239.
+    @Theory
+    @InlineData(`func val(v int32) int32 -> v
+func bad(out x int32) int32 {
+    let y = val(x)
+    x = 1
+    return y
+}`)
+    @InlineData(`func takeIn(in v int32) int32 -> v
+func bad(out x int32) int32 {
+    let y = takeIn(in x)
+    x = 1
+    return y
+}`)
+    @InlineData(`func takeIn(in v int32) int32 -> v
+func bad(out x int32) int32 {
+    let y = takeIn(x)
+    x = 1
+    return y
+}`)
+    @InlineData(`func bad(out x int32) int32 {
+    let y = x + 1
+    x = 1
+    return y
+}`)
+    @InlineData(`func bad(out x int32) {
+    x += 1
+}`)
+    @InlineData(`func bad(out x string) int32 {
+    let n = x.Length
+    x = "ok"
+    return n
+}`)
+    @InlineData(`func bad(out x []int32) {
+    x[0] = 1
+    x = []int32{1}
+}`)
+    @InlineData(`func bad(out x int32, cond bool) int32 {
+    if cond {
+        x = 1
+    }
+    let y = x
+    x = 2
+    return y
+}`)
+    @InlineData(`func bad(out x int32) int32 {
+    let f = () -> x
+    x = 1
+    return f()
+}`)
+    @InlineData(`class Box {
+    var f int32
+}
+func bad(out x Box) {
+    x.f = 1
+    x = Box()
+}`)
+    @InlineData(`func put(out a int32, b int32) {
+    a = b
+}
+func bad(out x int32) {
+    put(&x, x)
+}`)
+    @InlineData(`unsafe func bad(out x []int32) {
+    let pointers = []*int32{&x[0]}
+    x = []int32{1}
+}`)
+    @InlineData(`func fill(out v int32) int32 {
+    v = 1
+    return v
+}
+unsafe func bad(values []int32, out x int32) {
+    *(&values[x]) = fill(out x)
+}`)
+    @InlineData(`struct Pair {
+    var f int32
+}
+func takeRef(ref v int32) {}
+func bad(out x Pair) {
+    takeRef(&x.f)
+    x = Pair{f: 1}
+}`)
+    @InlineData(`import System.Numerics
+func takeRef(ref v float32) {}
+func bad(out x Vector2) {
+    takeRef(&x.X)
+    x = Vector2(1.0f, 2.0f)
+}`)
+    func OutParameterReadBeforeAssignment_ReportsGS0239(body string) {
+        let result = Compile("package OutReadDA\n\n" + body + "\n")
+        let diag = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0239")
+        Assert.Contains("'x'", diag.Message)
+        Assert.NotEqual(default(TextLocation), diag.Location)
+        Assert.True(diag.Location.Span.Length > 0)
+    }
+
+    @Fact
+    func OutParameterReadAfterAssignmentOnAllPaths_NoDiagnostic() {
+        const Source = `package OutReadOk
+
+import System.Numerics
+
+struct Pair {
+    var f int32
+}
+
+func takeIn(in v int32) int32 -> v
+func fill(out v int32) int32 {
+    v = 3
+    return v
+}
+func fillFloat(out v float32) {
+    v = 4.0f
+}
+func combine(a int32, b int32) int32 -> a + b
+
+unsafe func ok(out x int32, out s Pair, out vec Vector2, cond bool) int32 {
+    var other = 0
+    let _ = fill(out (cond ? x : other))
+    let pField *int32 = &s.f
+    *pField = 1
+    let _ = fill(out s.f)
+    fillFloat(out vec.X)
+    s.f = 1
+    s = Pair{f: 2}
+    vec.X = 1.0f
+    vec = Vector2(2.0f, 3.0f)
+    if cond {
+        x = combine(fill(out x), x)
+    } else {
+        x = 20
+    }
+    x += 5
+    return takeIn(x)
+}
+`
+        let result = Compile(Source)
+        Assert.Empty(result.Diagnostics)
     }
 
     shared {

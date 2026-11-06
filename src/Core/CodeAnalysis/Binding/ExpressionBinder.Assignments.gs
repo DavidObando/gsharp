@@ -816,6 +816,16 @@ internal partial class ExpressionBinder {
                     CanAccessInternalsOf
                 )
                 if inhMember != nil {
+                    let receiverExpr = BoundVariableExpression(anchor, receiverLocal)
+                    if TryReportProtectedClrInstanceMemberWrite(
+                        inheritedBaseClr,
+                        propertyName,
+                        receiverExpr,
+                        memberIdentifier.Location
+                    ) {
+                        let _ = BindExpression(valueSyntax)
+                        return nil
+                    }
                     // Issue #3815: project the inherited member through the
                     // derived receiver so an imported GENERIC base's member keeps
                     // the derived type's own type arguments (ChannelReader[T], not
@@ -833,7 +843,6 @@ internal partial class ExpressionBinder {
                         return nil
                     }
                     let converted = BindExpression(valueSyntax, inhTargetSymbol!!)
-                    let receiverExpr = BoundVariableExpression(anchor, receiverLocal)
                     return BoundClrPropertyAssignmentExpression(
                         anchor,
                         receiverExpr,
@@ -1140,7 +1149,11 @@ internal partial class ExpressionBinder {
         // storage type, while the bound receiver carries the effective type
         // proven by the active if-let/null-guard frame.
         var assignmentReceiver = implicitFieldReceiverExpr ??
-            BuildNarrowedVariableRead(variable, syntax.FieldIdentifier.Location)
+            BuildNarrowedVariableRead(
+            variable,
+            syntax.FieldIdentifier.Location,
+            NameExpressionSyntax(syntax.SyntaxTree, syntax.Receiver)
+        )
         let assignmentReceiverType = assignmentReceiver.Type
         // Stream B: instance-CLR receiver → property/field write via reflection.
         if !(assignmentReceiverType is StructSymbol) &&
@@ -1154,6 +1167,15 @@ internal partial class ExpressionBinder {
             }
             instanceMember ??= SafeGetVisibleInstanceField(clrReceiverType!!, fieldName)
             if instanceMember == nil {
+                if TryReportProtectedClrInstanceMemberWrite(
+                    clrReceiverType!!,
+                    fieldName,
+                    assignmentReceiver,
+                    syntax.FieldIdentifier.Location
+                ) {
+                    let _ = BindExpression(syntax.Value)
+                    return BoundErrorExpression(nil)
+                }
                 Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName)
                 return BoundErrorExpression(nil)
             }
@@ -1166,6 +1188,16 @@ internal partial class ExpressionBinder {
             ) ||
                 RefCapabilities
                 .IsReadOnlyValueReference(assignmentReceiver) {
+                if !RefCapabilities.IsReadOnlyValueReference(assignmentReceiver) &&
+                    TryReportProtectedClrInstanceMemberWrite(
+                    clrReceiverType!!,
+                    fieldName,
+                    assignmentReceiver,
+                    syntax.FieldIdentifier.Location
+                ) {
+                    let _ = BindExpression(syntax.Value)
+                    return BoundErrorExpression(nil)
+                }
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName)
                 return BoundErrorExpression(nil)
             }
@@ -1599,6 +1631,15 @@ internal partial class ExpressionBinder {
                     CanAccessInternalsOf
                 )
                 if clrMember != nil {
+                    if TryReportProtectedClrInstanceMemberWrite(
+                        inheritedBaseClr,
+                        memberName,
+                        assignmentReceiver,
+                        syntax.FieldIdentifier.Location
+                    ) {
+                        let _ = BindExpression(syntax.Value)
+                        return BoundErrorExpression(nil)
+                    }
                     // Issue #3815: project the inherited member through the
                     // derived receiver so an imported GENERIC base's member keeps
                     // the derived type's own type arguments (ChannelReader[T], not
@@ -1692,14 +1733,14 @@ internal partial class ExpressionBinder {
         }
         if usesExpressionReceiver {
             return BoundFieldAssignmentExpression.WithExpressionReceiver(
-                nil,
+                syntax,
                 assignmentReceiver,
                 fieldDeclaringType,
                 field,
                 converted
             )
         }
-        return BoundFieldAssignmentExpression(nil, variable, fieldDeclaringType, field, converted)
+        return BoundFieldAssignmentExpression(syntax, variable, fieldDeclaringType, field, converted)
     }
 
     /// Issue #1246: binds the underlying binary operation of a compound
@@ -1921,6 +1962,52 @@ internal partial class ExpressionBinder {
             if effThis?.Type is StructSymbol thisStruct &&
                 GetInheritedClrBaseType(thisStruct) is Type inheritedBaseClr {
                 let inheritedReceiver = BoundVariableExpression(nil, effThis!!)
+                let inheritedEventInfo EventInfo? = if isEventOperator {
+                    TryGetInheritedClrEvent(inheritedBaseClr, name, inheritedReceiver)
+                } else {
+                    default(EventInfo?)
+                }
+                if inheritedEventInfo != nil {
+                    let subscriptionAccessor = if isAdd {
+                        inheritedEventInfo.AddMethod
+                    } else {
+                        inheritedEventInfo.RemoveMethod
+                    }
+                    if !IsCallableClrEventAccessor(
+                        subscriptionAccessor,
+                        inheritedEventInfo.DeclaringType,
+                        inheritedReceiver
+                    ) {
+                        Diagnostics.ReportMemberInaccessible(
+                            bareName.Location,
+                            inheritedEventInfo.Name,
+                            inheritedEventInfo.DeclaringType?.Name ?? name,
+                            ClrEventAccessorAccessibility(subscriptionAccessor)
+                        )
+                        let _ = BindExpression(syntax.Value)
+                        return BoundErrorExpression(nil)
+                    }
+                    let importedEventTarget TypeSymbol? = TypeMemberModel.GetNearestImportedBase(thisStruct)
+                    let handlerTypeSymbol = if importedEventTarget != nil {
+                        MemberLookup.GetClrEventHandlerTypeSymbol(importedEventTarget, inheritedEventInfo)
+                    } else {
+                        MemberLookup.GetClrEventHandlerTypeSymbol(inheritedEventInfo)
+                    }
+                    let convertedHandler = BindEventSubscriptionHandler(syntax.Value, handlerTypeSymbol)
+                    let eventContainingType = if importedEventTarget == nil {
+                        default(TypeSymbol?)
+                    } else {
+                        MemberLookup.GetClrMemberDeclaringTypeSymbol(importedEventTarget, inheritedEventInfo)
+                    }
+                    return BoundClrEventSubscriptionExpression(
+                        nil,
+                        inheritedReceiver,
+                        inheritedEventInfo,
+                        convertedHandler,
+                        isAdd,
+                        eventContainingType: eventContainingType
+                    )
+                }
                 SyntaxFacts.TryGetCompoundAssignmentBaseOperator(
                     syntax.OperatorToken.Kind,
                     out var inheritedBaseOperator
@@ -3040,13 +3127,50 @@ internal partial class ExpressionBinder {
             instanceMember ??= SafeGetVisibleInstanceField(clrReceiverType, memberName)
         }
         if instanceMember == nil {
+            if TryReportProtectedClrInstanceDataMemberRead(
+                clrReceiverType,
+                memberName,
+                boundReceiver,
+                memberNameSyntax.IdentifierToken.Location
+            ) ||
+                TryReportProtectedClrInstanceMemberWrite(
+                clrReceiverType,
+                memberName,
+                boundReceiver,
+                memberNameSyntax.IdentifierToken.Location
+            ) {
+                let _ = BindExpression(syntax.Value)
+                return BoundErrorExpression(nil)
+            }
             return nil
+        }
+        if TryReportProtectedClrInstanceDataMemberRead(
+            clrReceiverType,
+            memberName,
+            boundReceiver,
+            memberNameSyntax.IdentifierToken.Location
+        ) ||
+            TryReportProtectedClrInstanceMemberWrite(
+            clrReceiverType,
+            memberName,
+            boundReceiver,
+            memberNameSyntax.IdentifierToken.Location
+        ) {
+            let _ = BindExpression(syntax.Value)
+            return BoundErrorExpression(nil)
         }
         if (
             instanceMember is PropertyInfo compoundProperty &&
                 GetVisibleGetter(compoundProperty, includeInherited) == nil
         ) ||
-            !TryGetWritableClrMember(instanceMember, boundReceiver.Type, out _, out var targetSymbol, out _) ||
+            !TryGetWritableClrMember(
+            instanceMember,
+            boundReceiver.Type,
+            out _,
+            out var targetSymbol,
+            out _,
+            fromDerivedType: includeInherited
+        ) ||
             RefCapabilities
             .IsReadOnlyValueReference(boundReceiver) {
             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName)
@@ -4406,6 +4530,15 @@ internal partial class ExpressionBinder {
                     CanAccessInternalsOf
                 )
                 if clrMember != nil {
+                    if TryReportProtectedClrInstanceMemberWrite(
+                        inheritedBaseClr,
+                        fieldName,
+                        receiver,
+                        syntax.FieldIdentifier.Location
+                    ) {
+                        let _ = BindExpression(syntax.Value)
+                        return BoundErrorExpression(nil)
+                    }
                     // Issue #3815: project the inherited member through the
                     // derived receiver so an imported GENERIC base's member keeps
                     // the derived type's own type arguments (ChannelReader[T], not
@@ -4732,6 +4865,15 @@ internal partial class ExpressionBinder {
             }
             instanceMember ??= SafeGetVisibleInstanceField(clrReceiverType, fieldName)
             if instanceMember == nil {
+                if TryReportProtectedClrInstanceMemberWrite(
+                    clrReceiverType,
+                    fieldName,
+                    receiver,
+                    syntax.FieldIdentifier.Location
+                ) {
+                    let _ = BindExpression(syntax.Value)
+                    return BoundErrorExpression(nil)
+                }
                 Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName)
                 return BoundErrorExpression(nil)
             }
@@ -4744,6 +4886,16 @@ internal partial class ExpressionBinder {
             ) ||
                 RefCapabilities
                 .IsReadOnlyValueReference(receiver) {
+                if !RefCapabilities.IsReadOnlyValueReference(receiver) &&
+                    TryReportProtectedClrInstanceMemberWrite(
+                    clrReceiverType,
+                    fieldName,
+                    receiver,
+                    syntax.FieldIdentifier.Location
+                ) {
+                    let _ = BindExpression(syntax.Value)
+                    return BoundErrorExpression(nil)
+                }
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName)
                 return BoundErrorExpression(nil)
             }

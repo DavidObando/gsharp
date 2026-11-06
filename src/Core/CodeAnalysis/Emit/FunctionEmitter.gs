@@ -219,8 +219,6 @@ internal class FunctionEmitter {
             let body = moveNextBody.Body
             let il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
             using let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il, pooled: true)
-            // Issue #216: collect compile-time const bindings before slot allocation.
-            session.CollectConstValues(body)
             session.Plan(body)
             // MoveNext is instance on the SM struct: arg0 = this.
             let parameters = Dictionary[ParameterSymbol, int32]{
@@ -424,8 +422,6 @@ internal class FunctionEmitter {
             } else {
                 let il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
                 using let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il, pooled: true)
-                // Issue #216: collect compile-time const bindings before slot allocation.
-                session.CollectConstValues(body)
                 session.Plan(body, function)
                 // For instance methods, IL slot 0 is the implicit `this`, so user
                 // parameters shift up by one. Both the synthesized `ThisParameter`

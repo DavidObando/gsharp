@@ -950,6 +950,15 @@ internal partial class ExpressionBinder {
                             CanAccessInternalsOf
                         )
                         if clrProp != nil && GetVisibleGetter(clrProp, fromDerivedType: true) != nil {
+                            if GetVisibleGetter(clrProp) == nil &&
+                                !IsFamilyAccessibleClrMember(clrProp.DeclaringType, receiver) {
+                                Diagnostics.ReportProtectedMemberInaccessible(
+                                    ne.IdentifierToken.Location,
+                                    memberName,
+                                    ClrTypeDisplayName(clrProp.DeclaringType ?? inheritedBaseClr)
+                                )
+                                return BoundErrorExpression(nil)
+                            }
                             return ConversionClassifier.AutoDereferenceRefReturn(
                                 BoundClrPropertyAccessExpression(
                                     nil,
@@ -965,6 +974,15 @@ internal partial class ExpressionBinder {
                             CanAccessInternalsOf
                         )
                         if clrFld != nil {
+                            if !ClrMemberVisibility.IsVisible(clrFld, CanAccessInternalsOf(clrFld.DeclaringType)) &&
+                                !IsFamilyAccessibleClrMember(clrFld.DeclaringType, receiver) {
+                                Diagnostics.ReportProtectedMemberInaccessible(
+                                    ne.IdentifierToken.Location,
+                                    memberName,
+                                    ClrTypeDisplayName(clrFld.DeclaringType ?? inheritedBaseClr)
+                                )
+                                return BoundErrorExpression(nil)
+                            }
                             return BoundClrPropertyAccessExpression(
                                 nil,
                                 receiver,
@@ -991,7 +1009,7 @@ internal partial class ExpressionBinder {
                     // position. When the user type declares no explicit imported
                     // base, fall back to typeof(object) so the member is captured
                     // as a CLR method group resolvable against a target delegate.
-                    let inheritedMgClr = structSym!!.ImportedBaseType?.ClrType ?? typeof(object)
+                    let inheritedMgClr = GetInheritedClrBaseType(structSym!!) ?? typeof(object)
                     if TryBindClrMethodGroup(
                         receiver,
                         inheritedMgClr,
@@ -1228,6 +1246,14 @@ internal partial class ExpressionBinder {
                         out var instanceGroup
                     ) {
                         return instanceGroup!!
+                    }
+                    if TryReportProtectedClrInstanceDataMemberRead(
+                        clrReceiverType,
+                        memberName,
+                        receiver,
+                        ne.IdentifierToken.Location
+                    ) {
+                        return BoundErrorExpression(nil)
                     }
                     return BindExtensionMethodGroupOrError(receiver, ne)
                 } else if receiver != nil &&
@@ -1616,19 +1642,18 @@ internal partial class ExpressionBinder {
                 }
                 builder.MoveToImmutable()
             }
+            let allowProtectedMultiIndexer = IsFamilyAccessibleClrMember(multiClrTarget, target)
             let multiOutcome = this.memberLookup.TryResolveClrIndexer(
                 target.Type,
                 multiClrTarget,
                 multiClrArguments,
                 out var multiClrIndexer,
-                out var multiResolvedArguments
+                out var multiResolvedArguments,
+                fromDerivedType: allowProtectedMultiIndexer
             )
             if multiOutcome == ClrIndexerResolutionOutcome.Resolved &&
                 multiClrIndexer != nil &&
-                ClrMemberVisibility.GetVisibleGetter(
-                multiClrIndexer,
-                CanAccessInternalsOf(multiClrIndexer.DeclaringType)
-            ) != nil {
+                GetVisibleGetter(multiClrIndexer, fromDerivedType: allowProtectedMultiIndexer) != nil {
                 let elementType = if target.Type is ImportedTypeSymbol importedTarget {
                     MapErasedIndexerElementType(importedTarget, multiClrIndexer)
                 } else {
@@ -1657,6 +1682,37 @@ internal partial class ExpressionBinder {
                         clrIndex
                 }
                 return ConversionClassifier.AutoDereferenceRefReturn(clrIndex)
+            }
+            if multiOutcome == ClrIndexerResolutionOutcome.Resolved &&
+                multiClrIndexer != nil &&
+                !allowProtectedMultiIndexer &&
+                GetVisibleGetter(multiClrIndexer, fromDerivedType: true) != nil &&
+                CanReportProtectedClrInstanceAccess(multiClrIndexer.DeclaringType, target) {
+                Diagnostics.ReportProtectedMemberInaccessible(
+                    targetLocation,
+                    multiClrIndexer.Name,
+                    ClrTypeDisplayName(multiClrIndexer.DeclaringType ?? multiClrTarget)
+                )
+                return BoundErrorExpression(nil)
+            }
+            if !allowProtectedMultiIndexer && this.memberLookup.TryResolveClrIndexer(
+                target.Type,
+                multiClrTarget,
+                multiClrArguments,
+                out var protMultiClrIndexer,
+                out _,
+                fromDerivedType: true
+            ) == ClrIndexerResolutionOutcome.Resolved &&
+                protMultiClrIndexer != nil &&
+                GetVisibleGetter(protMultiClrIndexer, fromDerivedType: true) != nil &&
+                GetVisibleGetter(protMultiClrIndexer) == nil &&
+                CanReportProtectedClrInstanceAccess(protMultiClrIndexer.DeclaringType, target) {
+                Diagnostics.ReportProtectedMemberInaccessible(
+                    targetLocation,
+                    protMultiClrIndexer.Name,
+                    ClrTypeDisplayName(protMultiClrIndexer.DeclaringType ?? multiClrTarget)
+                )
+                return BoundErrorExpression(nil)
             }
             if ReportClrIndexerResolutionFailure(multiOutcome, targetLocation) {
                 return BoundErrorExpression(nil)
@@ -2054,20 +2110,29 @@ internal partial class ExpressionBinder {
         )
         if (target.Type is ImportedTypeSymbol || target.Type is StructSymbol) && clrTarget != nil {
             let idxArgs = ImmutableArray.Create(BoundIndexArg())
+            let allowProtectedIndexer = IsFamilyAccessibleClrMember(clrTarget, target)
             let outcome = this.memberLookup.TryResolveClrIndexer(
                 target.Type,
                 clrTarget,
                 idxArgs,
                 out var idxProp,
-                out var resolvedIdxArgs
+                out var resolvedIdxArgs,
+                fromDerivedType: allowProtectedIndexer
             )
             if outcome == ClrIndexerResolutionOutcome.Resolved {
                 // A successful CLR indexer resolution establishes a non-null property.
-                if ClrMemberVisibility.GetVisibleGetter(
-                    idxProp!!,
-                    CanAccessInternalsOf(idxProp!!.DeclaringType)
-                ) == nil {
-                    Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type)
+                if GetVisibleGetter(idxProp!!, fromDerivedType: allowProtectedIndexer) == nil {
+                    if GetVisibleGetter(idxProp!!, fromDerivedType: true) != nil &&
+                        CanReportProtectedClrInstanceAccess(idxProp!!.DeclaringType, target) &&
+                        !allowProtectedIndexer {
+                        Diagnostics.ReportProtectedMemberInaccessible(
+                            targetLocation,
+                            idxProp!!.Name,
+                            ClrTypeDisplayName(idxProp!!.DeclaringType ?? clrTarget)
+                        )
+                    } else {
+                        Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type)
+                    }
                     return BoundErrorExpression(nil)
                 }
                 let elementType = ResolveIndexerElementType(target.Type, idxProp!!)
@@ -2081,6 +2146,25 @@ internal partial class ExpressionBinder {
                 return ConversionClassifier.AutoDereferenceRefReturn(
                     BoundClrIndexExpression(nil, target, idxProp!!, convertedIdxArgs, elementType)
                 )
+            }
+            if !allowProtectedIndexer && this.memberLookup.TryResolveClrIndexer(
+                target.Type,
+                clrTarget,
+                idxArgs,
+                out var protIdxProp,
+                out _,
+                fromDerivedType: true
+            ) == ClrIndexerResolutionOutcome.Resolved &&
+                protIdxProp != nil &&
+                GetVisibleGetter(protIdxProp, fromDerivedType: true) != nil &&
+                GetVisibleGetter(protIdxProp) == nil &&
+                CanReportProtectedClrInstanceAccess(protIdxProp.DeclaringType, target) {
+                Diagnostics.ReportProtectedMemberInaccessible(
+                    targetLocation,
+                    protIdxProp.Name,
+                    ClrTypeDisplayName(protIdxProp.DeclaringType ?? clrTarget)
+                )
+                return BoundErrorExpression(nil)
             }
             clrIndexerOutcome = outcome
         }
@@ -2805,9 +2889,9 @@ internal partial class ExpressionBinder {
             elementType TypeSymbol
         ) BoundExpression {
             return if hasNarrowedTarget {
-                BoundIndexAssignmentExpression.WithExpressionTarget(nil, target, index, value, elementType)
+                BoundIndexAssignmentExpression.WithExpressionTarget(indexSyntax, target, index, value, elementType)
             } else {
-                BoundIndexAssignmentExpression(nil, variable, index, value, elementType)
+                BoundIndexAssignmentExpression(indexSyntax, variable, index, value, elementType)
             }
         }
         let MakeClrIndexAssignment = func (
@@ -2833,7 +2917,7 @@ internal partial class ExpressionBinder {
             }
             return if hasNarrowedTarget {
                 BoundClrIndexAssignmentExpression.WithExpressionTarget(
-                    nil,
+                    indexSyntax,
                     target,
                     indexer,
                     arguments,
@@ -2844,7 +2928,7 @@ internal partial class ExpressionBinder {
                 )
             } else {
                 BoundClrIndexAssignmentExpression(
-                    nil,
+                    indexSyntax,
                     variable,
                     indexer,
                     arguments,
@@ -3213,12 +3297,14 @@ internal partial class ExpressionBinder {
             (targetType is ImportedTypeSymbol || targetType is StructSymbol) &&
             clrWriteTarget is Type clrTarget {
             let idxArgs = ImmutableArray.Create(BindIndexValue())
+            let allowProtectedIndexer = IsFamilyAccessibleClrMember(clrTarget, target)
             let outcome = this.memberLookup.TryResolveClrIndexer(
                 targetType,
                 clrTarget,
                 idxArgs,
                 out var idxProp,
-                out var resolvedIdxArgs
+                out var resolvedIdxArgs,
+                fromDerivedType: allowProtectedIndexer
             )
             if outcome == ClrIndexerResolutionOutcome.Resolved {
                 // A successful CLR indexer resolution establishes a non-null property.
@@ -3237,11 +3323,8 @@ internal partial class ExpressionBinder {
                 // managed pointer. Detect the ref-returning getter and store through
                 // it. A `ReadOnlySpan[T]` getter is `ref readonly T` — writing is a
                 // hard error (GS0226).
-                if ClrMemberVisibility.GetVisibleSetter(
-                    idxProp!!,
-                    CanAccessInternalsOf(idxProp!!.DeclaringType)
-                ) == nil {
-                    let refGetter MethodInfo? = GetVisibleGetter(idxProp!!)
+                if GetVisibleSetter(idxProp!!, fromDerivedType: allowProtectedIndexer) == nil {
+                    let refGetter MethodInfo? = GetVisibleGetter(idxProp!!, fromDerivedType: allowProtectedIndexer)
                     if refGetter != nil && refGetter.ReturnType.IsByRef {
                         if IsReadOnlyRefReturn(idxProp!!) {
                             Diagnostics.ReportCannotAssignReadOnlySpanElement(diagnosticLocation, targetType)
@@ -3273,7 +3356,24 @@ internal partial class ExpressionBinder {
                             constrainedInterfaceType: nil
                         )
                     }
-                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType)
+                    if !allowProtectedIndexer &&
+                        CanReportProtectedClrInstanceAccess(idxProp!!.DeclaringType, target) &&
+                        (
+                        GetVisibleSetter(idxProp!!, fromDerivedType: true) != nil ||
+                            (
+                            GetVisibleGetter(idxProp!!, fromDerivedType: true) is {ReturnType: {IsByRef: true}} &&
+                                !IsReadOnlyRefReturn(idxProp!!)
+                        )
+                    ) {
+                        Diagnostics.ReportProtectedMemberInaccessible(
+                            diagnosticLocation,
+                            idxProp!!.Name,
+                            ClrTypeDisplayName(idxProp!!.DeclaringType ?? clrTarget)
+                        )
+                        let _ = BindValue(ResolveIndexerElementType(targetType, idxProp!!))
+                    } else {
+                        Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType)
+                    }
                     return BoundErrorExpression(nil)
                 }
                 // Issue #968: recover the symbolic element type the same way
@@ -3298,6 +3398,35 @@ internal partial class ExpressionBinder {
                     constrainedReceiverTypeParameter: nil,
                     constrainedInterfaceType: nil
                 )
+            }
+            if !allowProtectedIndexer && this.memberLookup.TryResolveClrIndexer(
+                targetType,
+                clrTarget,
+                idxArgs,
+                out var protWriteIdxProp,
+                out _,
+                fromDerivedType: true
+            ) == ClrIndexerResolutionOutcome.Resolved &&
+                protWriteIdxProp != nil &&
+                CanReportProtectedClrInstanceAccess(protWriteIdxProp.DeclaringType, target) &&
+                (
+                (
+                    GetVisibleSetter(protWriteIdxProp, fromDerivedType: true) != nil &&
+                        GetVisibleSetter(protWriteIdxProp) == nil
+                ) ||
+                    (
+                    GetVisibleGetter(protWriteIdxProp, fromDerivedType: true) is {ReturnType: {IsByRef: true}} &&
+                        GetVisibleGetter(protWriteIdxProp) == nil &&
+                        !IsReadOnlyRefReturn(protWriteIdxProp)
+                )
+            ) {
+                Diagnostics.ReportProtectedMemberInaccessible(
+                    diagnosticLocation,
+                    protWriteIdxProp.Name,
+                    ClrTypeDisplayName(protWriteIdxProp.DeclaringType ?? clrTarget)
+                )
+                let _ = BindValue(ResolveIndexerElementType(targetType, protWriteIdxProp))
+                return BoundErrorExpression(nil)
             }
             clrIndexerOutcome = outcome
         }
@@ -4264,11 +4393,7 @@ internal partial class ExpressionBinder {
         if lengthReported {
             return BoundErrorExpression(nil)
         }
-        let returnType = SliceResultType(
-            target,
-            sliceMethod.ReturnType,
-            MemberLookup.GetClrMethodReturnTypeSymbol(target.Type, sliceMethod)
-        )
+        let returnType = MemberLookup.GetClrMethodReturnTypeSymbol(target.Type, sliceMethod)
         let call = BoundImportedInstanceCallExpression(
             nil,
             srcRef,
@@ -4285,11 +4410,7 @@ internal partial class ExpressionBinder {
         indexer PropertyInfo
     ) BoundExpression {
         let rangeValue = BuildSystemRangeValue($range)
-        let resultType = SliceResultType(
-            target,
-            indexer.PropertyType,
-            MemberLookup.GetClrPropertyTypeSymbol(target.Type, indexer)
-        )
+        let resultType = MemberLookup.GetClrPropertyTypeSymbol(target.Type, indexer)
         return BoundClrIndexExpression($range, target, indexer, ImmutableArray.Create(rangeValue), resultType)
     }
 
@@ -4417,11 +4538,7 @@ internal partial class ExpressionBinder {
         )
         if clrType != nil {
             if TryFindRangeIndexer(clrType, out var rangeIndexer) {
-                let resultType = SliceResultType(
-                    target,
-                    rangeIndexer.PropertyType,
-                    MemberLookup.GetClrPropertyTypeSymbol(target.Type, rangeIndexer)
-                )
+                let resultType = MemberLookup.GetClrPropertyTypeSymbol(target.Type, rangeIndexer)
                 return BoundClrIndexExpression(nil, target, rangeIndexer, ImmutableArray.Create(rangeValue), resultType)
             }
             if TryFindSliceShape(clrType, out var lengthMember, out var sliceMethod) {
@@ -4445,11 +4562,7 @@ internal partial class ExpressionBinder {
                 if lengthReported {
                     return BoundErrorExpression(nil)
                 }
-                let returnType = SliceResultType(
-                    target,
-                    sliceMethod.ReturnType,
-                    MemberLookup.GetClrMethodReturnTypeSymbol(target.Type, sliceMethod)
-                )
+                let returnType = MemberLookup.GetClrMethodReturnTypeSymbol(target.Type, sliceMethod)
                 let call = BoundImportedInstanceCallExpression(
                     nil,
                     srcRef,
@@ -6577,28 +6690,6 @@ internal partial class ExpressionBinder {
         /// away: `destination[1..]` produced a `Span[object]` that no
         /// longer converted back into the `Span[T]` slot it was sliced
         /// from.
-        ///
-        /// Every slice shape in the BCL — `Span<T>`,
-        /// `ReadOnlySpan<T>`, `Memory<T>`,
-        /// `ReadOnlyMemory<T>`, `string` — yields the RECEIVER'S
-        /// OWN type, so when the reflected result is identical to the receiver's
-        /// CLR type the symbolic answer is just the receiver's symbolic type,
-        /// which still carries `T`. Deliberately guarded on that identity:
-        /// a slice member returning anything else keeps the reflected answer
-        /// unchanged, and a receiver whose type argument is already concrete
-        /// (`Span[int32]`) gets back the same symbol it had before.
-        /// @param target The sliced receiver.
-        /// @param reflectedResult The slice member's reflected result type.
-        /// @param readResult The slice member's result type, read through the funnel.
-        /// @returns The slice expression's static type.
-        private func SliceResultType(target BoundExpression, reflectedResult Type, readResult TypeSymbol) TypeSymbol {
-            let targetType = target.Type
-            if targetType?.ClrType != nil && targetType.ClrType.IsSameAs(reflectedResult) {
-                return targetType
-            }
-            return readResult
-        }
-
         private func BuildSystemRangeValue(lower RangeBound?, upper RangeBound?) BoundExpression {
             let indexCtor = typeof(Index).GetConstructor([]Type{typeof(int32), typeof(bool)})!!
             let rangeCtor = typeof(Range).GetConstructor([]Type{typeof(Index), typeof(Index)})!!

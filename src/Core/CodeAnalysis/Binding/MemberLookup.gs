@@ -161,11 +161,12 @@ internal class MemberLookup {
         clrTarget Type,
         boundArguments ImmutableArray[BoundExpression],
         out indexer PropertyInfo?,
-        out resolvedArguments ImmutableArray[BoundExpression]
+        out resolvedArguments ImmutableArray[BoundExpression],
+        fromDerivedType bool = false
     ) ClrIndexerResolutionOutcome {
         indexer = nil
         resolvedArguments = default(ImmutableArray[BoundExpression])
-        let properties = CollectVisibleClrIndexers(targetType, clrTarget)
+        let properties = CollectVisibleClrIndexers(targetType, clrTarget, fromDerivedType)
         if properties.Length == 0 {
             return ClrIndexerResolutionOutcome.NoneFound
         }
@@ -177,10 +178,13 @@ internal class MemberLookup {
         }
         var hasSetOnlyIndexer = false
         for property in properties {
-            hasSetOnlyIndexer |= ClrMemberVisibility.GetVisibleGetter(
-                property,
-                this.binderCtx.References.CanAccessInternalMembers(property.DeclaringType?.Assembly)
-            ) == nil
+            let includeInternal = this.binderCtx.References.CanAccessInternalMembers(property.DeclaringType?.Assembly)
+            let visibleGetter = if fromDerivedType {
+                ClrMemberVisibility.GetDerivedVisibleGetter(property, includeInternal)
+            } else {
+                ClrMemberVisibility.GetVisibleGetter(property, includeInternal)
+            }
+            hasSetOnlyIndexer |= visibleGetter == nil
         }
         if hasSymbolicArgument || hasSetOnlyIndexer {
             let applicable = List[(Property PropertyInfo, ParameterTypes ImmutableArray[TypeSymbol])]()
@@ -366,7 +370,7 @@ internal class MemberLookup {
                 staticFlags |= BindingFlags.NonPublic
             }
             for method in ClrTypeUtilities.SafeGetMethods(staticClassType, staticFlags) {
-                if (method.IsPublic || (staticsIncludeInternal && method.IsAssembly)) &&
+                if ClrMemberVisibility.IsVisible(method, staticsIncludeInternal) &&
                     ClrTypeUtilities.EmittedMemberNameMatches(method, methodName) {
                     statics.Add(method)
                 }
@@ -384,7 +388,12 @@ internal class MemberLookup {
                 SafeGetMethodsIncludingSelfAndInterfaces(
                     receiverClrType,
                     methodName,
-                    includeInternal: this.binderCtx.References.CanAccessInternalMembers(receiverClrType.Assembly)
+                    includeInternal: this.binderCtx.References.CanAccessInternalMembers(receiverClrType.Assembly),
+                    includeExplicitInterfaceMembers: false,
+                    canAccessInternals: (owner Type?) -> this
+                        .binderCtx
+                        .References
+                        .CanAccessInternalMembers(owner?.Assembly)
                 )
             )
             if instance.Count > 0 {
@@ -672,7 +681,11 @@ internal class MemberLookup {
         clrTarget
     ).Length != 0
 
-    private func CollectVisibleClrIndexers(targetType TypeSymbol, clrTarget Type)[]PropertyInfo {
+    private func CollectVisibleClrIndexers(
+        targetType TypeSymbol,
+        clrTarget Type,
+        fromDerivedType bool = false
+    )[]PropertyInfo {
         let declaringTypes = if clrTarget.IsInterface {
             EnumerateSelfAndInterfaces(clrTarget)
         } else {
@@ -684,11 +697,21 @@ internal class MemberLookup {
         // methods, properties and fields were not. Only metadata `assembly`
         // accessibility is admitted.
         let includeInternal = this.binderCtx.References.CanAccessInternalMembers(clrTarget.Assembly)
+        var anyAncestorGrantsInternal = includeInternal
+        for var ancestor Type? = clrTarget.BaseType;
+            ancestor != nil &&
+            !anyAncestorGrantsInternal;
+            ancestor = ancestor?.BaseType {
+            anyAncestorGrantsInternal = this.binderCtx.References.CanAccessInternalMembers(ancestor.Assembly)
+        }
         let collected = List[PropertyInfo]()
         for declaringType in declaringTypes {
             for property in ClrTypeUtilities.SafeGetProperties(
                 declaringType,
-                ClrMemberVisibility.Widen(BindingFlags.Public | BindingFlags.Instance, includeInternal)
+                ClrMemberVisibility.Widen(
+                    BindingFlags.Public | BindingFlags.Instance,
+                    anyAncestorGrantsInternal || fromDerivedType
+                )
             ) {
                 var alreadyCollected = false
                 for existing in collected {
@@ -699,11 +722,17 @@ internal class MemberLookup {
                         break
                     }
                 }
-                if property.GetIndexParameters().Length == 0 || !ClrMemberVisibility.IsVisible(
-                    property,
-                    includeInternal
-                ) ||
-                    alreadyCollected {
+                let propertyIncludeInternal = this
+                    .binderCtx
+                    .References
+                    .CanAccessInternalMembers(property.DeclaringType?.Assembly)
+                let isVisibleProperty = if fromDerivedType {
+                    ClrMemberVisibility.GetDerivedVisibleGetter(property, propertyIncludeInternal) != nil ||
+                        ClrMemberVisibility.GetDerivedVisibleSetter(property, propertyIncludeInternal) != nil
+                } else {
+                    ClrMemberVisibility.IsVisible(property, propertyIncludeInternal)
+                }
+                if property.GetIndexParameters().Length == 0 || !isVisibleProperty || alreadyCollected {
                     continue
                 }
                 collected.Add(property)
@@ -731,13 +760,19 @@ internal class MemberLookup {
         return visible.ToArray()
     }
 
-    private func IsVisibleImportedMethod(method MethodBase) bool -> method.IsPublic ||
-        (method.IsAssembly && this.binderCtx.References.CanAccessInternalMembers(method.DeclaringType?.Assembly))
+    private func IsVisibleImportedMethod(method MethodBase) bool -> ClrMemberVisibility.IsVisible(
+        method,
+        this.binderCtx.References.CanAccessInternalMembers(method.DeclaringType?.Assembly)
+    )
 
     private func IsVisibleImportedType(type Type) bool -> type.IsPublic ||
         type.IsNestedPublic ||
         (
-        (type.IsNotPublic || type.IsNestedAssembly) && this.binderCtx.References.CanAccessInternalMembers(type.Assembly)
+        (type.IsNotPublic || type.IsNestedAssembly || type.IsNestedFamORAssem) &&
+            this
+            .binderCtx
+            .References
+            .CanAccessInternalMembers(type.Assembly)
     )
 
     /// Issue #985: a single CLR interface method slot that an implementing type
@@ -891,6 +926,8 @@ internal class MemberLookup {
             get;
         }
     }
+
+    private data class DelegateArgLayout(Layout Type?, FlagPosition int32, ParentLayouts[]?DelegateArgLayout) { }
 
     shared {
         // Preserve the kind of provisional evidence across argument sites without
@@ -1187,7 +1224,8 @@ internal class MemberLookup {
             clrType Type?,
             name string,
             includeInternal bool,
-            includeExplicitInterfaceMembers bool
+            includeExplicitInterfaceMembers bool,
+            canAccessInternals((Type?) -> bool)? = nil
         ) IReadOnlyList[MethodInfo] {
             let GetBaseTypeSafe = func (type Type) Type? {
                 try {
@@ -1199,16 +1237,97 @@ internal class MemberLookup {
             if clrType == nil {
                 return Array.Empty[MethodInfo]()
             }
-            // Issue #1678: this result is recomputed identically at every call
-            // site that probes the same (type, name) pair — e.g. the "does this
-            // type have an accessible Add?" collection-initializer check runs once
-            // per collection-literal expression against the same receiver type.
-            // ClrTypeUtilities.SafeGetMethods/SafeGetInterfaces are themselves
-            // memoized per Type now, but the name filter and the O(result ×
-            // candidates) IsMethodHiddenByExisting dedup below still re-ran on
-            // every call before this cache existed. Keyed on the CLR Type (not the
-            // GSharp symbol) so it is naturally invalidated by
-            // ClrTypeUtilities.ClearCache() clearing the caches it reads from.
+            let CollectCandidates = func (levelCanAccessInternals(Type) -> bool) IReadOnlyList[MethodInfo] {
+                let n = name
+                let selfMethods = ClrTypeUtilities.SafeGetMethods(clrType, BindingFlags.Public | BindingFlags.Instance)
+                let result = List[MethodInfo]()
+                for m in selfMethods {
+                    if ClrTypeUtilities.EmittedMemberNameMatches(m, n) {
+                        result.Add(m)
+                    }
+                }
+                // Issues #2614 / #2638: an aggregate metadata walk may return a
+                // usable but incomplete set. Always probe each declaration level
+                // and union accessible methods without duplicating inherited slots.
+                for var current Type? = clrType; current != nil; current = GetBaseTypeSafe(current!!) {
+                    for m in ClrTypeUtilities.SafeGetMethods(
+                        current,
+                        BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly
+                    ) {
+                        if ClrTypeUtilities.EmittedMemberNameMatches(m, n) && !IsMethodHiddenByExisting(result, m) {
+                            result.Add(m)
+                        }
+                    }
+                    // Issue #3679 / #4467: an `internal` or `protected internal`
+                    // instance method is a candidate only when its own declaring
+                    // assembly grants internal access to the consuming compilation.
+                    if !levelCanAccessInternals(current) {
+                        continue
+                    }
+                    for m in ClrTypeUtilities.SafeGetMethods(
+                        current,
+                        BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly
+                    ) {
+                        if ClrMemberVisibility.IsVisible(m, includeInternal: true) &&
+                            ClrTypeUtilities.EmittedMemberNameMatches(m, n) && !IsMethodHiddenByExisting(result, m) {
+                            result.Add(m)
+                        }
+                    }
+                }
+                if clrType.IsConstructedGenericType {
+                    for openMethod in ClrTypeUtilities.SafeGetMethods(
+                        clrType.GetGenericTypeDefinition(),
+                        BindingFlags.Public | BindingFlags.Instance
+                    ) {
+                        if !ClrTypeUtilities.EmittedMemberNameMatches(openMethod, n) {
+                            continue
+                        }
+                        // TypeBuilder.GetMethod accepts only a TypeBuilder instantiation of the
+                        // method's own generic declaring type; every other shape would throw.
+                        let openDeclaringType = openMethod.DeclaringType
+                        if !ClrTypeUtilities.IsTypeBuilderInstantiation(clrType) ||
+                            openDeclaringType == nil ||
+                            !openDeclaringType.IsGenericTypeDefinition ||
+                            openDeclaringType != clrType.GetGenericTypeDefinition() ||
+                            (openMethod.IsGenericMethod && !openMethod.IsGenericMethodDefinition) {
+                            continue
+                        }
+                        try {
+                            let mapped = ClrTypeUtilities.MapConstructedGenericMethod(clrType, openMethod)
+                            if !IsMethodHiddenByExisting(result, mapped) {
+                                result.Add(mapped)
+                            }
+                        } catch (ArgumentException) {
+                            // Runtime constructed types already exposed their methods above.
+
+                        }
+                    }
+                }
+                // Walk transitive interfaces for DIMs not surfaced by the concrete type.
+                let receiverIsInterface = clrType.IsInterface
+                for iface in ClrTypeUtilities.SafeGetInterfaces(clrType) {
+                    for m in ClrTypeUtilities.SafeGetMethods(iface, BindingFlags.Public | BindingFlags.Instance) {
+                        if !ClrTypeUtilities.EmittedMemberNameMatches(m, n) {
+                            continue
+                        }
+                        if receiverIsInterface || includeExplicitInterfaceMembers || !m.IsAbstract {
+                            if !IsMethodHiddenByExisting(result, m) {
+                                result.Add(m)
+                            }
+                        }
+                    }
+                }
+                return result
+            }
+            if canAccessInternals != nil {
+                for var ancestor Type? = GetBaseTypeSafe(clrType);
+                    ancestor != nil;
+                    ancestor = GetBaseTypeSafe(ancestor!!) {
+                    if !object.ReferenceEquals(ancestor.Assembly, clrType.Assembly) && canAccessInternals(ancestor) {
+                        return CollectCandidates((owner Type) -> canAccessInternals(owner))
+                    }
+                }
+            }
             return methodsIncludingSelfAndInterfacesCache.GetValue(
                 clrType,
                 (_ Type) -> ConcurrentDictionary[string, IReadOnlyList[MethodInfo]](StringComparer.Ordinal)
@@ -1228,116 +1347,9 @@ internal class MemberLookup {
                         string.Empty
                     }
                 ),
-                func (_ string) IReadOnlyList[MethodInfo] {
-                    // The cache key may carry the internal-inclusive suffix; the probe
-                    // itself always matches on the bare method name.
-                    let n = name
-                    let selfMethods = ClrTypeUtilities.SafeGetMethods(
-                        clrType,
-                        BindingFlags.Public | BindingFlags.Instance
-                    )
-                    let result = List[MethodInfo]()
-                    for m in selfMethods {
-                        if ClrTypeUtilities.EmittedMemberNameMatches(m, n) {
-                            result.Add(m)
-                        }
-                    }
-                    // Issues #2614 / #2638: an aggregate metadata walk may return a
-                    // usable but incomplete set. Always probe each declaration level
-                    // and union accessible methods without duplicating inherited slots.
-                    for var current Type? = clrType; current != nil; current = GetBaseTypeSafe(current!!) {
-                        for m in ClrTypeUtilities.SafeGetMethods(
-                            current,
-                            BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly
-                        ) {
-                            if ClrTypeUtilities.EmittedMemberNameMatches(m, n) && !IsMethodHiddenByExisting(result, m) {
-                                result.Add(m)
-                            }
-                        }
-                        // Issue #3679: an `internal` instance method of a friend
-                        // assembly is a legal candidate. Only `assembly` accessibility
-                        // is admitted — `private`/`protected`/`private protected`
-                        // members stay invisible however the friendship is declared.
-                        if !includeInternal {
-                            continue
-                        }
-                        for m in ClrTypeUtilities.SafeGetMethods(
-                            current,
-                            BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly
-                        ) {
-                            if m.IsAssembly && ClrTypeUtilities.EmittedMemberNameMatches(m, n) &&
-                                !IsMethodHiddenByExisting(result, m) {
-                                result.Add(m)
-                            }
-                        }
-                    }
-                    if clrType.IsConstructedGenericType {
-                        for openMethod in ClrTypeUtilities.SafeGetMethods(
-                            clrType.GetGenericTypeDefinition(),
-                            BindingFlags.Public | BindingFlags.Instance
-                        ) {
-                            if !ClrTypeUtilities.EmittedMemberNameMatches(openMethod, n) {
-                                continue
-                            }
-                            // TypeBuilder.GetMethod accepts only a TypeBuilder instantiation of the
-                            // method's own generic declaring type; every other shape would throw.
-                            let openDeclaringType = openMethod.DeclaringType
-                            if !ClrTypeUtilities.IsTypeBuilderInstantiation(clrType) ||
-                                openDeclaringType == nil ||
-                                !openDeclaringType.IsGenericTypeDefinition ||
-                                openDeclaringType != clrType.GetGenericTypeDefinition() ||
-                                (openMethod.IsGenericMethod && !openMethod.IsGenericMethodDefinition) {
-                                continue
-                            }
-                            try {
-                                let mapped = ClrTypeUtilities.MapConstructedGenericMethod(clrType, openMethod)
-                                if !IsMethodHiddenByExisting(result, mapped) {
-                                    result.Add(mapped)
-                                }
-                            } catch (ArgumentException) {
-                                // Runtime constructed types already exposed their methods above.
-
-                            }
-                        }
-                    }
-                    // Walk transitive interfaces for DIMs not surfaced by the concrete type.
-                    let receiverIsInterface = clrType.IsInterface
-                    for iface in ClrTypeUtilities.SafeGetInterfaces(clrType) {
-                        for m in ClrTypeUtilities.SafeGetMethods(iface, BindingFlags.Public | BindingFlags.Instance) {
-                            if !ClrTypeUtilities.EmittedMemberNameMatches(m, n) {
-                                continue
-                            }
-                            // Issue #4013: on a CLASS receiver an ABSTRACT interface
-                            // member is not part of the type's own surface. The class
-                            // must implement it, and how it did so decides whether the
-                            // member is reachable here:
-                            //
-                            //  - implemented IMPLICITLY — the class's own public method
-                            //    is already in `result` from the self/base walk above,
-                            //    so admitting the interface's copy adds nothing;
-                            //  - implemented EXPLICITLY — C# says the member is NOT on
-                            //    the implementing type's surface and is reachable only
-                            //    through an interface-typed receiver.
-                            //
-                            // Admitting it anyway is unsound, not merely permissive:
-                            // `List[int32]().Add("x")` fell through the generic
-                            // `Add(T)` to `IList.Add(object)` (which accepts anything)
-                            // and turned a static type error into a run-time
-                            // ArgumentException. Only a genuine DEFAULT interface
-                            // method — a non-abstract interface instance method, which
-                            // the class need not implement at all — is what this walk
-                            // exists to surface, so only that is admitted. An interface
-                            // receiver keeps the full walk: a base interface's abstract
-                            // members really are members of the derived interface.
-                            if receiverIsInterface || includeExplicitInterfaceMembers || !m.IsAbstract {
-                                if !IsMethodHiddenByExisting(result, m) {
-                                    result.Add(m)
-                                }
-                            }
-                        }
-                    }
-                    return result
-                }
+                (_ string) -> CollectCandidates(
+                    (owner Type) -> includeInternal && object.ReferenceEquals(owner.Assembly, clrType.Assembly)
+                )
             )
         }
 
@@ -1460,15 +1472,52 @@ internal class MemberLookup {
         func SafeGetEventIncludingSelfAndInterfaces(
             clrType Type?,
             name string,
-            includeInternal bool = false
+            includeInternal bool = false,
+            canAccessInternals((Type?) -> bool)? = nil,
+            isFamilyAccessible((Type?) -> bool)? = nil
         ) EventInfo? {
             if clrType == nil {
                 return nil
             }
-            let flags = ClrMemberVisibility.Widen(BindingFlags.Public | BindingFlags.Instance, includeInternal)
-            for type in EnumerateSelfAndInterfaces(clrType) {
-                let eventInfo = ClrTypeUtilities.SafeGetEvent(type, name, flags)
-                if ClrMemberVisibility.IsVisible(eventInfo, includeInternal) {
+            let declaredFlags = ClrMemberVisibility.Widen(
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly,
+                includeInternal || canAccessInternals != nil || isFamilyAccessible != nil
+            )
+            for var current Type? = clrType; current != nil; current = current?.BaseType {
+                let eventInfo = ClrTypeUtilities.SafeGetEvent(current, name, declaredFlags)
+                if eventInfo == nil {
+                    continue
+                }
+                let eventIncludeInternal = if canAccessInternals != nil {
+                    canAccessInternals(eventInfo.DeclaringType)
+                } else {
+                    includeInternal && object.ReferenceEquals(eventInfo.DeclaringType?.Assembly, clrType.Assembly)
+                }
+                let eventFromDerived = isFamilyAccessible != nil && isFamilyAccessible(eventInfo.DeclaringType)
+                let visible = if eventFromDerived {
+                    ClrMemberVisibility.IsVisibleFromDerived(eventInfo, eventIncludeInternal)
+                } else {
+                    ClrMemberVisibility.IsVisible(eventInfo, eventIncludeInternal)
+                }
+                if visible {
+                    return eventInfo
+                }
+            }
+            let interfaceFlags = ClrMemberVisibility.Widen(
+                BindingFlags.Public | BindingFlags.Instance,
+                includeInternal || canAccessInternals != nil
+            )
+            for iface in ClrTypeUtilities.SafeGetInterfaces(clrType) {
+                let eventInfo = ClrTypeUtilities.SafeGetEvent(iface, name, interfaceFlags)
+                if eventInfo == nil {
+                    continue
+                }
+                let eventIncludeInternal = if canAccessInternals != nil {
+                    canAccessInternals(eventInfo.DeclaringType)
+                } else {
+                    includeInternal && object.ReferenceEquals(eventInfo.DeclaringType?.Assembly, clrType.Assembly)
+                }
+                if ClrMemberVisibility.IsVisible(eventInfo, eventIncludeInternal) {
                     return eventInfo
                 }
             }
@@ -5313,7 +5362,7 @@ internal class MemberLookup {
                 let openParameters[]?ParameterInfo = openIndexer?.GetIndexParameters()
                 if openParameters != nil && parameterIndex < openParameters.Length {
                     let openParameter = openParameters[parameterIndex]
-                    return TupleElementNamesReader.ApplyNames(
+                    let mapped = TupleElementNamesReader.ApplyNames(
                         NullableFlagsBuilder.MergeDeclarationNullability(
                             MapOpenClrTypeToSymbolic(
                                 ClrNullability.GetSignatureType(openParameter),
@@ -5326,6 +5375,11 @@ internal class MemberLookup {
                         openParameter,
                         openParameter.ParameterType
                     )
+                    return if ClrNullability.HasOptionalNullDefault(openParameter) {
+                        NullabilityImportRule.ApplyNullDefaultLift(mapped)
+                    } else {
+                        mapped
+                    }
                 }
             }
             let closedParameterType = closedParameter.ParameterType
@@ -5923,19 +5977,24 @@ internal class MemberLookup {
                             "a by-ref parameter type has an element type",
                             expression: "openParameterType.GetElementType()"
                         )
+                        let pointee = TupleElementNamesReader.ApplyNames(
+                            NullableFlagsBuilder.MergeDeclarationNullability(
+                                MapOpenClrTypeToSymbolic(pointeeType, openDefinition, declaringTypeArguments),
+                                pointeeType,
+                                parameterFlags
+                            ),
+                            openParameter,
+                            pointeeType
+                        )
                         return ByRefTypeSymbol.Get(
-                            TupleElementNamesReader.ApplyNames(
-                                NullableFlagsBuilder.MergeDeclarationNullability(
-                                    MapOpenClrTypeToSymbolic(pointeeType, openDefinition, declaringTypeArguments),
-                                    pointeeType,
-                                    parameterFlags
-                                ),
-                                openParameter,
-                                pointeeType
-                            )
+                            if ClrNullability.HasOptionalNullDefault(openParameter) {
+                                NullabilityImportRule.ApplyNullDefaultLift(pointee)
+                            } else {
+                                pointee
+                            }
                         )
                     }
-                    return TupleElementNamesReader.ApplyNames(
+                    let mapped = TupleElementNamesReader.ApplyNames(
                         NullableFlagsBuilder.MergeDeclarationNullability(
                             MapOpenClrTypeToSymbolic(openParameterType, openDefinition, declaringTypeArguments),
                             openParameterType,
@@ -5944,6 +6003,11 @@ internal class MemberLookup {
                         openParameter,
                         openParameterType
                     )
+                    return if ClrNullability.HasOptionalNullDefault(openParameter) {
+                        NullabilityImportRule.ApplyNullDefaultLift(mapped)
+                    } else {
+                        mapped
+                    }
                 }
             }
             // Issue #3705 (family 2): same omission as GetClrMethodReturnTypeSymbol,
@@ -6326,7 +6390,7 @@ internal class MemberLookup {
             } else {
                 openType
             }
-            return TupleElementNamesReader.ApplyNames(
+            let mapped = TupleElementNamesReader.ApplyNames(
                 NullableFlagsBuilder.MergeDeclarationNullability(
                     MapOpenClrTypeToSymbolic(layout, openDefinition, typeArguments, openMethod, methodTypeArguments),
                     layout,
@@ -6335,6 +6399,11 @@ internal class MemberLookup {
                 openParameter,
                 layout
             )
+            return if ClrNullability.HasOptionalNullDefault(openParameter) {
+                NullabilityImportRule.ApplyNullDefaultLift(mapped)
+            } else {
+                mapped
+            }
         }
 
         /// ADR-0193 Phase 2: (cref:GetClrOpenParameterPointeeTypeSymbol)
@@ -8335,67 +8404,49 @@ internal class MemberLookup {
                 let paramsIndex = openParams.Length - 1
                 let fixedPairs = Math.Min(paramsIndex, argumentCount)
                 for var i = 0; i < fixedPairs; i++ {
+                    let layoutParameter = ClrNullability.GetOpenParameterDefinition(openParams[i])
                     UnifyForMethodTypeArgs(
                         openParams[i].ParameterType,
-                        OpenSlotInferenceArgument(
-                            openParams[i],
-                            ArgumentForInference(openParams[i], paramsElement: false, i)
-                        ),
+                        ArgumentForInference(openParams[i], paramsElement: false, i),
                         openMethod,
                         bounds,
-                        ArgumentBoundKind(i)
+                        ArgumentBoundKind(i),
+                        layoutParameter,
+                        layoutParameter.ParameterType,
+                        flagPosition: 0
                     )
                 }
+                let layoutParams = ClrNullability.GetOpenParameterDefinition(openParams[^1])
+                let layoutParamsElement = layoutParams.ParameterType.GetElementType()
                 for var i = paramsIndex; i < argumentCount; i++ {
                     UnifyForMethodTypeArgs(
                         paramsElementType,
                         ArgumentForInference(openParams[^1], paramsElement: true, i),
                         openMethod,
                         bounds,
-                        ArgumentBoundKind(i)
+                        ArgumentBoundKind(i),
+                        layoutParams,
+                        layoutParamsElement,
+                        flagPosition: 1
                     )
                 }
             } else {
                 let pairs = Math.Min(openParams.Length, argumentCount)
                 for var i = 0; i < pairs; i++ {
+                    let layoutParameter = ClrNullability.GetOpenParameterDefinition(openParams[i])
                     UnifyForMethodTypeArgs(
                         openParams[i].ParameterType,
-                        OpenSlotInferenceArgument(
-                            openParams[i],
-                            ArgumentForInference(openParams[i], paramsElement: false, i)
-                        ),
+                        ArgumentForInference(openParams[i], paramsElement: false, i),
                         openMethod,
                         bounds,
-                        ArgumentBoundKind(i)
+                        ArgumentBoundKind(i),
+                        layoutParameter,
+                        layoutParameter.ParameterType,
+                        flagPosition: 0
                     )
                 }
             }
             return FixSymbolicMethodTypeArguments(openMethod, bounds, out requiresRecoveredInference)
-        }
-
-        /// The argument a top-level parameter contributes to method type-argument
-        /// inference. When the parameter is a bare method type parameter the
-        /// declaration annotates (`T? value`), a `X?` argument infers
-        /// `T := X`, as in C#, rather than `T := X?`, which would make
-        /// `Invariant.Required(p.DeclaringType, …)` return `Type?`.
-        /// (cref:NullabilityImportRule.InferOpenSlotArgument) decides it, as
-        /// the inverse of the rule that widens the same slot on the way in. A
-        /// source method's parameter is already typed `T?` and unifies
-        /// through the nullable wrapper, so only imported methods need this.
-        /// @param openParameter The open definition's parameter.
-        /// @param argument The argument's symbolic type.
-        /// @returns The type to unify against the parameter's CLR type.
-        private func OpenSlotInferenceArgument(openParameter ParameterInfo, argument TypeSymbol?) TypeSymbol? {
-            if !(argument is NullableTypeSymbol) ||
-                openParameter.ParameterType is not{IsGenericParameter: true, DeclaringMethod: not nil} {
-                return argument
-            }
-            // The slot as DECLARED: GetParameterTypeSymbol also widens a parameter
-            // with a null default, and `T value = default` must not strip `?`.
-            return NullabilityImportRule.InferOpenSlotArgument(
-                argument,
-                ClrNullability.GetParameterDeclaredState(openParameter)
-            )
         }
 
         private func FixSymbolicMethodTypeArguments(
@@ -8811,12 +8862,76 @@ internal class MemberLookup {
             default: SymbolicInferenceBoundKind.Exact
         }
 
+        private func NextFlagPosition(flagPosition int32, delta int32) int32 -> if flagPosition < 0 {
+            -1
+        } else {
+            flagPosition + delta
+        }
+
+        private func GetGenericArgumentFlagPosition(
+            layoutClr Type?,
+            layoutArgs[]?Type,
+            flagPosition int32,
+            argumentIndex int32
+        ) int32 {
+            if flagPosition < 0 ||
+                layoutClr == nil ||
+                layoutArgs == nil ||
+                uint32(argumentIndex) >= uint32(layoutArgs.Length) {
+                return -1
+            }
+            var current = flagPosition +
+                (
+                if NullableLifting.GetValueTypeNullableUnderlyingClr(layoutClr) != nil {
+                    0
+                } else {
+                    1
+                }
+            )
+            for var i = 0; i < argumentIndex; i++ {
+                current += ClrNullability.CountNullabilityBytes(layoutArgs[i])
+            }
+            return current
+        }
+
+        private func ResolveLayoutStep(
+            nextLayout Type?,
+            nextFlagPosition int32,
+            delegateArgLayouts[]?DelegateArgLayout
+        )(Layout Type?, FlagPosition int32, DelegateArgLayouts[]?DelegateArgLayout) {
+            var currentLayout = nextLayout
+            var currentFlagPosition = nextFlagPosition
+            var currentDelegateLayouts = delegateArgLayouts
+            while currentDelegateLayouts != nil {
+                let stripped = if currentLayout != nil && currentLayout.IsByRef == true {
+                    currentLayout.GetElementType()
+                } else {
+                    currentLayout
+                }
+                if stripped == nil ||
+                    stripped.IsGenericParameter != true ||
+                    stripped.DeclaringMethod != nil ||
+                    uint32(stripped.GenericParameterPosition) >= uint32(currentDelegateLayouts.Length) {
+                    break
+                }
+                let entry = currentDelegateLayouts[stripped.GenericParameterPosition]
+                currentLayout = entry.Layout
+                currentFlagPosition = entry.FlagPosition
+                currentDelegateLayouts = entry.ParentLayouts
+            }
+            return (currentLayout, currentFlagPosition, currentDelegateLayouts)
+        }
+
         private func UnifyForMethodTypeArgs(
             openClr Type?,
             actual TypeSymbol?,
             openMethod MethodInfo,
             bounds SymbolicInferenceBounds,
-            boundKind SymbolicInferenceBoundKind = SymbolicInferenceBoundKind.Lower
+            boundKind SymbolicInferenceBoundKind = SymbolicInferenceBoundKind.Lower,
+            openParameter ParameterInfo? = nil,
+            layoutClr Type? = nil,
+            flagPosition int32 = -1,
+            delegateArgLayouts[]?DelegateArgLayout = nil
         ) {
             var actual = actual
             if openClr == nil || actual == nil {
@@ -8826,6 +8941,35 @@ internal class MemberLookup {
                 return
             }
             if object.ReferenceEquals(actual, TypeSymbol.Error) {
+                return
+            }
+            if openClr.IsByRef {
+                let openPointee = openClr.GetElementType()
+                let layoutPointee = if layoutClr != nil && layoutClr.IsByRef == true {
+                    layoutClr.GetElementType()
+                } else {
+                    layoutClr
+                }
+                let (nextLayout, nextFlagPosition, nextDelegateLayouts) = ResolveLayoutStep(
+                    layoutPointee,
+                    flagPosition,
+                    delegateArgLayouts
+                )
+                UnifyForMethodTypeArgs(
+                    openPointee,
+                    if actual is ByRefTypeSymbol bf {
+                        bf.PointeeType
+                    } else {
+                        actual
+                    },
+                    openMethod,
+                    bounds,
+                    SymbolicInferenceBoundKind.Exact,
+                    openParameter,
+                    nextLayout,
+                    nextFlagPosition,
+                    nextDelegateLayouts
+                )
                 return
             }
             var actualForHierarchyProjection = actual
@@ -8845,17 +8989,30 @@ internal class MemberLookup {
             // nullable-reference wrappers are removed for outer structural
             // matching. Multiple inference sources join compatible nullable
             // evidence instead of depending on argument order.
+            //
+            // Issues #4425 / #4429: when an imported parameter position (top-level
+            // or nested inside an array, by-ref, tuple, or generic parameter) is
+            // explicitly annotated `T?` (`[Nullable(2)]`), a reference-typed `X?`
+            // argument infers `T := X`, as in C#, via `InferOpenSlotArgument`.
             if openClr.IsGenericParameter && openClr.DeclaringMethod != nil {
                 if actual == TypeSymbol.Void || TypeSymbol.ContainsNeverType(actual) ||
                     TypeSymbol.ContainsNullLiteralType(actual) {
                     return
+                }
+                let inferredActual = if openParameter != nil && flagPosition >= 0 && actual is NullableTypeSymbol {
+                    NullabilityImportRule.InferOpenSlotArgument(
+                        actual,
+                        ClrNullability.GetParameterDeclaredState(openParameter, flagPosition)
+                    )
+                } else {
+                    actual
                 }
                 if object.ReferenceEquals(openClr.DeclaringMethod, openMethod) ||
                     openClr.DeclaringMethod!!.MetadataToken == openMethod
                     .MetadataToken {
                     let pos = openClr.GenericParameterPosition
                     if uint32(pos) < uint32(bounds.Arity) {
-                        bounds.Add(pos, NormalizeRecoveredNullability(actual), boundKind)
+                        bounds.Add(pos, NormalizeRecoveredNullability(inferredActual), boundKind)
                     }
                 }
                 return
@@ -8892,12 +9049,30 @@ internal class MemberLookup {
                 if actual is RectangularArrayTypeSymbol actualRectangular &&
                     actualRectangular.Rank == openClr
                     .GetArrayRank() {
+                    let layoutElement = if layoutClr != nil && layoutClr.IsArray == true {
+                        layoutClr.GetElementType()
+                    } else {
+                        default(Type?)
+                    }
+                    let (nextLayout, nextFlagPosition, nextDelegateLayouts) = ResolveLayoutStep(
+                        layoutElement,
+                        if layoutElement != nil {
+                            NextFlagPosition(flagPosition, 1)
+                        } else {
+                            -1
+                        },
+                        delegateArgLayouts
+                    )
                     UnifyForMethodTypeArgs(
                         openClr.GetElementType(),
                         actualRectangular.ElementType,
                         openMethod,
                         bounds,
-                        boundKind
+                        boundKind,
+                        openParameter,
+                        nextLayout,
+                        nextFlagPosition,
+                        nextDelegateLayouts
                     )
                 }
                 return
@@ -8908,24 +9083,42 @@ internal class MemberLookup {
                     return
                 }
                 let openElement = openClr.GetElementType()
-                let actualElement TypeSymbol? = TryGetElementType(actual!!)
-                if actualElement != nil {
-                    UnifyForMethodTypeArgs(openElement, actualElement, openMethod, bounds, boundKind)
+                let layoutElement = if layoutClr != nil && layoutClr.IsArray == true {
+                    layoutClr.GetElementType()
+                } else {
+                    default(Type?)
                 }
-                return
-            }
-            if openClr.IsByRef {
-                let openPointee = openClr.GetElementType()
-                if actual is ByRefTypeSymbol bf {
+                let (nextLayout, nextFlagPosition, nextDelegateLayouts) = ResolveLayoutStep(
+                    layoutElement,
+                    if layoutElement != nil {
+                        NextFlagPosition(flagPosition, 1)
+                    } else {
+                        -1
+                    },
+                    delegateArgLayouts
+                )
+                let actualElement TypeSymbol? = TryGetElementType(actual!!) ??
+                    (
+                    if (annotatedActualForProjection ?? actual) is {} arrayCarrier &&
+                        arrayCarrier.ClrType is {IsSZArray: true} &&
+                        arrayCarrier.GetElementPositions() is [var carrierElement] {
+                        carrierElement
+                    } else {
+                        default(TypeSymbol?)
+                    }
+                )
+                if actualElement != nil {
                     UnifyForMethodTypeArgs(
-                        openPointee,
-                        bf.PointeeType,
+                        openElement,
+                        actualElement,
                         openMethod,
                         bounds,
-                        SymbolicInferenceBoundKind.Exact
+                        boundKind,
+                        openParameter,
+                        nextLayout,
+                        nextFlagPosition,
+                        nextDelegateLayouts
                     )
-                } else {
-                    UnifyForMethodTypeArgs(openPointee, actual, openMethod, bounds, SymbolicInferenceBoundKind.Exact)
                 }
                 return
             }
@@ -8939,6 +9132,20 @@ internal class MemberLookup {
                 // through the pointee, tolerating an actual that is already the
                 // pointee rather than a pointer.
                 let openPointerPointee = openClr.GetElementType()
+                let layoutPointerPointee = if layoutClr != nil && layoutClr.IsPointer == true {
+                    layoutClr.GetElementType()
+                } else {
+                    default(Type?)
+                }
+                let (nextLayout, nextFlagPosition, nextDelegateLayouts) = ResolveLayoutStep(
+                    layoutPointerPointee,
+                    if layoutPointerPointee != nil {
+                        NextFlagPosition(flagPosition, 1)
+                    } else {
+                        -1
+                    },
+                    delegateArgLayouts
+                )
                 UnifyForMethodTypeArgs(
                     openPointerPointee,
                     if actual is PointerTypeSymbol actualPointer {
@@ -8948,13 +9155,43 @@ internal class MemberLookup {
                     },
                     openMethod,
                     bounds,
-                    SymbolicInferenceBoundKind.Exact
+                    SymbolicInferenceBoundKind.Exact,
+                    openParameter,
+                    nextLayout,
+                    nextFlagPosition,
+                    nextDelegateLayouts
                 )
                 return
             }
             if openClr.IsGenericType && !openClr.IsGenericTypeDefinition {
                 let openDef = openClr.GetGenericTypeDefinition()
                 let openArgs = openClr.GetGenericArguments()
+                let layoutArgs = if layoutClr != nil &&
+                    layoutClr.IsGenericType &&
+                    !layoutClr.IsGenericTypeDefinition &&
+                    ClrTypeUtilities.AreSame(layoutClr.GetGenericTypeDefinition(), openDef) {
+                    layoutClr.GetGenericArguments()
+                } else {
+                    default([]?Type)
+                }
+                let LayoutArgAt = func (index int32) Type? {
+                    return if layoutArgs != nil && uint32(index) < uint32(layoutArgs.Length) {
+                        layoutArgs[index]
+                    } else {
+                        default(Type?)
+                    }
+                }
+                let StepGenericArg = func (index int32)(
+                    Layout Type?,
+                    FlagPosition int32,
+                    DelegateArgLayouts[]?DelegateArgLayout
+                ) {
+                    return ResolveLayoutStep(
+                        LayoutArgAt(index),
+                        GetGenericArgumentFlagPosition(layoutClr, layoutArgs, flagPosition, index),
+                        delegateArgLayouts
+                    )
+                }
                 var foundHierarchyProjection = false
                 if (annotatedActualForProjection != nil || actual is ImportedTypeSymbol) &&
                     TryMapUniqueConstructedTypeArgumentsThroughHierarchy(
@@ -8964,12 +9201,17 @@ internal class MemberLookup {
                     out foundHierarchyProjection
                 ) {
                     for var i = 0; i < openArgs.Length && i < hierarchyProjection.Length; i++ {
+                        let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(i)
                         UnifyForMethodTypeArgs(
                             openArgs[i],
                             hierarchyProjection[i],
                             openMethod,
                             bounds,
-                            GetNestedInferenceBoundKind(openDef, i, boundKind)
+                            GetNestedInferenceBoundKind(openDef, i, boundKind),
+                            openParameter,
+                            argLayout,
+                            argFlagPosition,
+                            argDelegateLayouts
                         )
                     }
                     return
@@ -8988,7 +9230,18 @@ internal class MemberLookup {
                     .ElementTypes
                     .Length {
                     for var i = 0; i < openArgs.Length; i++ {
-                        UnifyForMethodTypeArgs(openArgs[i], tuple.ElementTypes[i], openMethod, bounds, boundKind)
+                        let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(i)
+                        UnifyForMethodTypeArgs(
+                            openArgs[i],
+                            tuple.ElementTypes[i],
+                            openMethod,
+                            bounds,
+                            boundKind,
+                            openParameter,
+                            argLayout,
+                            argFlagPosition,
+                            argDelegateLayouts
+                        )
                     }
                     return
                 }
@@ -9025,12 +9278,17 @@ internal class MemberLookup {
                 if openArgs.Length == 1 && ChannelTypeSymbol.IsChannelClrDefinitionName(openDef.FullName) &&
                     ChannelTypeSymbol
                     .TryGetChannelShape(actual, out var channelActualElement, out _, out _) {
+                    let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(0)
                     UnifyForMethodTypeArgs(
                         openArgs[0],
                         channelActualElement,
                         openMethod,
                         bounds,
-                        GetNestedInferenceBoundKind(openDef, 0, boundKind)
+                        GetNestedInferenceBoundKind(openDef, 0, boundKind),
+                        openParameter,
+                        argLayout,
+                        argFlagPosition,
+                        argDelegateLayouts
                     )
                     return
                 }
@@ -9068,12 +9326,17 @@ internal class MemberLookup {
                     .Length == openArgs
                     .Length {
                     for var j = 0; j < openArgs.Length; j++ {
+                        let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(j)
                         UnifyForMethodTypeArgs(
                             openArgs[j],
                             projectedImp.TypeArguments[j],
                             openMethod,
                             bounds,
-                            GetNestedInferenceBoundKind(openDef, j, boundKind)
+                            GetNestedInferenceBoundKind(openDef, j, boundKind),
+                            openParameter,
+                            argLayout,
+                            argFlagPosition,
+                            argDelegateLayouts
                         )
                     }
                     return
@@ -9099,7 +9362,18 @@ internal class MemberLookup {
                     "System.Linq.Expressions.Expression`1",
                     StringComparison.Ordinal
                 ) {
-                    UnifyForMethodTypeArgs(openArgs[0], actual, openMethod, bounds, boundKind)
+                    let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(0)
+                    UnifyForMethodTypeArgs(
+                        openArgs[0],
+                        actual,
+                        openMethod,
+                        bounds,
+                        boundKind,
+                        openParameter,
+                        argLayout,
+                        argFlagPosition,
+                        argDelegateLayouts
+                    )
                     return
                 }
                 // Issue #2643: infer through the Invoke signature rather than
@@ -9109,30 +9383,59 @@ internal class MemberLookup {
                 if actual is FunctionTypeSymbol namedDelegateFunction && ClrTypeUtilities.IsDelegateType(openClr) {
                     let invoke MethodInfo? = openClr.GetMethodSafe("Invoke")
                     let invokeParameters[]?ParameterInfo = invoke?.GetParameters()
+                    let openInvoke MethodInfo? = openDef.GetMethodSafe("Invoke")
+                    let openInvokeParameters[]?ParameterInfo = openInvoke?.GetParameters()
+                    let slotLayouts = [openArgs.Length]DelegateArgLayout
+                    for var k = 0; k < openArgs.Length; k++ {
+                        let (argLayout, argFlagPosition, parentLayouts) = StepGenericArg(k)
+                        slotLayouts[k] = DelegateArgLayout(argLayout, argFlagPosition, parentLayouts)
+                    }
                     if invoke != nil &&
                         invokeParameters != nil &&
                         invokeParameters.Length == namedDelegateFunction
                         .ParameterTypes
                         .Length {
                         for var j = 0; j < invokeParameters.Length; j++ {
+                            let (paramLayout, paramFlagPosition, paramDelegateLayouts) = ResolveLayoutStep(
+                                if openInvokeParameters != nil && uint32(j) < uint32(openInvokeParameters.Length) {
+                                    openInvokeParameters[j].ParameterType
+                                } else {
+                                    default(Type?)
+                                },
+                                -1,
+                                slotLayouts
+                            )
                             UnifyForMethodTypeArgs(
                                 invokeParameters[j].ParameterType,
                                 namedDelegateFunction.ParameterTypes[j],
                                 openMethod,
                                 bounds,
-                                ReverseInferenceBoundKind(boundKind)
+                                ReverseInferenceBoundKind(boundKind),
+                                openParameter,
+                                paramLayout,
+                                paramFlagPosition,
+                                paramDelegateLayouts
                             )
                         }
                         if !FunctionTypeSymbol.IsVoidReturn(namedDelegateFunction.ReturnType) &&
                             !invoke
                             .ReturnType
                             .IsSameAs(typeof(Void)) {
+                            let (returnLayout, returnFlagPosition, returnDelegateLayouts) = ResolveLayoutStep(
+                                openInvoke?.ReturnType,
+                                -1,
+                                slotLayouts
+                            )
                             UnifyForMethodTypeArgs(
                                 invoke.ReturnType,
                                 namedDelegateFunction.ReturnType,
                                 openMethod,
                                 bounds,
-                                boundKind
+                                boundKind,
+                                openParameter,
+                                returnLayout,
+                                returnFlagPosition,
+                                returnDelegateLayouts
                             )
                         }
                     }
@@ -9160,21 +9463,32 @@ internal class MemberLookup {
                     }
                     if openArgs.Length == expectedArgs {
                         for var j = 0; j < fn.ParameterTypes.Length; j++ {
+                            let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(j)
                             UnifyForMethodTypeArgs(
                                 openArgs[j],
                                 fn.ParameterTypes[j],
                                 openMethod,
                                 bounds,
-                                ReverseInferenceBoundKind(boundKind)
+                                ReverseInferenceBoundKind(boundKind),
+                                openParameter,
+                                argLayout,
+                                argFlagPosition,
+                                argDelegateLayouts
                             )
                         }
                         if !fnVoid {
+                            let returnArgIndex = openArgs.Length - 1
+                            let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(returnArgIndex)
                             UnifyForMethodTypeArgs(
-                                openArgs[openArgs.Length - 1],
+                                openArgs[returnArgIndex],
                                 fn.ReturnType,
                                 openMethod,
                                 bounds,
-                                boundKind
+                                boundKind,
+                                openParameter,
+                                argLayout,
+                                argFlagPosition,
+                                argDelegateLayouts
                             )
                         }
                     }
@@ -9186,12 +9500,17 @@ internal class MemberLookup {
                 if openArgs.Length == 1 {
                     let actualElement TypeSymbol? = TryGetElementType(actual!!)
                     if actualElement != nil {
+                        let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(0)
                         UnifyForMethodTypeArgs(
                             openArgs[0],
                             actualElement,
                             openMethod,
                             bounds,
-                            GetNestedInferenceBoundKind(openDef, 0, boundKind)
+                            GetNestedInferenceBoundKind(openDef, 0, boundKind),
+                            openParameter,
+                            argLayout,
+                            argFlagPosition,
+                            argDelegateLayouts
                         )
                         return
                     }
@@ -9204,12 +9523,17 @@ internal class MemberLookup {
                     projectedImp2 != nil {
                     if TryMapThroughImplemented(projectedImp2, openDef, out var liftedArgs) {
                         for var j = 0; j < openArgs.Length && j < liftedArgs.Length; j++ {
+                            let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(j)
                             UnifyForMethodTypeArgs(
                                 openArgs[j],
                                 liftedArgs[j],
                                 openMethod,
                                 bounds,
-                                GetNestedInferenceBoundKind(openDef, j, boundKind)
+                                GetNestedInferenceBoundKind(openDef, j, boundKind),
+                                openParameter,
+                                argLayout,
+                                argFlagPosition,
+                                argDelegateLayouts
                             )
                         }
                     }

@@ -49,13 +49,6 @@ internal shared class ReaderAgreementAllowlist {
             Reason: "FromClrType maps the reference type System.Tuple<...> onto a (value) TupleTypeSymbol " +
                 "(#1922); the symbolic projection keeps it an ImportedTypeSymbol reference. Only the CLR " +
                 "readers' side of the split is excused, so the symbolic readers must still agree."
-        ),
-        ReaderAgreementAllowlist.Entry(
-            Readers: ImmutableArray.Create("direct"),
-            Tag: "optional-null-default",
-            Issue: "https://github.com/DavidObando/gsharp/issues/4403",
-            Reason: "ClrNullability.GetParameterTypeSymbol lifts a null-default reference parameter to T?; " +
-                "the merge-based parameter reader does not."
         )
     )
 
