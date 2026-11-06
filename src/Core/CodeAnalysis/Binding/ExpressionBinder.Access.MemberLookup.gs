@@ -1642,19 +1642,18 @@ internal partial class ExpressionBinder {
                 }
                 builder.MoveToImmutable()
             }
+            let allowProtectedMultiIndexer = IsFamilyAccessibleClrMember(multiClrTarget, target)
             let multiOutcome = this.memberLookup.TryResolveClrIndexer(
                 target.Type,
                 multiClrTarget,
                 multiClrArguments,
                 out var multiClrIndexer,
-                out var multiResolvedArguments
+                out var multiResolvedArguments,
+                fromDerivedType: allowProtectedMultiIndexer
             )
             if multiOutcome == ClrIndexerResolutionOutcome.Resolved &&
                 multiClrIndexer != nil &&
-                ClrMemberVisibility.GetVisibleGetter(
-                multiClrIndexer,
-                CanAccessInternalsOf(multiClrIndexer.DeclaringType)
-            ) != nil {
+                GetVisibleGetter(multiClrIndexer, fromDerivedType: allowProtectedMultiIndexer) != nil {
                 let elementType = if target.Type is ImportedTypeSymbol importedTarget {
                     MapErasedIndexerElementType(importedTarget, multiClrIndexer)
                 } else {
@@ -1683,6 +1682,37 @@ internal partial class ExpressionBinder {
                         clrIndex
                 }
                 return ConversionClassifier.AutoDereferenceRefReturn(clrIndex)
+            }
+            if multiOutcome == ClrIndexerResolutionOutcome.Resolved &&
+                multiClrIndexer != nil &&
+                !allowProtectedMultiIndexer &&
+                GetVisibleGetter(multiClrIndexer, fromDerivedType: true) != nil &&
+                CanReportProtectedClrInstanceAccess(multiClrIndexer.DeclaringType, target) {
+                Diagnostics.ReportProtectedMemberInaccessible(
+                    targetLocation,
+                    multiClrIndexer.Name,
+                    ClrTypeDisplayName(multiClrIndexer.DeclaringType ?? multiClrTarget)
+                )
+                return BoundErrorExpression(nil)
+            }
+            if !allowProtectedMultiIndexer && this.memberLookup.TryResolveClrIndexer(
+                target.Type,
+                multiClrTarget,
+                multiClrArguments,
+                out var protMultiClrIndexer,
+                out _,
+                fromDerivedType: true
+            ) == ClrIndexerResolutionOutcome.Resolved &&
+                protMultiClrIndexer != nil &&
+                GetVisibleGetter(protMultiClrIndexer, fromDerivedType: true) != nil &&
+                GetVisibleGetter(protMultiClrIndexer) == nil &&
+                CanReportProtectedClrInstanceAccess(protMultiClrIndexer.DeclaringType, target) {
+                Diagnostics.ReportProtectedMemberInaccessible(
+                    targetLocation,
+                    protMultiClrIndexer.Name,
+                    ClrTypeDisplayName(protMultiClrIndexer.DeclaringType ?? multiClrTarget)
+                )
+                return BoundErrorExpression(nil)
             }
             if ReportClrIndexerResolutionFailure(multiOutcome, targetLocation) {
                 return BoundErrorExpression(nil)

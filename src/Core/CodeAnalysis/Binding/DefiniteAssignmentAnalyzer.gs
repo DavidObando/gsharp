@@ -2566,6 +2566,15 @@ internal shared class DefiniteAssignmentAnalyzer {
             }
             return
         }
+        if refKind == RefKind.Ref && argument is BoundAddressOfExpression refAddress {
+            ProcessExpression(refAddress.Operand, assigned, diagnostics, pointerAliases, tracked, flowContext)
+            return
+        }
+        if refKind == RefKind.Ref &&
+            argument is BoundConditionalAddressExpression refConditionalAddress &&
+            TryGetSingleAddressedVariable(refConditionalAddress, out var refCondVariable) {
+            assignedAfterCall = refCondVariable
+        }
         ProcessExpression(argument, assigned, diagnostics, pointerAliases, tracked, flowContext)
     }
 

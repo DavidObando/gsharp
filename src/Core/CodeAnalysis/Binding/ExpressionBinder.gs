@@ -3332,17 +3332,19 @@ internal partial class ExpressionBinder {
             memberName,
             CanAccessInternalsOf
         )
-        if clrProp != nil &&
-            GetVisibleGetter(clrProp, fromDerivedType: true) != nil &&
-            GetVisibleGetter(clrProp) == nil &&
-            CanReportProtectedClrInstanceAccess(clrProp.DeclaringType, receiver) &&
-            !IsFamilyAccessibleClrMember(clrProp.DeclaringType, receiver) {
-            Diagnostics.ReportProtectedMemberInaccessible(
-                location,
-                memberName,
-                ClrTypeDisplayName(clrProp.DeclaringType ?? clrReceiverType)
-            )
-            return true
+        if clrProp != nil {
+            if GetVisibleGetter(clrProp, fromDerivedType: true) != nil &&
+                GetVisibleGetter(clrProp) == nil &&
+                CanReportProtectedClrInstanceAccess(clrProp.DeclaringType, receiver) &&
+                !IsFamilyAccessibleClrMember(clrProp.DeclaringType, receiver) {
+                Diagnostics.ReportProtectedMemberInaccessible(
+                    location,
+                    memberName,
+                    ClrTypeDisplayName(clrProp.DeclaringType ?? clrReceiverType)
+                )
+                return true
+            }
+            return false
         }
         let clrFld FieldInfo? = ClrTypeUtilities.SafeGetInheritedInstanceField(
             clrReceiverType,

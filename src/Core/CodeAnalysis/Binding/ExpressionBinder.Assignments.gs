@@ -1963,7 +1963,7 @@ internal partial class ExpressionBinder {
                 GetInheritedClrBaseType(thisStruct) is Type inheritedBaseClr {
                 let inheritedReceiver = BoundVariableExpression(nil, effThis!!)
                 let inheritedEventInfo EventInfo? = if isEventOperator {
-                    TryGetInheritedClrEvent(inheritedBaseClr, name)
+                    TryGetInheritedClrEvent(inheritedBaseClr, name, inheritedReceiver)
                 } else {
                     default(EventInfo?)
                 }

@@ -1471,14 +1471,15 @@ internal class MemberLookup {
             clrType Type?,
             name string,
             includeInternal bool = false,
-            canAccessInternals((Type?) -> bool)? = nil
+            canAccessInternals((Type?) -> bool)? = nil,
+            isFamilyAccessible((Type?) -> bool)? = nil
         ) EventInfo? {
             if clrType == nil {
                 return nil
             }
             let declaredFlags = ClrMemberVisibility.Widen(
                 BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly,
-                includeInternal || canAccessInternals != nil
+                includeInternal || canAccessInternals != nil || isFamilyAccessible != nil
             )
             for var current Type? = clrType; current != nil; current = current?.BaseType {
                 let eventInfo = ClrTypeUtilities.SafeGetEvent(current, name, declaredFlags)
@@ -1490,7 +1491,13 @@ internal class MemberLookup {
                 } else {
                     includeInternal && object.ReferenceEquals(eventInfo.DeclaringType?.Assembly, clrType.Assembly)
                 }
-                if ClrMemberVisibility.IsVisible(eventInfo, eventIncludeInternal) {
+                let eventFromDerived = isFamilyAccessible != nil && isFamilyAccessible(eventInfo.DeclaringType)
+                let visible = if eventFromDerived {
+                    ClrMemberVisibility.IsVisibleFromDerived(eventInfo, eventIncludeInternal)
+                } else {
+                    ClrMemberVisibility.IsVisible(eventInfo, eventIncludeInternal)
+                }
+                if visible {
                     return eventInfo
                 }
             }

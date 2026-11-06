@@ -1219,13 +1219,31 @@ class Der : CSource {
         protected int ProtField = 10;
         protected int ProtProp { get; set; } = 20;
         protected int ProtMethod(int x) => ProtField + ProtProp + x;
+        private readonly int[,] _grid = new int[4, 4];
+        protected int this[int row, int col]
+        {
+            get => _grid[row, col];
+            set => _grid[row, col] = value;
+        }
+        protected int Value = 100;
         public event System.Action? Shadowed;
+        public event System.Action? PrivShadowed;
+        public event System.Action? ProtShadowed;
+        public void InvokeBaseEvents()
+        {
+            PrivShadowed?.Invoke();
+            ProtShadowed?.Invoke();
+        }
     }
 
     public class CMid : CBase
     {
+        public new int Value { get; set; } = 5;
         protected new System.Action? Shadowed;
+        private new event System.Action? PrivShadowed { add { } remove { } }
+        protected new event System.Action? ProtShadowed;
         public void InvokeShadowed() => Shadowed?.Invoke();
+        public void InvokeMidProtShadowed() => ProtShadowed?.Invoke();
     }
 }`
         const source = `
@@ -1234,15 +1252,23 @@ import System
 import ProtectedReceiver.Library
 
 open class Der : CMid {
-    func Poke(d Der, s SubDer) int32 {
+    func Poke(d Der, s SubDer, m CMid) int32 {
         d.ProtField = 1
         d.ProtField += 2
         d.ProtProp = 4
         d.ProtProp += 5
+        d[1, 2] = 7
+        d[1, 2] += 3
+        s[0, 1] = d[1, 2]
+        m.Value += 4
         s.ProtField = d.ProtField + 10
         s.ProtProp = d.ProtProp + 20
         Shadowed += () -> { Console.WriteLine("nearer field") }
-        return d.ProtMethod(3) + s.ProtMethod(6)
+        PrivShadowed += () -> { Console.WriteLine("base priv-shadowed bare") }
+        this.PrivShadowed += () -> { Console.WriteLine("base priv-shadowed this") }
+        ProtShadowed += () -> { Console.WriteLine("mid prot-shadowed bare") }
+        this.ProtShadowed += () -> { Console.WriteLine("mid prot-shadowed this") }
+        return d.ProtMethod(3) + s.ProtMethod(6) + s[0, 1] + m.Value
     }
 }
 
@@ -1251,14 +1277,41 @@ class SubDer : Der {
 
 let d = Der()
 let s = SubDer()
-Console.WriteLine(d.Poke(d, s))
+let m = CMid()
+Console.WriteLine(d.Poke(d, s, m))
 d.InvokeShadowed()
+d.InvokeBaseEvents()
+d.InvokeMidProtShadowed()
 `
         let tempDir = Directory.CreateTempSubdirectory("gs_prot_recv_").FullName
         try {
             let library = BuildCsLibrary(tempDir, csLibrary, "ProtectedReceiver.Library")
             let lines = CompileVerifyAndRun(tempDir, "imported-protected-receiver", source, library)
-            Assert.Equal([]string{"63", "nearer field"}, lines)
+            Assert.Equal(
+                []string{
+                    "82",
+                    "nearer field",
+                    "base priv-shadowed bare",
+                    "base priv-shadowed this",
+                    "mid prot-shadowed bare",
+                    "mid prot-shadowed this"
+                },
+                lines
+            )
+            let (_, badIdxReadOut, badIdxReadErr) = Compile(tempDir, "imported-protected-multi-idx-read", `package P
+import ProtectedReceiver.Library
+class Der : CMid {
+    func Bad(b CBase) int32 -> b[1, 2]
+}`, library)
+            Assert.Contains("GS0379", badIdxReadOut + badIdxReadErr)
+            let (_, badIdxWriteOut, badIdxWriteErr) = Compile(tempDir, "imported-protected-multi-idx-write", `package P
+import ProtectedReceiver.Library
+class Der : CMid {
+    func Bad(b CBase) {
+        b[1, 2] = 5
+    }
+}`, library)
+            Assert.Contains("GS0379", badIdxWriteOut + badIdxWriteErr)
         } finally {
             DeleteBestEffort(tempDir)
         }

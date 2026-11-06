@@ -382,6 +382,20 @@ func bad(out x int32) {
 unsafe func bad(values []int32, out x int32) {
     *(&values[x]) = fill(out x)
 }`)
+    @InlineData(`struct Pair {
+    var f int32
+}
+func takeRef(ref v int32) {}
+func bad(out x Pair) {
+    takeRef(&x.f)
+    x = Pair{f: 1}
+}`)
+    @InlineData(`import System.Numerics
+func takeRef(ref v float32) {}
+func bad(out x Vector2) {
+    takeRef(&x.X)
+    x = Vector2(1.0f, 2.0f)
+}`)
     func OutParameterReadBeforeAssignment_ReportsGS0239(body string) {
         let result = Compile("package OutReadDA\n\n" + body + "\n")
         let diag = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0239")
