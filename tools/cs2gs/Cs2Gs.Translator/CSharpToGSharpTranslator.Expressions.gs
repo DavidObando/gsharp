@@ -4409,7 +4409,18 @@ partial class CSharpToGSharpTranslator {
             }
             // Issue #5582: the emitted value is `T?` although C# types it non-null. Asked here, so that each
             // operand of a composed value (`flag ? a : b`, `a ?? b`) is decided by its emitted type too.
-            if expression != nil && this.EmittedValueIsNilableBeyondItsCSharpType(expression) {
+            if expression != nil &&
+                (
+                this.EmittedValueIsNilableBeyondItsCSharpType(expression) ||
+                    (
+                    expression is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CheckedExpressionSyntax &&
+                        this.YieldsValueNilableBeyondItsCSharpType(expression)
+                )
+            ) {
                 return false
             }
             // Issue #4356: a Roslyn member that is non-null in C# — even a
@@ -4477,13 +4488,6 @@ partial class CSharpToGSharpTranslator {
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
                 ) {
                     return !IsNullOrSuppressedNull(suppression.Operand)
-                }
-                case checkedExpression is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax {
-                    return if UnwrapTranslatedValue(translated) is CheckedExpression translatedChecked {
-                        this.GSharpExpressionIsStaticallyNonNull(checkedExpression.Expression, translatedChecked.Inner)
-                    } else {
-                        this.GSharpExpressionIsStaticallyNonNull(checkedExpression.Expression)
-                    }
                 }
                 case concatenation is Microsoft
                     .CodeAnalysis
@@ -14019,9 +14023,6 @@ partial class CSharpToGSharpTranslator {
                     .IsNullable: true
                 case parenthesized is ParenthesizedExpression: TranslatedExpressionIsStaticallyNonNull(
                     parenthesized.Inner
-                )
-                case checkedExpression is CheckedExpression: TranslatedExpressionIsStaticallyNonNull(
-                    checkedExpression.Inner
                 )
                 case block is BlockExpression: TranslatedExpressionIsStaticallyNonNull(block.Value)
                 case ifExpression is IfExpression: TranslatedExpressionIsStaticallyNonNull(

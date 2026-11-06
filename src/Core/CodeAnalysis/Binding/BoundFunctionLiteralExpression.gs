@@ -59,6 +59,10 @@ class BoundFunctionLiteralExpression : BoundExpression {
     /// Rewritten literals have a new body and start with an empty slot.
     internal prop LoweredBody BoundBlockStatement?
 
+    /// Gets or sets whether this literal was pre-bound under an expression-tree candidate exemption and must be
+    /// revalidated if a runtime delegate overload is selected.
+    internal prop DeferredExpressionTreeReturnValidation bool
+
     /// Gets or sets the enclosing method/type type parameter this GENERIC
     /// local-function literal (`let Name[T, ...] = func ...`)
     /// referenced in its own signature, an own type-parameter constraint, or

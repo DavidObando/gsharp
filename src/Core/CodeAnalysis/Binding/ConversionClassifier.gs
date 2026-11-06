@@ -1533,7 +1533,7 @@ internal class ConversionClassifier {
                 nullableTarget.UnderlyingType is TupleTypeSymbol innerTargetTuple &&
                 innerTargetTuple.Arity == sourceTuple.Arity &&
                 (
-                !object.ReferenceEquals(sourceTuple.WithoutNames(), innerTargetTuple.WithoutNames()) ||
+                !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(sourceTuple, innerTargetTuple) ||
                     (
                     expression is BoundTupleLiteralExpression nullableTupleLiteral &&
                         ContainsTupleFunctionLiteral(nullableTupleLiteral)
@@ -3972,7 +3972,9 @@ internal class ConversionClassifier {
         if targetType == nil || MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out _) {
             return false
         }
-        if !LambdaBinder.TryGetFunctionLiteral(expression, out var literal) || literal == nil {
+        if !LambdaBinder.TryGetFunctionLiteral(expression, out var literal) ||
+            literal == nil ||
+            !literal.DeferredExpressionTreeReturnValidation {
             return false
         }
         let syntax = literal.Syntax as LambdaExpressionSyntax
@@ -5118,6 +5120,8 @@ internal class ConversionClassifier {
                 targetReturn == TypeSymbol.Void ||
                 targetReturn == TypeSymbol.Error ||
                 TypeSymbol.ContainsTypeParameter(targetReturn) || object.ReferenceEquals(sourceReturn, targetReturn) ||
+                NullableLifting.IsAnyValueTypeNullable(sourceReturn as NullableTypeSymbol) ||
+                NullableLifting.IsAnyValueTypeNullable(targetReturn as NullableTypeSymbol) ||
                 targetReturn is NullableTypeSymbol ||
                 targetReturn is PlatformTypeSymbol {
                 return false

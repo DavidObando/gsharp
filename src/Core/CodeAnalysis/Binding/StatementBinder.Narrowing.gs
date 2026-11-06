@@ -5870,7 +5870,6 @@ internal partial class StatementBinder {
                     syntax.Initializer is ConditionalExpressionSyntax ||
                     syntax.Initializer is SwitchExpressionSyntax ||
                     syntax.Initializer is BlockExpressionSyntax ||
-                    syntax.Initializer is TupleLiteralExpressionSyntax ||
                     IsNullCoalescingExpression(syntax.Initializer) ||
                     conversions.ContainsNestedLambdaSyntax(syntax.Initializer!!)
             ) {

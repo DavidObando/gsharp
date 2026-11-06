@@ -1667,7 +1667,9 @@ internal class LambdaBinder {
         // ClosureCaptureLegalityChecker so the `go`-statement closure path
         // (StatementBinder.BindGoStatement) applies the exact same rules.
         ClosureCaptureLegalityChecker.CheckCapturedVariables(captured, Diagnostics, syntax.Location)
-        let literal = BoundFunctionLiteralExpression(syntax, synthetic, fnType, bodyBlock, captured)
+        let literal = BoundFunctionLiteralExpression(syntax, synthetic, fnType, bodyBlock, captured){
+            DeferredExpressionTreeReturnValidation = isExpressionTreeTarget
+        }
         if !needsExplicitParameterAdapter {
             return literal
         }
@@ -1677,11 +1679,13 @@ internal class LambdaBinder {
             expression: "targetFunctionType"
         )
         let adapterTarget = FunctionTypeSymbol.Get(target.ParameterTypes, target.IsVariadic, observableReturnType)
-        return CreateErasedFunctionLiteralAdapter(
+        let adapted = CreateErasedFunctionLiteralAdapter(
             literal,
             adapterTarget,
             ImmutableArray.Create(exactTargetParameterSlots)
         )
+        adapted.DeferredExpressionTreeReturnValidation = isExpressionTreeTarget
+        return adapted
     }
 
     /// Synthesizes an "erased" function-literal adapter: a wrapper
