@@ -62,14 +62,18 @@ internal partial class ExpressionBinder {
                 }
             }
         }
+        clrEvent = TryGetInheritedClrEvent(GetInheritedClrBaseType(enclosing), name)
+        return clrEvent != nil
+    }
+
+    private func TryGetInheritedClrEvent(inheritedBaseClr Type?, name string) EventInfo? {
         const DeclaredInstance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
-        for var level Type? = GetInheritedClrBaseType(enclosing); level != nil; level = level!!.BaseType {
+        for var level Type? = inheritedBaseClr; level != nil; level = level!!.BaseType {
             for candidate in ClrTypeUtilities.SafeGetEvents(level, DeclaredInstance) {
                 if !string.Equals(candidate.Name, name, StringComparison.Ordinal) {
                     continue
                 }
-                clrEvent = candidate
-                return true
+                return candidate
             }
             // A value member the derived class can reach hides farther
             // events; one it cannot reach (e.g. private) does not take part
@@ -90,10 +94,10 @@ internal partial class ExpressionBinder {
                         ClrMemberVisibility.IsVisibleFromDerived(property.SetMethod, includeInternal)
                 )
             ) {
-                return false
+                return nil
             }
         }
-        return false
+        return nil
     }
 
     /// Issue #4394: the accessibility gate every source-event subscription
@@ -213,21 +217,12 @@ internal partial class ExpressionBinder {
     /// the class derives from the declaring type and, for an instance event,
     /// the receiver is of the current class (or a class derived from it), the
     /// C# rule for protected instance access.
-    private func IsFamilyAccessibleClrEvent(accessor MethodInfo, declaringType Type?, receiver BoundExpression?) bool {
-        if !ClrMemberVisibility.IsVisibleFromDerived(accessor, CanAccessInternalsOf(declaringType)) ||
-            declaringType == nil ||
-            GetFamilyAccessBase() is not{} familyBase ||
-            !IsSameOrDerivedClrType(familyBase, declaringType) {
-            return false
-        }
-        if receiver == nil {
-            return true
-        }
-        // Issue #4453: the receiver half is the same C# CS1540 rule source
-        // members follow, asked through the one shared helper.
-        let enclosing StructSymbol? = (function?.ReceiverType ?? GetEffectiveThisParameter()?.Type) as StructSymbol
-        return enclosing != nil && AccessibilityChecker.IsReceiverWithinClass(receiver.Type, enclosing)
-    }
+    private func IsFamilyAccessibleClrEvent(
+        accessor MethodInfo,
+        declaringType Type?,
+        receiver BoundExpression?
+    ) bool -> ClrMemberVisibility.IsVisibleFromDerived(accessor, CanAccessInternalsOf(declaringType)) &&
+        IsFamilyAccessibleClrMember(declaringType, receiver)
 
     private func BindEventSubscriptionExpression(syntax EventSubscriptionExpressionSyntax) BoundExpression {
         // Bare identifier `EventName += handler` / `EventName -= handler`:
@@ -870,7 +865,12 @@ internal partial class ExpressionBinder {
             // here exactly as friend-visible methods/properties/fields are.
             let eventsIncludeInternal = CanAccessInternalsOf(receiverClrType)
             eventInfo = if boundReceiver != nil {
-                MemberLookup.SafeGetEventIncludingSelfAndInterfaces(receiverClrType, eventName, eventsIncludeInternal)
+                MemberLookup.SafeGetEventIncludingSelfAndInterfaces(
+                    receiverClrType,
+                    eventName,
+                    eventsIncludeInternal,
+                    CanAccessInternalsOf
+                )
             } else {
                 ClrTypeUtilities.SafeGetEvent(
                     receiverClrType,
@@ -878,7 +878,7 @@ internal partial class ExpressionBinder {
                     ClrMemberVisibility.Widen(flags, eventsIncludeInternal)
                 )
             }
-            if !ClrMemberVisibility.IsVisible(eventInfo, eventsIncludeInternal) {
+            if !ClrMemberVisibility.IsVisible(eventInfo, CanAccessInternalsOf(eventInfo?.DeclaringType)) {
                 eventInfo = nil
             }
         }

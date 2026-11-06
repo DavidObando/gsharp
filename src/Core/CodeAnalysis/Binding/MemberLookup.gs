@@ -161,11 +161,12 @@ internal class MemberLookup {
         clrTarget Type,
         boundArguments ImmutableArray[BoundExpression],
         out indexer PropertyInfo?,
-        out resolvedArguments ImmutableArray[BoundExpression]
+        out resolvedArguments ImmutableArray[BoundExpression],
+        fromDerivedType bool = false
     ) ClrIndexerResolutionOutcome {
         indexer = nil
         resolvedArguments = default(ImmutableArray[BoundExpression])
-        let properties = CollectVisibleClrIndexers(targetType, clrTarget)
+        let properties = CollectVisibleClrIndexers(targetType, clrTarget, fromDerivedType)
         if properties.Length == 0 {
             return ClrIndexerResolutionOutcome.NoneFound
         }
@@ -177,10 +178,13 @@ internal class MemberLookup {
         }
         var hasSetOnlyIndexer = false
         for property in properties {
-            hasSetOnlyIndexer |= ClrMemberVisibility.GetVisibleGetter(
-                property,
-                this.binderCtx.References.CanAccessInternalMembers(property.DeclaringType?.Assembly)
-            ) == nil
+            let includeInternal = this.binderCtx.References.CanAccessInternalMembers(property.DeclaringType?.Assembly)
+            let visibleGetter = if fromDerivedType {
+                ClrMemberVisibility.GetDerivedVisibleGetter(property, includeInternal)
+            } else {
+                ClrMemberVisibility.GetVisibleGetter(property, includeInternal)
+            }
+            hasSetOnlyIndexer |= visibleGetter == nil
         }
         if hasSymbolicArgument || hasSetOnlyIndexer {
             let applicable = List[(Property PropertyInfo, ParameterTypes ImmutableArray[TypeSymbol])]()
@@ -366,7 +370,7 @@ internal class MemberLookup {
                 staticFlags |= BindingFlags.NonPublic
             }
             for method in ClrTypeUtilities.SafeGetMethods(staticClassType, staticFlags) {
-                if (method.IsPublic || (staticsIncludeInternal && method.IsAssembly)) &&
+                if ClrMemberVisibility.IsVisible(method, staticsIncludeInternal) &&
                     ClrTypeUtilities.EmittedMemberNameMatches(method, methodName) {
                     statics.Add(method)
                 }
@@ -384,7 +388,12 @@ internal class MemberLookup {
                 SafeGetMethodsIncludingSelfAndInterfaces(
                     receiverClrType,
                     methodName,
-                    includeInternal: this.binderCtx.References.CanAccessInternalMembers(receiverClrType.Assembly)
+                    includeInternal: this.binderCtx.References.CanAccessInternalMembers(receiverClrType.Assembly),
+                    includeExplicitInterfaceMembers: false,
+                    canAccessInternals: (owner Type?) -> this
+                        .binderCtx
+                        .References
+                        .CanAccessInternalMembers(owner?.Assembly)
                 )
             )
             if instance.Count > 0 {
@@ -672,7 +681,11 @@ internal class MemberLookup {
         clrTarget
     ).Length != 0
 
-    private func CollectVisibleClrIndexers(targetType TypeSymbol, clrTarget Type)[]PropertyInfo {
+    private func CollectVisibleClrIndexers(
+        targetType TypeSymbol,
+        clrTarget Type,
+        fromDerivedType bool = false
+    )[]PropertyInfo {
         let declaringTypes = if clrTarget.IsInterface {
             EnumerateSelfAndInterfaces(clrTarget)
         } else {
@@ -684,11 +697,21 @@ internal class MemberLookup {
         // methods, properties and fields were not. Only metadata `assembly`
         // accessibility is admitted.
         let includeInternal = this.binderCtx.References.CanAccessInternalMembers(clrTarget.Assembly)
+        var anyAncestorGrantsInternal = includeInternal
+        for var ancestor Type? = clrTarget.BaseType;
+            ancestor != nil &&
+            !anyAncestorGrantsInternal;
+            ancestor = ancestor?.BaseType {
+            anyAncestorGrantsInternal = this.binderCtx.References.CanAccessInternalMembers(ancestor.Assembly)
+        }
         let collected = List[PropertyInfo]()
         for declaringType in declaringTypes {
             for property in ClrTypeUtilities.SafeGetProperties(
                 declaringType,
-                ClrMemberVisibility.Widen(BindingFlags.Public | BindingFlags.Instance, includeInternal)
+                ClrMemberVisibility.Widen(
+                    BindingFlags.Public | BindingFlags.Instance,
+                    anyAncestorGrantsInternal || fromDerivedType
+                )
             ) {
                 var alreadyCollected = false
                 for existing in collected {
@@ -699,11 +722,17 @@ internal class MemberLookup {
                         break
                     }
                 }
-                if property.GetIndexParameters().Length == 0 || !ClrMemberVisibility.IsVisible(
-                    property,
-                    includeInternal
-                ) ||
-                    alreadyCollected {
+                let propertyIncludeInternal = this
+                    .binderCtx
+                    .References
+                    .CanAccessInternalMembers(property.DeclaringType?.Assembly)
+                let isVisibleProperty = if fromDerivedType {
+                    ClrMemberVisibility.GetDerivedVisibleGetter(property, propertyIncludeInternal) != nil ||
+                        ClrMemberVisibility.GetDerivedVisibleSetter(property, propertyIncludeInternal) != nil
+                } else {
+                    ClrMemberVisibility.IsVisible(property, propertyIncludeInternal)
+                }
+                if property.GetIndexParameters().Length == 0 || !isVisibleProperty || alreadyCollected {
                     continue
                 }
                 collected.Add(property)
@@ -731,13 +760,19 @@ internal class MemberLookup {
         return visible.ToArray()
     }
 
-    private func IsVisibleImportedMethod(method MethodBase) bool -> method.IsPublic ||
-        (method.IsAssembly && this.binderCtx.References.CanAccessInternalMembers(method.DeclaringType?.Assembly))
+    private func IsVisibleImportedMethod(method MethodBase) bool -> ClrMemberVisibility.IsVisible(
+        method,
+        this.binderCtx.References.CanAccessInternalMembers(method.DeclaringType?.Assembly)
+    )
 
     private func IsVisibleImportedType(type Type) bool -> type.IsPublic ||
         type.IsNestedPublic ||
         (
-        (type.IsNotPublic || type.IsNestedAssembly) && this.binderCtx.References.CanAccessInternalMembers(type.Assembly)
+        (type.IsNotPublic || type.IsNestedAssembly || type.IsNestedFamORAssem) &&
+            this
+            .binderCtx
+            .References
+            .CanAccessInternalMembers(type.Assembly)
     )
 
     /// Issue #985: a single CLR interface method slot that an implementing type
@@ -1187,7 +1222,8 @@ internal class MemberLookup {
             clrType Type?,
             name string,
             includeInternal bool,
-            includeExplicitInterfaceMembers bool
+            includeExplicitInterfaceMembers bool,
+            canAccessInternals((Type?) -> bool)? = nil
         ) IReadOnlyList[MethodInfo] {
             let GetBaseTypeSafe = func (type Type) Type? {
                 try {
@@ -1199,16 +1235,97 @@ internal class MemberLookup {
             if clrType == nil {
                 return Array.Empty[MethodInfo]()
             }
-            // Issue #1678: this result is recomputed identically at every call
-            // site that probes the same (type, name) pair — e.g. the "does this
-            // type have an accessible Add?" collection-initializer check runs once
-            // per collection-literal expression against the same receiver type.
-            // ClrTypeUtilities.SafeGetMethods/SafeGetInterfaces are themselves
-            // memoized per Type now, but the name filter and the O(result ×
-            // candidates) IsMethodHiddenByExisting dedup below still re-ran on
-            // every call before this cache existed. Keyed on the CLR Type (not the
-            // GSharp symbol) so it is naturally invalidated by
-            // ClrTypeUtilities.ClearCache() clearing the caches it reads from.
+            let CollectCandidates = func (levelCanAccessInternals(Type) -> bool) IReadOnlyList[MethodInfo] {
+                let n = name
+                let selfMethods = ClrTypeUtilities.SafeGetMethods(clrType, BindingFlags.Public | BindingFlags.Instance)
+                let result = List[MethodInfo]()
+                for m in selfMethods {
+                    if ClrTypeUtilities.EmittedMemberNameMatches(m, n) {
+                        result.Add(m)
+                    }
+                }
+                // Issues #2614 / #2638: an aggregate metadata walk may return a
+                // usable but incomplete set. Always probe each declaration level
+                // and union accessible methods without duplicating inherited slots.
+                for var current Type? = clrType; current != nil; current = GetBaseTypeSafe(current!!) {
+                    for m in ClrTypeUtilities.SafeGetMethods(
+                        current,
+                        BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly
+                    ) {
+                        if ClrTypeUtilities.EmittedMemberNameMatches(m, n) && !IsMethodHiddenByExisting(result, m) {
+                            result.Add(m)
+                        }
+                    }
+                    // Issue #3679 / #4467: an `internal` or `protected internal`
+                    // instance method is a candidate only when its own declaring
+                    // assembly grants internal access to the consuming compilation.
+                    if !levelCanAccessInternals(current) {
+                        continue
+                    }
+                    for m in ClrTypeUtilities.SafeGetMethods(
+                        current,
+                        BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly
+                    ) {
+                        if ClrMemberVisibility.IsVisible(m, includeInternal: true) &&
+                            ClrTypeUtilities.EmittedMemberNameMatches(m, n) && !IsMethodHiddenByExisting(result, m) {
+                            result.Add(m)
+                        }
+                    }
+                }
+                if clrType.IsConstructedGenericType {
+                    for openMethod in ClrTypeUtilities.SafeGetMethods(
+                        clrType.GetGenericTypeDefinition(),
+                        BindingFlags.Public | BindingFlags.Instance
+                    ) {
+                        if !ClrTypeUtilities.EmittedMemberNameMatches(openMethod, n) {
+                            continue
+                        }
+                        // TypeBuilder.GetMethod accepts only a TypeBuilder instantiation of the
+                        // method's own generic declaring type; every other shape would throw.
+                        let openDeclaringType = openMethod.DeclaringType
+                        if !ClrTypeUtilities.IsTypeBuilderInstantiation(clrType) ||
+                            openDeclaringType == nil ||
+                            !openDeclaringType.IsGenericTypeDefinition ||
+                            openDeclaringType != clrType.GetGenericTypeDefinition() ||
+                            (openMethod.IsGenericMethod && !openMethod.IsGenericMethodDefinition) {
+                            continue
+                        }
+                        try {
+                            let mapped = ClrTypeUtilities.MapConstructedGenericMethod(clrType, openMethod)
+                            if !IsMethodHiddenByExisting(result, mapped) {
+                                result.Add(mapped)
+                            }
+                        } catch (ArgumentException) {
+                            // Runtime constructed types already exposed their methods above.
+
+                        }
+                    }
+                }
+                // Walk transitive interfaces for DIMs not surfaced by the concrete type.
+                let receiverIsInterface = clrType.IsInterface
+                for iface in ClrTypeUtilities.SafeGetInterfaces(clrType) {
+                    for m in ClrTypeUtilities.SafeGetMethods(iface, BindingFlags.Public | BindingFlags.Instance) {
+                        if !ClrTypeUtilities.EmittedMemberNameMatches(m, n) {
+                            continue
+                        }
+                        if receiverIsInterface || includeExplicitInterfaceMembers || !m.IsAbstract {
+                            if !IsMethodHiddenByExisting(result, m) {
+                                result.Add(m)
+                            }
+                        }
+                    }
+                }
+                return result
+            }
+            if canAccessInternals != nil {
+                for var ancestor Type? = GetBaseTypeSafe(clrType);
+                    ancestor != nil;
+                    ancestor = GetBaseTypeSafe(ancestor!!) {
+                    if !object.ReferenceEquals(ancestor.Assembly, clrType.Assembly) && canAccessInternals(ancestor) {
+                        return CollectCandidates((owner Type) -> canAccessInternals(owner))
+                    }
+                }
+            }
             return methodsIncludingSelfAndInterfacesCache.GetValue(
                 clrType,
                 (_ Type) -> ConcurrentDictionary[string, IReadOnlyList[MethodInfo]](StringComparer.Ordinal)
@@ -1228,116 +1345,9 @@ internal class MemberLookup {
                         string.Empty
                     }
                 ),
-                func (_ string) IReadOnlyList[MethodInfo] {
-                    // The cache key may carry the internal-inclusive suffix; the probe
-                    // itself always matches on the bare method name.
-                    let n = name
-                    let selfMethods = ClrTypeUtilities.SafeGetMethods(
-                        clrType,
-                        BindingFlags.Public | BindingFlags.Instance
-                    )
-                    let result = List[MethodInfo]()
-                    for m in selfMethods {
-                        if ClrTypeUtilities.EmittedMemberNameMatches(m, n) {
-                            result.Add(m)
-                        }
-                    }
-                    // Issues #2614 / #2638: an aggregate metadata walk may return a
-                    // usable but incomplete set. Always probe each declaration level
-                    // and union accessible methods without duplicating inherited slots.
-                    for var current Type? = clrType; current != nil; current = GetBaseTypeSafe(current!!) {
-                        for m in ClrTypeUtilities.SafeGetMethods(
-                            current,
-                            BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly
-                        ) {
-                            if ClrTypeUtilities.EmittedMemberNameMatches(m, n) && !IsMethodHiddenByExisting(result, m) {
-                                result.Add(m)
-                            }
-                        }
-                        // Issue #3679: an `internal` instance method of a friend
-                        // assembly is a legal candidate. Only `assembly` accessibility
-                        // is admitted — `private`/`protected`/`private protected`
-                        // members stay invisible however the friendship is declared.
-                        if !includeInternal {
-                            continue
-                        }
-                        for m in ClrTypeUtilities.SafeGetMethods(
-                            current,
-                            BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly
-                        ) {
-                            if m.IsAssembly && ClrTypeUtilities.EmittedMemberNameMatches(m, n) &&
-                                !IsMethodHiddenByExisting(result, m) {
-                                result.Add(m)
-                            }
-                        }
-                    }
-                    if clrType.IsConstructedGenericType {
-                        for openMethod in ClrTypeUtilities.SafeGetMethods(
-                            clrType.GetGenericTypeDefinition(),
-                            BindingFlags.Public | BindingFlags.Instance
-                        ) {
-                            if !ClrTypeUtilities.EmittedMemberNameMatches(openMethod, n) {
-                                continue
-                            }
-                            // TypeBuilder.GetMethod accepts only a TypeBuilder instantiation of the
-                            // method's own generic declaring type; every other shape would throw.
-                            let openDeclaringType = openMethod.DeclaringType
-                            if !ClrTypeUtilities.IsTypeBuilderInstantiation(clrType) ||
-                                openDeclaringType == nil ||
-                                !openDeclaringType.IsGenericTypeDefinition ||
-                                openDeclaringType != clrType.GetGenericTypeDefinition() ||
-                                (openMethod.IsGenericMethod && !openMethod.IsGenericMethodDefinition) {
-                                continue
-                            }
-                            try {
-                                let mapped = ClrTypeUtilities.MapConstructedGenericMethod(clrType, openMethod)
-                                if !IsMethodHiddenByExisting(result, mapped) {
-                                    result.Add(mapped)
-                                }
-                            } catch (ArgumentException) {
-                                // Runtime constructed types already exposed their methods above.
-
-                            }
-                        }
-                    }
-                    // Walk transitive interfaces for DIMs not surfaced by the concrete type.
-                    let receiverIsInterface = clrType.IsInterface
-                    for iface in ClrTypeUtilities.SafeGetInterfaces(clrType) {
-                        for m in ClrTypeUtilities.SafeGetMethods(iface, BindingFlags.Public | BindingFlags.Instance) {
-                            if !ClrTypeUtilities.EmittedMemberNameMatches(m, n) {
-                                continue
-                            }
-                            // Issue #4013: on a CLASS receiver an ABSTRACT interface
-                            // member is not part of the type's own surface. The class
-                            // must implement it, and how it did so decides whether the
-                            // member is reachable here:
-                            //
-                            //  - implemented IMPLICITLY — the class's own public method
-                            //    is already in `result` from the self/base walk above,
-                            //    so admitting the interface's copy adds nothing;
-                            //  - implemented EXPLICITLY — C# says the member is NOT on
-                            //    the implementing type's surface and is reachable only
-                            //    through an interface-typed receiver.
-                            //
-                            // Admitting it anyway is unsound, not merely permissive:
-                            // `List[int32]().Add("x")` fell through the generic
-                            // `Add(T)` to `IList.Add(object)` (which accepts anything)
-                            // and turned a static type error into a run-time
-                            // ArgumentException. Only a genuine DEFAULT interface
-                            // method — a non-abstract interface instance method, which
-                            // the class need not implement at all — is what this walk
-                            // exists to surface, so only that is admitted. An interface
-                            // receiver keeps the full walk: a base interface's abstract
-                            // members really are members of the derived interface.
-                            if receiverIsInterface || includeExplicitInterfaceMembers || !m.IsAbstract {
-                                if !IsMethodHiddenByExisting(result, m) {
-                                    result.Add(m)
-                                }
-                            }
-                        }
-                    }
-                    return result
-                }
+                (_ string) -> CollectCandidates(
+                    (owner Type) -> includeInternal && object.ReferenceEquals(owner.Assembly, clrType.Assembly)
+                )
             )
         }
 
@@ -1460,15 +1470,45 @@ internal class MemberLookup {
         func SafeGetEventIncludingSelfAndInterfaces(
             clrType Type?,
             name string,
-            includeInternal bool = false
+            includeInternal bool = false,
+            canAccessInternals((Type?) -> bool)? = nil
         ) EventInfo? {
             if clrType == nil {
                 return nil
             }
-            let flags = ClrMemberVisibility.Widen(BindingFlags.Public | BindingFlags.Instance, includeInternal)
-            for type in EnumerateSelfAndInterfaces(clrType) {
-                let eventInfo = ClrTypeUtilities.SafeGetEvent(type, name, flags)
-                if ClrMemberVisibility.IsVisible(eventInfo, includeInternal) {
+            let declaredFlags = ClrMemberVisibility.Widen(
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly,
+                includeInternal || canAccessInternals != nil
+            )
+            for var current Type? = clrType; current != nil; current = current?.BaseType {
+                let eventInfo = ClrTypeUtilities.SafeGetEvent(current, name, declaredFlags)
+                if eventInfo == nil {
+                    continue
+                }
+                let eventIncludeInternal = if canAccessInternals != nil {
+                    canAccessInternals(eventInfo.DeclaringType)
+                } else {
+                    includeInternal && object.ReferenceEquals(eventInfo.DeclaringType?.Assembly, clrType.Assembly)
+                }
+                if ClrMemberVisibility.IsVisible(eventInfo, eventIncludeInternal) {
+                    return eventInfo
+                }
+            }
+            let interfaceFlags = ClrMemberVisibility.Widen(
+                BindingFlags.Public | BindingFlags.Instance,
+                includeInternal || canAccessInternals != nil
+            )
+            for iface in ClrTypeUtilities.SafeGetInterfaces(clrType) {
+                let eventInfo = ClrTypeUtilities.SafeGetEvent(iface, name, interfaceFlags)
+                if eventInfo == nil {
+                    continue
+                }
+                let eventIncludeInternal = if canAccessInternals != nil {
+                    canAccessInternals(eventInfo.DeclaringType)
+                } else {
+                    includeInternal && object.ReferenceEquals(eventInfo.DeclaringType?.Assembly, clrType.Assembly)
+                }
+                if ClrMemberVisibility.IsVisible(eventInfo, eventIncludeInternal) {
                     return eventInfo
                 }
             }
