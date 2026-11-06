@@ -885,7 +885,8 @@ partial class CSharpToGSharpTranslator {
             result = nil
             DecomposeConjunction(ifStatement.Condition, out var leftmost, out var guards)
             if leftmost is not IsPatternExpressionSyntax isPattern ||
-                !TryExtractSingleVarTypePattern(isPattern.Pattern, out var typeSyntax, out var single) {
+                !TryExtractSingleVarTypePattern(isPattern.Pattern, out var typeSyntax, out var single) ||
+                this.IsVariableReferenceAnalyzerType(typeSyntax, out _) {
                 return false
             }
             if guards.Any(
@@ -1174,7 +1175,10 @@ partial class CSharpToGSharpTranslator {
             if patternIndex > 0 && ifStatement.Else == nil && !StatementAlwaysExits(ifStatement.Statement) {
                 return false
             }
-            if designation is not SingleVariableDesignationSyntax single {
+            if designation is not SingleVariableDesignationSyntax single || this.IsVariableReferenceAnalyzerType(
+                typeSyntax,
+                out _
+            ) {
                 return false
             }
             let localName string? = this.EmittedName(single, single.Identifier)
@@ -1465,7 +1469,10 @@ partial class CSharpToGSharpTranslator {
                     statements.Add(IfStatement(this.TranslateExpression(term), then))
                     continue
                 }
-                if designation is not SingleVariableDesignationSyntax single {
+                if designation is not SingleVariableDesignationSyntax single || this.IsVariableReferenceAnalyzerType(
+                    typeSyntax,
+                    out _
+                ) {
                     return false
                 }
                 let localName string? = this.EmittedName(single, single.Identifier)

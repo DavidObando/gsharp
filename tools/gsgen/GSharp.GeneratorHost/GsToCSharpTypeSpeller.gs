@@ -114,8 +114,10 @@ class GsToCSharpTypeSpeller {
             }
             case del is DelegateTypeSymbol {
                 return SpellUserType(
+                    del.ContainingType,
                     del.PackageName,
-                    del.Name,
+                    del.Definition?.Name ?? del.Name,
+                    default(ImmutableArray[TypeSymbol]),
                     del.TypeArguments,
                     eraseReferenceNullability,
                     recordFallback
@@ -123,8 +125,10 @@ class GsToCSharpTypeSpeller {
             }
             case enumSymbol is EnumSymbol when enumSymbol.ClrType == nil {
                 return SpellUserType(
+                    enumSymbol.ContainingType,
                     enumSymbol.PackageName,
-                    enumSymbol.Name,
+                    enumSymbol.Definition?.Name ?? enumSymbol.Name,
+                    enumSymbol.EnclosingTypeArguments,
                     default(ImmutableArray[TypeSymbol]),
                     eraseReferenceNullability,
                     recordFallback
@@ -132,8 +136,10 @@ class GsToCSharpTypeSpeller {
             }
             case iface is InterfaceSymbol when iface.ClrType == nil {
                 return SpellUserType(
+                    iface.ContainingType,
                     iface.PackageName,
-                    iface.Name,
+                    iface.Definition?.Name ?? iface.Name,
+                    iface.EnclosingTypeArguments,
                     iface.TypeArguments,
                     eraseReferenceNullability,
                     recordFallback
@@ -141,8 +147,10 @@ class GsToCSharpTypeSpeller {
             }
             case structSymbol is StructSymbol when structSymbol.ClrType == nil {
                 return SpellUserType(
+                    structSymbol.ContainingType,
                     structSymbol.PackageName,
-                    structSymbol.Name,
+                    structSymbol.Definition?.Name ?? structSymbol.Name,
+                    structSymbol.EnclosingTypeArguments,
                     structSymbol.TypeArguments,
                     eraseReferenceNullability,
                     recordFallback
@@ -195,18 +203,23 @@ class GsToCSharpTypeSpeller {
     }
 
     private func SpellUserType(
+        containingType TypeSymbol?,
         packageName string,
         name string,
+        enclosingTypeArguments ImmutableArray[TypeSymbol],
         typeArguments ImmutableArray[TypeSymbol],
         eraseReferenceNullability bool,
         recordFallback bool
     ) string {
-        let qualified = if string.IsNullOrEmpty(packageName) {
-            name
+        var spelled = if containingType != nil {
+            SpellEnclosingType(containingType, enclosingTypeArguments, eraseReferenceNullability, recordFallback) +
+                "." +
+                name
+        } else if string.IsNullOrEmpty(packageName) {
+            "global::" + name
         } else {
-            "$packageName.$name"
+            "global::$packageName.$name"
         }
-        var spelled = "global::" + qualified
         if !typeArguments.IsDefaultOrEmpty {
             spelled += "<" + string.Join(
                 ", ",
@@ -217,6 +230,77 @@ class GsToCSharpTypeSpeller {
                 ">"
         }
         return spelled
+    }
+
+    private func SpellEnclosingType(
+        containingType TypeSymbol,
+        enclosingTypeArguments ImmutableArray[TypeSymbol],
+        eraseReferenceNullability bool,
+        recordFallback bool
+    ) string {
+        if containingType is StructSymbol structContainer && structContainer.ClrType == nil {
+            let containerDef = structContainer.Definition ?? structContainer
+            let ownTypeParameters = containerDef.DeclaredTypeParameters
+            if !enclosingTypeArguments.IsDefaultOrEmpty {
+                let ownArgumentCount = Math.Min(ownTypeParameters.Length, enclosingTypeArguments.Length)
+                let outerArgumentCount = enclosingTypeArguments.Length - ownArgumentCount
+                return SpellUserType(
+                    structContainer.ContainingType,
+                    structContainer.PackageName,
+                    containerDef.Name,
+                    enclosingTypeArguments.Take(outerArgumentCount).ToImmutableArray(),
+                    enclosingTypeArguments.Skip(outerArgumentCount).ToImmutableArray(),
+                    eraseReferenceNullability,
+                    recordFallback
+                )
+            }
+            let typeArguments = if !structContainer.TypeArguments.IsDefaultOrEmpty {
+                structContainer.TypeArguments
+            } else {
+                ownTypeParameters.Cast[TypeSymbol]().ToImmutableArray()
+            }
+            return SpellUserType(
+                structContainer.ContainingType,
+                structContainer.PackageName,
+                containerDef.Name,
+                structContainer.EnclosingTypeArguments,
+                typeArguments,
+                eraseReferenceNullability,
+                recordFallback
+            )
+        }
+        if containingType is InterfaceSymbol ifaceContainer && ifaceContainer.ClrType == nil {
+            let containerDef = ifaceContainer.Definition ?? ifaceContainer
+            let ownTypeParameters = containerDef.DeclaredTypeParameters
+            if !enclosingTypeArguments.IsDefaultOrEmpty {
+                let ownArgumentCount = Math.Min(ownTypeParameters.Length, enclosingTypeArguments.Length)
+                let outerArgumentCount = enclosingTypeArguments.Length - ownArgumentCount
+                return SpellUserType(
+                    ifaceContainer.ContainingType,
+                    ifaceContainer.PackageName,
+                    containerDef.Name,
+                    enclosingTypeArguments.Take(outerArgumentCount).ToImmutableArray(),
+                    enclosingTypeArguments.Skip(outerArgumentCount).ToImmutableArray(),
+                    eraseReferenceNullability,
+                    recordFallback
+                )
+            }
+            let typeArguments = if !ifaceContainer.TypeArguments.IsDefaultOrEmpty {
+                ifaceContainer.TypeArguments
+            } else {
+                ownTypeParameters.Cast[TypeSymbol]().ToImmutableArray()
+            }
+            return SpellUserType(
+                ifaceContainer.ContainingType,
+                ifaceContainer.PackageName,
+                containerDef.Name,
+                ifaceContainer.EnclosingTypeArguments,
+                typeArguments,
+                eraseReferenceNullability,
+                recordFallback
+            )
+        }
+        return SpellCore(containingType, eraseReferenceNullability, recordFallback)
     }
 
     private func SpellImported(

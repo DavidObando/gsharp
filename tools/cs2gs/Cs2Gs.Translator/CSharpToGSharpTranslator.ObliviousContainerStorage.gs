@@ -389,9 +389,8 @@ partial class CSharpToGSharpTranslator {
                 !arrayType
                 .ElementType
                 .IsNullable &&
-                symbol is ILocalSymbol arrayLocal &&
                 this
-                .IsWidenedArrayElementLocal(arrayLocal) {
+                .IsWidenedArrayElementStorage(symbol) {
                 promoted = ArrayTypeReference(MakeNullable(arrayType.ElementType)!!, arrayType.Rank){
                     IsNullable = arrayType.IsNullable
                 }
@@ -2032,10 +2031,49 @@ partial class CSharpToGSharpTranslator {
                     } else if node is PropertyDeclarationSyntax{Initializer: {} propertyInitializer} property {
                         edges.Add((model.GetDeclaredSymbol(property), propertyInitializer.Value, model, "", 0))
                     } else if node is ArgumentSyntax argument {
-                        if argument.RefKindKeyword.IsKind(SyntaxKind.None) {
-                            let (parameter, prefix) = ArgumentDestination(argument, model)
-                            if parameter != nil {
-                                edges.Add((parameter, argument.Expression, model, prefix, 0))
+                        let (parameter, prefix) = ArgumentDestination(argument, model)
+                        if parameter != nil {
+                            if !argument.RefKindKeyword.IsKind(SyntaxKind.None) && model.GetSymbolInfo(
+                                Unparenthesize(argument.Expression)
+                            )
+                                .Symbol is ILocalSymbol refLocal {
+                                assignedLocals.Add(refLocal)
+                            }
+                            edges.Add((parameter, argument.Expression, model, prefix, 0))
+                        }
+                        if (
+                            argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) || argument.RefKindKeyword.IsKind(
+                                SyntaxKind.RefKeyword
+                            )
+                        ) &&
+                            Unparenthesize(argument.Expression) is ElementAccessExpressionSyntax elementAccess &&
+                            model.GetOperation(argument) is IArgumentOperation{Parameter: {} byRefParameter} &&
+                            byRefParameter
+                            .Type
+                            .IsReferenceType &&
+                            (
+                            IsAnnotatedNullableReference(byRefParameter.Type) || this.ShouldPromoteToNullableReference(
+                                byRefParameter
+                            )
+                        ) {
+                            var target ExpressionSyntax = elementAccess
+                            var accessPosition = ""
+                            while target is ElementAccessExpressionSyntax currentAccess && model.GetTypeInfo(
+                                currentAccess.Expression
+                            )
+                                .Type is IArrayTypeSymbol {
+                                accessPosition = JoinPosition("0", accessPosition)
+                                target = Unparenthesize(currentAccess.Expression)!!
+                            }
+                            if accessPosition != "" {
+                                this.AddAliasedSourcePositions(
+                                    flow,
+                                    target,
+                                    model,
+                                    model.GetTypeInfo(target).Type,
+                                    HashSet[string](System.StringComparer.Ordinal){accessPosition},
+                                    compilation
+                                )
                             }
                         }
                     } else if node is ReturnStatementSyntax{Expression: {} returned} {
@@ -3919,7 +3957,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 var signatureOwner ISymbol = symbol
                 if symbol is IParameterSymbol parameter {
-                    if parameter.RefKind != RefKind.None || parameter.ContainingSymbol == nil {
+                    if parameter.ContainingSymbol == nil {
                         return false
                     }
                     signatureOwner = parameter.ContainingSymbol!!

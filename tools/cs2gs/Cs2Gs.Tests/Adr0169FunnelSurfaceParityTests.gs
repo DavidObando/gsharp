@@ -78,6 +78,125 @@ class Adr0169FunnelSurfaceParityTests : IDisposable {
         AssertParity("DescendantsSurfaceAnalyzer", "DescendantsCorpus.cs", expected: 6)
     }
 
+    @Fact
+    func TranslatedLocalAndParameterReferenceRule_MatchesRoslyn_OverTranslatedCorpus() {
+        const AnalyzerSource = `
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+
+namespace GSharp.InternalAnalyzers;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class VariableReferenceSurfaceAnalyzer : DiagnosticAnalyzer
+{
+    private int _localFactoryCalls;
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; }
+        = ImmutableArray.Create(DiagnosticDescriptors.NullabilityFunnelBypass);
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
+        context.EnableConcurrentExecution();
+        context.RegisterOperationAction(CreateLocalAnalyzer(), OperationKind.LocalReference);
+        System.Action<OperationAnalysisContext> parameterHandler = AnalyzeParameter;
+        void RegisterParameter() => context.RegisterOperationAction(parameterHandler, OperationKind.ParameterReference);
+        RegisterParameter();
+        parameterHandler = static _ => { };
+        context.RegisterOperationBlockAction(AnalyzeBlock);
+    }
+
+    private System.Action<OperationAnalysisContext> CreateLocalAnalyzer()
+    {
+        _localFactoryCalls++;
+        int call = _localFactoryCalls;
+        return context => AnalyzeLocal(context, call);
+    }
+
+    private static void AnalyzeLocal(OperationAnalysisContext context, int factoryCall)
+    {
+        if (context.Operation is IParameterReferenceOperation || !(context.Operation is ILocalReferenceOperation))
+        {
+            return;
+        }
+
+        if (context.Operation is ILocalReferenceOperation operation && operation.Local.Name == "trackedLocal")
+        {
+            context.ReportDiagnostic(Diagnostic.Create(
+                DiagnosticDescriptors.NullabilityFunnelBypass,
+                context.Operation.Syntax.GetLocation(),
+                "op-local " + operation.Local.Name + "#" + factoryCall));
+        }
+    }
+
+    private static void AnalyzeParameter(OperationAnalysisContext context)
+    {
+        if (context.Operation is ILocalReferenceOperation || !(context.Operation is IParameterReferenceOperation))
+        {
+            return;
+        }
+
+        if (context.Operation is IParameterReferenceOperation operation && operation.Parameter.Name == "trackedParam")
+        {
+            context.ReportDiagnostic(Diagnostic.Create(
+                DiagnosticDescriptors.NullabilityFunnelBypass,
+                context.Operation.Syntax.GetLocation(),
+                "op-parameter " + operation.Parameter.Name));
+        }
+    }
+
+    private static void AnalyzeBlock(OperationBlockAnalysisContext context)
+    {
+        foreach (IOperation block in context.OperationBlocks)
+        {
+            foreach (IOperation operation in block.Descendants())
+            {
+                if (operation is ILocalReferenceOperation local && local.Local.Name == "walkLocal")
+                {
+                    context.ReportDiagnostic(Diagnostic.Create(
+                        DiagnosticDescriptors.NullabilityFunnelBypass,
+                        operation.Syntax.GetLocation(),
+                        "walk-local " + local.Local.Name));
+                }
+
+                if (operation is IParameterReferenceOperation parameter && parameter.Parameter.Name == "walkParam")
+                {
+                    context.ReportDiagnostic(Diagnostic.Create(
+                        DiagnosticDescriptors.NullabilityFunnelBypass,
+                        operation.Syntax.GetLocation(),
+                        "walk-parameter " + parameter.Parameter.Name));
+                }
+            }
+        }
+    }
+}
+`
+        const CorpusSource = `
+namespace GSharp.Core.CodeAnalysis.Binding
+{
+    public sealed class VariableSample
+    {
+        public int Sum(int trackedParam, int walkParam)
+        {
+            int trackedLocal = 1;
+            int walkLocal = 2;
+            return trackedParam + trackedLocal + walkParam + walkLocal;
+        }
+    }
+}
+`
+        let roslyn = RunRoslyn("VariableReferenceSurfaceAnalyzer", "VariableCorpus.cs", CorpusSource, AnalyzerSource)
+        Assert.Equal(4, roslyn.Count)
+        let gsharp = RunTranslated(
+            "VariableReferenceSurfaceAnalyzer",
+            TranslateOrdinary("VariableCorpus.cs", CorpusSource),
+            AnalyzerSource
+        )
+        Assert.Equal(roslyn, gsharp)
+    }
+
     private func AssertParity(analyzerName string, corpusName string, expected int32) {
         let corpus = Adr0169FunnelSurfaceParityTests.Fixture(corpusName)
         // Asserted on the C# side too, so a wrong expectation cannot silently
@@ -91,8 +210,10 @@ class Adr0169FunnelSurfaceParityTests : IDisposable {
         Assert.Equal(roslyn, gsharp)
     }
 
-    private func RunTranslated(analyzerName string, gsCorpus string) IReadOnlyList[string] {
-        let analyzerDll = CompileTranslatedAnalyzer(analyzerName)
+    private func RunTranslated(analyzerName string, gsCorpus string, analyzerSource string? = nil) IReadOnlyList[
+        string
+    ] {
+        let analyzerDll = CompileTranslatedAnalyzer(analyzerName, analyzerSource)
         let tree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(SourceText.From(gsCorpus, "corpus.gs"))
         Assert.True(
             tree.Diagnostics.IsEmpty,
@@ -126,8 +247,8 @@ class Adr0169FunnelSurfaceParityTests : IDisposable {
             .ToList()
     }
 
-    private func CompileTranslatedAnalyzer(analyzerName string) string {
-        let project = CSharpProjectLoader.LoadInMemory(AnalyzerSources(analyzerName))
+    private func CompileTranslatedAnalyzer(analyzerName string, analyzerSource string? = nil) string {
+        let project = CSharpProjectLoader.LoadInMemory(AnalyzerSources(analyzerName, analyzerSource))
         Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
         Assert.True(AnalyzerProjectDetector.IsAnalyzerProject(project.Compilation))
         let translator = CSharpToGSharpTranslator(analyzerApiMode: true)
@@ -215,16 +336,20 @@ class Adr0169FunnelSurfaceParityTests : IDisposable {
             )
         )
 
-        private func AnalyzerSources(analyzerName string) IReadOnlyList[(Name string, Source string)] -> [](
-            string,
-            string
-        ){
-            (analyzerName + ".cs", Adr0169FunnelSurfaceParityTests.Fixture(analyzerName + ".cs")),
+        private func AnalyzerSources(analyzerName string, analyzerSource string? = nil) IReadOnlyList[
+            (Name string, Source string)
+        ] -> [](string, string){
+            (analyzerName + ".cs", analyzerSource ?? Adr0169FunnelSurfaceParityTests.Fixture(analyzerName + ".cs")),
             ("DiagnosticDescriptors.cs", Adr0169FunnelSurfaceParityTests.Fixture("DiagnosticDescriptors.cs"))
         }
 
-        private func RunRoslyn(analyzerName string, corpusName string, corpus string) IReadOnlyList[string] {
-            let analyzerProject = CSharpProjectLoader.LoadInMemory(AnalyzerSources(analyzerName))
+        private func RunRoslyn(
+            analyzerName string,
+            corpusName string,
+            corpus string,
+            analyzerSource string? = nil
+        ) IReadOnlyList[string] {
+            let analyzerProject = CSharpProjectLoader.LoadInMemory(AnalyzerSources(analyzerName, analyzerSource))
             Assert.True(analyzerProject.BoundWithoutErrors, string.Join("\n", analyzerProject.ErrorDiagnostics))
             using let peStream = MemoryStream()
             let emitted = analyzerProject.Compilation.Emit(peStream)

@@ -715,6 +715,46 @@ namespace Lib.B { internal static class Second { public static int V => 2; } }
         )
     }
 
+    // Issue #4471: a declaring part in a nested partial type (including doubly
+    // nested and `partial data class` inside a `shared partial class`) is
+    // projected in the stub, implemented by the real Regex generator, and
+    // back-translated with its declaring header, `shared` outer modifier, and
+    // `data` modifier intact.
+    @Fact
+    func NestedPartialType_DeclaringPart_IsImplementedByTheRealGenerator_AndCompilesAndRuns() {
+        const UserSource = `package App
+
+import System.Text.RegularExpressions
+import Rx = System.Text.RegularExpressions.Regex
+
+shared partial class Outer {
+    partial class Mid {
+        partial data class Inner(Prefix string) {
+            shared {
+                @GeneratedRegex("\\d+")
+                private partial func Digits() Rx;
+
+                public func Test(s string) bool {
+                    return Digits().IsMatch(s)
+                }
+            }
+        }
+    }
+}
+`
+        let run = this.GenerateAndCompile([]string{UserSource}, RegexGenerator())
+        let userPart = run.File("RegexGenerator.g.cs")
+        Assert.Contains("import Rx = System.Text.RegularExpressions.Regex", userPart, StringComparison.Ordinal)
+        Assert.Contains("shared partial class Outer", userPart, StringComparison.Ordinal)
+        Assert.Contains("partial class Mid", userPart, StringComparison.Ordinal)
+        Assert.Contains("partial data class Inner", userPart, StringComparison.Ordinal)
+        Assert.Contains("private partial func Digits() Rx -> Digits_0.Instance", userPart, StringComparison.Ordinal)
+        let inner = run.Type("Inner")
+        Assert.Equal("App.Outer+Mid+Inner", inner.FullName)
+        Assert.Equal(true, Invoke(inner, "Test", "a1"))
+        Assert.Equal(false, Invoke(inner, "Test", "zzz"))
+    }
+
     // ADR-0192 amendment (partial data types): the declaring part lives in a
     // `partial data class` / `partial data struct` — the G# spelling of the C#
     // `partial record` / `partial record struct` that code-exploder's

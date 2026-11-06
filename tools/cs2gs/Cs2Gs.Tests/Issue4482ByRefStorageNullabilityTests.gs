@@ -32,10 +32,18 @@ open class Issue4482ByRefStorageNullabilityTests {
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Contains("let failures = [2]string?", printed)
+        Assert.Contains("let callerArray = []string?{\"x\"}", printed)
+        Assert.Contains("var genericRefCallerArray = []string?{\"x\"}", printed)
+        Assert.Contains("private func MakeArray() []string?", printed)
+        Assert.Contains("private func ForwardParamArray(forwarded []string?) string", printed)
+        Assert.Contains("private func UseRefParamArray(ref refParamArray []string?) string", printed)
+        Assert.Contains("private func UseGenericRefParamArray[T](ref refParamArray []string?) string", printed)
+        Assert.Contains("UseParamsJagged([]string{\"x\"})", printed)
+        Assert.Contains("let dictKey = []string{\"k\"}", printed)
         Assert.Contains("var r string? = \"x\"", printed)
         let (compileOutput, runOutput) = CompileAndRun(printed, "Holder.Run()")
         Assert.DoesNotContain("GS0612", compileOutput)
-        Assert.Equal("3-positive-positivepositive-", runOutput.Trim())
+        Assert.Equal("3-positive-positivepositive-----positive------", runOutput.Trim())
     }
 
     shared {
@@ -43,6 +51,7 @@ open class Issue4482ByRefStorageNullabilityTests {
 public class Holder
 {
     public string Field;
+    public string[] FieldArray = new string[1];
 
     private static int Find(int x, out string failureReason)
     {
@@ -53,8 +62,61 @@ public class Holder
 
     private static void Swap(ref string s) { s = null; }
 
+    private static void ClearRow(out string[] row) { row = null; }
+
+    private static string[] MakeArray() => new string[] { "x" };
+
+    private static string UseParamArray(string[] paramArray)
+    {
+        Find(0, out paramArray[0]);
+        return paramArray[0] ?? "-";
+    }
+
+    private static string ForwardParamArray(string[] forwarded)
+    {
+        return UseParamArray(forwarded);
+    }
+
+    private static string UseRefParamArray(ref string[] refParamArray)
+    {
+        Find(0, out refParamArray[0]);
+        return refParamArray[0] ?? "-";
+    }
+
+    private static string UseGenericRefParamArray<T>(ref string[] refParamArray)
+    {
+        Find(0, out refParamArray[0]);
+        return refParamArray[0] ?? "-";
+    }
+
+    private static string UseParamsJagged(params string[][] rows)
+    {
+        ClearRow(out rows[0]);
+        return rows[0] == null ? "-" : "x";
+    }
+
+    private static void WalkRecursiveParams<T>(int depth, params T[] xs) where T : class
+    {
+        if (depth > 0)
+        {
+            WalkRecursiveParams<T[]>(depth - 1, xs);
+        }
+    }
+
+#nullable enable
+    private static string UseDictionaryArrayValue(System.Collections.Generic.Dictionary<string[], string?[]> rows, string[] key)
+    {
+        Find(0, out rows[key][0]!);
+        return rows[key][0] ?? "-";
+    }
+#nullable restore
+
     public static string Run()
     {
+        WalkRecursiveParams(1, "x");
+        var dictKey = new string[] { "k" };
+        var dictRows = new System.Collections.Generic.Dictionary<string[], string?[]> { [dictKey] = new string?[1] { "v" } };
+        string dictResult = UseDictionaryArrayValue(dictRows, dictKey);
         var failures = new string[2];
         int a = Find(0, out failures[0]);
         int b = Find(2, out string inline);
@@ -65,7 +127,29 @@ public class Holder
         int e = Find(4, out h.Field);
         string r = "x";
         Swap(ref r);
-        return a + b + c + d + e + (failures[0] ?? "-") + (inline ?? "-") + (inferred ?? "-") + (declared ?? "-") + (h.Field ?? "-") + (r ?? "-");
+        var initialized = new string[1] { "x" };
+        Find(0, out initialized[0]);
+        var implicitArr = new[] { "x" };
+        Swap(ref implicitArr[0]);
+        string[] collectionArr = ["x"];
+        Find(0, out collectionArr[0]);
+        string[] bareInitArr = { "x" };
+        Find(0, out bareInitArr[0]);
+        string[] declaredThenAssigned;
+        declaredThenAssigned = new string[1];
+        Find(1, out declaredThenAssigned[0]);
+        var rect = new string[1, 1];
+        Find(0, out rect[0, 0]);
+        Find(0, out h.FieldArray[0]);
+        string paramResult = UseParamArray(new string[1]);
+        var callerArray = new string[] { "x" };
+        string forwardedResult = ForwardParamArray(callerArray);
+        var refCallerArray = MakeArray();
+        string refForwardedResult = UseRefParamArray(ref refCallerArray);
+        var genericRefCallerArray = new string[] { "x" };
+        string genericRefResult = UseGenericRefParamArray<int>(ref genericRefCallerArray);
+        string paramsJaggedResult = UseParamsJagged(new string[] { "x" });
+        return a + b + c + d + e + (failures[0] ?? "-") + (inline ?? "-") + (inferred ?? "-") + (declared ?? "-") + (h.Field ?? "-") + (r ?? "-") + (initialized[0] ?? "-") + (implicitArr[0] ?? "-") + (collectionArr[0] ?? "-") + (bareInitArr[0] ?? "-") + (declaredThenAssigned[0] ?? "-") + (rect[0, 0] ?? "") + (h.FieldArray[0] ?? "") + paramResult + forwardedResult + refForwardedResult + genericRefResult + paramsJaggedResult + dictResult;
     }
 }`
 

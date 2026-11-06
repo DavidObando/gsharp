@@ -547,8 +547,9 @@ public sealed class CtxAnalyzer : DiagnosticAnalyzer
     }
 }`)
         Assert.Contains("ctx BoundNodeAnalysisContext", printed, StringComparison.Ordinal)
+        Assert.Contains("let handler (BoundNodeAnalysisContext) -> void = ctx_2", printed, StringComparison.Ordinal)
         Assert.Contains("ctx_3 BoundNodeAnalysisContext", printed, StringComparison.Ordinal)
-        Assert.Contains("ctx_2(ctx_3)", printed, StringComparison.Ordinal)
+        Assert.Contains("handler(ctx_3)", printed, StringComparison.Ordinal)
         Assert.DoesNotContain(diagnostics, (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported)
         AssertBindsAgainstGsCore(printed)
     }
@@ -1156,6 +1157,14 @@ public sealed class BindingShapesAnalyzer : DiagnosticAnalyzer
 
     private static string Designated(MethodDeclarationSyntax declaration)
         => declaration.ParameterList.Parameters[0].Identifier is var token ? token.Text : "";
+
+    private static string ContainingTypeShapes(IMethodSymbol method)
+    {
+        (var deconstructed, var count) = (method.ContainingType, 0);
+        return (method.ContainingType is var designated ? designated.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) : "")
+            + deconstructed.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)
+            + count;
+    }
 }
 `)
         Assert.DoesNotContain(diagnostics, (d TranslationDiagnostic) -> d.Severity == TranslationSeverity.Unsupported)

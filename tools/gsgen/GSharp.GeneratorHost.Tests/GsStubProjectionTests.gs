@@ -149,6 +149,35 @@ class Gadget {
     }
 
     @Fact
+    func ClosedNestedTypesInGenericOuter_CarryEnclosingTypeArguments() {
+        let stub = GsStubProjectionTests.Project(`
+package Sample
+
+class Box[T] {
+    class Tag {
+    }
+
+    interface IMarker[U] {
+    }
+
+    enum Kind {
+        One
+    }
+}
+
+class Consumer {
+    var tag Box[int32].Tag
+    var marker Box[string].IMarker[bool]
+    var kind Box[int32].Kind
+}
+`)
+        Assert.Contains("global::Sample.Box<int>.Tag tag", stub)
+        Assert.Contains("global::Sample.Box<string>.IMarker<bool> marker", stub)
+        Assert.Contains("global::Sample.Box<int>.Kind kind", stub)
+        Assert.DoesNotContain("global::Sample.Box<T>.Tag", stub)
+    }
+
+    @Fact
     func RenderedStub_ParsesAsValidCSharp() {
         let stub = GsStubProjectionTests.Project(`
 package Sample
