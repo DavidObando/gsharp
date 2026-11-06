@@ -1751,14 +1751,16 @@ internal partial class MethodBodyEmitter {
             .IsReferenceTypeForConstraint(referenceOwner.StripToBareShape()) {
             return false
         }
+        let receiverType = receiver.Type.StripToBareShape()
         let storage = if GSharp.Core.CodeAnalysis.Lowering.SideEffectSpiller.IsBoxedTypeParameterReceiver(receiver) {
             GSharp.Core.CodeAnalysis.Lowering.SideEffectSpiller.GetReceiverStorageView(receiver)
-        } else if GSharp
+        } else if receiverType is not TypeParameterSymbol &&
+            GSharp
             .Core
             .CodeAnalysis
             .Binding
             .Binder
-            .IsReferenceTypeForConstraint(receiver.Type.StripToBareShape()) {
+            .IsReferenceTypeForConstraint(receiverType) {
             receiver
         } else {
             default(BoundExpression?)
@@ -1767,12 +1769,18 @@ internal partial class MethodBodyEmitter {
             return false
         }
         this.EmitExpression(storage)
-        if storage.Type is TypeParameterSymbol {
+        let storageType = storage.Type.StripToBareShape()
+        if storageType is TypeParameterSymbol {
             this.il.OpCode(ILOpCode.Box)
-            this.il.Token(this.outer.memberRefs.GetElementTypeToken(storage.Type))
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(storageType))
+        }
+        let castTarget = if receiverType is TypeParameterSymbol && Binder.IsReferenceTypeForConstraint(receiverType) {
+            receiverType
+        } else {
+            referenceOwner
         }
         this.il.OpCode(ILOpCode.Castclass)
-        this.il.Token(this.outer.memberRefs.GetElementTypeToken(referenceOwner))
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(castTarget))
         return true
     }
 

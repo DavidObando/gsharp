@@ -500,6 +500,24 @@ Console.WriteLine(reference.n)`, "1\n2\n2\n")
     }
 
     @Fact
+    func ClassConstrainedReferenceViews_PreserveProtectedReceiverAccess() {
+        AssertRuns(`import System
+open class Base {
+    protected func M() { Console.WriteLine("called") }
+}
+open class Derived : Base {
+    func Run[T Derived](input object) {
+        if input is T { input.M() }
+    }
+    func Deferred[T Derived](input T) { defer input.M() }
+}
+class More : Derived {}
+let value = More()
+value.Run[More](value)
+value.Deferred[More](value)`, "called\ncalled\n")
+    }
+
+    @Fact
     func ObjectConstrainedReceivers_PreserveStructStorageAndSnapshotReferenceValues() {
         AssertRuns(`import System
 struct Counter {
