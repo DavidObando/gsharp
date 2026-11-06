@@ -509,6 +509,17 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         reason
     )
 
+    /// Reports a constant floating-point to integer conversion that is NaN or out of range outside an
+    /// explicit `unchecked` context (#5767, ADR-0219).
+    /// @param location The converted expression location.
+    /// @param valueText The constant value, formatted with the invariant culture.
+    /// @param toType The integer target type.
+    func ReportConstantFloatingConversionOutOfRange(
+        location TextLocation,
+        valueText string,
+        toType TypeSymbol
+    ) -> Report(location, DiagnosticDescriptors.ConstantFloatingConversionOutOfRange, valueText, toType)
+
     /// Rerpots that there's no conversion from one type to the other.
     /// @param location The text location where the error was found.
     /// @param fromType From type.

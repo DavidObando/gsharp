@@ -3642,7 +3642,7 @@ internal partial class DeclarationBinder {
             this.binderCtx.CurrentTypeParameters = nil
         }
         try {
-            using let _ = binderCtx.PushCheckedContext(false)
+            using let _ = binderCtx.PushDefaultCheckedContext()
             using let _ = PushStaticMemberScope(structSymbol)
             action()
         } finally {
@@ -3981,6 +3981,32 @@ internal partial class DeclarationBinder {
     }
 
     private func BindConstFieldInitializer(
+        constField FieldSymbol,
+        fieldSyntaxNode FieldDeclarationSyntax,
+        fieldType TypeSymbol
+    )(Field FieldSymbol, Bound BoundExpression, Location TextLocation) {
+        // Issue #5767: a sibling or cross-type const that the operand refers to has its value only after the
+        // const fixpoint folds it. The GS0635 checks that cannot run now run when this field folds.
+        let previousChecks = conversions.BeginDeferredFloatingConstantChecks()
+        try {
+            return BindConstFieldInitializerCore(constField, fieldSyntaxNode, fieldType)
+        } finally {
+            let checks = conversions.EndDeferredFloatingConstantChecks(previousChecks)
+            if checks.Length > 0 {
+                deferredFloatingConstantChecks[constField] = checks
+            }
+        }
+    }
+
+    /// Runs the deferred GS0635 checks of [`constField`](paramref) one time (#5767).
+    /// @param constField The const field.
+    private func ReportDeferredFloatingConstantChecks(constField FieldSymbol) {
+        if deferredFloatingConstantChecks.Remove(constField, out var checks) {
+            conversions.ReportDeferredFloatingConstantChecks(checks)
+        }
+    }
+
+    private func BindConstFieldInitializerCore(
         constField FieldSymbol,
         fieldSyntaxNode FieldDeclarationSyntax,
         fieldType TypeSymbol
@@ -4369,6 +4395,7 @@ internal partial class DeclarationBinder {
             for item in pending {
                 if ConstantExpressionEvaluator.TryFold(item.Bound, item.Field.Type, out var constantValue) {
                     item.Field.SetConstantValue(constantValue)
+                    ReportDeferredFloatingConstantChecks(item.Field)
                     progress = true
                 } else {
                     stillPending.Add(item)
@@ -4381,7 +4408,12 @@ internal partial class DeclarationBinder {
             return
         }
         for (constField, bound, location) in pending {
-            if !(bound is BoundErrorExpression) {
+            // Issue #5767: a checked conversion of a value out of range does not fold. GS0635 gives the cause,
+            // reported when the initializer was bound or by the deferred check whose operand is constant now.
+            ReportDeferredFloatingConstantChecks(constField)
+            if !(bound is BoundErrorExpression) &&
+                !ConstantExpressionEvaluator
+                .ContainsCheckedOutOfRangeFloatingConstantConversion(bound) {
                 Diagnostics.ReportConstFieldInitializerNotConstant(location, constField.Name)
             }
         }
@@ -4405,6 +4437,7 @@ internal partial class DeclarationBinder {
             for item in pendingConstFolds {
                 if ConstantExpressionEvaluator.TryFold(item.Bound, item.Field.Type, out var constantValue) {
                     item.Field.SetConstantValue(constantValue)
+                    ReportDeferredFloatingConstantChecks(item.Field)
                     progress = true
                 } else {
                     stillPending.Add(item)
