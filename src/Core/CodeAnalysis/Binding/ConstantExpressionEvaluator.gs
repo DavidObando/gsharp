@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.Binding
 
 import System
 import System.Diagnostics.CodeAnalysis
+import System.Globalization
 import System.Linq.Expressions
 import System.Reflection
 import GSharp.Core.CodeAnalysis.Symbols
@@ -421,6 +422,25 @@ internal shared class ConstantExpressionEvaluator {
             converted = source
             return true
         }
+        if IsFloatingRuntimeType(source.Type) && IsIntegralConstantTarget(targetType) {
+            // #5767: do not let the JIT of the host runtime convert the value. The result of
+            // Expression.Convert for an out-of-range value changed in .NET 11.
+            converted = nil
+            if !TryInvoke(source, out var operand) || operand == nil {
+                return false
+            }
+            if !TryConvertFloatingConstant(
+                Convert.ToDouble(operand, CultureInfo.InvariantCulture),
+                targetType,
+                out var value,
+                out var inRange
+            ) ||
+                (isChecked && !inRange) {
+                return false
+            }
+            converted = Expression.Constant(value, targetType)
+            return true
+        }
         converted = if isChecked {
             Expression.ConvertChecked(source, targetType)
         } else {
@@ -428,6 +448,257 @@ internal shared class ConstantExpressionEvaluator {
         }
         return true
     }
+
+    /// Converts a floating-point constant to an integer type with the G# constant rule (#5767, ADR-0219).
+    /// The result does not depend on the runtime that hosts gsc. A value in range truncates toward zero.
+    /// A value out of range saturates at the bounds of the type, and NaN converts to 0. The .NET 11 runtime
+    /// uses the same rule for unchecked conversions.
+    /// @param value The constant value.
+    /// @param targetType The integer or `char` runtime type.
+    /// @param converted The converted value, boxed as [`targetType`](paramref).
+    /// @param inRange `false` when [`value`](paramref) is NaN or out of the range of the type.
+    /// @returns `false` when [`targetType`](paramref) is not a fixed-width integer type or `char`.
+    func TryConvertFloatingConstant(
+        value float64,
+        targetType Type,
+        @NotNullWhen(true) out converted object?,
+        out inRange bool
+    ) bool {
+        converted = nil
+        inRange = false
+        if !TryGetIntegralBounds(targetType, out var typeCode, out var lower, out var upperExclusive) {
+            return false
+        }
+        let truncated = Math.Truncate(value)
+        inRange = !float64.IsNaN(value) && truncated >= lower && truncated < upperExclusive
+        converted = if inRange && lower < 0.0 {
+            Convert.ChangeType(int64(truncated), typeCode, CultureInfo.InvariantCulture)
+        } else if inRange {
+            Convert.ChangeType(uint64(truncated), typeCode, CultureInfo.InvariantCulture)
+        } else if float64.IsNaN(value) {
+            Convert.ChangeType(0, typeCode, CultureInfo.InvariantCulture)
+        } else if value < 0.0 {
+            GetIntegralMinimum(typeCode)
+        } else {
+            GetIntegralMaximum(typeCode)
+        }
+        return true
+    }
+
+    /// Tests the types of a floating-point constant conversion (#5767, ADR-0219): a `float32` or `float64`
+    /// operand and a fixed-width integer, `char`, or enum target, or a `Nullable<T>` of one of these. It does
+    /// not evaluate the operand, so a conversion to another type does not compile an expression tree.
+    /// @param conversion The bound conversion.
+    /// @returns `true` when the rule of (cref:TryConvertFloatingConstant) applies if the operand is constant.
+    func IsFloatingConstantConversionCandidate(conversion BoundConversionExpression) bool {
+        let operandType = conversion.Expression.Type
+        if operandType != TypeSymbol.Float64 && operandType != TypeSymbol.Float32 {
+            return false
+        }
+        let targetType = GetFloatingConstantConversionStorageType(conversion.Type).ClrType
+        return targetType != nil && IsIntegralConstantTarget(targetType)
+    }
+
+    /// Folds a bound conversion of a constant `float32` or `float64` operand to a fixed-width integer type,
+    /// `char`, or an enum of one of these, with (cref:TryConvertFloatingConstant) (#5767, ADR-0219). The binder
+    /// uses it to report GS0635, and the emitter and the expression-tree lowerer use it to emit the folded value.
+    /// The `const` fold of (cref:TryFold) uses the same rule for the same storage type. Thus each conversion of
+    /// a constant operand has the same value in each position and on each host runtime.
+    /// @param conversion The bound conversion.
+    /// @param operandValue The constant operand value, boxed as `float32` or `float64`.
+    /// @param converted The converted value, boxed as the runtime type of the integer storage type.
+    /// @param inRange `false` when the operand value is NaN or out of the range of the target type.
+    /// @returns `true` when the conversion is a candidate (cref:IsFloatingConstantConversionCandidate) and the
+    /// operand is constant.
+    func TryFoldFloatingConstantConversion(
+        conversion BoundConversionExpression,
+        @NotNullWhen(true) out operandValue object?,
+        @NotNullWhen(true) out converted object?,
+        out inRange bool
+    ) bool {
+        operandValue = nil
+        converted = nil
+        inRange = false
+        if !IsFloatingConstantConversionCandidate(conversion) {
+            return false
+        }
+        if !TryEvaluate(conversion.Expression, out var value) || value == nil {
+            return false
+        }
+        operandValue = value
+        return TryConvertFloatingConstant(
+            Convert.ToDouble(value, CultureInfo.InvariantCulture),
+            GetFloatingConstantConversionStorageType(conversion.Type).ClrType!!,
+            out converted,
+            out inRange
+        )
+    }
+
+    /// Replaces a bound conversion of a constant `float32` or `float64` operand with its folded value (#5767,
+    /// ADR-0219). (cref:Lowering.ConstantConversionFolder) uses it before the other emit-pipeline passes, and the
+    /// emitter and the expression-tree lowerer use it too, so the conversion opcodes and `Expression.Convert` of the
+    /// host or target runtime do not calculate the value. The result is a literal of
+    /// the integer storage type. For an enum target, a conversion of that literal to the enum follows. For a
+    /// `Nullable<T>` target, the normal nullable lift of the `T` value follows. These conversions do not change
+    /// the value.
+    /// @param conversion The bound conversion.
+    /// @param folded The folded literal, with the conversions to the enum and nullable target.
+    /// @returns `false` when the conversion is not a floating-point constant conversion to an integer, `char`,
+    /// or enum type, or when it is a checked conversion of a value out of range. That conversion throws at run
+    /// time.
+    func TryFoldFloatingConstantConversionToLiteral(
+        conversion BoundConversionExpression,
+        @NotNullWhen(true) out folded BoundExpression?
+    ) bool {
+        folded = nil
+        if !TryFoldFloatingConstantConversion(conversion, out _, out var converted, out var inRange) ||
+            (!inRange && conversion.IsChecked) {
+            return false
+        }
+        let valueType = GetNonNullableTarget(conversion.Type)
+        let storageType = GetConstantStorageType(valueType)
+        var result = cast[BoundExpression](BoundLiteralExpression(conversion.Syntax, converted, storageType))
+        if !object.ReferenceEquals(storageType, valueType) {
+            result = BoundConversionExpression(conversion.Syntax, valueType, result)
+        }
+        if !object.ReferenceEquals(valueType, conversion.Type) {
+            result = BoundConversionExpression(conversion.Syntax, conversion.Type, result)
+        }
+        folded = result
+        return true
+    }
+
+    /// Whether [`expression`](paramref) contains a checked conversion of a constant `float32` or `float64` value
+    /// that is NaN or out of range for its integer, `char`, or enum target (#5767, ADR-0219). That conversion does
+    /// not fold, and the binder reports GS0635 for it, when the conversion is bound or when the const fixpoint
+    /// gives its operand a value. A const declaration whose initializer contains it does not also get GS0376.
+    /// @param expression The bound const initializer.
+    /// @returns `true` when the expression contains the conversion.
+    func ContainsCheckedOutOfRangeFloatingConstantConversion(expression BoundExpression) bool {
+        let finder = CheckedOutOfRangeFloatingConstantConversionFinder()
+        finder.VisitExpression(expression)
+        return finder.Found
+    }
+
+    private class CheckedOutOfRangeFloatingConstantConversionFinder : BoundTreeWalker {
+        var Found bool
+
+        protected override func VisitConversionExpression(node BoundConversionExpression) {
+            if Found {
+                return
+            }
+            if node.IsChecked && TryFoldFloatingConstantConversion(node, out _, out _, out var inRange) && !inRange {
+                Found = true
+                return
+            }
+            base.VisitConversionExpression(node)
+        }
+    }
+
+    /// Gets the integer storage type of a floating-point constant conversion target: the underlying type of a
+    /// `Nullable<T>` target, and then the underlying type of an enum. The CLR type of a `Nullable<T>` symbol is not
+    /// the integer type in each representation.
+    private func GetFloatingConstantConversionStorageType(type TypeSymbol) TypeSymbol -> GetConstantStorageType(
+        GetNonNullableTarget(type)
+    )
+
+    private func GetNonNullableTarget(type TypeSymbol) TypeSymbol -> if type is NullableTypeSymbol nullable {
+        nullable.UnderlyingType
+    } else {
+        type
+    }
+
+    private func TryGetIntegralBounds(
+        type Type,
+        out typeCode TypeCode,
+        out lower float64,
+        out upperExclusive float64
+    ) bool {
+        lower = 0.0
+        upperExclusive = 0.0
+        typeCode = if type.IsSameAs(typeof(int8)) {
+            TypeCode.SByte
+        } else if type.IsSameAs(typeof(uint8)) {
+            TypeCode.Byte
+        } else if type.IsSameAs(typeof(int16)) {
+            TypeCode.Int16
+        } else if type.IsSameAs(typeof(uint16)) {
+            TypeCode.UInt16
+        } else if type.IsSameAs(typeof(char)) {
+            TypeCode.Char
+        } else if type.IsSameAs(typeof(int32)) {
+            TypeCode.Int32
+        } else if type.IsSameAs(typeof(uint32)) {
+            TypeCode.UInt32
+        } else if type.IsSameAs(typeof(int64)) {
+            TypeCode.Int64
+        } else if type.IsSameAs(typeof(uint64)) {
+            TypeCode.UInt64
+        } else {
+            TypeCode.Empty
+        }
+        // Each bound is a power of two, so it is exact as a float64.
+        switch typeCode {
+            case TypeCode.SByte {
+                lower = -128.0
+                upperExclusive = 128.0
+            }
+            case TypeCode.Byte {
+                upperExclusive = 256.0
+            }
+            case TypeCode.Int16 {
+                lower = -32768.0
+                upperExclusive = 32768.0
+            }
+            case TypeCode.UInt16, TypeCode.Char {
+                upperExclusive = 65536.0
+            }
+            case TypeCode.Int32 {
+                lower = -2147483648.0
+                upperExclusive = 2147483648.0
+            }
+            case TypeCode.UInt32 {
+                upperExclusive = 4294967296.0
+            }
+            case TypeCode.Int64 {
+                lower = -9223372036854775808.0
+                upperExclusive = 9223372036854775808.0
+            }
+            case TypeCode.UInt64 {
+                upperExclusive = 18446744073709551616.0
+            }
+            default {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func GetIntegralMinimum(typeCode TypeCode) object -> switch typeCode {
+        case TypeCode.SByte: int8.MinValue
+        case TypeCode.Int16: int16.MinValue
+        case TypeCode.Int32: int32.MinValue
+        case TypeCode.Int64: int64.MinValue
+        default: Convert.ChangeType(0, typeCode, CultureInfo.InvariantCulture)
+    }
+
+    private func GetIntegralMaximum(typeCode TypeCode) object -> switch typeCode {
+        case TypeCode.SByte: int8.MaxValue
+        case TypeCode.Byte: uint8.MaxValue
+        case TypeCode.Int16: int16.MaxValue
+        case TypeCode.UInt16: uint16.MaxValue
+        case TypeCode.Char: char.MaxValue
+        case TypeCode.Int32: int32.MaxValue
+        case TypeCode.UInt32: uint32.MaxValue
+        case TypeCode.Int64: int64.MaxValue
+        default: uint64.MaxValue
+    }
+
+    private func IsIntegralConstantTarget(type Type) bool -> TryGetIntegralBounds(type, out _, out _, out _)
+
+    private func IsFloatingRuntimeType(type Type) bool -> type.IsSameAs(typeof(float64)) || type.IsSameAs(
+        typeof(float32)
+    )
 
     private func TryInvoke(expression Expression, out value object?) bool {
         let boxed = if expression.Type.IsSameAs(typeof(object)) {

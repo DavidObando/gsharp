@@ -6159,7 +6159,12 @@ internal partial class StatementBinder {
                     constLocal.IsConst = true
                     constLocal.ConstantValue = constValue
                 }
-            } else if declaredVariable is GlobalVariableSymbol && !(convertedInitializer is BoundErrorExpression) {
+            } else if declaredVariable is GlobalVariableSymbol &&
+                !(convertedInitializer is BoundErrorExpression) &&
+                !ConstantExpressionEvaluator
+                .ContainsCheckedOutOfRangeFloatingConstantConversion(convertedInitializer) {
+                // Issue #5767: the condition excludes an initializer that does not fold because of a checked
+                // conversion of a value out of range. Its GS0635 gives the cause.
                 Diagnostics.ReportConstFieldInitializerNotConstant(
                     syntax.Initializer?.Location ?? syntax.Identifier.Location,
                     syntax.Identifier.ValueText

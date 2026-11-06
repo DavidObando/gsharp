@@ -2603,6 +2603,11 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "The program has no entry point. Declare 'func Main()', write top-level statements, or set <OutputType>Library</OutputType>.{0}"
     )
+    internal let ConstantFloatingConversionOutOfRange DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0635",
+        DiagnosticSeverity.Error,
+        "Constant value '{0}' cannot be converted to '{1}' because it is NaN or out of range. Use 'unchecked(...)' to convert it with saturation."
+    )
     internal let FatalCompilerIOError DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9997",
         DiagnosticSeverity.Error,
