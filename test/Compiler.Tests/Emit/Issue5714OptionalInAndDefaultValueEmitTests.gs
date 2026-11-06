@@ -121,12 +121,13 @@ class Calls {
     }
 
     @Fact
-    func UnrepresentableLiftedStructDefaults_ReportGS0265() {
+    func UnrepresentableOrMismatchedNullableDefaults_ReportGS0265() {
         const source = `package InvalidDefaults
 import System
 struct Point { var X int32 }
 func PointDefault(x Point? = default(Point)) bool -> x.HasValue
 func DateDefault(x DateTime? = default(DateTime)) bool -> x.HasValue
+func NullableToValue(x int32 = default(int32?)) int32 -> x
 `
         using let resolver = ReferenceResolver.WithReferences(Array.Empty[string]())
         let compilation = GsCompilation(resolver, GsSyntaxTree.Parse(SourceText.From(source))){IsLibrary = true}
@@ -137,9 +138,10 @@ func DateDefault(x DateTime? = default(DateTime)) bool -> x.HasValue
             .Diagnostics
             .Where((diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.Id == "GS0265")
             .ToArray()
-        Assert.Equal(2, diagnostics.Length)
+        Assert.Equal(3, diagnostics.Length)
         Assert.Equal(3, diagnostics[0].Location.StartLine)
         Assert.Equal(4, diagnostics[1].Location.StartLine)
+        Assert.Equal(5, diagnostics[2].Location.StartLine)
     }
 
     shared {

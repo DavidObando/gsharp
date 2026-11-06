@@ -6813,15 +6813,17 @@ internal class ConversionClassifier {
             } else {
                 def.Type
             }
+            let defaultIsNullable = NullableLifting.IsAnyValueTypeNullable(def.Type as NullableTypeSymbol)
+            let parameterIsNullable = NullableLifting.IsAnyValueTypeNullable(parameterType as NullableTypeSymbol)
             // The written `default(T)` / `T()` must denote the parameter's own type;
             // no implicit conversion of a value-type default is supported.
-            if !DefaultTypeMatchesParameter(defUnderlying, paramUnderlying) {
+            if !DefaultTypeMatchesParameter(defUnderlying, paramUnderlying) ||
+                (defaultIsNullable && !parameterIsNullable) {
                 reason = "the default value 'default(${def.Type?.Name})' does not match the parameter type '${parameterType.Name}'."
                 return false
             }
             // Only default(T?) is missing. default(T) must retain its value when lifted to T?.
-            if NullableLifting.IsAnyValueTypeNullable(def.Type as NullableTypeSymbol) ||
-                !IsValueTypeForDefault(paramUnderlying) {
+            if defaultIsNullable || !IsValueTypeForDefault(paramUnderlying) {
                 value = nil
                 return true
             }
@@ -6839,7 +6841,7 @@ internal class ConversionClassifier {
                 value = decimal.Zero
                 return true
             }
-            if NullableLifting.IsAnyValueTypeNullable(parameterType as NullableTypeSymbol) {
+            if parameterIsNullable {
                 reason = "a non-null value-type default for '${parameterType.Name}' is not representable in CLR parameter metadata."
                 return false
             }
