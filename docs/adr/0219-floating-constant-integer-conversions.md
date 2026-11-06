@@ -31,7 +31,7 @@ The maintainer selected "Error unless unchecked" for #5767.
 
 ## Decision
 
-1. A constant `float32` or `float64` value that is NaN or out of range and that converts to `int8`, `uint8`, `int16`, `uint16`, `char`, `int32`, `uint32`, `int64`, or `uint64` is error **GS0635**, unless an explicit `unchecked(...)` expression or `unchecked { }` block is the innermost overflow context. The default context and `checked` report it.
+1. A constant `float32` or `float64` value that is NaN or out of range and that converts to `int8`, `uint8`, `int16`, `uint16`, `char`, `int32`, `uint32`, `int64`, `uint64`, or an enum with one of these underlying types is error **GS0635**, unless an explicit `unchecked(...)` expression or `unchecked { }` block is the innermost overflow context. The default context and `checked` report it.
 2. A value is in range when its value truncated toward zero is in the range of the target type.
 3. gsc folds these conversions with one rule that does not depend on the host runtime:
    - A value in range truncates toward zero.
@@ -41,10 +41,11 @@ The maintainer selected "Error unless unchecked" for #5767.
    This is the .NET 11 rule for unchecked run-time conversions, and Kotlin's rule for `Double.toInt()`.
 4. A conversion of a value that is not constant is a run-time conversion. GS0635 does not apply, and the result is the result of the target runtime.
 5. The rule applies to each conversion of a constant operand, not only to a `const` declaration. `let a = unchecked(int8(300.5))`, an argument, a return value, and a lambda body get `127`, the same value as `const a int8 = unchecked(int8(300.5))`. The emitter emits the folded value and does not emit a conversion opcode. An expression tree contains the folded value as a constant, not `Expression.Convert` of the operand.
-6. A conversion to `Nullable<T>` of one of these integer types, such as `cast[int8?](300.5)`, follows the same rule: GS0635 outside `unchecked`, and in `unchecked` the folded `T` value wrapped in `Nullable<T>`.
-7. The conversion binder reports GS0635, the evaluator folds a `const` declaration, and the emitter and the expression-tree lowerer fold the other positions. Each uses `ConstantExpressionEvaluator.TryFoldFloatingConstantConversion` or `TryConvertFloatingConstant`, so they use the same range test and the same value.
+6. A conversion to an enum folds with the rule of its underlying type, and the folded value converts to the enum. A conversion to `Nullable<T>` of one of these types, such as `cast[int8?](300.5)`, follows the same rule: GS0635 outside `unchecked`, and in `unchecked` the folded `T` value wrapped in `Nullable<T>`. C# reports CS0221 for these targets too.
+7. A `const` field can refer to a sibling or cross-type `const` that the const fixpoint folds later. Its GS0635 check runs when the fixpoint gives the operand a value, in the overflow context of the conversion. A `checked` conversion of a value out of range does not fold, and it reports GS0635, not GS0376.
+8. The conversion binder reports GS0635, the evaluator folds a `const` declaration, and the emitter and the expression-tree lowerer fold the other positions. Each uses `ConstantExpressionEvaluator.TryFoldFloatingConstantConversion` or `TryConvertFloatingConstant`, so they use the same range test and the same value.
 
-`nint`, `nuint`, `decimal`, and enum targets are not in this decision. gsc does not fold a floating-point conversion to a native-width integer, and a `decimal` conversion that is out of range is not a constant.
+`nint`, `nuint`, and `decimal` targets are not in this decision. gsc does not fold a floating-point conversion to a native-width integer, and a `decimal` conversion that is out of range is not a constant.
 
 ## Consequences
 

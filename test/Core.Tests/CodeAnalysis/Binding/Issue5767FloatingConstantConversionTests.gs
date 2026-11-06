@@ -34,6 +34,9 @@ open class Issue5767FloatingConstantConversionTests {
     @InlineData("let a = unchecked(checked(int8(300.5)))\na")
     @InlineData("let a = Math.Abs(int32(1e10))\na")
     @InlineData("let a = cast[int8?](300.5)\na")
+    @InlineData("import System.Text.Json\nconst a JsonTokenType = cast[JsonTokenType](300.5)\na")
+    @InlineData("import System.Text.Json\nlet a = cast[JsonTokenType?](-1.0)\na")
+    @InlineData("enum Color {\n    Red\n}\nlet a = cast[Color](1e10)\na")
     @InlineData("func F(x int8 = int8(300.5)) int8 {\n    return x\n}\nF()")
     @InlineData("let f = () -> int8(1e10)\nf()")
     @InlineData("class C {\n    shared {\n        let B int8 = int8(1e10)\n    }\n}\nC.B")
@@ -115,6 +118,15 @@ open class Issue5767FloatingConstantConversionTests {
     @InlineData("let a = unchecked(cast[uint16?](70000.0))\na", "65535")
     @InlineData("let a int32? = cast[int32?](1.5)\na", "1")
     @InlineData("func F() uint8? {\n    return unchecked(cast[uint8?](-1.5))\n}\nF()", "0")
+    @InlineData("import System.Text.Json\nlet a = unchecked(cast[JsonTokenType](300.5))\nint32(a)", "255")
+    @InlineData(
+        "import System.Text.Json\nconst a JsonTokenType = unchecked(cast[JsonTokenType](300.5))\nint32(a)",
+        "255"
+    )
+    @InlineData(
+        "import System.Text.Json\nlet a = unchecked(cast[JsonTokenType?](300.5))\nint32(a ?? JsonTokenType.None)",
+        "255"
+    )
     func ConstantOperandConversion_OutsideConstDeclaration_EmitsFoldedValue(source string, expected string) {
         let result = EmittedOracle.Evaluate(source)
         Assert.Empty(result.Diagnostics)
@@ -127,6 +139,7 @@ open class Issue5767FloatingConstantConversionTests {
     @InlineData("Expression[Func[int8]]", "() -> unchecked(int8(300.5))", "127")
     @InlineData("Expression[Func[uint16?]]", "() -> unchecked(cast[uint16?](70000.0))", "65535")
     @InlineData("Expression[Func[int32, int16]]", "(x int32) -> unchecked(int16(70000.0)) + int16(0 * x)", "32767")
+    @InlineData("Expression[Func[int32]]", "() -> int32(unchecked(cast[System.Text.Json.JsonTokenType](300.5)))", "255")
     func ConstantOperandConversion_InExpressionTree_ContainsFoldedValue(
         treeType string,
         lambda string,
@@ -140,6 +153,52 @@ open class Issue5767FloatingConstantConversionTests {
         let result = EmittedOracle.Evaluate(
             "import System\nimport System.Linq.Expressions\n\nlet e " + treeType + " = " + lambda + "\n" + invoke
         )
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(expected, result.ValueText)
+    }
+
+    /// A const field can refer to a sibling or cross-type const that the const fixpoint folds later. Its GS0635
+    /// check runs when the field folds, in the overflow context of its own conversion.
+    @Theory
+    @InlineData(
+        "class C {\n    shared {\n        const D float64 = 300.5\n        const A int8 = int8(D)\n    }\n}\nC.A"
+    )
+    @InlineData(
+        "class C {\n    shared {\n        const A int8 = int8(D)\n        const D float64 = 300.5\n    }\n}\nC.A"
+    )
+    @InlineData(
+        "class C {\n    shared {\n        const A uint16 = uint16(D * 1000.0)\n        const D float64 = 70.5\n    }\n}\nC.A"
+    )
+    @InlineData(
+        "class C {\n    shared {\n        const A int8 = int8(E.D)\n    }\n}\nclass E {\n    shared {\n        const D float64 = 300.5\n    }\n}\nC.A"
+    )
+    @InlineData(
+        "class C {\n    shared {\n        const A int8 = checked(int8(D))\n        const D float64 = 300.5\n    }\n}\nC.A"
+    )
+    @InlineData(
+        "class C {\n    shared {\n        const A int8 = unchecked(checked(int8(D)))\n        const D float64 = 300.5\n    }\n}\nC.A"
+    )
+    func OutOfRangeConversionOfDeferredConstField_ReportsGS0635Once(source string) {
+        let result = EmittedOracle.Evaluate(source)
+        Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0635")
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0376")
+    }
+
+    @Theory
+    @InlineData(
+        "class C {\n    shared {\n        const A int8 = unchecked(int8(D))\n        const D float64 = 300.5\n    }\n}\nC.A",
+        "127"
+    )
+    @InlineData(
+        "class C {\n    shared {\n        const A int8 = int8(D)\n        const D float64 = 100.7\n    }\n}\nC.A",
+        "100"
+    )
+    @InlineData(
+        "class C {\n    shared {\n        const A int8 = unchecked(int8(E.D))\n    }\n}\nclass E {\n    shared {\n        const D float64 = -1e9\n    }\n}\nC.A",
+        "-128"
+    )
+    func ConversionOfDeferredConstField_InRangeOrUnchecked_FoldsWithoutDiagnostic(source string, expected string) {
+        let result = EmittedOracle.Evaluate(source)
         Assert.Empty(result.Diagnostics)
         Assert.Equal(expected, result.ValueText)
     }

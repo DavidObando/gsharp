@@ -692,7 +692,7 @@ entry point depends on.
 
 ## Constant floating-point conversion diagnostics (GS0635)
 
-gsc folds a constant `float32` or `float64` value that converts to an integer type or `char`. A value in range truncates toward zero. Run-time conversions of a value that is NaN or out of range give different results on .NET 10 and .NET 11, so such a constant needs an explicit `unchecked` context. See ADR-0219 and issue #5767.
+gsc folds a constant `float32` or `float64` value that converts to an integer type, `char`, or an enum of one of these types. A value in range truncates toward zero. Run-time conversions of a value that is NaN or out of range give different results on .NET 10 and .NET 11, so such a constant needs an explicit `unchecked` context. See ADR-0219 and issue #5767.
 
 | Code | Severity | Meaning | Remedy |
 | --- | --- | --- | --- |

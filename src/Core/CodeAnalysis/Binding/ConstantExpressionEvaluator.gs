@@ -485,16 +485,31 @@ internal shared class ConstantExpressionEvaluator {
         return true
     }
 
-    /// Folds a bound conversion of a constant `float32` or `float64` operand to a fixed-width integer type or
-    /// `char` with (cref:TryConvertFloatingConstant) (#5767, ADR-0219). The binder uses it to report GS0635,
-    /// and the emitter uses it to emit the folded value, so each conversion of a constant operand has the same
-    /// value in each position and on each host runtime. The target type is tested before the operand is
-    /// evaluated, so a conversion to another type does not compile an expression tree.
+    /// Tests the types of a floating-point constant conversion (#5767, ADR-0219): a `float32` or `float64`
+    /// operand and a fixed-width integer, `char`, or enum target, or a `Nullable<T>` of one of these. It does
+    /// not evaluate the operand, so a conversion to another type does not compile an expression tree.
+    /// @param conversion The bound conversion.
+    /// @returns `true` when the rule of (cref:TryConvertFloatingConstant) applies if the operand is constant.
+    func IsFloatingConstantConversionCandidate(conversion BoundConversionExpression) bool {
+        let operandType = conversion.Expression.Type
+        if operandType != TypeSymbol.Float64 && operandType != TypeSymbol.Float32 {
+            return false
+        }
+        let targetType = GetFloatingConstantConversionStorageType(conversion.Type).ClrType
+        return targetType != nil && IsIntegralConstantTarget(targetType)
+    }
+
+    /// Folds a bound conversion of a constant `float32` or `float64` operand to a fixed-width integer type,
+    /// `char`, or an enum of one of these, with (cref:TryConvertFloatingConstant) (#5767, ADR-0219). The binder
+    /// uses it to report GS0635, and the emitter and the expression-tree lowerer use it to emit the folded value.
+    /// The `const` fold of (cref:TryFold) uses the same rule for the same storage type. Thus each conversion of
+    /// a constant operand has the same value in each position and on each host runtime.
     /// @param conversion The bound conversion.
     /// @param operandValue The constant operand value, boxed as `float32` or `float64`.
-    /// @param converted The converted value, boxed as the runtime type of the target.
+    /// @param converted The converted value, boxed as the runtime type of the integer storage type.
     /// @param inRange `false` when the operand value is NaN or out of the range of the target type.
-    /// @returns `true` when the operand is a floating-point constant and the target is an integer type or `char`.
+    /// @returns `true` when the conversion is a candidate (cref:IsFloatingConstantConversionCandidate) and the
+    /// operand is constant.
     func TryFoldFloatingConstantConversion(
         conversion BoundConversionExpression,
         @NotNullWhen(true) out operandValue object?,
@@ -504,12 +519,7 @@ internal shared class ConstantExpressionEvaluator {
         operandValue = nil
         converted = nil
         inRange = false
-        let operandType = conversion.Expression.Type
-        if operandType != TypeSymbol.Float64 && operandType != TypeSymbol.Float32 {
-            return false
-        }
-        let targetType = GetFloatingConstantConversionTarget(conversion.Type).ClrType
-        if targetType == nil || !IsIntegralConstantTarget(targetType) {
+        if !IsFloatingConstantConversionCandidate(conversion) {
             return false
         }
         if !TryEvaluate(conversion.Expression, out var value) || value == nil {
@@ -518,21 +528,23 @@ internal shared class ConstantExpressionEvaluator {
         operandValue = value
         return TryConvertFloatingConstant(
             Convert.ToDouble(value, CultureInfo.InvariantCulture),
-            targetType,
+            GetFloatingConstantConversionStorageType(conversion.Type).ClrType!!,
             out converted,
             out inRange
         )
     }
 
-    /// Replaces a bound conversion of a constant `float32` or `float64` operand to an integer type or `char`
-    /// with its folded value (#5767, ADR-0219). The emitter and the expression-tree lowerer use it, so the
-    /// conversion opcodes and `Expression.Convert` of the host or target runtime do not calculate the value.
-    /// For a `Nullable<T>` target, the result is a conversion of the folded `T` literal to the target, so the
-    /// normal nullable lift wraps the value.
+    /// Replaces a bound conversion of a constant `float32` or `float64` operand with its folded value (#5767,
+    /// ADR-0219). The emitter and the expression-tree lowerer use it, so the conversion opcodes and
+    /// `Expression.Convert` of the host or target runtime do not calculate the value. The result is a literal of
+    /// the integer storage type. For an enum target, a conversion of that literal to the enum follows. For a
+    /// `Nullable<T>` target, the normal nullable lift of the `T` value follows. These conversions do not change
+    /// the value.
     /// @param conversion The bound conversion.
-    /// @param folded The folded literal, or the lift of the folded literal to a nullable target.
-    /// @returns `false` when the conversion is not a floating-point constant conversion to an integer type or
-    /// `char`, or when it is a checked conversion of a value out of range. That conversion throws at run time.
+    /// @param folded The folded literal, with the conversions to the enum and nullable target.
+    /// @returns `false` when the conversion is not a floating-point constant conversion to an integer, `char`,
+    /// or enum type, or when it is a checked conversion of a value out of range. That conversion throws at run
+    /// time.
     func TryFoldFloatingConstantConversionToLiteral(
         conversion BoundConversionExpression,
         @NotNullWhen(true) out folded BoundExpression?
@@ -542,21 +554,27 @@ internal shared class ConstantExpressionEvaluator {
             (!inRange && conversion.IsChecked) {
             return false
         }
-        let foldedType = GetFloatingConstantConversionTarget(conversion.Type)
-        let literal = BoundLiteralExpression(conversion.Syntax, converted, foldedType)
-        folded = if object.ReferenceEquals(foldedType, conversion.Type) {
-            literal
-        } else {
-            BoundConversionExpression(conversion.Syntax, conversion.Type, literal)
+        let valueType = GetNonNullableTarget(conversion.Type)
+        let storageType = GetConstantStorageType(valueType)
+        var result = cast[BoundExpression](BoundLiteralExpression(conversion.Syntax, converted, storageType))
+        if !object.ReferenceEquals(storageType, valueType) {
+            result = BoundConversionExpression(conversion.Syntax, valueType, result)
         }
+        if !object.ReferenceEquals(valueType, conversion.Type) {
+            result = BoundConversionExpression(conversion.Syntax, conversion.Type, result)
+        }
+        folded = result
         return true
     }
 
-    /// Gets the integer type of a floating-point constant conversion: the underlying type of a nullable target,
-    /// or the target. The CLR type of a `Nullable<T>` symbol is not the integer type in each representation.
-    private func GetFloatingConstantConversionTarget(
-        type TypeSymbol
-    ) TypeSymbol -> if type is NullableTypeSymbol nullable {
+    /// Gets the integer storage type of a floating-point constant conversion target: the underlying type of a
+    /// `Nullable<T>` target, and then the underlying type of an enum. The CLR type of a `Nullable<T>` symbol is not
+    /// the integer type in each representation.
+    private func GetFloatingConstantConversionStorageType(type TypeSymbol) TypeSymbol -> GetConstantStorageType(
+        GetNonNullableTarget(type)
+    )
+
+    private func GetNonNullableTarget(type TypeSymbol) TypeSymbol -> if type is NullableTypeSymbol nullable {
         nullable.UnderlyingType
     } else {
         type

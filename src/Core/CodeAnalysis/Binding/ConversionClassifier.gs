@@ -58,6 +58,10 @@ internal class ConversionClassifier {
     // private copy that could drift.
     private let binderCtx BinderContext
 
+    // Issue #5767 (ADR-0219): the GS0635 checks whose operand was not constant yet when the conversion was
+    // bound, for the const field initializer that is being bound (cref:BeginDeferredFloatingConstantChecks).
+    private var deferredFloatingConstantChecks List[(Location TextLocation, Conversion BoundConversionExpression)]?
+
     private let memberLookup MemberLookup
 
     internal prop MemberLookup MemberLookup -> memberLookup
@@ -492,28 +496,95 @@ internal class ConversionClassifier {
     }
 
     /// Reports GS0635 when a constant floating-point value that is NaN or out of range converts to an
-    /// integer type outside an explicit `unchecked` context (#5767, ADR-0219). C# reports CS0221 here.
-    /// The value is folded with the rule of (cref:ConstantExpressionEvaluator.TryConvertFloatingConstant)
-    /// in every context, so the compiler that runs on .NET 10 and on .NET 11 emits the same constant.
+    /// integer, `char`, or enum type outside an explicit `unchecked` context (#5767, ADR-0219). C# reports
+    /// CS0221 here. The value is folded with the rule of (cref:ConstantExpressionEvaluator.TryConvertFloatingConstant)
+    /// in every context, so the compiler that runs on .NET 10 and on .NET 11 emits the same constant. When the
+    /// operand refers to a const field that has no value yet, the check is deferred to
+    /// (cref:ReportDeferredFloatingConstantChecks) if a const field initializer is being bound.
     /// @param location The conversion location.
     /// @param result The bound conversion.
     private func ReportOutOfRangeFloatingConstantConversion(location TextLocation, result BoundExpression) {
         if binderCtx.IsUncheckedContext || result is not BoundConversionExpression {
             return
         }
-        if ConstantExpressionEvaluator.TryFoldFloatingConstantConversion(
-            cast[BoundConversionExpression](result),
+        let conversion = cast[BoundConversionExpression](result)
+        if !ConstantExpressionEvaluator.IsFloatingConstantConversionCandidate(conversion) {
+            return
+        }
+        if !TryReportOutOfRangeFloatingConstantConversion(location, conversion, out _) {
+            deferredFloatingConstantChecks?.Add((location, conversion))
+        }
+    }
+
+    /// Reports GS0635 when the operand of [`conversion`](paramref) is a constant that is NaN or out of range.
+    /// @param location The conversion location.
+    /// @param conversion The bound conversion, bound outside an explicit `unchecked` context.
+    /// @param reported `true` when GS0635 was reported.
+    /// @returns `false` when the operand is not constant.
+    private func TryReportOutOfRangeFloatingConstantConversion(
+        location TextLocation,
+        conversion BoundConversionExpression,
+        out reported bool
+    ) bool {
+        reported = false
+        if !ConstantExpressionEvaluator.TryFoldFloatingConstantConversion(
+            conversion,
             out var value,
             out _,
             out var inRange
-        ) &&
-            !inRange {
+        ) {
+            return false
+        }
+        if !inRange {
             Diagnostics.ReportConstantFloatingConversionOutOfRange(
                 location,
                 Convert.ToString(value, CultureInfo.InvariantCulture)!!,
-                result.Type
+                conversion.Type
             )
+            reported = true
         }
+        return true
+    }
+
+    /// Starts to record the GS0635 checks that cannot run yet, because the operand refers to a const field
+    /// whose value the const fixpoint calculates later (#5767). Only the conversions bound outside an explicit
+    /// `unchecked` context are recorded, so each check keeps its own overflow context.
+    /// @returns The recording of an enclosing initializer, to give to (cref:EndDeferredFloatingConstantChecks).
+    func BeginDeferredFloatingConstantChecks() List[(Location TextLocation, Conversion BoundConversionExpression)]? {
+        let previous = deferredFloatingConstantChecks
+        deferredFloatingConstantChecks = List[(Location TextLocation, Conversion BoundConversionExpression)]()
+        return previous
+    }
+
+    /// Stops the recording that (cref:BeginDeferredFloatingConstantChecks) started.
+    /// @param previous The value that (cref:BeginDeferredFloatingConstantChecks) returned.
+    /// @returns The deferred checks, in binding order.
+    func EndDeferredFloatingConstantChecks(
+        previous List[(Location TextLocation, Conversion BoundConversionExpression)]?
+    ) ImmutableArray[(Location TextLocation, Conversion BoundConversionExpression)] {
+        let checks = deferredFloatingConstantChecks
+        deferredFloatingConstantChecks = previous
+        return if checks == nil {
+            ImmutableArray[(Location TextLocation, Conversion BoundConversionExpression)].Empty
+        } else {
+            checks.ToImmutableArray()
+        }
+    }
+
+    /// Runs the GS0635 checks that (cref:EndDeferredFloatingConstantChecks) returned, after the const fixpoint
+    /// calculated the values that their operands refer to.
+    /// @param checks The deferred checks.
+    /// @returns `true` when a check reported GS0635.
+    func ReportDeferredFloatingConstantChecks(
+        checks ImmutableArray[(Location TextLocation, Conversion BoundConversionExpression)]
+    ) bool {
+        var anyReported = false
+        for (location, conversion) in checks {
+            if TryReportOutOfRangeFloatingConstantConversion(location, conversion, out var reported) && reported {
+                anyReported = true
+            }
+        }
+        return anyReported
     }
 
     /// Replaces a narrowed member read with its declared read when the conversion to [`target`](paramref)
