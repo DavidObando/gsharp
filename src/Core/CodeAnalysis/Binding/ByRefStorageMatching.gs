@@ -91,7 +91,8 @@ internal shared class ByRefStorageMatching {
     func TryGetStorageType(argument BoundExpression?, refKind RefKind = RefKind.None) TypeSymbol? {
         if refKind == RefKind.Out &&
             argument is BoundAddressOfExpression address &&
-            ExpressionBinder.TryGetAddressedStorageType(address.Operand, out var declaredStorage) {
+            ExpressionBinder.TryGetAddressedStorageType(address.Operand, out var declaredStorage) &&
+            declaredStorage != TypeSymbol.Error {
             return declaredStorage
         }
         let storageType = switch argument {
