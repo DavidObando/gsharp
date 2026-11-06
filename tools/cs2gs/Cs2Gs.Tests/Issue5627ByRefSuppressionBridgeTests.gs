@@ -372,8 +372,8 @@ namespace Demo
         static int UseConditional(Box<Dictionary<string, int>>? b) => b?.Use(() => Volatile.Read(ref full!)) ?? 0;
         static int UseHolderField(Holder<Dictionary<string, int>> h) => h.Box.Use(() => Volatile.Read(ref full!));
         static int UseCastReceiver(object o) => ((Box<Dictionary<string, int>>)o).Use(() => Volatile.Read(ref full!));
-        static int UseTernaryReceiver(bool flag, Box<Dictionary<string, int>> a, Box<Dictionary<string, int>> b) { var chosen = flag ? a : b; var inferredChosen = flag ? Wrap(Volatile.Read(ref cache!)) : Wrap(Volatile.Read(ref cache!)); return (flag ? a : b).Use(() => Volatile.Read(ref full!)) + chosen.Use(() => Volatile.Read(ref full!)) + inferredChosen.Use(() => Volatile.Read(ref cache!)); }
-        static int CastInitializer() { var read = (Func<Dictionary<string, int>>)(() => Volatile.Read(ref full!)); return read().Count; }
+        static int UseTernaryReceiver(bool flag, Box<Dictionary<string, int>> a, Box<Dictionary<string, int>> b) { var chosen = flag ? a : b; var chosen2 = flag ? chosen : chosen; var chosen3 = flag ? chosen2 : chosen2; var inferredChosen = flag ? Wrap(Volatile.Read(ref cache!)) : Wrap(Volatile.Read(ref cache!)); return (flag ? a : b).Use(() => Volatile.Read(ref full!)) + chosen3.Use(() => Volatile.Read(ref full!)) + inferredChosen.Use(() => Volatile.Read(ref cache!)); }
+        static int CastInitializer() { var read = (Func<Dictionary<string, int>>)(() => Volatile.Read(ref full!)); Func<Dictionary<string, int>> checkedRead = () => (checked(Volatile.Read(ref full!))); Func<Dictionary<string, int>> uncheckedRead = () => (unchecked(Volatile.Read(ref full!))); return read().Count + checkedRead().Count + uncheckedRead().Count; }
         static int AssignGenericMember(Box<Dictionary<string, int>> b) { b.Read = () => Volatile.Read(ref full!); b.ReadProp = () => Volatile.Read(ref full!); return b.Read().Count + b.ReadProp().Count; }
         static bool AssignInferredGenericMember() { var b = Wrap(Volatile.Read(ref cache!)); b.Read = () => Volatile.Read(ref cache!); return b.Read() == null; }
         static int ExplicitDelegateArray() { var readers = new Func<Dictionary<string, int>>[] { () => Volatile.Read(ref full!) }; return readers[0]().Count; }
@@ -428,9 +428,17 @@ namespace Demo
         Assert.Contains("b?.Use(() -> Volatile.Read(&full)!!) ?? 0", printed)
         Assert.Contains("h.Box.Use(() -> Volatile.Read(&full)!!)", printed)
         Assert.Contains("(cast[Box[Dictionary[string, int32]]](o)).Use(() -> Volatile.Read(&full)!!)", printed)
-        Assert.Contains("chosen.Use(() -> Volatile.Read(&full)!!)", printed)
+        Assert.Contains("chosen3.Use(() -> Volatile.Read(&full)!!)", printed)
         Assert.Contains("inferredChosen.Use(() -> Volatile.Read(&cache))", printed)
         Assert.Contains("Func[Dictionary[string, int32]]((() -> Volatile.Read(&full)!!))", printed)
+        Assert.Contains(
+            "let checkedRead () -> Dictionary[string, int32] = () -> (checked(Volatile.Read(&full)))!!",
+            printed
+        )
+        Assert.Contains(
+            "let uncheckedRead () -> Dictionary[string, int32] = () -> (unchecked(Volatile.Read(&full)))!!",
+            printed
+        )
         Assert.Contains("b.Read = () -> Volatile.Read(&full)!!", printed)
         Assert.Contains("b.ReadProp = () -> Volatile.Read(&full)!!", printed)
         Assert.Contains("b.Read = () -> Volatile.Read(&cache)", printed)
@@ -448,7 +456,7 @@ namespace Demo
         Assert.Contains("var d = Volatile.Read(&full)!!\n        d = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("let read Delegate = () -> {\n            return Volatile.Read(&cache)\n", printed)
         Assert.Contains("let read Delegate = () -> Volatile.Read(&cache)\n", printed)
-        RunsAs(printed, "True 1 1 2 1 True 1 1 1 2 2 True 1 1 1 2 2 2 2 5 1 2 True 1 1 1 1 1 1 1 True True")
+        RunsAs(printed, "True 1 1 2 1 True 1 1 1 2 2 True 1 1 1 2 2 2 2 5 3 2 True 1 1 1 1 1 1 1 True True")
     }
 
     /// An indexer key is a parameter slot: a key that is `T?` only in G# is asserted at a non-null indexer

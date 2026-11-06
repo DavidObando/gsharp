@@ -83,6 +83,7 @@ func MaybeThing() IThing? -> nil
 func MaybeInt() int32? -> nil
 func MaybePair() (string, int32)? -> nil
 func MaybePairElement() (string?, int32) -> (nil, 0)
+func MaybeNullablePairElement() (string?, int32)? -> (nil, 0)
 func TakeFunc(f () -> string) string -> f()
 func TakeClrFunc(f Func[string]) string -> f()
 func TakeNamedDelegate(f StringFunc) string -> f()
@@ -336,6 +337,11 @@ func Run(token Token) {
                 "MaybePairElement()"
             )
             yield Row(
+                "nullable-tuple-source-element-mismatch",
+                `func Make() () -> (string, int32)? -> () -> MaybeNullablePairElement()`,
+                "MaybeNullablePairElement()"
+            )
+            yield Row(
                 "mixed-nullable-tuple-literal-delegate-and-expression-tree-overload",
                 `func Run() (string, int32)? -> StrictSink5686.PickNullableTuple(() -> (Maybe(), 0), 1)`,
                 "(Maybe(), 0)"
@@ -344,6 +350,11 @@ func Run(token Token) {
                 "mixed-nullable-tuple-value-delegate-and-expression-tree-overload",
                 `func Run() (string, int32)? -> StrictSink5686.PickNullableTuple(() -> MaybePairElement(), 1)`,
                 "MaybePairElement()"
+            )
+            yield Row(
+                "mixed-nullable-tuple-source-delegate-and-expression-tree-overload",
+                `func Run() (string, int32)? -> StrictSink5686.PickNullableTuple(() -> MaybeNullablePairElement(), 1)`,
+                "MaybeNullablePairElement()"
             )
             yield Row(
                 "mixed-delegate-and-expression-tree-overload",

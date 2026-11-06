@@ -2736,7 +2736,9 @@ internal class LambdaBinder {
         let trailingLocation = (syntax.Body as BlockExpressionSyntax)?.Expression?.Location ?? syntax.Body.Location
         let trailingConverted = if trailing.Type == returnType {
             trailing
-        } else if trailing.Type is TupleTypeSymbol &&
+        } else if (
+            trailing.Type is TupleTypeSymbol || trailing.Type is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol}
+        ) &&
             (returnType is TupleTypeSymbol || returnType is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol}) &&
             ConversionClassifier
             .HasReferenceNullabilityReturnMismatch(trailing.Type, returnType) {

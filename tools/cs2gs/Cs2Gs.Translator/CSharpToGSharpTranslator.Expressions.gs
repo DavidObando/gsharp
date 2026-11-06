@@ -3764,7 +3764,8 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ReceiverTypeArgumentsAreDeclared(
-            receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+            receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            memo Dictionary[ILocalSymbol, bool]? = nil
         ) bool {
             var unwrapped = Unparenthesize(receiver)
             while true {
@@ -3797,23 +3798,23 @@ partial class CSharpToGSharpTranslator {
                     return asType is INamedTypeSymbol && !ContainsTypeParameter(asType)
                 }
                 if binaryExpression.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression) {
-                    return this.ReceiverTypeArgumentsAreDeclared(binaryExpression.Left) &&
-                        this.ReceiverTypeArgumentsAreDeclared(binaryExpression.Right)
+                    return this.ReceiverTypeArgumentsAreDeclared(binaryExpression.Left, memo) &&
+                        this.ReceiverTypeArgumentsAreDeclared(binaryExpression.Right, memo)
                 }
             }
             if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax conditional {
-                return this.ReceiverTypeArgumentsAreDeclared(conditional.WhenTrue) &&
-                    this.ReceiverTypeArgumentsAreDeclared(conditional.WhenFalse)
+                return this.ReceiverTypeArgumentsAreDeclared(conditional.WhenTrue, memo) &&
+                    this.ReceiverTypeArgumentsAreDeclared(conditional.WhenFalse, memo)
             }
             if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression {
                 return switchExpression.Arms.Count > 0 && switchExpression.Arms.All(
                     (
                         arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax
-                    ) -> this.ReceiverTypeArgumentsAreDeclared(arm.Expression)
+                    ) -> this.ReceiverTypeArgumentsAreDeclared(arm.Expression, memo)
                 )
             }
             if unwrapped is ConditionalAccessExpressionSyntax conditionalAccess {
-                return this.ReceiverTypeArgumentsAreDeclared(conditionalAccess.WhenNotNull)
+                return this.ReceiverTypeArgumentsAreDeclared(conditionalAccess.WhenNotNull, memo)
             }
             if unwrapped is BaseObjectCreationExpressionSyntax creation {
                 let createdType = this.context.GetTypeInfo(creation).Type
@@ -3849,30 +3850,38 @@ partial class CSharpToGSharpTranslator {
                         )
                         default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
                     }
-                    return this.ReceiverTypeArgumentsAreDeclared(invocationReceiver)
+                    return this.ReceiverTypeArgumentsAreDeclared(invocationReceiver, memo)
                 }
                 return true
             }
             let symbol = this.context.GetSymbolInfo(unwrapped).Symbol
             return switch symbol {
                 case namedType is INamedTypeSymbol: !ContainsTypeParameter(namedType)
-                case local is ILocalSymbol: this.LocalReceiverTypeArgumentsAreDeclared(local)
+                case local is ILocalSymbol: this.LocalReceiverTypeArgumentsAreDeclared(local, memo)
                 case field is IFieldSymbol: this.MemberReceiverTypeArgumentsAreDeclared(
                     field.OriginalDefinition.Type,
                     field.Type,
-                    unwrapped
+                    unwrapped,
+                    memo
                 )
                 case property is IPropertySymbol: this.MemberReceiverTypeArgumentsAreDeclared(
                     property.OriginalDefinition.Type,
                     property.Type,
-                    unwrapped
+                    unwrapped,
+                    memo
                 )
                 case parameter is IParameterSymbol: this.SlotTypeIsDeclared(parameter, unwrapped)
                 default: false
             }
         }
 
-        private func LocalReceiverTypeArgumentsAreDeclared(local ILocalSymbol) bool {
+        private func LocalReceiverTypeArgumentsAreDeclared(
+            local ILocalSymbol,
+            memo Dictionary[ILocalSymbol, bool]? = nil
+        ) bool {
+            if memo != nil && memo.TryGetValue(local, out var cached) {
+                return cached
+            }
             if ContainsTypeParameter(local.Type) {
                 return false
             }
@@ -3886,13 +3895,21 @@ partial class CSharpToGSharpTranslator {
                 (this.state.EmittedLocalTypeClauses.Contains(local) || declarator.Initializer?.Value == nil) {
                 return true
             }
-            return declarator.Initializer?.Value is {} initializer && this.ReceiverTypeArgumentsAreDeclared(initializer)
+            if declarator.Initializer?.Value is not{} initializer {
+                return false
+            }
+            let activeMemo = memo ?? Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+            activeMemo[local] = false
+            let result = this.ReceiverTypeArgumentsAreDeclared(initializer, activeMemo)
+            activeMemo[local] = result
+            return result
         }
 
         private func MemberReceiverTypeArgumentsAreDeclared(
             declaredType ITypeSymbol?,
             constructedType ITypeSymbol?,
-            memberAccessSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+            memberAccessSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            memo Dictionary[ILocalSymbol, bool]? = nil
         ) bool {
             if ContainsTypeParameter(constructedType) {
                 return false
@@ -3909,7 +3926,7 @@ partial class CSharpToGSharpTranslator {
                 )
                 default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
             }
-            return this.ReceiverTypeArgumentsAreDeclared(containingReceiver)
+            return this.ReceiverTypeArgumentsAreDeclared(containingReceiver, memo)
         }
 
         private func MentionedTypeParameterKind(type ITypeSymbol?, kind TypeParameterKind) bool -> switch type {
@@ -4654,7 +4671,7 @@ partial class CSharpToGSharpTranslator {
                 (
                 this.EmittedValueIsNilableBeyondItsCSharpType(expression) ||
                     (
-                    expression is Microsoft
+                    Unparenthesize(expression) is Microsoft
                         .CodeAnalysis
                         .CSharp
                         .Syntax
@@ -4833,6 +4850,13 @@ partial class CSharpToGSharpTranslator {
                 }
                 case ConditionalAccessExpressionSyntax {
                     return false
+                }
+                case checkedExpression is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax {
+                    return if UnwrapTranslatedValue(translated) is CheckedExpression translatedChecked {
+                        this.GSharpExpressionIsStaticallyNonNull(checkedExpression.Expression, translatedChecked.Inner)
+                    } else {
+                        this.GSharpExpressionIsStaticallyNonNull(checkedExpression.Expression)
+                    }
                 }
                 case arrayElement is ElementAccessExpressionSyntax when this
                     .context
