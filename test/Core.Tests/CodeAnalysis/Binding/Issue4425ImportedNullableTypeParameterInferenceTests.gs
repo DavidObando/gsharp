@@ -122,6 +122,73 @@ func Run(maybe int32?) int32 -> Inv.Val(maybe)`)
         Assert.True(source.Success, Describe(source))
     }
 
+    /// Issue #4429: a `params T?[]` parameter (expanded and normal array
+    /// forms), a by-ref `ref T?` / `in T?` parameter, and a nested generic
+    /// `IEnumerable<T?>` / `IList<T?>` / `(int, T?)` parameter infer
+    /// `T := X` from an `X?` argument, while their unannotated siblings keep
+    /// `T := X?`.
+    @Fact
+    func Imported_NestedAndByRefNullableSlots_InferUnderlyingType() {
+        AssertCompiles("func Run(a string?, b string?) string -> Inv.Last(a, b)")
+        AssertCompiles("func Run(a string?, b string) string -> Inv.Last(a, b)")
+        AssertCompiles("func Run(a string?) string? -> Inv.Pick(a, nil)")
+        AssertCompiles("func Run(values []string?) string -> Inv.Last(values)")
+        AssertCompiles("func Run(a string?) string -> Inv.Last(Inv.MakeNullableArray(a))")
+        AssertCompiles(
+            "func Run(items System.Collections.Generic.IEnumerable[string?]) string -> Inv.FirstNonNull(items)"
+        )
+        AssertCompiles("func Run(items System.Collections.Generic.IList[string?]) string -> Inv.FirstFromList(items)")
+        AssertCompiles("func Run(items []string?) string -> Inv.FirstNonNull(items)")
+        AssertCompiles("func Run(a string?) string -> Inv.SecondOfPair((1, a))")
+        AssertCompiles(`func Run(a string?) string {
+    var local string? = a
+    return Inv.TakeRef(ref local)
+}`)
+        AssertCompiles(`func Run(a string?) string {
+    let local string? = a
+    return Inv.TakeIn(in local)
+}`)
+        AssertCompiles("func Run(a string?) string -> Inv.TakeIn(a)")
+        AssertCompiles("func Run(a string?) string -> Inv.RequiredFrom(() -> a)")
+        AssertCompiles("func Run(a string?) string -> Inv.RequiredFromExpression(() -> a)")
+        AssertCompiles("func Run(a string?) string -> Inv.RequiredFromNamedDelegate((n int32) -> (n, a))")
+        AssertCompiles("func Run(xs []string?) string -> Inv.FirstFromArrayFactory(() -> xs)")
+        AssertCompiles("func Run(xs []string?) string -> Inv.FirstFromNestedFactory(() -> (() -> xs))")
+        AssertCompiles("func Run(box GenericCarrier[[]string], xs []string, a string?) string -> box.Pick((xs, a))")
+        AssertCompiles("func Run(box GenericCarrier[int32], a string?) string? -> box.PickUnannotatedSecond((1, a))")
+
+        // Controls: unannotated `params T[]`, `IEnumerable<T>`, `ref T`, and
+        // `in T` keep `T := string?` and reject narrowing to `string`.
+        AssertCompiles("func Run(a string?, b string?) string? -> Inv.LastUnannotated(a, b)")
+        Assert.False(Compile("func Run(a string?, b string?) string -> Inv.LastUnannotated(a, b)").Success)
+        Assert.False(Compile("func Run(values []string?) string -> Inv.LastUnannotated(values)").Success)
+        Assert.False(
+            Compile(
+                "func Run(items System.Collections.Generic.IEnumerable[string?]) string -> Inv.FirstUnannotated(items)"
+            ).Success
+        )
+        Assert.False(Compile(`func Run(a string?) string {
+    var local string? = a
+    return Inv.TakeRefUnannotated(ref local)
+}`).Success)
+        Assert.False(Compile("func Run(a string?) string -> Inv.TakeInUnannotated(a)").Success)
+        Assert.False(Compile("func Run(a string?) string -> Inv.FromUnannotated(() -> a)").Success)
+        Assert.False(Compile("func Run(xs []string?) string -> Inv.FirstFromArrayFactoryUnannotated(() -> xs)").Success)
+        Assert.False(
+            Compile("func Run(xs []string?) string -> Inv.FirstFromNestedFactoryUnannotated(() -> (() -> xs))").Success
+        )
+        Assert.False(
+            Compile(
+                "func Run(box GenericCarrier[int32], a string?) string -> box.PickUnannotatedSecond((1, a))"
+            ).Success
+        )
+        Assert.False(
+            Compile(
+                "func Run(box GenericCarrier[[]string], xs []string, a string?) string -> box.PickUnannotatedSecond((xs, a))"
+            ).Success
+        )
+    }
+
     private data struct CompileResult(Success bool, Diagnostics[]string) : IEquatable[
         Issue4425ImportedNullableTypeParameterInferenceTests.CompileResult
     ] { }
@@ -130,10 +197,43 @@ func Run(maybe int32?) int32 -> Inv.Val(maybe)`)
         private const LibrarySource string = `#nullable enable
 namespace Issue4425.Library;
 
+public delegate TResult CustomFactory<in TFixed, out TResult>(TFixed input);
+public delegate R[] ArrayFactory<R>();
+public delegate System.Func<R[]> NestedFactory<R>();
+
+public sealed class GenericCarrier<A>
+{
+    public T Pick<T>((A, T?) pair) where T : class
+        => pair.Item2 ?? throw new System.InvalidOperationException();
+
+    public T PickUnannotatedSecond<T>((A?, T) pair) => pair.Item2;
+}
+
 public static class Inv
 {
     public static T Required<T>(T? value) where T : class
         => value ?? throw new System.InvalidOperationException();
+
+    public static T RequiredFrom<T>(System.Func<T?> make) where T : class
+        => make() ?? throw new System.InvalidOperationException();
+
+    public static T RequiredFromExpression<T>(System.Linq.Expressions.Expression<System.Func<T?>> make) where T : class
+        => make.Compile()() ?? throw new System.InvalidOperationException();
+
+    public static T RequiredFromNamedDelegate<T>(CustomFactory<int, (int, T?)> make) where T : class
+        => make(1).Item2 ?? throw new System.InvalidOperationException();
+
+    public static T FirstFromArrayFactory<T>(ArrayFactory<T?> make) where T : class
+        => make()[0] ?? throw new System.InvalidOperationException();
+
+    public static T FirstFromArrayFactoryUnannotated<T>(ArrayFactory<T> make) => make()[0];
+
+    public static T FirstFromNestedFactory<T>(NestedFactory<T?> make) where T : class
+        => make()()[0] ?? throw new System.InvalidOperationException();
+
+    public static T FirstFromNestedFactoryUnannotated<T>(NestedFactory<T> make) => make()()[0];
+
+    public static T FromUnannotated<T>(System.Func<T> make) => make();
 
     public static T Id<T>(T? value) => value!;
 
@@ -142,6 +242,38 @@ public static class Inv
     public static T IdentityDefault<T>(T value = default) => value;
 
     public static T Val<T>(T? value) where T : struct => value ?? default;
+
+    public static T Last<T>(params T?[] values) where T : class
+        => values[0] ?? throw new System.InvalidOperationException();
+
+    public static T? Pick<T>(params T?[] values) where T : class
+        => values.Length > 0 ? values[0] : null;
+
+    public static T LastUnannotated<T>(params T[] values) => values[0];
+
+    public static T?[] MakeNullableArray<T>(T? value) where T : class => new[] { value };
+
+    public static T FirstNonNull<T>(System.Collections.Generic.IEnumerable<T?> items) where T : class
+        => throw new System.InvalidOperationException();
+
+    public static T FirstFromList<T>(System.Collections.Generic.IList<T?> items) where T : class
+        => items[0] ?? throw new System.InvalidOperationException();
+
+    public static T FirstUnannotated<T>(System.Collections.Generic.IEnumerable<T> items)
+        => throw new System.InvalidOperationException();
+
+    public static T SecondOfPair<T>((int, T?) pair) where T : class
+        => pair.Item2 ?? throw new System.InvalidOperationException();
+
+    public static T TakeRef<T>(ref T? value) where T : class
+        => value ?? throw new System.InvalidOperationException();
+
+    public static T TakeRefUnannotated<T>(ref T value) => value;
+
+    public static T TakeIn<T>(in T? value) where T : class
+        => value ?? throw new System.InvalidOperationException();
+
+    public static T TakeInUnannotated<T>(in T value) => value;
 }`
 
         private func AssertCompiles(body string) {

@@ -356,38 +356,80 @@ shared class ClrNullability {
         )
         // ADR-0172 Phase B: surface imported tuple element names.
         mapped = TupleElementNamesReader.ApplyNames(mapped, attributeParameter, layoutType)
-        let rawDefault object? = if parameter.HasDefaultValue || parameter.IsOptional {
-            parameter.RawDefaultValue
-        } else {
-            default(object?)
-        }
-        return if parameterType?.IsValueType == false &&
-            (parameter.HasDefaultValue || parameter.IsOptional) &&
-            (
-            rawDefault == nil || object.ReferenceEquals(rawDefault, Missing.Value) || object.ReferenceEquals(
-                rawDefault,
-                DBNull.Value
-            )
-        ) &&
-            !(mapped is NullableTypeSymbol) {
+        return if HasOptionalNullDefault(parameter) {
             NullabilityImportRule.ApplyNullDefaultLift(mapped)
         } else {
             mapped
         }
     }
 
-    /// Issue #4425: what a parameter's declaration says about its top-level
-    /// position, as written. Unlike (cref:GetParameterTypeSymbol), this
-    /// does not also widen a reference parameter whose default is
+    /// Issue #4403: whether [`parameter`](paramref) is an optional reference-capable
+    /// parameter whose default value is `null` (`null`, `Missing.Value`, or `DBNull.Value`).
+    /// @param parameter The parameter to inspect.
+    /// @returns `true` when the parameter has an optional null default.
+    internal func HasOptionalNullDefault(parameter ParameterInfo) bool {
+        try {
+            let type = if parameter.ParameterType.IsByRef {
+                parameter.ParameterType.GetElementType()
+            } else {
+                parameter.ParameterType
+            }
+            if type?.IsValueType != false || !(parameter.HasDefaultValue || parameter.IsOptional) {
+                return false
+            }
+            let rawDefault object? = parameter.RawDefaultValue
+            return rawDefault == nil || object.ReferenceEquals(rawDefault, Missing.Value) || object.ReferenceEquals(
+                rawDefault,
+                DBNull.Value
+            )
+        } catch (exception Exception) when exception is FormatException ||
+            exception is InvalidOperationException ||
+            exception is NotSupportedException {
+            return false
+        }
+    }
+
+    /// Issue #4429: resolves [`parameter`](paramref) back to the open
+    /// method or indexer definition on the open generic declaring type so
+    /// `[Nullable]` flag positions match the declaration's metadata layout.
+    /// @param parameter The parameter to inspect.
+    /// @returns The open declaration's parameter when available; otherwise [`parameter`](paramref).
+    internal func GetOpenParameterDefinition(parameter ParameterInfo) ParameterInfo {
+        let definitionParameters[]?ParameterInfo = switch parameter.Member {
+            case method is MethodBase: GetMetadataDefinition(method)?.GetParameters()
+            case indexer is PropertyInfo: GetOpenDefinition(indexer)?.GetIndexParameters()
+            default: default([]?ParameterInfo)
+        }
+        return if definitionParameters != nil && uint32(parameter.Position) < uint32(definitionParameters.Length) {
+            definitionParameters[parameter.Position]
+        } else {
+            parameter
+        }
+    }
+
+    /// Issue #4425 / #4429: what a parameter's declaration says about a
+    /// position in its type layout, as written. Unlike (cref:GetParameterTypeSymbol),
+    /// this does not also widen a reference parameter whose default is
     /// `null`: `T value = default` declares an unannotated
     /// `T`, and method type-argument inference must read it as one.
     /// @param parameter The parameter to inspect.
-    /// @returns The declared state of the parameter's top-level position.
+    /// @param position The pre-order nullability flag position (0 for the outer parameter type).
+    /// @returns The declared state of the parameter's position.
     @NullabilityFunnel
-    internal func GetParameterDeclaredState(parameter ParameterInfo) ClrNullabilityState -> ClassifyPosition(
-        ReadNullableFlags(parameter, parameter.Member),
-        0
-    )
+    internal func GetParameterDeclaredState(parameter ParameterInfo, position int32 = 0) ClrNullabilityState {
+        let openParameter = GetOpenParameterDefinition(parameter)
+        let flags = ReadNullableFlags(openParameter, openParameter.Member)
+        if position <= 0 {
+            return ClassifyPosition(flags, 0)
+        }
+        let signatureType = GetSignatureType(openParameter)
+        let layoutType = if signatureType.IsByRef {
+            signatureType.GetElementType() ?? signatureType
+        } else {
+            signatureType
+        }
+        return ClassifyPosition(ExpandNullableFlags(layoutType, flags, absentFill: uint8(0)), position)
+    }
 
     /// Issue #3802: collects the parameter names named by every
     /// `[return: NotNullIfNotNull(name)]` on [`method`](paramref).
