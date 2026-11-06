@@ -167,19 +167,23 @@ namespace Demo
         static bool Block() { var read = () => { return Volatile.Read(ref cache!); }; return read() == null; }
         static bool Expression() { var read = () => Volatile.Read(ref cache!); return read() == null; }
         static int Fixed() { Func<Dictionary<string, int>> read = () => Volatile.Read(ref full!); return read().Count; }
+        static int FixedChecked() { Func<Dictionary<string, int>> read = () => checked(Volatile.Read(ref full!)); return read().Count; }
+        static int FixedUnchecked() { Func<Dictionary<string, int>> read = () => unchecked(Volatile.Read(ref full!)); return read().Count; }
         static int FixedBlock() { Func<Dictionary<string, int>> read = () => { return Volatile.Read(ref full!); }; return read().Count; }
         static bool Arm(bool flag) { var read = () => flag ? Volatile.Read(ref cache!) : new Dictionary<string, int>(); return read() == null; }
         static int FixedArm(bool flag) { Func<Dictionary<string, int>> read = () => flag ? Volatile.Read(ref full!) : new Dictionary<string, int>(); return read().Count; }
-        public static string Run() => Block() + " " + Expression() + " " + Fixed() + " " + FixedBlock() + " " + Arm(true) + " " + FixedArm(true);
+        public static string Run() => Block() + " " + Expression() + " " + Fixed() + " " + FixedChecked() + " " + FixedUnchecked() + " " + FixedBlock() + " " + Arm(true) + " " + FixedArm(true);
     }
 }`)
         Assert.Contains("return Volatile.Read(&cache)\n", printed)
         Assert.Contains("let read = () -> Volatile.Read(&cache)\n", printed)
         Assert.Contains("let read () -> Dictionary[string, int32] = () -> Volatile.Read(&full)!!\n", printed)
+        Assert.Contains("let read () -> Dictionary[string, int32] = () -> checked(Volatile.Read(&full))!!\n", printed)
+        Assert.Contains("let read () -> Dictionary[string, int32] = () -> unchecked(Volatile.Read(&full))!!\n", printed)
         Assert.Contains("return Volatile.Read(&full)!!\n", printed)
         Assert.Contains("let read = () -> if flag { Volatile.Read(&cache) } else", printed)
         Assert.Contains("() -> if flag { Volatile.Read(&full)!! } else", printed)
-        RunsAs(printed, "True True 1 1 True 1")
+        RunsAs(printed, "True True 1 1 1 1 True 1")
     }
 
     /// Control: a tuple element that initializes a `var` local (also named or nested) or a local that a
@@ -244,8 +248,11 @@ namespace Demo
         static int Generic() { var b = Id(Volatile.Read(ref cache!)); b = Volatile.Read(ref cache!); return 1; }
         static int FixedLambdaTuple() { Func<(Dictionary<string, int>, int)> read = () => { return (Volatile.Read(ref full!), 0); }; return read().Item1.Count; }
         static int FixedLambdaTupleExpr() { Func<(Dictionary<string, int>, int)> read = () => (Volatile.Read(ref full!), 0); return read().Item1.Count; }
+        static int FixedAsyncLambdaTupleExpr() { Func<System.Threading.Tasks.Task<(Dictionary<string, int>, int)>> read = async () => (Volatile.Read(ref full!), 0); return read().Result.Item1.Count; }
+        static int FixedCheckedLambdaTupleExpr() { Func<(Dictionary<string, int>, int)> read = () => checked((Volatile.Read(ref full!), 0)); return read().Item1.Count; }
+        static int FixedUncheckedLambdaTupleExpr() { Func<(Dictionary<string, int>, int)> read = () => unchecked((Volatile.Read(ref full!), 0)); return read().Item1.Count; }
         public static string Run() =>
-            Operator(true) + " " + TupleReassign() + " " + LambdaTuple() + " " + LambdaTupleExpr() + " " + Alias() + " " + Generic() + " " + FixedLambdaTuple() + " " + FixedLambdaTupleExpr();
+            Operator(true) + " " + TupleReassign() + " " + LambdaTuple() + " " + LambdaTupleExpr() + " " + Alias() + " " + Generic() + " " + FixedLambdaTuple() + " " + FixedLambdaTupleExpr() + " " + FixedAsyncLambdaTupleExpr() + " " + FixedCheckedLambdaTupleExpr() + " " + FixedUncheckedLambdaTupleExpr();
     }
 }`)
         Assert.Contains("Box(Volatile.Read(&full)!!)", printed)
@@ -255,7 +262,10 @@ namespace Demo
         Assert.Contains("b = Volatile.Read(&cache)\n", printed)
         Assert.Contains("return (Volatile.Read(&full)!!, 0)\n", printed)
         Assert.Contains("() -> (Volatile.Read(&full)!!, 0)\n", printed)
-        RunsAs(printed, "box 1 True True 1 1 1 1")
+        Assert.Contains("async () -> (Volatile.Read(&full)!!, 0)\n", printed)
+        Assert.Contains("() -> checked((Volatile.Read(&full)!!, 0))\n", printed)
+        Assert.Contains("() -> unchecked((Volatile.Read(&full)!!, 0))\n", printed)
+        RunsAs(printed, "box 1 True True 1 1 1 1 1 1 1")
     }
 
     /// Control: a field, a property or a parameter whose declared type mentions a type parameter is typed by
@@ -334,12 +344,29 @@ namespace Demo
             Reassign() + " " + Use() + " " + UseBlock() + " " + Deconstruct() + " " + TypedThenGeneric() + " " + FixedField() + " " + FixedFieldExpr() + " " + NestedFixedExpr() + " " + TypedReassign() + " " + AsDelegate() + " " + AsDelegateExpr();
     }
 }`)
+        let exprTreePrinted = Translate(`
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.Linq.Expressions;
+namespace Demo
+{
+    public static class ExprTreeHolder
+    {
+        public static Expression<Func<Dictionary<string, int>>> Make(Dictionary<string, int>? d)
+        {
+            Expression<Func<Dictionary<string, int>>> read = () => d;
+            return read;
+        }
+    }
+}`)
         Assert.Contains("return b.Use(() -> Volatile.Read(&cache))", printed)
         Assert.Contains("var (d, n) = (Volatile.Read(&cache), 0)\n        d = Volatile.Read(&cache)\n", printed)
         Assert.Contains("var d = Id(Volatile.Read(&cache))\n        d = Volatile.Read(&cache)\n", printed)
         Assert.Contains("return Volatile.Read(&full)!!\n", printed)
         Assert.Contains("fixedRead = () -> Volatile.Read(&full)!!\n", printed)
         Assert.Contains("() -> () -> Volatile.Read(&full)!!\n", printed)
+        Assert.Contains("let read Expression[() -> Dictionary[string, int32]] = () -> d\n", exprTreePrinted)
         Assert.Contains("var d = Volatile.Read(&full)!!\n        d = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("let read Delegate = () -> {\n            return Volatile.Read(&cache)\n", printed)
         Assert.Contains("let read Delegate = () -> Volatile.Read(&cache)\n", printed)

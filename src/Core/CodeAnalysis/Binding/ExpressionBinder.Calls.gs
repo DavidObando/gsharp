@@ -2623,6 +2623,7 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         keepsNaturalType = false
         let alternatives = List[Type]()
+        var isExpressionTreeTarget = false
         let AddAlternative = func (slotType Type) {
             // A bare type parameter can take the natural type by inference, if its constraints accept it.
             if !slotType.IsByRef &&
@@ -2648,12 +2649,21 @@ internal partial class ExpressionBinder {
                 )
             }
             if index < parameters.Length {
-                AddAlternative(ConversionClassifier.GetPlainValueClrParameterType(parameters[index]))
+                let slotParameterType = ConversionClassifier.GetPlainValueClrParameterType(parameters[index])
+                if MemberLookup.TryGetExpressionTreeDelegateType(slotParameterType, out _) {
+                    isExpressionTreeTarget = true
+                }
+                AddAlternative(slotParameterType)
             }
         }
         if alternatives.Count == 0 {
             return convertToTarget(
-                lambdas.BindLambdaExpression(lambdaSyntax, target, inferReturnTypeFromBody: inferReturnTypeFromBody)
+                lambdas.BindLambdaExpression(
+                    lambdaSyntax,
+                    target,
+                    inferReturnTypeFromBody: inferReturnTypeFromBody,
+                    isExpressionTreeTarget: isExpressionTreeTarget
+                )
             )
         }
         var accepted = false
@@ -2666,7 +2676,8 @@ internal partial class ExpressionBinder {
                     alternatives.Any((slotType Type) -> AcceptsNaturalLiteral(slotType, naturalClrType))
                 return accepted
             },
-            discardedTargetDiagnostics: literalTargetDiagnostics
+            discardedTargetDiagnostics: literalTargetDiagnostics,
+            isExpressionTreeTarget: isExpressionTreeTarget
         )
         keepsNaturalType = accepted
         return if accepted {

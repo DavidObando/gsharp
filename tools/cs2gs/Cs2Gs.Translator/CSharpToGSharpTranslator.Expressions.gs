@@ -3014,6 +3014,9 @@ partial class CSharpToGSharpTranslator {
                 case parenthesized is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax {
                     return this.IsGSharpNullableAnalyzerExpression(parenthesized.Expression)
                 }
+                case checkedExpression is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax {
+                    return this.IsGSharpNullableAnalyzerExpression(checkedExpression.Expression)
+                }
                 case suppression is PostfixUnaryExpressionSyntax when suppression.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
                 ) {
@@ -4291,6 +4294,16 @@ partial class CSharpToGSharpTranslator {
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
                 ) {
                     return !IsNullOrSuppressedNull(suppression.Operand)
+                }
+                case checkedExpression is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax {
+                    return if UnwrapTranslatedValue(translated) is CheckedExpression translatedChecked {
+                        this.GSharpExpressionIsStaticallyNonNull(
+                            checkedExpression.Expression,
+                            translatedChecked.Inner
+                        )
+                    } else {
+                        this.GSharpExpressionIsStaticallyNonNull(checkedExpression.Expression)
+                    }
                 }
                 case concatenation is Microsoft
                     .CodeAnalysis
@@ -11020,17 +11033,22 @@ partial class CSharpToGSharpTranslator {
                     return (projectedElement, nil)
                 }
             }
-            if target == nil &&
-                (current!!.Parent is ArgumentSyntax and {Parent: TupleExpressionSyntax}) &&
-                (
-                this.ResolveValueSink(value) ??
-                    (
-                    this.FindResultLambda(value) is {} tupleLambda ? this.GetLambdaTargetDelegateType(tupleLambda)
-                        ?.DelegateInvokeMethod: default(IMethodSymbol?)
-                )
-            ) is {} tupleSink &&
-                this.GetFixedElementDestinationType(value, tupleSink) is {} tupleTargetType {
-                return (tupleTargetType, tupleSink)
+            if target == nil && (current!!.Parent is ArgumentSyntax and {Parent: TupleExpressionSyntax}) {
+                if this.ResolveValueSink(value) is {} tupleSink &&
+                    this.GetFixedElementDestinationType(value, tupleSink) is {} tupleTargetType {
+                    return (tupleTargetType, tupleSink)
+                }
+                if this.FindResultLambda(value) is {} tupleLambda {
+                    let (lambdaReturnType, lambdaReturnSymbol) = this.ReturnSlotOf(tupleLambda)
+                    if lambdaReturnSymbol != nil &&
+                        this.GetFixedElementDestinationType(
+                        value,
+                        lambdaReturnSymbol,
+                        lambdaReturnType
+                    ) is {} lambdaTupleTargetType {
+                        return (lambdaTupleTargetType, lambdaReturnSymbol)
+                    }
+                }
             }
             // An arm's effective target is the sink of the whole expression — a
             // local, field, property, assignment target or parameter — and
@@ -13185,7 +13203,12 @@ partial class CSharpToGSharpTranslator {
                         .CSharp
                         .Syntax
                         .ParenthesizedExpressionSyntax or
-                        CastExpressionSyntax
+                        CastExpressionSyntax or
+                        Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CheckedExpressionSyntax
                 ) {
                     node = node!!.Parent
                 } else if node!!.Parent is Microsoft
@@ -13817,6 +13840,9 @@ partial class CSharpToGSharpTranslator {
                 case parenthesized is ParenthesizedExpression: TranslatedExpressionIsStaticallyNonNull(
                     parenthesized.Inner
                 )
+                case checkedExpression is CheckedExpression: TranslatedExpressionIsStaticallyNonNull(
+                    checkedExpression.Inner
+                )
                 case block is BlockExpression: TranslatedExpressionIsStaticallyNonNull(block.Value)
                 case ifExpression is IfExpression: TranslatedExpressionIsStaticallyNonNull(
                     ifExpression.ThenExpression
@@ -13918,6 +13944,9 @@ partial class CSharpToGSharpTranslator {
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
                     ) {
                         operands.Add(coalesce.Right)
+                    }
+                    case checkedExpression is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax {
+                        operands.Add(checkedExpression.Expression)
                     }
                     default {
                         return nil

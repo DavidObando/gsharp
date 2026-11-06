@@ -1312,6 +1312,17 @@ internal partial class OverloadResolver {
                 MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType, out var deferredTarget) &&
                 !TypeSymbol
                 .ContainsTypeParameter(deferredTarget!!) {
+                if MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(paramType, out _) {
+                    let targetedTree = bindExpressionWithTargetType(deferredLambda, paramType)
+                    let targetedTreeArgument = if isImplicitIn {
+                        conversions.BindImplicitInArgument(argLocation, targetedTree, paramType, parameter)
+                    } else {
+                        targetedTree
+                    }
+                    hasErrors |= isImplicitIn && targetedTreeArgument is BoundErrorExpression
+                    convertedArguments.Add(targetedTreeArgument)
+                    continue
+                }
                 let targeted = bindLambdaWithTarget!!(deferredLambda, deferredTarget!!)
                 let targetedArgument = if isImplicitIn {
                     conversions.BindImplicitInArgument(argLocation, targeted, paramType, parameter)

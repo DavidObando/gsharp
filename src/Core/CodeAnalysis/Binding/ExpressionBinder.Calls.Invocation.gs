@@ -394,6 +394,7 @@ internal partial class ExpressionBinder {
                 continue
             }
             var target FunctionTypeSymbol? = nil
+            var isExpressionTreeTarget = false
             var disagree = false
             for candidate in candidates {
                 let offset = if candidate.ExplicitReceiverParameter == nil {
@@ -405,13 +406,15 @@ internal partial class ExpressionBinder {
                 if paramPos < 0 || paramPos >= candidate.Parameters.Length {
                     continue
                 }
+                let paramType = candidate.Parameters[paramPos].Type
                 if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
-                    candidate.Parameters[paramPos].Type,
+                    paramType,
                     out var fn
                 ) ||
                     fn == nil {
                     continue
                 }
+                isExpressionTreeTarget |= MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(paramType, out _)
                 if target == nil {
                     target = fn
                 } else if !object.ReferenceEquals(target, fn) && !target.Equals(fn) {
@@ -420,7 +423,11 @@ internal partial class ExpressionBinder {
                 }
             }
             if target != nil && !disagree {
-                boundArgs[idx] = lambdas.BindLambdaExpression(lambdaSyntax, target)
+                boundArgs[idx] = lambdas.BindLambdaExpression(
+                    lambdaSyntax,
+                    target,
+                    isExpressionTreeTarget: isExpressionTreeTarget
+                )
                 deferredIndices.Remove(idx)
             }
         }

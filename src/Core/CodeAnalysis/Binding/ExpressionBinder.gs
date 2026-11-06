@@ -1581,10 +1581,12 @@ internal partial class ExpressionBinder {
         if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out var targetFunctionType) {
             return false
         }
+        let isExpressionTreeTarget = MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out _)
         let mark = Diagnostics.Count
         let candidate = lambdas.BindLambdaExpression(
             Invariant.Required(lambda, "lambda target typing requires lambda syntax", expression: "lambda"),
-            targetFunctionType
+            targetFunctionType,
+            isExpressionTreeTarget: isExpressionTreeTarget
         )
         if targetType is NullableTypeSymbol &&
             (candidate is BoundErrorExpression || lambda.Parameters.Count != targetFunctionType.Arity) {

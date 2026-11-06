@@ -993,7 +993,8 @@ internal class LambdaBinder {
         targetFunctionType FunctionTypeSymbol? = nil,
         inferReturnTypeFromBody bool = false,
         acceptsNaturalType((TypeSymbol) -> bool)? = nil,
-        discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]? = nil
+        discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]? = nil,
+        isExpressionTreeTarget bool = false
     ) BoundExpression {
         let startMark = Diagnostics.Count
         if bindLambdaBodyExpression == nil {
@@ -1565,7 +1566,8 @@ internal class LambdaBinder {
                     placeholderReturnType
                 }
             }
-        } else if placeholderReturnType != TypeSymbol.Error &&
+        } else if !isExpressionTreeTarget &&
+            placeholderReturnType != TypeSymbol.Error &&
             placeholderReturnType != TypeSymbol.Void &&
             !(boundBody is BoundErrorExpression) {
             returnType = placeholderReturnType

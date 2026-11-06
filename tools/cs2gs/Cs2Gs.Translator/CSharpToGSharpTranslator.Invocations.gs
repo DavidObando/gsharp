@@ -6197,11 +6197,12 @@ partial class CSharpToGSharpTranslator {
 
         private func GetFixedElementDestinationType(
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
-            sink ISymbol?
+            sink ISymbol?,
+            sinkTypeOverride ITypeSymbol? = nil
         ) ITypeSymbol? {
             let tupleIndices = List[int32]()
             let node Microsoft.CodeAnalysis.SyntaxNode? = OutermostTransparentNode(value, tupleIndices)
-            var sinkType ITypeSymbol? = ObliviousNullabilityAnalyzer.SymbolValueType(sink)
+            var sinkType ITypeSymbol? = sinkTypeOverride ?? ObliviousNullabilityAnalyzer.SymbolValueType(sink)
             sinkType ??= if node is TupleExpressionSyntax containingTuple {
                 this.context.GetTypeInfo(containingTuple).ConvertedType
             } else {

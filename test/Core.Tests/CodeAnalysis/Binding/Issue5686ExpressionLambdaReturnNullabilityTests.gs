@@ -323,6 +323,14 @@ func Run(token Token) {
     let c = StrictSink5686.TakeNullableExpression(() -> Box().MaybeName)
     return a ?? b ?? c
 }`)
+            yield AcceptedRow("ok-fixed-expression-tree-return", `func TakeLocalExpression(e Expression[Func[int32, string]]) string? -> e.Compile()(1)
+func Run() string? {
+    let e Expression[Func[string]] = () -> Box().MaybeName
+    let p = StrictSink5686.TakeExpression(() -> Box().MaybeName)
+    let q = StrictSink5686.TakeExpressionArg((x) -> Box().MaybeName)
+    let r = TakeLocalExpression((x) -> Box().MaybeName)
+    return e.Compile()() ?? p ?? q ?? r
+}`)
         }
 
         private func Row(
@@ -360,7 +368,7 @@ func Run(token Token) {
         private func EmitLibrary() string {
             let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue5686Binding")
             Directory.CreateDirectory(outputDir)
-            let libraryPath = Path.Combine(outputDir, "Lib5686_v3.dll")
+            let libraryPath = Path.Combine(outputDir, "Lib5686_v4.dll")
             const csharpSource = `#nullable enable
 using System;
 using System.Linq.Expressions;
@@ -373,6 +381,8 @@ namespace Lib5686
     {
         public static string Take(Func<string> f) => f();
         public static string TakeArg(Func<int, string> f) => f(1);
+        public static string? TakeExpression(Expression<Func<string>> f) => f.Compile()();
+        public static string? TakeExpressionArg(Expression<Func<int, string>> f) => f.Compile()(1);
         public static string? TakeNullable(Func<string?> f) => f();
         public static string? TakeNullableArg(Func<int, string?> f) => f(1);
         public static string? TakeNullableExpression(Expression<Func<string?>> f) => f.Compile()();
