@@ -283,6 +283,7 @@ namespace ReaderAgreement.Fixture
         public T? MaybeDefault() => default;
         public T Get() => default;
         public void Set(T value) { }
+        public void SetOptional(T value = default!) { }
         public void SetMaybe(T? value) { }
         public List<T?> Nulls = new();
         public List<T> NonNulls = new();
@@ -294,6 +295,7 @@ namespace ReaderAgreement.Fixture
         public KeyValuePair<T, string?> Pair;
         public Func<T?, string> Projection = _ => "";
         public T this[int index] => default;
+        public T this[int index, T fallback = default!] => default;
         public List<List<T>> Nested = new();
         public U? Convert<U>(T value) where U : class => null;
         public U? Pick<U>(IEnumerable<U> source) => default;
@@ -343,6 +345,8 @@ namespace ReaderAgreement.Fixture.Oblivious
     {
         public T Value;
         public T Get() => default;
+        public void PutOptional(T value = default) { }
+        public T this[int index, T fallback = default] => default;
         public List<T> Items = new List<T>();
         public T[] Array;
         public Dictionary<string, T> Map;

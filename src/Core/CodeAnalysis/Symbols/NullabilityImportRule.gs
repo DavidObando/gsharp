@@ -177,15 +177,34 @@ internal shared class NullabilityImportRule {
         argument
     }
 
-    /// Issue #4403: the direct parameter reader lifts a reference parameter
+    /// Issue #4403: the parameter readers lift a reference parameter
     /// whose default value is `null` to `T?`. That is a G#-side
     /// inference from the default value, not a classified metadata position,
     /// so it is named here rather than passed off as an `Annotated`
-    /// state. Only `ClrNullability.GetParameterTypeSymbol` applies it
-    /// today; #4403 decides whether the other readers should.
+    /// state. Value-type arguments and in-scope unconstrained type parameters
+    /// are left unchanged, matching (cref:DecideOpenSlot).
     /// @param parameterType The parameter's already-read type.
-    /// @returns The parameter type, stated nullable.
-    internal func ApplyNullDefaultLift(parameterType TypeSymbol) TypeSymbol -> NullableTypeSymbol.Get(parameterType)
+    /// @returns The parameter type, stated nullable when it is a reference position.
+    internal func ApplyNullDefaultLift(parameterType TypeSymbol) TypeSymbol {
+        if parameterType is ByRefTypeSymbol byRef {
+            let liftedPointee = ApplyNullDefaultLift(byRef.PointeeType)
+            return if object.ReferenceEquals(liftedPointee, byRef.PointeeType) {
+                parameterType
+            } else {
+                cast[TypeSymbol](ByRefTypeSymbol.Get(liftedPointee))
+            }
+        }
+        if parameterType is NullableTypeSymbol {
+            return parameterType
+        }
+        let kind = ClassifyArgument(parameterType)
+        return if kind == TypeArgumentKind.Reference ||
+            (kind == TypeArgumentKind.Unknown && !(parameterType is TypeParameterSymbol)) {
+            NullableTypeSymbol.Get(parameterType)
+        } else {
+            parameterType
+        }
+    }
 
     /// The (cref:ImportedReferenceNullability.Unchanged) decision for a
     /// walker that peeled its input's own `?` to rebuild the core under
@@ -294,6 +313,9 @@ internal shared class NullabilityImportRule {
             }
             case annotated is NullabilityAnnotatedTypeSymbol {
                 return ClassifyArgument(annotated.BaseType)
+            }
+            case byRef is ByRefTypeSymbol {
+                return ClassifyArgument(byRef.PointeeType)
             }
             case parameter is TypeParameterSymbol {
                 if parameter.HasValueTypeConstraint || parameter.HasUnmanagedConstraint {

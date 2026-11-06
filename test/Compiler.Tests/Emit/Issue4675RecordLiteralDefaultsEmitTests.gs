@@ -2387,4 +2387,61 @@ System.Console.WriteLine(viaAlias.Value)
         Assert.False(System.IO.File.Exists(rejectedReference))
         Assert.False(System.IO.File.Exists(pdb))
     }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedGenericDataClassLiteral_OptionalNullDefaultPreservesNullableSubstitutionAndMarkerSynthesis(
+        referenceAssembly bool
+    ) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = System.IO.Path.Combine(fixture.Directory, "OptionalDefault5419.ref.dll")
+        let contract = fixture.CompileCSharpWithReference(`#nullable enable
+using System.Reflection;
+[assembly: AssemblyMetadata("GSharp.TypeSemantics", "33554434|class|1|Value:67108865,Items:67108866")]
+[assembly: AssemblyMetadata("GSharp.MagicCollectionFields", "33554434|Items:arr3")]
+namespace OptionalDefault5419;
+public class MarkedBox<T> {
+    public readonly int Value;
+    public readonly T[] Items;
+    public MarkedBox(int Value = 5, T[] Items = null!) {
+        this.Value = Value;
+        this.Items = Items;
+    }
+}
+public record Box<T>(T Items = default!);
+public record SpreadBox<T>(int Value, T Items = default!);`, "OptionalDefault5419", reference)
+        VerifyPrimaryShapeIl(contract)
+        VerifyPrimaryShapeIl(reference)
+        let selected = if referenceAssembly {
+            reference
+        } else {
+            contract
+        }
+        let dll = fixture.Compile(`import OptionalDefault5419
+struct Source { public var Value int32 }
+let source = Source{Value: 7}
+let nullableDirect = Box[[]?int32]{}
+System.Console.WriteLine(nullableDirect.Items == nil)
+let nonNullDirect = Box[[]int32]{}
+System.Console.WriteLine(nonNullDirect.Items.Length)
+let nullableSpread = SpreadBox[[]?int32]{...source}
+System.Console.WriteLine(nullableSpread.Value)
+System.Console.WriteLine(nullableSpread.Items == nil)
+let nonNullSpread = SpreadBox[[]int32]{...source}
+System.Console.WriteLine(nonNullSpread.Value)
+System.Console.WriteLine(nonNullSpread.Items.Length)
+let markedDirect = MarkedBox[int32]{}
+System.Console.WriteLine(markedDirect.Value)
+System.Console.WriteLine(markedDirect.Items.Length)
+let markedSpread = MarkedBox[int32]{...source}
+System.Console.WriteLine(markedSpread.Value)
+System.Console.WriteLine(markedSpread.Items.Length)
+let markedCall = MarkedBox[int32]()
+System.Console.WriteLine(markedCall.Value)
+System.Console.WriteLine(System.Object.ReferenceEquals(markedCall.Items, nil))
+`, "OptionalDefaultConsumer5419", true, "/r:" + selected)
+        VerifyPrimaryShapeIl(dll, []string{contract})
+        Assert.Equal("True\n0\n7\nTrue\n7\n0\n0\n3\n7\n3\n5\nTrue\n", fixture.Run(dll))
+    }
 }

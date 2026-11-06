@@ -3462,7 +3462,8 @@ internal partial class ExpressionBinder {
                     aggregate.PrimaryConstructorParameters[index],
                     out var missingDeclarationShape,
                     parameterType,
-                    constructor
+                    constructor,
+                    resultType
                 )
                 if missingDeclarationShape {
                     Diagnostics.ReportNoApplicableOverload(syntax.TypeIdentifier.Location, aggregate.Name)
@@ -3661,7 +3662,8 @@ internal partial class ExpressionBinder {
                     parameters[i],
                     out var missingDeclarationShape,
                     type,
-                    constructor
+                    constructor,
+                    resultType
                 )
                 if missingDeclarationShape {
                     Diagnostics.ReportNoApplicableOverload(syntax.TypeIdentifier.Location, aggregate!!.Name)

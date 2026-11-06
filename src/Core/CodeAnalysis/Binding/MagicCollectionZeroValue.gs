@@ -167,10 +167,51 @@ internal shared class MagicCollectionZeroValue {
         parameter ParameterSymbol,
         out missingDeclarationShape bool,
         parameterType TypeSymbol? = nil,
-        constructor ConstructorInfo? = nil
+        constructor ConstructorInfo? = nil,
+        receiverType TypeSymbol? = nil
     ) BoundExpression? {
         missingDeclarationShape = false
-        let type = parameterType ?? parameter.Type
+        var type = parameterType ?? parameter.Type
+        let primaryCtor = constructor ??
+            (
+            if owner.UsesConstructorOwnedDataConstruction {
+                owner.GetDataConstructionConstructor()
+            } else {
+                default(ConstructorInfo?)
+            }
+        )
+        if primaryCtor != nil && owner.ClrType is {} importedForDefault && type is NullableTypeSymbol liftedNullable {
+            let indexForDefault = owner.PrimaryConstructorParameters.IndexOf(parameter)
+            let ctorParameters = primaryCtor.GetParameters()
+            if uint32(indexForDefault) < uint32(ctorParameters.Length) {
+                let openParameter = ClrNullability.GetOpenParameterDefinition(ctorParameters[indexForDefault])
+                let openParameterType = openParameter.ParameterType
+                var declaringTypeArguments = owner.TypeArguments
+                if declaringTypeArguments.IsDefaultOrEmpty && MemberLookup.GetProjectionReceiverImportedType(
+                    receiverType ?? owner
+                ) is {} importedReceiver &&
+                    MemberLookup
+                    .TryGetSymbolicDeclaringContext(
+                    importedReceiver,
+                    primaryCtor.DeclaringType,
+                    out _,
+                    out var symbolicArguments
+                ) {
+                    declaringTypeArguments = symbolicArguments
+                }
+                let substitutedArgIsNullable = openParameterType.IsGenericParameter &&
+                    openParameterType.DeclaringMethod == nil &&
+                    !declaringTypeArguments.IsDefault &&
+                    uint32(openParameterType.GenericParameterPosition) < uint32(declaringTypeArguments.Length) &&
+                    declaringTypeArguments[openParameterType.GenericParameterPosition] is NullableTypeSymbol
+                // Brace/spread literals synthesize legal collection zero values rather than
+                // using optional `= null!` / `= default!` defaults on non-nullable slots (#5419).
+                if !substitutedArgIsNullable && ClrNullability.HasOptionalNullDefault(openParameter) &&
+                    ClrNullability.GetParameterDeclaredState(openParameter, 0) == ClrNullabilityState.NotAnnotated {
+                    type = liftedNullable.UnderlyingType
+                }
+            }
+        }
         if type.ReferenceNullability == ReferenceNullabilityKind.Nullable || NullableLifting.IsAnyValueTypeNullable(
             type as NullableTypeSymbol
         ) {
@@ -186,7 +227,11 @@ internal shared class MagicCollectionZeroValue {
                     field,
                     kind,
                     out missingDeclarationShape,
-                    parameterType ?? MemberLookup.GetClrFieldTypeSymbol(owner, field)
+                    if parameterType != nil {
+                        type
+                    } else {
+                        MemberLookup.GetClrFieldTypeSymbol(receiverType ?? owner, field)
+                    }
                 )
                 // A declared marker cannot fall back to a different zero recipe.
                 return zero
