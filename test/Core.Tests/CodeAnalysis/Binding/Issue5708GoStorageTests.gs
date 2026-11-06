@@ -99,6 +99,23 @@ unsafe func Run() {
     @Theory
     @InlineData("go")
     @InlineData("defer")
+    func UnsafeAddressAtRefParameter_ReportsGS0460(keyword string) {
+        let operand = "Inc(&x)"
+        let source = `package Issue5708UnsafeRef
+func Inc(ref value int32) { value++ }
+unsafe func Run() {
+    var x = 1
+    ` + keyword + " " + operand + `
+}
+`
+        let error = Assert.Single(BindErrors(source))
+        Assert.Equal("GS0460", error.Id)
+        Assert.Equal(TextSpan(source.IndexOf(operand), operand.Length), error.Location.Span)
+    }
+
+    @Theory
+    @InlineData("go")
+    @InlineData("defer")
     func UnforwardedByReferenceHandlers_ReportGS0460(keyword string) {
         using let fixture = CSharpFixture(`namespace Handler5708 {
     public static class Api {

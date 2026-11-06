@@ -3224,6 +3224,48 @@ internal partial class StatementBinder {
 
         // Check the bound arguments, including address-valued blocks from named-argument ordering and implicit `in` conversions.
         private func HasByRefArgument(expression BoundExpression) bool {
+            // Unsafe address arguments can retain a pointer type even at a managed by-reference parameter.
+            if expression is BoundCallOperationExpression call {
+                let calledFunction = call.CalledFunction
+                if calledFunction is FunctionSymbol function && function.Parameters.Any(
+                    (parameter ParameterSymbol) -> parameter.RefKind != RefKind.None
+                ) {
+                    return true
+                }
+                if calledFunction is ImportedFunctionSymbol imported &&
+                    imported
+                    .Method
+                    .GetParameters()
+                    .Any((parameter ParameterInfo) -> parameter.ParameterType.IsByRef) {
+                    return true
+                }
+            }
+            if expression is BoundBaseClassCallExpression{Method: {} method} && method.Parameters.Any(
+                (parameter ParameterSymbol) -> parameter.RefKind != RefKind.None
+            ) {
+                return true
+            }
+            if expression is BoundIndirectCallExpression indirect &&
+                (
+                indirect
+                    .FunctionType
+                    .ParameterTypes
+                    .Any((type TypeSymbol) -> type is ByRefTypeSymbol) ||
+                    (
+                    !indirect.ArgumentRefKinds.IsDefaultOrEmpty && indirect.ArgumentRefKinds.Any(
+                        (kind RefKind) -> kind != RefKind.None
+                    )
+                )
+            ) {
+                return true
+            }
+            if expression is BoundFunctionPointerInvocationExpression pointer &&
+                pointer
+                .FunctionPointerType
+                .ParameterTypes
+                .Any((type TypeSymbol) -> type is ByRefTypeSymbol) {
+                return true
+            }
             let arguments = switch expression {
                 case call is BoundCallOperationExpression: call.Arguments
                 case call is BoundIndirectCallExpression: call.Arguments

@@ -410,6 +410,29 @@ Run()
         Assert.Equal("42\n".ReplaceLineEndings(Environment.NewLine), RunBounded(assemblyPath, "PointerValue"))
     }
 
+    @Theory
+    @InlineData("go")
+    @InlineData("defer")
+    func UnsafeAddressAtRefParameter_IsRejectedByTheDriver(keyword string) {
+        let source = `package Issue5708UnsafeRefDriver
+func Inc(ref value int32) { value++ }
+unsafe func Run() {
+    var x = 1
+    ` + keyword + ` Inc(&x)
+}
+Run()
+`
+        let (exitCode, output) = TryCompile(source, "Issue5708UnsafeRef")
+        let column = 6 + keyword.Length
+        Assert.NotEqual(0, exitCode)
+        Assert.Contains(
+            "(5," + column.ToString() + ",5," + (column + 7).ToString() + "): error GS0460",
+            output,
+            StringComparison.Ordinal
+        )
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+    }
+
     /// A value-type receiver is storage: the containers that locate it (the
     /// object holding the field or CLR field, the tuple element chain, the
     /// array and its index) are evaluated and validated on the spawner before
