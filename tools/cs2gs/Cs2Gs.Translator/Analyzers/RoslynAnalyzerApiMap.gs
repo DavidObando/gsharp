@@ -466,6 +466,8 @@ internal shared class RoslynAnalyzerApiMap {
         ["BinaryOperator"] = []string{"BinaryExpression", "ClrBinaryOperatorExpression"},
         ["MethodReference"] = []string{"MethodGroupExpression", "ClrMethodGroupExpression"},
         ["PropertyReference"] = []string{"PropertyAccessExpression", "ClrPropertyAccessExpression"},
+        ["LocalReference"] = []string{"VariableExpression"},
+        ["ParameterReference"] = []string{"VariableExpression"},
         ["IsType"] = []string{"IsExpression"},
         ["Invocation"] = []string{
             "CallExpression",
@@ -634,7 +636,8 @@ internal shared class RoslynAnalyzerApiMap {
     /// `!!`). Keep in step with (cref:GSharpNullableMembers).
     private let GSharpNullableCapableTypes HashSet[string] = HashSet[string](StringComparer.Ordinal){
         "Microsoft.CodeAnalysis.SyntaxToken",
-        "Microsoft.CodeAnalysis.SyntaxNode"
+        "Microsoft.CodeAnalysis.SyntaxNode",
+        "Microsoft.CodeAnalysis.INamedTypeSymbol"
     }
 
     /// Whether the Roslyn member [`memberName`](paramref) declared on

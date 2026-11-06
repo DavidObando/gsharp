@@ -216,6 +216,43 @@
     <_ExplicitReference Include="$(FrameworkPathOverride)\mscorlib.dll" Condition=" '$(FrameworkPathOverride)' != '' " />
   </ItemGroup>
 
+  <!-- Issue #5819: preserve System.Runtime type forwarders and root bundled G#
+       runtime helpers when ILLink or NativeAOT prepares trimmed inputs. -->
+  <PropertyGroup>
+    <GsharpTrimmerRootDescriptorFile Condition=" '$(GsharpTrimmerRootDescriptorFile)' == '' ">$([MSBuild]::NormalizePath('$(IntermediateOutputPath)', 'gsharp.trimmer.xml'))</GsharpTrimmerRootDescriptorFile>
+  </PropertyGroup>
+
+  <Target Name="_GsharpPrepareForILLink"
+          BeforeTargets="PrepareForILLink"
+          Condition=" '$(PublishTrimmed)' == 'true' or '$(PublishAot)' == 'true' ">
+    <ItemGroup>
+      <_GsharpTrimmerRootDescriptorLine Include="&lt;linker&gt;" />
+      <_GsharpTrimmerRootDescriptorLine Include="  &lt;assembly fullname=&quot;System.Runtime&quot; preserve=&quot;all&quot; /&gt;" />
+      <_GsharpTrimmerRootDescriptorLine Include="&lt;/linker&gt;" />
+    </ItemGroup>
+    <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(GsharpTrimmerRootDescriptorFile)'))" />
+    <WriteLinesToFile Lines="@(_GsharpTrimmerRootDescriptorLine)"
+                      File="$(GsharpTrimmerRootDescriptorFile)"
+                      Overwrite="True"
+                      WriteOnlyWhenDifferent="True" />
+    <ItemGroup>
+      <FileWrites Include="$(GsharpTrimmerRootDescriptorFile)" />
+      <TrimmerRootDescriptor Remove="$(GsharpTrimmerRootDescriptorFile)" />
+      <TrimmerRootDescriptor Include="$(GsharpTrimmerRootDescriptorFile)" />
+      <_GsharpBundledRuntimeCandidate Include="@(_ExplicitReference);@(ReferencePath);@(ManagedAssemblyToLink)" />
+      <_GsharpBundledRuntimeRoot Include="Gsharp.Extensions"
+                                 Condition=" '$(GsharpNoExtensions)' != 'true' and (Exists('$(GsharpExtensionsAssemblyFullPath)') or '@(_GsharpBundledRuntimeCandidate->WithMetadataValue('Filename', 'Gsharp.Extensions'))' != '') " />
+      <_GsharpBundledRuntimeRoot Include="Gsharp.Runtime.Channels"
+                                 Condition=" '$(GsharpNoChannelsRuntime)' != 'true' and (Exists('$(GsharpChannelsRuntimeAssemblyFullPath)') or '@(_GsharpBundledRuntimeCandidate->WithMetadataValue('Filename', 'Gsharp.Runtime.Channels'))' != '') " />
+      <_GsharpBundledRuntimeRoot Include="Gsharp.Runtime.Values"
+                                 Condition=" '$(GsharpNoValuesRuntime)' != 'true' and (Exists('$(GsharpValuesRuntimeAssemblyFullPath)') or '@(_GsharpBundledRuntimeCandidate->WithMetadataValue('Filename', 'Gsharp.Runtime.Values'))' != '') " />
+      <TrimmerRootAssembly Remove="@(_GsharpBundledRuntimeRoot)" />
+      <TrimmerRootAssembly Include="@(_GsharpBundledRuntimeRoot)" RootMode="All" />
+      <_GsharpBundledRuntimeCandidate Remove="@(_GsharpBundledRuntimeCandidate)" />
+      <_GsharpBundledRuntimeRoot Remove="@(_GsharpBundledRuntimeRoot)" />
+    </ItemGroup>
+  </Target>
+
   <!-- Issue #1666: property-only changes (e.g. `-p:Version=`, `-p:DebugType=`,
        `-p:Deterministic=`, `-p:NoWarn=`, `-p:TreatWarningsAsErrors=`,
        `-p:OutputType=`, ...) touch nothing on disk that $(MSBuildAllProjects),

@@ -60,6 +60,10 @@ internal partial class MethodBodyEmitter {
                 this.EmitNarrowingCastIfNeeded(v)
             }
             case a is BoundAssignmentExpression {
+                if a.Expression.Type == TypeSymbol.Never {
+                    this.EmitExpression(a.Expression)
+                    break
+                }
                 if a.Variable is ParameterSymbol assignParam && assignParam.RefKind != RefKind.None {
                     // ADR-0060: assign-through-ref-kind-parameter lowers to
                     // `ldarg ptr; value; dup; stloc tmp; stind.*; ldloc tmp`
@@ -201,7 +205,11 @@ internal partial class MethodBodyEmitter {
                     // `T : IComparable[T]`) emits a verifiable
                     // `constrained. !!T  callvirt IComparable`1<!!T>::M(...)`.
                     if instCall.IsConstrainedTypeParameterCall {
-                        this.EmitConstrainedTypeParameterReceiver(instCall.Receiver)
+                        let referenceOwner = instCall.ConstrainedInterfaceType ?? TypeSymbol.Object
+                        let boxed = this.TryEmitBoxedTypeParameterReceiver(instCall.Receiver, referenceOwner)
+                        if !boxed {
+                            this.EmitConstrainedTypeParameterReceiver(instCall.Receiver)
+                        }
                         this.EmitImportedCallArguments(instCall.Arguments, instCall.ArgumentRefKinds)
                         let constrainedHandle = this
                             .outer
@@ -211,10 +219,12 @@ internal partial class MethodBodyEmitter {
                             instCall.TypeArgumentSymbols,
                             instCall.ConstrainedInterfaceType
                         )
-                        this.il.OpCode(ILOpCode.Constrained)
-                        this.il.Token(
-                            this.outer.memberRefs.GetElementTypeToken(instCall.ConstrainedReceiverTypeParameter!!)
-                        )
+                        if !boxed {
+                            this.il.OpCode(ILOpCode.Constrained)
+                            this.il.Token(
+                                this.outer.memberRefs.GetElementTypeToken(instCall.ConstrainedReceiverTypeParameter!!)
+                            )
+                        }
                         this.il.OpCode(ILOpCode.Callvirt)
                         this.il.Token(constrainedHandle)
                         break
@@ -2338,7 +2348,9 @@ internal partial class MethodBodyEmitter {
         this.il.Branch(ILOpCode.Brfalse, falseLabel)
         this.EmitExpression(node.WhenTrue)
         this.EmitInterfaceMergeCastIfNeeded(node.WhenTrue, node.Type)
-        this.il.Branch(ILOpCode.Br, doneLabel)
+        if node.WhenTrue.Type != TypeSymbol.Never {
+            this.il.Branch(ILOpCode.Br, doneLabel)
+        }
         this.il.MarkLabel(falseLabel)
         this.EmitExpression(node.WhenFalse)
         this.EmitInterfaceMergeCastIfNeeded(node.WhenFalse, node.Type)

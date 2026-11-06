@@ -3399,6 +3399,9 @@ internal partial class ExpressionBinder {
             if left == nil || right == nil {
                 return nil
             }
+            if left == TypeSymbol.Never && right == TypeSymbol.Never {
+                return TypeSymbol.Never
+            }
             // (a) Target-typing: honor an explicit, valid target when both arms
             // implicitly convert to it.
             if targetType != nil &&

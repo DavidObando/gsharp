@@ -1878,13 +1878,19 @@ internal partial class DeclarationBinder {
                     continue
                 }
                 if !replacesPositionalProperty {
+                    if propSyntax.HasExplicitInterfaceClause {
+                        if !propAlreadyDeclared {
+                            explicitInterfaceClauseNames.Add(propName)
+                        }
+                    } else {
+                        explicitInterfaceClauseNames.Remove(propName)
+                    }
                     existingNames.Add(propName)
+                } else {
+                    explicitInterfaceClauseNames.Remove(propName)
                 }
                 if isIndexer && !propSyntax.HasExplicitInterfaceClause {
                     declaredIndexerSignatures.Add(indexerParameters)
-                }
-                if propSyntax.HasExplicitInterfaceClause {
-                    explicitInterfaceClauseNames.Add(propName)
                 }
                 let propType TypeSymbol? = if propSyntax.Type is {} propTypeSyntax {
                     bindTypeClause(propTypeSyntax)
@@ -2335,10 +2341,14 @@ internal partial class DeclarationBinder {
                     Diagnostics.ReportSymbolAlreadyDeclared(eventSyntax.Identifier.Location, eventName)
                     continue
                 }
-                existingNames.Add(eventName)
                 if eventSyntax.HasExplicitInterfaceClause {
-                    explicitInterfaceClauseNames.Add(eventName)
+                    if !eventAlreadyDeclared {
+                        explicitInterfaceClauseNames.Add(eventName)
+                    }
+                } else {
+                    explicitInterfaceClauseNames.Remove(eventName)
                 }
+                existingNames.Add(eventName)
                 var handlerType TypeSymbol? = if eventSyntax.Type is {} eventTypeSyntax {
                     bindTypeClause(eventTypeSyntax)
                 } else {
@@ -3146,10 +3156,14 @@ internal partial class DeclarationBinder {
                     Diagnostics.ReportSymbolAlreadyDeclared(propSyntax.Identifier.Location, propName)
                     continue
                 }
-                existingNames.Add(propName)
                 if propSyntax.HasExplicitInterfaceClause {
-                    explicitInterfaceClauseNames.Add(propName)
+                    if !staticPropAlreadyDeclared {
+                        explicitInterfaceClauseNames.Add(propName)
+                    }
+                } else {
+                    explicitInterfaceClauseNames.Remove(propName)
                 }
+                existingNames.Add(propName)
                 let propType TypeSymbol? = if propSyntax.Type is {} propTypeSyntax {
                     bindTypeClause(propTypeSyntax)
                 } else {
@@ -3329,15 +3343,27 @@ internal partial class DeclarationBinder {
     ) {
         let existingNames = memberBinding.ExistingNames
         let methodNames = memberBinding.MethodNames
+        let explicitInterfaceClauseNames = memberBinding.ExplicitInterfaceClauseNames
         if syntax.SharedBlock != nil {
             // Static events
             let staticEventsBuilder = ImmutableArray.CreateBuilder[EventSymbol]()
             for eventSyntax in syntax.SharedBlock!!.Events {
                 let eventName = eventSyntax.Identifier.ValueText
-                if methodNames.Contains(eventName) || !existingNames.Add(eventName) {
+                let staticEventAlreadyDeclared = existingNames.Contains(eventName)
+                let staticEventExemptCollision = eventSyntax.HasExplicitInterfaceClause ||
+                    explicitInterfaceClauseNames.Contains(eventName)
+                if methodNames.Contains(eventName) || (staticEventAlreadyDeclared && !staticEventExemptCollision) {
                     Diagnostics.ReportSymbolAlreadyDeclared(eventSyntax.Identifier.Location, eventName)
                     continue
                 }
+                if eventSyntax.HasExplicitInterfaceClause {
+                    if !staticEventAlreadyDeclared {
+                        explicitInterfaceClauseNames.Add(eventName)
+                    }
+                } else {
+                    explicitInterfaceClauseNames.Remove(eventName)
+                }
+                existingNames.Add(eventName)
                 var handlerType TypeSymbol? = if eventSyntax.Type is {} eventTypeSyntax {
                     bindTypeClause(eventTypeSyntax)
                 } else {

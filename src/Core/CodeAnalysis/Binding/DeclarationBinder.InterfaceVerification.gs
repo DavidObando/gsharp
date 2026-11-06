@@ -285,6 +285,121 @@ internal partial class DeclarationBinder {
                         break
                     }
                 }
+                for method in structSymbol.StaticMethods {
+                    let target = method.ExplicitInterfaceClauseTarget
+                    if !method.HasExplicitInterfaceClause ||
+                        target is InterfaceSymbol ||
+                        target
+                        ?.ClrType
+                        ?.IsInterface != true {
+                        continue
+                    }
+                    let targetClr = target!!.ClrType!!
+                    var openInterface Type? = nil
+                    var symbolicArgs = default(ImmutableArray[TypeSymbol])
+                    let isSymbolic = MemberLookup.TryGetSymbolicClrGenericInterface(
+                        target!!,
+                        out openInterface,
+                        out symbolicArgs
+                    )
+                    for slot in ClrTypeUtilities.SafeGetMethods(
+                        targetClr,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
+                    ) {
+                        if !slot.IsVirtual ||
+                            IsClrStaticPropertyOrEventAccessor(targetClr, slot) ||
+                            slot.Name != method.Name {
+                            continue
+                        }
+                        let matches = if isSymbolic && openInterface != nil {
+                            FindOpenStaticSlotForMethod(openInterface, slot) is {} openSlot &&
+                                MemberLookup.MethodMatchesSymbolicClrInterfaceSignature(method, openSlot, symbolicArgs)
+                        } else {
+                            MemberLookup.MethodMatchesClrSignature(method, slot)
+                        }
+                        if matches {
+                            method.ExplicitInterfaceSlot = slot
+                            method.ExplicitInterfaceSlotContainingType = target
+                            break
+                        }
+                    }
+                }
+                for property in GetMembersIncludingInherited(
+                    structSymbol,
+                    (type StructSymbol) -> type.StaticProperties
+                ) {
+                    let target = property.ExplicitInterfaceClauseTarget
+                    if !property.HasExplicitInterfaceClause ||
+                        target is InterfaceSymbol ||
+                        target
+                        ?.ClrType
+                        ?.IsInterface != true {
+                        continue
+                    }
+                    for slot in ClrTypeUtilities.SafeGetProperties(
+                        target!!.ClrType!!,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
+                    ) {
+                        if (!property.HasGetter && !property.HasSetter) ||
+                            (property.HasGetter && slot.GetMethod?.IsVirtual != true) ||
+                            (property.HasSetter && slot.SetMethod?.IsVirtual != true) ||
+                            !MemberLookup.PropertyMatchesClrInterfaceSignature(property, target!!, slot) {
+                            continue
+                        }
+                        property.ExplicitInterfaceGetterSlot = if slot.GetMethod?.IsVirtual == true {
+                            slot.GetMethod
+                        } else {
+                            default(MethodInfo?)
+                        }
+                        property.ExplicitInterfaceSetterSlot = if slot.SetMethod?.IsVirtual == true {
+                            slot.SetMethod
+                        } else {
+                            default(MethodInfo?)
+                        }
+                        property.ExplicitInterfaceSlotContainingType = target
+                        break
+                    }
+                }
+                for eventSymbol in structSymbol.StaticEvents {
+                    let target = eventSymbol.ExplicitInterfaceClauseTarget
+                    if !eventSymbol.HasExplicitInterfaceClause ||
+                        target is InterfaceSymbol ||
+                        target
+                        ?.ClrType
+                        ?.IsInterface != true {
+                        continue
+                    }
+                    for slot in ClrTypeUtilities.SafeGetEvents(
+                        target!!.ClrType!!,
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
+                    ) {
+                        if (slot.AddMethod?.IsVirtual != true && slot.RemoveMethod?.IsVirtual != true) ||
+                            slot.Name != eventSymbol.Name ||
+                            !ConformanceSignaturesEquivalent(
+                            eventSymbol.Type,
+                            MemberLookup.GetClrEventHandlerTypeSymbol(target!!, slot)
+                        ) {
+                            continue
+                        }
+                        eventSymbol.ExplicitInterfaceAddSlot = if slot.AddMethod?.IsVirtual == true {
+                            slot.AddMethod
+                        } else {
+                            default(MethodInfo?)
+                        }
+                        eventSymbol.ExplicitInterfaceRemoveSlot = if slot.RemoveMethod?.IsVirtual == true {
+                            slot.RemoveMethod
+                        } else {
+                            default(MethodInfo?)
+                        }
+                        eventSymbol.ExplicitInterfaceRaiseSlot = if slot.RaiseMethod?.IsVirtual == true {
+                            slot.RaiseMethod
+                        } else {
+                            default(MethodInfo?)
+                        }
+                        eventSymbol.ExplicitInterfaceSlotContainingType = target
+                        break
+                    }
+                }
             }
             ResolveExplicitClrInterfaceImplementations(structSymbol)
             let inheritedDefaultsBySignature = Dictionary[string, (Method FunctionSymbol, Iface InterfaceSymbol)](
@@ -1030,7 +1145,7 @@ internal partial class DeclarationBinder {
                     continue
                 }
                 seenStaticSlots[slot] = true
-                if method.ExplicitInterfaceMember == nil {
+                if method.ExplicitInterfaceMember == nil && method.ExplicitInterfaceSlot == nil {
                     Diagnostics.ReportExplicitInterfaceClauseMemberNotFound(
                         Invariant
                             .Required(
@@ -1069,7 +1184,9 @@ internal partial class DeclarationBinder {
                     continue
                 }
                 seenStaticSlots[slot] = true
-                if prop.ExplicitInterfaceMember == nil {
+                if prop.ExplicitInterfaceMember == nil &&
+                    prop.ExplicitInterfaceGetterSlot == nil &&
+                    prop.ExplicitInterfaceSetterSlot == nil {
                     Diagnostics.ReportExplicitInterfaceClauseMemberNotFound(
                         Invariant
                             .Required(
@@ -1081,6 +1198,47 @@ internal partial class DeclarationBinder {
                             .Location,
                         target!!.Name,
                         prop.Name
+                    )
+                }
+            }
+        }
+        if !structSymbol.StaticEvents.IsDefaultOrEmpty {
+            for evt in structSymbol.StaticEvents {
+                if !evt.HasExplicitInterfaceClause || evt.ExplicitInterfaceClauseTarget == nil {
+                    continue
+                }
+                let target = evt.ExplicitInterfaceClauseTarget
+                let slot = (target!!, evt.Name)
+                if seenStaticSlots.ContainsKey(slot) {
+                    Diagnostics.ReportDuplicateExplicitInterfaceImplementation(
+                        Invariant
+                            .Required(
+                            evt.Declaration,
+                            "an explicit interface event has a declaration",
+                            expression: "evt.Declaration"
+                        )
+                            .Identifier
+                            .Location,
+                        target!!.Name,
+                        evt.Name
+                    )
+                    continue
+                }
+                seenStaticSlots[slot] = true
+                if evt.ExplicitInterfaceMember == nil &&
+                    evt.ExplicitInterfaceAddSlot == nil &&
+                    evt.ExplicitInterfaceRemoveSlot == nil {
+                    Diagnostics.ReportExplicitInterfaceClauseMemberNotFound(
+                        Invariant
+                            .Required(
+                            evt.Declaration,
+                            "an explicit interface event has a declaration",
+                            expression: "evt.Declaration"
+                        )
+                            .Identifier
+                            .Location,
+                        target!!.Name,
+                        evt.Name
                     )
                 }
             }
@@ -1396,6 +1554,7 @@ internal partial class DeclarationBinder {
                 let contractSlot = openSlot ?? slot
                 if TryFindClrStaticVirtualMethodImplementation(
                     structSymbol,
+                    slotOwnerSymbol,
                     slot,
                     openIface,
                     symbolicArgs,
@@ -2773,6 +2932,7 @@ internal partial class DeclarationBinder {
 
         internal func TryFindClrStaticVirtualMethodImplementation(
             structSymbol StructSymbol,
+            slotOwnerSymbol TypeSymbol,
             slot MethodInfo,
             openIface Type?,
             symbolicArgs ImmutableArray[TypeSymbol],
@@ -2790,6 +2950,21 @@ internal partial class DeclarationBinder {
                 openSlot = FindOpenStaticSlotForMethod(openIface, slot)
                 if openSlot == nil {
                     return false
+                }
+            }
+            if !structSymbol.StaticMethods.IsDefaultOrEmpty {
+                for explicitCandidate in structSymbol.StaticMethods {
+                    if ExplicitClrSlotMatches(
+                        explicitCandidate.ExplicitInterfaceSlotContainingType,
+                        slotOwnerSymbol,
+                        explicitCandidate.ExplicitInterfaceSlot,
+                        slot
+                    ) {
+                        implementation = explicitCandidate
+                        effectiveImplementation = SubstituteStaticMethodForOwner(structSymbol, explicitCandidate)
+                        declaringType = structSymbol
+                        return true
+                    }
                 }
             }
             for current in structSymbol.GetHierarchy() {
@@ -2830,6 +3005,25 @@ internal partial class DeclarationBinder {
             @NotNullWhen(true) out implementation PropertySymbol?,
             @NotNullWhen(true) out declaringType StructSymbol?
         ) bool {
+            if !structSymbol.StaticProperties.IsDefaultOrEmpty {
+                let slotGetter = if slotProperty.GetMethod is {IsVirtual: true} virtualGetter {
+                    virtualGetter
+                } else {
+                    default(MethodInfo?)
+                }
+                let slotSetter = if slotProperty.SetMethod is {IsVirtual: true} virtualSetter {
+                    virtualSetter
+                } else {
+                    default(MethodInfo?)
+                }
+                for explicitCandidate in structSymbol.StaticProperties {
+                    if ExplicitClrPropertySlotMatches(explicitCandidate, slotOwnerSymbol, slotGetter, slotSetter) {
+                        implementation = explicitCandidate
+                        declaringType = structSymbol
+                        return true
+                    }
+                }
+            }
             for current in structSymbol.GetHierarchy() {
                 for candidate in current.StaticProperties {
                     if candidate.Name == slotProperty.Name && MemberLookup.IsImplicitInterfaceImplementationCandidate(
@@ -2858,6 +3052,36 @@ internal partial class DeclarationBinder {
             @NotNullWhen(true) out implementation EventSymbol?,
             @NotNullWhen(true) out declaringType StructSymbol?
         ) bool {
+            if !structSymbol.StaticEvents.IsDefaultOrEmpty {
+                let slotAdd = if slotEvent.AddMethod is {IsVirtual: true} virtualAdd {
+                    virtualAdd
+                } else {
+                    default(MethodInfo?)
+                }
+                let slotRemove = if slotEvent.RemoveMethod is {IsVirtual: true} virtualRemove {
+                    virtualRemove
+                } else {
+                    default(MethodInfo?)
+                }
+                for explicitCandidate in structSymbol.StaticEvents {
+                    if ExplicitClrSlotMatches(
+                        explicitCandidate.ExplicitInterfaceSlotContainingType,
+                        slotOwnerSymbol,
+                        explicitCandidate.ExplicitInterfaceAddSlot,
+                        slotAdd
+                    ) ||
+                        ExplicitClrSlotMatches(
+                        explicitCandidate.ExplicitInterfaceSlotContainingType,
+                        slotOwnerSymbol,
+                        explicitCandidate.ExplicitInterfaceRemoveSlot,
+                        slotRemove
+                    ) {
+                        implementation = explicitCandidate
+                        declaringType = structSymbol
+                        return true
+                    }
+                }
+            }
             let slotType = MemberLookup.GetClrEventHandlerTypeSymbol(slotOwnerSymbol, slotEvent)
             for current in structSymbol.GetHierarchy() {
                 for candidate in current.StaticEvents {

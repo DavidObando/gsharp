@@ -15,6 +15,24 @@ Add `defer call(arg1, arg2, …)` as a statement. The operand must bind to a cal
 
 Deferred call arguments are evaluated eagerly when the `defer` statement executes. Binding synthesizes immutable locals using names with the `$defer$arg$` prefix, initializes each local from the corresponding argument expression at the defer point, and substitutes those locals into the call that runs later.
 
+The function value or receiver is evaluated before the arguments, at the `defer` statement.
+A reference-type receiver and a value-type rvalue are captured by value.
+A value-type storage receiver keeps its location instead of copying its value (issue #5707).
+For a field chain, binding captures the reference-type owner eagerly and preserves the remaining value-type field accesses.
+For an array element, binding captures the array and indices eagerly and preserves the element access.
+Locals, parameters, `ref` aliases, globals, and static fields keep their storage.
+A pointer dereference captures the pointer eagerly and preserves its selected location.
+Managed pointer captures remain scoped aliases and obey the existing suspension-liveness restrictions.
+Static readonly value fields are captured by value; cleanup must not take an illegal writable field address.
+Binding probes the location before evaluating arguments, so an invalid location fails at the `defer` statement.
+A generic receiver captures reference-type instantiations by value and preserves value-type storage, including with a `System.Object` constraint.
+A reference slot narrowed to a boxed value type captures the selected box, not the mutable reference slot.
+Ref-returning receivers preserve their readonly capability, including through generic receiver reconstruction.
+An immutable `let` binding does not create a readonly reference to its struct receiver.
+Calls on a box narrowed to a type parameter use the selected interface or CLR base member with the captured reference.
+A user block expression remains a value even when its final expression returns by reference.
+The deferred method body runs only at block exit; only the eager operands affect narrowing at the `defer` statement.
+
 `defer` is block-scoped and LIFO. A `defer` runs when the enclosing block exits normally or exceptionally. Multiple `defer` statements in the same block lower to nested `try/finally` statements so later source declarations execute first at exit.
 
 `using` declarations share the same block cleanup lowering. `using let x = expr` binds the declaration at the point it appears, then wraps the remaining statements in the enclosing block in `try/finally` with `x.Dispose()` in the `finally`. Interleaved `defer` and `using` declarations compose as one LIFO cleanup stack.

@@ -2274,7 +2274,7 @@ class StructSymbol : TypeSymbol {
                     f.IsConst,
                     f.IsEventBackingField,
                     f.Declaration
-                ){ImportedMember = f.ImportedMember}
+                ){ImportedMember = f.ImportedMember, OriginalDefinition = f.OriginalDefinition ?? f}
                 if f.IsConst && f.HasConstantValue {
                     substituted.SetConstantValue(f.ConstantValue)
                 }

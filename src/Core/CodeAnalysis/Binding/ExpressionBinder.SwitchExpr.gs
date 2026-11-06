@@ -450,8 +450,15 @@ internal partial class ExpressionBinder {
             targetType TypeSymbol?
         ) TypeSymbol {
             let armTypes = List[TypeSymbol](arms.Count)
+            var anyNonNever = false
             for arm in arms {
                 armTypes.Add(arm.Result.Type)
+                if arm.Result.Type != TypeSymbol.Never {
+                    anyNonNever = true
+                }
+            }
+            if !anyNonNever {
+                return TypeSymbol.Never
             }
             // Target-typing: honor an explicit target when every arm converts to it.
             if targetType != nil &&

@@ -423,25 +423,35 @@ shared class SpillSequenceSpiller {
                     }
                     let nextArm = MakeLabel()
                     EmitSpilledPatternTest(arm.Pattern!!, discriminantInput, locals, sideEffects, nextArm)
+                    var guardNever = false
                     if arm.Guard is {} armGuard {
                         let spilledGuard = SpillExpression(armGuard)
                         locals.AddRange(spilledGuard.Locals)
                         sideEffects.AddRange(spilledGuard.SideEffects)
-                        sideEffects.Add(
-                            BoundConditionalGotoStatement(
-                                armGuard.Syntax,
-                                nextArm,
-                                spilledGuard.Value,
-                                jumpIfTrue: false
+                        guardNever = spilledGuard.Value.Type == TypeSymbol.Never
+                        if guardNever {
+                            if !(spilledGuard.Value is BoundLiteralExpression) {
+                                sideEffects.Add(BoundExpressionStatement(armGuard.Syntax, spilledGuard.Value))
+                            }
+                        } else {
+                            sideEffects.Add(
+                                BoundConditionalGotoStatement(
+                                    armGuard.Syntax,
+                                    nextArm,
+                                    spilledGuard.Value,
+                                    jumpIfTrue: false
+                                )
                             )
-                        )
+                        }
                     }
-                    if arm.Body is BoundBlockStatement armBlock {
-                        sideEffects.AddRange(armBlock.Statements)
-                    } else {
-                        sideEffects.Add(arm.Body)
+                    if !guardNever || SlotPlanner.ContainsLabel(arm.Body) {
+                        if arm.Body is BoundBlockStatement armBlock {
+                            sideEffects.AddRange(armBlock.Statements)
+                        } else {
+                            sideEffects.Add(arm.Body)
+                        }
+                        sideEffects.Add(BoundGotoStatement(nil, endLabel))
                     }
-                    sideEffects.Add(BoundGotoStatement(nil, endLabel))
                     sideEffects.Add(BoundLabelStatement(nil, nextArm))
                 }
                 if defaultArm != nil {
@@ -499,17 +509,27 @@ shared class SpillSequenceSpiller {
                     let patternTest = MakePatternMatchExpression(discriminant, arm.Pattern!!)
                     builder.Add(BoundConditionalGotoStatement(nil, nextArmLabel, patternTest, jumpIfTrue: false))
                 }
-                if arm.Guard != nil {
-                    var guardValue = arm.Guard
+                var guardNever = false
+                if arm.Guard is {} armGuard {
+                    var guardValue = armGuard
                     if HasAwait(guardValue) {
                         let spilledGuard = SpillExpression(guardValue)
                         FlushSideEffects(spilledGuard, builder)
                         guardValue = spilledGuard.Value
                     }
-                    builder.Add(BoundConditionalGotoStatement(nil, nextArmLabel, guardValue, jumpIfTrue: false))
+                    guardNever = guardValue.Type == TypeSymbol.Never
+                    if guardNever {
+                        if !(guardValue is BoundLiteralExpression) {
+                            builder.Add(BoundExpressionStatement(armGuard.Syntax, guardValue))
+                        }
+                    } else {
+                        builder.Add(BoundConditionalGotoStatement(nil, nextArmLabel, guardValue, jumpIfTrue: false))
+                    }
                 }
-                RewriteStatementToList(arm.Body, builder)
-                builder.Add(BoundGotoStatement(nil, endLabel))
+                if !guardNever || SlotPlanner.ContainsLabel(arm.Body) {
+                    RewriteStatementToList(arm.Body, builder)
+                    builder.Add(BoundGotoStatement(nil, endLabel))
+                }
                 builder.Add(BoundLabelStatement(nil, nextArmLabel))
             }
             if defaultArm != nil {
@@ -671,6 +691,12 @@ shared class SpillSequenceSpiller {
             }
             let spilled = SpillExpression(gotoStmt.Condition)
             FlushSideEffects(spilled, builder)
+            if spilled.Value.Type == TypeSymbol.Never {
+                if !(spilled.Value is BoundLiteralExpression) {
+                    builder.Add(BoundExpressionStatement(gotoStmt.Syntax, spilled.Value))
+                }
+                return true
+            }
             builder.Add(
                 BoundConditionalGotoStatement(gotoStmt.Syntax, gotoStmt.Label, spilled.Value, gotoStmt.JumpIfTrue)
             )
@@ -1414,10 +1440,16 @@ shared class SpillSequenceSpiller {
             let spilledRight = SpillExpression(binary.Right)
             locals.AddRange(spilledRight.Locals)
             sideEffects.AddRange(spilledRight.SideEffects)
-            sideEffects.Add(
-                BoundExpressionStatement(nil, BoundAssignmentExpression(nil, resultLocal, spilledRight.Value))
-            )
-            sideEffects.Add(BoundGotoStatement(nil, endLabel))
+            if spilledRight.Value.Type == TypeSymbol.Never {
+                if !(spilledRight.Value is BoundLiteralExpression) {
+                    sideEffects.Add(BoundExpressionStatement(nil, spilledRight.Value))
+                }
+            } else {
+                sideEffects.Add(
+                    BoundExpressionStatement(nil, BoundAssignmentExpression(nil, resultLocal, spilledRight.Value))
+                )
+                sideEffects.Add(BoundGotoStatement(nil, endLabel))
+            }
             sideEffects.Add(BoundLabelStatement(nil, useLeftLabel))
             var leftValue BoundExpression = BoundVariableExpression(nil, leftLocal)
             if leftLocal.Type is NullableTypeSymbol {
@@ -1811,20 +1843,22 @@ shared class SpillSequenceSpiller {
             let spilledTrue = SpillExpression(conditional.WhenTrue)
             locals.AddRange(spilledTrue.Locals)
             sideEffects.AddRange(spilledTrue.SideEffects)
-            if resultLocal != nil {
+            if resultLocal != nil && spilledTrue.Value.Type != TypeSymbol.Never {
                 sideEffects.Add(
                     BoundExpressionStatement(nil, BoundAssignmentExpression(nil, resultLocal, spilledTrue.Value))
                 )
             } else if !(spilledTrue.Value is BoundLiteralExpression) {
                 sideEffects.Add(BoundExpressionStatement(nil, spilledTrue.Value))
             }
-            sideEffects.Add(BoundGotoStatement(nil, endLabel))
+            if spilledTrue.Value.Type != TypeSymbol.Never {
+                sideEffects.Add(BoundGotoStatement(nil, endLabel))
+            }
             // else: result = whenFalse (spilled — only runs if condition was false)
             sideEffects.Add(BoundLabelStatement(nil, elseLabel))
             let spilledFalse = SpillExpression(conditional.WhenFalse)
             locals.AddRange(spilledFalse.Locals)
             sideEffects.AddRange(spilledFalse.SideEffects)
-            if resultLocal != nil {
+            if resultLocal != nil && spilledFalse.Value.Type != TypeSymbol.Never {
                 sideEffects.Add(
                     BoundExpressionStatement(nil, BoundAssignmentExpression(nil, resultLocal, spilledFalse.Value))
                 )
@@ -1966,7 +2000,9 @@ shared class SpillSequenceSpiller {
                     locals,
                     sideEffects
                 )
-                sideEffects.Add(BoundGotoStatement(nil, endLabel))
+                if arm.Result.Type != TypeSymbol.Never {
+                    sideEffects.Add(BoundGotoStatement(nil, endLabel))
+                }
                 sideEffects.Add(BoundLabelStatement(nil, nextArmLabel))
             }
             sideEffects.Add(BoundLabelStatement(nil, endLabel))
@@ -2016,24 +2052,36 @@ shared class SpillSequenceSpiller {
                     let patternTest = MakePatternMatchExpression(discriminant, arm.Pattern!!)
                     sideEffects.Add(BoundConditionalGotoStatement(nil, nextArmLabel, patternTest, jumpIfTrue: false))
                 }
-                if arm.Guard != nil {
-                    var guardValue = arm.Guard
+                var guardNever = false
+                if arm.Guard is {} armGuard {
+                    var guardValue = armGuard
                     if HasAwait(guardValue) {
                         let spilledGuard = SpillExpression(guardValue)
                         locals.AddRange(spilledGuard.Locals)
                         sideEffects.AddRange(spilledGuard.SideEffects)
                         guardValue = spilledGuard.Value
                     }
-                    sideEffects.Add(BoundConditionalGotoStatement(nil, nextArmLabel, guardValue, jumpIfTrue: false))
+                    guardNever = guardValue.Type == TypeSymbol.Never
+                    if guardNever {
+                        if !(guardValue is BoundLiteralExpression) {
+                            sideEffects.Add(BoundExpressionStatement(armGuard.Syntax, guardValue))
+                        }
+                    } else {
+                        sideEffects.Add(BoundConditionalGotoStatement(nil, nextArmLabel, guardValue, jumpIfTrue: false))
+                    }
                 }
-                AppendSpilledSwitchExpressionArmResult(
-                    arm.Result,
-                    resultLocal,
-                    ref firstArmResultDeclared,
-                    locals,
-                    sideEffects
-                )
-                sideEffects.Add(BoundGotoStatement(nil, endLabel))
+                if !guardNever || SlotPlanner.ContainsLabel(arm.Result) {
+                    AppendSpilledSwitchExpressionArmResult(
+                        arm.Result,
+                        resultLocal,
+                        ref firstArmResultDeclared,
+                        locals,
+                        sideEffects
+                    )
+                    if arm.Result.Type != TypeSymbol.Never {
+                        sideEffects.Add(BoundGotoStatement(nil, endLabel))
+                    }
+                }
                 sideEffects.Add(BoundLabelStatement(nil, nextArmLabel))
             }
             if defaultArm != nil {
@@ -2090,7 +2138,7 @@ shared class SpillSequenceSpiller {
             let spilledResult = SpillExpression(result)
             locals.AddRange(spilledResult.Locals)
             sideEffects.AddRange(spilledResult.SideEffects)
-            if resultLocal == nil {
+            if resultLocal == nil || spilledResult.Value.Type == TypeSymbol.Never {
                 if !(spilledResult.Value is BoundLiteralExpression) {
                     sideEffects.Add(BoundExpressionStatement(nil, spilledResult.Value))
                 }
@@ -2220,21 +2268,33 @@ shared class SpillSequenceSpiller {
                 }
                 let nextArmLabel = MakeLabel()
                 EmitSpilledPatternTest(arm.Pattern!!, discriminantInput, locals, sideEffects, nextArmLabel)
+                var guardNever = false
                 if arm.Guard is {} armGuard {
                     let spilledGuard = SpillExpression(armGuard)
                     locals.AddRange(spilledGuard.Locals)
                     sideEffects.AddRange(spilledGuard.SideEffects)
-                    sideEffects.Add(
-                        BoundConditionalGotoStatement(
-                            armGuard.Syntax,
-                            nextArmLabel,
-                            spilledGuard.Value,
-                            jumpIfTrue: false
+                    guardNever = spilledGuard.Value.Type == TypeSymbol.Never
+                    if guardNever {
+                        if !(spilledGuard.Value is BoundLiteralExpression) {
+                            sideEffects.Add(BoundExpressionStatement(armGuard.Syntax, spilledGuard.Value))
+                        }
+                    } else {
+                        sideEffects.Add(
+                            BoundConditionalGotoStatement(
+                                armGuard.Syntax,
+                                nextArmLabel,
+                                spilledGuard.Value,
+                                jumpIfTrue: false
+                            )
                         )
-                    )
+                    }
                 }
-                EmitSpilledSwitchArmResult(arm.Result, resultLocal, locals, sideEffects)
-                sideEffects.Add(BoundGotoStatement(nil, endLabel))
+                if !guardNever || SlotPlanner.ContainsLabel(arm.Result) {
+                    EmitSpilledSwitchArmResult(arm.Result, resultLocal, locals, sideEffects)
+                    if arm.Result.Type != TypeSymbol.Never {
+                        sideEffects.Add(BoundGotoStatement(nil, endLabel))
+                    }
+                }
                 sideEffects.Add(BoundLabelStatement(nil, nextArmLabel))
             }
             if defaultArm != nil {

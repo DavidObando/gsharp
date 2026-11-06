@@ -592,7 +592,7 @@ internal partial class StatementBinder {
                         continue
                     }
                     // Issue #5640: the receiver and arguments run at the `defer` statement. The deferred call runs when the block exits.
-                    let prefix = DeferPrefixBlock(deferSyntax, defer_.PrefixStatements)
+                    let prefix = defer_.OperandEffects!!
                     InvalidateNarrowingsForAssignedVariables(
                         statementSyntax,
                         prefix,
@@ -790,9 +790,6 @@ internal partial class StatementBinder {
                     )
                 }
                 statements.Add(statement)
-                // Issue #208: after binding a call statement, apply any
-                // [MemberNotNull] post-condition narrowings to the persistent frame.
-                ApplyMemberNotNullNarrowings(statement, memberNotNullFrame)
                 // ADR-0069 / issue #700: lift the else-frame of an
                 // `if x !is T { return }` (or any if whose then-branch
                 // ends in an unconditional exit) into the enclosing
@@ -812,6 +809,11 @@ internal partial class StatementBinder {
                     statement,
                     aliasesAtEntry: externalCallableAliasesAtEntry
                 )
+                // Issue #208 / #5830: after invalidating any prior narrowings
+                // that the statement (including a call) may have mutated, apply
+                // any [MemberNotNull] post-condition narrowings from this call
+                // to the persistent frame.
+                ApplyMemberNotNullNarrowings(statement, memberNotNullFrame)
                 RestoreEarlyExitLiftsWrittenOnlyByCondition(
                     statement,
                     memberNotNullFrame,

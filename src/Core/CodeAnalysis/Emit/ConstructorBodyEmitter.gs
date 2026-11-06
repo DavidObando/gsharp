@@ -636,7 +636,6 @@ internal class ConstructorBodyEmitter {
             )
             session.Plan(fieldInitBody)
         }
-        session.CollectConstValues(body)
         session.Plan(body, function)
         // Slot 0 is the implicit `this`; user parameters shift up by one.
         let paramSlots = Dictionary[ParameterSymbol, int32]{
@@ -757,15 +756,12 @@ internal class ConstructorBodyEmitter {
         }
         let il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
         using let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il, pooled: true)
-        session.CollectConstValues(plan.Prologue)
-        session.CollectConstValues(plan.Body)
         session.Plan(plan.Prologue, plan.Function)
         for argument in plan.Arguments {
             let argumentBody = BoundBlockStatement(
                 nil,
                 ImmutableArray.Create[BoundStatement](BoundExpressionStatement(nil, argument))
             )
-            session.CollectConstValues(argumentBody)
             session.Plan(argumentBody)
         }
         session.Plan(plan.Body, plan.Function)
@@ -849,7 +845,6 @@ internal class ConstructorBodyEmitter {
         let function = deinit.Function
         let il = InstructionEncoder(BlobBuilder(), ControlFlowBuilder())
         using let session = ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il, pooled: true)
-        session.CollectConstValues(body)
         session.Plan(body, function)
         // Slot 0 is the implicit `this`; deinit has no user parameters.
         let paramSlots = Dictionary[ParameterSymbol, int32]{

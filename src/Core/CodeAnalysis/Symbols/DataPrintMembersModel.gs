@@ -216,7 +216,10 @@ internal shared class DataPrintMembersModel {
     internal func GetPrintableMembers(owner StructSymbol) ImmutableArray[PrintableMember] {
         let members = ImmutableArray.CreateBuilder[(File string, Position int32, Group int32, Member PrintableMember)]()
         for field in owner.Fields {
-            if field.IsStatic || field.Accessibility != Accessibility.Public || field.Type is PointerTypeSymbol {
+            if field.IsStatic ||
+                field.Accessibility != Accessibility.Public ||
+                field.Type is PointerTypeSymbol or
+                FunctionPointerTypeSymbol {
                 continue
             }
             members.Add(
@@ -237,7 +240,8 @@ internal shared class DataPrintMembersModel {
                 property.IsIndexer ||
                 !property.HasGetter ||
                 property.Accessibility != Accessibility.Public ||
-                property.Type is PointerTypeSymbol ||
+                property.Type is PointerTypeSymbol or
+                FunctionPointerTypeSymbol ||
                 (
                 property.Declaration == nil &&
                     property.BackingField is {} backingField &&
