@@ -53,6 +53,10 @@ class GsStubRenderer {
     // when a group has several and no implementation; that survivor must not
     // be offered to generators as a lone definition to implement.
     private var partCountErrorLocations HashSet[TextLocation] = HashSet[TextLocation]()
+    private let nestedRenderers Dictionary[StructSymbol, List[(StringBuilder, string) -> void]] = Dictionary[
+        StructSymbol,
+        List[(StringBuilder, string) -> void]
+    ]()
 
     /// Initializes a new instance of the (cref:GsStubRenderer) class.
     convenience init() {
@@ -124,11 +128,12 @@ class GsStubRenderer {
         this.semanticOnlyAbstractTypes.Clear()
         this.recordTypes = PlanRecords($scope.Structs)
         this.copyConstructorTypes = PlanCopyConstructors($scope.Structs, this.recordTypes)
+        this.nestedRenderers.Clear()
         let builder = StringBuilder()
         builder.AppendLine("#nullable enable")
         // Group every top-level user type by its package (namespace). A type
-        // nested inside another type is rendered by its enclosing type; skip it
-        // at the namespace level (v1: top-level only).
+        // nested inside another type is indexed under its enclosing type so
+        // nested emission is linear in the total number of declarations.
         let byPackage = SortedDictionary[string, List[(StringBuilder, string) -> void]](StringComparer.Ordinal)
         let AddType = func (packageName string, emit(StringBuilder, string) -> void) {
             let key = packageName ?? string.Empty
@@ -138,25 +143,23 @@ class GsStubRenderer {
             }
             list.Add(emit)
         }
+        let AddNestedType = func (owner StructSymbol, emit(StringBuilder, string) -> void) {
+            if !this.nestedRenderers.TryGetValue(owner, out var list) {
+                list = List[(StringBuilder, string) -> void]()
+                this.nestedRenderers[owner] = list
+            }
+            list.Add(emit)
+        }
         for structSymbol in $scope.Structs {
-            if SkipType(structSymbol.Name) || structSymbol.ContainingType != nil {
+            if SkipType(structSymbol.Name) {
                 continue
             }
-            if structSymbol.IsData {
-                // The user's positional list, if any, which a generated part
-                // must not also carry (GS9209): the merged declaration takes it
-                // from the one part that states it (ADR-0144, GS0482).
-                let declaration StructDeclarationSyntax? = structSymbol.Declaration
-                let positionalList = declaration?.PrimaryConstructorOpenParenthesisToken?.Location
-                dataTypes.Add(
-                    StubDataType(
-                        structSymbol.PackageName,
-                        structSymbol.Name,
-                        structSymbol.TypeParameters.Length,
-                        structSymbol.IsClass,
-                        positionalList
-                    )
-                )
+            if structSymbol.ContainingType is StructSymbol owner {
+                AddNestedType(owner, (sb StringBuilder, indent string) -> RenderStruct(sb, indent, structSymbol))
+                continue
+            }
+            if structSymbol.ContainingType != nil {
+                continue
             }
             AddType(
                 structSymbol.PackageName,
@@ -164,13 +167,27 @@ class GsStubRenderer {
             )
         }
         for iface in $scope.Interfaces {
-            if SkipType(iface.Name) || iface.ContainingType != nil {
+            if SkipType(iface.Name) {
+                continue
+            }
+            if iface.ContainingType is StructSymbol owner {
+                AddNestedType(owner, (sb StringBuilder, indent string) -> RenderInterface(sb, indent, iface))
+                continue
+            }
+            if iface.ContainingType != nil {
                 continue
             }
             AddType(iface.PackageName, (sb StringBuilder, indent string) -> RenderInterface(sb, indent, iface))
         }
         for enumSymbol in $scope.Enums {
-            if SkipType(enumSymbol.Name) || enumSymbol.ContainingType != nil {
+            if SkipType(enumSymbol.Name) {
+                continue
+            }
+            if enumSymbol.ContainingType is StructSymbol owner {
+                AddNestedType(owner, (sb StringBuilder, indent string) -> RenderEnum(sb, indent, enumSymbol))
+                continue
+            }
+            if enumSymbol.ContainingType != nil {
                 continue
             }
             AddType(enumSymbol.PackageName, (sb StringBuilder, indent string) -> RenderEnum(sb, indent, enumSymbol))
@@ -209,6 +226,24 @@ class GsStubRenderer {
     }
 
     private func RenderStruct(sb StringBuilder, indent string, structSymbol StructSymbol) {
+        let typeKey = SemanticAbstractTypeKey.Format(structSymbol.PackageName, MetadataNameChain(structSymbol))
+        if structSymbol.IsData {
+            // The user's positional list, if any, which a generated part
+            // must not also carry (GS9209): the merged declaration takes it
+            // from the one part that states it (ADR-0144, GS0482).
+            let declaration StructDeclarationSyntax? = structSymbol.Declaration
+            let positionalList = declaration?.PrimaryConstructorOpenParenthesisToken?.Location
+            dataTypes.Add(
+                StubDataType(
+                    structSymbol.PackageName,
+                    structSymbol.Name,
+                    structSymbol.TypeParameters.Length,
+                    structSymbol.IsClass,
+                    positionalList,
+                    typeKey
+                )
+            )
+        }
         RenderAttributes(sb, indent, structSymbol.Attributes)
         sb.Append(indent).Append(AccessibilityKeyword(structSymbol.Accessibility)).Append(' ')
         // ADR-0195: a G# `shared class` is a C# static class, so a generator (and the
@@ -223,18 +258,9 @@ class GsStubRenderer {
             sb.Append("abstract ")
             // Issues #5252/#5253: abstract only by inheritance, not by the user's
             // declaration; recorded so the back-translation can keep it out of the
-            // generated parts. The stub is rendered top-level only (nested types are
-            // not projected), so the key is the package and the type's own name.
+            // generated parts.
             if !structSymbol.IsDeclaredAbstract {
-                let metadataName = if structSymbol.TypeParameters.Length > 0 {
-                    structSymbol.Name + "`" + structSymbol.TypeParameters.Length.ToString(CultureInfo.InvariantCulture)
-                } else {
-                    structSymbol.Name
-                }
-                semanticOnlyAbstractTypes[
-                    SemanticAbstractTypeKey.Format(structSymbol.PackageName, []string{metadataName})
-                ] =
-                structSymbol.IsOpen
+                semanticOnlyAbstractTypes[typeKey] = structSymbol.IsOpen
             }
         }
         if structSymbol.Declaration?.IsPartial ?? false {
@@ -290,9 +316,19 @@ class GsStubRenderer {
         let isPartialType = structSymbol.Declaration?.IsPartial ?? false
         RenderMethods(sb, memberIndent, structSymbol.Methods, isStatic: false, isPartialType)
         RenderMethods(sb, memberIndent, structSymbol.StaticMethods, isStatic: true, isPartialType)
-        RecordPartialDefinitions(structSymbol, structSymbol.Methods, isPartialType)
-        RecordPartialDefinitions(structSymbol, structSymbol.StaticMethods, isPartialType)
+        RecordPartialDefinitions(structSymbol, structSymbol.Methods, isPartialType, typeKey)
+        RecordPartialDefinitions(structSymbol, structSymbol.StaticMethods, isPartialType, typeKey)
+        RenderNestedTypes(sb, memberIndent, structSymbol)
         sb.Append(indent).AppendLine("}")
+    }
+
+    private func RenderNestedTypes(sb StringBuilder, indent string, owner StructSymbol) {
+        if !this.nestedRenderers.TryGetValue(owner, out var children) {
+            return
+        }
+        for emit in children {
+            emit(sb, indent)
+        }
     }
 
     /// ADR-0192 follow-on 2, step 4: records each lone G# declaring part the
@@ -302,7 +338,8 @@ class GsStubRenderer {
     private func RecordPartialDefinitions(
         owner StructSymbol,
         methods ImmutableArray[FunctionSymbol],
-        isPartialType bool
+        isPartialType bool,
+        typeKey string
     ) {
         if methods.IsDefaultOrEmpty {
             return
@@ -313,10 +350,36 @@ class GsStubRenderer {
                 ClassifyPartialShape(method, isPartialType) == PartialShape
                 .Definition {
                 partialDefinitions.Add(
-                    StubPartialDefinition(owner.PackageName, owner.Name, owner.TypeParameters.Length, declaration)
+                    StubPartialDefinition(
+                        owner.PackageName,
+                        owner.Name,
+                        owner.TypeParameters.Length,
+                        declaration,
+                        typeKey
+                    )
                 )
             }
         }
+    }
+
+    private func MetadataNameChain(structSymbol StructSymbol) List[string] {
+        let names = List[string]()
+        for var current TypeSymbol? = structSymbol; current != nil; current = current!!.ContainingType {
+            let arity = switch current {
+                case s is StructSymbol: s.TypeParameters.Length
+                case i is InterfaceSymbol: i.TypeParameters.Length
+                default: 0
+            }
+            names.Add(
+                if arity > 0 {
+                    current.Name + "`" + arity.ToString(CultureInfo.InvariantCulture)
+                } else {
+                    current.Name
+                }
+            )
+        }
+        names.Reverse()
+        return names
     }
 
     private func CollectBaseTypes(structSymbol StructSymbol) List[string] {
