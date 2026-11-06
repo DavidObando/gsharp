@@ -4712,10 +4712,14 @@ internal partial class StatementBinder {
                 return
             }
             let isStableSystemIndexOp = StatementBinder.IsStableSystemIndexOperation(node)
-            // ADR-0208 R20 and R21 (#5796, #5786): a source property or field write is classified below.
+            // ADR-0208 R20 and R21 (#5796, #5786): a source property or field write into storage that no other
+            // field overlaps is classified below. Every other member write removes every member-bearing path.
+            let separateSourceWrite = (
+                node is BoundPropertyAssignmentExpression || node is BoundFieldAssignmentExpression
+            ) &&
+                StatementBinder.MemberWriteStorageIsSeparate(node)
             if !isStableSystemIndexOp && StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) &&
-                node is not BoundPropertyAssignmentExpression &&
-                node is not BoundFieldAssignmentExpression {
+                !separateSourceWrite {
                 MayMutateMemberPaths = true
                 if node is not BoundFieldAssignmentExpression {
                     MayMutateImplicitMembers = true
@@ -4745,12 +4749,7 @@ internal partial class StatementBinder {
                 }
             }
             if StatementBinder.IsMemberStorageWriteExpression(node.Kind) &&
-                (
-                (node is not BoundPropertyAssignmentExpression && node is not BoundFieldAssignmentExpression) ||
-                    sourcePropertyRunsUserCode ||
-                    writesStableAutoProperty ||
-                    writesStableField
-            ) {
+                (!separateSourceWrite || sourcePropertyRunsUserCode || writesStableAutoProperty || writesStableField) {
                 HasMemberStorageWrite = true
             }
             var runsEscapedClosureHere = false
@@ -9296,6 +9295,60 @@ internal partial class StatementBinder {
                 !clr.IsPointer
         }
 
+        /// ADR-0208 R20 and R21 (#5796, #5786, #5832): whether the source field or property write
+        /// [`write`](paramref) stores into storage that no field of another declaration overlaps. A field of a type
+        /// with explicit layout (`@StructLayout(LayoutKind.Explicit)`) can share bytes with another field of that
+        /// type. The written member must be declared in a type without explicit layout. Its receiver must be an object,
+        /// a value-type variable that is not a by-reference root, or a value-type field of such a receiver in a type
+        /// without explicit layout. A by-reference value receiver (a struct `this`, a `ref` parameter or a `ref` local)
+        /// can name a field of a type with explicit layout, so it does not qualify. An interface field has no owner
+        /// type here and does not qualify.
+        /// @param write A (cref:BoundFieldAssignmentExpression) or a (cref:BoundPropertyAssignmentExpression).
+        /// @returns `true` when the write can keep the facts on member paths.
+        internal func MemberWriteStorageIsSeparate(write BoundExpression) bool -> switch write {
+            case field is BoundFieldAssignmentExpression: field.StructType is {} fieldOwner &&
+                !HasExplicitLayout(fieldOwner) &&
+                (
+                if field.ReceiverExpression != nil {
+                    ReceiverStorageIsSeparate(field.ReceiverExpression)
+                } else if field.Receiver is {} receiverVariable {
+                    VariableStorageIsSeparate(receiverVariable)
+                } else {
+                    true
+                }
+            )
+            case property is BoundPropertyAssignmentExpression: property.StructType is {} propertyOwner &&
+                !HasExplicitLayout(propertyOwner) &&
+                ReceiverStorageIsSeparate(property.Receiver)
+            default: false
+        }
+
+        private func HasExplicitLayout(type StructSymbol) bool -> (type.Definition ?? type).LayoutMetadata?.Layout ==
+        System.Runtime.InteropServices.LayoutKind.Explicit
+
+        private func VariableStorageIsSeparate(variable VariableSymbol) bool {
+            let variableType = StripNullability(variable.Type)
+            return (variableType != nil && Binder.IsReferenceTypeForConstraint(variableType)) ||
+                !IsExternalStorageAlias(variable)
+        }
+
+        private func ReceiverStorageIsSeparate(receiver BoundExpression?) bool {
+            if receiver == nil {
+                return true
+            }
+            let receiverType = StripNullability(receiver.Type)
+            if receiverType != nil && Binder.IsReferenceTypeForConstraint(receiverType) {
+                return true
+            }
+            return switch receiver {
+                case variable is BoundVariableExpression: VariableStorageIsSeparate(variable.Variable)
+                case field is BoundFieldAccessExpression: field.StructType is {} fieldOwner &&
+                    !HasExplicitLayout(fieldOwner) &&
+                    ReceiverStorageIsSeparate(field.Receiver)
+                default: false
+            }
+        }
+
         /// ADR-0208 R20 (#5827): whether the member, index or indirect write [`write`](paramref) can store into the
         /// storage of a by-reference root of type [`rootType`](paramref). A by-reference root (a struct `this`, a `ref`
         /// parameter or a `ref` local) can name a field, an array element or the backing field of an auto property.
@@ -9389,6 +9442,20 @@ internal partial class StatementBinder {
         ///
         /// The test reads the declaration (`DeclaresStaticInitializerBlock`), not the bound statements, which exist
         /// only after the body of the type is bound.
+        /// ADR-0208 R11 (#5504, #5832): whether the first access of a static field of the interface
+        /// [`type`](paramref) can run user code. The type initializer of an interface runs the initializers of its
+        /// `shared` fields, so an interface that declares a `shared` field initializer counts. The answer reads the
+        /// declaration of the generic definition, which includes every part of a partial interface.
+        internal func InterfaceInitializationRunsUserCode(type InterfaceSymbol) bool {
+            let definition = type.Definition ?? type
+            for field in definition.Declaration.StaticFields {
+                if field.Initializer != nil {
+                    return true
+                }
+            }
+            return false
+        }
+
         internal func TypeInitializationRunsUserCode(type StructSymbol, atStaticMemberAccess bool) bool {
             let definition = type.Definition ?? type
             if definition.DeclaresStaticInitializerBlock && (atStaticMemberAccess || definition.IsClass) {
@@ -9722,6 +9789,11 @@ internal partial class StatementBinder {
                     StructType: {} fieldOwner
                 } {
                     owner = fieldOwner
+                } else if node is BoundFieldAccessExpression{
+                    Field: {IsStatic: true, IsConst: false},
+                    InterfaceType: {} interfaceOwner
+                } {
+                    return InterfaceInitializationRunsUserCode(interfaceOwner)
                 }
                 case BoundNodeKind.FieldAssignmentExpression:
                 if node is BoundFieldAssignmentExpression{
@@ -9729,6 +9801,11 @@ internal partial class StatementBinder {
                     StructType: {} fieldOwner
                 } {
                     owner = fieldOwner
+                } else if node is BoundFieldAssignmentExpression{
+                    Field: {IsStatic: true, IsConst: false},
+                    InterfaceType: {} interfaceOwner
+                } {
+                    return InterfaceInitializationRunsUserCode(interfaceOwner)
                 }
                 case BoundNodeKind.PropertyAccessExpression:
                 if node is BoundPropertyAccessExpression{Property: {IsStatic: true}, StructType: {} propertyOwner} {

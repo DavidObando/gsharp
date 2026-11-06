@@ -236,4 +236,148 @@ Token(Owner()).Restore(Holder{tok: Token(nil), pair: Wrapper{tok: Token(nil)}}, 
         Assert.Empty(result.Diagnostics)
         Assert.Equal("True", result.ValueText)
     }
+
+    /// #5832 review: the first access of a static field of an interface runs the initializers of its `shared`
+    /// fields, which can run a stored callback that replaces a captured, guarded root. A write and a read of the
+    /// field both remove the facts (ADR-0208 R11).
+    @Theory
+    @InlineData("IState.Count = 1\n        return b.Pet.Length // READ")
+    @InlineData("let n = IState.Count\n        return b.Pet.Length + n // READ")
+    func InterfaceStaticFieldAccess_RunsInitializer_RemovesFact(access string) {
+        let source = `import System
+
+class Box {
+    let Pet string?
+    init(pet string?) {
+        this.Pet = pet
+    }
+}
+func Fire() int32 {
+    if reset != nil {
+        reset()
+    }
+    return 0
+}
+interface IState {
+    shared {
+        var Count int32 = Fire()
+    }
+}
+func Run() int32 {
+    var b = Box("abc")
+    reset = func() { b = Box(nil) }
+    if b.Pet != nil {
+        ` + access + `
+    }
+    return 0
+}
+var reset (() -> void)? = nil
+Run()
+`
+        let result = EmittedOracle.Evaluate(source)
+        let diagnostic = Assert.Single(result.Diagnostics)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal(MarkedLine(source), diagnostic.Location.StartLine + 1)
+    }
+
+    /// #5832 review: two fields of a type with explicit layout can share storage, so a `var` field write of such a
+    /// type removes the facts on its `let` fields. A by-reference value receiver can name a field of such a type, so
+    /// a write through it removes them too.
+    @Theory
+    @InlineData(
+        "class",
+        "func Run(b Box) int32 {\n    if b.Text != nil {\n        b.Other = nil\n        return b.Text.Length // READ\n    }\n    return 0\n}\nRun(Box(\"abc\"))"
+    )
+    @InlineData(
+        "struct",
+        "func Run() int32 {\n    var b = Box(\"abc\")\n    if b.Text != nil {\n        b.Other = nil\n        return b.Text.Length // READ\n    }\n    return 0\n}\nRun()"
+    )
+    func ExplicitLayoutFieldWrite_RemovesFact(kind string, run string) {
+        let source = `import System
+import System.Runtime.InteropServices
+
+@StructLayout(LayoutKind.Explicit)
+` + kind + ` Box {
+    @FieldOffset(0)
+    let Text string?
+    @FieldOffset(0)
+    var Other string?
+    init(t string?) {
+        this.Text = t
+        this.Other = t
+    }
+}
+` + run + `
+`
+        let result = EmittedOracle.Evaluate(source)
+        let diagnostic = Assert.Single(result.Diagnostics)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal(MarkedLine(source), diagnostic.Location.StartLine + 1)
+    }
+
+    @Fact
+    func FieldWriteThroughARefIntoExplicitLayout_RemovesFact() {
+        let source = `import System
+import System.Runtime.InteropServices
+
+struct T {
+    let x string?
+    init(x string?) {
+        this.x = x
+    }
+}
+struct U {
+    var y string?
+}
+@StructLayout(LayoutKind.Explicit)
+struct E {
+    @FieldOffset(0)
+    var a T
+    @FieldOffset(0)
+    var b U
+}
+func Run(ref t T, ref u U) int32 {
+    if t.x != nil {
+        u.y = nil
+        return t.x.Length // READ
+    }
+    return 0
+}
+var e = E{a: T("abc")}
+Run(ref e.a, ref e.b)
+`
+        let result = EmittedOracle.Evaluate(source)
+        let diagnostic = Assert.Single(result.Diagnostics)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal(MarkedLine(source), diagnostic.Location.StartLine + 1)
+    }
+
+    /// The same shapes without explicit layout and through a value-type local keep the fact and run.
+    @Theory
+    @InlineData("class")
+    @InlineData("struct")
+    func SequentialLayoutFieldWrite_KeepsFact(kind string) {
+        let result = EmittedOracle.Evaluate(`import System
+
+` + kind + ` Box {
+    let Text string?
+    var Other string?
+    init(t string?) {
+        this.Text = t
+        this.Other = t
+    }
+}
+func Run() int32 {
+    var b = Box("abc")
+    if b.Text != nil {
+        b.Other = nil
+        return b.Text.Length
+    }
+    return 0
+}
+Run()
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("3", result.ValueText)
+    }
 }
