@@ -4374,7 +4374,7 @@ internal partial class ExpressionBinder {
                         }
                         Binder.InferTypeArguments(
                             method!!.Parameters[i].Type,
-                            RefCapabilities.GetInferenceType(method!!.Parameters[i], arguments[i].Type),
+                            RefCapabilities.GetInferenceType(method!!.Parameters[i], arguments[i]),
                             substitution!!
                         )
                     }

@@ -2085,7 +2085,7 @@ internal partial class OverloadResolver {
                     }
                     inferTypeArguments(
                         paramType,
-                        RefCapabilities.GetInferenceType(function!!.Parameters[i], boundArguments[i].Type),
+                        RefCapabilities.GetInferenceType(function!!.Parameters[i], boundArguments[i]),
                         substitution
                     )
                 }

@@ -587,6 +587,19 @@ internal shared class RefCapabilities {
         return GetValueArgumentInferenceType(argumentType)
     }
 
+    /// Gets the argument's inference view, using declared storage for an out parameter.
+    /// @param parameter The parameter the argument binds to.
+    /// @param argument The bound argument.
+    internal func GetInferenceType(parameter ParameterSymbol, argument BoundExpression?) TypeSymbol {
+        if parameter.RefKind == RefKind.Out && ByRefStorageMatching.TryGetStorageType(
+            argument,
+            parameter.RefKind
+        ) is {} storage {
+            return storage
+        }
+        return GetInferenceType(parameter, argument?.Type ?? TypeSymbol.Error)
+    }
+
     /// (cref:GetInferenceType) for a by-value argument with no single
     /// parameter of its own (a variadic element, or a carrier passed through
     /// to a variadic slot): a top-level `T!` contributes `T`.

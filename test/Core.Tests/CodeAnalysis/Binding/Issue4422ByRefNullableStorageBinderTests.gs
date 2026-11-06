@@ -27,6 +27,35 @@ import System
 /// `int[]?` field was rejected with GS0154.
 open class Issue4422ByRefNullableStorageBinderTests {
     @Theory
+    @InlineData("Clear(&slot)")
+    @InlineData("Writer().Clear(&slot)")
+    @InlineData("let sink = Sink(&slot)")
+    func GenericOutInference_UsesDeclaredSupertypeStorage(call string) {
+        let result = EmittedOracle.Evaluate(`
+func Clear[T](out target T) { target = default(T) }
+class Writer {
+    func Clear[T](out target T) { target = default(T) }
+}
+class Sink[T] {
+    init(out target T) { target = default(T) }
+}
+func Run(input object?) bool {
+    var slot object? = input
+    if slot == nil {
+        slot = "unused"
+        return false
+    }
+    if slot !is string { return false }
+    ` + call + `
+    return slot == nil
+}
+Console.WriteLine(Run("before"))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("True", result.Output.Trim())
+    }
+
+    @Theory
     @InlineData("Write(&value)")
     @InlineData("Write(&{ let marker = 0\nvalue })")
     @InlineData("Writer().Write(&value)")

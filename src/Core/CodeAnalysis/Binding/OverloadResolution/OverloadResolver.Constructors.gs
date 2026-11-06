@@ -1686,6 +1686,7 @@ internal partial class OverloadResolver {
                     constructor,
                     argumentNames,
                     inferenceArgumentTypes,
+                    inferenceBoundArguments,
                     candidateSubstitution
                 )
                 let candidateUnresolvedTypeParameter TypeParameterSymbol? = tps.FirstOrDefault(
@@ -1839,6 +1840,7 @@ internal partial class OverloadResolver {
         constructor ConstructorSymbol,
         argumentNames ImmutableArray[string],
         argumentTypes IReadOnlyList[TypeSymbol?],
+        boundArguments IReadOnlyList[BoundExpression],
         substitution Dictionary[TypeParameterSymbol, TypeSymbol]
     ) {
         let parameters = constructor.Parameters
@@ -1870,7 +1872,13 @@ internal partial class OverloadResolver {
                 continue
             }
             if argumentTypes[i] is {} argumentType {
-                inferTypeArguments(parameters[parameterIndex].Type, argumentType, substitution)
+                let parameter = parameters[parameterIndex]
+                let inferenceType = if parameter.RefKind == RefKind.Out {
+                    RefCapabilities.GetInferenceType(parameter, boundArguments[i])
+                } else {
+                    argumentType
+                }
+                inferTypeArguments(parameter.Type, inferenceType, substitution)
             }
         }
         if !isVariadic ||

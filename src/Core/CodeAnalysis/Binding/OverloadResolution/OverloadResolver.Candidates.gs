@@ -1518,7 +1518,11 @@ internal partial class OverloadResolver {
                 continue
             }
             let parameter = candidate.Parameters[i + parameterOffset]
-            inferTypeArguments(parameter.Type, RefCapabilities.GetInferenceType(parameter, argType), substitution)
+            inferTypeArguments(
+                parameter.Type,
+                RefCapabilities.GetInferenceType(parameter, boundArguments[i]),
+                substitution
+            )
         }
         if isVariadic && VariadicCarriers.GetElementType(
             candidate.Parameters[candidate.Parameters.Length - 1].Type

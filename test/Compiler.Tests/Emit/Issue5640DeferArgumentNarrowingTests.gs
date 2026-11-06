@@ -196,7 +196,7 @@ func Run() int32 {
     defer Consume(ClearOut(out x))
     return x.Value
 }
-Console.WriteLine(Run())`, "GS0612@13:28 GS0158@14:14", "reject", ""}
+Console.WriteLine(Run())`, "GS0158@14:14", "reject", ""}
             yield[]object{"d07_5640_defer_eager_target_replaces_an_external_callable_alias", `import System
 class C {
     var Value int32 = 1

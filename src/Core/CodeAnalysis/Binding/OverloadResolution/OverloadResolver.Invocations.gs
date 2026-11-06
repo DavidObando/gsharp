@@ -1333,7 +1333,7 @@ internal partial class OverloadResolver {
                     if permutedArguments[i].Type != nil {
                         inferTypeArguments(
                             extension.Parameters[i + 1].Type,
-                            RefCapabilities.GetInferenceType(extension.Parameters[i + 1], permutedArguments[i].Type),
+                            RefCapabilities.GetInferenceType(extension.Parameters[i + 1], permutedArguments[i]),
                             substitution
                         )
                     }
@@ -1773,10 +1773,7 @@ internal partial class OverloadResolver {
                     }
                     inferTypeArguments(
                         paramType,
-                        RefCapabilities.GetInferenceType(
-                            method.Parameters[i + parameterOffset],
-                            permutedArguments[i].Type
-                        ),
+                        RefCapabilities.GetInferenceType(method.Parameters[i + parameterOffset], permutedArguments[i]),
                         substitution
                     )
                 }
