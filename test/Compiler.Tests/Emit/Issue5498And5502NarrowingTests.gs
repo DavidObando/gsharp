@@ -95,6 +95,24 @@ open class Issue5498And5502NarrowingTests {
         private const RunTimeout int32 = 30000
 
         public func Rows() IEnumerable[[]object] {
+            yield[]object{"nested_assignment_native_map_read_before_next_operand", `import System
+class Key {
+    var Callback () -> void
+    override func GetHashCode() int32 {
+        Callback()
+        return 1
+    }
+}
+func Run() int32 {
+    var text string? = nil
+    let key = Key{}
+    key.Callback = func() { text = nil }
+    var m = map[Key, int32]{key: 0}
+    var safe = []string?{nil}
+    safe[0] = (text = "safe")
+    return m[key] + text.Length
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@16:26", "reject", ""}
             yield[]object{"nested_assignment_block_keeps_entry_external_aliases", `import System
 func External() { }
 func Run(callback () -> void) int32 {
@@ -165,17 +183,33 @@ func Run() int32 {
     return text.Length
 }
 func Main() { Console.WriteLine(Run()) }`, "GS0158@20:17", "reject", ""}
-            yield[]object{"nested_assignment_primitive_map_key_preserves_fact", `import System
+            yield[]object{"nested_assignment_map_setter_preserves_uncaptured_local", `import System
 func Run() int32 {
     var text string? = nil
-    let clear = func() { text = nil }
     var m = map[int32, string?]{}
     m[0] = (text = "safe")
-    let length = text.Length
-    clear()
-    return length
+    return text.Length
 }
 func Main() { Console.WriteLine(Run()) }`, "", "run", "4"}
+            yield[]object{"nested_assignment_native_map_custom_comparer_callback", `import System
+import System.Collections.Generic
+class Comparer : IEqualityComparer[int32] {
+    var Callback () -> void
+    func Equals(left int32, right int32) bool -> left == right
+    func GetHashCode(value int32) int32 {
+        Callback()
+        return value
+    }
+}
+func Run() int32 {
+    var text string? = nil
+    let comparer = Comparer{}
+    comparer.Callback = func() { text = nil }
+    var m map[int32, string?] = Dictionary[int32, string?](comparer)
+    m[0] = (text = "safe")
+    return text.Length
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@17:17", "reject", ""}
             yield[]object{"nested_assignment_discharges_failed_dictionary_lookup", `import System
 import System.Collections.Generic
 func Run(dict Dictionary[string, HashSet[string]]) int32 {

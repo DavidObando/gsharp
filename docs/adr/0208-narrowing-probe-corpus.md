@@ -178,7 +178,9 @@ A setter callback that writes the local still removes its proof.
 The positive probes fail on the preceding product; omitting setter effects kills the negative controls.
 Assignment replay starts with recorded expression-entry callable aliases, not the aliases at expression exit.
 Native-map hashing and equality remove callback-reachable facts after key and value evaluation.
-Primitive and string map keys do not add callback effects.
+Indexed maps can carry CLR custom comparers, including for primitive keys.
+Only fresh map literals retain the primitive/string-key exemption.
+The operand-purity fast path uses the same callback predicate before it binds a later operand.
 
 ## Experiments on the deferred loop rule
 

@@ -25,6 +25,31 @@ import Xunit
 /// re-nullable-ization.
 open class Issue2159IfJoinNarrowingTests {
     @Fact
+    func NativeMapRead_InvalidatesBeforeTheNextOperand() {
+        let result = Evaluate(`package T
+class Key {
+    var Callback () -> void
+    override func GetHashCode() int32 {
+        Callback()
+        return 1
+    }
+}
+func Run() int32 {
+    var text string? = nil
+    let key = Key{}
+    key.Callback = func() { text = nil }
+    var m = map[Key, int32]{key: 0}
+    var safe = []string?{nil}
+    safe[0] = (text = "safe")
+    return m[key] + text.Length
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
     func AssignmentBlockReplay_KeepsEntryExternalAliases() {
         let result = Evaluate(`package T
 func External() { }
@@ -100,21 +125,44 @@ func Run() int32 {
     }
 
     @Fact
-    func PrimitiveMapKey_PreservesNestedAssignmentFacts() {
+    func NativeMapSetter_PreservesAnUncapturedLocal() {
         let result = Evaluate(`package T
 func Run() int32 {
     var text string? = nil
-    let clear = func() { text = nil }
     var m = map[int32, string?]{}
     m[0] = (text = "safe")
-    let length = text.Length
-    clear()
-    return length
+    return text.Length
 }
 Console.WriteLine(Run())
 `)
         Assert.Empty(result.Diagnostics)
         Assert.Equal("4\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Fact
+    func NativeMapCustomComparer_RemovesCapturedAssignmentFacts() {
+        let result = Evaluate(`package T
+import System.Collections.Generic
+class Comparer : IEqualityComparer[int32] {
+    var Callback () -> void
+    func Equals(left int32, right int32) bool -> left == right
+    func GetHashCode(value int32) int32 {
+        Callback()
+        return value
+    }
+}
+func Run() int32 {
+    var text string? = nil
+    let comparer = Comparer{}
+    comparer.Callback = func() { text = nil }
+    var m map[int32, string?] = Dictionary[int32, string?](comparer)
+    m[0] = (text = "safe")
+    return text.Length
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
     }
 
     @Fact

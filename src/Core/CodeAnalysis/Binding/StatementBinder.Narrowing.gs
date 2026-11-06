@@ -3684,7 +3684,8 @@ internal partial class StatementBinder {
             case clrIndex is BoundClrIndexExpression: !ClrAccessRunsUserCode(clrIndex) &&
                 ExpressionHasNoNarrowingEffects(clrIndex.Target) &&
                 ExpressionsHaveNoNarrowingEffects(clrIndex.Arguments)
-            case index is BoundIndexExpression: ExpressionHasNoNarrowingEffects(index.Target) &&
+            case index is BoundIndexExpression: !NativeMapAccessRunsUserCode(index) &&
+                ExpressionHasNoNarrowingEffects(index.Target) &&
                 ExpressionsHaveNoNarrowingEffects(index.Indices)
             case tupleAccess is BoundTupleElementAccessExpression: ExpressionHasNoNarrowingEffects(tupleAccess.Receiver)
             case asExpr is BoundAsExpression: ExpressionHasNoNarrowingEffects(asExpr.Expression)
@@ -9450,18 +9451,20 @@ internal partial class StatementBinder {
         }
 
         // Native map hashing and equality run after the key and stored value.
-        private func NativeMapAccessRunsUserCode(node BoundExpression) bool {
-            let mapType = switch node {
-                case literal is BoundMapLiteralExpression when !literal.Entries.IsDefaultOrEmpty: literal.MapType
-                case read is BoundIndexExpression: StripNullability(read.Target.Type) as MapTypeSymbol
-                case write is BoundIndexAssignmentExpression: StripNullability(
-                    write.TargetExpression?.Type ?? write.Target?.Type
-                ) as MapTypeSymbol
-                default: default(MapTypeSymbol?)
-            }
-            return mapType != nil && mapType.KeyType != TypeSymbol.String && !TypeSymbol.IsLegalPointeeType(
-                mapType.KeyType
-            )
+        // Indexed maps can carry CLR custom comparers, even with primitive keys.
+        private func NativeMapAccessRunsUserCode(node BoundExpression) bool -> switch node {
+            case literal is BoundMapLiteralExpression: !literal
+                .Entries
+                .IsDefaultOrEmpty &&
+                literal
+                .MapType
+                .KeyType != TypeSymbol.String &&
+                !TypeSymbol.IsLegalPointeeType(literal.MapType.KeyType)
+            case read is BoundIndexExpression: StripNullability(read.Target.Type) is MapTypeSymbol
+            case write is BoundIndexAssignmentExpression: StripNullability(
+                write.TargetExpression?.Type ?? write.Target?.Type
+            ) is MapTypeSymbol
+            default: false
         }
 
         /// ADR-0208 R14 (#5215, #5599): the one predicate for a source property accessor. It is true when
