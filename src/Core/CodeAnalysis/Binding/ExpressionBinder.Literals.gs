@@ -2591,7 +2591,9 @@ internal partial class ExpressionBinder {
                 // Issue #5596: bind each omitted field's default initializer on demand.
                 binderCtx.EnsureStructFieldInitializerBound?.Invoke(structSymbol, field)
                 if structSymbol!!.InstanceFieldInitializers.TryGetValue(field, out var initExpr) {
-                    inits.Add(BoundFieldInitializer(field, initExpr){IsDeclarationInitializer = true})
+                    inits.Add(
+                        BoundFieldInitializer(field, BoundTreeRewriter.Clone(initExpr)){IsDeclarationInitializer = true}
+                    )
                     seenFieldNames.Add(field.Name)
                 } else if structSymbol!!.ClrType != nil {
                     let _ = GetStructFieldZeroValue(syntax, structSymbol!!, field)

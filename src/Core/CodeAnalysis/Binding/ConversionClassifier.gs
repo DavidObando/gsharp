@@ -6681,13 +6681,14 @@ internal class ConversionClassifier {
             field FieldSymbol,
             @NotNullWhen(true) out initializer BoundExpression?
         ) bool {
-            if type.InstanceFieldInitializers.TryGetValue(field, out initializer) {
+            if type.InstanceFieldInitializers.TryGetValue(field, out var stored) {
+                initializer = BoundTreeRewriter.Clone(stored)
                 return true
             }
             if type.Definition != nil {
                 for candidate in type.Definition!!.InstanceFieldInitializers {
                     if string.Equals(candidate.Key.Name, field.Name, StringComparison.Ordinal) {
-                        initializer = candidate.Value
+                        initializer = BoundTreeRewriter.Clone(candidate.Value)
                         return true
                     }
                 }
