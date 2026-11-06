@@ -82,8 +82,8 @@ func F() {
     @Fact
     func Namespace_Alias_Resolves_Inside_Same_Named_Nested_Class() {
         // Issue #4455: `UIA.StringBuilder` and `UIA.Text.StringBuilder` inside
-        // a nested `class StringBuilder` (or `class UIA`) must resolve through
-        // the namespace alias rather than falling back to the enclosing nested class.
+        // a nested `class StringBuilder` must resolve through the namespace
+        // alias rather than falling back to the enclosing nested class.
         let directAliasDiagnostics = Bind(`import UIA = System.Text
 
 sealed class UIAPattern {
@@ -98,8 +98,8 @@ sealed class UIAPattern {
 
         let multiSegmentAliasDiagnostics = Bind(`import UIA = System
 
-sealed class UIA {
-    class StringBuilder : UIA {
+sealed class UIAPattern {
+    class StringBuilder : UIAPattern {
         func DoFor(pattern UIA.Text.StringBuilder, items UIA.Collections.Generic.List[int32].Enumerator) int32 {
             var e = items
             let _ = e.MoveNext()
@@ -109,6 +109,39 @@ sealed class UIA {
 }
 `)
         Assert.Empty(multiSegmentAliasDiagnostics)
+    }
+
+    @Fact
+    func Source_Type_Alias_And_Lexical_Nested_Type_Precedence_Preserved() {
+        // Implicit-package `import R = Outer` resolves `R.Inner`, and lexical
+        // `Host.R` takes precedence over an imported alias `R` for `R.Child`.
+        let implicitPackageAliasDiagnostics = Bind(`import R = Outer
+
+class Outer {
+    public class Inner {
+        public func Value() int32 -> 7
+    }
+}
+
+func Use(inner R.Inner) int32 -> inner.Value()
+`)
+        Assert.Empty(implicitPackageAliasDiagnostics)
+
+        let lexicalNestedDiagnostics = Bind(`package App
+
+import R = System.Text
+
+class Host {
+    class R {
+        public class Child {
+            public func Ping() int32 -> 1
+        }
+    }
+
+    func Check(c R.Child) int32 -> c.Ping()
+}
+`)
+        Assert.Empty(lexicalNestedDiagnostics)
     }
 
     shared {

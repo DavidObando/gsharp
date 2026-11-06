@@ -463,10 +463,13 @@ partial class CSharpToGSharpTranslator {
             members.AddRange(hoistedFuncs)
             trailingStatements.AddRange(entryStatements)
         }
-        for member in EnumerateTopLevelDeclarations(root).Where(
+        let allTopLevelDeclarations = EnumerateTopLevelDeclarations(root).ToList()
+        let unitDeclarations = allTopLevelDeclarations.Where(
             (member MemberDeclarationSyntax) -> this.packageFilter == nil ||
                 DeclarationBelongsToPackage(member, context, this.packageFilter, this.includeGlobalNamespace)
-        ) {
+        )
+            .ToList()
+        for member in unitDeclarations {
             if member is Microsoft.CodeAnalysis.CSharp.Syntax.GlobalStatementSyntax {
                 // Already handled in a single pass above (native top-level
                 // statements are not visited one-by-one like an ordinary member —
@@ -510,9 +513,15 @@ partial class CSharpToGSharpTranslator {
         // Top-level statements are appended after every declaration so the program
         // entry runs with all package types and funcs already in scope.
         members.AddRange(trailingStatements)
-        if this.packageFilter == nil || this.includeGlobalNamespace {
-            visitor.ReportDroppedGsaPragmas(root)
-        }
+        visitor.ReportDroppedGsaPragmas(
+            root,
+            allTopLevelDeclarations,
+            unitDeclarations,
+            globalStatements,
+            hasNativeTopLevelStatements,
+            this.packageFilter,
+            this.includeGlobalNamespace
+        )
         // Issue #2211: a Roslyn source generator (and other fully-qualified,
         // no-`using` C# input) can reference a BCL/external type by its
         // fully-qualified name with no matching `using` directive. The type

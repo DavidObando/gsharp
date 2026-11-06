@@ -5165,29 +5165,14 @@ partial class Binder {
         }
         let definitions = [segmentTexts.Length]TypeSymbol?
         let inheritedDeclaringContainers = [segmentTexts.Length]StructSymbol?
-        if $scope.TryLookupImport(segmentTexts[0], out var headImport) && headImport!!.IsAlias {
-            if $scope.TryLookupQualifiedSourceType(
-                headImport!!.Target,
-                if headArity > 0 {
-                    headArity
-                } else {
-                    -1
-                },
-                out var aliasedContainer
-            ) &&
-                !binderCtx.HasUnclosedEnclosingTypeParameters(aliasedContainer, function) {
-                definitions[0] = aliasedContainer
+        definitions[0] = LookupType(
+            segmentTexts[0],
+            if headArity > 0 {
+                headArity
+            } else {
+                -1
             }
-        } else {
-            definitions[0] = LookupType(
-                segmentTexts[0],
-                if headArity > 0 {
-                    headArity
-                } else {
-                    -1
-                }
-            )
-        }
+        )
         if definitions[0] == nil {
             return nil
         }
@@ -6558,8 +6543,13 @@ partial class Binder {
                 return TypeSymbol.FromClrTypeWithoutNullability(clrAliasType, NullabilityFreeReason.ResolvedTypeName)
             }
             // Source types have no reflectable CLR type while binding, so
-            // resolve the alias's full package-qualified target instead of a
-            // bare simple-name lookup that could match a lexical nested class.
+            // resolve the alias through the scope's explicit source-alias
+            // table and package-qualified source lookup instead of a bare
+            // simple-name lookup that could match a lexical nested class.
+            if $scope.TryResolveExplicitSourceTypeAlias(name, preferredArity, out var explicitSourceAlias) &&
+                !binderCtx.HasUnclosedEnclosingTypeParameters(explicitSourceAlias, function) {
+                return explicitSourceAlias
+            }
             if $scope.TryLookupQualifiedSourceType(aliasTarget, preferredArity, out var aliasedSourceType) &&
                 !binderCtx.HasUnclosedEnclosingTypeParameters(aliasedSourceType, function) {
                 return aliasedSourceType
