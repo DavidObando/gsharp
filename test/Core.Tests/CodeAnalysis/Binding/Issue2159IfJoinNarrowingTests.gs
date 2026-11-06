@@ -24,6 +24,111 @@ import Xunit
 /// must still block narrowing, an `else if` chain, and post-if
 /// re-nullable-ization.
 open class Issue2159IfJoinNarrowingTests {
+    @Theory
+    @InlineData("")
+    @InlineData("var n = 0; ")
+    func ConditionCall_DoesNotRestoreACallerOwnedFact(initializer string) {
+        let result = Evaluate(`package T
+class C { var Value int32 = 1 }
+func Clear(values []C?) bool {
+    values[0] = nil
+    return true
+}
+func Run(ref value C?, values []C?) int32 {
+    if ` + initializer + `value != nil && Clear(values) {
+    } else { return 0 }
+    return value.Value
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Value", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
+    func DeferredWrite_EndsTheBranchFactBeforeItsNormalExit() {
+        let result = Evaluate(`package T
+func Run(flag bool, input string?) int32 {
+    var s = input
+    let clear = func() { s = nil }
+    if s == nil { return 0 }
+    if flag {
+        defer clear()
+    } else { }
+    return s.Length
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Theory
+    @InlineData(`if flag {
+        s = nil
+        return -1
+    }`)
+    @InlineData(`if flag {
+        s = nil
+        return -1
+    } else { }`)
+    @InlineData(`if var n = 1; flag && n == 1 {
+        s = nil
+        return -1
+    }`)
+    func ExitingBranchWrite_DoesNotRemoveTheSurvivingFact(branch string) {
+        let result = Evaluate(`package T
+func Run(flag bool, input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    ` + branch + `
+    return s.Length
+}
+Console.WriteLine(Run(false, "abc"))
+Console.WriteLine(Run(true, "abc"))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("3\n-1\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Theory
+    @InlineData(`switch 1 { case 1 { s = "abc" } default { return -1 } }`)
+    @InlineData(`switch 1 {
+        case 1 {
+            s = "abc"
+            break
+        }
+        default { return -1 }
+    }`)
+    @InlineData(`switch 1 {
+        case 1 {
+            try { break } finally { s = "abc" }
+        }
+        default { return -1 }
+    }`)
+    @InlineData(`for {
+        s = "abc"
+        break
+    }`)
+    @InlineData(`try { s = "abc" } catch { s = "abc" }`)
+    func NestedStatement_ContributesItsNormalExitState(body string) {
+        let result = Evaluate(`package T
+func Run(flag bool) int32 {
+    var s string? = nil
+    if flag {
+        ` + body + `
+    } else {
+        s = "abc"
+    }
+    return s.Length
+}
+Console.WriteLine(Run(true))
+Console.WriteLine(Run(false))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("3\n3\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
     @Fact
     func ReassignInNullBranch_NoElse_Narrows() {
         // Repro (1): non-null branch reached via the implicit negated-condition

@@ -2620,7 +2620,7 @@ internal partial class StatementBinder {
 
     // ADR-0208 R18 (#5545 shape 5): removes from [`state`](paramref) the facts of an earlier operand that the later
     // operand [`operand`](paramref) can invalidate. A stable member path's members are immutable, so only a write or
-    // unknown write that can replace its root removes it, matching (cref:KillsJoinGain).
+    // unknown write that can replace its root removes it.
     private func ClearOperandFacts(
         operand BoundExpression,
         state Dictionary[AccessPath, TypeSymbol],

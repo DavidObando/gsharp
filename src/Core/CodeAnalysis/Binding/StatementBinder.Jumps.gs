@@ -473,9 +473,7 @@ internal partial class StatementBinder {
         let gotoStatement = BoundGotoStatement(syntax, breakLabel)
         if currentStatementListFallsThrough {
             internallyReachableLoopExits.Add(breakLabel)
-            if topFrame.ContinueLabel != nil {
-                binderCtx.NarrowingFlow.RecordBreak(breakLabel, CaptureJumpState(gotoStatement))
-            }
+            binderCtx.NarrowingFlow.RecordBreak(breakLabel, CaptureJumpState(gotoStatement))
         }
         return gotoStatement
     }

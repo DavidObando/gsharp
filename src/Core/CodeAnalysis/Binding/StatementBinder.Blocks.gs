@@ -55,6 +55,8 @@ internal partial class StatementBinder {
         var hasDefault = false
         let callableEntry = CaptureExternalCallableAliases()
         let shadowFlow = ShadowBegin(discriminant)
+        let joinExits = List[NarrowingState]()
+        var fallthroughState NarrowingState? = nil
         var shadowApproximate = false
         var callableExits HashSet[VariableSymbol]? = nil
         var callableFallthrough HashSet[VariableSymbol]? = nil
@@ -125,6 +127,11 @@ internal partial class StatementBinder {
                     }
                     hasDefault = true
                     let defaultIndex = caseIndex
+                    let defaultEntry = binderCtx.Narrowing
+                    let defaultOuterKills = BeginThenBranchConditionKills()
+                    if fallthroughState != nil {
+                        IntersectBranchEntry(binderCtx.Narrowing.Join(fallthroughState))
+                    }
                     var defaultExitAliases HashSet[VariableSymbol]? = nil
                     var defaultBody = if defaultIndex == syntax.Cases.Length - 1 {
                         BindBlockStatement(caseSyntax.Body)
@@ -164,7 +171,14 @@ internal partial class StatementBinder {
                             )
                         )
                     }
+                    AddBranchExits(joinExits, defaultBody)
                     ShadowAddBranch(shadowFlow, nil, defaultBody, true)
+                    fallthroughState = if endsInFallthrough {
+                        listExitState
+                    } else {
+                        default(NarrowingState?)
+                    }
+                    RestoreThenBranchConditionKills(defaultOuterKills, defaultEntry)
                     shadowApproximate = shadowApproximate || endsInFallthrough
                     defaultBody = PrependArmEntryLabel(defaultBody, armEntryLabels[caseIndex])
                     arms.Add(BoundPatternSwitchArm(nil, pattern: nil, $guard: nil, defaultBody))
@@ -240,6 +254,27 @@ internal partial class StatementBinder {
                 // guard's when-true pattern variables (`when x.Tag is string tag`)
                 // are in scope there.
                 let (guardWhenTrue, _) = PatternVariables.Classify(guard_)
+                let armEntry = binderCtx.Narrowing
+                let armOuterKills = BeginThenBranchConditionKills()
+                if fallthroughState != nil {
+                    let testedEntry = if frame == nil {
+                        binderCtx.Narrowing
+                    } else {
+                        binderCtx.Narrowing.WithAll(frame)
+                    }
+                    let bodyEntry = testedEntry.Join(fallthroughState)
+                    IntersectBranchEntry(bodyEntry)
+                    if frame != nil {
+                        for path in frame.Keys.ToArray() {
+                            let joined = bodyEntry.NarrowedType(path)
+                            if joined == nil {
+                                frame.Remove(path)
+                            } else {
+                                frame[path] = joined
+                            }
+                        }
+                    }
+                }
                 var body = PatternVariables.BindInScope(
                     binderCtx,
                     guardWhenTrue,
@@ -249,7 +284,14 @@ internal partial class StatementBinder {
                     caseSyntax.Body
                 )
                 $scope = $scope.Pop()
+                AddBranchExits(joinExits, body)
                 ShadowAddBranch(shadowFlow, frame, body)
+                fallthroughState = if endsInFallthrough {
+                    listExitState
+                } else {
+                    default(NarrowingState?)
+                }
+                RestoreThenBranchConditionKills(armOuterKills, armEntry)
                 shadowApproximate = shadowApproximate || endsInFallthrough
                 body = PrependArmEntryLabel(body, armEntryLabels[caseIndex])
                 arms.Add(BoundPatternSwitchArm(nil, pattern, guard_, body))
@@ -318,6 +360,20 @@ internal partial class StatementBinder {
             Diagnostics
         )
         let result = BoundPatternSwitchStatement(syntax, discriminant, boundArms, isExhaustive)
+        if !(hasCatchAll || isExhaustive) {
+            joinExits.Add(binderCtx.Narrowing)
+        }
+        let breaks = binderCtx.NarrowingFlow.TakeBreaks(switchBreakLabel)
+        if breaks != nil {
+            let activeFinallySet = HashSet[FinallyClauseSyntax](activeFinallyClauses)
+            let activeCleanupSet = HashSet[BoundStatement](activeCleanupStatements)
+            for snapshot in breaks {
+                ApplyBreakPrefixEffects(snapshot, syntax, result, nil, callableEntry.ToImmutableArray())
+                if ApplyExitedFinallyEffects(snapshot, activeFinallySet, activeCleanupSet) {
+                    joinExits.Add(NarrowingState.Empty.WithAll(snapshot.NarrowedVariables))
+                }
+            }
+        }
         let shadowBreaks = binderCtx.UsedBreakLabels.Contains(switchBreakLabel)
         // ADR-0069 addendum / issue #712: park the merged narrowing on the
         // bound switch so the enclosing block walker can lift it. Only do
@@ -351,6 +407,7 @@ internal partial class StatementBinder {
                 !(hasCatchAll || isExhaustive),
                 true
             )
+            RecordJoinExits(wrapped, joinExits)
             return wrapped
         }
         ShadowFinish(
@@ -361,16 +418,21 @@ internal partial class StatementBinder {
             !(hasCatchAll || isExhaustive),
             shadowApproximate
         )
+        RecordJoinExits(result, joinExits)
         return result
     }
 
     private func BindTryStatement(syntax TryStatementSyntax) BoundStatement {
+        let joinExits = List[NarrowingState]()
         let callableEntry = CaptureExternalCallableAliases()
         let reachabilityGeneration = internalReachabilityGeneration
         let tryBlock = BindWithinFinallyScope(syntax.FinallyClause, () -> BindBlockStatement(syntax.TryBlock))
+        AddBranchExits(joinExits, tryBlock)
         let callableTryExit = CaptureExternalCallableAliases()
         let tryMutations = NewCollector(nil, callableEntry)
         tryMutations.Visit(tryBlock)
+        // A handler can observe every protected write, including writes on paths that do not complete normally.
+        InvalidateNarrowingsForAssignedVariables(syntax.TryBlock, tryBlock, aliasesAtEntry: callableEntry)
         let callableExceptionalEntry = HashSet[VariableSymbol](callableEntry)
         RemoveAssignedAliases(callableExceptionalEntry, tryMutations)
         // ADR-0208 R10 (#5168): an enclosing filter can run user code that assigns a callable alias.
@@ -447,6 +509,8 @@ internal partial class StatementBinder {
                 )
             }
             let (filterWhenTrue, _) = PatternVariables.Classify(filter)
+            let catchEntry = binderCtx.Narrowing
+            let catchOuterKills = BeginThenBranchConditionKills()
             exceptionHandlerRegions.Push(catchSyntax)
             var body BoundStatement
             try {
@@ -466,6 +530,8 @@ internal partial class StatementBinder {
                 exceptionHandlerRegions.Pop()
                 currentStatementListFallsThrough = inheritedReachability
             }
+            AddBranchExits(joinExits, body)
+            RestoreThenBranchConditionKills(catchOuterKills, catchEntry)
             $scope = $scope.Pop()
             if filter == nil {
                 unfilteredCoverage.Add(catchType)
@@ -478,7 +544,10 @@ internal partial class StatementBinder {
             }
         }
         var finallyBlock BoundStatement? = nil
+        var finallyExit NarrowingState? = nil
         if syntax.FinallyClause != nil {
+            let protectedRegion = BoundTryStatement(syntax, tryBlock, catches.ToImmutable(), finallyBlock: nil)
+            InvalidateNarrowingsForAssignedVariables(syntax, protectedRegion, aliasesAtEntry: callableEntry)
             InvalidateNarrowingsForEnclosingFilters(enclosingFilters)
             RestoreExternalCallableAliases(callableFinallyEntries)
             finallyEntryExternalCallableAliases[syntax.FinallyClause!!] = callableExits?.ToImmutableArray() ??
@@ -488,6 +557,9 @@ internal partial class StatementBinder {
             exceptionHandlerRegions.Push(syntax.FinallyClause!!)
             try {
                 finallyBlock = BindBlockStatement(syntax.FinallyClause!!.Body)
+                let finallyExits = List[NarrowingState]()
+                AddBranchExits(finallyExits, finallyBlock)
+                finallyExit = NarrowingState.Join(finallyExits)
                 boundFinallyBlocks[syntax.FinallyClause!!] = finallyBlock
             } finally {
                 exceptionHandlerRegions.Pop()
@@ -515,7 +587,30 @@ internal partial class StatementBinder {
                 Diagnostics.ReportYieldInsideTryWithCatch(yieldLocation)
             }
         }
-        return BoundTryStatement(syntax, tryBlock, catches.ToImmutable(), finallyBlock)
+        let result = BoundTryStatement(syntax, tryBlock, catches.ToImmutable(), finallyBlock)
+        var exit = NarrowingState.Join(joinExits)
+        if finallyBlock != nil && finallyExit != nil {
+            let normalAliases = finallyEntryExternalCallableAliases[syntax.FinallyClause!!]
+            exit = KillExitEffects(exit, finallyBlock, normalAliases)
+            if finallyExit.IsUnreachable {
+                exit = NarrowingState.Unreachable
+            } else {
+                for path in finallyExit.Paths {
+                    exit = exit.With(path, finallyExit.NarrowedType(path)!!)
+                }
+                // Returning paths can carry different callable aliases into the same cleanup.
+                let summary = GetFinallyFlowSummary(syntax.FinallyClause!!, finallyBlock)
+                if summary.NonNullOnNormalExit is {} facts {
+                    for fact in facts {
+                        if !fact.Key.HasMembers {
+                            exit = exit.With(fact.Key, fact.Value)
+                        }
+                    }
+                }
+            }
+        }
+        RecordJoinExits(result, List[NarrowingState]{exit})
+        return result
     }
 
     /// ADR-0208 R10 (#5168): the `when` filters of [`syntax`](paramref) and of every enclosing `try`
