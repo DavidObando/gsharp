@@ -542,6 +542,83 @@ class Box {
 let box = Box{}
 Console.WriteLine(box.Run(ref box.Field))
 `}
+            yield[]object{"member-not-null-field-and-other-receiver-write", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Box {
+    var Field C?
+
+    @System.Diagnostics.CodeAnalysis.MemberNotNull(members: []string{"Field"})
+    func Init() {
+        Field = C{}
+    }
+
+    func Run(other Box) int32 {
+        this.Init()
+        other.Field = nil
+        return Field.Value
+    }
+}
+let box = Box{}
+Console.WriteLine(box.Run(box))
+`}
+            yield[]object{"member-not-null-field-and-other-receiver-multi-write-loop", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Box {
+    var Field C?
+
+    @System.Diagnostics.CodeAnalysis.MemberNotNull(members: []string{"Field"})
+    func Init() {
+        Field = C{}
+    }
+
+    func Run(other Box) int32 {
+        this.Init()
+        var total = 0
+        for var i = 0; i < 2; i++ {
+            total = total + Field.Value
+            other.Field, _ = nil, 0
+        }
+        return total
+    }
+}
+let box = Box{}
+Console.WriteLine(box.Run(box))
+`}
+            yield[]object{"member-not-null-field-and-other-receiver-call", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Box {
+    var Field C?
+
+    @System.Diagnostics.CodeAnalysis.MemberNotNull(members: []string{"Field"})
+    func Init() {
+        Field = C{}
+    }
+
+    func Clear() {
+        Field = nil
+    }
+
+    func Run(other Box) int32 {
+        this.Init()
+        other.Clear()
+        return Field.Value
+    }
+}
+let box = Box{}
+Console.WriteLine(box.Run(box))
+`}
             yield[]object{"using-let-getter-clears-aliased-member", `
 import System
 

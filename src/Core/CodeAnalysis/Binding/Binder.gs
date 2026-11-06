@@ -834,9 +834,10 @@ partial class Binder {
                         // BindBareEventOrCompoundAssignment.
                         if !t.Events.IsDefaultOrEmpty {
                             for evt in t.Events {
-                                if evt.IsFieldLike && evt.BackingField != nil && !paramNames.Contains(evt.Name) &&
-                                    seenMembers
-                                    .Add(evt.Name) {
+                                if evt.IsFieldLike &&
+                                    !evt.HasExplicitInterfaceClause &&
+                                    evt.BackingField != nil &&
+                                    !paramNames.Contains(evt.Name) && seenMembers.Add(evt.Name) {
                                     $scope.TryDeclareVariable(
                                         ImplicitFieldVariableSymbol(function.ThisParameter!!, t, evt.BackingField!!)
                                     )
@@ -914,7 +915,9 @@ partial class Binder {
                 }
                 if !ownerStruct.StaticProperties.IsDefaultOrEmpty {
                     for prop in ownerStruct.StaticProperties {
-                        if paramNames.Contains(prop.Name) || !seenMembers.Add(prop.Name) ||
+                        if prop.HasExplicitInterfaceClause || paramNames.Contains(prop.Name) || !seenMembers.Add(
+                            prop.Name
+                        ) ||
                             (
                             isOuterOwner && !object.ReferenceEquals(
                                 memberLookup.FindLexicalMemberOwner(lexicalOwner!!, prop.Name),
@@ -953,8 +956,10 @@ partial class Binder {
                 // this variable.
                 if !ownerStruct.StaticEvents.IsDefaultOrEmpty {
                     for evt in ownerStruct.StaticEvents {
-                        if !evt.IsFieldLike || evt.BackingField == nil || paramNames.Contains(evt.Name) ||
-                            !seenMembers.Add(evt.Name) ||
+                        if !evt.IsFieldLike ||
+                            evt.HasExplicitInterfaceClause ||
+                            evt.BackingField == nil ||
+                            paramNames.Contains(evt.Name) || !seenMembers.Add(evt.Name) ||
                             (
                             isOuterOwner && !object.ReferenceEquals(
                                 memberLookup.FindLexicalMemberOwner(lexicalOwner!!, evt.Name),

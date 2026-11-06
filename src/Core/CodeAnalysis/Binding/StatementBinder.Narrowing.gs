@@ -462,6 +462,7 @@ internal partial class StatementBinder {
             return
         }
         var memberNames ImmutableArray[string]
+        var receiver BoundExpression? = nil
         switch callExpr {
             case userCall is BoundCallExpression {
                 if !KnownAttributes.TryGetMemberNotNullMembers(userCall.Function.Attributes, out memberNames) {
@@ -477,18 +478,20 @@ internal partial class StatementBinder {
                 if !ClrNullability.TryGetMemberNotNullMembers(instanceCall.Method, out memberNames) {
                     return
                 }
+                receiver = instanceCall.Receiver
             }
             case userInstanceCall is BoundUserInstanceCallExpression {
                 if !KnownAttributes.TryGetMemberNotNullMembers(userInstanceCall.Method.Attributes, out memberNames) {
                     return
                 }
+                receiver = userInstanceCall.Receiver
             }
             default {
                 return
             }
         }
         for name in memberNames {
-            NarrowFieldIfNullable(name, frame)
+            NarrowFieldIfNullable(name, frame, receiver)
         }
     }
 
@@ -496,15 +499,21 @@ internal partial class StatementBinder {
     /// resolves to an (cref:ImplicitFieldVariableSymbol) whose declared
     /// type is nullable, adds a narrowing entry to [`frame`](paramref)
     /// that maps the symbol to its underlying non-nullable type.
-    private func NarrowFieldIfNullable(fieldName string, frame Dictionary[AccessPath, TypeSymbol]) {
+    private func NarrowFieldIfNullable(
+        fieldName string,
+        frame Dictionary[AccessPath, TypeSymbol],
+        receiver BoundExpression? = nil
+    ) {
         if $scope.TryLookupSymbol(fieldName) is ImplicitFieldVariableSymbol fieldVar &&
+            (receiver == nil || TargetsImplicitThis(receiver, fieldVar)) &&
             fieldVar.Type is NullableTypeSymbol nullable {
             SetPersistentNarrowing(frame, fieldVar, nullable.UnderlyingType)
         }
     }
 
-    private func NarrowFieldIfNullable(fieldName string, frame NarrowingFrame) {
+    private func NarrowFieldIfNullable(fieldName string, frame NarrowingFrame, receiver BoundExpression? = nil) {
         if $scope.TryLookupSymbol(fieldName) is ImplicitFieldVariableSymbol fieldVar &&
+            (receiver == nil || TargetsImplicitThis(receiver, fieldVar)) &&
             fieldVar.Type is NullableTypeSymbol nullable {
             SetPersistentNarrowing(frame, fieldVar, nullable.UnderlyingType)
         }
@@ -731,7 +740,7 @@ internal partial class StatementBinder {
                             (assigned VariableSymbol) -> object.ReferenceEquals(assigned, key.Root) ||
                                 MayShareStorage(assigned, key.Root)
                         ) ||
-                            DropsOnMemberMutation(key, dropAllMemberPaths, dropAllMemberPaths)
+                            DropsOnMemberMutation(key, dropAllMemberPaths, dropAllMemberPaths, dropAllMemberPaths)
                     }
                 )
                 if drop &&
@@ -834,7 +843,8 @@ internal partial class StatementBinder {
         dropReferenceStorage bool
     ) bool -> MayBeMutatedByUnknownWrite(effects, path) ||
         (effects.MayMutateGlobalRoots && path.Root is GlobalVariableSymbol && !path.Root.IsReadOnly) ||
-        effects.AssignsRoot(path.Root) || DropsOnMemberMutation(path, dropAllMemberPaths, dropReferenceStorage)
+        effects.AssignsRoot(path.Root) ||
+        DropsOnMemberMutation(path, dropAllMemberPaths, dropReferenceStorage, effects.MayMutateImplicitMembers)
 
     private func UpdateExternalCallableAliases(
         statement BoundStatement,
@@ -2674,7 +2684,8 @@ internal partial class StatementBinder {
                 DropsOnMemberMutation(
                 path,
                 syntaxMutatesMembers || collector.MayMutateMemberPaths,
-                collector.MayWriteStorageOf(path)
+                collector.MayWriteStorageOf(path),
+                collector.MayMutateImplicitMembers
             ) ||
                 collector.InvalidatesNarrowing(path.Root, entry.Value) || collector.Roots.Contains(path.Root) {
                 state.Remove(path)
@@ -4455,8 +4466,8 @@ internal partial class StatementBinder {
     /// join narrowings across constructs the flow analysis does not model.
     private open class AssignedRootsCollector : BoundTreeWalker {
         private let assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?
-        private let assignedFields HashSet[AssignedField] = HashSet[AssignedField]()
-        private let assignedProperties HashSet[AssignedProperty] = HashSet[AssignedProperty]()
+        private let assignedFields HashSet[FieldSymbol] = HashSet[FieldSymbol]()
+        private let assignedProperties HashSet[PropertySymbol] = HashSet[PropertySymbol]()
         private let assignments Dictionary[VariableSymbol, List[BoundAssignmentExpression]] = Dictionary[
             VariableSymbol,
             List[BoundAssignmentExpression]
@@ -4521,6 +4532,11 @@ internal partial class StatementBinder {
         }
 
         prop MayMutateMemberPaths bool {
+            get;
+            private set;
+        }
+
+        prop MayMutateImplicitMembers bool {
             get;
             private set;
         }
@@ -4699,6 +4715,9 @@ internal partial class StatementBinder {
             if !isStableSystemIndexOp && StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) &&
                 node is not BoundPropertyAssignmentExpression {
                 MayMutateMemberPaths = true
+                if node is not BoundFieldAssignmentExpression {
+                    MayMutateImplicitMembers = true
+                }
             }
             if StatementBinder.IsMemberStorageWriteExpression(node.Kind) ||
                 (
@@ -4716,6 +4735,9 @@ internal partial class StatementBinder {
                 (!propAssign.Property.HasSetter || propAssign.Property.IsInitOnly)
             if sourcePropertyRunsUserCode || writesStableAutoProperty {
                 MayMutateMemberPaths = true
+                if sourcePropertyRunsUserCode {
+                    MayMutateImplicitMembers = true
+                }
             }
             if StatementBinder.IsMemberStorageWriteExpression(node.Kind) &&
                 (
@@ -4800,6 +4822,7 @@ internal partial class StatementBinder {
                 !TypeSymbol
                 .IsLegalPointeeType(mapLiteral.MapType.KeyType) {
                 MayMutateMemberPaths = true
+                MayMutateImplicitMembers = true
                 MarkMayMutateGlobalRoots(invalidateCallableAliases: false)
                 runsEscapedClosureHere = true
             }
@@ -4992,23 +5015,27 @@ internal partial class StatementBinder {
             return Roots.Contains(root) ||
                 SharesStorageWithAssignedRoot(root) ||
                 (
-                root is ImplicitFieldVariableSymbol field && assignedFields.Contains(
-                    AssignedField(field.Receiver, field.Field)
+                root is ImplicitFieldVariableSymbol field &&
+                    (
+                    assignedFields.Contains(field.Field.OriginalDefinition ?? field.Field) ||
+                        AssignsRoot(field.Receiver)
                 )
             ) ||
                 (
                 root is ImplicitStaticFieldVariableSymbol staticField && assignedFields.Contains(
-                    AssignedField(nil, staticField.Field)
+                    staticField.Field.OriginalDefinition ?? staticField.Field
                 )
             ) ||
                 (
-                root is ImplicitPropertyVariableSymbol property && assignedProperties.Contains(
-                    AssignedProperty(property.Receiver, property.Property)
+                root is ImplicitPropertyVariableSymbol property &&
+                    (
+                    assignedProperties.Contains(property.Property.OriginalDefinition ?? property.Property) ||
+                        AssignsRoot(property.Receiver)
                 )
             ) ||
                 (
                 root is ImplicitStaticPropertyVariableSymbol staticProperty && assignedProperties.Contains(
-                    AssignedProperty(nil, staticProperty.Property)
+                    staticProperty.Property.OriginalDefinition ?? staticProperty.Property
                 )
             )
         }
@@ -6044,6 +6071,7 @@ internal partial class StatementBinder {
             }
             // User code can also write members and the storage behind by-reference aliases.
             MayMutateMemberPaths = true
+            MayMutateImplicitMembers = true
             if writesReferenceStorage {
                 RecordReferenceStorageWrite(nil)
             }
@@ -6236,9 +6264,13 @@ internal partial class StatementBinder {
                 RecordWritableReference(conditional.WhenFalseOperand, invalidateCallableState)
                 return
             }
+            if expression is BoundFieldAccessExpression fieldAccess && fieldAccess.Field != nil {
+                assignedFields.Add(fieldAccess.Field.OriginalDefinition ?? fieldAccess.Field)
+            }
             if !SmartCastStability.TryGetStableMemberPath(expression, out var path, out _) {
                 if expression is BoundIndexExpression || expression is BoundClrIndexExpression {
                     MayMutateMemberPaths = true
+                    MayMutateImplicitMembers = true
                     RecordReferenceStorageWrite(nil)
                 } else {
                     MayMutateAnyRoot = true
@@ -6248,6 +6280,9 @@ internal partial class StatementBinder {
             }
             if path.HasMembers {
                 MayMutateMemberPaths = true
+                if expression is not BoundFieldAccessExpression {
+                    MayMutateImplicitMembers = true
+                }
                 RecordReferenceStorageWrite(nil)
             } else {
                 Roots.Add(path.Root)
@@ -6259,25 +6294,14 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitFieldAssignmentExpression(node BoundFieldAssignmentExpression) {
-            if node.ReceiverExpression == nil {
-                assignedFields.Add(AssignedField(node.Receiver, node.Field))
-            }
+            assignedFields.Add(node.Field.OriginalDefinition ?? node.Field)
             base.VisitFieldAssignmentExpression(node)
         }
 
         protected open override func VisitPropertyAssignmentExpression(node BoundPropertyAssignmentExpression) {
-            let receiver VariableSymbol? = (node.Receiver as BoundVariableExpression)?.Variable
-            if node.Receiver == nil || receiver != nil {
-                assignedProperties.Add(AssignedProperty(receiver, node.Property))
-            }
+            assignedProperties.Add(node.Property.OriginalDefinition ?? node.Property)
             base.VisitPropertyAssignmentExpression(node)
         }
-
-        private data struct AssignedField(Receiver VariableSymbol?, Field FieldSymbol) : IEquatable[AssignedField] { }
-
-        private data struct AssignedProperty(Receiver VariableSymbol?, Property PropertySymbol) : IEquatable[
-            AssignedProperty
-        ] { }
 
         private sealed class CallableAliasState {
             let Literals Dictionary[VariableSymbol, HashSet[BoundFunctionLiteralExpression]] = Dictionary[
@@ -8782,14 +8806,20 @@ internal partial class StatementBinder {
             var mayMutateMemberPaths = false
             switch node {
                 case CallExpressionSyntax,
-                MemberFieldAssignmentExpressionSyntax,
                 MemberIndexAssignmentExpressionSyntax,
                 IndexAssignmentExpressionSyntax,
                 CompoundIndexAssignmentExpressionSyntax,
                 IndirectAssignmentExpressionSyntax,
-                IndirectCompoundAssignmentExpressionSyntax,
-                FieldAssignmentExpressionSyntax {
+                IndirectCompoundAssignmentExpressionSyntax {
                     mayMutateMemberPaths = true
+                }
+                case mfa is MemberFieldAssignmentExpressionSyntax {
+                    mayMutateMemberPaths = true
+                    assigned.Add(mfa.FieldIdentifier.ValueText)
+                }
+                case fa is FieldAssignmentExpressionSyntax {
+                    mayMutateMemberPaths = true
+                    assigned.Add(fa.FieldIdentifier.ValueText)
                 }
                 case a is AssignmentExpressionSyntax {
                     assigned.Add(a.IdentifierToken.ValueText)
@@ -9752,11 +9782,18 @@ internal partial class StatementBinder {
         /// that does not alias a by-reference parameter also drops on any call (see
         /// (cref:CallsMayWriteAliasedStorage)). A plain call does not drop the narrowing of a by-reference
         /// parameter, as in 0.5.212 and in C#.
+        internal func IsImplicitMemberRoot(root VariableSymbol) bool -> root is ImplicitFieldVariableSymbol or
+            ImplicitPropertyVariableSymbol or
+            ImplicitStaticFieldVariableSymbol or
+            ImplicitStaticPropertyVariableSymbol
+
         internal func DropsOnMemberMutation(
             path AccessPath,
             mayMutateMemberPaths bool,
-            mayMutateReferenceStorage bool
+            mayMutateReferenceStorage bool,
+            mayMutateImplicitMembers bool = false
         ) bool -> (path.HasMembers && mayMutateMemberPaths) ||
+            (IsImplicitMemberRoot(path.Root) && mayMutateImplicitMembers) ||
             (
             IsExternalStorageAlias(path.Root) &&
                 (mayMutateReferenceStorage || (mayMutateMemberPaths && CallsMayWriteAliasedStorage(path.Root)))
@@ -9765,7 +9802,12 @@ internal partial class StatementBinder {
         internal func DropsOnMemberMutation(
             path AccessPath,
             mutations AssignedRootsCollector
-        ) bool -> DropsOnMemberMutation(path, mutations.MayMutateMemberPaths, mutations.MayWriteStorageOf(path))
+        ) bool -> DropsOnMemberMutation(
+            path,
+            mutations.MayMutateMemberPaths,
+            mutations.MayWriteStorageOf(path),
+            mutations.MayMutateImplicitMembers
+        )
 
         /// ADR-0208 R12 (#5292): whether a call can write the storage that the external-storage alias
         /// [`root`](paramref) names. A by-reference parameter (or a `ref` local that aliases one) names

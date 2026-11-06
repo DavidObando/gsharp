@@ -1183,6 +1183,10 @@ internal class InterfaceImplEmitter {
                 if slotOwner == nil {
                     continue
                 }
+                let slotOwnerSymbol = symbolicIface ?? TypeSymbol.FromClrTypeWithoutNullability(
+                    slotOwner,
+                    NullabilityFreeReason.TypeStructure
+                )
                 for slot in ClrTypeUtilities.SafeGetMethods(
                     slotOwner,
                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
@@ -1192,6 +1196,7 @@ internal class InterfaceImplEmitter {
                     }
                     if !DeclarationBinder.TryFindClrStaticVirtualMethodImplementation(
                         structSymbol,
+                        slotOwnerSymbol,
                         slot,
                         openIface,
                         symbolicArgs,
@@ -1206,10 +1211,6 @@ internal class InterfaceImplEmitter {
                         PlanMethodBridge(declaringType, impl)
                     }
                 }
-                let slotOwnerSymbol = symbolicIface ?? TypeSymbol.FromClrTypeWithoutNullability(
-                    slotOwner,
-                    NullabilityFreeReason.TypeStructure
-                )
                 for slotEvent in ClrTypeUtilities.SafeGetEvents(
                     slotOwner,
                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
@@ -1724,6 +1725,10 @@ internal class InterfaceImplEmitter {
             if slotOwner == nil {
                 continue
             }
+            let slotOwnerSymbol = symbolicIface ?? TypeSymbol.FromClrTypeWithoutNullability(
+                slotOwner,
+                NullabilityFreeReason.TypeStructure
+            )
             for slot in ClrTypeUtilities.SafeGetMethods(
                 slotOwner,
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly
@@ -1733,6 +1738,7 @@ internal class InterfaceImplEmitter {
                 }
                 if !DeclarationBinder.TryFindClrStaticVirtualMethodImplementation(
                     structSymbol,
+                    slotOwnerSymbol,
                     slot,
                     openIface,
                     symbolicArgs,
@@ -1749,10 +1755,6 @@ internal class InterfaceImplEmitter {
                 let declaration = this.outer.memberRefs.GetMethodEntityHandle(slot, symbolicIface)
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implHandle, declaration)
             }
-            let slotOwnerSymbol = symbolicIface ?? TypeSymbol.FromClrTypeWithoutNullability(
-                slotOwner,
-                NullabilityFreeReason.TypeStructure
-            )
             // Static-virtual event slots bind through their accessors, to the
             // implementer's static event of the same name and handler type.
             this.EmitClrStaticVirtualEventMethodImpls(

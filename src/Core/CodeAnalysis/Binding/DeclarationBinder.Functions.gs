@@ -1749,6 +1749,9 @@ internal partial class DeclarationBinder {
                     .StaticProperties
                     .IsDefaultOrEmpty ||
                     !HasAnyExplicitInterfaceClause(structSymbol.StaticProperties)
+            ) &&
+                (
+                structSymbol.StaticEvents.IsDefaultOrEmpty || !HasAnyExplicitInterfaceClause(structSymbol.StaticEvents)
             ) {
                 continue
             }
@@ -1892,6 +1895,29 @@ internal partial class DeclarationBinder {
                                 }
                                 if prop.SetterSymbol != nil {
                                     prop.SetterSymbol!!.ExplicitInterfaceClauseTarget = target
+                                }
+                            }
+                        }
+                    }
+                }
+                if !structSymbol.StaticEvents.IsDefaultOrEmpty {
+                    for evt in structSymbol.StaticEvents {
+                        if evt.HasExplicitInterfaceClause && evt.ExplicitInterfaceClauseTarget == nil {
+                            let target TypeSymbol? = ResolveExplicitInterfaceClauseTarget(
+                                structSymbol,
+                                evt.Declaration?.ExplicitInterfaceType,
+                                evt.Name
+                            )
+                            if target != nil {
+                                evt.ExplicitInterfaceClauseTarget = target
+                                if evt.AddMethodSymbol != nil {
+                                    evt.AddMethodSymbol!!.ExplicitInterfaceClauseTarget = target
+                                }
+                                if evt.RemoveMethodSymbol != nil {
+                                    evt.RemoveMethodSymbol!!.ExplicitInterfaceClauseTarget = target
+                                }
+                                if evt.RaiseMethodSymbol != nil {
+                                    evt.RaiseMethodSymbol!!.ExplicitInterfaceClauseTarget = target
                                 }
                             }
                         }

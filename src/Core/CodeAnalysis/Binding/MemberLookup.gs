@@ -6417,9 +6417,17 @@ internal class MemberLookup {
         internal func GetClrOpenParameterTypeSymbol(
             openParameter ParameterInfo,
             openDefinition Type?,
-            typeArguments ImmutableArray[TypeSymbol]
+            typeArguments ImmutableArray[TypeSymbol],
+            openMethod MethodInfo? = nil,
+            methodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?])
         ) TypeSymbol {
-            let pointee = GetClrOpenParameterPointeeTypeSymbol(openParameter, openDefinition, typeArguments)
+            let pointee = GetClrOpenParameterPointeeTypeSymbol(
+                openParameter,
+                openDefinition,
+                typeArguments,
+                openMethod,
+                methodTypeArguments
+            )
             return if openParameter.ParameterType.IsByRef {
                 cast[TypeSymbol](ByRefTypeSymbol.Get(pointee))
             } else {
@@ -6966,6 +6974,30 @@ internal class MemberLookup {
             type,
             SymbolicInferenceConflict
         )
+
+        internal func ValidateSymbolicMethodConstraintsWithReceiver(
+            receiverType TypeSymbol?,
+            closedOrOpenMethod MethodInfo,
+            recovered ImmutableArray[TypeSymbol?]
+        ) ImmutableArray[TypeSymbol?] {
+            if recovered.IsDefaultOrEmpty ||
+                receiverType is not ImportedTypeSymbol symRecv ||
+                symRecv.OpenDefinition == nil ||
+                symRecv
+                .TypeArguments
+                .IsDefaultOrEmpty {
+                return recovered
+            }
+            if !ClrOverloadResolution.SatisfiesMethodConstraintsWithReceiver(
+                symRecv.OpenDefinition,
+                symRecv.TypeArguments,
+                closedOrOpenMethod,
+                recovered
+            ) {
+                return ImmutableArray.Create[TypeSymbol?](SymbolicInferenceConflict)
+            }
+            return recovered
+        }
 
         internal func TryMapConstructedTypeArgumentsThroughHierarchy(
             source ImportedTypeSymbol,
@@ -8241,7 +8273,7 @@ internal class MemberLookup {
         /// @param openDeclaringType The receiver's open generic type definition.
         /// @param genericMethod The method to re-project onto [`openDeclaringType`](paramref).
         /// @returns The fully open method, or `null` when no match is found.
-        private func TryGetOpenMethodOnDeclaringType(openDeclaringType Type?, genericMethod MethodInfo?) MethodInfo? {
+        internal func TryGetOpenMethodOnDeclaringType(openDeclaringType Type?, genericMethod MethodInfo?) MethodInfo? {
             if openDeclaringType == nil || genericMethod == nil {
                 return nil
             }
@@ -10111,6 +10143,56 @@ internal class MemberLookup {
         /// before.
         /// @param closedMethod The closed method selected by overload resolution.
         /// @returns The per-MVar symbol vector, or default when there is nothing to substitute.
+        internal func MergeSymbolicAndClosedMethodTypeArgs(
+            closedMethod MethodInfo?,
+            symbolicMethodTypeArgs ImmutableArray[TypeSymbol?]
+        ) ImmutableArray[TypeSymbol?] {
+            if closedMethod == nil || !closedMethod.IsGenericMethod {
+                return symbolicMethodTypeArgs
+            }
+            if !symbolicMethodTypeArgs.IsDefaultOrEmpty && !symbolicMethodTypeArgs.Any(
+                (type TypeSymbol?) -> type == nil || type == TypeSymbol.Error
+            ) {
+                return symbolicMethodTypeArgs
+            }
+            if closedMethod.IsGenericMethodDefinition {
+                return symbolicMethodTypeArgs
+            }
+            let closedTypeArguments = BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod)
+            if symbolicMethodTypeArgs.IsDefaultOrEmpty {
+                return closedTypeArguments
+            }
+            let effectiveCount = symbolicMethodTypeArgs.Length
+            let closedCount = if closedTypeArguments.IsDefault {
+                0
+            } else {
+                closedTypeArguments.Length
+            }
+            let count = Math.Max(effectiveCount, closedCount)
+            let merged = ImmutableArray.CreateBuilder[TypeSymbol?](count)
+            for var i = 0; i < count; i++ {
+                let symbolicType TypeSymbol? = if i < effectiveCount {
+                    symbolicMethodTypeArgs[i]
+                } else {
+                    default(TypeSymbol?)
+                }
+                merged.Add(
+                    if symbolicType != nil && symbolicType != TypeSymbol.Error {
+                        symbolicType
+                    } else {
+                        (
+                            if i < closedCount {
+                                closedTypeArguments[i]
+                            } else {
+                                default(TypeSymbol?)
+                            }
+                        )
+                    }
+                )
+            }
+            return merged.MoveToImmutable()
+        }
+
         private func BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod MethodInfo?) ImmutableArray[TypeSymbol?] {
             if closedMethod == nil || !closedMethod.IsGenericMethod || closedMethod.IsGenericMethodDefinition {
                 return default(ImmutableArray[TypeSymbol?])
