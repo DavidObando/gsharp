@@ -5,8 +5,12 @@
 package GSharp.Core.Tests.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Text
 import GSharp.Tests
+import GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation
+import GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree
 import System
+import System.IO
 import Xunit
 
 /// Issue #5786, ADR-0208 R21: a write of a source `var` field stores no link of a stable member path, so it keeps
@@ -379,5 +383,104 @@ Run()
 `)
         Assert.Empty(result.Diagnostics)
         Assert.Equal("3", result.ValueText)
+    }
+
+    /// #5832 review: an interface whose `shared` fields have only literal initializers, no initializer, or a
+    /// `const` runs no user code at the first access, so a read of the field keeps the facts (ADR-0208 R11, #5520).
+    @Theory
+    @InlineData("var Count int32 = 0")
+    @InlineData("var Count int32")
+    @InlineData("const K int32 = 1\n        var Count int32")
+    @InlineData("var Count int32 = -1\n        let Name string = \"x\"")
+    func InterfaceStaticFieldRead_WithoutUserCodeInitializer_KeepsFact(fields string) {
+        let result = EmittedOracle.Evaluate(`import System
+
+class Box {
+    let Pet string?
+    init(pet string?) {
+        this.Pet = pet
+    }
+}
+interface IState {
+    shared {
+        ` + fields + `
+    }
+}
+func Run() int32 {
+    var b = Box("abc")
+    let reset = func() { b = Box(nil) }
+    if b.Pet != nil {
+        let n = IState.Count
+        return b.Pet.Length + n * 0
+    }
+    reset()
+    return 0
+}
+Run()
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("3", result.ValueText)
+    }
+
+    /// #5832 review: an imported G# type has no source declaration in this compilation, so its layout is not
+    /// known here. A field write of an imported type keeps the full rule, so an overlapping explicit-layout field
+    /// cannot keep a stale fact. A read alone keeps the fact.
+    @Theory
+    @InlineData("        b.Other = nil\n        return b.Text.Length // READ", false)
+    @InlineData("        return b.Text.Length", true)
+    func ImportedExplicitLayoutFieldWrite_RemovesFact(body string, accepted bool) {
+        let libraryPath = EmitLibrary(
+            if accepted {
+                "read"
+            } else {
+                "write"
+            }
+        )
+        let source = `import System
+import Models
+
+func Run(b Box) int32 {
+    if b.Text != nil {
+` + body + `
+    }
+    return 0
+}
+Run(Box("abc"))
+`
+        let result = EmittedOracle.Evaluate(source, references: []string{libraryPath})
+        if accepted {
+            Assert.Empty(result.Diagnostics)
+            Assert.Equal("3", result.ValueText)
+        } else {
+            let diagnostic = Assert.Single(result.Diagnostics)
+            Assert.Equal("GS0158", diagnostic.Id)
+            Assert.Equal(MarkedLine(source), diagnostic.Location.StartLine + 1)
+        }
+    }
+
+    shared {
+        private func EmitLibrary(caseName string) string {
+            let directory = Path.Combine(AppContext.BaseDirectory, "Issue5786FieldWrite", caseName)
+            Directory.CreateDirectory(directory)
+            let libraryPath = Path.Combine(directory, "Models.dll")
+            let library = GsCompilation(GsSyntaxTree.Parse(SourceText.From(`package Models
+import System.Runtime.InteropServices
+
+@StructLayout(LayoutKind.Explicit)
+data class Box {
+    @FieldOffset(0)
+    let Text string?
+    @FieldOffset(0)
+    var Other string?
+    init(t string?) {
+        this.Text = t
+        this.Other = t
+    }
+}`))){IsLibrary = true}
+            using let stream = File.Create(libraryPath)
+            let result = library.Emit(stream, pdbStream: nil, refStream: nil, assemblyName: "Models")
+            Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics))
+            return libraryPath
+        }
     }
 }
