@@ -4407,10 +4407,15 @@ partial class Binder {
                 return nil
             }
             var symbolic = false
+            let erasedElement = if element is EnumSymbol {
+                typeof(int32)
+            } else {
+                typeof(object)
+            }
             return ApplyArraySuffix(
                 syntax,
                 ImportedTypeSymbol.GetConstructed(
-                    definition.MakeGenericType(ProjectGenericArgument(element, typeof(object), &symbolic)),
+                    definition.MakeGenericType(ProjectGenericArgument(element, erasedElement, &symbolic)),
                     definition,
                     ImmutableArray.Create(element)
                 )
@@ -5739,7 +5744,13 @@ partial class Binder {
                 Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument")
                 return nil
             }
-            clrArgs[i] = ProjectGenericArgument(ta, typeof(object), &hasSymbolicArg)
+            let erasedArgument = if ta is EnumSymbol &&
+                (clrType.FullName == "System.Span`1" || clrType.FullName == "System.ReadOnlySpan`1") {
+                typeof(int32)
+            } else {
+                typeof(object)
+            }
+            clrArgs[i] = ProjectGenericArgument(ta, erasedArgument, &hasSymbolicArg)
         }
         // Issue #4032: MetadataLoadContext's MakeGenericType does not validate
         // constraints, so ask them here.

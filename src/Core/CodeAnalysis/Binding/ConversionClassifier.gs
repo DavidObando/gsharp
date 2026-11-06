@@ -58,6 +58,10 @@ internal class ConversionClassifier {
     // private copy that could drift.
     private let binderCtx BinderContext
 
+    // Issue #5767 (ADR-0219): the GS0635 checks whose operand was not constant yet when the conversion was
+    // bound, for the const field initializer that is being bound (cref:BeginDeferredFloatingConstantChecks).
+    private var deferredFloatingConstantChecks List[(Location TextLocation, Conversion BoundConversionExpression)]?
+
     private let memberLookup MemberLookup
 
     internal prop MemberLookup MemberLookup -> memberLookup
@@ -504,9 +508,97 @@ internal class ConversionClassifier {
             // implementation builds calls or chains through other conversions.
             result.ImplicitConversionOperand = expression
         }
+        if !object.ReferenceEquals(result, expression) {
+            // An identity conversion returns its operand. Its conversion was checked where it was bound,
+            // in its own checked or unchecked context.
+            ReportOutOfRangeFloatingConstantConversion(diagnosticLocation, result)
+        }
         onConversionBound?.Invoke(expression, result, beforeVersion)
         recordConvertedArgument?(expression, result)
         return result
+    }
+
+    /// Reports GS0635 when a constant floating-point value that is NaN or out of range converts to an
+    /// integer, `char`, or enum type outside an explicit `unchecked` context (#5767, ADR-0219). C# reports
+    /// CS0221 here. The value is folded with the rule of (cref:ConstantExpressionEvaluator.TryConvertFloatingConstant)
+    /// in every context, so the compiler that runs on .NET 10 and on .NET 11 emits the same constant. When the
+    /// operand refers to a const field that has no value yet, the check is deferred to
+    /// (cref:ReportDeferredFloatingConstantChecks) if a const field initializer is being bound.
+    /// @param location The conversion location.
+    /// @param result The bound conversion.
+    private func ReportOutOfRangeFloatingConstantConversion(location TextLocation, result BoundExpression) {
+        if binderCtx.IsUncheckedContext || result is not BoundConversionExpression {
+            return
+        }
+        let conversion = cast[BoundConversionExpression](result)
+        if !ConstantExpressionEvaluator.IsFloatingConstantConversionCandidate(conversion) {
+            return
+        }
+        if !TryReportOutOfRangeFloatingConstantConversion(location, conversion) {
+            deferredFloatingConstantChecks?.Add((location, conversion))
+        }
+    }
+
+    /// Reports GS0635 when the operand of [`conversion`](paramref) is a constant that is NaN or out of range.
+    /// @param location The conversion location.
+    /// @param conversion The bound conversion, bound outside an explicit `unchecked` context.
+    /// @returns `false` when the operand is not constant.
+    private func TryReportOutOfRangeFloatingConstantConversion(
+        location TextLocation,
+        conversion BoundConversionExpression
+    ) bool {
+        if !ConstantExpressionEvaluator.TryFoldFloatingConstantConversion(
+            conversion,
+            out var value,
+            out _,
+            out var inRange
+        ) {
+            return false
+        }
+        if !inRange {
+            Diagnostics.ReportConstantFloatingConversionOutOfRange(
+                location,
+                Convert.ToString(value, CultureInfo.InvariantCulture)!!,
+                conversion.Type
+            )
+        }
+        return true
+    }
+
+    /// Starts to record the GS0635 checks that cannot run yet, because the operand refers to a const field
+    /// whose value the const fixpoint calculates later (#5767). Only the conversions bound outside an explicit
+    /// `unchecked` context are recorded, so each check keeps its own overflow context.
+    /// @returns The recording of an enclosing initializer, to give to (cref:EndDeferredFloatingConstantChecks).
+    func BeginDeferredFloatingConstantChecks() List[(Location TextLocation, Conversion BoundConversionExpression)]? {
+        let previous = deferredFloatingConstantChecks
+        deferredFloatingConstantChecks = List[(Location TextLocation, Conversion BoundConversionExpression)]()
+        return previous
+    }
+
+    /// Stops the recording that (cref:BeginDeferredFloatingConstantChecks) started.
+    /// @param previous The value that (cref:BeginDeferredFloatingConstantChecks) returned.
+    /// @returns The deferred checks, in binding order.
+    func EndDeferredFloatingConstantChecks(
+        previous List[(Location TextLocation, Conversion BoundConversionExpression)]?
+    ) ImmutableArray[(Location TextLocation, Conversion BoundConversionExpression)] {
+        let checks = deferredFloatingConstantChecks
+        deferredFloatingConstantChecks = previous
+        return if checks == nil {
+            ImmutableArray[(Location TextLocation, Conversion BoundConversionExpression)].Empty
+        } else {
+            checks.ToImmutableArray()
+        }
+    }
+
+    /// Runs the GS0635 checks that (cref:EndDeferredFloatingConstantChecks) returned, after the const fixpoint
+    /// calculated the values that their operands refer to.
+    /// @param checks The deferred checks.
+    func ReportDeferredFloatingConstantChecks(
+        checks ImmutableArray[(Location TextLocation, Conversion BoundConversionExpression)]
+    ) {
+        for (location, conversion) in checks {
+            TryReportOutOfRangeFloatingConstantConversion(location, conversion)
+        }
     }
 
     /// Replaces a narrowed member read with its declared read when the conversion to [`target`](paramref)
@@ -886,6 +978,7 @@ internal class ConversionClassifier {
             return BoundErrorExpression(expression.Syntax)
         }
         var resolvedUserMethodGroup BoundMethodGroupExpression? = expression as BoundMethodGroupExpression
+        let isUserMethodGroupSource = resolvedUserMethodGroup != nil
         if resolvedUserMethodGroup != nil && !MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out _) {
             resolvedUserMethodGroup = BoundMethodGroupExpression(
                 resolvedUserMethodGroup.Syntax,
@@ -1014,8 +1107,14 @@ internal class ConversionClassifier {
         }
         var conversion = Conversion.Classify(expression.Type, type!!)
         conversion = ClassifyConvertedDelegate(expression, type!!, conversion)
+        if isUserMethodGroupSource &&
+            !conversion.IsImplicit &&
+            !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(expression.Type, type) {
+            conversion = Conversion.None
+        }
         if !conversion.Exists &&
             allowExplicit &&
+            !isUserMethodGroupSource &&
             (
             (
                 Conversion.HasCheckedReferenceConversion(expression.Type, type) &&
@@ -5498,7 +5597,7 @@ internal class ConversionClassifier {
                 mapped != TypeSymbol.Error &&
                 (
                 allowConcreteSymbolic || TypeSymbol.ContainsTypeParameter(mapped) ||
-                    TypeSymbol.ContainsSameCompilationUserType(mapped)
+                    TypeSymbol.ContainsSameCompilationUserType(mapped) || TypeSymbol.ContainsFunctionPointer(mapped)
             ) {
                 mapped
             } else {
@@ -5976,6 +6075,9 @@ internal class ConversionClassifier {
             if substitutedTarget != nil && from == substitutedTarget {
                 return false
             }
+            if from is FunctionPointerTypeSymbol && targetParameterType.IsFunctionPointer {
+                return false
+            }
             // FunctionTypeSymbol carries no ClrType but always needs delegate
             // materialisation when handed to a CLR delegate parameter.
             if from.ClrType == nil {
@@ -6161,6 +6263,11 @@ internal class ConversionClassifier {
             target TypeSymbol,
             conversion Conversion
         ) Conversion {
+            if (expression is BoundMethodGroupExpression or BoundClrMethodGroupExpression) &&
+                !conversion.IsImplicit &&
+                !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(expression.Type, target) {
+                return Conversion.None
+            }
             if !conversion.Exists || conversion.IsIdentity || KeepsConvertedDelegate(expression, target) {
                 return conversion
             }
@@ -6739,13 +6846,14 @@ internal class ConversionClassifier {
             field FieldSymbol,
             @NotNullWhen(true) out initializer BoundExpression?
         ) bool {
-            if type.InstanceFieldInitializers.TryGetValue(field, out initializer) {
+            if type.InstanceFieldInitializers.TryGetValue(field, out var stored) {
+                initializer = BoundTreeRewriter.Clone(stored)
                 return true
             }
             if type.Definition != nil {
                 for candidate in type.Definition!!.InstanceFieldInitializers {
                     if string.Equals(candidate.Key.Name, field.Name, StringComparison.Ordinal) {
-                        initializer = candidate.Value
+                        initializer = BoundTreeRewriter.Clone(candidate.Value)
                         return true
                     }
                 }
@@ -6839,7 +6947,7 @@ internal class ConversionClassifier {
             }
             if !(mapped is ImportedTypeSymbol{OpenDefinition: {} mappedOpen} mappedImported) ||
                 !(expected is ImportedTypeSymbol{OpenDefinition: {} expectedOpen} expectedImported) ||
-                mappedOpen != expectedOpen ||
+                !ClrTypeUtilities.AreSame(mappedOpen, expectedOpen) ||
                 mappedImported
                 .TypeArguments
                 .Length != expectedImported

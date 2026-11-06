@@ -112,6 +112,10 @@ internal partial class ExpressionBinder {
             if enclosingAliasType is StructSymbol enclosingStruct && IsNestedTypeOf(headIdentifier!!, enclosingStruct) {
                 return BindUserTypeStaticAccessorStep(enclosingStruct, syntax.RightPart)
             }
+            if enclosingAliasType is InterfaceSymbol enclosingInterface &&
+                IsNestedTypeOf(headIdentifier!!, enclosingInterface) {
+                return BindInterfaceStaticAccessorStep(enclosingInterface, syntax.RightPart)
+            }
             // No collision (the nested type still holds its simple key): peel off
             // the redundant enclosing-type qualifier and bind the remainder by
             // simple name. This mirrors how the enclosing type's own members
@@ -679,7 +683,17 @@ internal partial class ExpressionBinder {
             }
         } else if leftPart is AccessorExpressionSyntax qualifiedNestedType &&
             !qualifiedNestedType.IsNullConditional &&
-            TryResolveQualifiedUserNestedType(qualifiedNestedType, out var qualifiedNestedSymbol) {
+            (
+            TryResolveQualifiedUserNestedType(
+                qualifiedNestedType,
+                out var qualifiedNestedSymbol,
+                out var qualifiedNestedFailureHandled
+            ) ||
+                qualifiedNestedFailureHandled
+        ) {
+            if qualifiedNestedFailureHandled {
+                return BoundErrorExpression(nil)
+            }
             // Issue #1069: a qualified nested *type* used as the receiver of a
             // further member access, e.g. `Outer.Color.Red` (the `Outer.Color`
             // sub-chain names the nested enum) or `Outer.Inner.StaticMember`.
@@ -703,7 +717,17 @@ internal partial class ExpressionBinder {
             classSymbol = inheritedImportedNestedSymbol
         } else if leftPart is IndexExpressionSyntax nestedTypeIndex &&
             !nestedTypeIndex.IsNullConditional &&
-            TryResolveUserNestedTypeExpression(nestedTypeIndex, out var nestedTypeIndexSymbol) {
+            (
+            TryResolveUserNestedTypeExpression(
+                nestedTypeIndex,
+                out var nestedTypeIndexSymbol,
+                out var nestedIndexFailureHandled
+            ) ||
+                nestedIndexFailureHandled
+        ) {
+            if nestedIndexFailureHandled {
+                return BoundErrorExpression(nil)
+            }
             // Issue #1537: a per-segment generic nested-type chain whose deepest
             // segment carries a SINGLE type argument parses as an index over the
             // preceding accessor (`Outer[int32].Middle[string]` is
@@ -877,13 +901,20 @@ internal partial class ExpressionBinder {
 
     /// Issue #1069: whether [`name`](paramref) resolves to a user-defined
     /// type whose enclosing type is [`container`](paramref).
-    private func IsNestedTypeOf(name string, container TypeSymbol) bool -> $scope.TryLookupNestedTypeAlias(
-        container,
-        name,
-        preferredArity: -1,
-        out var candidate
-    ) &&
-        IsUserAggregateType(candidate!!)
+    private func IsNestedTypeOf(name string, container TypeSymbol) bool -> (
+        $scope.TryLookupNestedTypeAlias(container, name, preferredArity: -1, out var candidate) &&
+            IsUserAggregateType(candidate!!)
+    ) ||
+        (
+        container is StructSymbol containerStruct && $scope.TryLookupNestedTypeAliasIncludingInherited(
+            containerStruct,
+            name,
+            preferredArity: -1,
+            out var inheritedCandidate,
+            out _
+        ) &&
+            IsUserAggregateType(inheritedCandidate!!)
+    )
 
     /// Issue #1069: resolves a dotted accessor of the form
     /// `Outer.Nested` (optionally deeper, `A.B.C`) to the user-defined
@@ -894,7 +925,13 @@ internal partial class ExpressionBinder {
     private func TryResolveQualifiedUserNestedType(
         accessor AccessorExpressionSyntax,
         @NotNullWhen(true) out nestedType TypeSymbol?
-    ) bool -> TryResolveUserNestedTypeExpression(accessor, out nestedType)
+    ) bool -> TryResolveUserNestedTypeExpression(accessor, out nestedType, out _)
+
+    private func TryResolveQualifiedUserNestedType(
+        accessor AccessorExpressionSyntax,
+        @NotNullWhen(true) out nestedType TypeSymbol?,
+        out failureHandled bool
+    ) bool -> TryResolveUserNestedTypeExpression(accessor, out nestedType, out failureHandled)
 
     /// Issue #1069/#1506/#1521/#1537: resolves an expression that names a
     /// (possibly nested, possibly per-segment generic) user type — e.g.
@@ -916,8 +953,15 @@ internal partial class ExpressionBinder {
     private func TryResolveUserNestedTypeExpression(
         expr ExpressionSyntax,
         @NotNullWhen(true) out nestedType TypeSymbol?
+    ) bool -> TryResolveUserNestedTypeExpression(expr, out nestedType, out _)
+
+    private func TryResolveUserNestedTypeExpression(
+        expr ExpressionSyntax,
+        @NotNullWhen(true) out nestedType TypeSymbol?,
+        out failureHandled bool
     ) bool {
         nestedType = nil
+        failureHandled = false
         // Issue #942 regression guard: this probe speculatively binds each
         // bracketed segment's contents as TYPE arguments to decide whether
         // `expr` names a constructed nested type (#1537) rather than an indexer
@@ -936,7 +980,7 @@ internal partial class ExpressionBinder {
             !IsUserAggregateType(headCandidate!!) {
             return false
         }
-        return TryResolveUserNestedTypeExpressionCore(expr, out nestedType)
+        return TryResolveUserNestedTypeExpressionCore(expr, out nestedType, out failureHandled)
     }
 
     /// Issue #1537: the flatten-and-construct core of
@@ -949,9 +993,11 @@ internal partial class ExpressionBinder {
     /// @returns Whether the expression resolved to a user nested type.
     private func TryResolveUserNestedTypeExpressionCore(
         expr ExpressionSyntax,
-        @NotNullWhen(true) out nestedType TypeSymbol?
+        @NotNullWhen(true) out nestedType TypeSymbol?,
+        out failureHandled bool
     ) bool {
         nestedType = nil
+        failureHandled = false
         let segments = List[(Name string, Args ImmutableArray[TypeSymbol])]()
         if !TryFlattenUserTypeExpressionSegments(expr, segments) || segments.Count < 2 {
             return false
@@ -969,7 +1015,9 @@ internal partial class ExpressionBinder {
         let inheritedDeclaringContainers = [segments.Count]StructSymbol?
         definitions[0] = headDef!!
         for var i = 1; i < segments.Count; i++ {
-            let containerDef = (definitions[i - 1] as StructSymbol)?.Definition ?? definitions[i - 1]
+            let containerDef = (definitions[i - 1] as StructSymbol)?.Definition ??
+                (definitions[i - 1] as InterfaceSymbol)?.Definition ??
+                definitions[i - 1]
             let arity = if segments[i].Args.IsDefaultOrEmpty {
                 -1
             } else {
@@ -1008,6 +1056,13 @@ internal partial class ExpressionBinder {
                 enclosingBuilder!!.Clear()
                 enclosingBuilder!!.AddRange(nestedConstruction.EnclosingTypeArguments)
                 hasConstructedSegment = true
+            } else if definitions[i] is InterfaceSymbol nestedIfaceConstruction &&
+                !nestedIfaceConstruction
+                .EnclosingTypeArguments
+                .IsDefaultOrEmpty {
+                enclosingBuilder!!.Clear()
+                enclosingBuilder!!.AddRange(nestedIfaceConstruction.EnclosingTypeArguments)
+                hasConstructedSegment = true
             } else if i == 0 {
                 let headEnclosingParams = StructSymbol.CollectEnclosingTypeParameters(definitions[0])
                 for tp in headEnclosingParams {
@@ -1019,6 +1074,36 @@ internal partial class ExpressionBinder {
                 case iface is InterfaceSymbol: (iface.Definition ?? iface).DeclaredTypeParameters
                 default: ImmutableArray[TypeParameterSymbol].Empty
             }
+            if definitions[i] is InterfaceSymbol midIface {
+                let midIfaceDef = midIface.Definition ?? midIface
+                let midOwnArgs = if !midIface.TypeArguments.IsDefaultOrEmpty {
+                    midIface.TypeArguments
+                } else {
+                    segments[i].Args
+                }
+                if binderCtx.HasUnclosedOwnTypeParameters(midIfaceDef, midOwnArgs, getCurrentFunction()) {
+                    return false
+                }
+                if !IsNestedInterfaceAccessible(midIfaceDef) {
+                    Diagnostics.ReportMemberInaccessible(
+                        expr.Location,
+                        midIfaceDef.Name,
+                        (midIfaceDef.ContainingType ?? definitions[Math.Max(0, i - 1)]).Name,
+                        midIfaceDef.Accessibility
+                    )
+                    failureHandled = true
+                    return false
+                }
+                let midEnclosingArgs = if enclosingBuilder != nil && enclosingBuilder.Count > 0 {
+                    enclosingBuilder.ToImmutable()
+                } else {
+                    default(ImmutableArray[TypeSymbol])
+                }
+                if CheckNestedInterfaceConstraints(midIfaceDef, midEnclosingArgs, midOwnArgs, expr.Location) {
+                    failureHandled = true
+                    return false
+                }
+            }
             var constructionArgs = default(ImmutableArray[TypeSymbol])
             if !ownParams.IsDefaultOrEmpty {
                 constructionArgs = if definitions[i] is StructSymbol constructedStruct &&
@@ -1026,8 +1111,16 @@ internal partial class ExpressionBinder {
                     .TypeArguments
                     .IsDefaultOrEmpty {
                     constructedStruct.TypeArguments
+                } else if definitions[i] is InterfaceSymbol constructedIface &&
+                    !constructedIface
+                    .TypeArguments
+                    .IsDefaultOrEmpty {
+                    constructedIface.TypeArguments
                 } else {
                     segments[i].Args
+                }
+                if constructionArgs.IsDefaultOrEmpty && definitions[i] is InterfaceSymbol {
+                    constructionArgs = ownParams.CastArray[TypeSymbol]()
                 }
                 if constructionArgs.IsDefaultOrEmpty || constructionArgs.Length != ownParams.Length {
                     enclosingBuilder = nil
@@ -1123,6 +1216,23 @@ internal partial class ExpressionBinder {
             }
             case nestedIface is InterfaceSymbol {
                 let ifaceDef = nestedIface.Definition ?? nestedIface
+                if binderCtx.HasUnclosedOwnTypeParameters(ifaceDef, ownArgs, getCurrentFunction()) {
+                    return false
+                }
+                if !IsNestedInterfaceAccessible(ifaceDef) {
+                    Diagnostics.ReportMemberInaccessible(
+                        expr.Location,
+                        ifaceDef.Name,
+                        (ifaceDef.ContainingType ?? definitions[segments.Count - 2]).Name,
+                        ifaceDef.Accessibility
+                    )
+                    failureHandled = true
+                    return false
+                }
+                if CheckNestedInterfaceConstraints(ifaceDef, enclosingArgs, ownArgs, expr.Location) {
+                    failureHandled = true
+                    return false
+                }
                 nestedType = if !enclosingArgs.IsDefaultOrEmpty && !ownArgs.IsDefaultOrEmpty {
                     InterfaceSymbol.ConstructNestedGeneric(
                         ifaceDef,
@@ -1228,25 +1338,8 @@ internal partial class ExpressionBinder {
                 return true
             }
             case accessor is AccessorExpressionSyntax when !accessor.IsNullConditional {
-                if !TryFlattenUserTypeExpressionSegments(accessor.LeftPart, segments) {
-                    return false
-                }
-                switch accessor.RightPart {
-                    case rightName is NameExpressionSyntax {
-                        segments.Add((rightName.IdentifierToken.ValueText, default(ImmutableArray[TypeSymbol])))
-                        return true
-                    }
-                    case rightGeneric is GenericNameExpressionSyntax when TryBindGenericSegmentArguments(
-                        rightGeneric,
-                        out var rightArgs
-                    ) {
-                        segments.Add((rightGeneric.Identifier.ValueText, rightArgs))
-                        return true
-                    }
-                    default {
-                        return false
-                    }
-                }
+                return TryFlattenUserTypeExpressionSegmentsCore(accessor.LeftPart, segments) &&
+                    TryFlattenUserTypeExpressionSegmentsCore(accessor.RightPart, segments)
             }
             default {
                 return false
@@ -2052,7 +2145,8 @@ internal partial class ExpressionBinder {
                 IsNestedTypeOf(headName, userStructSymbol)
         }
         if interfaceSymbol != nil {
-            return HasUserTypeStaticMember(interfaceSymbol, headName, isCall)
+            return HasUserTypeStaticMember(interfaceSymbol, headName, isCall) ||
+                IsNestedTypeOf(headName, interfaceSymbol)
         }
         if enumSymbol != nil {
             return !isCall && enumSymbol.TryGetMember(headName, out _)
@@ -2162,16 +2256,24 @@ internal partial class ExpressionBinder {
                     structSym,
                     nested.LeftPart,
                     out var innerStruct,
-                    out var innerEnum
+                    out var innerEnum,
+                    out var innerInterface,
+                    out var nestedFailureHandled
                 ) {
                     if innerEnum != nil {
                         return BindEnumAccessorStep(innerEnum, nested.RightPart)
+                    }
+                    if innerInterface != nil {
+                        return BindInterfaceStaticAccessorStep(innerInterface, nested.RightPart)
                     }
                     return if innerStruct != nil {
                         BindUserTypeStaticAccessorStep(innerStruct, nested.RightPart)
                     } else {
                         cast[BoundExpression](BoundErrorExpression(nil))
                     }
+                }
+                if nestedFailureHandled {
+                    return BoundErrorExpression(nil)
                 }
                 let importedBaseType = TypeMemberModel.GetNearestImportedBase(structSym)
                 if importedBaseType?.ClrType is Type importedBase {
@@ -2209,6 +2311,7 @@ internal partial class ExpressionBinder {
                     NameExpressionSyntax(ce.SyntaxTree, ce.Identifier),
                     out var nestedConstructorType,
                     out var nestedConversionType,
+                    out _,
                     ce.TypeArgumentList?.Arguments.Count ?? -1
                 ) {
                     if nestedConstructorType != nil {
@@ -2287,30 +2390,34 @@ internal partial class ExpressionBinder {
     /// @param structLiteral The nested composite literal (e.g. `Middle[string]{…}`).
     /// @returns The bound nested struct literal, or a bound error expression.
     private func BindQualifiedNestedStructLiteral(
-        outerConstructed StructSymbol,
+        outerConstructed TypeSymbol,
         structLiteral StructLiteralExpressionSyntax
     ) BoundExpression {
-        let container = outerConstructed.Definition ?? outerConstructed
+        let container = (outerConstructed as StructSymbol)?.Definition ??
+            (outerConstructed as InterfaceSymbol)?.Definition ??
+            outerConstructed
         let literalArity = if structLiteral.TypeArgumentList != nil {
             structLiteral.TypeArgumentList!!.Arguments.Count
         } else {
             -1
         }
         var nestedType TypeSymbol?
-        var declaringContainer StructSymbol? = outerConstructed
+        var declaringContainer TypeSymbol? = outerConstructed
         if !$scope.TryLookupNestedTypeAlias(
             container,
             structLiteral.TypeIdentifier.ValueText,
             literalArity,
             out nestedType
         ) &&
-            !$scope
-            .TryLookupNestedTypeAliasIncludingInherited(
-            outerConstructed,
-            structLiteral.TypeIdentifier.ValueText,
-            literalArity,
-            out nestedType,
-            out declaringContainer
+            !(
+            outerConstructed is StructSymbol outerStruct && $scope.TryLookupNestedTypeAliasIncludingInherited(
+                outerStruct,
+                structLiteral.TypeIdentifier.ValueText,
+                literalArity,
+                out nestedType,
+                out var inheritedDeclaringContainer
+            ) &&
+                (declaringContainer = inheritedDeclaringContainer) != nil
         ) {
             Diagnostics.ReportUnableToFindType(
                 structLiteral.TypeIdentifier.Location,
@@ -2348,17 +2455,39 @@ internal partial class ExpressionBinder {
     /// @param typeExpr The nested-type-naming expression.
     /// @param constructedStruct The resolved constructed nested struct on success.
     /// @param constructedEnum The resolved constructed nested enum on success.
+    /// @param constructedInterface The resolved constructed nested interface on success.
     /// @param preferredArity A terminal constructor's own arity, or -1 when inferred.
     /// @returns Whether the expression named a nested type of the receiver.
     private func TryResolveNestedTypeChainUnderReceiver(
-        receiver StructSymbol,
+        receiver TypeSymbol,
         typeExpr ExpressionSyntax,
         out constructedStruct StructSymbol?,
         out constructedEnum EnumSymbol?,
+        out constructedInterface InterfaceSymbol?,
+        preferredArity int32 = -1
+    ) bool -> TryResolveNestedTypeChainUnderReceiver(
+        receiver,
+        typeExpr,
+        out constructedStruct,
+        out constructedEnum,
+        out constructedInterface,
+        out _,
+        preferredArity
+    )
+
+    private func TryResolveNestedTypeChainUnderReceiver(
+        receiver TypeSymbol,
+        typeExpr ExpressionSyntax,
+        out constructedStruct StructSymbol?,
+        out constructedEnum EnumSymbol?,
+        out constructedInterface InterfaceSymbol?,
+        out failureHandled bool,
         preferredArity int32 = -1
     ) bool {
         constructedStruct = nil
         constructedEnum = nil
+        constructedInterface = nil
+        failureHandled = false
         let segments = List[(Name string, Args ImmutableArray[TypeSymbol])]()
         if !TryFlattenUserTypeExpressionSegments(typeExpr, segments) || segments.Count == 0 {
             return false
@@ -2378,7 +2507,9 @@ internal partial class ExpressionBinder {
                 segments[i].Args.Length
             }
             let constructorArity = i == segments.Count - 1 && segments[i].Args.IsDefaultOrEmpty && preferredArity >= 0
-            let lookupContainer = (container as StructSymbol)?.Definition ?? container
+            let lookupContainer = (container as StructSymbol)?.Definition ??
+                (container as InterfaceSymbol)?.Definition ??
+                container
             var nested TypeSymbol?
             if !$scope.TryLookupNestedTypeAlias(lookupContainer, segments[i].Name, arity, out nested) &&
                 (
@@ -2423,6 +2554,51 @@ internal partial class ExpressionBinder {
                     return false
                 }
                 return true
+            }
+            if nested is InterfaceSymbol nestedInterface {
+                let ifaceDef = nestedInterface.Definition ?? nestedInterface
+                let ownIfaceArgs = segments[i].Args
+                if binderCtx.HasUnclosedOwnTypeParameters(ifaceDef, ownIfaceArgs, getCurrentFunction()) {
+                    return false
+                }
+                if !IsNestedInterfaceAccessible(ifaceDef) {
+                    Diagnostics.ReportMemberInaccessible(
+                        typeExpr.Location,
+                        ifaceDef.Name,
+                        (ifaceDef.ContainingType ?? container).Name,
+                        ifaceDef.Accessibility
+                    )
+                    failureHandled = true
+                    return false
+                }
+                if CheckNestedInterfaceConstraints(ifaceDef, enclosingArgs, ownIfaceArgs, typeExpr.Location) {
+                    failureHandled = true
+                    return false
+                }
+                let currentInterface = if !enclosingArgs.IsDefaultOrEmpty && !ownIfaceArgs.IsDefaultOrEmpty {
+                    InterfaceSymbol.ConstructNestedGeneric(
+                        ifaceDef,
+                        enclosingArgs,
+                        ownIfaceArgs,
+                        $scope.References!!.MapClrTypeToReferences
+                    )
+                } else if !enclosingArgs.IsDefaultOrEmpty {
+                    InterfaceSymbol.ConstructNested(ifaceDef, enclosingArgs, $scope.References!!.MapClrTypeToReferences)
+                } else if !ownIfaceArgs.IsDefaultOrEmpty {
+                    InterfaceSymbol.Construct(ifaceDef, ownIfaceArgs, $scope.References!!.MapClrTypeToReferences)
+                } else {
+                    ifaceDef
+                }
+                if i == segments.Count - 1 {
+                    if binderCtx.HasUnclosedEnclosingTypeParameters(currentInterface, getCurrentFunction()) {
+                        return false
+                    }
+                    constructedInterface = currentInterface
+                    return true
+                }
+                enclosingArgs = FlattenConstructedEnclosingArguments(currentInterface!!)
+                container = currentInterface!!
+                continue
             }
             if nested is not StructSymbol nestedStruct {
                 return false
@@ -2495,12 +2671,71 @@ internal partial class ExpressionBinder {
         let fieldOwner = interfaceSym.Definition ?? interfaceSym
         switch rightPart {
             case ce is CallExpressionSyntax {
+                if TryResolveNestedTypeChainUnderReceiver(
+                    interfaceSym,
+                    NameExpressionSyntax(ce.SyntaxTree, ce.Identifier),
+                    out var nestedConstructorType,
+                    out var nestedConversionType,
+                    out _,
+                    ce.TypeArgumentList?.Arguments.Count ?? -1
+                ) {
+                    if nestedConstructorType != nil {
+                        return overloads.BindCallExpression(ce, nestedConstructorType)
+                    }
+                    if nestedConversionType != nil {
+                        if ce.TypeArgumentList != nil {
+                            Diagnostics.ReportWrongTypeArgumentCount(
+                                ce.TypeArgumentList.Location,
+                                nestedConversionType.Name,
+                                0,
+                                ce.TypeArgumentList.Arguments.Count
+                            )
+                            return BoundErrorExpression(ce)
+                        }
+                        if ce.Arguments.Count != 1 {
+                            Diagnostics.ReportWrongArgumentCount(
+                                ce.Location,
+                                nestedConversionType.Name,
+                                1,
+                                ce.Arguments.Count
+                            )
+                            return BoundErrorExpression(ce)
+                        }
+                        return overloads.BindCallExpression(ce, nestedConversionType)
+                    }
+                }
                 return BindUserTypeStaticCall(interfaceSym, ce)
+            }
+            case structLiteral is StructLiteralExpressionSyntax {
+                return BindQualifiedNestedStructLiteral(interfaceSym, structLiteral)
             }
             case ne is NameExpressionSyntax {
                 return BindInterfaceStaticMemberAccess(interfaceSym, fieldOwner, ne)
             }
             case nested is AccessorExpressionSyntax {
+                if TryResolveNestedTypeChainUnderReceiver(
+                    interfaceSym,
+                    nested.LeftPart,
+                    out var innerStruct,
+                    out var innerEnum,
+                    out var innerInterface,
+                    out var nestedFailureHandled
+                ) {
+                    if innerEnum != nil {
+                        return BindEnumAccessorStep(innerEnum, nested.RightPart)
+                    }
+                    if innerInterface != nil {
+                        return BindInterfaceStaticAccessorStep(innerInterface, nested.RightPart)
+                    }
+                    return if innerStruct != nil {
+                        BindUserTypeStaticAccessorStep(innerStruct, nested.RightPart)
+                    } else {
+                        cast[BoundExpression](BoundErrorExpression(nil))
+                    }
+                }
+                if nestedFailureHandled {
+                    return BoundErrorExpression(nil)
+                }
                 let head = BindInterfaceStaticAccessorStep(interfaceSym, nested.LeftPart)
                 if head is BoundErrorExpression {
                     return head
@@ -3164,14 +3399,24 @@ internal partial class ExpressionBinder {
         failureHandled = false
         switch receiver {
             case index is IndexExpressionSyntax when !index.IsNullConditional {
-                return TryResolveConstructedGenericTypeReceiver(
+                if TryResolveConstructedGenericTypeReceiver(
                     index,
                     out constructedStruct,
                     out constructedInterface,
                     out constructedImported,
                     out failureHandled,
                     resolvedType
-                )
+                ) {
+                    return true
+                }
+                if !failureHandled &&
+                    resolvedType == nil &&
+                    TryResolveUserNestedTypeExpression(index, out var nestedIndexType, out failureHandled) {
+                    constructedStruct = nestedIndexType as StructSymbol
+                    constructedInterface = nestedIndexType as InterfaceSymbol
+                    return constructedStruct != nil || constructedInterface != nil
+                }
+                return false
             }
             case generic is GenericNameExpressionSyntax {
                 return TryResolveConstructedGenericTypeReceiver(
@@ -3184,19 +3429,62 @@ internal partial class ExpressionBinder {
                 )
             }
             case accessorChain is AccessorExpressionSyntax when !accessorChain.IsNullConditional {
-                if TryResolveQualifiedSourceType(accessorChain, out var remainder, out var sourceType) &&
-                    (
-                    remainder is IndexExpressionSyntax{IsNullConditional: false, Target: NameExpressionSyntax} ||
-                        remainder is GenericNameExpressionSyntax
-                ) {
-                    return TryResolveConstructedGenericTypeReceiver(
-                        remainder,
-                        out constructedStruct,
-                        out constructedInterface,
-                        out constructedImported,
-                        out failureHandled,
-                        sourceType
-                    )
+                if TryResolveQualifiedSourceType(accessorChain, out var remainder, out var sourceType) {
+                    if remainder is IndexExpressionSyntax{IsNullConditional: false, Target: NameExpressionSyntax} or
+                        GenericNameExpressionSyntax {
+                        return TryResolveConstructedGenericTypeReceiver(
+                            remainder,
+                            out constructedStruct,
+                            out constructedInterface,
+                            out constructedImported,
+                            out failureHandled,
+                            sourceType
+                        )
+                    }
+                    if remainder is NameExpressionSyntax {
+                        constructedStruct = sourceType as StructSymbol
+                        constructedInterface = sourceType as InterfaceSymbol
+                        return constructedStruct != nil || constructedInterface != nil
+                    }
+                    if remainder is AccessorExpressionSyntax nestedRemainder {
+                        var receiverHead TypeSymbol? = sourceType
+                        if nestedRemainder.LeftPart is IndexExpressionSyntax{IsNullConditional: false} or
+                            GenericNameExpressionSyntax {
+                            if !TryResolveConstructedGenericTypeReceiver(
+                                nestedRemainder.LeftPart,
+                                out var headStruct,
+                                out var headInterface,
+                                out _,
+                                out failureHandled,
+                                sourceType
+                            ) {
+                                return false
+                            }
+                            receiverHead = (headStruct as TypeSymbol) ?? headInterface
+                        }
+                        if receiverHead != nil &&
+                            TryResolveNestedTypeChainUnderReceiver(
+                            receiverHead,
+                            nestedRemainder.RightPart,
+                            out var pkgNestedStruct,
+                            out _,
+                            out var pkgNestedInterface,
+                            out failureHandled
+                        ) {
+                            constructedStruct = pkgNestedStruct
+                            constructedInterface = pkgNestedInterface
+                            return constructedStruct != nil || constructedInterface != nil
+                        }
+                        if failureHandled {
+                            return false
+                        }
+                    }
+                }
+                if !failureHandled &&
+                    TryResolveQualifiedUserNestedType(accessorChain, out var nestedType, out failureHandled) {
+                    constructedStruct = nestedType as StructSymbol
+                    constructedInterface = nestedType as InterfaceSymbol
+                    return constructedStruct != nil || constructedInterface != nil
                 }
                 return false
             }
@@ -3204,6 +3492,77 @@ internal partial class ExpressionBinder {
                 return false
             }
         }
+    }
+
+    private func IsNestedInterfaceAccessible(ifaceDef InterfaceSymbol) bool {
+        if ifaceDef.ContainingType == nil {
+            return true
+        }
+        let currentFunction = getCurrentFunction()
+        if currentFunction != nil {
+            return AccessibilityChecker.IsAccessible(ifaceDef.Accessibility, ifaceDef.ContainingType, currentFunction)
+        }
+        if binderCtx.CurrentContainingType is StructSymbol ambientClass {
+            return AccessibilityChecker.IsAccessibleFromType(
+                ifaceDef.Accessibility,
+                ifaceDef.ContainingType as StructSymbol,
+                ambientClass
+            )
+        }
+        if binderCtx.CurrentContainingType is InterfaceSymbol ambientInterface &&
+            ifaceDef.ContainingType is InterfaceSymbol declaringInterface {
+            if ifaceDef.Accessibility != Accessibility.Protected && ifaceDef.Accessibility != Accessibility.Private {
+                return true
+            }
+            if ifaceDef.Accessibility == Accessibility.Private {
+                return object.ReferenceEquals(
+                    ambientInterface.Definition ?? ambientInterface,
+                    declaringInterface.Definition ?? declaringInterface
+                )
+            }
+            return ambientInterface.SelfAndAllBaseInterfaces().Any(
+                (candidate InterfaceSymbol) -> object.ReferenceEquals(
+                    candidate.Definition ?? candidate,
+                    declaringInterface.Definition ?? declaringInterface
+                )
+            )
+        }
+        return AccessibilityChecker.IsAccessible(ifaceDef.Accessibility, ifaceDef.ContainingType, nil)
+    }
+
+    private func CheckNestedInterfaceConstraints(
+        ifaceDef InterfaceSymbol,
+        enclosingArgs ImmutableArray[TypeSymbol],
+        ownArgs ImmutableArray[TypeSymbol],
+        location TextLocation
+    ) bool {
+        let ownParams = ifaceDef.DeclaredTypeParameters
+        let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(ifaceDef)
+        let hasEnclosingArgs = !enclosingParams.IsDefaultOrEmpty &&
+            !enclosingArgs.IsDefaultOrEmpty &&
+            enclosingArgs.Length == enclosingParams.Length
+        let hasOwnArgs = !ownParams.IsDefaultOrEmpty && !ownArgs.IsDefaultOrEmpty && ownArgs.Length == ownParams.Length
+        if !hasEnclosingArgs && !hasOwnArgs {
+            return false
+        }
+        let effectiveEnclosingArgs = if hasEnclosingArgs {
+            enclosingArgs
+        } else {
+            enclosingParams.CastArray[TypeSymbol]()
+        }
+        let effectiveOwnArgs = if hasOwnArgs {
+            ownArgs
+        } else {
+            ownParams.CastArray[TypeSymbol]()
+        }
+        let (checkParams, checkArgs) = if !enclosingParams.IsDefaultOrEmpty && !ownParams.IsDefaultOrEmpty {
+            (enclosingParams.AddRange(ownParams), effectiveEnclosingArgs.AddRange(effectiveOwnArgs))
+        } else if !enclosingParams.IsDefaultOrEmpty {
+            (enclosingParams, effectiveEnclosingArgs)
+        } else {
+            (ownParams, effectiveOwnArgs)
+        }
+        return Binder.CheckUserGenericTypeClauseConstraints($scope, Diagnostics, checkParams, checkArgs, location)
     }
 
     /// Whether [`segment`](paramref) is a pure namespace/package prefix component.
@@ -4627,9 +4986,17 @@ internal partial class ExpressionBinder {
         /// non-generic enclosing type contributes nothing to thread).
         /// @param outerConstructed The constructed (or open) enclosing segment.
         /// @returns The flattened enclosing-argument vector, or `default`.
-        private func FlattenConstructedEnclosingArguments(outerConstructed StructSymbol) ImmutableArray[TypeSymbol] {
-            let enclosing = outerConstructed.EnclosingTypeArguments
-            let own = outerConstructed.TypeArguments
+        private func FlattenConstructedEnclosingArguments(outerConstructed TypeSymbol) ImmutableArray[TypeSymbol] {
+            let enclosing = switch outerConstructed {
+                case s is StructSymbol: s.EnclosingTypeArguments
+                case i is InterfaceSymbol: i.EnclosingTypeArguments
+                default: ImmutableArray[TypeSymbol].Empty
+            }
+            let own = switch outerConstructed {
+                case s is StructSymbol: s.TypeArguments
+                case i is InterfaceSymbol: i.TypeArguments
+                default: ImmutableArray[TypeSymbol].Empty
+            }
             if enclosing.IsDefaultOrEmpty && own.IsDefaultOrEmpty {
                 return default(ImmutableArray[TypeSymbol])
             }
@@ -4644,6 +5011,10 @@ internal partial class ExpressionBinder {
             }
             if !own.IsDefaultOrEmpty {
                 builder.AddRange(own)
+            } else if outerConstructed is InterfaceSymbol outerIface {
+                for tp in(outerIface.Definition ?? outerIface).DeclaredTypeParameters {
+                    builder.Add(tp)
+                }
             }
             return builder.ToImmutable()
         }

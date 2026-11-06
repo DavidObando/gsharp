@@ -558,12 +558,15 @@ shared class MoveNextBodyRewriter {
 
             protected override func RewriteTryStatement(node BoundTryStatement) BoundStatement {
                 // The emitter stores the caught exception into a LOCAL slot via
-                // EmitStoreVariable(clause.Variable). If the clause variable is
-                // hoisted to a field (because it's referenced elsewhere in the
-                // async body), the body's field-based reads would see the default
-                // value (null) instead of the caught exception. Fix: inject a
-                // local→field copy at the start of each catch body for hoisted
-                // catch variables.
+                // EmitStoreVariable(clause.Variable) — at filter entry when a
+                // `when` filter is present (ADR-0177), or at handler entry
+                // otherwise. If the clause variable is hoisted to a field
+                // (because it's referenced elsewhere in the async body),
+                // field-based reads in the filter (including a capture-boxing
+                // seed) or handler body would see the default value (null)
+                // instead of the caught exception. Fix: inject a local→field
+                // copy at the start of the filter when present, or at the start
+                // of the catch body otherwise.
                 var result = cast[BoundTryStatement](base.RewriteTryStatement(node))
                 // Patch hoisted catch variables.
                 var needsCatchPatch = false
@@ -580,17 +583,33 @@ shared class MoveNextBodyRewriter {
                             let copyToField = RewriteContext.Stmt(
                                 ctx.WriteField(field!!, BoundVariableExpression(nil, variable))
                             )
-                            let stmts = ImmutableArray.CreateBuilder[BoundStatement]()
-                            stmts.Add(copyToField)
-                            if clause.Body is BoundBlockStatement block {
-                                stmts.AddRange(block.Statements)
+                            if clause.Filter is {} existingFilter {
+                                let patchedFilter = if existingFilter is BoundBlockExpression existingBlock {
+                                    BoundBlockExpression(
+                                        nil,
+                                        ImmutableArray.Create[BoundStatement](copyToField).AddRange(
+                                            existingBlock.Statements
+                                        ),
+                                        existingBlock.Expression
+                                    )
+                                } else {
+                                    BoundBlockExpression(
+                                        nil,
+                                        ImmutableArray.Create[BoundStatement](copyToField),
+                                        existingFilter
+                                    )
+                                }
+                                patchedClauses.Add(clause.Update(patchedFilter, clause.Body))
                             } else {
-                                stmts.Add(clause.Body)
+                                let stmts = ImmutableArray.CreateBuilder[BoundStatement]()
+                                stmts.Add(copyToField)
+                                if clause.Body is BoundBlockStatement block {
+                                    stmts.AddRange(block.Statements)
+                                } else {
+                                    stmts.Add(clause.Body)
+                                }
+                                patchedClauses.Add(clause.WithBody(BoundBlockStatement(nil, stmts.ToImmutable())))
                             }
-                            // WithBody so the clause keeps its ADR-0177 `when`
-                            // filter (and ExitsThroughFinally) rather than
-                            // silently dropping them here.
-                            patchedClauses.Add(clause.WithBody(BoundBlockStatement(nil, stmts.ToImmutable())))
                         } else {
                             patchedClauses.Add(clause)
                         }

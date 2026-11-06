@@ -3409,6 +3409,7 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportConstFieldInitializerNotConstant(GSharp.Core.CodeAnalysis.Text.TextLocation location, String name)
   method public Void ReportConstFieldRequiresInitializer(GSharp.Core.CodeAnalysis.Text.TextLocation location, String name)
   method public Void ReportConstNativeIntegerNotSupported(GSharp.Core.CodeAnalysis.Text.TextLocation location, String name, String typeName)
+  method public Void ReportConstantFloatingConversionOutOfRange(GSharp.Core.CodeAnalysis.Text.TextLocation location, String valueText, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol toType)
   method public Void ReportConstraintNotInterface(GSharp.Core.CodeAnalysis.Text.TextLocation location, String typeName)
   method public Void ReportConstructedTypeParameterRequiresNewConstraint(GSharp.Core.CodeAnalysis.Text.TextLocation location, String typeParameterName)
   method public Void ReportConstructorInitializerCannotReferenceInstanceMember(GSharp.Core.CodeAnalysis.Text.TextLocation location, String memberName)

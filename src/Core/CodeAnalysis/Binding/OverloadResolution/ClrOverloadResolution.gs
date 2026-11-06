@@ -5835,7 +5835,6 @@ internal shared class ClrOverloadResolution {
                 // constructed generic class — `List[T].Add`, `Dictionary[K,
                 // V].TryGetValue` — on the hot path.
                 if conv != ImplicitConversionKind.None &&
-                    conv != ImplicitConversionKind.UserDefinedImplicit &&
                     erasedArgumentMismatchCheck != nil &&
                     erasedArgumentMismatchCheck(i, paramTypes[i]) &&
                     (
@@ -6349,7 +6348,6 @@ internal shared class ClrOverloadResolution {
             // genuine `object` element rather than an erased one, so the top-
             // level-`object` narrowing inside the callback keeps it applicable.
             if conv != ImplicitConversionKind.None &&
-                conv != ImplicitConversionKind.UserDefinedImplicit &&
                 erasedArgumentMismatchCheck != nil &&
                 erasedArgumentMismatchCheck(i, target) &&
                 !IsErasedGenericParameterSlot(rawCandidate, slot, explicitTypeArgIsGenuine) {
@@ -7343,12 +7341,6 @@ internal shared class ClrOverloadResolution {
         )
         var hasBetter = false
         for var i = 0; i < count; i++ {
-            if candidateConversions[i] != otherConversions[i] || !ClrTypeUtilities.AreSame(
-                PeelByRef(candidateParams[i]),
-                PeelByRef(otherParams[i])
-            ) {
-                return false
-            }
             let source = sources[i]
             if source?.IsByRef == true || object.ReferenceEquals(source, SymbolicByRefArgumentType) {
                 continue

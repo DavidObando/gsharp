@@ -1779,6 +1779,7 @@ internal class ReflectionMetadataEmitter {
     }
 
     private func PlanMethodRows(aggregateTypes AggregateTypeLayout) MethodRowPlan {
+        let structLetFields = this.CollectReadOnlyLiteralFields()
         let topInterfaces = aggregateTypes.TopLevel.Interfaces
         let topClasses = aggregateTypes.TopLevel.Classes
         let topStructs = aggregateTypes.TopLevel.Structs
@@ -2161,6 +2162,7 @@ internal class ReflectionMetadataEmitter {
             // inline-struct first-row offsets pre-registered later in this
             // pass stay valid).
             let needsSynthesizedDefaultCtor = ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(s)
+            let hasLetFieldCtors = s.Fields.Any((f FieldSymbol) -> f.IsReadOnly && structLetFields.Contains(f))
             if s
                 .Methods
                 .IsDefaultOrEmpty &&
@@ -2189,7 +2191,8 @@ internal class ReflectionMetadataEmitter {
                 .IsEmpty &&
                 !ConstantFieldMetadataEmitter.ContainsRuntimeInitializedConstant(s.ConstFields) &&
                 !s.HasStaticInitializerBlock &&
-                !needsSynthesizedDefaultCtor {
+                !needsSynthesizedDefaultCtor &&
+                !hasLetFieldCtors {
                 return
             }
             structFirstMethodRows[s] = methodRow
@@ -2333,6 +2336,33 @@ internal class ReflectionMetadataEmitter {
                     this.cache.ClassPrimaryCtorHandles[s] = initializerCtor
                 } else {
                     this.cache.ClassCtorHandles[s] = initializerCtor
+                }
+            }
+            if hasLetFieldCtors {
+                let maxExistingArity = Math.Max(
+                    Math.Max(
+                        s.PrimaryConstructorParameters.Length,
+                        if s.ExplicitConstructors.IsDefaultOrEmpty {
+                            if s.IsInline {
+                                1
+                            } else {
+                                0
+                            }
+                        } else {
+                            s.ExplicitConstructors.Max((ctor ConstructorSymbol) -> ctor.Parameters.Length)
+                        }
+                    ),
+                    s.LiteralInitializerMarkerCount
+                )
+                var nextTotalArity = Math.Max(2, maxExistingArity + 1)
+                for field in s.Fields {
+                    if !field.IsReadOnly || !structLetFields.Contains(field) {
+                        continue
+                    }
+                    let fieldCtor = MetadataTokens.MethodDefinitionHandle(methodRow++)
+                    let markerCount = nextTotalArity - 1
+                    nextTotalArity++
+                    this.cache.StructLetFieldCtorHandles[field] = (fieldCtor, markerCount)
                 }
             }
         }
@@ -3594,6 +3624,7 @@ internal class ReflectionMetadataEmitter {
                 if emitsSynthesizedDefaultCtor {
                     this.typeDefEmitter.EmitValueStructDefaultConstructor(s)
                 }
+                this.EmitPlannedStructLetFieldConstructors(s)
                 return
             }
             for m in s.Methods {
@@ -3653,6 +3684,7 @@ internal class ReflectionMetadataEmitter {
             if emitsSynthesizedDefaultCtor {
                 this.typeDefEmitter.EmitValueStructDefaultConstructor(s)
             }
+            this.EmitPlannedStructLetFieldConstructors(s)
             // Issues #2718/#2742: see the class path above.
             this.interfaceImpls.EmitImplicitEventMethodImpls(s)
         }
@@ -4264,6 +4296,196 @@ internal class ReflectionMetadataEmitter {
             )
         }
         return blob
+    }
+
+    private func CollectReadOnlyLiteralFields() HashSet[FieldSymbol] {
+        let structFields = HashSet[FieldSymbol]()
+        let collector = ReadOnlyLiteralFieldCollector(structFields)
+        collector.Visit(this.emitCtx.Program.Statement)
+        for kvp in BoundProgramOrder.Functions(this.emitCtx.Program) {
+            collector.Visit(kvp.Value)
+        }
+        for entry in BoundProgramOrder.Initializers(this.emitCtx.Program) {
+            let plan = entry.Value
+            collector.Visit(plan.Prologue)
+            for argument in plan.Arguments {
+                collector.VisitExpression(argument)
+            }
+            collector.Visit(plan.Body)
+        }
+        for type in this
+            .emitCtx
+            .Program
+            .Structs
+            .OrderBy((s StructSymbol) -> s.Declaration?.Span.Start ?? int32.MaxValue)
+            .ThenBy((s StructSymbol) -> s.Name, StringComparer.Ordinal) {
+            for field in type.Fields {
+                if type.InstanceFieldInitializers.TryGetValue(field, out var initializer) {
+                    collector.VisitExpression(initializer)
+                }
+            }
+            for field in type.StaticFields {
+                if type.StaticFieldInitializers.TryGetValue(field, out var initializer) {
+                    collector.VisitExpression(initializer)
+                }
+            }
+            for statement in type.StaticInitializerStatements {
+                collector.Visit(statement)
+            }
+            if type.BaseConstructorInitializer is {} primaryBaseInitializer {
+                for argument in primaryBaseInitializer.Arguments {
+                    collector.VisitExpression(argument)
+                }
+            }
+            for constructor in type.ExplicitConstructors {
+                if constructor.BaseInitializer is not{} baseInitializer {
+                    continue
+                }
+                for argument in baseInitializer.Arguments {
+                    collector.VisitExpression(argument)
+                }
+            }
+        }
+        for type in this
+            .emitCtx
+            .Program
+            .Interfaces
+            .OrderBy((i InterfaceSymbol) -> i.Declaration?.Span.Start ?? int32.MaxValue)
+            .ThenBy((i InterfaceSymbol) -> i.Name, StringComparer.Ordinal) {
+            for field in type.StaticFields {
+                if type.StaticFieldInitializers.TryGetValue(field, out var initializer) {
+                    collector.VisitExpression(initializer)
+                }
+            }
+        }
+        for plan in this.stateMachines.AsyncStateMachinePlans {
+            collector.Visit(plan.LoweredBody)
+        }
+        for closureClass in this.closures.SynthesizedClosureClasses {
+            for m in closureClass.Methods {
+                if this.lambdaBodies.TryGetValue(m, out var closureBody) {
+                    collector.Visit(closureBody)
+                }
+            }
+        }
+        return structFields
+    }
+
+    private func EmitPlannedStructLetFieldConstructors(structSym StructSymbol) {
+        if structSym.IsClass {
+            return
+        }
+        for field in structSym.Fields {
+            if !field.IsReadOnly || !this.cache.StructLetFieldCtorHandles.TryGetValue(field, out var entry) {
+                continue
+            }
+            var bodyOffset = -1
+            if !this.emitCtx.MetadataOnly {
+                let il = InstructionEncoder(BlobBuilder())
+                il.LoadArgument(0)
+                il.LoadArgument(1)
+                il.OpCode(ILOpCode.Stfld)
+                il.Token(this.userTokens.ResolveFieldToken(structSym, field))
+                il.OpCode(ILOpCode.Ret)
+                bodyOffset = this
+                    .emitCtx
+                    .MethodBodyStream
+                    .AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il))
+            }
+            let sigBlob = BlobBuilder()
+            {
+                using let _ = this.remaps.PushSmRemap(structSym)
+                BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
+                    1 + entry.MarkerCount,
+                    (r ReturnTypeEncoder) -> r.Void(),
+                    (ps ParametersEncoder) -> {
+                        this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(), field.Type)
+                        for var m = 0; m < entry.MarkerCount; m++ {
+                            this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(), TypeSymbol.Bool)
+                        }
+                    }
+                )
+            }
+            let emitted = this
+                .emitCtx
+                .Metadata
+                .AddMethodDefinition(
+                attributes: MethodAttributes.Assembly | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
+                implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+                name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
+                bodyOffset: bodyOffset,
+                parameterList: this.customAttrEncoder.NextParameterHandle()
+            )
+            if emitted != entry.Handle {
+                throw InvalidOperationException(
+                    "Struct '${structSym.Name}' let-field constructor row ${MetadataTokens.GetRowNumber(emitted)} did not match planned row ${MetadataTokens.GetRowNumber(entry.Handle)}."
+                )
+            }
+        }
+    }
+
+    private class ReadOnlyLiteralFieldCollector : BoundTreeWalker {
+        private let structFields HashSet[FieldSymbol]
+        private let seenLambdas HashSet[BoundFunctionLiteralExpression] = HashSet[BoundFunctionLiteralExpression]()
+
+        init(structFields HashSet[FieldSymbol]) {
+            this.structFields = structFields
+        }
+
+        override func VisitExpression(node BoundExpression?) {
+            if node is BoundFunctionLiteralExpression lambda && this.seenLambdas.Add(lambda) {
+                this.Visit(lambda.Body)
+            }
+            base.VisitExpression(node)
+        }
+
+        protected override func VisitStructLiteralExpression(node BoundStructLiteralExpression) {
+            let structType = node.StructType
+            let def = structType.Definition ?? structType
+            if !def.IsClass && def.ClrType == nil && node.CopySource == nil {
+                let callsPrimary = node.CallsPrimaryConstructor
+                let usesOwning = if node.IsZeroInitialization {
+                    def.UsesOwningZeroInitializerConstructor
+                } else {
+                    ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(def)
+                }
+                for init in node.Initializers {
+                    if init.Field is not{IsReadOnly: true} field {
+                        continue
+                    }
+                    if node.IsInTypeZeroInitializer(init) {
+                        continue
+                    }
+                    if callsPrimary && BoundStructLiteralExpression.GetPrimaryMember(structType, field.Name) == field {
+                        continue
+                    }
+                    if usesOwning && init.IsDeclarationInitializer {
+                        continue
+                    }
+                    this.structFields.Add(def.Fields.FirstOrDefault((f FieldSymbol) -> f.Name == field.Name) ?? field)
+                }
+            }
+            base.VisitStructLiteralExpression(node)
+        }
+
+        protected override func VisitFieldAssignmentExpression(node BoundFieldAssignmentExpression) {
+            if node
+                .Field
+                .IsReadOnly &&
+                ((node.Receiver != nil && node.Receiver is not ParameterSymbol) || node.ReceiverExpression != nil) {
+                let owner = (node.StructType as StructSymbol) ?? (node.Receiver?.Type as StructSymbol)
+                if owner != nil {
+                    let def = owner.Definition ?? owner
+                    if !def.IsClass && def.ClrType == nil {
+                        this.structFields.Add(
+                            def.Fields.FirstOrDefault((f FieldSymbol) -> f.Name == node.Field.Name) ?? node.Field
+                        )
+                    }
+                }
+            }
+            base.VisitFieldAssignmentExpression(node)
+        }
     }
 
     /// PR-E-10 body-emit callback used by

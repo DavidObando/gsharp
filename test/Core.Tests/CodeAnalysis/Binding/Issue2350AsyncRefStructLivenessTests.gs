@@ -32,12 +32,29 @@ open class Issue2350AsyncRefStructLivenessTests {
     @InlineData(false)
     @InlineData(true)
     func DiagnosticsOnlyConvertsUnsupportedSpillFailureAtOriginalGuard(boundProgram bool) {
-        let source = `import System.Threading.Tasks
+        let validSource = `import System.Threading.Tasks
 async func Pick(n int32, pending Task[bool]) int32 {
     let value = switch n {
         case 1 when await pending: 10
         default: 0
     }
+    return value
+}`
+        let validCompilation = Compilation(SyntaxTree.Parse(SourceText.From(validSource)))
+        let validDiagnostics = if boundProgram {
+            validCompilation.GetBoundProgram(default(CancellationToken)).Diagnostics
+        } else {
+            validCompilation.GetDiagnostics()
+        }
+        Assert.Empty(validDiagnostics)
+        let source = `import System
+import System.Threading.Tasks
+func Consume(value ReadOnlySpan[byte], extra int32) int32 -> value.Length + extra
+async func Pick(n int32, pending Task[bool]) int32 {
+    let value = Consume(ReadOnlySpan[byte]([]byte{65}), switch n {
+        case 1 when await pending: 10
+        default: 0
+    })
     return value
 }`
         let text = SourceText.From(source)
@@ -48,11 +65,73 @@ async func Pick(n int32, pending Task[bool]) int32 {
             compilation.GetDiagnostics()
         }
         let diagnostic = Assert.Single(diagnostics)
-        Assert.Equal("GS9998", diagnostic.Id)
-        Assert.Contains("'await' inside a switch-expression 'when' guard is not yet supported", diagnostic.Message)
+        Assert.Equal("GS0219", diagnostic.Id)
         Assert.Same(text, diagnostic.Location.Text)
         Assert.Equal(source.IndexOf("await pending", StringComparison.Ordinal), diagnostic.Location.Span.Start)
         Assert.Equal("await pending".Length, diagnostic.Location.Span.Length)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func PatternBoundRefStructCrossingGuardedSwitchAwaitReportsGS0219(statementForm bool) {
+        let switchBody = if statementForm {
+            `switch Make() {
+        case var s when await pending {
+            return s.Length
+        }
+        default {
+            return 0
+        }
+    }`
+        } else {
+            `return switch Make() {
+        case var s when await pending: s.Length
+        default: 0
+    }`
+        }
+        let source = `import System
+import System.Threading.Tasks
+func Make() ReadOnlySpan[byte] -> ReadOnlySpan[byte]([]byte{65})
+async func Pick(pending Task[bool]) int32 {
+    ` + "$switchBody" + `
+}`
+        let text = SourceText.From(source)
+        let compilation = Compilation(SyntaxTree.Parse(text))
+        let diagnostic = Assert.Single(compilation.GetDiagnostics())
+        Assert.Equal("GS0219", diagnostic.Id)
+        Assert.Contains("variable 's'", diagnostic.Message, StringComparison.Ordinal)
+        Assert.Same(text, diagnostic.Location.Text)
+        Assert.Equal(source.IndexOf("s when", StringComparison.Ordinal), diagnostic.Location.Span.Start)
+        Assert.Equal(1, diagnostic.Location.Span.Length)
+    }
+
+    @Theory
+    @InlineData("return switch n {\n        case > s.Length: 1\n        default: 0\n    }")
+    @InlineData(
+        "switch n {\n        case > s.Length {\n            return 1\n        }\n        default {\n            return 0\n        }\n    }"
+    )
+    @InlineData("return if n is > s.Length { 1 } else { 0 }")
+    func ExternalRefStructReadInPatternOperandAfterAwaitReportsGS0219(patternConsumer string) {
+        let source = `import System
+import System.Threading.Tasks
+func Make() ReadOnlySpan[byte] -> ReadOnlySpan[byte]([]byte{65})
+async func Pick(n int32, pending Task[bool]) int32 {
+    let s = Make()
+    let gate = await pending
+    if !gate {
+        return -1
+    }
+    ` + "$patternConsumer" + `
+}`
+        let text = SourceText.From(source)
+        let compilation = Compilation(SyntaxTree.Parse(text))
+        let diagnostic = Assert.Single(compilation.GetDiagnostics())
+        Assert.Equal("GS0219", diagnostic.Id)
+        Assert.Contains("variable 's'", diagnostic.Message, StringComparison.Ordinal)
+        Assert.Same(text, diagnostic.Location.Text)
+        Assert.Equal(source.IndexOf("s = Make()", StringComparison.Ordinal), diagnostic.Location.Span.Start)
+        Assert.Equal(1, diagnostic.Location.Span.Length)
     }
 
     @Theory

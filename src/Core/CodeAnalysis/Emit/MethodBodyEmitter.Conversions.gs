@@ -33,6 +33,16 @@ internal partial class MethodBodyEmitter {
         if conv.Expression.Type == TypeSymbol.Null && this.TryEmitPointerLikeDefault(conv.Type) {
             return
         }
+        // Issue #5767 (ADR-0219): a conversion of a constant floating-point operand to an integer type or
+        // `char` emits the folded value. `conv.i1` and the other conversion opcodes give different results
+        // for a value out of range on .NET 10 and on .NET 11, so `let a = unchecked(int8(300.5))` must not
+        // depend on the runtime, and must give the same value as `const`. Outside explicit `unchecked`, the
+        // binder reports GS0635 for a value out of range, so only an in-range value reaches a checked conversion.
+        // A nullable target is a lift of the folded literal, which the nullable arms below emit.
+        if ConstantExpressionEvaluator.TryFoldFloatingConstantConversionToLiteral(conv, out var folded) {
+            this.EmitExpression(folded)
+            return
+        }
         if (
             TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(conv.Expression.Type, conv.Type) ||
                 IsRepresentationPreservingPlatformWidening(conv.Expression.Type, conv.Type)

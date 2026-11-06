@@ -6678,6 +6678,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         tupleTainted,
                         tupleEdges
                     )
+                    AddParameterTupleContractPairs(method.Parameters, overridden.Parameters, tupleTainted, tupleEdges)
                 }
                 if method.PartialImplementationPart is IMethodSymbol implementation {
                     AddTupleContractPair(
@@ -6714,6 +6715,22 @@ internal shared class ObliviousNullabilityAnalyzer {
                         tupleTainted,
                         tupleEdges
                     )
+                    if interfaceMember is IMethodSymbol ifaceMethod && implementation is IMethodSymbol implMethod {
+                        AddParameterTupleContractPairs(
+                            ifaceMethod.Parameters,
+                            implMethod.Parameters,
+                            tupleTainted,
+                            tupleEdges
+                        )
+                    } else if interfaceMember is IPropertySymbol ifaceProp &&
+                        implementation is IPropertySymbol implProp {
+                        AddParameterTupleContractPairs(
+                            ifaceProp.Parameters,
+                            implProp.Parameters,
+                            tupleTainted,
+                            tupleEdges
+                        )
+                    }
                 }
             }
             for property in type.GetMembers().OfType[IPropertySymbol]() {
@@ -6753,6 +6770,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         tupleTainted,
                         tupleEdges
                     )
+                    AddParameterTupleContractPairs(property.Parameters, overridden.Parameters, tupleTainted, tupleEdges)
                 }
             }
         }
@@ -6825,6 +6843,16 @@ internal shared class ObliviousNullabilityAnalyzer {
             // Compare method parameters by ordinal without changing tuple-key ownership.
             comparisonType = SymbolValueType(
                 firstMethod.ConstructedFrom.Construct(secondMethod.TypeArguments.ToArray())
+            )
+        } else if first is IParameterSymbol{ContainingSymbol: IMethodSymbol{Arity: > 0} firstOwner} firstParam &&
+            second is IParameterSymbol{ContainingSymbol: IMethodSymbol secondOwner} &&
+            firstOwner.Arity == secondOwner.Arity &&
+            firstParam.Ordinal >= 0 &&
+            firstParam.Ordinal < firstOwner
+            .Parameters
+            .Length {
+            comparisonType = SymbolValueType(
+                firstOwner.ConstructedFrom.Construct(secondOwner.TypeArguments.ToArray()).Parameters[firstParam.Ordinal]
             )
         }
         // Covariant envelopes can reorder type arguments. Bare tuple
@@ -6901,12 +6929,15 @@ internal shared class ObliviousNullabilityAnalyzer {
             if model.GetTypeInfo(expression)
                 .ConvertedType is not INamedTypeSymbol delegateType ||
                 delegateType.TypeKind != TypeKind.Delegate ||
-                delegateType.DelegateInvokeMethod is not IMethodSymbol invoke ||
-                invoke.ReturnsVoid {
+                delegateType.DelegateInvokeMethod is not IMethodSymbol invoke {
                 continue
             }
             let source IMethodSymbol? = model.GetSymbolInfo(expression).Symbol as IMethodSymbol
-            if source == nil || source.ReturnsVoid {
+            if source == nil {
+                continue
+            }
+            AddParameterTupleContractPairs(invoke.Parameters, source.Parameters, tupleTainted, tupleEdges)
+            if invoke.ReturnsVoid || source.ReturnsVoid {
                 continue
             }
             AddTupleContractPair(

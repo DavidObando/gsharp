@@ -140,6 +140,13 @@ internal partial class DeclarationBinder {
         (Field FieldSymbol, Bound BoundExpression, Location TextLocation)
     ] = List[(Field FieldSymbol, Bound BoundExpression, Location TextLocation)]()
 
+    // Issue #5767 (ADR-0219): the GS0635 checks of a const field initializer whose operand refers to a const that
+    // had no value yet. The const fixpoint runs them when it folds the field, or when the field stays unfolded.
+    private let deferredFloatingConstantChecks Dictionary[
+        FieldSymbol,
+        ImmutableArray[(Location TextLocation, Conversion BoundConversionExpression)]
+    ] = Dictionary[FieldSymbol, ImmutableArray[(Location TextLocation, Conversion BoundConversionExpression)]]()
+
     // Issue #1069: nested struct/class and interface type-name shells declared in
     // phase 1 (DeclareNestedTypeShells) so a sibling member signature can
     // forward-reference a nested type by name. The recorded shells are reused in

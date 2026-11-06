@@ -1969,6 +1969,46 @@ internal class UserTokenResolver {
         return this.GetUserStructMethodRef(structType, explicitDef, ".ctor", sigBlob)
     }
 
+    internal func TryResolveStructLetFieldCtorToken(
+        structType StructSymbol,
+        field FieldSymbol,
+        out token EntityHandle,
+        out markerCount int32
+    ) bool {
+        token = default(EntityHandle)
+        markerCount = 0
+        let def = structType.Definition ?? structType
+        if def.IsClass {
+            return false
+        }
+        let defField = def.Fields.FirstOrDefault((f FieldSymbol) -> f.Name == field.Name) ?? field
+        if !this.cache.StructLetFieldCtorHandles.TryGetValue(defField, out var entry) {
+            return false
+        }
+        markerCount = entry.MarkerCount
+        if !ReflectionMetadataEmitter.IsUserGenericTypeReference(structType) {
+            token = entry.Handle
+            return true
+        }
+        let markers = markerCount
+        let sigBlob = BlobBuilder()
+        {
+            using let _ = this.remaps.PushSmRemap(def)
+            BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true).Parameters(
+                1 + markers,
+                (r ReturnTypeEncoder) -> r.Void(),
+                (ps ParametersEncoder) -> {
+                    this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(), defField.Type)
+                    for var m = 0; m < markers; m++ {
+                        this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(), TypeSymbol.Bool)
+                    }
+                }
+            )
+        }
+        token = this.GetUserStructMethodRef(structType, entry.Handle, ".ctor", sigBlob)
+        return true
+    }
+
     /// ADR-0087 §3 R3: resolves the right token for a type operation
     /// (`isinst`, `unbox`, `unbox.any`, `initobj`,
     /// `castclass`) against a user-declared type. Returns the

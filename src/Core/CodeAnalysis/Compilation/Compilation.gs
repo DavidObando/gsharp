@@ -1074,6 +1074,12 @@ open class Compilation {
             return (nil, program, allDiagnostics)
         }
         let documentationDiagnostics = ValidateDocumentation(program)
+        // Issue #5767: fold each conversion of a constant floating operand to its literal before
+        // capture boxing and the async and iterator rewriters replace a `const` local read with a
+        // box-cell or state-machine field read that is no longer constant.
+        using let constantConversionPhase = CompilationMeasurements.BeginPhase("lowering.constant-conversions")
+        program = ConstantConversionFolder.Lower(program)
+        constantConversionPhase?.Dispose()
         // ADR-0055 / issue #368: lower interpolated strings to the
         // DefaultInterpolatedStringHandler pattern on the emit path only, before
         // the async/iterator rewriters and IL emission. The interpreter path is

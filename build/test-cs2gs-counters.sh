@@ -122,7 +122,7 @@ assert_eq "$reducible $atomic $total" "3 1 4" "issue #4082 non-delimiter backtic
 # flips the moment the scanner's state desyncs from the lexer's. A shared tree
 # would let one fix mask the other's fixture.
 #
-# (a) `$$` escapes to a literal `$` (Lexer.cs:905-915), so in "$${" the brace
+# (a) `$$` escapes to a literal `$` (Lexer.gs:905-915), so in "$${" the brace
 #     is ordinary text. Reading the second `$` as an interpolation opener makes
 #     the literal's own closing quote look like the START of a new literal, and
 #     the raw-string opener after it is then swallowed -- so the raw body line
@@ -142,7 +142,7 @@ PY
 read -r reducible atomic total < <(cs2gs_long_line_counts "$dollar_escape_tree")
 assert_eq "$reducible $atomic $total" "0 1 1" "PR #4123: \$\$ escape does not open a hole"
 
-# (b) An ADR-0055 interpolation hole may span a newline (Lexer.cs:824-830,
+# (b) An ADR-0055 interpolation hole may span a newline (Lexer.gs:824-830,
 #     samples/InterpolatedStringRichHoles.gs:17-19). Dropping the hole stack at
 #     the line boundary left the continuation's `}` unable to restore the
 #     string state, so the closing quote opened a literal that swallowed the

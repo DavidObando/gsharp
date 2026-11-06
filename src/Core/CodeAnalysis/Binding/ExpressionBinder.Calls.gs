@@ -1392,6 +1392,7 @@ internal partial class ExpressionBinder {
     /// @param symbolicTypeArgs The symbolic type arguments of the constructed type.
     /// @returns The CLR type to use for overload resolution.
     private func EraseEnumElementArrayForClosedConstruction(
+        constructedClrType Type,
         argumentType TypeSymbol,
         clrType Type,
         symbolicTypeArgs ImmutableArray[TypeSymbol]
@@ -1404,8 +1405,14 @@ internal partial class ExpressionBinder {
             case array is ArrayTypeSymbol: array.ElementType
             default: nil
         }
-        if element is EnumSymbol && symbolicTypeArgs.Contains(element) {
-            return typeof(object).MakeArrayType()
+        if element is EnumSymbol {
+            let index = symbolicTypeArgs.IndexOf(element)
+            if index >= 0 && constructedClrType.IsGenericType && index < constructedClrType.GetGenericArguments()
+                .Length &&
+                ClrTypeUtilities
+                .AreSame(constructedClrType.GetGenericArguments()[index], typeof(object)) {
+                return typeof(object).MakeArrayType()
+            }
         }
         return clrType
     }
@@ -1900,7 +1907,7 @@ internal partial class ExpressionBinder {
                 hasUserClassArg = true
             }
             argTypes[i] = if t != nil && openGenericDefinition != nil {
-                EraseEnumElementArrayForClosedConstruction(boundArguments[i].Type, t, symbolicTypeArgs)
+                EraseEnumElementArrayForClosedConstruction(clrType, boundArguments[i].Type, t, symbolicTypeArgs)
             } else {
                 t
             }

@@ -4984,6 +4984,14 @@ internal partial class ExpressionBinder {
             let ownerDef = constructedInterface.Definition ?? constructedInterface
             let ifaceStaticField FieldSymbol? = ownerDef.GetStaticField(fieldName)
             if ifaceStaticField != nil {
+                if !AccessibilityChecker.IsAccessible(ifaceStaticField.Accessibility, ownerDef, function) {
+                    Diagnostics.ReportMemberInaccessible(
+                        syntax.FieldIdentifier.Location,
+                        ifaceStaticField.Name,
+                        ownerDef.Name,
+                        ifaceStaticField.Accessibility
+                    )
+                }
                 if ifaceStaticField.IsReadOnly || ifaceStaticField.IsConst {
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName)
                 }
@@ -4996,6 +5004,37 @@ internal partial class ExpressionBinder {
                     ifaceConverted,
                     fieldType
                 )
+            }
+            for prop in ownerDef.Properties {
+                if prop.IsStatic && !prop.IsIndexer && prop.Name == fieldName {
+                    if !AccessibilityChecker.IsAccessible(prop.SetterAccessibility, ownerDef, function) {
+                        Diagnostics.ReportMemberInaccessible(
+                            syntax.FieldIdentifier.Location,
+                            prop.Name,
+                            ownerDef.Name,
+                            prop.SetterAccessibility
+                        )
+                    }
+                    if !prop.HasSetter || prop.SetterSymbol == nil || prop.SetterSymbol!!.IsAbstract {
+                        Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName)
+                        return BoundErrorExpression(nil)
+                    }
+                    let propType = constructedInterface.SubstituteMemberType(prop.Type)
+                    let propConverted = conversions.BindConversion(syntax.Value.Location, BindValue(propType), propType)
+                    return BoundPropertyAssignmentExpression(
+                        nil,
+                        receiver: nil,
+                        structType: nil,
+                        prop,
+                        propConverted,
+                        if object.ReferenceEquals(propType, prop.Type) {
+                            default(TypeSymbol?)
+                        } else {
+                            propType
+                        },
+                        constructedInterface
+                    )
+                }
             }
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName)
             return BoundErrorExpression(nil)

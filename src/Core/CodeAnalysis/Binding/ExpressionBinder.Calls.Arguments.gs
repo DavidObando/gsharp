@@ -924,15 +924,21 @@ internal partial class ExpressionBinder {
         // precedence used by the read path in BindAccessorStep (properties
         // first, fields fallback). Indexer properties (those with parameters)
         // are not member-style invocable, so skip them.
-        var member MemberInfo? = ClrTypeUtilities.SafeGetProperty(
-            clrType,
-            methodName,
-            BindingFlags.Public | BindingFlags.Instance
-        )
-        if member is PropertyInfo prop && (prop.GetIndexParameters().Length != 0 || !prop.CanRead) {
+        let fromDerivedType = IsCurrentThisReceiver(receiver)
+        var member MemberInfo? = if fromDerivedType {
+            ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrType, methodName, CanAccessInternalsOf)
+        } else {
+            ClrTypeUtilities.SafeGetProperty(clrType, methodName, BindingFlags.Public | BindingFlags.Instance)
+        }
+        if member is PropertyInfo prop &&
+            (prop.GetIndexParameters().Length != 0 || GetVisibleGetter(prop, fromDerivedType) == nil) {
             member = nil
         }
-        member ??= ClrTypeUtilities.SafeGetField(clrType, methodName, BindingFlags.Public | BindingFlags.Instance)
+        member ??= if fromDerivedType {
+            ClrTypeUtilities.SafeGetInheritedInstanceField(clrType, methodName, CanAccessInternalsOf)
+        } else {
+            ClrTypeUtilities.SafeGetField(clrType, methodName, BindingFlags.Public | BindingFlags.Instance)
+        }
         if member == nil {
             return false
         }
@@ -944,10 +950,36 @@ internal partial class ExpressionBinder {
         if memberClrType == nil {
             return false
         }
-        let memberTypeSymbol = MemberLookup.GetClrMemberValueTypeSymbol(member)
+        let memberTypeSymbol = if fromDerivedType {
+            GetInheritedClrMemberType(receiver.Type, member)
+        } else {
+            switch member {
+                case property is PropertyInfo: MemberLookup.GetClrPropertyTypeSymbol(receiver.Type, property)
+                case field is FieldInfo: MemberLookup.GetClrFieldTypeSymbol(receiver.Type, field)
+                default: MemberLookup.GetClrMemberValueTypeSymbol(member)
+            }
+        }
         var delegateLoad = ApplyCallableMemberNarrowing(
             BoundClrPropertyAccessExpression(nil, receiver, member, memberTypeSymbol)
         )
+        let initialEffectiveType = switch delegateLoad {
+            case unwrap is BoundUnaryExpression when unwrap.Op.Kind == BoundUnaryOperatorKind.NullAssertion: unwrap.Type
+            default: delegateLoad.Type
+        }
+        if ce.NullableQuestionToken == nil &&
+            ce.TypeArgumentList == nil &&
+            initialEffectiveType is FunctionPointerTypeSymbol functionPointerType {
+            result = overloads.BindFunctionPointerInvocation(
+                ce,
+                delegateLoad,
+                functionPointerType,
+                methodName,
+                ce.Identifier.Location,
+                arguments,
+                argumentNames
+            )
+            return true
+        }
         if !ClrTypeUtilities.IsDelegateType(memberClrType) {
             // Issue #3880, the imported twin of the source-receiver recovery in
             // TryBindUserCallableMemberInvocation. `x.Callbacks[key]()` where
@@ -959,10 +991,22 @@ internal partial class ExpressionBinder {
             // below, which already owns named arguments, ref/in/out and
             // variadic packing.
             if !TryBindAmbiguousBracketAsIndex(ce, delegateLoad, out var indexedValue) ||
-                indexedValue!!
-                .Type
-                ?.ClrType is not{} indexedClrType ||
-                !ClrTypeUtilities.IsDelegateType(indexedClrType) {
+                indexedValue!!.Type is not{} indexedType {
+                return false
+            }
+            if indexedType is FunctionPointerTypeSymbol indexedFpType {
+                result = overloads.BindFunctionPointerInvocation(
+                    ce,
+                    indexedValue!!,
+                    indexedFpType,
+                    methodName,
+                    ce.Identifier.Location,
+                    arguments,
+                    argumentNames
+                )
+                return true
+            }
+            if indexedType.ClrType is not{} indexedClrType || !ClrTypeUtilities.IsDelegateType(indexedClrType) {
                 return false
             }
             delegateLoad = indexedValue!!
@@ -1069,18 +1113,62 @@ internal partial class ExpressionBinder {
         if memberClrType == nil {
             return false
         }
-        let memberTypeSymbol = MemberLookup.GetClrMemberValueTypeSymbol(member!!)
+        let staticOwnerType = classSymbol.ConstructedReceiver ?? classSymbol.SymbolicReceiver
+        let memberTypeSymbol = if staticOwnerType != nil {
+            switch member {
+                case property is PropertyInfo: MemberLookup.GetClrPropertyTypeSymbol(staticOwnerType, property)
+                case field is FieldInfo: MemberLookup.GetClrFieldTypeSymbol(staticOwnerType, field)
+                default: MemberLookup.GetClrMemberValueTypeSymbol(member!!)
+            }
+        } else {
+            MemberLookup.GetClrMemberValueTypeSymbol(member!!)
+        }
+        if member is PropertyInfo readProperty &&
+            !TryRequireVisibleStaticGetter(classSymbol, readProperty, ce.Identifier.Location) {
+            result = BoundErrorExpression(nil)
+            return true
+        }
         var delegateLoad = ApplyCallableMemberNarrowing(
-            BoundClrPropertyAccessExpression(nil, nil, member!!, memberTypeSymbol)
+            BoundClrPropertyAccessExpression(nil, nil, member!!, memberTypeSymbol, classSymbol.SymbolicReceiver)
         )
+        let initialEffectiveType = switch delegateLoad {
+            case unwrap is BoundUnaryExpression when unwrap.Op.Kind == BoundUnaryOperatorKind.NullAssertion: unwrap.Type
+            default: delegateLoad.Type
+        }
+        if ce.NullableQuestionToken == nil &&
+            ce.TypeArgumentList == nil &&
+            initialEffectiveType is FunctionPointerTypeSymbol functionPointerType {
+            result = overloads.BindFunctionPointerInvocation(
+                ce,
+                delegateLoad,
+                functionPointerType,
+                methodName,
+                ce.Identifier.Location,
+                arguments,
+                argumentNames
+            )
+            return true
+        }
         if !ClrTypeUtilities.IsDelegateType(memberClrType) {
             // Static imports have the same Member[index](args) ambiguity as
             // instance members; reuse their index recovery before Invoke.
             if !TryBindAmbiguousBracketAsIndex(ce, delegateLoad, out var indexedValue) ||
-                indexedValue!!
-                .Type
-                ?.ClrType is not{} indexedClrType ||
-                !ClrTypeUtilities.IsDelegateType(indexedClrType) {
+                indexedValue!!.Type is not{} indexedType {
+                return false
+            }
+            if indexedType is FunctionPointerTypeSymbol indexedFpType {
+                result = overloads.BindFunctionPointerInvocation(
+                    ce,
+                    indexedValue!!,
+                    indexedFpType,
+                    methodName,
+                    ce.Identifier.Location,
+                    arguments,
+                    argumentNames
+                )
+                return true
+            }
+            if indexedType.ClrType is not{} indexedClrType || !ClrTypeUtilities.IsDelegateType(indexedClrType) {
                 return false
             }
             delegateLoad = indexedValue!!

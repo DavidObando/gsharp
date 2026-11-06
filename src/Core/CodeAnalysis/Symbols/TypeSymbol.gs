@@ -1248,6 +1248,20 @@ open partial class TypeSymbol : Symbol {
                     )
                 )
             }
+            if left is ImportedTypeSymbol &&
+                right is ImportedTypeSymbol &&
+                left.ClrType != nil &&
+                right.ClrType != nil &&
+                (
+                ManagedReferenceTypes.IsDefinition(left.ClrType, out _) || NativeSliceTypes.IsDefinition(
+                    left.ClrType,
+                    out _
+                )
+            ) &&
+                !RequiresSymbolicProjection(left) &&
+                !RequiresSymbolicProjection(right) {
+                return ClrTypeUtilities.AreSame(left.ClrType, right.ClrType)
+            }
             if left.GetType() != right.GetType() {
                 return MemberLookup.IsNaturalStructuralDelegateTarget(left, right) ||
                     MemberLookup.IsNaturalStructuralDelegateTarget(right, left)
@@ -1305,8 +1319,49 @@ open partial class TypeSymbol : Symbol {
             ContainsReferenceNullableAnnotation(type) ||
             ContainsFunctionPointer(type)
 
-        private func ContainsFunctionPointer(type TypeSymbol) bool -> type is FunctionPointerTypeSymbol ||
-            GetWrappedTypes(type).Any(ContainsFunctionPointer)
+        internal func ContainsFunctionPointer(type TypeSymbol) bool {
+            var visited HashSet[TypeSymbol]? = nil
+            return ContainsFunctionPointerCore(type, &visited)
+        }
+
+        private func ContainsFunctionPointerCore(type TypeSymbol, ref visited HashSet[TypeSymbol]?) bool {
+            if type is FunctionPointerTypeSymbol {
+                return true
+            }
+            let aggregateArgs = switch type {
+                case s is StructSymbol: GSharp.Core.CodeAnalysis.Binding.Conversion.GetEffectiveStructTypeArguments(s)
+                case i is InterfaceSymbol: GSharp
+                    .Core
+                    .CodeAnalysis
+                    .Binding
+                    .Conversion
+                    .GetEffectiveInterfaceTypeArguments(i)
+                case d is DelegateTypeSymbol: d.TypeArguments
+                default: ImmutableArray[TypeSymbol].Empty
+            }
+            if !aggregateArgs.IsDefaultOrEmpty {
+                for arg in aggregateArgs {
+                    visited ??= HashSet[TypeSymbol](ReferenceEqualityComparer.Instance)
+                    if !visited!!.Add(arg) {
+                        continue
+                    }
+                    if ContainsFunctionPointerCore(arg, &visited) {
+                        return true
+                    }
+                }
+                return false
+            }
+            for inner in GetWrappedTypes(type) {
+                visited ??= HashSet[TypeSymbol](ReferenceEqualityComparer.Instance)
+                if !visited!!.Add(inner) {
+                    continue
+                }
+                if ContainsFunctionPointerCore(inner, &visited) {
+                    return true
+                }
+            }
+            return false
+        }
 
         /// Issue #3746 / ADR-0172: returns `true` when [`type`](paramref)
         /// carries tuple element names at any structural position. Like reference

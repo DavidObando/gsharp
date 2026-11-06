@@ -603,8 +603,30 @@ internal partial class MethodBodyEmitter {
             this.EmitExpression(fas.Value)
             this.il.OpCode(ILOpCode.Dup)
             this.il.StoreLocal(valueSlot)
-            this.il.OpCode(ILOpCode.Stfld)
-            this.il.Token(fieldHandle)
+            let exprDeclaringStruct = BoundNodeForm.DeclaringType(fas)
+            if !exprDeclaringStruct.IsClass &&
+                fas
+                .Field
+                .IsReadOnly &&
+                exprDeclaringStruct.ClrType == nil &&
+                this
+                .outer
+                .userTokens
+                .TryResolveStructLetFieldCtorToken(
+                fieldContainer ?? exprDeclaringStruct,
+                fas.Field,
+                out var exprLetCtorHandle,
+                out var exprLetMarkerCount
+            ) {
+                for var marker = 0; marker < exprLetMarkerCount; marker++ {
+                    this.il.LoadConstantI4(0)
+                }
+                this.il.OpCode(ILOpCode.Call)
+                this.il.Token(exprLetCtorHandle)
+            } else {
+                this.il.OpCode(ILOpCode.Stfld)
+                this.il.Token(fieldHandle)
+            }
             // Expression result: the value we just stored — no second
             // receiver evaluation, no second field read.
             this.il.LoadLocal(valueSlot)
@@ -658,12 +680,44 @@ internal partial class MethodBodyEmitter {
         // Class field assignment: load the reference, evaluate the value,
         // stfld through the reference. Re-load the receiver + ldfld to
         // leave the new value on the stack as the expression result.
-        if BoundNodeForm.DeclaringType(fas).IsClass {
+        let declaringStruct = BoundNodeForm.DeclaringType(fas)
+        if declaringStruct.IsClass {
             this.EmitLoadVariable(fieldReceiver)
             this.EmitExpression(fas.Value)
             this.il.OpCode(ILOpCode.Stfld)
             this.il.Token(fieldHandle)
             this.EmitLoadVariable(fieldReceiver)
+            this.il.OpCode(ILOpCode.Ldfld)
+            this.il.Token(fieldHandle)
+            return
+        }
+        if fas.Field.IsReadOnly && !object.ReferenceEquals(fieldReceiver, this.structThisParameter) &&
+            declaringStruct.ClrType == nil &&
+            this
+            .outer
+            .userTokens
+            .TryResolveStructLetFieldCtorToken(
+            fieldContainer ?? (fieldReceiver.Type as StructSymbol) ?? declaringStruct,
+            fas.Field,
+            out var letFieldCtorHandle,
+            out var letFieldMarkerCount
+        ) {
+            if !this.TryLoadVariableAddress(fieldReceiver) {
+                throw InvalidOperationException(
+                    "Cannot take the address of variable '${fieldReceiver.Name}' for field assignment."
+                )
+            }
+            this.EmitExpression(fas.Value)
+            for var marker = 0; marker < letFieldMarkerCount; marker++ {
+                this.il.LoadConstantI4(0)
+            }
+            this.il.OpCode(ILOpCode.Call)
+            this.il.Token(letFieldCtorHandle)
+            if !this.TryLoadVariableAddress(fieldReceiver) {
+                throw InvalidOperationException(
+                    "Cannot take the address of variable '${fieldReceiver.Name}' for field assignment."
+                )
+            }
             this.il.OpCode(ILOpCode.Ldfld)
             this.il.Token(fieldHandle)
             return
