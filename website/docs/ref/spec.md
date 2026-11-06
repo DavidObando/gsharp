@@ -2322,6 +2322,11 @@ CheckedExpression ::= ('checked' | 'unchecked') '(' Expression ')'
 
 `defer expr` registers a deferred call. The parser accepts an expression, but binding requires a call expression. `using` introduces a resource variable declaration and requires a disposable value.
 
+The function value or receiver and the arguments evaluate eagerly, in that order. The call runs at block exit, in reverse registration order. A value-type storage receiver keeps its location: a field chain captures its reference-type owner, and an array element captures its array and indices, before the arguments. The location is checked eagerly. Locals, parameters, `ref` aliases, globals, and static fields retain their storage. Reference-type receivers and value-type rvalues are captured by value. For a generic receiver, this distinction follows its runtime type. Only the eager operands affect narrowing before block exit.
+
+A reference slot narrowed to a boxed value captures the selected box, not the mutable reference slot. Ref-returning receivers retain readonly capability. A user block expression remains a value, including when its last expression returns by reference.
+A pointer dereference captures the pointer eagerly and preserves the selected location. Managed pointer captures obey scoped alias suspension restrictions. Static readonly value fields are captured by value.
+
 ```ebnf
 UsingStmt = "using" VariableDecl .
 DeferStmt = "defer" Expression .
