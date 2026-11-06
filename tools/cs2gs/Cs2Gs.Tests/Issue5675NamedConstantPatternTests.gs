@@ -531,6 +531,54 @@ namespace Demo
     }
 
     @Fact
+    func SharedPrefixCaptures_OutliveEarlierBindingStorageBlocks() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public class Q
+    {
+        public object X => 3;
+        public object Y => 4;
+    }
+    public class Middle { public Q Q = new Q(); }
+    public class Row { public Middle? P = new Middle(); }
+    public static class P
+    {
+        public static string Run()
+        {
+            var value = new Row();
+            if (value is { P.Q.X: int x, P.Q.Y: 4 }) return x.ToString();
+            return "-1";
+        }
+    }
+}`, "3")
+    }
+
+    @Fact
+    func SharedPrefixCaptures_OutliveRootSnapshotAndEscapeToConditionalArm() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public class Q
+    {
+        public static int Reads;
+        public object X => 3;
+        public object Y { get { Reads++; return 4; } }
+    }
+    public class Middle { public Q Q = new Q(); }
+    public class Row { public Middle? P = new Middle(); }
+    public static class P
+    {
+        static Row Read() => new Row();
+        public static string Run() =>
+            (Read() is { P.Q.X: 3, P.Q.Y: int y } ? y : -1) + " " + Q.Reads;
+    }
+}`, "4 1")
+    }
+
+    @Fact
     func ExtendedPropertyFallback_ReusesCommonGetterPrefix() {
         Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
 #nullable enable
