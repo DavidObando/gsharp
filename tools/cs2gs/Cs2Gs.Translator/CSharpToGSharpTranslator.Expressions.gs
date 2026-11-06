@@ -3600,12 +3600,19 @@ partial class CSharpToGSharpTranslator {
             if assignment.Parent is InitializerExpressionSyntax{Parent: BaseObjectCreationExpressionSyntax creation} {
                 return this.ReceiverTypeArgumentsAreDeclared(creation, effectiveDeclared)
             }
-            return this.MemberReceiverTypeArgumentsAreDeclared(
-                effectiveDeclared,
-                effectiveConstructed,
-                assignment.Left,
-                effectiveDeclared
-            )
+            if assignment.Left is SimpleNameSyntax {
+                return true
+            }
+            let containingReceiver = switch assignment.Left {
+                case memberAccess is MemberAccessExpressionSyntax: memberAccess.Expression
+                case memberBinding is MemberBindingExpressionSyntax: this.GetConditionalBindingReceiver(memberBinding)
+                case elementAccess is ElementAccessExpressionSyntax: elementAccess.Expression
+                case elementBinding is ElementBindingExpressionSyntax: this.GetConditionalBindingReceiver(
+                    elementBinding
+                )
+                default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            return this.ReceiverTypeArgumentsAreDeclared(containingReceiver, effectiveDeclared)
         }
 
         private func LambdaFeedsDeclaredCollectionElement(lambda AnonymousFunctionExpressionSyntax) bool {
@@ -4059,12 +4066,15 @@ partial class CSharpToGSharpTranslator {
         ) bool -> ContainsTypeParameter(this.ProjectSlotThroughReceiverType(slotType, receiverType))
 
         private func ProjectSlotThroughReceiverType(slotType ITypeSymbol?, receiverType ITypeSymbol?) ITypeSymbol? {
-            if slotType == nil || receiverType == nil {
+            if slotType == nil {
                 return receiverType
+            }
+            if receiverType == nil {
+                return slotType
             }
             switch slotType {
                 case typeParameter is ITypeParameterSymbol when typeParameter.TypeParameterKind == TypeParameterKind.Type {
-                    return this.ResolveReceiverTypeArgument(typeParameter, receiverType) ?? receiverType
+                    return this.ResolveReceiverTypeArgument(typeParameter, receiverType) ?? slotType
                 }
                 case array is IArrayTypeSymbol {
                     return if this.ProjectSlotThroughReceiverType(
@@ -4079,7 +4089,14 @@ partial class CSharpToGSharpTranslator {
                         slotType
                     }
                 }
-                case named is INamedTypeSymbol when named.IsGenericType && named.TypeArguments.Length > 0 {
+                case named is INamedTypeSymbol when named.IsGenericType {
+                    if named.TypeArguments.Length == 0 {
+                        return if named.ContainingType != nil {
+                            this.ProjectSlotThroughReceiverType(named.ContainingType, receiverType)
+                        } else {
+                            slotType
+                        }
+                    }
                     let args = List[ITypeSymbol](named.TypeArguments.Length)
                     var changed = false
                     for argument in named.TypeArguments {
@@ -4090,13 +4107,13 @@ partial class CSharpToGSharpTranslator {
                         args.Add(projected)
                     }
                     return if changed {
-                        named.OriginalDefinition.Construct(args.ToArray())
+                        named.ConstructedFrom.Construct(args.ToArray())
                     } else {
                         slotType
                     }
                 }
                 default {
-                    return receiverType
+                    return slotType
                 }
             }
         }
@@ -4105,6 +4122,9 @@ partial class CSharpToGSharpTranslator {
             typeParameter ITypeParameterSymbol,
             receiverType ITypeSymbol?
         ) ITypeSymbol? {
+            if receiverType is ITypeParameterSymbol {
+                return receiverType
+            }
             if typeParameter.TypeParameterKind != TypeParameterKind.Type ||
                 typeParameter.ContainingType is not INamedTypeSymbol declaringType {
                 return nil
@@ -4667,7 +4687,8 @@ partial class CSharpToGSharpTranslator {
             if !this.SlotTypeIsDeclared(targetSymbol, value) || !this.HasTupleElementRequiringBridge(
                 value,
                 targetTuple,
-                List[int32]()
+                List[int32](),
+                targetSymbol
             ) {
                 return false
             }
@@ -4690,22 +4711,17 @@ partial class CSharpToGSharpTranslator {
         private func HasTupleElementRequiringBridge(
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             currentTuple INamedTypeSymbol,
-            path List[int32]
+            path List[int32],
+            targetSymbol ISymbol?
         ) bool {
             for var i = 0; i < currentTuple.TupleElements.Length; i++ {
                 let elementType = currentTuple.TupleElements[i].Type
                 let childPath = List[int32](path){i}
                 if elementType is INamedTypeSymbol{IsTupleType: true} nestedTuple {
-                    if this.HasTupleElementRequiringBridge(value, nestedTuple, childPath) {
+                    if this.HasTupleElementRequiringBridge(value, nestedTuple, childPath, targetSymbol) {
                         return true
                     }
-                } else if elementType.IsReferenceType &&
-                    elementType.NullableAnnotation != Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated &&
-                    !ContainsTypeParameter(elementType) &&
-                    this.TupleElementYieldsNilableBeyondItsCSharpType(value, childPath) {
+                } else if this.TupleElementRequiresBridge(value, targetSymbol, elementType, childPath) {
                     return true
                 }
             }
@@ -4725,21 +4741,14 @@ partial class CSharpToGSharpTranslator {
                 let elementType = currentTuple.TupleElements[i].Type
                 let childPath = List[int32](path){i}
                 if elementType is INamedTypeSymbol{IsTupleType: true} nestedTuple {
-                    if this.HasTupleElementRequiringBridge(value, nestedTuple, childPath) {
+                    if this.HasTupleElementRequiringBridge(value, nestedTuple, childPath, targetSymbol) {
                         elements.Add(
                             this.BuildBridgedTupleLiteral(value, elementAccess, nestedTuple, childPath, targetSymbol)
                         )
                     } else {
                         elements.Add(elementAccess)
                     }
-                } else if elementType.IsReferenceType &&
-                    elementType.NullableAnnotation != Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated &&
-                    !ContainsTypeParameter(elementType) &&
-                    this
-                    .TupleElementYieldsNilableBeyondItsCSharpType(value, childPath) {
+                } else if this.TupleElementRequiresBridge(value, targetSymbol, elementType, childPath) {
                     elements.Add(
                         this.ReportStoreBridge(
                             value,
@@ -4757,6 +4766,42 @@ partial class CSharpToGSharpTranslator {
             return TupleLiteralExpression(elements)
         }
 
+        private func TupleElementRequiresBridge(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            targetSymbol ISymbol?,
+            elementType ITypeSymbol,
+            path List[int32]
+        ) bool -> elementType.IsReferenceType &&
+            elementType.NullableAnnotation != Microsoft
+            .CodeAnalysis
+            .NullableAnnotation
+            .Annotated &&
+            !ContainsTypeParameter(elementType) &&
+            !ObliviousNullabilityAnalyzer
+            .IsTupleElementTainted(this.context.Compilation, targetSymbol, path, this.context.SiblingCompilations) &&
+            (
+            this.SourceTupleElementIsAnnotatedNullable(value, path) ||
+                this.TupleElementYieldsNilableBeyondItsCSharpType(value, path)
+        )
+
+        private func SourceTupleElementIsAnnotatedNullable(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            path List[int32]
+        ) bool {
+            var currentType ITypeSymbol? = this.context.GetTypeInfo(value).Type
+            for index in path {
+                if currentType is not INamedTypeSymbol{IsTupleType: true} tupleType ||
+                    index < 0 ||
+                    index >= tupleType
+                    .TupleElements
+                    .Length {
+                    return false
+                }
+                currentType = tupleType.TupleElements[index].Type
+            }
+            return currentType?.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+        }
+
         private func TupleElementYieldsNilableBeyondItsCSharpType(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             path List[int32],
@@ -4771,6 +4816,17 @@ partial class CSharpToGSharpTranslator {
             }
             if path.Count == 0 && this.YieldsValueNilableBeyondItsCSharpType(unwrapped) {
                 return true
+            }
+            if unwrapped is MemberAccessExpressionSyntax tupleAccess && this.TryGetTupleElementAccess(
+                tupleAccess,
+                out var tupleReceiver,
+                out var accessPath
+            ) {
+                return this.TupleElementYieldsNilableBeyondItsCSharpType(
+                    tupleReceiver,
+                    accessPath!!.Concat(path).ToList(),
+                    visitedLocals
+                )
             }
             if path.Count > 0 && unwrapped is TupleExpressionSyntax tupleExpr {
                 let index = path[0]
