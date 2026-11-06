@@ -3980,9 +3980,9 @@ internal partial class StatementBinder {
             let rebindAddedAliases = HashSet[VariableSymbol](externalCallableAliases)
             rebindAddedAliases.ExceptWith(savedEntry.ExitAliases)
             RestoreNarrowingFramesSnapshot(postFrames)
-            if removedOnRebind != nil {
+            if removedOnRebind is {} removedSet {
                 for kill in rebindKills {
-                    if IsOnNarrowingStack(kill.Frame) && removedOnRebind.Contains(
+                    if IsOnNarrowingStack(kill.Frame) && removedSet.Contains(
                         SpeculativeFrameKey(kill.Frame, kill.Path)
                     ) {
                         kill.Frame.Remove(kill.Path)

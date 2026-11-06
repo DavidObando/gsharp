@@ -2889,7 +2889,8 @@ internal class LambdaBinder {
             }
         }
         if localFunctionReferencedFunctions.TryGetValue(literal.Function, out var referencedFunctions) &&
-            !referencedFunctions.IsDefaultOrEmpty {
+            !referencedFunctions
+            .IsDefaultOrEmpty {
             let visited = HashSet[FunctionSymbol](ReferenceEqualityComparer.Instance)
             let worklist = Stack[FunctionSymbol]()
             for var i = referencedFunctions.Length - 1; i >= 0; i-- {
@@ -2911,7 +2912,8 @@ internal class LambdaBinder {
                     }
                 }
                 if localFunctionReferencedFunctions.TryGetValue(referenced, out var nestedReferenced) &&
-                    !nestedReferenced.IsDefaultOrEmpty {
+                    !nestedReferenced
+                    .IsDefaultOrEmpty {
                     for var i = nestedReferenced.Length - 1; i >= 0; i-- {
                         let nested = nestedReferenced[i]
                         if visited.Add(nested) {

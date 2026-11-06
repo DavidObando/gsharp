@@ -3938,7 +3938,7 @@ internal partial class StatementBinder {
                 ApplyBreakPrefixEffects(snapshot, loopBody, boundBody, condition, loopEntryAliases, boundPost)
                 if ApplyExitedFinallyEffects(snapshot, activeFinallySet, activeCleanupSet) {
                     reachableBreaks ??= List[NarrowingState](rawBreaks.Count)
-                    reachableBreaks!!.Add(NarrowingState.Empty.WithAll(snapshot.NarrowedVariables))
+                    reachableBreaks!!.Add(NarrowingState.Empty.WithAll(snapshot.GetNarrowedVariablesSnapshot()))
                 }
             }
         }

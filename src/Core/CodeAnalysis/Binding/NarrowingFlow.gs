@@ -64,7 +64,8 @@ internal sealed class NarrowingJumpState {
         }
         if !frameSnapshots.IsDefaultOrEmpty {
             for var i = frameSnapshots.Length - 1; i >= 0; i-- {
-                if frameSnapshots[i] is {} snap && snap.TryGetValue(path, out narrowedType) {
+                let snap = frameSnapshots[i]
+                if snap != nil && snap.TryGetValue(path, out narrowedType) {
                     return true
                 }
             }
@@ -80,7 +81,8 @@ internal sealed class NarrowingJumpState {
         }
         if !frameSnapshots.IsDefaultOrEmpty {
             for var i = frameSnapshots.Length - 1; i >= 0; i-- {
-                if frameSnapshots[i] is {} snap && snap.ContainsKey(path) {
+                let snap = frameSnapshots[i]
+                if snap != nil && snap.ContainsKey(path) {
                     frameIndex = i
                     return true
                 }
@@ -94,7 +96,8 @@ internal sealed class NarrowingJumpState {
         let result = Dictionary[AccessPath, TypeSymbol]()
         if !frameSnapshots.IsDefaultOrEmpty {
             for var i = 0; i < frameSnapshots.Length; i++ {
-                if frameSnapshots[i] is {} snap {
+                let snap = frameSnapshots[i]
+                if snap != nil {
                     for entry in snap.GetMap() {
                         result[entry.Key] = entry.Value
                     }
@@ -115,13 +118,7 @@ internal sealed class NarrowingJumpState {
 
     func Clone() NarrowingJumpState {
         StatementBinder.SpeculativeRollbackWorkCount += overrides.Count
-        return NarrowingJumpState(
-            frameSnapshots,
-            overrides,
-            externalCallableAliases,
-            ActiveCleanupRegions,
-            BreakNode
-        )
+        return NarrowingJumpState(frameSnapshots, overrides, externalCallableAliases, ActiveCleanupRegions, BreakNode)
     }
 
     func RemoveNarrowing(path AccessPath) {

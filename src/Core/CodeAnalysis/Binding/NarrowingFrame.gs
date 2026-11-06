@@ -58,17 +58,17 @@ internal sealed class NarrowingFrameSnapshot {
             chain.Add(curr)
             curr = curr.Parent!!
         }
-        var map = curr.lazyMap!!
+        var dict = curr.lazyMap!!
         for var i = chain.Count - 1; i >= 0; i-- {
             let step = chain[i]
-            map = if step.HasCurrent {
-                map.SetItem(step.Path, step.CurrentType!!)
+            dict = if step.HasCurrent {
+                dict.SetItem(step.Path, step.CurrentType!!)
             } else {
-                map.Remove(step.Path)
+                dict.Remove(step.Path)
             }
-            step.lazyMap = map
+            step.lazyMap = dict
         }
-        return map
+        return dict
     }
 
     internal func ContainsKey(path AccessPath) bool -> TryGetValue(path, out _)
@@ -80,7 +80,7 @@ internal sealed class NarrowingFrameSnapshot {
         }
         if object.ReferenceEquals(current.Parent, this) {
             StatementBinder.SpeculativeRollbackWorkCount++
-            if current.Path == path {
+            if current.Path.Equals(path) {
                 narrowedType = current.PreviousType ?? TypeSymbol.Error
                 return current.HadPrevious
             }
@@ -88,7 +88,7 @@ internal sealed class NarrowingFrameSnapshot {
         }
         if object.ReferenceEquals(this.Parent, current) {
             StatementBinder.SpeculativeRollbackWorkCount++
-            if this.Path == path {
+            if this.Path.Equals(path) {
                 narrowedType = this.CurrentType ?? TypeSymbol.Error
                 return this.HasCurrent
             }
