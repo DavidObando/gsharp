@@ -328,10 +328,13 @@ namespace Demo
         private static Dictionary<string, int>? full = new Dictionary<string, int> { ["a"] = 1 };
         private static Func<Dictionary<string, int>> fixedRead = () => new Dictionary<string, int>();
         static T Id<T>(T value) => value;
+        static T Read<T>(Func<T> f) => f();
         static Box<T> Wrap<T>(T value) => new Box<T>(value);
         static bool Reassign() { var read = () => Volatile.Read(ref cache!); read = () => { return Volatile.Read(ref cache!); }; return read() == null; }
         static int Use() { var b = Wrap(Volatile.Read(ref cache!)); return b.Use(() => Volatile.Read(ref cache!)); }
         static int UseBlock() { var b = Wrap(Volatile.Read(ref cache!)); return b.Use(() => { return Volatile.Read(ref cache!); }); }
+        static bool ReadInferred() => Read(() => Volatile.Read(ref cache!)) == null;
+        static int ReadExplicit() => Read<Dictionary<string, int>>(() => Volatile.Read(ref full!)).Count;
         static int Deconstruct() { (Dictionary<string, int> d, int n) = (Volatile.Read(ref cache!), 0); d = Volatile.Read(ref cache!); return 1; }
         static int TypedThenGeneric() { Dictionary<string, int> d = Id(Volatile.Read(ref cache!)); d = Volatile.Read(ref cache!); return 1; }
         static int FixedField() { fixedRead = () => { return Volatile.Read(ref full!); }; return fixedRead().Count; }
@@ -341,7 +344,7 @@ namespace Demo
         static bool AsDelegateExpr() { Delegate read = () => Volatile.Read(ref cache!); return read.DynamicInvoke() == null; }
         static int TypedReassign() { Dictionary<string, int> d = Volatile.Read(ref full!); d = Volatile.Read(ref full!); return d.Count; }
         public static string Run() =>
-            Reassign() + " " + Use() + " " + UseBlock() + " " + Deconstruct() + " " + TypedThenGeneric() + " " + FixedField() + " " + FixedFieldExpr() + " " + NestedFixedExpr() + " " + TypedReassign() + " " + AsDelegate() + " " + AsDelegateExpr();
+            Reassign() + " " + Use() + " " + UseBlock() + " " + ReadInferred() + " " + ReadExplicit() + " " + Deconstruct() + " " + TypedThenGeneric() + " " + FixedField() + " " + FixedFieldExpr() + " " + NestedFixedExpr() + " " + TypedReassign() + " " + AsDelegate() + " " + AsDelegateExpr();
     }
 }`)
         let exprTreePrinted = Translate(`
@@ -361,6 +364,8 @@ namespace Demo
     }
 }`)
         Assert.Contains("return b.Use(() -> Volatile.Read(&cache))", printed)
+        Assert.Contains("Read(() -> Volatile.Read(&cache)) == nil", printed)
+        Assert.Contains("Read[Dictionary[string, int32]](() -> Volatile.Read(&full)!!).Count", printed)
         Assert.Contains("var (d, n) = (Volatile.Read(&cache), 0)\n        d = Volatile.Read(&cache)\n", printed)
         Assert.Contains("var d = Id(Volatile.Read(&cache))\n        d = Volatile.Read(&cache)\n", printed)
         Assert.Contains("return Volatile.Read(&full)!!\n", printed)
@@ -370,7 +375,7 @@ namespace Demo
         Assert.Contains("var d = Volatile.Read(&full)!!\n        d = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("let read Delegate = () -> {\n            return Volatile.Read(&cache)\n", printed)
         Assert.Contains("let read Delegate = () -> Volatile.Read(&cache)\n", printed)
-        RunsAs(printed, "True 1 1 1 1 1 1 1 1 True True")
+        RunsAs(printed, "True 1 1 True 1 1 1 1 1 1 1 True True")
     }
 
     /// An indexer key is a parameter slot: a key that is `T?` only in G# is asserted at a non-null indexer

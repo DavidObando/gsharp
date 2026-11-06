@@ -3482,7 +3482,7 @@ partial class CSharpToGSharpTranslator {
         ) bool -> switch targetSymbol {
             case field is IFieldSymbol: !ContainsTypeParameter(field.OriginalDefinition.Type)
             case property is IPropertySymbol: !ContainsTypeParameter(property.OriginalDefinition.Type)
-            case parameter is IParameterSymbol: !ContainsTypeParameter(parameter.OriginalDefinition.Type)
+            case parameter is IParameterSymbol: this.ParameterSlotIsDeclared(parameter, value)
             case local is ILocalSymbol: this.LocalSlotIsDeclared(local)
             case method is IMethodSymbol: if this.ResultLambda(method, value) is {} lambda {
                 this
@@ -3503,6 +3503,67 @@ partial class CSharpToGSharpTranslator {
             } else {
                 true
             }
+            default: false
+        }
+
+        private func ParameterSlotIsDeclared(
+            parameter IParameterSymbol,
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            let declaredType = parameter.OriginalDefinition.Type
+            if !ContainsTypeParameter(declaredType) {
+                return true
+            }
+            if ContainsTypeParameter(parameter.Type) {
+                return false
+            }
+            if MentionedTypeParameterKind(declaredType, TypeParameterKind.Method) &&
+                !ValueFeedsExplicitTypeArguments(value) {
+                return false
+            }
+            if MentionedTypeParameterKind(declaredType, TypeParameterKind.Type) && !this.CallReceiverSlotIsDeclared(
+                value
+            ) {
+                return false
+            }
+            return true
+        }
+
+        private func CallReceiverSlotIsDeclared(value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
+            if value == nil {
+                return false
+            }
+            let receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch OutermostTransparentNode(value)
+                ?.Parent {
+                case ArgumentSyntax{
+                    Parent: ArgumentListSyntax{
+                        Parent: InvocationExpressionSyntax{Expression: MemberAccessExpressionSyntax memberAccess}
+                    }
+                }: memberAccess.Expression
+                case ArgumentSyntax{
+                    Parent: BracketedArgumentListSyntax{Parent: ElementAccessExpressionSyntax elementAccess}
+                }: elementAccess.Expression
+                default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            let unwrapped = Unparenthesize(receiver)
+            if unwrapped == nil {
+                return false
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ObjectCreationExpressionSyntax {
+                return !this.MentionsValueNilableOnlyInEmittedGSharp(unwrapped)
+            }
+            return this.context.GetSymbolInfo(unwrapped).Symbol is {} symbol && this.SlotTypeIsDeclared(
+                symbol,
+                unwrapped
+            )
+        }
+
+        private func MentionedTypeParameterKind(type ITypeSymbol?, kind TypeParameterKind) bool -> switch type {
+            case typeParameter is ITypeParameterSymbol: typeParameter.TypeParameterKind == kind
+            case array is IArrayTypeSymbol: this.MentionedTypeParameterKind(array.ElementType, kind)
+            case named is INamedTypeSymbol: named.TypeArguments.Any(
+                (argument ITypeSymbol) -> this.MentionedTypeParameterKind(argument, kind)
+            )
             default: false
         }
 
@@ -4297,10 +4358,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 case checkedExpression is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax {
                     return if UnwrapTranslatedValue(translated) is CheckedExpression translatedChecked {
-                        this.GSharpExpressionIsStaticallyNonNull(
-                            checkedExpression.Expression,
-                            translatedChecked.Inner
-                        )
+                        this.GSharpExpressionIsStaticallyNonNull(checkedExpression.Expression, translatedChecked.Inner)
                     } else {
                         this.GSharpExpressionIsStaticallyNonNull(checkedExpression.Expression)
                     }
@@ -11034,14 +11092,15 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             if target == nil && (current!!.Parent is ArgumentSyntax and {Parent: TupleExpressionSyntax}) {
-                if this.ResolveValueSink(value) is {} tupleSink &&
-                    this.GetFixedElementDestinationType(value, tupleSink) is {} tupleTargetType {
+                if this.ResolveValueSink(value) is {} tupleSink && this.GetFixedElementDestinationType(
+                    value,
+                    tupleSink
+                ) is {} tupleTargetType {
                     return (tupleTargetType, tupleSink)
                 }
                 if this.FindResultLambda(value) is {} tupleLambda {
                     let (lambdaReturnType, lambdaReturnSymbol) = this.ReturnSlotOf(tupleLambda)
-                    if lambdaReturnSymbol != nil &&
-                        this.GetFixedElementDestinationType(
+                    if lambdaReturnSymbol != nil && this.GetFixedElementDestinationType(
                         value,
                         lambdaReturnSymbol,
                         lambdaReturnType

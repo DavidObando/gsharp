@@ -2003,12 +2003,19 @@ internal class ConversionClassifier {
                         GetClrParameterTargetType(argument.Type, parameters[paramIndex])
                     let rejectionTargetType = substituted ??
                         (
-                        if method != nil && !symbolicMethodTypeArgs.IsDefaultOrEmpty {
+                        if method != nil {
                             MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(
                                 receiverType,
                                 method,
                                 paramIndex,
                                 symbolicMethodTypeArgs
+                            ) ??
+                                (
+                                if receiverType != nil {
+                                    MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, paramIndex)
+                                } else {
+                                    default(TypeSymbol?)
+                                }
                             )
                         } else {
                             default(TypeSymbol?)

@@ -2275,7 +2275,26 @@ internal partial class ExpressionBinder {
             let parameterTargetSymbol = parameterTypeOverride ??
                 (
                 if paramIndex < parameters.Length {
-                    ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
+                    (
+                        if method != nil {
+                            MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(
+                                receiverType,
+                                method,
+                                paramIndex,
+                                symbolicMethodTypeArgs
+                            ) ??
+                                (
+                                if receiverType != nil {
+                                    MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, paramIndex)
+                                } else {
+                                    default(TypeSymbol?)
+                                }
+                            )
+                        } else {
+                            default(TypeSymbol?)
+                        }
+                    ) ??
+                        ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
                 } else {
                     default(TypeSymbol?)
                 }
