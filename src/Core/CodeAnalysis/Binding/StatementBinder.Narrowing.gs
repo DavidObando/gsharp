@@ -132,7 +132,7 @@ internal partial class StatementBinder {
     }
 
     internal data struct NarrowingBindSnapshot(
-        Frames[]?NarrowingFrameSnapshot,
+        Frames[]?NarrowingFrameSnapshot?,
         Aliases[]?VariableSymbol,
         JournalEntries[]?(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol),
         AppliedBinaryLeftsCount int32 = 0,
@@ -140,11 +140,14 @@ internal partial class StatementBinder {
     ) { }
 
     internal func CaptureNarrowingBindSnapshot() NarrowingBindSnapshot {
-        var frames[]?NarrowingFrameSnapshot = nil
-        if binderCtx.NarrowedVariables.Count > 0 {
-            frames = [binderCtx.NarrowedVariables.Count]NarrowingFrameSnapshot
+        var frames[]?NarrowingFrameSnapshot? = nil
+        if HasAnyActiveNarrowings() {
+            frames = [binderCtx.NarrowedVariables.Count]NarrowingFrameSnapshot?
             for var i = 0; i < binderCtx.NarrowedVariables.Count; i++ {
-                frames[i] = binderCtx.NarrowedVariables[i].SnapshotEntries()
+                let frame = binderCtx.NarrowedVariables[i]
+                if frame.Count > 0 {
+                    frames[i] = frame.SnapshotEntries()
+                }
             }
         }
         let aliases = if externalCallableAliases.Count == 0 {

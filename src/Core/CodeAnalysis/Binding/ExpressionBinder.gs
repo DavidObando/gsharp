@@ -791,13 +791,22 @@ internal partial class ExpressionBinder {
         ](expressionNarrowingFrames.Count + binderCtx.NarrowedVariables.Count)
         for stmtFrame in binderCtx.NarrowedVariables {
             if stmtFrame.Owner != nil && !IsTrackedExpressionFrame(stmtFrame) {
-                snapshot.Add((-1, stmtFrame, stmtFrame.SnapshotEntries(), emptyCallableAliases))
+                let entries = if stmtFrame.Count > 0 {
+                    stmtFrame.SnapshotEntries()
+                } else {
+                    default(NarrowingFrameSnapshot?)
+                }
+                snapshot.Add((-1, stmtFrame, entries, emptyCallableAliases))
             }
         }
         for entry in expressionNarrowingFrames {
             if IsExpressionFrameActive(entry) {
                 let frame = entry.Frame
-                let entries = frame?.SnapshotEntries()
+                let entries = if frame != nil && frame.Count > 0 {
+                    frame.SnapshotEntries()
+                } else {
+                    default(NarrowingFrameSnapshot?)
+                }
                 let aliases = if entry.Aliases.Count == 0 {
                     emptyCallableAliases
                 } else {

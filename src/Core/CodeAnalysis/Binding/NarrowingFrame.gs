@@ -187,6 +187,28 @@ internal sealed class NarrowingFrame : IEnumerable[KeyValuePair[AccessPath, Type
         }
         var a = currentSnapshot
         var b = other
+        if object.ReferenceEquals(a.Parent, b) {
+            StatementBinder.SpeculativeRollbackWorkCount++
+            let path = a.Path
+            let currentExists = entries.TryGetValue(path, out var currentType)
+            let otherExists = a.HadPrevious
+            let otherType = a.PreviousType
+            if currentExists != otherExists || (currentExists && !object.Equals(currentType, otherType)) {
+                action(path, currentExists, currentType, otherExists, otherType)
+            }
+            return
+        }
+        if object.ReferenceEquals(b.Parent, a) {
+            StatementBinder.SpeculativeRollbackWorkCount++
+            let path = b.Path
+            let currentExists = entries.TryGetValue(path, out var currentType)
+            let otherExists = b.HasCurrent
+            let otherType = b.CurrentType
+            if currentExists != otherExists || (currentExists && !object.Equals(currentType, otherType)) {
+                action(path, currentExists, currentType, otherExists, otherType)
+            }
+            return
+        }
         let candidates = List[AccessPath]()
         let lcaState = Dictionary[AccessPath, (Exists bool, Type TypeSymbol?)]()
         let otherState = Dictionary[AccessPath, (Exists bool, Type TypeSymbol?)]()
