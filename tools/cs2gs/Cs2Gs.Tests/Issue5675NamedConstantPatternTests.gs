@@ -68,7 +68,7 @@ namespace Demo
     }
 
     @Fact
-    func ObjectConstants_PreserveBoxedTypesAndNativeNarrowing() {
+    func ObjectConstants_PreserveBoxedTypesAndGuardedReads() {
         Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
 #nullable enable
 namespace Demo
@@ -90,14 +90,134 @@ namespace Demo
         static bool Enum(object? value) => value is C;
         static bool Null(object? value) => value is Nil;
         static bool Type(object? value) => value is Key;
+        static bool Bool(object? value) => value is true;
         public static string Run() =>
             String("key") + " " + String("no") + " " + String(null) + " " +
             Number(3) + " " + Number(4) + " " + Number(3L) + " " +
             Long(3L) + " " + Long(3) + " " + Byte((byte)3) + " " + Byte(3) + " " +
             Double(3.0) + " " + Double(3) + " " + Decimal(3m) + " " + Decimal(3) + " " +
             Enum(Color.Green) + " " + Enum(Color.Red) + " " + Enum(1) + " " +
-            Null(null) + " " + Null("key") + " " + Type(new Key()) + " " + Type("key");
+            Null(null) + " " + Null("key") + " " + Type(new Key()) + " " + Type("key") + " " +
+            Bool(true) + " " + Bool(false) + " " + Bool(null);
     }
-}`, "3 0 0 True False False True False True False True False True False True False False True False True False")
+}`, "3 0 0 True False False True False True False True False True False True False False True False True False True False False")
+    }
+
+    @Fact
+    func ObjectConstantGuard_HandlesAnEscapedClosureAssignment() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public static class P
+    {
+        const int K = 3;
+        static Action? saved;
+        static int Match(object? seed)
+        {
+            object? current = seed;
+            saved = () => current = null;
+            if (current is K) return current.GetHashCode();
+            return 0;
+        }
+        public static string Run() => Match(3) + " " + Match(4) + " " + Match(null);
+    }
+}`, "3 0 0")
+    }
+
+    @Fact
+    func ObjectConstantInLoop_KeepsByReferenceReadsSound() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        const long K = 3;
+        static int Binary(ref string? text, object? value)
+        {
+            if (text == null) return 0;
+            for (int i = 0; i < 1; i++) { if (value is K) return text.Length; }
+            return 0;
+        }
+        static int Pattern(ref string? text, object? value)
+        {
+            if (text == null) return 0;
+            for (int i = 0; i < 1; i++) { if (value is not (not K)) return text.Length; }
+            return 0;
+        }
+        public static string Run()
+        {
+            string? text = "abc";
+            return Binary(ref text, 3L) + " " + Binary(ref text, 3) + " " +
+                Pattern(ref text, 3L) + " " + Pattern(ref text, null);
+        }
+    }
+}`, "3 0 3 0")
+    }
+
+    @Fact
+    func ObjectDecimalConstants_PreserveRangeAndPrecision() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        const decimal Max = 79228162514264337593543950335m;
+        const decimal Min = -79228162514264337593543950335m;
+        const decimal Fraction = 0.1234567890123456789012345678m;
+        static bool MatchMax(object? value) => value is Max;
+        static bool MatchMin(object? value) => value is Min;
+        static bool MatchFraction(object? value) => value is Fraction;
+        public static string Run() =>
+            MatchMax(decimal.MaxValue) + " " + MatchMax(decimal.MinValue) + " " +
+            MatchMin(decimal.MinValue) + " " + MatchMin(null) + " " +
+            MatchFraction(Fraction) + " " + MatchFraction(0.1234567890123456789012345679m) + " " +
+            MatchFraction(0.12345678901234568);
+    }
+}`, "True False True False True False False")
+    }
+
+    @Fact
+    func NaNPatterns_PreserveNullableBoxedAndSingleEvaluationSemantics() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public sealed class Pretender
+    {
+        public static int Calls;
+        public override bool Equals(object? other) { Calls++; return true; }
+        public override int GetHashCode() => 0;
+    }
+    public static class P
+    {
+        const double D = double.NaN;
+        const float F = float.NaN;
+        static int reads;
+        static double? Read(double? value) { reads++; return value; }
+        static bool Double(double value) => value is D;
+        static bool Float(float value) => value is F;
+        static bool NullableDouble(double? value) => value is D;
+        static bool NullableFloat(float? value) => value is F;
+        static bool Not(double? value) => value is not D;
+        static bool Either(double? value) => value is D or 1.0;
+        static bool Wide(double? value) => value is F;
+        static bool NotWide(double? value) => value is not F;
+        static bool BoxDouble(object? value) => value is D;
+        static bool BoxFloat(object? value) => value is F;
+        static bool Once(double? value) => Read(value) is D;
+        public static string Run() =>
+            Double(D) + " " + Double(1) + " " + Float(F) + " " + Float(1f) + " " +
+            NullableDouble(D) + " " + NullableDouble(null) + " " + NullableFloat(F) + " " + NullableFloat(null) + " " +
+            Not(D) + " " + Not(1) + " " + Not(null) + " " +
+            BoxDouble(D) + " " + BoxDouble(F) + " " + BoxFloat(F) + " " + BoxFloat(D) + " " +
+            BoxDouble(new Pretender()) + " " + Pretender.Calls + " " + Once(D) + " " + Once(null) + " " + reads + " " +
+            Either(D) + " " + Either(1.0) + " " + Either(null) + " " +
+            Wide(D) + " " + Wide(null) + " " + NotWide(D) + " " + NotWide(null);
+    }
+}`, "True False True False True False True False False True True True False True False False 0 True False 2 True True False True False False True")
     }
 }

@@ -793,8 +793,8 @@ partial class CSharpToGSharpTranslator {
 
         /// The narrowed type of the lowered test of [`pattern`](paramref) (cref:TranslatePatternTest) where it is
         /// [`whenTrue`](paramref), or `nil`. The lowering emits `== nil` for `null`, an `is` type test for a type,
-        /// and `&&`, `||` and `!` for `and`, `or` and `not`. It emits an equality for any other constant, which
-        /// does not narrow, except on an `object` input, where it keeps the `is` test. gsc classifies the nil guards
+        /// and `&&`, `||` and `!` for `and`, `or` and `not`. Other constants use equality or `object.Equals`,
+        /// neither of which narrows the input. gsc classifies the nil guards
         /// and the type tests of the condition separately and merges them with the type test winning
         /// (ClassifyIfConditionNarrowing).
         private func GetGSharpPatternNarrowedType(
@@ -857,13 +857,7 @@ partial class CSharpToGSharpTranslator {
                 if IsNullLiteral(constant.Expression) {
                     return (nil, nil, nil, underlyingType)
                 }
-                return if this.UsesNativeConstantPatternTest(underlyingType) && !this.IsNullPatternValue(
-                    constant.Expression
-                ) {
-                    (underlyingType, nil, nil, nil)
-                } else {
-                    (nil, nil, nil, nil)
-                }
+                return (nil, nil, nil, nil)
             }
             return (this.GetTypeTestNarrowedType(pattern, inputType), nil, nil, nil)
         }
@@ -1004,7 +998,10 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             switch pattern {
-                case ConstantPatternSyntax, RelationalPatternSyntax, DiscardPatternSyntax, TypePatternSyntax {
+                case constant is ConstantPatternSyntax {
+                    return !this.IsNaNPatternConstant(constant.Expression)
+                }
+                case RelationalPatternSyntax, DiscardPatternSyntax, TypePatternSyntax {
                     return true
                 }
                 case declaration is DeclarationPatternSyntax {

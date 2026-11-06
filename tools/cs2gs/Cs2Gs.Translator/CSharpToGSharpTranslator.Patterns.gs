@@ -779,7 +779,9 @@ partial class CSharpToGSharpTranslator {
         private func UsesNativeBooleanPatternTest(
             isPattern IsPatternExpressionSyntax
         ) bool -> !PatternIntroducesBinding(isPattern.Pattern) &&
-            !this.PatternMentionsConditionalAccessType(isPattern.Pattern, out _) &&
+            !this.PatternMentionsConditionalAccessType(isPattern.Pattern, out _) && !this.PatternContainsNaNConstant(
+            isPattern.Pattern
+        ) &&
             (
             this.RequiresNativePatternNarrowing(isPattern) ||
                 (
@@ -1999,16 +2001,7 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 case constant is ConstantPatternSyntax {
-                    // `x is not 6` → `x != 6` (with numeric retyping to the receiver).
-                    return BinaryExpression(
-                        receiver,
-                        "!=",
-                        this.CoercePatternConstant(
-                            constant.Expression,
-                            this.TranslateExpression(constant.Expression),
-                            receiverType
-                        )
-                    )
+                    return this.TranslateConstantPatternTest(receiver, constant.Expression, receiverType, negated: true)
                 }
                 case RecursivePatternSyntax{Type: nil} emptyRecursive when(
                     emptyRecursive.PropertyPatternClause is nil or {Subpatterns: {Count: 0}}
@@ -2069,29 +2062,47 @@ partial class CSharpToGSharpTranslator {
         private func TranslateConstantPatternTest(
             receiver GExpression?,
             constantSyntax ExpressionSyntax,
-            receiverType ITypeSymbol?
+            receiverType ITypeSymbol?,
+            negated bool = false
         ) GExpression {
-            var constant GExpression? = this.TranslateExpression(constantSyntax)
-            // An object input needs a native constant pattern, not an equality across different types (#3501).
-            if this.UsesNativeConstantPatternTest(receiverType) {
-                let value = this.context.SemanticModel.GetConstantValue(constantSyntax)
-                let constantType = this.context.GetTypeInfo(constantSyntax).Type
-                if constantSyntax is not LiteralExpressionSyntax && value.HasValue {
-                    // A bare name after `is` is parsed as a type. Keep the constant's value and numeric width.
-                    constant = this.MapConstantValue(value.Value, constantType, constantSyntax, "constant pattern") ??
-                        LiteralExpression.Null()
-                    if TryGetNumericKind(constantType, out var kind) && kind != SpecialType.System_Int32 {
-                        constant = this.CoerceOperandTo(constant, constantType, constantSyntax.GetLocation())
-                    }
+            let constant = this.TranslateExpression(constantSyntax)
+            if this.ConstantPatternUsesValueEquality(receiverType, constantSyntax) {
+                // Put the constant first: a user input's Equals override must not control the match.
+                let equals = InvocationExpression(
+                    MemberAccessExpression(TypeExpression(NamedTypeReference("object")), "Equals"),
+                    List[GExpression]{this.CoercePatternConstant(constantSyntax, constant, receiverType)!!, receiver!!}
+                )
+                return if negated {
+                    cast[GExpression](UnaryExpression("!", ParenthesizedExpression(equals)))
+                } else {
+                    equals
                 }
-                return PatternTestExpression(receiver, ConstantPattern(constant))
             }
-            return BinaryExpression(receiver, "==", this.CoercePatternConstant(constantSyntax, constant, receiverType))
+            return BinaryExpression(
+                receiver,
+                if negated {
+                    "!="
+                } else {
+                    "=="
+                },
+                this.CoercePatternConstant(constantSyntax, constant, receiverType)
+            )
         }
 
-        private func UsesNativeConstantPatternTest(
-            receiverType ITypeSymbol?
-        ) bool -> receiverType?.SpecialType == SpecialType.System_Object
+        private func ConstantPatternUsesValueEquality(receiverType ITypeSymbol?, constant ExpressionSyntax) bool ->
+        !IsNullLiteral(constant) &&
+            (receiverType?.SpecialType == SpecialType.System_Object || this.IsNaNPatternConstant(constant))
+
+        private func IsNaNPatternConstant(expression ExpressionSyntax) bool {
+            let constant = this.context.SemanticModel.GetConstantValue(expression)
+            return constant.HasValue &&
+                ((constant.Value is float64 d && float64.IsNaN(d)) || (constant.Value is float32 f && float32.IsNaN(f)))
+        }
+
+        private func PatternContainsNaNConstant(pattern PatternSyntax) bool -> pattern
+            .DescendantNodesAndSelf()
+            .OfType[ConstantPatternSyntax]()
+            .Any((constant ConstantPatternSyntax) -> this.IsNaNPatternConstant(constant.Expression))
 
         // Convert numeric pattern constants to the receiver's numeric type without a runtime downcast (#5676).
         private func CoercePatternConstant(

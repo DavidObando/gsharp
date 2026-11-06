@@ -4879,7 +4879,7 @@ partial class CSharpToGSharpTranslator {
                 )
             )
                 .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]() {
-                if nullCheck.SpanStart >= expression.SpanStart || !this.TryGetBinaryTestNonNullPolarity(
+                if nullCheck.SpanStart >= expression.SpanStart || !this.TryGetNullComparisonNonNullPolarity(
                     nullCheck,
                     symbol,
                     out var whenTrue
@@ -5414,20 +5414,11 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
-        private func TryGetBinaryTestNonNullPolarity(
+        private func TryGetNullComparisonNonNullPolarity(
             comparison Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax,
             symbol ISymbol?,
             out whenTrue bool
         ) bool {
-            if comparison.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression) && !this.IsTypeReferencePattern(
-                comparison.Right
-            ) {
-                whenTrue = true
-                return this.BindsToGuardSymbol(comparison.Left, symbol) && this.UsesNativeConstantPatternTest(
-                    this.GetPatternScrutineeUnderlyingType(comparison.Left)
-                ) &&
-                    !this.IsNullPatternValue(comparison.Right)
-            }
             if !comparison.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.EqualsExpression) && !comparison.IsKind(
                 Microsoft.CodeAnalysis.CSharp.SyntaxKind.NotEqualsExpression
             ) {
@@ -9133,6 +9124,10 @@ partial class CSharpToGSharpTranslator {
             node Microsoft.CodeAnalysis.SyntaxNode,
             regionScope Microsoft.CodeAnalysis.SyntaxNode
         ) bool {
+            // The emitted `object.Equals` has a primitive type receiver, not a region-resolvable simple name.
+            if this.NodeEmitsConstantValueEquality(node) {
+                return true
+            }
             if node is not InvocationExpressionSyntax invocation ||
                 this
                 .context
@@ -10028,6 +10023,9 @@ partial class CSharpToGSharpTranslator {
             if this.context.SemanticModel.GetOperation(pattern) is not IConstantPatternOperation operation {
                 return true
             }
+            if this.NodeEmitsConstantValueEquality(pattern) {
+                return true
+            }
             return this.ConstantSwitchTestMayCallEquals(operation.InputType, operation.Value.ConstantValue)
         }
 
@@ -10445,6 +10443,9 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IsLoweredToCall(binary Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax) bool {
+            if this.NodeEmitsConstantValueEquality(binary) {
+                return true
+            }
             return this
                 .context
                 .GetSymbolInfo(binary)
@@ -10458,6 +10459,27 @@ partial class CSharpToGSharpTranslator {
                     .MethodKind
                     .Conversion
             }
+        }
+
+        private func NodeEmitsConstantValueEquality(node Microsoft.CodeAnalysis.SyntaxNode) bool -> switch node {
+            case binary is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when binary.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression
+            ) &&
+                !this.IsTypeReferencePattern(binary.Right): this.ConstantPatternUsesValueEquality(
+                this.context.GetTypeInfo(binary.Left).Type,
+                binary.Right
+            )
+            case constant is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ConstantPatternSyntax when this.IsLoweredComparisonPattern(
+                constant
+            ): this.ConstantPatternUsesValueEquality(
+                this.GetPatternComparisonReceiverType(constant),
+                constant.Expression
+            )
+            default: false
         }
 
         /// A bool, char, integer or floating-point value, whose operators are plain instructions.
