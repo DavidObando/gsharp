@@ -181,6 +181,8 @@ Native-map hashing and equality remove callback-reachable facts after key and va
 Indexed maps can carry CLR custom comparers, including for primitive keys.
 Only fresh map literals retain the primitive/string-key exemption.
 The operand-purity fast path uses the same callback predicate before it binds a later operand.
+Ordered cleanup summaries also consume definite non-null `out` postconditions.
+The shared query retains alias checks; later writes remove the proof before the cleanup exits.
 
 ## Experiments on the deferred loop rule
 

@@ -25,6 +25,43 @@ import Xunit
 /// re-nullable-ization.
 open class Issue2159IfJoinNarrowingTests {
     @Fact
+    func FinallyOutWrite_DischargesNullableWidening() {
+        let result = Evaluate(`package T
+import System.Collections.Generic
+func Write(out target string) { target = "safe" }
+func Run(dict Dictionary[string, string]) int32 {
+    var value string = ""
+    if dict.TryGetValue("key", &value) { return 0 }
+    try { } finally { Write(&value) }
+    return value.Length
+}
+Console.WriteLine(Run(Dictionary[string, string]()))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("4\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Fact
+    func FinallyOutWrite_LaterNullableWriteRemovesTheProof() {
+        let result = Evaluate(`package T
+import System.Collections.Generic
+func Write(out target string) { target = "safe" }
+func Run(dict Dictionary[string, string]) int32 {
+    var value string = ""
+    if dict.TryGetValue("key", &value) { return 0 }
+    try { } finally {
+        Write(&value)
+        dict.TryGetValue("missing", &value)
+    }
+    return value.Length
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
     func NativeMapRead_InvalidatesBeforeTheNextOperand() {
         let result = Evaluate(`package T
 class Key {

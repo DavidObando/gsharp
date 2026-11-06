@@ -2157,6 +2157,28 @@ internal partial class StatementBinder {
                 }
                 return true
             }
+            case expressionStatement is BoundExpressionStatement {
+                if !CanCompleteNormally(stmt) {
+                    return false
+                }
+                let hasLabel = ContainsUserLabel(stmt)
+                if hasLabel {
+                    state.Clear()
+                    aliases.Clear()
+                }
+                let postconditions = if hasLabel {
+                    default(Dictionary[AccessPath, TypeSymbol]?)
+                } else {
+                    TryClassifyConditionNonNullAssignments(expressionStatement.Expression, aliases)
+                }
+                ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
+                if postconditions != nil {
+                    for fact in postconditions {
+                        state[fact.Key] = fact.Value
+                    }
+                }
+                return true
+            }
             case nested is BoundIfStatement {
                 {
                     // The nested join is the exact post-if non-null set given the

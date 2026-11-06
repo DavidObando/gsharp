@@ -95,6 +95,29 @@ open class Issue5498And5502NarrowingTests {
         private const RunTimeout int32 = 30000
 
         public func Rows() IEnumerable[[]object] {
+            yield[]object{"finally_out_write_discharges_nullable_widening", `import System
+import System.Collections.Generic
+func Write(out target string) { target = "safe" }
+func Run(dict Dictionary[string, string]) int32 {
+    var value string = ""
+    if dict.TryGetValue("key", &value) { return 0 }
+    try { } finally { Write(&value) }
+    return value.Length
+}
+func Main() { Console.WriteLine(Run(Dictionary[string, string]())) }`, "", "run", "4"}
+            yield[]object{"finally_out_write_later_nullable_write_removes_proof", `import System
+import System.Collections.Generic
+func Write(out target string) { target = "safe" }
+func Run(dict Dictionary[string, string]) int32 {
+    var value string = ""
+    if dict.TryGetValue("key", &value) { return 0 }
+    try { } finally {
+        Write(&value)
+        dict.TryGetValue("missing", &value)
+    }
+    return value.Length
+}
+func Main() { Console.WriteLine(Run(Dictionary[string, string]())) }`, "GS0158@11:18", "reject", ""}
             yield[]object{"nested_assignment_native_map_read_before_next_operand", `import System
 class Key {
     var Callback () -> void
