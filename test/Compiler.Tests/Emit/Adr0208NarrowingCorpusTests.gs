@@ -269,6 +269,8 @@ open class Adr0208NarrowingCorpusTests {
                 "m19_5301_dead_block_bodied_arrow_lambda_label_does_not_leak_reachability_R6",
                 "m1_unrelated_interface_refinement",
                 "n1_boxed_value_type_test",
+                "n2_5130_sibling_type_refinement",
+                "n3_5130_nullable_widening_unbraced_call",
                 "o1_callback_after_test_replaces_root",
                 "o2_callback_in_or_arm_replaces_root",
                 "o3_callback_in_else_if_replaces_root",
@@ -1908,6 +1910,28 @@ func Main() {
     var xs = []Box{Box(Pet())}
     Console.WriteLine(Run(ref xs[0], xs))
 }`, "GS0158@15:18", "reject", "", ""}
+            yield[]object{"n2_5130_sibling_type_refinement", `open class Animal { }
+class Dog : Animal { func Bark() string { return "woof" } }
+func Run(x Animal?, flag bool) string {
+    if x == nil { return "" }
+    if flag {
+        if x !is Dog { return "" }
+    } else {
+        return x.Bark()
+    }
+    return ""
+}
+func Main() { Console.WriteLine(Run(Animal{}, false)) }`, "GS0159@8:18", "reject", "", ""}
+            yield[]object{"n3_5130_nullable_widening_unbraced_call", `import System.Collections.Generic
+func Run(dict Dictionary[string, string], flag bool) int32 {
+    var value string = ""
+    if !dict.TryGetValue("key", &value) {
+        if flag dict.TryGetValue("other", &value)
+        return value.Length
+    }
+    return 0
+}
+func Main() { Console.WriteLine(Run(Dictionary[string, string](), true)) }`, "GS0158@6:22", "reject", "", ""}
             yield[]object{"n1_boxed_value_type_test", `func Run(x object?) int32 {
     if x == nil { return 0 }
     if x is int32 {

@@ -64,13 +64,10 @@ internal partial class StatementBinder {
         for frame in binderCtx.NarrowedVariables {
             for entry in frame.ToArray() {
                 let joined = state.NarrowedType(entry.Key)
-                if !object.Equals(joined, entry.Value) {
+                // Keep weaker enclosing facts. A refinement belongs to the branch's own frame.
+                if joined == nil || !IsWeakerOrEqual(joined, entry.Value) {
                     conditionKillJournal?.Add((frame, entry.Key, entry.Value))
-                    if joined == nil {
-                        frame.Remove(entry.Key)
-                    } else {
-                        frame[entry.Key] = joined
-                    }
+                    frame.Remove(entry.Key)
                 }
             }
         }
@@ -93,7 +90,10 @@ internal partial class StatementBinder {
         for path in state.Paths {
             if StatementKillsPath(effects, path, effects.MayMutateMemberPaths, effects.MayMutateReferenceStorage) ||
                 (filters != nil && (FilterWritesVariable(filters, path.Root) || MayBeMutatedByUnknownCallable(path))) {
-                state = state.Remove(path)
+                let type = state.NarrowedType(path)!!
+                if !IsNullableWidening(path, type) || StatementDischargesNullableWidening(statement, path, type) {
+                    state = state.Remove(path)
+                }
             }
         }
         return state

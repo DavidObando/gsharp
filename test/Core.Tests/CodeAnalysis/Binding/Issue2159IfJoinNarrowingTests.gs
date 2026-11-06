@@ -24,6 +24,44 @@ import Xunit
 /// must still block narrowing, an `else if` chain, and post-if
 /// re-nullable-ization.
 open class Issue2159IfJoinNarrowingTests {
+    @Fact
+    func BranchRefinement_DoesNotChangeTheSiblingEntry() {
+        let result = Evaluate(`package T
+open class Animal { }
+class Dog : Animal { func Bark() string { return "woof" } }
+func Run(x Animal?, flag bool) string {
+    if x == nil { return "" }
+    if flag {
+        if x !is Dog { return "" }
+    } else {
+        return x.Bark()
+    }
+    return ""
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0159", diagnostic.Id)
+        Assert.Equal("Bark()", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
+    func UnbracedOutCall_PreservesTheNullableWidening() {
+        let result = Evaluate(`package T
+import System.Collections.Generic
+func Run(dict Dictionary[string, string], flag bool) int32 {
+    var value string = ""
+    if !dict.TryGetValue("key", &value) {
+        if flag dict.TryGetValue("other", &value)
+        return value.Length
+    }
+    return 0
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
     @Theory
     @InlineData("")
     @InlineData("var n = 0; ")

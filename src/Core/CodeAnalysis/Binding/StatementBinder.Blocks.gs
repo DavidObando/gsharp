@@ -129,12 +129,9 @@ internal partial class StatementBinder {
                     let defaultIndex = caseIndex
                     let defaultEntry = binderCtx.Narrowing
                     let defaultOuterKills = BeginThenBranchConditionKills()
-                    if fallthroughState != nil {
-                        IntersectBranchEntry(binderCtx.Narrowing.Join(fallthroughState))
-                    }
                     var defaultExitAliases HashSet[VariableSymbol]? = nil
                     var defaultBody = if defaultIndex == syntax.Cases.Length - 1 {
-                        BindBlockStatement(caseSyntax.Body)
+                        BindSwitchBody(caseSyntax.Body, nil, fallthroughState)
                     } else {
                         cast[BoundStatement](
                             BindAfterLaterArmTests(
@@ -164,7 +161,7 @@ internal partial class StatementBinder {
                                 },
                                 endsInFallthrough,
                                 func () BoundNode {
-                                    let body = BindBlockStatement(caseSyntax.Body)
+                                    let body = BindSwitchBody(caseSyntax.Body, nil, fallthroughState)
                                     defaultExitAliases = CaptureExternalCallableAliases()
                                     return body
                                 }
@@ -256,30 +253,11 @@ internal partial class StatementBinder {
                 let (guardWhenTrue, _) = PatternVariables.Classify(guard_)
                 let armEntry = binderCtx.Narrowing
                 let armOuterKills = BeginThenBranchConditionKills()
-                if fallthroughState != nil {
-                    let testedEntry = if frame == nil {
-                        binderCtx.Narrowing
-                    } else {
-                        binderCtx.Narrowing.WithAll(frame)
-                    }
-                    let bodyEntry = testedEntry.Join(fallthroughState)
-                    IntersectBranchEntry(bodyEntry)
-                    if frame != nil {
-                        for path in frame.Keys.ToArray() {
-                            let joined = bodyEntry.NarrowedType(path)
-                            if joined == nil {
-                                frame.Remove(path)
-                            } else {
-                                frame[path] = joined
-                            }
-                        }
-                    }
-                }
                 var body = PatternVariables.BindInScope(
                     binderCtx,
                     guardWhenTrue,
                     () -> {
-                        return BindStatementWithNarrowing(caseSyntax.Body, frame)
+                        return BindSwitchBody(caseSyntax.Body, frame, fallthroughState)
                     },
                     caseSyntax.Body
                 )
@@ -420,6 +398,28 @@ internal partial class StatementBinder {
         )
         RecordJoinExits(result, joinExits)
         return result
+    }
+
+    private func BindSwitchBody(
+        syntax BlockStatementSyntax,
+        frame Dictionary[AccessPath, TypeSymbol]?,
+        incomingFallthrough NarrowingState?
+    ) BoundStatement {
+        if incomingFallthrough == nil {
+            return BindStatementWithNarrowing(syntax, frame)
+        }
+        let testedEntry = if frame == nil {
+            binderCtx.Narrowing
+        } else {
+            binderCtx.Narrowing.WithAll(frame)
+        }
+        let entry = testedEntry.Join(incomingFallthrough)
+        IntersectBranchEntry(entry)
+        let local = Dictionary[AccessPath, TypeSymbol]()
+        for path in entry.Paths {
+            local[path] = entry.NarrowedType(path)!!
+        }
+        return BindStatementWithNarrowing(syntax, local)
     }
 
     private func BindTryStatement(syntax TryStatementSyntax) BoundStatement {

@@ -82,6 +82,16 @@ open class Adr0208NarrowingStateTests {
     }
 
     @Fact
+    func Join_PreservesANullableWideningFromAnyReachablePredecessor() {
+        let x = Local("x", false, TypeSymbol.String)
+        let path = AccessPath.ForVariable(x)
+        let nullable = NullableTypeSymbol.Get(TypeSymbol.String)
+        let widened = NarrowingState.Empty.With(path, nullable)
+        Assert.Equal(nullable, widened.Join(NarrowingState.Empty).NarrowedType(path))
+        Assert.Equal(nullable, NarrowingState.Empty.Join(widened).NarrowedType(path))
+    }
+
+    @Fact
     func Join_KeepsOnlyThePathsThatEveryPredecessorHas() {
         let x = Local("x", false, NullableTypeSymbol.Get(TypeSymbol.Object))
         let y = Local("y", false, NullableTypeSymbol.Get(TypeSymbol.Object))
