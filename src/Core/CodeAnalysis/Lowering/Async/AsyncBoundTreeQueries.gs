@@ -67,6 +67,21 @@ shared class AsyncBoundTreeQueries {
             Found = Found || outerFound
         }
 
+        override func VisitPattern(node BoundPattern?) {
+            if node == nil {
+                return
+            }
+            if memo != nil && memo.TryGetValue(node, out var cached) {
+                Found = Found || cached
+                return
+            }
+            let outerFound = Found
+            Found = false
+            base.VisitPattern(node)
+            memo?.Add(node, Found)
+            Found = Found || outerFound
+        }
+
         protected override func VisitAwaitExpression(node BoundAwaitExpression) {
             Found = true
         }
@@ -147,6 +162,21 @@ shared class AsyncBoundTreeQueries {
         }
         let probe = AwaitDetector(memo)
         probe.VisitExpression(expression)
+        return probe.Found
+    }
+
+    /// Returns `true` when the given bound pattern subtree
+    /// contains at least one (cref:BoundAwaitExpression), consulting and
+    /// populating [`memo`](paramref).
+    /// @param pattern The bound pattern to inspect.
+    /// @param memo An optional reference-keyed cache shared across calls in one lowering pass.
+    /// @returns Whether the subtree contains an `await`.
+    internal func HasAwait(pattern BoundPattern?, memo Dictionary[BoundNode, bool]?) bool {
+        if pattern == nil {
+            return false
+        }
+        let probe = AwaitDetector(memo)
+        probe.VisitPattern(pattern)
         return probe.Found
     }
 
