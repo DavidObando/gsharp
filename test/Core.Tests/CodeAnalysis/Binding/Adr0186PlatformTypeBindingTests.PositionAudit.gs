@@ -161,13 +161,14 @@ partial class Adr0186PlatformTypeBindingTests {
     @Theory
     @InlineData("    let x Fns? = Ob.LiveFns()\n    Console.WriteLine(x.F())")
     @InlineData("    let x Fns? = Ob.LiveFns()\n    Console.WriteLine(x.P())")
+    @InlineData("    let x Annotated? = nil\n    Console.WriteLine(x.MaybeF())")
+    @InlineData("    let x Annotated? = nil\n    Console.WriteLine(x.MaybeP())")
     func StatedNullableReceiver_DelegateMemberInvocation_Reports(body string) {
         using let world = World()
         let compiled = world.Compile(body, NullabilityMode.PlatformTypes)
-        Assert.Contains(
-            compiled.Diagnostics,
-            (d DiagnosticLine) -> d.Id == "GS0159" && d.Message.Contains("may be nil", StringComparison.Ordinal)
-        )
+        let report = Assert.Single(compiled.Diagnostics)
+        Assert.Equal("GS0159", report.Id)
+        Assert.Contains("may be nil", report.Message, StringComparison.Ordinal)
         Assert.Equal(
             "F",
             world.Run("    let x Fns? = Ob.LiveFns()\n    Console.WriteLine(x?.F())", NullabilityMode.PlatformTypes)
