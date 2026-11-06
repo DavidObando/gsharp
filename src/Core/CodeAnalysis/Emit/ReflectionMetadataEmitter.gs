@@ -4574,19 +4574,16 @@ internal class ReflectionMetadataEmitter {
         /// Gets the collected compile-time constant bindings (for PDB local-constant capture).
         prop ConstValues Dictionary[VariableSymbol, object] -> this.constValues
 
-        /// Issue #216: collects compile-time const bindings before slot allocation.
-        /// @param body The bound body to scan for const bindings.
-        func CollectConstValues(body BoundBlockStatement) -> MethodBodyPlanner.CollectConstValues(
-            body,
-            this.constValues
-        )
-
         /// Runs the slot planner for one body region, appending to the shared
         /// slot dictionaries. May be called more than once (e.g. base-initializer
         /// arguments and field initializers are planned separately).
+        /// @remarks Issue #216, #5797: the slot planner gives a `const` local no slot, so
+        /// the emitter must inline every read of it. Each planned region records its
+        /// `const` bindings here, so no method body can plan a region without them.
         /// @param body The bound body region contributing locals/labels.
         /// @param function The owning function, or `null` for synthesized bodies.
         func Plan(body BoundBlockStatement, function FunctionSymbol? = nil) {
+            MethodBodyPlanner.CollectConstValues(body, this.constValues)
             if TryGetFixedReturnType(body, out var fixedReturnType) {
                 this.hasFixedReturns = true
                 if fixedReturnType != nil && this.fixedReturnSlot < 0 {
@@ -4621,13 +4618,17 @@ internal class ReflectionMetadataEmitter {
         }
 
         /// Plans the proven primitive body without accessing the coordinator or metadata.
-        func PlanIndependent(body BoundBlockStatement) -> MethodBodyPlanner.CollectIndependentLocalsAndLabels(
-            body,
-            this.locals,
-            this.localTypes,
-            this.labels,
-            this.Il
-        )
+        /// @remarks It records the `const` bindings of the body, as (cref:Plan) does.
+        func PlanIndependent(body BoundBlockStatement) {
+            MethodBodyPlanner.CollectConstValues(body, this.constValues)
+            MethodBodyPlanner.CollectIndependentLocalsAndLabels(
+                body,
+                this.locals,
+                this.localTypes,
+                this.labels,
+                this.Il
+            )
+        }
 
         /// Encodes the collected locals into a standalone signature (default when there are none).
         /// @returns The locals signature handle, or `default` when no locals were collected.

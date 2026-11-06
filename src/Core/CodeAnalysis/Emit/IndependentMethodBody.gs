@@ -57,7 +57,6 @@ internal class IndependentMethodBody {
 
     func Emit() {
         try {
-            Session.CollectConstValues(this.body)
             Session.PlanIndependent(this.body)
             this.emitter.EmitMethodBody(this.body, alwaysAppendRet: this.function.Type == TypeSymbol.Void)
             MaxStack = MaxStackTracker.ComputeMaxStack(Il)
