@@ -2683,12 +2683,12 @@ internal partial class ExpressionBinder {
                         return overloads.BindCallExpression(ce, nestedConstructorType)
                     }
                     if nestedConversionType != nil {
-                        if ce.TypeArgumentList != nil {
+                        if ce.TypeArgumentList is {} typeArgList {
                             Diagnostics.ReportWrongTypeArgumentCount(
-                                ce.TypeArgumentList.Location,
+                                typeArgList.Location,
                                 nestedConversionType.Name,
                                 0,
-                                ce.TypeArgumentList.Arguments.Count
+                                typeArgList.Arguments.Count
                             )
                             return BoundErrorExpression(ce)
                         }

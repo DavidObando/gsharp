@@ -854,9 +854,10 @@ internal partial class ExpressionBinder {
                     eventInfo = MemberLookup.GetInterfaceImportedBaseInstanceEvent(
                         eventInterface,
                         eventName,
-                        out importedEventTarget
+                        out var resolvedImportedEventTarget
                     )
-                    receiverClrType = importedEventTarget?.ClrType
+                    importedEventTarget = resolvedImportedEventTarget
+                    receiverClrType = resolvedImportedEventTarget?.ClrType
                 }
                 if eventInfo == nil {
                     Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName)
