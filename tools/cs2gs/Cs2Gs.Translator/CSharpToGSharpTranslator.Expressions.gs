@@ -3490,10 +3490,17 @@ partial class CSharpToGSharpTranslator {
             case parameter is IParameterSymbol: this.ParameterSlotIsDeclared(parameter, value)
             case local is ILocalSymbol: this.LocalSlotIsDeclared(local)
             case method is IMethodSymbol: if this.ResultLambda(method, value) is {} lambda {
-                this
-                    .context
-                    .GetTypeInfo(lambda)
-                    .ConvertedType is INamedTypeSymbol{DelegateInvokeMethod: {}} &&
+                (
+                    this
+                        .context
+                        .GetTypeInfo(lambda)
+                        .ConvertedType is INamedTypeSymbol{DelegateInvokeMethod: {}} ||
+                        (
+                        value is AnonymousFunctionExpressionSyntax && this.GetLambdaTargetDelegateType(lambda) is {
+                            DelegateInvokeMethod: {}
+                        }
+                    )
+                ) &&
                     (
                     this.LambdaHasExplicitDelegateCast(lambda) || this.LambdaFeedsDeclaredCollectionElement(lambda) ||
                         this
@@ -3545,10 +3552,9 @@ partial class CSharpToGSharpTranslator {
                         node = arm.Parent
                     }
                     case castExpr is CastExpressionSyntax {
-                        if this
-                            .context
-                            .GetTypeInfo(castExpr.Type)
-                            .Type is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} &&
+                        if UnwrapExpressionTreeDelegateType(
+                            this.context.GetTypeInfo(castExpr.Type).Type
+                        ) is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} &&
                             !ContainsTypeParameter(invoke.ReturnType) {
                             return true
                         }
@@ -3595,7 +3601,7 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func LambdaFeedsDeclaredCollectionElement(lambda AnonymousFunctionExpressionSyntax) bool {
-            let converted = this.context.GetTypeInfo(lambda).ConvertedType as INamedTypeSymbol
+            let converted = this.GetLambdaTargetDelegateType(lambda)
             if converted?.DelegateInvokeMethod == nil ||
                 ContainsTypeParameter(converted!!.DelegateInvokeMethod!!.ReturnType) {
                 return false
@@ -3697,10 +3703,22 @@ partial class CSharpToGSharpTranslator {
         ) ITypeSymbol? {
             let bridged = GetBridgedSlotType(value, slotType)
             if value is AnonymousFunctionExpressionSyntax &&
-                bridged is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} {
+                UnwrapExpressionTreeDelegateType(bridged) is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} {
                 return invoke.ReturnType
             }
             return bridged
+        }
+
+        private func UnwrapExpressionTreeDelegateType(type ITypeSymbol?) ITypeSymbol? -> if type is INamedTypeSymbol{
+            IsGenericType: true,
+            TypeArguments: {Length: 1} typeArguments,
+            OriginalDefinition: {MetadataName: "Expression`1"},
+            ContainingNamespace: {} ns
+        } &&
+            ns.ToDisplayString() == "System.Linq.Expressions" && typeArguments[0].TypeKind == TypeKind.Delegate {
+            typeArguments[0]
+        } else {
+            type
         }
 
         private func CallReceiverSlotIsDeclared(value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
@@ -3773,15 +3791,26 @@ partial class CSharpToGSharpTranslator {
                 let castType = this.context.GetTypeInfo(castExpression.Type).Type
                 return castType is INamedTypeSymbol && !ContainsTypeParameter(castType)
             }
-            if unwrapped is Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .BinaryExpressionSyntax binaryExpression &&
-                binaryExpression
-                .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsExpression) {
-                let asType = this.context.GetTypeInfo(binaryExpression.Right).Type
-                return asType is INamedTypeSymbol && !ContainsTypeParameter(asType)
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binaryExpression {
+                if binaryExpression.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsExpression) {
+                    let asType = this.context.GetTypeInfo(binaryExpression.Right).Type
+                    return asType is INamedTypeSymbol && !ContainsTypeParameter(asType)
+                }
+                if binaryExpression.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression) {
+                    return this.ReceiverTypeArgumentsAreDeclared(binaryExpression.Left) &&
+                        this.ReceiverTypeArgumentsAreDeclared(binaryExpression.Right)
+                }
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax conditional {
+                return this.ReceiverTypeArgumentsAreDeclared(conditional.WhenTrue) &&
+                    this.ReceiverTypeArgumentsAreDeclared(conditional.WhenFalse)
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression {
+                return switchExpression.Arms.Count > 0 && switchExpression.Arms.All(
+                    (
+                        arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax
+                    ) -> this.ReceiverTypeArgumentsAreDeclared(arm.Expression)
+                )
             }
             if unwrapped is ConditionalAccessExpressionSyntax conditionalAccess {
                 return this.ReceiverTypeArgumentsAreDeclared(conditionalAccess.WhenNotNull)
@@ -4192,6 +4221,15 @@ partial class CSharpToGSharpTranslator {
                 .NotNull {
                 return translated
             }
+            // Issue #5627: a value that is `T?` only in G# (`Volatile.Read(ref cache!)`) reaches a slot whose
+            // non-null type the program text declares.
+            let emittedNilableValue = this.SlotTypeIsDeclared(targetSymbol, value) &&
+                this.YieldsValueNilableBeyondItsCSharpType(value)
+            let nestedDelegateReturnInExpressionTree = targetSymbol is IMethodSymbol methodTarget && this.ResultLambda(
+                methodTarget,
+                value
+            ) is {} resultLambda &&
+                !this.IsExpressionTreeLambda(resultLambda) && this.SlotTypeIsDeclared(targetSymbol, value)
             if translated is NonNullAssertionExpression ||
                 resultAcceptsNil ||
                 IsNullOrSuppressedNull(value) ||
@@ -4201,7 +4239,11 @@ partial class CSharpToGSharpTranslator {
                 targetSymbol.IsConst == true ||
                 targetSymbol is ILocalSymbol &&
                 targetSymbol.IsConst == true ||
-                this.IsWithinExpressionTreeLambda(value) ||
+                (
+                this.IsWithinExpressionTreeLambda(value) &&
+                    !emittedNilableValue &&
+                    !nestedDelegateReturnInExpressionTree
+            ) ||
                 IsInitializerOfInferredLocal(value, targetSymbol) ||
                 this.LambdaResultFeedsNullableObservedInvocation(value) || !this.TargetWillRemainNonNullableReference(
                 targetType,
@@ -4253,10 +4295,6 @@ partial class CSharpToGSharpTranslator {
             let declaredSink = (targetSymbol != nil || fixedSink) &&
                 !inferredSink &&
                 !(targetSymbol is ILocalSymbol typedByValue && IsImplicitlyTypedLocal(typedByValue))
-            // Issue #5627: a value that is `T?` only in G# (`Volatile.Read(ref cache!)`) reaches a slot whose
-            // non-null type the program text declares.
-            let emittedNilableValue = this.SlotTypeIsDeclared(targetSymbol, value) &&
-                this.YieldsValueNilableBeyondItsCSharpType(value)
             let inferredExpandedParamsElement = inferredSink &&
                 targetSymbol is IParameterSymbol expandedParam &&
                 this.IsExpandedParamsArgument(value, expandedParam)
