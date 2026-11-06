@@ -330,7 +330,7 @@ internal partial class MethodBodyEmitter {
             }
             case expr is BoundExpressionStatement {
                 this.EmitExpression(expr.Expression)
-                if expr.Expression.Type != TypeSymbol.Void {
+                if expr.Expression.Type != TypeSymbol.Void && expr.Expression.Type != TypeSymbol.Never {
                     this.il.OpCode(ILOpCode.Pop)
                 }
             }
@@ -344,6 +344,9 @@ internal partial class MethodBodyEmitter {
                         this.EmitAddressOf(addrOf)
                     } else {
                         this.EmitExpression(returnExpression)
+                    }
+                    if returnExpression.Type == TypeSymbol.Never {
+                        break
                     }
                 }
                 if this.protectedRegionStack.Count > 0 && this.hasFixedReturns {
@@ -366,7 +369,9 @@ internal partial class MethodBodyEmitter {
                     expression: "decl.Initializer"
                 )
                 this.EmitExpression(initializer)
-                this.EmitStoreVariable(decl.Variable)
+                if initializer.Type != TypeSymbol.Never {
+                    this.EmitStoreVariable(decl.Variable)
+                }
             }
             case BoundLocalFunctionDeclaration { }
             case lbl is BoundLabelStatement {
@@ -432,7 +437,8 @@ internal partial class MethodBodyEmitter {
             this.currentPositionEndsInTerminator = statement is BoundReturnStatement ||
                 statement is BoundThrowStatement ||
                 statement is BoundRethrowStatement ||
-                statement is BoundGotoStatement
+                statement is BoundGotoStatement ||
+                ControlFlowGraph.HasNeverValue(statement)
         }
     }
 
@@ -676,6 +682,10 @@ internal partial class MethodBodyEmitter {
                 },
                 targetHandle
             )
+            return
+        }
+        if conditional.Type == TypeSymbol.Never {
+            this.EmitExpression(conditional)
             return
         }
         if !crossesRegion {

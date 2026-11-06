@@ -132,6 +132,9 @@ class Lowerer : BoundTreeRewriter {
         if this.tryNestingDepth == 0 {
             return rewritten
         }
+        if rewritten.Expression is {} neverReturn && neverReturn.Type == TypeSymbol.Never {
+            return BoundExpressionStatement(rewritten.Syntax, neverReturn)
+        }
         this.hasRewrittenReturnsInProtectedRegions = true
         if this.methodExitLabel == nil {
             this.methodExitLabel = GenerateLabel()

@@ -60,12 +60,18 @@ internal partial class MethodBodyEmitter {
                 valueType: node.Discriminant.Type,
                 failLabel: nextArm
             )
-            if arm.Guard != nil {
-                this.EmitExpression(arm.Guard)
-                this.il.Branch(ILOpCode.Brfalse, nextArm)
+            var guardNever = false
+            if arm.Guard is {} armGuard {
+                guardNever = armGuard.Type == TypeSymbol.Never
+                this.EmitExpression(armGuard)
+                if !guardNever {
+                    this.il.Branch(ILOpCode.Brfalse, nextArm)
+                }
             }
-            this.EmitStatement(arm.Body)
-            this.il.Branch(ILOpCode.Br, endLabel)
+            if !guardNever || SlotPlanner.ContainsLabel(arm.Body) {
+                this.EmitStatement(arm.Body)
+                this.il.Branch(ILOpCode.Br, endLabel)
+            }
             this.il.MarkLabel(nextArm)
         }
         if defaultArm != nil {
@@ -100,20 +106,28 @@ internal partial class MethodBodyEmitter {
                 valueType: node.Discriminant.Type,
                 failLabel: nextArm
             )
-            if arm.Guard != nil {
-                this.EmitExpression(arm.Guard)
-                this.il.Branch(ILOpCode.Brfalse, nextArm)
+            var guardNever = false
+            if arm.Guard is {} armGuard {
+                guardNever = armGuard.Type == TypeSymbol.Never
+                this.EmitExpression(armGuard)
+                if !guardNever {
+                    this.il.Branch(ILOpCode.Brfalse, nextArm)
+                }
             }
-            this.EmitExpression(arm.Result)
-            if hasResult {
-                this.il.StoreLocal(resultSlot)
+            if !guardNever || SlotPlanner.ContainsLabel(arm.Result) {
+                this.EmitExpression(arm.Result)
+                if arm.Result.Type != TypeSymbol.Never {
+                    if hasResult {
+                        this.il.StoreLocal(resultSlot)
+                    }
+                    this.il.Branch(ILOpCode.Br, endLabel)
+                }
             }
-            this.il.Branch(ILOpCode.Br, endLabel)
             this.il.MarkLabel(nextArm)
         }
         if defaultArm != nil {
             this.EmitExpression(defaultArm.Result)
-            if hasResult {
+            if hasResult && defaultArm.Result.Type != TypeSymbol.Never {
                 this.il.StoreLocal(resultSlot)
             }
         } else if node.Type != TypeSymbol.Void {

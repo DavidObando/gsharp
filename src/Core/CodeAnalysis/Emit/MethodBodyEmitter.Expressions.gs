@@ -60,6 +60,10 @@ internal partial class MethodBodyEmitter {
                 this.EmitNarrowingCastIfNeeded(v)
             }
             case a is BoundAssignmentExpression {
+                if a.Expression.Type == TypeSymbol.Never {
+                    this.EmitExpression(a.Expression)
+                    break
+                }
                 if a.Variable is ParameterSymbol assignParam && assignParam.RefKind != RefKind.None {
                     // ADR-0060: assign-through-ref-kind-parameter lowers to
                     // `ldarg ptr; value; dup; stloc tmp; stind.*; ldloc tmp`
@@ -2344,7 +2348,9 @@ internal partial class MethodBodyEmitter {
         this.il.Branch(ILOpCode.Brfalse, falseLabel)
         this.EmitExpression(node.WhenTrue)
         this.EmitInterfaceMergeCastIfNeeded(node.WhenTrue, node.Type)
-        this.il.Branch(ILOpCode.Br, doneLabel)
+        if node.WhenTrue.Type != TypeSymbol.Never {
+            this.il.Branch(ILOpCode.Br, doneLabel)
+        }
         this.il.MarkLabel(falseLabel)
         this.EmitExpression(node.WhenFalse)
         this.EmitInterfaceMergeCastIfNeeded(node.WhenFalse, node.Type)
