@@ -95,26 +95,25 @@ internal partial class MethodBodyEmitter {
             let constraintInterface InterfaceSymbol? = (call.ConstrainedInterfaceType as InterfaceSymbol) ??
                 (call.Method.ReceiverType as InterfaceSymbol)
             let constraintClass StructSymbol? = call.ConstrainedReceiverTypeParameter!!.ClassConstraint as StructSymbol
-            let openMethod = if constraintInterface != nil {
-                ResolveOpenInterfaceMethod(constraintInterface, call.Method)
-            } else {
-                call.Method
-            }
             let constraintOwner StructSymbol? = if constraintClass != nil {
                 ResolveUserInstanceMethodOwner(constraintClass, call.Method)
             } else {
                 default(StructSymbol?)
             }
-            var constrainedMethodToken = if constraintInterface != nil {
-                this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(constraintInterface, openMethod)
+            var constrainedMethodToken EntityHandle
+            if constraintInterface != nil {
+                let (slotIface, openMethod) = ResolveInterfaceSlotOwner(constraintInterface, call.Method)
+                constrainedMethodToken = this
+                    .outer
+                    .userTokens
+                    .ResolveUserInterfaceInstanceMethodToken(slotIface, openMethod)
+            } else if constraintOwner != nil {
+                constrainedMethodToken = this
+                    .outer
+                    .userTokens
+                    .ResolveUserInstanceMethodToken(constraintOwner, call.Method)
             } else {
-                (
-                    if constraintOwner != nil {
-                        this.outer.userTokens.ResolveUserInstanceMethodToken(constraintOwner, call.Method)
-                    } else {
-                        this.outer.cache.MethodHandles[call.Method]
-                    }
-                )
+                constrainedMethodToken = this.outer.cache.MethodHandles[call.Method]
             }
             if call.Method.IsGeneric && !call.Method.TypeParameters.IsDefaultOrEmpty {
                 constrainedMethodToken = this

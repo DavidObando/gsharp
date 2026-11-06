@@ -777,34 +777,24 @@ internal partial class StatementBinder {
     }
 
     private func BindWhileLetStatement(syntax WhileLetStatementSyntax) BoundStatement {
-        return BindWhileLetStatementCore(syntax, syntax.Bindings, syntax.Body, labelName: nil)
+        return BindWhileLetStatementCore(syntax, syntax.Bindings, syntax.Guard, syntax.Body, labelName: nil)
     }
 
-    /// ADR-0163 / issue #3352: lowers `while let` through the existing
-    /// declaration, nil-check, goto, and loop-label nodes. Binding declarations
-    /// sit at the check label, so their initializers run before every iteration
-    /// and every `continue` re-enters through the same check.
+    /// ADR-0163 / issue #3352, issue #4968 / ADR-0201: lowers `while let` through the existing
+    /// declaration, nil-check, goto, and loop-label nodes. Binding declarations and the optional
+    /// guard sit at the check label and short-circuit left to right, so each initializer runs only
+    /// after earlier bindings matched, sees earlier bindings narrowed, and every `continue`
+    /// re-enters through the same check.
     private func BindWhileLetStatementCore(
         originatingSyntax SyntaxNode,
         bindingSyntaxes GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[IfLetBindingClauseSyntax],
+        guardSyntax ExpressionSyntax?,
         bodySyntax StatementSyntax,
         labelName string?
     ) BoundStatement {
-        // Lowers to:
-        //   {
-        //     goto checkLabel
-        //     bodyLabel:
-        //     <body, bindings narrowed to their underlying types>
-        //     continueLabel:
-        //     checkLabel:
-        //     let a T1? = e1
-        //     let b T2? = e2
-        //     if a != nil && b != nil goto bodyLabel
-        //     breakLabel:
-        //   }
         let enclosingScope = $scope
         let clauses = List[WhileLetChannelClause]()
-        var condition BoundExpression? = nil
+        var boundGuard BoundExpression? = nil
         let body = BindLoopBody(
             bodySyntax,
             labelName,
@@ -813,37 +803,85 @@ internal partial class StatementBinder {
             bindIteration: func () BoundStatement {
                 $scope = BoundScope(enclosingScope)
                 let loopScope = $scope
+                let loopFrame = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol]())
                 try {
                     clauses.Clear()
-                    let localsForFrame = List[(Variable VariableSymbol, Underlying TypeSymbol)]()
-                    var hasChannelGate = false
-                    for binding in bindingSyntaxes {
+                    boundGuard = nil
+                    for var i = 0; i < bindingSyntaxes.Count; i++ {
+                        let binding = bindingSyntaxes[i]
                         // ADR-0174 D3: channel gates short-circuit in source order
                         // and do not join the nullable-value check chain.
                         if IsChannelReceiveSyntax(binding.Initializer, out var receive) {
-                            let channelClause = BindWhileLetChannelClause(binding, receive, enclosingScope, loopScope)
+                            let channelClause = BindWhileLetChannelClause(binding, receive, loopScope)
                             clauses.Add(channelClause)
-                            hasChannelGate |= channelClause.Gate != nil
                             continue
                         }
+                        let isFinalBeforeGuard = guardSyntax != nil && i == bindingSyntaxes.Count - 1
                         let (variable, underlying, declaration) = BindWhileLetBindingClause(
                             binding,
-                            enclosingScope,
-                            loopScope
+                            loopScope,
+                            isFinalBeforeGuard
                         )
-                        clauses.Add(WhileLetChannelClause(ImmutableArray.Create(declaration), Gate: nil))
+                        let gate = if variable != nil && underlying != nil {
+                            IfLetBindingSupport.BuildNilCheckChain(binding, []VariableSymbol{variable})
+                        } else {
+                            default(BoundExpression?)
+                        }
+                        clauses.Add(WhileLetChannelClause(ImmutableArray.Create(declaration), Gate: gate))
                         if variable != nil && underlying != nil {
-                            localsForFrame.Add((variable, underlying))
+                            loopFrame[variable] = underlying
                         }
                     }
-                    condition = BuildNilCheckChain(originatingSyntax, localsForFrame) ??
-                        BoundLiteralExpression(originatingSyntax, hasChannelGate, TypeSymbol.Bool)
-                    return BindConditionedLoopBodyCore(condition, bodySyntax)
+                    if guardSyntax != nil {
+                        let (guardCondition, guardThenNarrow, _) = BindConditionWithEffects(guardSyntax)
+                        conditionRemovedFacts = nil
+                        let condWhenTrueAliases = lastConditionWhenTrueAliases ?? CaptureExternalCallableAliases()
+                        lastConditionWhenTrueAliases = nil
+                        lastConditionWhenFalseAliases = nil
+                        RestoreExternalCallableAliases(condWhenTrueAliases)
+                        if guardThenNarrow != nil {
+                            for entry in guardThenNarrow {
+                                loopFrame[entry.Key] = entry.Value
+                            }
+                        }
+                        boundGuard = guardCondition
+                    }
+                    let (patternWhenTrue, _) = PatternVariables.Classify(boundGuard)
+                    return PatternVariables.BindInScope(
+                        binderCtx,
+                        patternWhenTrue,
+                        () -> Invariant.Required(
+                            BindStatement(bodySyntax),
+                            "a loop body has a bound statement",
+                            expression: "BindStatement(bodySyntax)"
+                        ),
+                        bodySyntax
+                    )
                 } finally {
+                    binderCtx.EndNarrowingProof()
                     $scope = enclosingScope
                 }
             }
         )
+        let usableGuard = if boundGuard is BoundErrorExpression {
+            default(BoundExpression?)
+        } else {
+            boundGuard
+        }
+        var hasAnyGate = usableGuard != nil
+        for clause in clauses {
+            if clause.Gate != nil {
+                hasAnyGate = true
+            }
+        }
+        let lastGateIndex = if usableGuard == nil &&
+            clauses.Count > 0 &&
+            clauses[clauses.Count - 1].Gate != nil &&
+            !clauses[clauses.Count - 1].IsChannelGate {
+            clauses.Count - 1
+        } else {
+            -1
+        }
         let bodyLabel = BoundLabel("body${binderCtx.LabelCounter}")
         let checkLabel = BoundLabel("check${binderCtx.LabelCounter}")
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -852,85 +890,95 @@ internal partial class StatementBinder {
         statements.Add(body)
         statements.Add(BoundLabelStatement(originatingSyntax, continueLabel))
         statements.Add(BoundLabelStatement(originatingSyntax, checkLabel))
-        for clause in clauses {
+        for var i = 0; i < clauses.Count; i++ {
+            let clause = clauses[i]
             statements.AddRange(clause.Declarations)
-            if clause.Gate != nil {
+            if clause.Gate != nil && i != lastGateIndex {
                 statements.Add(
                     BoundConditionalGotoStatement(originatingSyntax, breakLabel, clause.Gate, jumpIfTrue: false)
                 )
             }
         }
-        statements.Add(
-            BoundConditionalGotoStatement(
-                originatingSyntax,
-                bodyLabel,
-                Invariant.Required(condition, "a while-let loop has a bound condition", expression: "condition"),
-                jumpIfTrue: true
-            )
-        )
+        let condition = if usableGuard != nil {
+            usableGuard
+        } else if lastGateIndex >= 0 {
+            clauses[lastGateIndex].Gate!!
+        } else {
+            BoundLiteralExpression(originatingSyntax, hasAnyGate, TypeSymbol.Bool)
+        }
+        statements.Add(BoundConditionalGotoStatement(originatingSyntax, bodyLabel, condition, jumpIfTrue: true))
         statements.Add(BoundLabelStatement(originatingSyntax, breakLabel))
         return BoundBlockStatement(originatingSyntax, statements.ToImmutable())
     }
 
     private func BindWhileLetBindingClause(
         binding IfLetBindingClauseSyntax,
-        enclosingScope BoundScope,
-        loopScope BoundScope
+        loopScope BoundScope,
+        isFinalBeforeGuard bool = false
     )(Variable VariableSymbol?, Underlying TypeSymbol?, Declaration BoundStatement) {
-        let savedScope = $scope
-        $scope = BoundScope(enclosingScope)
-        try {
-            let bound = IfLetBindingSupport.BindBindingClause(
-                binding,
-                Diagnostics,
-                conversions,
-                bindTypeClause,
-                (syntax ExpressionSyntax) -> {
-                    return BindInitializerWithEffects(syntax)
-                },
-                (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> {
-                    let initializerScope = $scope
-                    $scope = loopScope
-                    try {
-                        return bindLocalVariable(identifier, isReadOnly, type)
-                    } finally {
-                        $scope = initializerScope
-                    }
-                },
-                reportNonNullableInitializer: (clause IfLetBindingClauseSyntax, initializer BoundExpression) -> {
-                    // ADR-0174 D3: `while let v = ch` names the channel itself;
-                    // the author almost certainly meant `<-ch`. Say so (GS0555)
-                    // instead of the generic must-be-nullable GS0296.
-                    if ChannelTypeSymbol.TryGetChannelShape(initializer.Type, out _, out var direction, out _) &&
-                        direction != ChannelDirection
-                        .Out {
-                        let location = clause.Initializer.Location
-                        Diagnostics.ReportWhileLetOverChannelNeedsReceive(
-                            location,
-                            clause.Identifier.ValueText,
-                            location.Text?.ToString(location.Span) ?? "ch"
-                        )
-                        return
-                    }
-                    Diagnostics.ReportIfLetInitializerMustBeNullable(
-                        clause.Initializer.Location,
-                        clause.Identifier.ValueText,
-                        Invariant.Required(
-                            initializer.Type,
-                            "a bound initializer has a type",
-                            expression: "initializer.Type"
-                        )
-                    )
+        let bound = IfLetBindingSupport.BindBindingClause(
+            binding,
+            Diagnostics,
+            conversions,
+            bindTypeClause,
+            (syntax ExpressionSyntax) -> {
+                return BindInitializerWithEffects(syntax)
+            },
+            (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> {
+                let initializerScope = $scope
+                $scope = loopScope
+                try {
+                    return bindLocalVariable(identifier, isReadOnly, type)
+                } finally {
+                    $scope = initializerScope
                 }
-            )
-            let declaration = BoundVariableDeclaration(binding, bound.Variable, bound.Initializer)
-            return if bound.IsValid {
-                (bound.Variable, bound.Underlying, declaration)
-            } else {
-                (nil, nil, declaration)
+            },
+            reportNonNullableInitializer: (clause IfLetBindingClauseSyntax, initializer BoundExpression) -> {
+                // ADR-0174 D3: `while let v = ch` names the channel itself;
+                // the author almost certainly meant `<-ch`. Say so (GS0555)
+                // instead of the generic must-be-nullable GS0296.
+                if ChannelTypeSymbol.TryGetChannelShape(initializer.Type, out _, out var direction, out _) &&
+                    direction != ChannelDirection
+                    .Out {
+                    let location = clause.Initializer.Location
+                    Diagnostics.ReportWhileLetOverChannelNeedsReceive(
+                        location,
+                        clause.Identifier.ValueText,
+                        location.Text?.ToString(location.Span) ?? "ch"
+                    )
+                    return
+                }
+                if isFinalBeforeGuard {
+                    IfLetBindingSupport.ReportFinalInitializerBeforeGuard(Diagnostics, clause, initializer)
+                    return
+                }
+                Diagnostics.ReportIfLetInitializerMustBeNullable(
+                    clause.Initializer.Location,
+                    clause.Identifier.ValueText,
+                    Invariant.Required(
+                        initializer.Type,
+                        "a bound initializer has a type",
+                        expression: "initializer.Type"
+                    )
+                )
             }
-        } finally {
-            $scope = savedScope
+        )
+        if bound.IsValid &&
+            isFinalBeforeGuard &&
+            binding.Initializer is not ParenthesizedExpressionSyntax &&
+            IfLetBindingSupport
+            .HasAmbiguousBooleanContinuation(bound.Initializer, binding.Initializer) {
+            Diagnostics.ReportIfLetGuardSplitsInitializer(
+                binding.Initializer.Location,
+                binding.Identifier.ValueText,
+                bound.Initializer.Type
+            )
+        }
+        let declaration = BoundVariableDeclaration(binding, bound.Variable, bound.Initializer)
+        return if bound.IsValid {
+            (bound.Variable, bound.Underlying, declaration)
+        } else {
+            (nil, nil, declaration)
         }
     }
 
@@ -1112,6 +1160,7 @@ internal partial class StatementBinder {
             case SyntaxKind.WhileLetStatement: BindWhileLetStatementCore(
                 syntax,
                 (cast[WhileLetStatementSyntax](inner)).Bindings,
+                (cast[WhileLetStatementSyntax](inner)).Guard,
                 (cast[WhileLetStatementSyntax](inner)).Body,
                 labelName
             )

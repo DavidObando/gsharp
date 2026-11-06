@@ -3548,7 +3548,6 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportLambdaBindingTypeCannotBeInferred(GSharp.Core.CodeAnalysis.Text.TextLocation location, String parameterName)
   method public Void ReportLegacyChanTypeClauseSyntax(GSharp.Core.CodeAnalysis.Text.TextLocation location, String elementTypeText)
   method public Void ReportLegacyMapTypeClauseSyntax(GSharp.Core.CodeAnalysis.Text.TextLocation location, String keyTypeText, String valueTypeText)
-  method public Void ReportLetBindingGuardNotSupported(GSharp.Core.CodeAnalysis.Text.TextLocation location, String form)
   method public Void ReportLetBindingLogicalOr(GSharp.Core.CodeAnalysis.Text.TextLocation location)
   method public Void ReportLibraryImportInvalidStringMarshalling(GSharp.Core.CodeAnalysis.Text.TextLocation location, String value)
   method public Void ReportLibraryImportRequiresStringMarshalling(GSharp.Core.CodeAnalysis.Text.TextLocation location, String functionName)

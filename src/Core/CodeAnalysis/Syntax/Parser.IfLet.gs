@@ -9,11 +9,10 @@ import System.Collections.Immutable
 
 /// Shared binding headers and the value-position `if let` form.
 open partial class Parser {
-    /// ADR-0201: every binding form uses the ordinary expression grammar with
-    /// a top-level logical-operator boundary for each initializer.
-    /// @param unsupportedGuardForm The form to name in GS0625, or null for `if let`.
+    /// ADR-0201 / #4968: every binding form uses the ordinary expression grammar with
+    /// a top-level logical-operator boundary for each initializer and an optional `&&` guard.
     /// @returns The bindings, optional guard operator and guard.
-    private func ParseIfLetHeader(unsupportedGuardForm string? = nil)(
+    private func ParseIfLetHeader()(
         Bindings SeparatedSyntaxList[IfLetBindingClauseSyntax],
         GuardOperator SyntaxToken?,
         Guard ExpressionSyntax?
@@ -25,8 +24,6 @@ open partial class Parser {
         let guardOperator = NextToken()
         if guardOperator.Kind == SyntaxKind.PipePipeToken {
             Diagnostics.ReportLetBindingLogicalOr(guardOperator.Location)
-        } else if unsupportedGuardForm != nil {
-            Diagnostics.ReportLetBindingGuardNotSupported(guardOperator.Location, unsupportedGuardForm)
         }
         suppressTrailingObjectInitializer++
         suppressStructLiteral++

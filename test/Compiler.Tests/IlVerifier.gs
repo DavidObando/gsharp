@@ -167,7 +167,8 @@ internal shared class IlVerifier {
         ignoredErrorCodes IEnumerable[string]?,
         includedScope string?,
         excludedScope string?,
-        report Action[string]? = nil
+        report Action[string]? = nil,
+        allowFilterInFinally bool = true
     ) {
         let args = List[string](leadingArgs){assemblyPath, "-s", "System.Private.CoreLib"}
         for reference in references {
@@ -209,7 +210,7 @@ internal shared class IlVerifier {
         let upstreamReturn = stdout.Contains("[ReturnPtrToStack]", StringComparison.Ordinal)
         if report != nil || upstreamReturn {
             let policy = if exitCode == 2 && stderr.Length == 0 {
-                IlVerifyFalsePositives.Report(assemblyPath, stdout, allowFilterInFinally: true)
+                IlVerifyFalsePositives.Report(assemblyPath, stdout, allowFilterInFinally: allowFilterInFinally)
             } else {
                 "ILVerify policy: no diagnostic exception applies to this raw process outcome."
             }
@@ -229,8 +230,20 @@ internal shared class IlVerifier {
         if exitCode == 2 && stderr.Length == 0 && IlVerifyFalsePositives.OnlyKnown(
             assemblyPath,
             stdout,
-            allowFilterInFinally: true
+            allowFilterInFinally: allowFilterInFinally
         ) {
+            if allowFilterInFinally && stdout.Contains("[StackUnderflow]", StringComparison.Ordinal) {
+                VerifyShadowFilterInFinally(
+                    command,
+                    leadingArgs,
+                    assemblyPath,
+                    references,
+                    ignoredErrorCodes,
+                    includedScope,
+                    excludedScope,
+                    report
+                )
+            }
             return
         }
         if exitCode != 0 || stderr.Length != 0 {
@@ -253,6 +266,44 @@ internal shared class IlVerifier {
                 "ilverify exited successfully without confirming verification of '$assemblyPath'.${Environment.NewLine}" +
                     stdout.TrimEnd() + Environment.NewLine + stderr.TrimEnd()
             )
+        }
+    }
+
+    private func VerifyShadowFilterInFinally(
+        command string,
+        leadingArgs IReadOnlyList[string],
+        assemblyPath string,
+        references IReadOnlyList[string],
+        ignoredErrorCodes IEnumerable[string]?,
+        includedScope string?,
+        excludedScope string?,
+        report Action[string]?
+    ) {
+        let shadowDir = Directory.CreateTempSubdirectory("gs_ilv_shadow_").FullName
+        let shadowPath = Path.Combine(shadowDir, Path.GetFileName(assemblyPath))
+        try {
+            if !IlVerifyFilterInFinallyRule.TryWritePatchedAssembly(assemblyPath, shadowPath) {
+                throw XunitException(
+                    "ilverify: failed to construct shadow assembly for filter-in-finally verification of '$assemblyPath'"
+                )
+            }
+            VerifyCore(
+                command,
+                leadingArgs,
+                shadowPath,
+                references,
+                ignoredErrorCodes,
+                includedScope,
+                excludedScope,
+                report,
+                allowFilterInFinally: false
+            )
+        } finally {
+            try {
+                if Directory.Exists(shadowDir) {
+                    Directory.Delete(shadowDir, recursive: true)
+                }
+            } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
     }
 

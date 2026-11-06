@@ -8,7 +8,11 @@ import System
 import System.Collections.Generic
 import System.Globalization
 import System.IO
+import System.Linq
+import System.Reflection
+import System.Reflection.Emit
 import System.Reflection.Metadata
+import System.Reflection.Metadata.Ecma335
 import System.Reflection.PortableExecutable
 import System.Text.RegularExpressions
 
@@ -152,6 +156,12 @@ internal class IlVerifyFilterInFinallyRule {
     shared {
         private const StackUnderflowCode string = "StackUnderflow"
 
+        private let OpCodesByValue Dictionary[int16, OpCode] = typeof(OpCodes)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where((field FieldInfo) -> field.FieldType == typeof(OpCode))
+            .Select((field FieldInfo) -> OpCode(field.GetValue(nil)!!))
+            .ToDictionary((opcode OpCode) -> opcode.Value)
+
         // [IL]: Error [StackUnderflow]: [<asm> : <Type>::<Method>(<sig>)][offset 0x000001C6] Stack underflow.
         // The location is lazy so `]` inside array signatures does not end it early.
         private let ErrorLine Regex = Regex(
@@ -217,7 +227,14 @@ internal class IlVerifyFilterInFinallyRule {
                             for region in regions {
                                 if region.Kind == ExceptionRegionKind.Filter &&
                                     IsFilterStartInsideFinallyOrFault(regions, region.FilterOffset) &&
-                                    PopsExactlyOne(il, region.FilterOffset) {
+                                    PopsExactlyOne(il, region.FilterOffset) &&
+                                    CanPatchAndVerifyFilterRegion(
+                                    reader,
+                                    il,
+                                    region.FilterOffset,
+                                    region.HandlerOffset,
+                                    body.MaxStack
+                                ) {
                                     offsets.Add(region.FilterOffset)
                                 }
                             }
@@ -239,6 +256,601 @@ internal class IlVerifyFilterInFinallyRule {
                 found.Clear()
             }
             return IlVerifyFilterInFinallyRule(found)
+        }
+
+        /// Issue #5115: writes a shadow copy of [`assemblyPath`](paramref) to
+        /// [`shadowPath`](paramref) where each candidate filter-in-finally start
+        /// instruction (`isinst`/`castclass` or `pop`) is replaced in-place with
+        /// an instruction sequence of the same byte length (`ldnull; nop; nop; nop; nop`
+        /// or `nop`) that seeds ILVerify's empty filter-entry stack without shifting
+        /// any IL offset or EH clause. Running `ilverify` on the shadow assembly
+        /// verifies the remainder of the filter and the rest of the method that
+        /// ILVerify otherwise aborts before visiting.
+        /// @param assemblyPath The original assembly path.
+        /// @param shadowPath The destination path for the patched assembly.
+        /// @returns `true` when at least one candidate filter start was patched cleanly.
+        internal func TryWritePatchedAssembly(assemblyPath string, shadowPath string) bool {
+            if string.IsNullOrEmpty(assemblyPath) || !File.Exists(assemblyPath) {
+                return false
+            }
+            try {
+                let bytes = File.ReadAllBytes(assemblyPath)
+                if !TryPatchAssemblyBytes(bytes, out var patched) {
+                    return false
+                }
+                let dir = Path.GetDirectoryName(shadowPath)
+                if !string.IsNullOrEmpty(dir) {
+                    Directory.CreateDirectory(dir)
+                }
+                File.WriteAllBytes(shadowPath, patched)
+                return true
+            } catch (BadImageFormatException) {
+                return false
+            } catch (IOException) {
+                return false
+            } catch (UnauthorizedAccessException) {
+                return false
+            }
+        }
+
+        internal func TryPatchAssemblyBytes(bytes[]uint8, out patched[]uint8) bool {
+            patched = cast[[]uint8](bytes.Clone())
+            using let pe = PEReader(MemoryStream(bytes, writable: false))
+            if !pe.HasMetadata {
+                return false
+            }
+            let reader = pe.GetMetadataReader()
+            let identityCounts = Dictionary[string, int32](StringComparer.Ordinal)
+            for handle in reader.MethodDefinitions {
+                let key = IdentityKey(reader, reader.GetMethodDefinition(handle))
+                identityCounts.TryGetValue(key, out var count)
+                identityCounts[key] = count + 1
+            }
+            var patchedAny = false
+            for handle in reader.MethodDefinitions {
+                let method = reader.GetMethodDefinition(handle)
+                if method.RelativeVirtualAddress == 0 || identityCounts[IdentityKey(reader, method)] != 1 {
+                    continue
+                }
+                let body = pe.GetMethodBody(method.RelativeVirtualAddress)
+                let regions = List[Region]()
+                for region in body.ExceptionRegions {
+                    regions.Add(
+                        Region(
+                            region.Kind,
+                            region.TryOffset,
+                            region.TryLength,
+                            region.HandlerOffset,
+                            region.HandlerLength,
+                            if region.Kind == ExceptionRegionKind.Filter {
+                                region.FilterOffset
+                            } else {
+                                -1
+                            }
+                        )
+                    )
+                }
+                let il = body.GetILBytes() ?? Array.Empty[uint8]()
+                var codeStart = -1
+                for region in regions {
+                    if region.Kind != ExceptionRegionKind.Filter ||
+                        !IsFilterStartInsideFinallyOrFault(regions, region.FilterOffset) ||
+                        !PopsExactlyOne(il, region.FilterOffset) {
+                        continue
+                    }
+                    let patchLength = GetFilterPreludePatchLength(
+                        reader,
+                        il,
+                        region.FilterOffset,
+                        region.HandlerOffset,
+                        body.MaxStack
+                    )
+                    if patchLength <= 0 {
+                        return false
+                    }
+                    if codeStart < 0 {
+                        codeStart = GetMethodCodeOffset(pe, bytes, method.RelativeVirtualAddress)
+                        if codeStart < 0 {
+                            return false
+                        }
+                    }
+                    let op = il[region.FilterOffset]
+                    let fileOffset = codeStart + region.FilterOffset
+                    if op == uint8(0x75) || op == uint8(0x74) {
+                        if patchLength < 6 {
+                            return false
+                        }
+                        let token0 = il[region.FilterOffset + 1]
+                        let token1 = il[region.FilterOffset + 2]
+                        let token2 = il[region.FilterOffset + 3]
+                        let token3 = il[region.FilterOffset + 4]
+                        patched[fileOffset] = uint8(0x14)
+                        patched[fileOffset + 1] = op
+                        patched[fileOffset + 2] = token0
+                        patched[fileOffset + 3] = token1
+                        patched[fileOffset + 4] = token2
+                        patched[fileOffset + 5] = token3
+                        for var k = 6; k < patchLength; k++ {
+                            patched[fileOffset + k] = uint8(0x00)
+                        }
+                        patchedAny = true
+                    } else if op == uint8(0x26) {
+                        patched[fileOffset] = uint8(0x00)
+                        patchedAny = true
+                    } else {
+                        return false
+                    }
+                }
+            }
+            return patchedAny
+        }
+
+        private func GetMethodCodeOffset(pe PEReader, bytes[]uint8, rva int32) int32 {
+            for section in pe.PEHeaders.SectionHeaders {
+                if rva >= section.VirtualAddress && rva < section.VirtualAddress + section.SizeOfRawData {
+                    let headerOffset = rva - section.VirtualAddress + section.PointerToRawData
+                    if headerOffset < 0 || headerOffset >= bytes.Length {
+                        return -1
+                    }
+                    let isTiny = (int32(bytes[headerOffset]) & 0x3) == 0x2
+                    if !isTiny && headerOffset + 1 >= bytes.Length {
+                        return -1
+                    }
+                    let headerSize = if isTiny {
+                        1
+                    } else {
+                        (int32(bytes[headerOffset + 1]) >> 4) * 4
+                    }
+                    let codeStart = headerOffset + headerSize
+                    return if codeStart >= 0 && codeStart <= bytes.Length {
+                        codeStart
+                    } else {
+                        -1
+                    }
+                }
+            }
+            return -1
+        }
+
+        /// Issue #5115: checks that the filter region `[filterOffset, handlerOffset)`
+        /// starts with a patchable instruction (`isinst`/`castclass` with a valid type
+        /// token, or `pop`), decodes cleanly up to `endfilter`, and maintains a valid
+        /// evaluation stack depth along every path inside the filter starting from the
+        /// CLR's 1-item exception stack.
+        private func CanPatchAndVerifyFilterRegion(
+            reader MetadataReader,
+            il[]uint8,
+            filterOffset int32,
+            handlerOffset int32,
+            maxStack int32
+        ) bool {
+            return GetFilterPreludePatchLength(reader, il, filterOffset, handlerOffset, maxStack) > 0
+        }
+
+        private func GetFilterPreludePatchLength(
+            reader MetadataReader,
+            il[]uint8,
+            filterOffset int32,
+            handlerOffset int32,
+            maxStack int32
+        ) int32 {
+            if maxStack < 1 || filterOffset < 0 || handlerOffset <= filterOffset + 2 || handlerOffset > il.Length {
+                return 0
+            }
+            if il[handlerOffset - 2] != uint8(0xFE) || il[handlerOffset - 1] != uint8(0x11) {
+                return 0
+            }
+            let instructionStarts = HashSet[int32]()
+            let allBranchTargets = HashSet[int32]()
+            var scan = filterOffset
+            while scan < handlerOffset {
+                instructionStarts.Add(scan)
+                let decodedScan = DecodeInstruction(il, scan, handlerOffset)
+                if !decodedScan.Decoded {
+                    return 0
+                }
+                let scanBranchTargets = decodedScan.BranchTargets
+                if scanBranchTargets != nil {
+                    for target in scanBranchTargets {
+                        allBranchTargets.Add(target)
+                    }
+                }
+                scan = decodedScan.NextOffset
+            }
+            if scan != handlerOffset {
+                return 0
+            }
+            let patchLength = MatchFilterEntryPrelude(reader, il, filterOffset, handlerOffset, allBranchTargets)
+            if patchLength <= 0 {
+                return 0
+            }
+            let depths = Dictionary[int32, int32]()
+            let worklist = Queue[int32]()
+            depths[filterOffset] = 1
+            worklist.Enqueue(filterOffset)
+            var reachedEndfilter = false
+            while worklist.Count > 0 {
+                let pc = worklist.Dequeue()
+                let depth = depths[pc]
+                let decoded = DecodeInstruction(il, pc, handlerOffset)
+                if !decoded.Decoded {
+                    return 0
+                }
+                let opcode = decoded.OpCode
+                let nextPc = decoded.NextOffset
+                let branchTargets = decoded.BranchTargets
+                let metadataToken = decoded.MetadataToken
+                if !TryGetStackDelta(reader, opcode, metadataToken, out var pops, out var pushes) {
+                    return 0
+                }
+                if depth < pops {
+                    return 0
+                }
+                let nextDepth = depth - pops + pushes
+                if nextDepth > maxStack {
+                    return 0
+                }
+                if opcode == OpCodes.Endfilter {
+                    if depth != 1 || nextDepth != 0 {
+                        return 0
+                    }
+                    reachedEndfilter = true
+                    continue
+                }
+                if opcode.FlowControl == FlowControl.Return || opcode.FlowControl == FlowControl.Throw {
+                    continue
+                }
+                if branchTargets != nil {
+                    for target in branchTargets {
+                        if !instructionStarts.Contains(target) {
+                            return 0
+                        }
+                        if depths.TryGetValue(target, out var existingTargetDepth) {
+                            if existingTargetDepth != nextDepth {
+                                return 0
+                            }
+                        } else {
+                            depths[target] = nextDepth
+                            worklist.Enqueue(target)
+                        }
+                    }
+                }
+                if opcode.FlowControl != FlowControl.Branch {
+                    if nextPc >= handlerOffset || !instructionStarts.Contains(nextPc) {
+                        return 0
+                    }
+                    if depths.TryGetValue(nextPc, out var existingNextDepth) {
+                        if existingNextDepth != nextDepth {
+                            return 0
+                        }
+                    } else {
+                        depths[nextPc] = nextDepth
+                        worklist.Enqueue(nextPc)
+                    }
+                }
+            }
+            return if reachedEndfilter {
+                patchLength
+            } else {
+                0
+            }
+        }
+
+        private func MatchFilterEntryPrelude(
+            reader MetadataReader,
+            il[]uint8,
+            filterOffset int32,
+            handlerOffset int32,
+            allBranchTargets HashSet[int32]
+        ) int32 {
+            let firstOp = il[filterOffset]
+            if firstOp == uint8(0x26) {
+                return 1
+            }
+            if firstOp != uint8(0x75) && firstOp != uint8(0x74) {
+                return 0
+            }
+            if filterOffset +
+                5 > handlerOffset ||
+                !IsValidTypeToken(reader, BitConverter.ToInt32(il, filterOffset + 1)) {
+                return 0
+            }
+            if filterOffset + 6 <= handlerOffset && il[filterOffset + 5] == uint8(0x00) && !allBranchTargets.Contains(
+                filterOffset + 5
+            ) {
+                return 6
+            }
+            var cursor = filterOffset + 5
+            if cursor >= handlerOffset || il[cursor] != uint8(0x25) {
+                return 0
+            }
+            cursor += 1
+            let decodedBrtrue = DecodeInstruction(il, cursor, handlerOffset)
+            let brtrueTargets = decodedBrtrue.BranchTargets
+            if !decodedBrtrue.Decoded ||
+                (decodedBrtrue.OpCode != OpCodes.Brtrue_S && decodedBrtrue.OpCode != OpCodes.Brtrue) ||
+                brtrueTargets == nil ||
+                brtrueTargets.Count != 1 {
+                return 0
+            }
+            let matchedOffset = brtrueTargets[0]
+            cursor = decodedBrtrue.NextOffset
+            if cursor + 2 > handlerOffset || il[cursor] != uint8(0x26) || il[cursor + 1] != uint8(0x16) {
+                return 0
+            }
+            cursor += 2
+            let decodedBr = DecodeInstruction(il, cursor, handlerOffset)
+            let brTargets = decodedBr.BranchTargets
+            if !decodedBr.Decoded ||
+                (decodedBr.OpCode != OpCodes.Br_S && decodedBr.OpCode != OpCodes.Br) ||
+                brTargets == nil ||
+                brTargets.Count != 1 {
+                return 0
+            }
+            let doneOffset = brTargets[0]
+            cursor = decodedBr.NextOffset
+            if cursor != matchedOffset || matchedOffset >= handlerOffset - 2 || doneOffset != handlerOffset - 2 {
+                return 0
+            }
+            for var offset = filterOffset + 1; offset < matchedOffset; offset++ {
+                if allBranchTargets.Contains(offset) {
+                    return 0
+                }
+            }
+            return matchedOffset - filterOffset
+        }
+
+        private func IsValidTypeToken(reader MetadataReader, token int32) bool {
+            let tableByte = int32((uint32(token) >> 24) & uint32(0xFF))
+            if tableByte != 0x01 && tableByte != 0x02 && tableByte != 0x1B {
+                return false
+            }
+            try {
+                let handle = MetadataTokens.EntityHandle(token)
+                if handle.IsNil {
+                    return false
+                }
+                let row = MetadataTokens.GetRowNumber(handle)
+                return switch handle.Kind {
+                    case HandleKind.TypeDefinition: row >= 1 && row <= reader.GetTableRowCount(TableIndex.TypeDef)
+                    case HandleKind.TypeReference: row >= 1 && row <= reader.GetTableRowCount(TableIndex.TypeRef)
+                    case HandleKind.TypeSpecification: row >= 1 && row <= reader.GetTableRowCount(TableIndex.TypeSpec)
+                    default: false
+                }
+            } catch (ArgumentException) {
+                return false
+            } catch (BadImageFormatException) {
+                return false
+            }
+        }
+
+        private func DecodeInstruction(il[]uint8, offset int32, limit int32)(
+            Decoded bool,
+            OpCode OpCode,
+            NextOffset int32,
+            BranchTargets List[int32]?,
+            MetadataToken int32?
+        ) {
+            var branchTargets List[int32]? = nil
+            var metadataToken int32? = nil
+            if offset < 0 || offset >= limit {
+                return (false, OpCodes.Nop, offset, nil, nil)
+            }
+            var cursor = offset
+            var rawValue int16
+            if il[cursor++] == uint8(0xFE) {
+                if cursor >= limit {
+                    return (false, OpCodes.Nop, offset, nil, nil)
+                }
+                rawValue = unchecked(int16((0xFE00 | int32(il[cursor++]))))
+            } else {
+                rawValue = unchecked(int16(il[offset]))
+            }
+            if !OpCodesByValue.TryGetValue(rawValue, out var opcode) {
+                return (false, OpCodes.Nop, offset, nil, nil)
+            }
+            switch opcode.OperandType {
+                case OperandType.InlineNone { }
+                case OperandType.ShortInlineBrTarget {
+                    if cursor + 1 > limit {
+                        return (false, opcode, offset, nil, nil)
+                    }
+                    let delta = int32(unchecked(int8(il[cursor])))
+                    cursor += 1
+                    branchTargets = List[int32]{cursor + delta}
+                }
+                case OperandType.InlineBrTarget {
+                    if cursor + 4 > limit {
+                        return (false, opcode, offset, nil, nil)
+                    }
+                    let delta = BitConverter.ToInt32(il, cursor)
+                    cursor += 4
+                    branchTargets = List[int32]{cursor + delta}
+                }
+                case OperandType.InlineSwitch {
+                    if cursor + 4 > limit {
+                        return (false, opcode, offset, nil, nil)
+                    }
+                    let count = BitConverter.ToInt32(il, cursor)
+                    let remainingAfterCount = limit - (cursor + 4)
+                    if count < 0 || count > remainingAfterCount / 4 {
+                        return (false, opcode, offset, nil, nil)
+                    }
+                    let baseOffset = cursor + 4 + (count * 4)
+                    let targets = List[int32](count)
+                    for var i = 0; i < count; i++ {
+                        targets.Add(baseOffset + BitConverter.ToInt32(il, cursor + 4 + (i * 4)))
+                    }
+                    cursor = baseOffset
+                    branchTargets = targets
+                }
+                case OperandType.ShortInlineI, OperandType.ShortInlineVar {
+                    cursor += 1
+                }
+                case OperandType.InlineVar {
+                    cursor += 2
+                }
+                case OperandType.InlineMethod,
+                OperandType.InlineField,
+                OperandType.InlineSig,
+                OperandType.InlineString,
+                OperandType.InlineTok,
+                OperandType
+                    .InlineType {
+                    if cursor + 4 > limit {
+                        return (false, opcode, offset, nil, nil)
+                    }
+                    metadataToken = BitConverter.ToInt32(il, cursor)
+                    cursor += 4
+                }
+                case OperandType.InlineI, OperandType.ShortInlineR {
+                    cursor += 4
+                }
+                case OperandType.InlineI8, OperandType.InlineR {
+                    cursor += 8
+                }
+                default {
+                    return (false, opcode, offset, nil, nil)
+                }
+            }
+            if cursor > limit {
+                return (false, opcode, offset, nil, nil)
+            }
+            return (true, opcode, cursor, branchTargets, metadataToken)
+        }
+
+        private func TryGetStackDelta(
+            reader MetadataReader,
+            opcode OpCode,
+            metadataToken int32?,
+            out pops int32,
+            out pushes int32
+        ) bool {
+            pops = 0
+            pushes = 0
+            if opcode.StackBehaviourPop == StackBehaviour.Varpop ||
+                opcode.StackBehaviourPush == StackBehaviour
+                .Varpush {
+                if metadataToken == nil {
+                    return false
+                }
+                return TryGetCallStackDelta(reader, opcode, metadataToken, out pops, out pushes)
+            }
+            pops = switch opcode.StackBehaviourPop {
+                case StackBehaviour.Pop0: 0
+                case StackBehaviour.Pop1, StackBehaviour.Popi, StackBehaviour.Popref: 1
+                case StackBehaviour.Pop1_pop1,
+                StackBehaviour.Popi_pop1,
+                StackBehaviour.Popi_popi,
+                StackBehaviour.Popi_popi8,
+                StackBehaviour.Popi_popr4,
+                StackBehaviour.Popi_popr8,
+                StackBehaviour.Popref_pop1,
+                StackBehaviour.Popref_popi: 2
+                case StackBehaviour.Popi_popi_popi,
+                StackBehaviour.Popref_popi_popi,
+                StackBehaviour.Popref_popi_popi8,
+                StackBehaviour.Popref_popi_popr4,
+                StackBehaviour.Popref_popi_popr8,
+                StackBehaviour.Popref_popi_popref,
+                StackBehaviour.Popref_popi_pop1: 3
+                default: -1
+            }
+            pushes = switch opcode.StackBehaviourPush {
+                case StackBehaviour.Push0: 0
+                case StackBehaviour.Push1,
+                StackBehaviour.Pushi,
+                StackBehaviour.Pushi8,
+                StackBehaviour.Pushr4,
+                StackBehaviour.Pushr8,
+                StackBehaviour.Pushref: 1
+                case StackBehaviour.Push1_push1: 2
+                default: -1
+            }
+            return pops >= 0 && pushes >= 0
+        }
+
+        private func TryGetCallStackDelta(
+            reader MetadataReader,
+            opcode OpCode,
+            token int32,
+            out pops int32,
+            out pushes int32
+        ) bool {
+            pops = 0
+            pushes = 0
+            let tableByte = int32((uint32(token) >> 24) & uint32(0xFF))
+            if tableByte != 0x06 && tableByte != 0x0A && tableByte != 0x2B {
+                return false
+            }
+            try {
+                var handle = MetadataTokens.EntityHandle(token)
+                if handle.IsNil {
+                    return false
+                }
+                if handle.Kind == HandleKind.MethodSpecification {
+                    let row = MetadataTokens.GetRowNumber(handle)
+                    if row < 1 || row > reader.GetTableRowCount(TableIndex.MethodSpec) {
+                        return false
+                    }
+                    handle = reader.GetMethodSpecification(MethodSpecificationHandle(handle)).Method
+                }
+                var sigHandle = default(BlobHandle)
+                if handle.Kind == HandleKind.MethodDefinition {
+                    let row = MetadataTokens.GetRowNumber(handle)
+                    if row < 1 || row > reader.GetTableRowCount(TableIndex.MethodDef) {
+                        return false
+                    }
+                    sigHandle = reader.GetMethodDefinition(MethodDefinitionHandle(handle)).Signature
+                } else if handle.Kind == HandleKind.MemberReference {
+                    let row = MetadataTokens.GetRowNumber(handle)
+                    if row < 1 || row > reader.GetTableRowCount(TableIndex.MemberRef) {
+                        return false
+                    }
+                    sigHandle = reader.GetMemberReference(MemberReferenceHandle(handle)).Signature
+                } else {
+                    return false
+                }
+                var blob = reader.GetBlobReader(sigHandle)
+                let header = blob.ReadSignatureHeader()
+                if header.Kind != SignatureKind.Method {
+                    return false
+                }
+                if header.IsGeneric {
+                    blob.ReadCompressedInteger()
+                }
+                let paramCount = blob.ReadCompressedInteger()
+                let isNewobj = opcode == OpCodes.Newobj
+                let popThis = !isNewobj && header.IsInstance && !header.HasExplicitThis
+                pops = paramCount +
+                    (
+                    if popThis {
+                        1
+                    } else {
+                        0
+                    }
+                )
+                // Skip custom modifiers on return type (`ELEMENT_TYPE_CMOD_REQD` 0x1F, `ELEMENT_TYPE_CMOD_OPT` 0x20).
+                while blob.RemainingBytes > 0 {
+                    let b = blob.ReadByte()
+                    if b == uint8(0x1F) || b == uint8(0x20) {
+                        blob.ReadCompressedInteger()
+                        continue
+                    }
+                    let isVoid = b == uint8(0x01)
+                    pushes = if isNewobj || !isVoid {
+                        1
+                    } else {
+                        0
+                    }
+                    return true
+                }
+                return false
+            } catch (ArgumentException) {
+                return false
+            } catch (BadImageFormatException) {
+                return false
+            }
         }
 
         /// Returns whether the instruction at [`offset`](paramref) pops exactly

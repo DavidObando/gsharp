@@ -369,7 +369,7 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 | GS0622 | Error | A positional member follows a braced or content initializer in a composite literal. | Move positional members before composite elements so constructor arguments keep source evaluation order. |
 | GS0623 | Error | A data class or struct declares `PrintMembers(StringBuilder)` with a shape other than an instance, non-generic, synchronous (neither `async` nor `suspend`) method returning `bool` whose accessibility is `private` (a sealed type that starts the slot) or `protected`, marked `override` exactly when the type has an inherited slot. | A compatible `PrintMembers` replaces the synthesized one; remove it to use the synthesized print members, or fix its shape. |
 | GS0624 | Error | A guard leaves a `bool` initializer, or assignment/coalescing/ternary conversion hides the boolean in a nullable result. | Parenthesize the entire initializer to make the boundary explicit: `if let v = (a && b ? x : y)` or `if let v = (cached = a && b)`. |
-| GS0625 | Error | A `guard let` or `while let` has a `&&` guard after its bindings. | Only `if let` accepts a guard. Test the condition in a separate statement, or parenthesize the initializer if the `&&` belongs to it. |
+| GS0625 | _Retired_ | Previously: a `guard let` or `while let` had a `&&` guard after its bindings. | Both forms now accept an optional `&&` guard (#4968); this diagnostic is no longer emitted. |
 | GS0626 | Error | A top-level `\|\|` follows the bindings of an `if let`, `guard let` or `while let`. | Only `&&` introduces a guard. Parenthesize the initializer if the `\|\|` belongs to it. |
 | GS9001 | Error | Cannot take the address of a non-lvalue. | `&(1 + 2)` — the operand is a temporary expression. |
 | GS9002 | Error | Argument must be passed by `ref`. | A `ref` parameter called without the `ref` modifier. |
@@ -667,7 +667,7 @@ Cause/fix examples:
 - **GS0624** also covers `if let v = cached = a && b` when `cached` is nullable:
   use `(cached = a && b)` to preserve the old value and body execution, or
   `(cached = a) && b` to select the new guard explicitly.
-- **GS0625** — `while let line = reader.ReadLine() && line.Length > 0 { … }`. Fix: test the condition at the start of the body (`if line.Length == 0 { break }`).
+- **GS0625** (_Retired_) — previously reported when `while let` or `guard let` had a `&&` guard; both forms now accept an optional `&&` guard (#4968).
 - **GS0626** — `if let v = maybe || fallback { … }`. Fix: if you meant a fallback value, write `maybe ?? fallback`; if the `||` belongs to the initializer, parenthesize it.
 
 ## Top-level-statement diagnostics (GS0285–GS0287)

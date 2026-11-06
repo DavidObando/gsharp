@@ -232,9 +232,153 @@ Console.WriteLine(r())`
         Assert.Equal("1${Environment.NewLine}99${Environment.NewLine}", output)
     }
 
+    @Fact
+    func Issue5800_ClosureInFieldInitializer_BaseConstructorArgument_AndStaticInitBlock_SharesCapturedCell() {
+        let source = `package Probe
+import System
+
+class SF {
+    shared {
+        var F int32 = (() -> {
+            var x int32 = 1
+            let inc = () -> { x = x + 10 }
+            inc()
+            return x
+        })()
+    }
+}
+
+class IF {
+    var F int32 = (() -> {
+        var x int32 = 1
+        let inc = () -> { x = x + 10 }
+        inc()
+        return x
+    })()
+}
+
+open class Base {
+    let V int32
+    init(v int32) { V = v }
+}
+
+class Derived : Base {
+    init() : base((() -> {
+        var x int32 = 1
+        let inc = () -> { x = x + 10 }
+        inc()
+        return x
+    })()) {}
+}
+
+class DerivedPrimary(seed int32) : Base((() -> {
+    var x int32 = seed
+    let inc = () -> { x = x + 10 }
+    inc()
+    return x
+})()) {
+    var SelfV int32 = (() -> {
+        var y int32 = seed
+        let inc = () -> { y = y + 10 }
+        inc()
+        return y
+    })()
+}
+
+class MultiCtor {
+    var F int32 = (() -> {
+        var x int32 = 1
+        let inc = () -> { x = x + 5 }
+        let bump = func() { x = x + 5 }
+        inc()
+        bump()
+        return x
+    })()
+    var H int32 = ((x int32) -> {
+        let a = [1]int32
+        let Read[T] = func(unused T) int32 {
+            return x
+        }
+        a[0] = Read[int32](0)
+        return a[0]
+    })(11)
+    var G int32
+    init() { G = 10 }
+    init(g int32) { G = g }
+}
+
+interface I {
+    shared {
+        let E int32 = (() -> {
+            var x int32 = 1
+            let inc = () -> { x = x + 10 }
+            inc()
+            return x
+        })()
+    }
+}
+
+struct ST {
+    var Q int32
+    shared {
+        var S int32 = 0
+        init {
+            var x int32 = 1
+            let inc = () -> { x = x + 10 }
+            inc()
+            S = x
+        }
+    }
+}
+
+struct VS {
+    var F int32 = (() -> {
+        var x int32 = 1
+        let inc = () -> { x = x + 10 }
+        inc()
+        return x
+    })()
+}
+
+class CT {
+    var V int32
+    init() {
+        var x int32 = 1
+        let inc = () -> { x = x + 10 }
+        inc()
+        V = x
+    }
+}
+
+Console.WriteLine(SF.F)
+Console.WriteLine(IF().F)
+Console.WriteLine(Derived().V)
+let dp = DerivedPrimary(1)
+Console.WriteLine(dp.V)
+Console.WriteLine(dp.SelfV)
+Console.WriteLine(MultiCtor().F)
+Console.WriteLine(MultiCtor(20).F)
+Console.WriteLine(MultiCtor().H)
+Console.WriteLine(MultiCtor(20).H)
+Console.WriteLine(I.E)
+Console.WriteLine(ST.S)
+let vs1 = VS{}
+let vs2 = VS{}
+Console.WriteLine(vs1.F)
+Console.WriteLine(vs2.F)
+Console.WriteLine(CT().V)`
+        let output = CompileAndRun(source)
+        let expected = string.Join(
+            Environment.NewLine,
+            []string{"11", "11", "11", "11", "11", "11", "11", "11", "11", "11", "11", "11", "11", "11", ""}
+        )
+        Assert.Equal(expected, output)
+    }
+
     shared {
         private func CompileAndRun(source string) string {
-            let tempDir = Directory.CreateTempSubdirectory("gs_523_").FullName
+            let tempDir = Path.Combine(AppContext.BaseDirectory, "gs_523_" + Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(tempDir)
             try {
                 let srcPath = Path.Combine(tempDir, "test.gs")
                 let outPath = Path.Combine(tempDir, "test.dll")
