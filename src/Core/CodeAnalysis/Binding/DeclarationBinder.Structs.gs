@@ -2462,6 +2462,7 @@ internal partial class DeclarationBinder {
                 ){
                     IsUnsafe = binderCtx.InUnsafeContext,
                     IsSpecialName = true,
+                    OverriddenMethod = overriddenEvent?.AddMethodSymbol,
                     ExternalOverriddenMethod = eventSymbol.ExternalOverriddenAddMethod
                 }
                 eventSymbol.RemoveMethodSymbol = FunctionSymbol(
@@ -2477,6 +2478,7 @@ internal partial class DeclarationBinder {
                 ){
                     IsUnsafe = binderCtx.InUnsafeContext,
                     IsSpecialName = true,
+                    OverriddenMethod = overriddenEvent?.RemoveMethodSymbol,
                     ExternalOverriddenMethod = eventSymbol.ExternalOverriddenRemoveMethod
                 }
                 // Issue #257: create raise method symbol if raise accessor is present.
@@ -2502,6 +2504,7 @@ internal partial class DeclarationBinder {
                     ){
                         IsUnsafe = binderCtx.InUnsafeContext,
                         IsSpecialName = true,
+                        OverriddenMethod = overriddenEvent?.RaiseMethodSymbol,
                         ExternalOverriddenMethod = eventSymbol.ExternalOverriddenRaiseMethod
                     }
                 }

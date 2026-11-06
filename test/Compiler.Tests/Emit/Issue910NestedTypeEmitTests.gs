@@ -1454,6 +1454,70 @@ Console.WriteLine(o.Make())`)
         Assert.Equal("7${Environment.NewLine}", output)
     }
 
+    @Fact
+    func Issue5387_QualifiedNestedInterfaceStaticMembers_CompileVerifyAndRun() {
+        let output = CompileAndRun(`package Pkg5387
+
+import System
+
+class Outer {
+    interface Nested {
+        shared {
+            let Value int32 = 3
+            var Mutable int32 = 4
+            prop Computed int32 {
+                get { return Value + Mutable }
+                set { Mutable = value - Value }
+            }
+            func Describe(delta int32) int32 { return Value + Mutable + delta }
+        }
+    }
+    class Mid {
+        interface Deep {
+            shared {
+                let Tag int32 = 9
+            }
+        }
+    }
+
+    interface GenericNested[T] {
+        shared {
+            var Inside int32 = 8
+            func ReadInside() int32 { return Outer.GenericNested.Inside }
+        }
+    }
+}
+
+class GenericOuter[T] {
+    interface Nested {
+        shared {
+            var Count int32 = 5
+        }
+    }
+}
+
+Console.Write(Outer.Nested.Value)
+Console.Write("|")
+Console.Write(Pkg5387.Outer.Nested.Value)
+Console.Write("|")
+Outer.Nested.Mutable = 10
+Outer.Nested.Mutable += 2
+Console.Write(Outer.Nested.Computed)
+Console.Write("|")
+Console.Write(Outer.Nested.Describe(1))
+Console.Write("|")
+Console.Write(Outer.Mid.Deep.Tag)
+Console.Write("|")
+GenericOuter[int32].Nested.Count = 11
+Pkg5387.GenericOuter[int32].Nested.Count += 3
+let propAssigned = (Outer.Nested.Computed = 20)
+Console.Write(Pkg5387.GenericOuter[int32].Nested.Count)
+Console.Write("|")
+Console.Write(propAssigned + Outer.Nested.Mutable + Outer.GenericNested[int32].ReadInside())
+Console.WriteLine()`)
+        Assert.Equal("3|3|15|16|9|14|45${Environment.NewLine}", output)
+    }
+
     shared {
         private func CompileAndRun(source string) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_issue910_emit_").FullName

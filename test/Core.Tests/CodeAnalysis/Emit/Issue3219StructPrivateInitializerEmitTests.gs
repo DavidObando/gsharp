@@ -260,6 +260,30 @@ run()
     }
 
     @Fact
+    func Issue5372_ExplicitReadonlyLiteralStore_RoutesThroughSynthesizedCtor() {
+        let result = EmittedOracle.Evaluate(`
+data struct Generated {
+    public let Number float64
+}
+struct Plain {
+    public let Count int32
+}
+class Box {
+    public let Text string
+}
+func run() string {
+    let g = Generated{Number: 1.5}
+    let p = Plain{Count: 4}
+    let b = Box{Text: "hi"}
+    return "${g.Number}:${p.Count}:${b.Text}"
+}
+run()
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("1.5:4:hi", result.Value)
+    }
+
+    @Fact
     func ZeroInitInExpressionTree_WithPublicLetAndAuthoredInit_MatchesOrdinaryConstruction() {
         // When `S` has a public `let` initializer, a magic-collection field, and
         // an authored parameterless `init()`, `LiteralInitializerMarkerCount` is

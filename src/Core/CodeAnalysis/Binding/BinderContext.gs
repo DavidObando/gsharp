@@ -562,6 +562,42 @@ internal class BinderContext {
         return false
     }
 
+    internal func HasUnclosedOwnTypeParameters(
+        ifaceDef InterfaceSymbol,
+        suppliedOwnArgs ImmutableArray[TypeSymbol],
+        currentFunction FunctionSymbol?
+    ) bool {
+        let ownParams = (ifaceDef.Definition ?? ifaceDef).DeclaredTypeParameters
+        if ownParams.IsDefaultOrEmpty {
+            return !suppliedOwnArgs.IsDefaultOrEmpty
+        }
+        let currentContainingType TypeSymbol? = CurrentContainingType ??
+            currentFunction?.ReceiverType ??
+            currentFunction?.StaticOwnerType ??
+            currentFunction?.LexicalEnclosingType
+        if !suppliedOwnArgs.IsDefaultOrEmpty {
+            if suppliedOwnArgs.Length != ownParams.Length {
+                return true
+            }
+            let referencedTypeParameters = List[TypeParameterSymbol]()
+            for arg in suppliedOwnArgs {
+                TypeSymbol.CollectReferencedTypeParameters(arg, referencedTypeParameters, nil)
+            }
+            for tp in referencedTypeParameters {
+                if !IsTypeParameterInScope(tp, currentContainingType) {
+                    return true
+                }
+            }
+            return false
+        }
+        for tp in ownParams {
+            if !IsTypeParameterInScope(tp, currentContainingType) {
+                return true
+            }
+        }
+        return false
+    }
+
     private func IsTypeParameterInScope(typeParameter TypeParameterSymbol, containingType TypeSymbol?) bool {
         if CurrentTypeParameters != nil && CurrentTypeParameters!!.TryGetValue(typeParameter.Name, out var inScopeTp) &&
             object.ReferenceEquals(inScopeTp, typeParameter) {

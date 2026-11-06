@@ -339,6 +339,54 @@ func Main() {
         Assert.Equal(Encoding.UTF8.GetBytes("hAFhRhAFhRhAF1hR2aAFrR"), RunBaseEventBytes(dll))
     }
 
+    @Fact
+    func Issue5378_ConstructedSourceGenericEventOverride_VerifiesAndDispatches() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`import System
+import System.Collections.Generic
+
+open class GrandParent[T] {
+    open event Batch Action[T]?
+}
+open class Parent[U] : GrandParent[List[U]] {
+    open event Changed Action[U]?
+}
+class Child : Parent[string] {
+    override event Changed Action[string]?
+    override event Batch Action[List[string]]?
+    func RaiseChanged(value string) {
+        Changed?.Invoke(value)
+    }
+    func RaiseBatch(items List[string]) {
+        Batch?.Invoke(items)
+    }
+}
+func Main() {
+    let child = Child()
+    let parent Parent[string] = child
+    let grand GrandParent[List[string]] = child
+    parent.Changed += func(text string) { Console.Write(text) }
+    grand.Batch += func(items List[string]) { Console.Write(items.Count) }
+    child.RaiseChanged("ok:")
+    let list = List[string]()
+    list.Add("a")
+    list.Add("b")
+    child.RaiseBatch(list)
+}`, "generic-event-override", true)
+        IlVerifier.Verify(dll)
+        Assert.Equal(Encoding.UTF8.GetBytes("ok:2"), RunBaseEventBytes(dll))
+
+        let (badCode, badOutput) = fixture.TryCompile(`import System
+open class Parent[T] {
+    open event Changed Action[T]?
+}
+class Child : Parent[string] {
+    override event Changed Action[int32]?
+}`, "generic-event-override-bad", false)
+        Assert.NotEqual(0, badCode)
+        Assert.Contains("generic-event-override-bad.gs(6,20,6,27): error GS0185:", badOutput, StringComparison.Ordinal)
+    }
+
     private func AssertBaseEventCalls(dll string) {
         let assembly = EmittedFixture.Load(dll)
         let child = assembly.GetTypes().Single((type Type) -> type.Name == "Child")

@@ -4063,34 +4063,78 @@ internal partial class ExpressionBinder {
                     // Issue #5558: when a by-reference parameter is substituted from
                     // symbolic type arguments, compare the argument's storage type
                     // against the substituted symbolic pointee.
-                    if ByRefStorageMatching.TryGetStorageType(boundArguments[argIndex]) is not{} storageType {
-                        return nil
+                    let storageType = ByRefStorageMatching.TryGetStorageType(boundArguments[argIndex])
+                    if storageType != nil {
+                        var symbolicPointee = TryResolveSymbolicByRefParameterPointee(
+                            parameter,
+                            receiverType,
+                            openGenericDefinition,
+                            symbolicTypeArguments,
+                            explicitMethodTypeArguments,
+                            inferredMethodTypeArguments
+                        )
+                        if symbolicPointee == nil &&
+                            (
+                            ClrNullability.ContainsFunctionPointer(clrParameterType) ||
+                                TypeSymbol.ContainsFunctionPointer(storageType)
+                        ) {
+                            symbolicPointee = ClrNullability.GetParameterTypeSymbol(parameter)
+                        }
+                        if symbolicPointee == nil || symbolicPointee == TypeSymbol.Error {
+                            return nil
+                        }
+                        return if ByRefStorageMatching.AreSameStorageType(
+                            storageType,
+                            symbolicPointee,
+                            out _,
+                            out _,
+                            out _
+                        ) {
+                            ClrOverloadResolution.ImplicitConversionKind.Identity
+                        } else {
+                            ClrOverloadResolution.ImplicitConversionKind.None
+                        }
                     }
-                    let symbolicPointee = TryResolveSymbolicByRefParameterPointee(
-                        parameter,
-                        receiverType,
-                        openGenericDefinition,
-                        symbolicTypeArguments,
-                        explicitMethodTypeArguments,
-                        inferredMethodTypeArguments
-                    )
-                    if symbolicPointee == nil || symbolicPointee == TypeSymbol.Error {
-                        return nil
-                    }
-                    return if ByRefStorageMatching.AreSameStorageType(
-                        storageType,
-                        symbolicPointee,
-                        out _,
-                        out _,
-                        out _
+                    if !parameter.IsIn ||
+                        (
+                        !ClrNullability.ContainsFunctionPointer(clrParameterType) &&
+                            !TypeSymbol.ContainsFunctionPointer(boundArguments[argIndex].Type)
                     ) {
-                        ClrOverloadResolution.ImplicitConversionKind.Identity
-                    } else {
-                        ClrOverloadResolution.ImplicitConversionKind.None
+                        return nil
                     }
                 }
                 let sourceType = boundArguments[argIndex].Type
                 var nativeTarget = ClrNullability.GetParameterTypeSymbol(parameter)
+                if parameter.Member is MethodInfo targetMethod {
+                    let methodTypeArgs = if !explicitMethodTypeArguments.IsDefaultOrEmpty {
+                        ImmutableArray.CreateRange[TypeSymbol?](explicitMethodTypeArguments)
+                    } else {
+                        inferredMethodTypeArguments
+                    }
+                    if MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(
+                        receiverType,
+                        targetMethod,
+                        parameter.Position,
+                        methodTypeArgs
+                    ) is {} projectedTarget {
+                        nativeTarget = projectedTarget
+                    } else if receiverType != nil {
+                        nativeTarget = MemberLookup.GetClrMethodParameterTypeSymbol(
+                            receiverType,
+                            targetMethod,
+                            parameter.Position
+                        )
+                    }
+                } else if parameter.Member is ConstructorInfo targetCtor && receiverType != nil {
+                    nativeTarget = MemberLookup.GetClrMethodParameterTypeSymbol(
+                        receiverType,
+                        targetCtor,
+                        parameter.Position
+                    )
+                }
+                if clrParameterType.IsByRef && nativeTarget is ByRefTypeSymbol byRefTarget {
+                    nativeTarget = byRefTarget.PointeeType
+                }
                 if parameter.ParameterType.IsArray && !ClrTypeUtilities.AreSame(
                     parameter.ParameterType,
                     clrParameterType
@@ -4105,6 +4149,34 @@ internal partial class ExpressionBinder {
                         } else {
                             ClrOverloadResolution.ImplicitConversionKind.Reference
                         }
+                    } else {
+                        ClrOverloadResolution.ImplicitConversionKind.None
+                    }
+                }
+                if sourceType != TypeSymbol.Error &&
+                    (
+                    TypeSymbol.ContainsFunctionPointer(sourceType) || TypeSymbol.ContainsFunctionPointer(
+                        nativeTarget
+                    ) ||
+                        ClrNullability.ContainsFunctionPointer(clrParameterType)
+                ) {
+                    let fpStandard = Conversion.ClassifyNonStructural(sourceType, nativeTarget)
+                    if fpStandard.IsIdentity {
+                        return ClrOverloadResolution.ImplicitConversionKind.Identity
+                    }
+                    if fpStandard.IsImplicit {
+                        return if (
+                            sourceType is StructSymbol and {IsClass: false} or EnumSymbol or NullableTypeSymbol
+                        ) {
+                            ClrOverloadResolution.ImplicitConversionKind.Boxing
+                        } else {
+                            ClrOverloadResolution.ImplicitConversionKind.Reference
+                        }
+                    }
+                    return if DeclaresImplicitOperator(sourceType) &&
+                        ConversionClassifier
+                        .HasUserDefinedImplicitConversionForTypes(sourceType, nativeTarget) {
+                        ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit
                     } else {
                         ClrOverloadResolution.ImplicitConversionKind.None
                     }
