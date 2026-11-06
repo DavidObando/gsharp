@@ -310,7 +310,7 @@ internal shared class AccessibilityChecker {
 
     /// A direct generic local cannot borrow a lexical access domain that its
     /// emitted host cannot preserve, so it is checked as Program-host code.
-    private func NormalizeAccessContext(
+    internal func NormalizeAccessContext(
         currentFunction FunctionSymbol?
     ) FunctionSymbol? -> if currentFunction?.LocalDeclaration != nil &&
         !currentFunction!!.HasNonGenericLexicalOwner {

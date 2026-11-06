@@ -1149,6 +1149,11 @@ class Der : CSource {
         this.Prot += func (o object?, e EventArgs) { Console.WriteLine("this prot") }
         this.ProtIntl += func (o object?, e EventArgs) { Console.WriteLine("this protintl") }
         this.Prot -= h
+        Prot += h
+        Prot += func (o object?, e EventArgs) { Console.WriteLine("bare prot") }
+        ProtIntl += func (o object?, e EventArgs) { Console.WriteLine("bare protintl") }
+        Pub += func (o object?, e EventArgs) { Console.WriteLine("bare pub") }
+        Prot -= h
     }
     func HookOther(other Der) {
         other.Prot += func (o object?, e EventArgs) { Console.WriteLine("other der prot") }
@@ -1173,7 +1178,140 @@ d2.Fire()
         try {
             let library = BuildCsLibrary(tempDir, csLibrary, "EventAccess.Library")
             let lines = CompileVerifyAndRun(tempDir, "imported-event-access", source, library)
-            Assert.Equal([]string{"this prot", "this protintl", "other der prot", "other pub"}, lines)
+            Assert.Equal(
+                []string{
+                    "this prot",
+                    "bare prot",
+                    "bare pub",
+                    "this protintl",
+                    "bare protintl",
+                    "other der prot",
+                    "other pub"
+                },
+                lines
+            )
+            // Issue #4434: bare subscription to an inaccessible inherited CLR
+            // event reports the same GS0472 diagnostic as `this.Priv += ...`.
+            let (_, privOut, privErr) = Compile(tempDir, "imported-event-bare-priv", `package P
+import System
+import EventAccess.Library
+class Der : CSource {
+    func Bad() {
+        Priv += func (o object?, e EventArgs) {}
+    }
+}`, library)
+            Assert.Contains("GS0472", privOut + privErr)
+        } finally {
+            DeleteBestEffort(tempDir)
+        }
+    }
+
+    /// Issue #4463: a class deriving from an imported C# type reaches the
+    /// base's `protected` and `protected internal` instance fields,
+    /// properties, and methods through a receiver typed as the deriving class
+    /// or a subclass, compiles, passes ILVerify, and executes.
+    @Fact
+    func ImportedProtectedInstanceMembers_ThroughDerivedReceiver_VerifyAndRun() {
+        const csLibrary = `namespace ProtectedReceiver.Library
+{
+    public class CBase
+    {
+        protected int ProtField = 10;
+        protected int ProtProp { get; set; } = 20;
+        protected int ProtMethod(int x) => ProtField + ProtProp + x;
+        private readonly int[,] _grid = new int[4, 4];
+        protected int this[int row, int col]
+        {
+            get => _grid[row, col];
+            set => _grid[row, col] = value;
+        }
+        protected int Value = 100;
+        public event System.Action? Shadowed;
+        public event System.Action? PrivShadowed;
+        public event System.Action? ProtShadowed;
+        public void InvokeBaseEvents()
+        {
+            PrivShadowed?.Invoke();
+            ProtShadowed?.Invoke();
+        }
+    }
+
+    public class CMid : CBase
+    {
+        public new int Value { get; set; } = 5;
+        protected new System.Action? Shadowed;
+        private new event System.Action? PrivShadowed { add { } remove { } }
+        protected new event System.Action? ProtShadowed;
+        public void InvokeShadowed() => Shadowed?.Invoke();
+        public void InvokeMidProtShadowed() => ProtShadowed?.Invoke();
+    }
+}`
+        const source = `
+package P
+import System
+import ProtectedReceiver.Library
+
+open class Der : CMid {
+    func Poke(d Der, s SubDer, m CMid) int32 {
+        d.ProtField = 1
+        d.ProtField += 2
+        d.ProtProp = 4
+        d.ProtProp += 5
+        d[1, 2] = 7
+        d[1, 2] += 3
+        s[0, 1] = d[1, 2]
+        m.Value += 4
+        s.ProtField = d.ProtField + 10
+        s.ProtProp = d.ProtProp + 20
+        Shadowed += () -> { Console.WriteLine("nearer field") }
+        PrivShadowed += () -> { Console.WriteLine("base priv-shadowed bare") }
+        this.PrivShadowed += () -> { Console.WriteLine("base priv-shadowed this") }
+        ProtShadowed += () -> { Console.WriteLine("mid prot-shadowed bare") }
+        this.ProtShadowed += () -> { Console.WriteLine("mid prot-shadowed this") }
+        return d.ProtMethod(3) + s.ProtMethod(6) + s[0, 1] + m.Value
+    }
+}
+
+class SubDer : Der {
+}
+
+let d = Der()
+let s = SubDer()
+let m = CMid()
+Console.WriteLine(d.Poke(d, s, m))
+d.InvokeShadowed()
+d.InvokeBaseEvents()
+d.InvokeMidProtShadowed()
+`
+        let tempDir = Directory.CreateTempSubdirectory("gs_prot_recv_").FullName
+        try {
+            let library = BuildCsLibrary(tempDir, csLibrary, "ProtectedReceiver.Library")
+            let lines = CompileVerifyAndRun(tempDir, "imported-protected-receiver", source, library)
+            Assert.Equal(
+                []string{
+                    "82",
+                    "nearer field",
+                    "base priv-shadowed bare",
+                    "base priv-shadowed this",
+                    "mid prot-shadowed bare",
+                    "mid prot-shadowed this"
+                },
+                lines
+            )
+            let (_, badIdxReadOut, badIdxReadErr) = Compile(tempDir, "imported-protected-multi-idx-read", `package P
+import ProtectedReceiver.Library
+class Der : CMid {
+    func Bad(b CBase) int32 -> b[1, 2]
+}`, library)
+            Assert.Contains("GS0379", badIdxReadOut + badIdxReadErr)
+            let (_, badIdxWriteOut, badIdxWriteErr) = Compile(tempDir, "imported-protected-multi-idx-write", `package P
+import ProtectedReceiver.Library
+class Der : CMid {
+    func Bad(b CBase) {
+        b[1, 2] = 5
+    }
+}`, library)
+            Assert.Contains("GS0379", badIdxWriteOut + badIdxWriteErr)
         } finally {
             DeleteBestEffort(tempDir)
         }

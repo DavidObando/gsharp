@@ -45,7 +45,7 @@ shared class ClrMemberVisibility {
     /// @param includeInternal Whether friend internals are visible.
     /// @returns `true` when the method may be bound here.
     func IsVisible(method MethodBase?, includeInternal bool) bool -> method != nil &&
-        (method.IsPublic || (includeInternal && method.IsAssembly))
+        (method.IsPublic || (includeInternal && (method.IsAssembly || method.IsFamilyOrAssembly)))
 
     /// Whether a method or accessor is visible from a derived type.
     /// @param method The candidate method, or `null`.
@@ -59,7 +59,7 @@ shared class ClrMemberVisibility {
     /// @param includeInternal Whether friend internals are visible.
     /// @returns `true` when the field may be bound here.
     func IsVisible(field FieldInfo?, includeInternal bool) bool -> field != nil &&
-        (field.IsPublic || (includeInternal && field.IsAssembly))
+        (field.IsPublic || (includeInternal && (field.IsAssembly || field.IsFamilyOrAssembly)))
 
     /// Whether a field is visible from a derived type.
     /// @param field The candidate field, or `null`.
@@ -84,6 +84,13 @@ shared class ClrMemberVisibility {
     /// @returns `true` when the event may be bound here.
     func IsVisible(eventInfo EventInfo?, includeInternal bool) bool -> eventInfo != nil &&
         GetVisibleAddMethod(eventInfo, includeInternal) != nil
+
+    /// Whether an event is visible from a derived type — i.e. its `add` accessor is.
+    /// @param eventInfo The candidate event, or `null`.
+    /// @param includeInternal Whether friend internals are visible.
+    /// @returns `true` when the event may be bound from the derived type.
+    internal func IsVisibleFromDerived(eventInfo EventInfo?, includeInternal bool) bool -> eventInfo != nil &&
+        IsVisibleFromDerived(eventInfo.GetAddMethod(nonPublic: true), includeInternal)
 
     /// Returns the property's getter when it is visible here.
     /// @param property The property to inspect.

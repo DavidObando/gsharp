@@ -43,7 +43,7 @@ Console.WriteLine(v)
 
     @Fact
     func OutParameter_UserFunctionCanReadCallerValueBeforeAssignment() {
-        let output = RunSubmission(`import System
+        let diagOutput = RunSubmission(`import System
 
 func addOne(out result int32) {
     result = result + 1
@@ -52,7 +52,19 @@ func addOne(out result int32) {
 var value = 41
 addOne(&value)
 Console.WriteLine(value)`)
-        Assert.Equal("42${Environment.NewLine}", output)
+        Assert.Contains("GS0239", diagOutput)
+
+        let assignedOutput = RunSubmission(`import System
+
+func assignThenIncrement(out result int32) {
+    result = 41
+    result = result + 1
+}
+
+var assigned = 0
+assignThenIncrement(&assigned)
+Console.WriteLine(assigned)`)
+        Assert.Equal("42${Environment.NewLine}", assignedOutput)
     }
 
     @Fact

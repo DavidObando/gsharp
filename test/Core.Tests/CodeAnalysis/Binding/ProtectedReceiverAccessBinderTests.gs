@@ -259,6 +259,62 @@ class Sub2 : Base2 {
         )
     }
 
+    /// Issue #4463: a class deriving from an imported CLR type reaches the
+    /// base's `protected` instance methods, properties, and fields
+    /// through a receiver typed as the deriving class or a subclass, and
+    /// reports GS0379 when the receiver is typed as the imported base or a
+    /// sibling subclass.
+    @Fact
+    func ImportedProtectedInstanceMember_EnforcesReceiverRule_Issue4463() {
+        const okSource = `import System.IO
+
+open class MyStream : MemoryStream {
+    func Poke(s MyStream, sub SubStream) {
+        s.Dispose(true)
+        sub.Dispose(true)
+    }
+}
+
+class SubStream : MyStream {
+}
+`
+        let okErrors = EmittedOracle.Evaluate(okSource).Diagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
+        Assert.Empty(okErrors)
+        for badReceiverType in[]string{"MemoryStream", "SiblingStream"} {
+            let badSource = `import System.IO
+
+class SiblingStream : MemoryStream {
+}
+
+class MyStream : MemoryStream {
+    func Poke(s ` + badReceiverType + `) {
+        s.Dispose(true)
+    }
+}
+`
+            let badErrors = EmittedOracle.Evaluate(badSource).Diagnostics.Where((d Diagnostic) -> d.IsError).ToArray()
+            let error = Assert.Single(badErrors)
+            Assert.Equal("GS0379", error.Id)
+        }
+        let genericLocalSource = `import System.IO
+
+open class D[T] : MemoryStream {
+    func M() {
+        let F[U] = func(r D[int32]) {
+            r.Dispose(true)
+        }
+    }
+}
+`
+        let genericLocalErrors = EmittedOracle
+            .Evaluate(genericLocalSource)
+            .Diagnostics
+            .Where((d Diagnostic) -> d.IsError)
+            .ToArray()
+        let genericLocalError = Assert.Single(genericLocalErrors)
+        Assert.Equal("GS0379", genericLocalError.Id)
+    }
+
     shared {
         private const Declarations string = `import System
 
