@@ -812,9 +812,6 @@ internal partial class ExpressionBinder {
             reboundInvalidatedExpressions.Clear()
             snapshotSiblingCounts.Clear()
             expressionBindStep = 0
-            for stmtFrame in binderCtx.NarrowedVariables {
-                stmtFrame.ReleaseSnapshot()
-            }
             setCallableAliases(popped.Aliases)
         }
     }

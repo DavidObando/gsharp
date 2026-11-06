@@ -486,9 +486,14 @@ class Program {
             .Append(", {\n            s = nil\n            \"b\"\n        }))\n")
         source.Append("    }\n")
         oracle.Append("        Console.Write(\"O\");\n")
+        // Review of PR #5803: receive-bound `select` locals reuse their symbols across retried passes, so nested
+        // conditional returns capturing them hit the literal cache at every level.
+        source.Append("    let ch = Chan.Unbounded[string]()\n")
+        source.Append("    Console.Write(").Append(NestSelectReceiveReturnLiterals(24)).Append(")\n")
+        oracle.Append("        Console.Write(\"O\");\n")
         source.Append("}\n")
         oracle.Append("    }\n}\n")
-        Check(fixture, source.ToString(), oracle.ToString(), "OOOOOOOOOOOOOOOOOO")
+        Check(fixture, source.ToString(), oracle.ToString(), "OOOOOOOOOOOOOOOOOOO")
     }
 
     /// Issue #5604: sequential retried returns capture and restore operand-local deltas (including forward jumps
@@ -701,6 +706,22 @@ func Main() {
         }, 1)
     } : "u"
     }, 1))
+    Console.Write(Calls.Pa(() -> {
+        var tag = "init"
+        var box RefHolder[string]? = RefHolder[string](&tag)
+        if box == nil {
+            return "no"
+        }
+        let target = box
+        return true ? {
+            var sink = "a"
+            sink, box.Value = {
+                box = nil
+                "x"
+            }, "s"
+            Calls.Pa(() -> { return target.Value + sink }, 1)
+        } : "u"
+    }, 1))
 }
 `, `using System;
 using FunctionControl;
@@ -730,9 +751,10 @@ class Program {
         }
         return "u";
     }, 1));
+    Console.Write(Calls.Pa(() => { return Calls.Pa(() => "sx", 1); }, 1));
     }
 }
-`, "OOOOOOOOO<xF>P<P<s>>P<P<P<s>>>P<P<s>>")
+`, "OOOOOOOOO<xF>P<P<s>>P<P<P<s>>>P<P<s>>P<P<sx>>")
         let errors = RejectConsumerErrors(fixture, `import System
 import FunctionControl
 func Main() {
@@ -2951,6 +2973,22 @@ class Program {
         return call
     }
 
+    private func NestSelectReceiveReturnLiterals(depth int32) string {
+        var call = "Calls.M(() -> { return v0 }, 1)"
+        for var level = 0; level < depth; level++ {
+            let vName = "v${level}"
+            let useOuter = level + 1 < depth ? "let _ = v${level + 1}\n        ": ""
+            call = "Calls.M(() -> {\n        " +
+                useOuter +
+                "return true ? {\n            var r = \"t\"\n            select {\n                case let " +
+                vName +
+                " = <-ch {\n                    r = " +
+                call +
+                "\n                }\n                default {\n                    r = \"d\"\n                }\n            }\n            r\n        } : \"t\"\n    }, 1)"
+        }
+        return call
+    }
+
     private func SequentialRetriedReturnsSource(count int32) string {
         let body = SequentialRetriedReturnsBody(count, isOracle: false)
         return "import System\nimport FunctionControl\nfunc Main() {\n    let flag = true\n" +
@@ -3245,6 +3283,11 @@ class Program {
         if contract != nil {
             arguments.Add("-r")
             arguments.Add(contract)
+        }
+        let channelsRuntime = Path.Combine(Path.GetDirectoryName(image)!!, "Gsharp.Runtime.Channels.dll")
+        if File.Exists(channelsRuntime) {
+            arguments.Add("-r")
+            arguments.Add(channelsRuntime)
         }
         let verified = Run(arguments)
         Assert.True(verified.Code == 0, Encoding.UTF8.GetString(verified.Bytes) + verified.Error)

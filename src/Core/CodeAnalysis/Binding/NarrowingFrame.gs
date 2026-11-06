@@ -48,10 +48,6 @@ internal sealed class NarrowingFrame : IEnumerable[KeyValuePair[AccessPath, Type
         return entries
     }
 
-    internal func ReleaseSnapshot() {
-        cowShared = false
-    }
-
     private func EnsureWritable() {
         if cowShared {
             entries = Dictionary[AccessPath, TypeSymbol](entries)

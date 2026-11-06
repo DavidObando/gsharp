@@ -2136,15 +2136,7 @@ internal partial class StatementBinder {
                         expression: "chan"
                     )
                         .ElementType
-                    variable = LocalVariableSymbol(
-                        identifier.ValueText,
-                        isReadOnly: true,
-                        bindElement,
-                        declaringSyntax: identifier
-                    )
-                    if !$scope.TryDeclareVariable(variable) {
-                        Diagnostics.ReportSymbolAlreadyDeclared(identifier.Location, identifier.ValueText)
-                    }
+                    variable = bindLocalVariable(identifier, true, bindElement)
                     body = Invariant.Required(
                         BindStatement(caseSyntax.Body),
                         "a receive-bind select case has a bound body",
@@ -2244,15 +2236,7 @@ internal partial class StatementBinder {
             "an await-bind select case has an identifier",
             expression: "caseSyntax.Identifier"
         )
-        let variable = LocalVariableSymbol(
-            identifier.ValueText,
-            isReadOnly: true,
-            result ?? TypeSymbol.Error,
-            declaringSyntax: identifier
-        )
-        if !$scope.TryDeclareVariable(variable) {
-            Diagnostics.ReportSymbolAlreadyDeclared(identifier.Location, identifier.ValueText)
-        }
+        let variable = bindLocalVariable(identifier, true, result ?? TypeSymbol.Error)
         let body = Invariant.Required(
             BindStatement(caseSyntax.Body),
             "an await-bind select case has a bound body",
