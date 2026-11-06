@@ -140,8 +140,8 @@ shared class DocumentationValidator {
                 StringComparer.Ordinal
             )
             for parameter in documentation.Parameters {
-                if parameter.Name != nil && !parameterNames.Contains(parameter.Name) {
-                    diagnostics.ReportDocParamMismatch(function.Declaration!!.Location, parameter.Name, function.Name)
+                if parameter.Name is {} paramName && !parameterNames.Contains(paramName) {
+                    diagnostics.ReportDocParamMismatch(function.Declaration!!.Location, paramName, function.Name)
                 }
             }
             let typeParameterNames = HashSet[string](
@@ -149,12 +149,8 @@ shared class DocumentationValidator {
                 StringComparer.Ordinal
             )
             for typeParameter in documentation.TypeParameters {
-                if typeParameter.Name != nil && !typeParameterNames.Contains(typeParameter.Name) {
-                    diagnostics.ReportDocParamMismatch(
-                        function.Declaration!!.Location,
-                        typeParameter.Name,
-                        function.Name
-                    )
+                if typeParameter.Name is {} typeParamName && !typeParameterNames.Contains(typeParamName) {
+                    diagnostics.ReportDocParamMismatch(function.Declaration!!.Location, typeParamName, function.Name)
                 }
             }
         }

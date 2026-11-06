@@ -339,12 +339,17 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 )
             )
         } else {
+            let fieldReceiver = Invariant.Required(
+                field.Receiver,
+                "an instance field access has a receiver",
+                expression: "field.Receiver"
+            )
             BoundClrStaticCallExpression(
                 field.Syntax,
                 ExpressionFieldInstanceMethod,
                 TypeSymbol.FromClrTypeWithoutNullability(typeof(MemberExpression), NullabilityFreeReason.TypeLiteral),
                 ImmutableArray.Create[BoundExpression](
-                    UpcastToExpression(this.TranslateExpression(field.Receiver, parameterMap)),
+                    UpcastToExpression(this.TranslateExpression(fieldReceiver, parameterMap)),
                     BoundLiteralExpression(nil, field.Field.Name, TypeSymbol.String)
                 )
             )
@@ -653,7 +658,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         structLiteral BoundStructLiteralExpression,
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
-        if structLiteral.CopySource != nil {
+        if structLiteral.CopySource is {} copySource {
             return if structLiteral.StructType.IsClass {
                 cast[BoundExpression](
                     BoundClrStaticCallExpression(
@@ -664,7 +669,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                             NullabilityFreeReason.TypeLiteral
                         ),
                         ImmutableArray.Create[BoundExpression](
-                            UpcastToExpression(this.TranslateExpression(structLiteral.CopySource, parameterMap)),
+                            UpcastToExpression(this.TranslateExpression(copySource, parameterMap)),
                             BuildUserFunctionMethodInfoLookup(
                                 structLiteral.Syntax,
                                 structLiteral.StructType.DataClassCloneMethod,
@@ -676,7 +681,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                     )
                 )
             } else {
-                this.TranslateExpression(structLiteral.CopySource, parameterMap)
+                this.TranslateExpression(copySource, parameterMap)
             }
         }
         if structLiteral.CallsPrimaryConstructor || structLiteral.CallsDataConstructor {
@@ -992,14 +997,14 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             )
         )
         for initializer in literal.Initializers {
-            let member BoundExpression = if initializer.Field != nil {
+            let member BoundExpression = if initializer.Field is {} initField {
                 BoundClrStaticCallExpression(
                     literal.Syntax,
                     ExpressionFieldInstanceMethod,
                     ExpressionTypeSymbol,
                     ImmutableArray.Create[BoundExpression](
                         UpcastToExpression(localRead),
-                        BoundLiteralExpression(nil, initializer.Field.Name, TypeSymbol.String)
+                        BoundLiteralExpression(nil, initField.Name, TypeSymbol.String)
                     )
                 )
             } else {
@@ -1149,6 +1154,11 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             conversion.Expression is BoundMethodGroupExpression ||
             conversion.Expression is BoundClrMethodGroupExpression {
             return BuildRuntimeConstant(conversion, conversion.Type)
+        }
+        // Issue #5767 (ADR-0219): `Expression.Convert` of a constant floating-point value out of range gives a
+        // different value on each runtime. The tree contains the folded value, as the emitted body does.
+        if ConstantExpressionEvaluator.TryFoldFloatingConstantConversionToLiteral(conversion, out var folded) {
+            return this.TranslateExpression(folded, parameterMap)
         }
         return BoundClrStaticCallExpression(
             conversion.Syntax,

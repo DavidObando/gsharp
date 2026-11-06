@@ -58,6 +58,10 @@ internal class ConversionClassifier {
     // private copy that could drift.
     private let binderCtx BinderContext
 
+    // Issue #5767 (ADR-0219): the GS0635 checks whose operand was not constant yet when the conversion was
+    // bound, for the const field initializer that is being bound (cref:BeginDeferredFloatingConstantChecks).
+    private var deferredFloatingConstantChecks List[(Location TextLocation, Conversion BoundConversionExpression)]?
+
     private let memberLookup MemberLookup
 
     internal prop MemberLookup MemberLookup -> memberLookup
@@ -230,6 +234,16 @@ internal class ConversionClassifier {
         return true
     }
 
+    private let rebindDeferredArgumentWithSnapshot((SyntaxNode, () -> BoundExpression) -> BoundExpression)?
+    private let recordConvertedArgument((BoundExpression?, BoundExpression?) -> void)?
+    private let verifyCallArgumentsAfterConversions(
+        (
+            GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
+            BoundExpression?,
+            (() -> BoundExpression)?
+        ) -> BoundExpression?
+    )?
+
     /// Initializes a new instance of the (cref:ConversionClassifier)
     /// class.
     /// @param binderCtx The shared binder context that exposes the
@@ -291,7 +305,16 @@ internal class ConversionClassifier {
         refKindToString(RefKind) -> string,
         bindNativeProtocolConversion(TextLocation, BoundExpression, TypeSymbol) -> BoundExpression,
         canConvertNativeProtocol(TypeSymbol, TypeSymbol) -> bool,
-        getCurrentFunction() -> FunctionSymbol?
+        getCurrentFunction() -> FunctionSymbol?,
+        rebindDeferredArgumentWithSnapshot((SyntaxNode, () -> BoundExpression) -> BoundExpression)? = nil,
+        recordConvertedArgument((BoundExpression?, BoundExpression?) -> void)? = nil,
+        verifyCallArgumentsAfterConversions(
+            (
+                GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
+                BoundExpression?,
+                (() -> BoundExpression)?
+            ) -> BoundExpression?
+        )? = nil
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.getCurrentFunction = getCurrentFunction
@@ -316,6 +339,9 @@ internal class ConversionClassifier {
         this.refKindToString = refKindToString ?? throw ArgumentNullException("refKindToString")
         this.bindNativeProtocolConversion = bindNativeProtocolConversion
         this.canConvertNativeProtocol = canConvertNativeProtocol
+        this.rebindDeferredArgumentWithSnapshot = rebindDeferredArgumentWithSnapshot
+        this.recordConvertedArgument = recordConvertedArgument
+        this.verifyCallArgumentsAfterConversions = verifyCallArgumentsAfterConversions
     }
 
     internal func ClassifyArgumentConversion(source TypeSymbol, target TypeSymbol) Conversion {
@@ -482,8 +508,97 @@ internal class ConversionClassifier {
             // implementation builds calls or chains through other conversions.
             result.ImplicitConversionOperand = expression
         }
+        if !object.ReferenceEquals(result, expression) {
+            // An identity conversion returns its operand. Its conversion was checked where it was bound,
+            // in its own checked or unchecked context.
+            ReportOutOfRangeFloatingConstantConversion(diagnosticLocation, result)
+        }
         onConversionBound?.Invoke(expression, result, beforeVersion)
+        recordConvertedArgument?(expression, result)
         return result
+    }
+
+    /// Reports GS0635 when a constant floating-point value that is NaN or out of range converts to an
+    /// integer, `char`, or enum type outside an explicit `unchecked` context (#5767, ADR-0219). C# reports
+    /// CS0221 here. The value is folded with the rule of (cref:ConstantExpressionEvaluator.TryConvertFloatingConstant)
+    /// in every context, so the compiler that runs on .NET 10 and on .NET 11 emits the same constant. When the
+    /// operand refers to a const field that has no value yet, the check is deferred to
+    /// (cref:ReportDeferredFloatingConstantChecks) if a const field initializer is being bound.
+    /// @param location The conversion location.
+    /// @param result The bound conversion.
+    private func ReportOutOfRangeFloatingConstantConversion(location TextLocation, result BoundExpression) {
+        if binderCtx.IsUncheckedContext || result is not BoundConversionExpression {
+            return
+        }
+        let conversion = cast[BoundConversionExpression](result)
+        if !ConstantExpressionEvaluator.IsFloatingConstantConversionCandidate(conversion) {
+            return
+        }
+        if !TryReportOutOfRangeFloatingConstantConversion(location, conversion) {
+            deferredFloatingConstantChecks?.Add((location, conversion))
+        }
+    }
+
+    /// Reports GS0635 when the operand of [`conversion`](paramref) is a constant that is NaN or out of range.
+    /// @param location The conversion location.
+    /// @param conversion The bound conversion, bound outside an explicit `unchecked` context.
+    /// @returns `false` when the operand is not constant.
+    private func TryReportOutOfRangeFloatingConstantConversion(
+        location TextLocation,
+        conversion BoundConversionExpression
+    ) bool {
+        if !ConstantExpressionEvaluator.TryFoldFloatingConstantConversion(
+            conversion,
+            out var value,
+            out _,
+            out var inRange
+        ) {
+            return false
+        }
+        if !inRange {
+            Diagnostics.ReportConstantFloatingConversionOutOfRange(
+                location,
+                Convert.ToString(value, CultureInfo.InvariantCulture)!!,
+                conversion.Type
+            )
+        }
+        return true
+    }
+
+    /// Starts to record the GS0635 checks that cannot run yet, because the operand refers to a const field
+    /// whose value the const fixpoint calculates later (#5767). Only the conversions bound outside an explicit
+    /// `unchecked` context are recorded, so each check keeps its own overflow context.
+    /// @returns The recording of an enclosing initializer, to give to (cref:EndDeferredFloatingConstantChecks).
+    func BeginDeferredFloatingConstantChecks() List[(Location TextLocation, Conversion BoundConversionExpression)]? {
+        let previous = deferredFloatingConstantChecks
+        deferredFloatingConstantChecks = List[(Location TextLocation, Conversion BoundConversionExpression)]()
+        return previous
+    }
+
+    /// Stops the recording that (cref:BeginDeferredFloatingConstantChecks) started.
+    /// @param previous The value that (cref:BeginDeferredFloatingConstantChecks) returned.
+    /// @returns The deferred checks, in binding order.
+    func EndDeferredFloatingConstantChecks(
+        previous List[(Location TextLocation, Conversion BoundConversionExpression)]?
+    ) ImmutableArray[(Location TextLocation, Conversion BoundConversionExpression)] {
+        let checks = deferredFloatingConstantChecks
+        deferredFloatingConstantChecks = previous
+        return if checks == nil {
+            ImmutableArray[(Location TextLocation, Conversion BoundConversionExpression)].Empty
+        } else {
+            checks.ToImmutableArray()
+        }
+    }
+
+    /// Runs the GS0635 checks that (cref:EndDeferredFloatingConstantChecks) returned, after the const fixpoint
+    /// calculated the values that their operands refer to.
+    /// @param checks The deferred checks.
+    func ReportDeferredFloatingConstantChecks(
+        checks ImmutableArray[(Location TextLocation, Conversion BoundConversionExpression)]
+    ) {
+        for (location, conversion) in checks {
+            TryReportOutOfRangeFloatingConstantConversion(location, conversion)
+        }
     }
 
     /// Replaces a narrowed member read with its declared read when the conversion to [`target`](paramref)
@@ -548,10 +663,19 @@ internal class ConversionClassifier {
         // covers every call/constructor argument site routed through
         // BindConversion.
         if ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(expression, out var branchySyntax) {
-            if type == nil || type == TypeSymbol.Error || type == TypeSymbol.Void {
-                return bindExpression(branchySyntax)
+            let syntaxToBind ExpressionSyntax = branchySyntax
+            let rebind() -> BoundExpression = () -> if type == nil ||
+                type == TypeSymbol.Error ||
+                type == TypeSymbol.Void {
+                bindExpression(syntaxToBind)
+            } else {
+                bindExpressionWithTargetType(syntaxToBind, type)
             }
-            return bindExpressionWithTargetType(branchySyntax, type)
+            return if rebindDeferredArgumentWithSnapshot != nil {
+                rebindDeferredArgumentWithSnapshot!!(syntaxToBind, rebind)
+            } else {
+                rebind()
+            }
         }
         // Issue #1018: a throw-expression has the bottom (`never`) type and is
         // implicitly convertible to any target. Return it unwrapped — there is
@@ -2299,6 +2423,7 @@ internal class ConversionClassifier {
             out var liftedOwner
         ) {
             converted = BoundClrConversionCallExpression(nil, argument, liftedMethod!!, liftedOwner, expectedType!!)
+            recordConvertedArgument?(argument, converted)
             return true
         }
         // Issue #4350: resolve symbolic generic pairs before the erased CLR
@@ -2308,6 +2433,7 @@ internal class ConversionClassifier {
             BoundClrConversionCallExpression
             .CanApplyImplicitClrConversion(argument.Type, expectedType!!, symbolicConvMethod!!) {
             converted = BoundClrConversionCallExpression(nil, argument, symbolicConvMethod!!, expectedType!!)
+            recordConvertedArgument?(argument, converted)
             return true
         }
         if argument
@@ -2325,6 +2451,7 @@ internal class ConversionClassifier {
             BoundClrConversionCallExpression
             .CanApplyImplicitClrConversion(argument.Type, expectedType!!, convMethod!!) {
             converted = BoundClrConversionCallExpression(nil, argument, convMethod!!, expectedType!!)
+            recordConvertedArgument?(argument, converted)
             return true
         }
         // Issue #3932: an IMPORTED conversion operator whose declaring generic
@@ -2342,6 +2469,7 @@ internal class ConversionClassifier {
             BoundClrConversionCallExpression
             .CanApplyImplicitClrConversion(argument.Type, expectedType, openConvMethod!!) {
             converted = BoundClrConversionCallExpression(nil, argument, openConvMethod!!, expectedType)
+            recordConvertedArgument?(argument, converted)
             return true
         }
         // Issue #1017: same-package user-defined implicit conversion operators
@@ -2365,6 +2493,7 @@ internal class ConversionClassifier {
                 userConvOwner!!,
                 allowExplicit: false
             )
+            recordConvertedArgument?(argument, converted)
             return true
         }
         converted = argument
@@ -3889,7 +4018,40 @@ internal class ConversionClassifier {
             } finally {
                 leaveTupleConversion?.Invoke()
             }
-            return BoundTupleLiteralExpression(expression.Syntax, targetTuple, convertedLiteralElements.ToImmutable())
+            var resultTuple BoundExpression = BoundTupleLiteralExpression(
+                expression.Syntax,
+                targetTuple,
+                convertedLiteralElements.ToImmutable()
+            )
+            if expression.Syntax is TupleLiteralExpressionSyntax tupleSyntax &&
+                tupleSyntax
+                .Elements
+                .Count == arity &&
+                verifyCallArgumentsAfterConversions != nil {
+                resultTuple = verifyCallArgumentsAfterConversions!!(
+                    tupleSyntax.Elements,
+                    resultTuple,
+                    () -> {
+                        let reboundSource = if rebindTupleElement != nil {
+                            rebindTupleElement!!(expression, tupleSyntax)
+                        } else {
+                            bindExpression(tupleSyntax)
+                        }
+                        if reboundSource.Type is TupleTypeSymbol reboundSourceTuple {
+                            return BindTupleConversion(
+                                diagnosticLocation,
+                                reboundSource,
+                                reboundSourceTuple,
+                                targetTuple,
+                                allowExplicit
+                            )
+                        }
+                        return reboundSource
+                    }
+                ) ??
+                    resultTuple
+            }
+            return resultTuple
         }
         // Issue #4316: a `(nil, int32)` source cannot be spilled into a temp of its own type.
         if sourceTuple.HasNilElement &&
@@ -4420,7 +4582,7 @@ internal class ConversionClassifier {
                 explicitReads
             )
             var assignment BoundExpression
-            if slot.TargetField != nil {
+            if slot.TargetField is {} targetField {
                 assignment = BoundFieldAssignmentExpression(
                     expression.Syntax,
                     targetTemp,
@@ -4429,10 +4591,10 @@ internal class ConversionClassifier {
                         "a user field projection has a declaring type",
                         expression: "slot.TargetDeclaringType"
                     ),
-                    slot.TargetField,
+                    targetField,
                     value
                 )
-            } else if slot.TargetProperty != nil {
+            } else if slot.TargetProperty is {} targetProperty {
                 assignment = BoundPropertyAssignmentExpression(
                     expression.Syntax,
                     receiver,
@@ -4441,7 +4603,7 @@ internal class ConversionClassifier {
                         "a user property projection has a declaring type",
                         expression: "slot.TargetDeclaringType"
                     ),
-                    slot.TargetProperty,
+                    targetProperty,
                     value
                 )
             } else {
@@ -5435,7 +5597,7 @@ internal class ConversionClassifier {
                 mapped != TypeSymbol.Error &&
                 (
                 allowConcreteSymbolic || TypeSymbol.ContainsTypeParameter(mapped) ||
-                    TypeSymbol.ContainsSameCompilationUserType(mapped)
+                    TypeSymbol.ContainsSameCompilationUserType(mapped) || TypeSymbol.ContainsFunctionPointer(mapped)
             ) {
                 mapped
             } else {
@@ -5911,6 +6073,9 @@ internal class ConversionClassifier {
                 return false
             }
             if substitutedTarget != nil && from == substitutedTarget {
+                return false
+            }
+            if from is FunctionPointerTypeSymbol && targetParameterType.IsFunctionPointer {
                 return false
             }
             // FunctionTypeSymbol carries no ClrType but always needs delegate
@@ -6681,13 +6846,14 @@ internal class ConversionClassifier {
             field FieldSymbol,
             @NotNullWhen(true) out initializer BoundExpression?
         ) bool {
-            if type.InstanceFieldInitializers.TryGetValue(field, out initializer) {
+            if type.InstanceFieldInitializers.TryGetValue(field, out var stored) {
+                initializer = BoundTreeRewriter.Clone(stored)
                 return true
             }
             if type.Definition != nil {
                 for candidate in type.Definition!!.InstanceFieldInitializers {
                     if string.Equals(candidate.Key.Name, field.Name, StringComparison.Ordinal) {
-                        initializer = candidate.Value
+                        initializer = BoundTreeRewriter.Clone(candidate.Value)
                         return true
                     }
                 }

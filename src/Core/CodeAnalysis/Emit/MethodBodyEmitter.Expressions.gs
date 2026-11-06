@@ -1542,6 +1542,28 @@ internal partial class MethodBodyEmitter {
                 "a field initializer targets either a field or a property, and the property form is handled above",
                 expression: "init.Field"
             )
+            if initField.IsReadOnly &&
+                literal
+                .StructType
+                .ClrType == nil &&
+                this
+                .outer
+                .userTokens
+                .TryResolveStructLetFieldCtorToken(
+                literal.StructType,
+                initField,
+                out var letFieldCtorHandle,
+                out var letFieldMarkerCount
+            ) {
+                this.il.LoadLocalAddress(slot)
+                this.EmitExpression(init.Value)
+                for var marker = 0; marker < letFieldMarkerCount; marker++ {
+                    this.il.LoadConstantI4(0)
+                }
+                this.il.OpCode(ILOpCode.Call)
+                this.il.Token(letFieldCtorHandle)
+                continue
+            }
             if init.FieldDeclaringType != nil {
                 fieldHandle = this.ResolveStructLiteralFieldToken(literal, init)
             } else {
@@ -2225,8 +2247,8 @@ internal partial class MethodBodyEmitter {
                     }
                 )
                 this.il.Token(
-                    if access.StaticContainerType != nil {
-                        this.outer.memberRefs.GetFieldReference(field, access.StaticContainerType)
+                    if access.StaticContainerType is {} staticContainerType {
+                        this.outer.memberRefs.GetFieldReference(field, staticContainerType)
                     } else {
                         this.outer.memberRefs.GetFieldReference(field)
                     }

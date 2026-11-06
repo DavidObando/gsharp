@@ -1758,7 +1758,56 @@ internal partial class ExpressionBinder {
         }
         // Issue #1554: fall back to user-defined / CLR operator resolution,
         // exactly as the equivalent binary expression `lhs op rhs` does.
-        return TryBindBinaryWithUserAndClrFallback(baseOperatorKind, &left, &right, rhsLocation, rhsLocation, out _)
+        let fallback = TryBindBinaryWithUserAndClrFallback(
+            baseOperatorKind,
+            &left,
+            &right,
+            rhsLocation,
+            rhsLocation,
+            out _
+        )
+        if fallback != nil && !object.ReferenceEquals(left, leftRead) &&
+            boundRhs.Syntax is ExpressionSyntax rawRhsSyntax {
+            var rhsSyntax = rawRhsSyntax
+            while rhsSyntax.Parent is ParenthesizedExpressionSyntax or CheckedExpressionSyntax {
+                if rhsSyntax.Parent is ExpressionSyntax parentExpr &&
+                    parentExpr
+                    .Span
+                    .Start >= rhsLocation
+                    .Span
+                    .Start &&
+                    parentExpr
+                    .Span
+                    .End <= rhsLocation
+                    .Span
+                    .End {
+                    rhsSyntax = parentExpr
+                } else {
+                    break
+                }
+            }
+            if compoundRhsEntrySnapshots.TryGetValue(rhsSyntax, out var preRhsSnapshot) {
+                RestoreNarrowingBindSnapshot(preRhsSnapshot)
+            }
+            ApplySubExpressionNarrowingEffects(left.Syntax ?? rhsSyntax, left)
+            let reboundSyntax = rhsSyntax
+            var reboundRight = Diagnostics.ReplaceDiagnosticsIn(
+                reboundSyntax.Location,
+                () -> BindInSavedCheckedContext(reboundSyntax, () -> BindExpression(reboundSyntax))
+            )
+            var rebuiltLeft = leftRead
+            let rebuiltFallback = TryBindBinaryWithUserAndClrFallback(
+                baseOperatorKind,
+                &rebuiltLeft,
+                &reboundRight,
+                rhsLocation,
+                rhsLocation,
+                out _
+            )
+            ApplySubExpressionNarrowingEffects(reboundSyntax, reboundRight)
+            return rebuiltFallback
+        }
+        return fallback
     }
 
     private func BindBareEventOrCompoundAssignment(
@@ -1925,9 +1974,10 @@ internal partial class ExpressionBinder {
         if writableRefProperty {
             return BindRefGetterCompoundAssignment(syntax)
         }
-        let boundRhs = BindExpression(syntax.Value)
         // Synthesize the binary expression: variable op rhs.
         let compoundTarget = BindNameExpressionCore(bareName)
+        ApplySubExpressionNarrowingEffects(bareName, compoundTarget)
+        let boundRhs = BindExpression(syntax.Value)
         SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var baseOpSyntaxKind)
         // Issue #2834 / ADR-0035: a user-defined compound-assignment operator
         // mutates the receiver in place, so it replaces the whole
@@ -2104,7 +2154,6 @@ internal partial class ExpressionBinder {
         out result BoundExpression?
     ) bool {
         let memberName = memberNameSyntax.IdentifierToken.ValueText
-        let boundRhs = BindExpression(syntax.Value)
         if TypeMemberModel.TryGetStaticFieldIncludingInherited(
             staticStruct,
             memberName,
@@ -2128,6 +2177,8 @@ internal partial class ExpressionBinder {
                 fieldType,
                 narrowedType: nil
             )
+            ApplySubExpressionNarrowingEffects(memberNameSyntax, compoundTarget)
+            let boundRhs = BindExpression(syntax.Value)
             var leftRead = compoundTarget
             let previousValue = CapturePostfixCompoundValue(
                 syntax.ReturnsPreviousValue,
@@ -2226,6 +2277,8 @@ internal partial class ExpressionBinder {
                 return true
             }
             let compoundTarget BoundExpression = BoundPropertyAccessExpression(nil, receiver: nil, propertyOwner, prop)
+            ApplySubExpressionNarrowingEffects(memberNameSyntax, compoundTarget)
+            let boundRhs = BindExpression(syntax.Value)
             // Issue #2834: a user-defined compound-assignment operator mutates
             // the target in place, replacing the read/binary/write rewrite.
             let userCompound BoundExpression? = TryBindUserCompoundAssignmentOperator(
@@ -2309,8 +2362,9 @@ internal partial class ExpressionBinder {
             return false
         }
         let fieldType = interfaceSym.SubstituteMemberType(staticField.Type)
-        let boundRhs = BindExpression(syntax.Value)
         var leftRead BoundExpression = BoundFieldAccessExpression(nil, staticField, interfaceSym, fieldType)
+        ApplySubExpressionNarrowingEffects(memberNameSyntax, leftRead)
+        let boundRhs = BindExpression(syntax.Value)
         let previousValue = CapturePostfixCompoundValue(
             syntax.ReturnsPreviousValue,
             syntax,
@@ -2445,7 +2499,6 @@ internal partial class ExpressionBinder {
         } else {
             propertyType
         }
-        let boundRhs = BindExpression(syntax.Value)
         let compoundTarget BoundExpression = BoundPropertyAccessExpression(
             nil,
             receiver,
@@ -2455,6 +2508,8 @@ internal partial class ExpressionBinder {
             narrowedType: nil,
             interfaceType: effectiveInterface
         )
+        ApplySubExpressionNarrowingEffects(memberNameSyntax, compoundTarget)
+        let boundRhs = BindExpression(syntax.Value)
         let userCompound BoundExpression? = TryBindUserCompoundAssignmentOperator(
             syntax.OperatorToken.Kind,
             compoundTarget,
@@ -2802,8 +2857,9 @@ internal partial class ExpressionBinder {
                 "a user-defined struct property has a declaring type",
                 expression: "compoundPropertyDeclaringType"
             )
-            let boundRhs = BindExpression(syntax.Value)
             let compoundTarget BoundExpression = BoundPropertyAccessExpression(nil, boundReceiver, structSym, prop)
+            ApplySubExpressionNarrowingEffects(memberNameSyntax, compoundTarget)
+            let boundRhs = BindExpression(syntax.Value)
             // Issue #2834: a user-defined compound-assignment operator mutates
             // the property's *value* in place, so it needs only a getter — no
             // setter, no accessibility-of-setter check, and no write-back. This
@@ -2989,13 +3045,14 @@ internal partial class ExpressionBinder {
         ) {
             return BoundErrorExpression(syntax)
         }
-        let boundRhs = BindExpression(syntax.Value)
         var leftRead BoundExpression = BoundClrPropertyAccessExpression(
             nil,
             boundReceiver,
             instanceMember,
             targetSymbol!!
         )
+        ApplySubExpressionNarrowingEffects(memberNameSyntax, leftRead)
+        let boundRhs = BindExpression(syntax.Value)
         let previousValue = CapturePostfixCompoundValue(
             syntax.ReturnsPreviousValue,
             syntax,
@@ -3074,7 +3131,6 @@ internal partial class ExpressionBinder {
             !TryRequireVisibleStaticGetter(importedClass, compoundProperty, memberNameSyntax.IdentifierToken.Location) {
             return BoundErrorExpression(nil)
         }
-        let boundRhs = BindExpression(syntax.Value)
         // Issue #4056: the compound READ is a `ldsfld` / `call get_X` of its own,
         // so it needs the symbolic container just as much as the write below. A
         // write-only repair still emits an erased TypeSpec for the read half.
@@ -3085,6 +3141,8 @@ internal partial class ExpressionBinder {
             targetSymbol!!,
             staticContainerType: symbolicContainerType
         )
+        ApplySubExpressionNarrowingEffects(memberNameSyntax, leftRead)
+        let boundRhs = BindExpression(syntax.Value)
         let previousValue = CapturePostfixCompoundValue(
             syntax.ReturnsPreviousValue,
             syntax,
@@ -3151,6 +3209,7 @@ internal partial class ExpressionBinder {
             explicitBaseType: nil,
             selectorLocation: baseLocation
         )
+        ApplySubExpressionNarrowingEffects(memberNameSyntax, leftRead)
         let boundRhs = BindExpression(syntax.Value)
         if leftRead is BoundErrorExpression || boundRhs.Type == TypeSymbol.Error {
             return BoundErrorExpression(nil)
@@ -3325,6 +3384,7 @@ internal partial class ExpressionBinder {
         if pointer is BoundErrorExpression {
             return pointer
         }
+        ApplySubExpressionNarrowingEffects(syntax.Target, pointer)
         var value = BindAssignmentRhs(syntax.Value, pointeeType)
         if value is BoundErrorExpression {
             return value
@@ -3369,6 +3429,7 @@ internal partial class ExpressionBinder {
         if pointer is BoundErrorExpression {
             return pointer
         }
+        ApplySubExpressionNarrowingEffects(syntax.Target, pointer)
         if !SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var baseOpKind) {
             // Defensive: parser only emits this node for kinds recognised by
             // TryGetCompoundAssignmentBaseOperator above.
@@ -3567,6 +3628,9 @@ internal partial class ExpressionBinder {
         syntax RefArgumentExpressionSyntax,
         parameter ParameterSymbol?
     ) BoundExpression {
+        if parameter == nil {
+            recordDeferredArgumentSnapshot?(syntax)
+        }
         if syntax.IsInlineDeclaration {
             // ADR-0060 §1: `out var n [T]` / `out let n [T]` / `out _ [T]`.
             // Only legal when the modifier is `out` AND the parameter (if known) is `out`.
@@ -3967,7 +4031,9 @@ internal partial class ExpressionBinder {
         }
         let indices = ImmutableArray.CreateBuilder[BoundExpression](indexSyntaxes.Count)
         for indexSyntax in indexSyntaxes {
-            indices.Add(BindRectangularArrayElementIndex(indexSyntax))
+            let boundIndex = BindRectangularArrayElementIndex(indexSyntax)
+            ApplySubExpressionNarrowingEffects(indexSyntax, boundIndex)
+            indices.Add(boundIndex)
         }
         let value = conversions.BindConversion(valueSyntax, rectangular.ElementType)
         let boundIndices = indices.MoveToImmutable()
@@ -3996,6 +4062,7 @@ internal partial class ExpressionBinder {
         }
         if syntax.Target.Indices.Count > 1 {
             let target = BindExpression(syntax.Target.Target)
+            ApplySubExpressionNarrowingEffects(syntax.Target.Target, target)
             let rectangular RectangularArrayTypeSymbol? = GetRectangularArrayTypeForBinding(target.Type)
             // ADR-0187 / issue #4350: a multi-parameter user indexer write.
             if rectangular == nil &&
@@ -4028,7 +4095,9 @@ internal partial class ExpressionBinder {
             }
             let indices = ImmutableArray.CreateBuilder[BoundExpression](rectangular.Rank)
             for indexSyntax in syntax.Target.Indices {
-                indices.Add(BindRectangularArrayElementIndex(indexSyntax))
+                let boundIndex = BindRectangularArrayElementIndex(indexSyntax)
+                ApplySubExpressionNarrowingEffects(indexSyntax, boundIndex)
+                indices.Add(boundIndex)
             }
             return BoundIndexAssignmentExpression.WithExpressionTarget(
                 syntax,
@@ -4099,6 +4168,7 @@ internal partial class ExpressionBinder {
         // same guarantee that the dispatch below — which switches on the
         // receiver's symbol KIND — never sees a platform wrapper.
         receiver = PlatformCoercion.InsertCheck(receiver, syntax.Receiver.Location, "a member assignment receiver")
+        ApplySubExpressionNarrowingEffects(syntax.Receiver, receiver)
         let receiverType = receiver.Type
         let fieldName = if receiverType is TupleTypeSymbol tupleType {
             GetTupleFieldName(syntax.FieldIdentifier.ValueText, tupleType)
@@ -4914,6 +4984,14 @@ internal partial class ExpressionBinder {
             let ownerDef = constructedInterface.Definition ?? constructedInterface
             let ifaceStaticField FieldSymbol? = ownerDef.GetStaticField(fieldName)
             if ifaceStaticField != nil {
+                if !AccessibilityChecker.IsAccessible(ifaceStaticField.Accessibility, ownerDef, function) {
+                    Diagnostics.ReportMemberInaccessible(
+                        syntax.FieldIdentifier.Location,
+                        ifaceStaticField.Name,
+                        ownerDef.Name,
+                        ifaceStaticField.Accessibility
+                    )
+                }
                 if ifaceStaticField.IsReadOnly || ifaceStaticField.IsConst {
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName)
                 }
@@ -4926,6 +5004,37 @@ internal partial class ExpressionBinder {
                     ifaceConverted,
                     fieldType
                 )
+            }
+            for prop in ownerDef.Properties {
+                if prop.IsStatic && !prop.IsIndexer && prop.Name == fieldName {
+                    if !AccessibilityChecker.IsAccessible(prop.SetterAccessibility, ownerDef, function) {
+                        Diagnostics.ReportMemberInaccessible(
+                            syntax.FieldIdentifier.Location,
+                            prop.Name,
+                            ownerDef.Name,
+                            prop.SetterAccessibility
+                        )
+                    }
+                    if !prop.HasSetter || prop.SetterSymbol == nil || prop.SetterSymbol!!.IsAbstract {
+                        Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName)
+                        return BoundErrorExpression(nil)
+                    }
+                    let propType = constructedInterface.SubstituteMemberType(prop.Type)
+                    let propConverted = conversions.BindConversion(syntax.Value.Location, BindValue(propType), propType)
+                    return BoundPropertyAssignmentExpression(
+                        nil,
+                        receiver: nil,
+                        structType: nil,
+                        prop,
+                        propConverted,
+                        if object.ReferenceEquals(propType, prop.Type) {
+                            default(TypeSymbol?)
+                        } else {
+                            propType
+                        },
+                        constructedInterface
+                    )
+                }
             }
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName)
             return BoundErrorExpression(nil)
@@ -4985,6 +5094,7 @@ internal partial class ExpressionBinder {
         syntax CompoundIndexAssignmentExpressionSyntax
     ) BoundExpression {
         let target = BindExpression(syntax.Target.Target)
+        ApplySubExpressionNarrowingEffects(syntax.Target.Target, target)
         let rectangular RectangularArrayTypeSymbol? = GetRectangularArrayTypeForBinding(target.Type)
         // ADR-0187 / issue #4350: `t[a, b] op= v` over a multi-parameter user
         // indexer reads and writes the same selected indexer, evaluating the
@@ -5052,6 +5162,7 @@ internal partial class ExpressionBinder {
         let indices = ImmutableArray.CreateBuilder[BoundExpression](rectangular.Rank)
         for indexSyntax in syntax.Target.Indices {
             let index = BindRectangularArrayElementIndex(indexSyntax)
+            ApplySubExpressionNarrowingEffects(indexSyntax, index)
             let indexLocal = DeclareRangeTemp("index", index.Type, index, statements)
             indices.Add(BoundVariableExpression(nil, indexLocal))
         }

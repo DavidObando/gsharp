@@ -484,10 +484,10 @@ internal partial class MethodBodyEmitter {
         // function token (ilverify `DelegateCtor`). Re-resolve through the
         // receiver's type.
         if methodGroup.Receiver == nil &&
-            methodGroup.StaticOwnerType != nil &&
+            methodGroup.StaticOwnerType is {} staticOwnerType &&
             ReflectionMetadataEmitter
-            .IsUserGenericTypeReference(methodGroup.StaticOwnerType) {
-            ftnToken = this.outer.userTokens.ResolveUserStaticMethodToken(methodGroup.StaticOwnerType, function)
+            .IsUserGenericTypeReference(staticOwnerType) {
+            ftnToken = this.outer.userTokens.ResolveUserStaticMethodToken(staticOwnerType, function)
         }
         if function.IsGeneric {
             let ownTypeArgumentCount = if methodGroup.MethodTypeArguments.IsDefault {

@@ -94,6 +94,8 @@ internal partial class ExpressionBinder {
         let copiedValue = LocalVariableSymbol(tempName + "result", isReadOnly: true, receiverType)
         $scope.TryDeclareVariable(copiedValue)
         statements.Add(BoundVariableDeclaration(nil, copiedValue, copy))
+        ApplySubExpressionNarrowingEffects(copySyntax, receiver)
+        ApplySubExpressionNarrowingEffects(copySyntax, copy)
         let seen = HashSet[string]()
         for initSyntax in overrides {
             let memberName = initSyntax.FieldIdentifier.ValueText
@@ -111,6 +113,7 @@ internal partial class ExpressionBinder {
                     initSyntax
                 )
                 if assignment != nil {
+                    ApplySubExpressionNarrowingEffects(initSyntax, assignment)
                     statements.Add(BoundExpressionStatement(initSyntax, assignment))
                 }
                 continue
@@ -158,18 +161,15 @@ internal partial class ExpressionBinder {
                     )
                 }
                 let fieldValueExpr = BindExpression(initSyntax.Value, field!!.Type)
-                statements.Add(
-                    BoundExpressionStatement(
-                        initSyntax,
-                        BoundFieldAssignmentExpression(
-                            initSyntax,
-                            copiedValue,
-                            fieldDeclaringType!!,
-                            field!!,
-                            fieldValueExpr
-                        )
-                    )
+                let fieldAssignment = BoundFieldAssignmentExpression(
+                    initSyntax,
+                    copiedValue,
+                    fieldDeclaringType!!,
+                    field!!,
+                    fieldValueExpr
                 )
+                ApplySubExpressionNarrowingEffects(initSyntax, fieldAssignment)
+                statements.Add(BoundExpressionStatement(initSyntax, fieldAssignment))
                 continue
             }
             // Issue #2291: an imported C# record surfaces its positional
@@ -212,18 +212,15 @@ internal partial class ExpressionBinder {
                     )
                 }
                 let propertyValueExpr = BindExpression(initSyntax.Value, property!!.Type)
-                statements.Add(
-                    BoundExpressionStatement(
-                        initSyntax,
-                        BoundPropertyAssignmentExpression(
-                            initSyntax,
-                            BoundVariableExpression(nil, copiedValue),
-                            propertyDeclaringType,
-                            property!!,
-                            propertyValueExpr
-                        )
-                    )
+                let propertyAssignment = BoundPropertyAssignmentExpression(
+                    initSyntax,
+                    BoundVariableExpression(nil, copiedValue),
+                    propertyDeclaringType,
+                    property!!,
+                    propertyValueExpr
                 )
+                ApplySubExpressionNarrowingEffects(initSyntax, propertyAssignment)
+                statements.Add(BoundExpressionStatement(initSyntax, propertyAssignment))
                 continue
             }
             Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, memberName)
@@ -291,6 +288,7 @@ internal partial class ExpressionBinder {
         $scope.TryDeclareVariable(tempVar)
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         statements.Add(BoundVariableDeclaration(syntax, tempVar, target))
+        ApplySubExpressionNarrowingEffects(syntax.Target ?? syntax, target)
         let seen = HashSet[string]()
         for initSyntax in syntax.Initializers {
             let propertyName = initSyntax.PropertyIdentifier.ValueText
@@ -327,6 +325,7 @@ internal partial class ExpressionBinder {
             if assignment == nil {
                 continue
             }
+            ApplySubExpressionNarrowingEffects(initSyntax, assignment)
             statements.Add(BoundExpressionStatement(initSyntax, assignment))
         }
         let resultExpr = BoundVariableExpression(syntax, tempVar)
@@ -425,6 +424,7 @@ internal partial class ExpressionBinder {
         $scope.TryDeclareVariable(tempVar)
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         statements.Add(BoundVariableDeclaration(syntax, tempVar, target))
+        ApplySubExpressionNarrowingEffects(syntax.Target ?? syntax, target)
         if target is BoundDefaultExpression && resultType.ClrType is {IsValueType: true} clrType {
             AppendImportedStructZeroInitializers(syntax, clrType, tempVar, excludedMembers: nil, statements)
         }
@@ -475,12 +475,22 @@ internal partial class ExpressionBinder {
                         initializer
                     )
                     if assignment != nil {
+                        ApplySubExpressionNarrowingEffects(member, assignment)
                         statements.Add(BoundExpressionStatement(member, assignment))
                     }
                     continue
                 }
                 case ExpressionCollectionElementSyntax{Expression: SpreadElementExpressionSyntax spread} {
-                    statements.AddRange(BindCollectionSpreadStatements(collectionLocal, spread))
+                    let spreadStatements = BindCollectionSpreadStatements(collectionLocal, spread)
+                    ApplySubExpressionNarrowingEffects(
+                        spread,
+                        BoundBlockExpression(
+                            spread,
+                            spreadStatements,
+                            BoundLiteralExpression(spread, value: 0, TypeSymbol.Void)
+                        )
+                    )
+                    statements.AddRange(spreadStatements)
                     continue
                 }
                 case bare is ExpressionCollectionElementSyntax {
@@ -505,6 +515,7 @@ internal partial class ExpressionBinder {
                     bound = BoundErrorExpression(nil)
                 }
             }
+            ApplySubExpressionNarrowingEffects(element, bound)
             statements.Add(BoundExpressionStatement(element, bound))
         }
     }
@@ -825,6 +836,7 @@ internal partial class ExpressionBinder {
         if propRead is BoundErrorExpression || propRead.Type == nil || propRead.Type == TypeSymbol.Error {
             return false
         }
+        ApplySubExpressionNarrowingEffects(nameSyntax, propRead)
         // Reference nullability is metadata-only here. Keep the runtime value
         // unchecked so assignment/Add arguments run before callvirt observes a
         // null receiver, matching C# evaluation order.
@@ -881,6 +893,7 @@ internal partial class ExpressionBinder {
                     initializer
                 )
                 if boundAssignment != nil {
+                    ApplySubExpressionNarrowingEffects(initializer, boundAssignment)
                     statements.Add(BoundExpressionStatement(initializer, boundAssignment))
                 }
             }
@@ -1084,13 +1097,13 @@ internal partial class ExpressionBinder {
         var clrType Type? = nil
         var openGenericDefinition Type? = nil
         var symbolicTypeArgs = default(ImmutableArray[TypeSymbol])
-        if syntax.TypeArgumentList != nil {
+        if syntax.TypeArgumentList is {} typeArgumentList {
             // `List[int]()`, `Dictionary[string, int]()`, etc. Resolve the open
             // generic via imports (mangled `Name`N`) and construct the closed
             // type via Type.MakeGenericType.
             if !$scope.TryLookupImportedGenericClass(
                 name,
-                syntax.TypeArgumentList.Arguments.Count,
+                typeArgumentList.Arguments.Count,
                 out var openType,
                 out var openAmbiguity
             ) {
@@ -1102,7 +1115,7 @@ internal partial class ExpressionBinder {
                 Diagnostics.ReportAmbiguousImportedTypeReference(syntax.Identifier.Location, name, openAmbiguity)
             }
             if !TryResolveClrConstructionTypeArgs(
-                syntax.TypeArgumentList!!,
+                typeArgumentList,
                 out var clrArgs,
                 out symbolicTypeArgs,
                 out var hasSymbolicArg
@@ -1769,18 +1782,21 @@ internal partial class ExpressionBinder {
                 continue
             }
             if inner is RefArgumentExpressionSyntax refArgument {
-                boundArguments.Add(BindRefArgumentExpression(refArgument, parameter: nil))
+                recordDeferredArgumentSnapshot?(inner)
+                let boundRef = BindRefArgumentExpression(refArgument, parameter: nil)
+                ApplySubExpressionNarrowingEffects(inner, boundRef)
+                boundArguments.Add(boundRef)
             } else {
-                boundArguments.Add(
-                    BindCallArgumentWithDelegateTargetTyping(
-                        syntax.Arguments[i],
-                        ctorParameterLists,
-                        sourceArgumentCount: syntax.Arguments.Count,
-                        sourceArgIndex: i,
-                        argName: argName,
-                        paramOffset: 0
-                    )
+                let boundArg = BindCallArgumentWithDelegateTargetTyping(
+                    syntax.Arguments[i],
+                    ctorParameterLists,
+                    sourceArgumentCount: syntax.Arguments.Count,
+                    sourceArgIndex: i,
+                    argName: argName,
+                    paramOffset: 0
                 )
+                ApplySubExpressionNarrowingEffects(inner, boundArg)
+                boundArguments.Add(boundArg)
             }
         }
         let initialArguments = boundArguments.ToImmutable()
@@ -2213,6 +2229,37 @@ internal partial class ExpressionBinder {
             ctorRefKinds
         )
         result = WrapWithHandlerPrelude(ctorCall, ctorHandlerPrelude, syntax)
+        if verifyCallArgumentsAfterConversions != nil {
+            var verifiedNoApplicable = false
+            var verifiedFailedArgs = default(ImmutableArray[BoundExpression])
+            result = verifyCallArgumentsAfterConversions!!(
+                syntax.Arguments,
+                result,
+                () -> {
+                    if TryBindClrConstructorFromTypeCore(
+                        clrType,
+                        syntax,
+                        out var reboundResult,
+                        out verifiedNoApplicable,
+                        out verifiedFailedArgs,
+                        openGenericDefinition,
+                        symbolicTypeArgs,
+                        resultTypeOverride
+                    ) &&
+                        reboundResult != nil {
+                        return reboundResult
+                    }
+                    return BoundErrorExpression(syntax)
+                }
+            ) ??
+                result
+            if verifiedNoApplicable {
+                noApplicableOverload = true
+                boundArgumentsOnFailure = verifiedFailedArgs
+                result = nil
+                return false
+            }
+        }
         return true
     }
 
@@ -2539,6 +2586,7 @@ internal partial class ExpressionBinder {
         paramOffset int32
     ) BoundExpression {
         let inner = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax)
+        recordDeferredArgumentSnapshot?(inner)
         if IsTargetDependentBlockArgumentSyntax(inner) &&
             TryResolveTargetDependentBlockTarget(
             candidateParameterLists,
@@ -2571,7 +2619,7 @@ internal partial class ExpressionBinder {
                 (literal BoundExpression) -> ConvertLiteralToNominalDelegate(argumentSyntax, literal, nominalTarget)
             )
         }
-        return BindExpression(inner)
+        return BindArgumentDeferringBranchy(inner)
     }
 
     /// Issue #5569: binds a function literal against the delegate target that the delegate candidates agree on.

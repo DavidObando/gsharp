@@ -1357,11 +1357,9 @@ internal class InterfaceImplEmitter {
             let pendingRows = this.emitCtx.PendingGenericParameters
             for var gi = gpRowStart; gi < pendingRows.Count; gi++ {
                 let gpRow = pendingRows[gi]
-                if gpRow.InterfaceConstraintType != nil {
-                    let substitutedConstraint = bridge.DeclaringType.SubstituteMemberType(
-                        gpRow.InterfaceConstraintType
-                    ) ??
-                        gpRow.InterfaceConstraintType
+                if gpRow.InterfaceConstraintType is {} constraintType {
+                    let substitutedConstraint TypeSymbol = bridge.DeclaringType.SubstituteMemberType(constraintType) ??
+                        constraintType
                     pendingRows[gi] = gpRow with{
                         InterfaceConstraintType = substitutedConstraint,
                         PreResolvedConstraintHandle = this.outer.memberRefs.GetElementTypeToken(substitutedConstraint)

@@ -191,7 +191,7 @@ class BoundStructLiteralExpression : BoundExpression {
 
         internal func CanWriteInitializerField(type StructSymbol, field FieldSymbol) bool ->
         !(type.ClrType != nil && field.Accessibility == Accessibility.Private) &&
-            (!field.IsReadOnly || (type.ClrType == nil && (!type.IsData || type.IsClass)))
+            (!field.IsReadOnly || type.ClrType == nil)
 
         internal func ValidateDataConstructor(
             type StructSymbol,

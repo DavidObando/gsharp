@@ -429,11 +429,11 @@ internal partial class MethodBodyEmitter {
             fieldContainer = this.enclosingClosure!!.ConstructedClassSym
         }
         var fieldHandle EntityHandle
-        if fa.InterfaceType != nil {
+        if fa.InterfaceType is {} interfaceType {
             // ADR-0089 / issue #1030: interface static field read. A generic
             // interface routes through a TypeSpec-parented MemberRef (per
             // construction); a non-generic interface uses the bare FieldDef.
-            fieldHandle = this.outer.userTokens.ResolveInterfaceFieldToken(fa.InterfaceType, fa.Field)
+            fieldHandle = this.outer.userTokens.ResolveInterfaceFieldToken(interfaceType, fa.Field)
         } else if fieldContainer != nil {
             fieldHandle = this.outer.userTokens.ResolveFieldToken(fieldContainer, fa.Field)
         } else if fa.Receiver?.Type is StructSymbol receiverStruct {
@@ -525,10 +525,10 @@ internal partial class MethodBodyEmitter {
             fieldContainer = this.enclosingClosure!!.ConstructedClassSym
         }
         var fieldHandle EntityHandle
-        if fas.InterfaceType != nil {
+        if fas.InterfaceType is {} interfaceType {
             // ADR-0089 / issue #1030: interface static field write — generic
             // interface via TypeSpec MemberRef, non-generic via bare FieldDef.
-            fieldHandle = this.outer.userTokens.ResolveInterfaceFieldToken(fas.InterfaceType, fas.Field)
+            fieldHandle = this.outer.userTokens.ResolveInterfaceFieldToken(interfaceType, fas.Field)
         } else if fieldContainer != nil {
             fieldHandle = this.outer.userTokens.ResolveFieldToken(fieldContainer, fas.Field)
         } else if fas.Receiver?.Type is StructSymbol receiverStruct {
@@ -603,8 +603,30 @@ internal partial class MethodBodyEmitter {
             this.EmitExpression(fas.Value)
             this.il.OpCode(ILOpCode.Dup)
             this.il.StoreLocal(valueSlot)
-            this.il.OpCode(ILOpCode.Stfld)
-            this.il.Token(fieldHandle)
+            let exprDeclaringStruct = BoundNodeForm.DeclaringType(fas)
+            if !exprDeclaringStruct.IsClass &&
+                fas
+                .Field
+                .IsReadOnly &&
+                exprDeclaringStruct.ClrType == nil &&
+                this
+                .outer
+                .userTokens
+                .TryResolveStructLetFieldCtorToken(
+                fieldContainer ?? exprDeclaringStruct,
+                fas.Field,
+                out var exprLetCtorHandle,
+                out var exprLetMarkerCount
+            ) {
+                for var marker = 0; marker < exprLetMarkerCount; marker++ {
+                    this.il.LoadConstantI4(0)
+                }
+                this.il.OpCode(ILOpCode.Call)
+                this.il.Token(exprLetCtorHandle)
+            } else {
+                this.il.OpCode(ILOpCode.Stfld)
+                this.il.Token(fieldHandle)
+            }
             // Expression result: the value we just stored — no second
             // receiver evaluation, no second field read.
             this.il.LoadLocal(valueSlot)
@@ -658,12 +680,44 @@ internal partial class MethodBodyEmitter {
         // Class field assignment: load the reference, evaluate the value,
         // stfld through the reference. Re-load the receiver + ldfld to
         // leave the new value on the stack as the expression result.
-        if BoundNodeForm.DeclaringType(fas).IsClass {
+        let declaringStruct = BoundNodeForm.DeclaringType(fas)
+        if declaringStruct.IsClass {
             this.EmitLoadVariable(fieldReceiver)
             this.EmitExpression(fas.Value)
             this.il.OpCode(ILOpCode.Stfld)
             this.il.Token(fieldHandle)
             this.EmitLoadVariable(fieldReceiver)
+            this.il.OpCode(ILOpCode.Ldfld)
+            this.il.Token(fieldHandle)
+            return
+        }
+        if fas.Field.IsReadOnly && !object.ReferenceEquals(fieldReceiver, this.structThisParameter) &&
+            declaringStruct.ClrType == nil &&
+            this
+            .outer
+            .userTokens
+            .TryResolveStructLetFieldCtorToken(
+            fieldContainer ?? (fieldReceiver.Type as StructSymbol) ?? declaringStruct,
+            fas.Field,
+            out var letFieldCtorHandle,
+            out var letFieldMarkerCount
+        ) {
+            if !this.TryLoadVariableAddress(fieldReceiver) {
+                throw InvalidOperationException(
+                    "Cannot take the address of variable '${fieldReceiver.Name}' for field assignment."
+                )
+            }
+            this.EmitExpression(fas.Value)
+            for var marker = 0; marker < letFieldMarkerCount; marker++ {
+                this.il.LoadConstantI4(0)
+            }
+            this.il.OpCode(ILOpCode.Call)
+            this.il.Token(letFieldCtorHandle)
+            if !this.TryLoadVariableAddress(fieldReceiver) {
+                throw InvalidOperationException(
+                    "Cannot take the address of variable '${fieldReceiver.Name}' for field assignment."
+                )
+            }
             this.il.OpCode(ILOpCode.Ldfld)
             this.il.Token(fieldHandle)
             return
@@ -745,11 +799,11 @@ internal partial class MethodBodyEmitter {
         // parameter is read with the substitution applied. The non-generic case
         // keeps using the plain accessor MethodDef.
         var getterHandle EntityHandle
-        if access.InterfaceType != nil {
+        if access.InterfaceType is {} interfaceType {
             getterHandle = this
                 .outer
                 .userTokens
-                .ResolveUserPropertyAccessorToken(access.InterfaceType, access.Property, wantSetter: false)
+                .ResolveUserPropertyAccessorToken(interfaceType, access.Property, wantSetter: false)
         } else {
             let getterContainer StructSymbol? = ResolvePropertyReferenceContainer(
                 access.StructType as StructSymbol,
@@ -832,11 +886,11 @@ internal partial class MethodBodyEmitter {
         // Issue #989: route generic constructed receivers through the
         // TypeSpec-parented MemberRef (mirrors EmitPropertyAccess).
         var setterHandle EntityHandle
-        if assn.InterfaceType != nil {
+        if assn.InterfaceType is {} interfaceType {
             setterHandle = this
                 .outer
                 .userTokens
-                .ResolveUserPropertyAccessorToken(assn.InterfaceType, assn.Property, wantSetter: true)
+                .ResolveUserPropertyAccessorToken(interfaceType, assn.Property, wantSetter: true)
         } else {
             let setterContainer StructSymbol? = ResolvePropertyReferenceContainer(
                 assn.StructType as StructSymbol,
@@ -1083,8 +1137,8 @@ internal partial class MethodBodyEmitter {
                 this.EmitErasedObjectReturnWidening(getter.ReturnType, access.Type)
             }
             case field is FieldInfo {
-                let fieldRef = if access.StaticContainerType != nil {
-                    this.outer.memberRefs.GetFieldReference(field, access.StaticContainerType)
+                let fieldRef = if access.StaticContainerType is {} staticContainerType {
+                    this.outer.memberRefs.GetFieldReference(field, staticContainerType)
                 } else {
                     this.outer.memberRefs.GetFieldReference(field)
                 }
@@ -1203,8 +1257,8 @@ internal partial class MethodBodyEmitter {
                     }
                 )
                 this.il.Token(
-                    if assn.StaticContainerType != nil {
-                        this.outer.memberRefs.GetFieldReference(field, assn.StaticContainerType)
+                    if assn.StaticContainerType is {} staticContainerType {
+                        this.outer.memberRefs.GetFieldReference(field, staticContainerType)
                     } else {
                         this.outer.memberRefs.GetFieldReference(field)
                     }

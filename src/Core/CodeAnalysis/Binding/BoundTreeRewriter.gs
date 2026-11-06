@@ -14,6 +14,9 @@ import System.Collections.Immutable
 
 /// Abstract bound tree rewriter.
 abstract class BoundTreeRewriter {
+    /// When `true`, forces leaf and composite bound nodes to allocate fresh
+    /// instances even when their children are unchanged.
+    private var ForceClone bool
     /// Reweites bound statements.
     /// @param node The node to rewrite.
     /// @returns The rewritten node.
@@ -550,14 +553,22 @@ abstract class BoundTreeRewriter {
     /// @param node The literal expression to rewrite.
     /// @returns The rewritten literal expression.
     protected open func RewriteLiteralExpression(node BoundLiteralExpression) BoundExpression {
-        return node
+        return if ForceClone {
+            BoundLiteralExpression(node.Syntax, node.Value, node.Type)
+        } else {
+            node
+        }
     }
 
     /// Rewrites a default expression. Leaf node — returns as-is by default.
     /// @param node The default expression to rewrite.
     /// @returns The rewritten default expression.
     protected open func RewriteDefaultExpression(node BoundDefaultExpression) BoundExpression {
-        return node
+        return if ForceClone {
+            BoundDefaultExpression(node.Syntax, node.Type)
+        } else {
+            node
+        }
     }
 
     /// Issue #988: rewrites a (cref:BoundTypeParameterConstructionExpression) (a leaf).
@@ -566,7 +577,11 @@ abstract class BoundTreeRewriter {
     protected open func RewriteTypeParameterConstructionExpression(
         node BoundTypeParameterConstructionExpression
     ) BoundExpression {
-        return node
+        return if ForceClone {
+            BoundTypeParameterConstructionExpression(node.Syntax, node.TypeParameter)
+        } else {
+            node
+        }
     }
 
     /// Rewrites a variable expression.
@@ -1370,10 +1385,10 @@ abstract class BoundTreeRewriter {
             }
             builder?.Add(newEl)
         }
-        return if builder == nil {
+        return if !ForceClone && builder == nil {
             node
         } else {
-            BoundArrayCreationExpression(node.Syntax, node.ContainerType, builder.MoveToImmutable())
+            BoundArrayCreationExpression(node.Syntax, node.ContainerType, builder?.MoveToImmutable() ?? node.Elements)
         }
     }
 
@@ -1436,10 +1451,10 @@ abstract class BoundTreeRewriter {
                 }
             )
         }
-        return if builder == nil {
+        return if !ForceClone && builder == nil {
             node
         } else {
-            BoundMapLiteralExpression(node.Syntax, node.MapType, builder.MoveToImmutable())
+            BoundMapLiteralExpression(node.Syntax, node.MapType, builder?.MoveToImmutable() ?? node.Entries)
         }
     }
 
@@ -1455,7 +1470,7 @@ abstract class BoundTreeRewriter {
             indices.Add(rewritten)
             changed |= rewritten != index
         }
-        if !changed {
+        if !ForceClone && !changed {
             return node
         }
         return BoundIndexExpression(node.Syntax, target, indices.MoveToImmutable(), node.Type)
@@ -1533,7 +1548,8 @@ abstract class BoundTreeRewriter {
 
             // their evaluation into side effects outside the constructor.
 
-            let constructorOwnsValue = init.IsDeclarationInitializer &&
+            let constructorOwnsValue = !ForceClone &&
+                init.IsDeclarationInitializer &&
                 node
                 .StructType
                 .NeedsSynthesizedValueStructDefaultCtor
@@ -1558,7 +1574,7 @@ abstract class BoundTreeRewriter {
                 )
             }
         }
-        return if builder == nil && copySource == node.CopySource {
+        return if !ForceClone && builder == nil && copySource == node.CopySource {
             node
         } else {
             BoundStructLiteralExpression(
@@ -2328,7 +2344,7 @@ abstract class BoundTreeRewriter {
         if receiver == node.Receiver {
             return node
         }
-        return if node.FunctionType != nil {
+        return if node.FunctionType is {} functionType {
             BoundMethodGroupExpression(
                 node.Syntax,
                 receiver,
@@ -2337,7 +2353,7 @@ abstract class BoundTreeRewriter {
                     "a method group with a function type has a function",
                     expression: "node.Function"
                 ),
-                node.FunctionType,
+                functionType,
                 node.StaticOwnerType,
                 node.MethodTypeArguments
             ){
@@ -2487,5 +2503,19 @@ abstract class BoundTreeRewriter {
             return node
         }
         return BoundAsExpression(node.Syntax, expression, node.TargetType)
+    }
+
+    private class ExpressionCloner : BoundTreeRewriter {
+        init() {
+            ForceClone = true
+        }
+
+        func Clone(expression BoundExpression) BoundExpression -> RewriteExpression(expression)
+    }
+
+    shared {
+        /// Issue #5785: clones a cached bound expression subtree so each use site
+        /// receives distinct slot-bearing bound nodes.
+        internal func Clone(expression BoundExpression) BoundExpression -> ExpressionCloner().Clone(expression)
     }
 }

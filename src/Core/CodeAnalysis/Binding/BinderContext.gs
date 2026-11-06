@@ -198,6 +198,15 @@ internal class BinderContext {
         private set;
     }
 
+    /// Gets a value indicating whether an explicit `unchecked(...)` expression or `unchecked { }`
+    /// statement is the innermost overflow context. The default context is also unchecked, but this
+    /// value is `false` there. A constant floating-point to integer conversion that is out of range
+    /// is an error (GS0635) unless this value is `true` (#5767, ADR-0219).
+    prop IsUncheckedContext bool {
+        get;
+        private set;
+    }
+
     /// Gets or sets the scope the binder currently operates against. Starts
     /// at the binder's root scope; mutated during nested-scope push/pop by
     /// statement, expression, and lambda binding helpers — so a writable
@@ -562,6 +571,42 @@ internal class BinderContext {
         return false
     }
 
+    internal func HasUnclosedOwnTypeParameters(
+        ifaceDef InterfaceSymbol,
+        suppliedOwnArgs ImmutableArray[TypeSymbol],
+        currentFunction FunctionSymbol?
+    ) bool {
+        let ownParams = (ifaceDef.Definition ?? ifaceDef).DeclaredTypeParameters
+        if ownParams.IsDefaultOrEmpty {
+            return !suppliedOwnArgs.IsDefaultOrEmpty
+        }
+        let currentContainingType TypeSymbol? = CurrentContainingType ??
+            currentFunction?.ReceiverType ??
+            currentFunction?.StaticOwnerType ??
+            currentFunction?.LexicalEnclosingType
+        if !suppliedOwnArgs.IsDefaultOrEmpty {
+            if suppliedOwnArgs.Length != ownParams.Length {
+                return true
+            }
+            let referencedTypeParameters = List[TypeParameterSymbol]()
+            for arg in suppliedOwnArgs {
+                TypeSymbol.CollectReferencedTypeParameters(arg, referencedTypeParameters, nil)
+            }
+            for tp in referencedTypeParameters {
+                if !IsTypeParameterInScope(tp, currentContainingType) {
+                    return true
+                }
+            }
+            return false
+        }
+        for tp in ownParams {
+            if !IsTypeParameterInScope(tp, currentContainingType) {
+                return true
+            }
+        }
+        return false
+    }
+
     private func IsTypeParameterInScope(typeParameter TypeParameterSymbol, containingType TypeSymbol?) bool {
         if CurrentTypeParameters != nil && CurrentTypeParameters!!.TryGetValue(typeParameter.Name, out var inScopeTp) &&
             object.ReferenceEquals(inScopeTp, typeParameter) {
@@ -832,10 +877,13 @@ internal class BinderContext {
         }
         if expression is BoundUnaryExpression{IsNarrowingUnwrap: true} unwrap {
             if unwrap.Operand is BoundVariableExpression unwrappedVariable {
-                let variablePath = AccessPath.ForVariable(unwrappedVariable.Variable)
-                path = variablePath
-                narrowedType = NarrowedVariables.Query(variablePath)
-                return narrowedType != nil
+                path = AccessPath.ForVariable(unwrappedVariable.Variable)
+                narrowedType = unwrap.Type
+                return true
+            }
+            if SmartCastStability.TryGetStableMemberPath(unwrap.Operand, out path, out _) {
+                narrowedType = unwrap.Type
+                return true
             }
             return TryGetNarrowedAccessPath(unwrap.Operand, out path, out narrowedType)
         }
@@ -844,6 +892,21 @@ internal class BinderContext {
         if !found || stablePath == nil {
             narrowedType = nil
             return false
+        }
+        if expression is BoundFieldAccessExpression{NarrowedType: {} fieldNarrowed} {
+            narrowedType = fieldNarrowed
+            return true
+        }
+        if expression is BoundPropertyAccessExpression{NarrowedType: {} propertyNarrowed} {
+            narrowedType = propertyNarrowed
+            return true
+        }
+        if expression is BoundClrPropertyAccessExpression clrAccess {
+            let declared = MemberLookup.GetDeclaredAccessPathType(stablePath, clrAccess.Type)
+            if !object.Equals(clrAccess.Type, declared) {
+                narrowedType = clrAccess.Type
+                return true
+            }
         }
         narrowedType = NarrowedVariables.Query(stablePath)
         return narrowedType != nil
@@ -874,15 +937,26 @@ internal class BinderContext {
         ConstructorInitializerDepth--
     }
 
-    /// Issue #1881. Enters a `checked`/`unchecked` arithmetic context for the
+    /// Issue #1881. Enters an explicit `checked`/`unchecked` arithmetic context for the
     /// lifetime of the returned token; disposing the token restores the
     /// previous context (innermost nesting wins).
     /// @param isChecked Whether the entered context is checked (true) or unchecked (false).
     /// @returns A disposable token that restores the previous context when disposed.
     func PushCheckedContext(isChecked bool) CheckedContextScope {
-        let previous = IsCheckedContext
+        let saved = CheckedContextScope(this, IsCheckedContext, IsUncheckedContext)
         IsCheckedContext = isChecked
-        return CheckedContextScope(this, previous)
+        IsUncheckedContext = !isChecked
+        return saved
+    }
+
+    /// Enters the default overflow context, which is unchecked but not explicit, for the lifetime
+    /// of the returned token. Initializers that are bound away from their source context use it.
+    /// @returns A disposable token that restores the previous context when disposed.
+    func PushDefaultCheckedContext() CheckedContextScope {
+        let saved = CheckedContextScope(this, IsCheckedContext, IsUncheckedContext)
+        IsCheckedContext = false
+        IsUncheckedContext = false
+        return saved
     }
 
     /// The ambient context a channel operation should observe here, or
@@ -939,18 +1013,21 @@ internal class BinderContext {
     struct CheckedContextScope : IDisposable {
         private let owner BinderContext?
         private let previous bool
+        private let previousUnchecked bool
 
-        internal init(owner BinderContext, previous bool) {
+        internal init(owner BinderContext, previous bool, previousUnchecked bool) {
             this.owner = owner
             this.previous = previous
+            this.previousUnchecked = previousUnchecked
         }
 
         /// ```xmldoc
         /// <inheritdoc />
         /// ```
         func Dispose() {
-            if owner != nil {
-                this.owner.IsCheckedContext = previous
+            if let target = owner {
+                target.IsCheckedContext = previous
+                target.IsUncheckedContext = previousUnchecked
             }
         }
     }

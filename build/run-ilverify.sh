@@ -9,7 +9,7 @@
 # silent-invalid-IL emitter bugs into loud CI failures without waiting on the
 # 45-minute test matrix.
 #
-# Corpus (mirrors test/Compiler.Tests/LanguageConformance/SampleConformanceData.cs):
+# Corpus (mirrors test/Compiler.Tests/LanguageConformance/SampleConformanceData.gs):
 #   - single-file: samples/*.gs that have a sibling *.golden
 #   - multi-file:  samples/<dir>/ (except aspirational/) containing *.gs and
 #                  <dir>/<dir>.golden
@@ -24,7 +24,7 @@
 # (either a new code on a listed assembly or any error on an unlisted
 # assembly) breaks the gate. The stricter method-scoped version of these
 # suppressions still runs inside the conformance suite
-# (test/Compiler.Tests/IlVerifier.cs, GetKnownIssuesForSample).
+# (test/Compiler.Tests/IlVerifier.gs, GetKnownIssuesForSample).
 #
 # Usage:
 #   ./build/run-ilverify.sh              # full gate
@@ -77,7 +77,7 @@ fi
 echo "    ilverify $(dotnet tool run ilverify --version)"
 
 # Reference set: the newest host Microsoft.NETCore.App 10.x BCL, filtered the
-# same way as test/Compiler.Tests/IlVerifier.cs (System.*, mscorlib,
+# same way as test/Compiler.Tests/IlVerifier.gs (System.*, mscorlib,
 # netstandard, plus the few Microsoft.* facades). This matches the implicit
 # references gsc resolves for /targetframework:net10.0.
 RUNTIME_DIR="$(dotnet --list-runtimes \

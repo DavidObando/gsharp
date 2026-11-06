@@ -667,10 +667,24 @@ class CorpusDerivationTests(unittest.TestCase):
         spec.loader.exec_module(module)
         expected = module.expected_apps(REPO)
         if "src/Core/Core.csproj" not in expected:
-            # expected_apps derives the C# corpus from tracked *.csproj files. After the cut-over this
-            # checkout is G# source (*.gsproj), so the derivation only applies to a C# checkout
-            # (cs2gs/csharp-0.4), which is where the apps nightly runs it.
-            self.skipTest("the C# corpus is not in this checkout (G# source tree)")
+            fixture = REPO / "build" / ".stage2-corpus-derivation-test"
+            remove_tree(fixture)
+            self.addCleanup(remove_tree, fixture)
+            fixture.mkdir(parents=True)
+            subprocess.run(["git", "init", "-q"], cwd=fixture, check=True)
+            for rel in (
+                "src/Core/Core.csproj",
+                "src/Compiler/Compiler.csproj",
+                "src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj",
+                "src/vs-gsharp/src/VsGsharp/VsGsharp.csproj",
+                "src/vs-gsharp/src/VsGsharp.CodeLens/VsGsharp.CodeLens.csproj",
+                "src/vs-gsharp/test/VsGsharp.UnitTests/VsGsharp.UnitTests.csproj",
+            ):
+                target = fixture / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("<Project />\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=fixture, check=True)
+            expected = module.expected_apps(fixture)
         self.assertIn("src/Core/Core.csproj", expected)
         self.assertNotIn("src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj", expected)
         self.assertFalse(any(path.startswith("src/vs-gsharp/") for path in expected))

@@ -119,6 +119,19 @@ internal partial class OverloadResolver {
     private let bindLambdaWithTarget((LambdaExpressionSyntax, FunctionTypeSymbol) -> BoundExpression)?
     private let bindUserTypeStaticCall((StructSymbol, CallExpressionSyntax) -> BoundExpression)?
     private let bindImportedClrStaticCall((Type, CallExpressionSyntax) -> BoundExpression)?
+    private let applySubExpressionEffects((SyntaxNode?, BoundExpression?) -> void)?
+    private let captureNarrowingSnapshot(() -> StatementBinder.NarrowingBindSnapshot)?
+    private let restoreNarrowingSnapshot((StatementBinder.NarrowingBindSnapshot) -> void)?
+    private let recordDeferredArgumentSnapshot((SyntaxNode) -> void)?
+    private let rebindDeferredArgumentWithSnapshot((SyntaxNode, () -> BoundExpression) -> BoundExpression)?
+    private let intersectNarrowingWithSnapshot((StatementBinder.NarrowingBindSnapshot) -> void)?
+    private let verifyCallArgumentsAfterConversions(
+        (
+            GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
+            BoundExpression?,
+            (() -> BoundExpression)?
+        ) -> BoundExpression?
+    )?
     private let captureCallArgumentPrebindRollback((SyntaxNode) -> Action)?
 
     /// Initializes a new instance of the (cref:OverloadResolver)
@@ -266,6 +279,19 @@ internal partial class OverloadResolver {
         bindLambdaWithTarget((LambdaExpressionSyntax, FunctionTypeSymbol) -> BoundExpression)? = nil,
         bindUserTypeStaticCall((StructSymbol, CallExpressionSyntax) -> BoundExpression)? = nil,
         bindImportedClrStaticCall((Type, CallExpressionSyntax) -> BoundExpression)? = nil,
+        applySubExpressionEffects((SyntaxNode?, BoundExpression?) -> void)? = nil,
+        captureNarrowingSnapshot(() -> StatementBinder.NarrowingBindSnapshot)? = nil,
+        restoreNarrowingSnapshot((StatementBinder.NarrowingBindSnapshot) -> void)? = nil,
+        recordDeferredArgumentSnapshot((SyntaxNode) -> void)? = nil,
+        rebindDeferredArgumentWithSnapshot((SyntaxNode, () -> BoundExpression) -> BoundExpression)? = nil,
+        intersectNarrowingWithSnapshot((StatementBinder.NarrowingBindSnapshot) -> void)? = nil,
+        verifyCallArgumentsAfterConversions(
+            (
+                GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
+                BoundExpression?,
+                (() -> BoundExpression)?
+            ) -> BoundExpression?
+        )? = nil,
         captureCallArgumentPrebindRollback((SyntaxNode) -> Action)? = nil
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
@@ -309,7 +335,28 @@ internal partial class OverloadResolver {
         this.bindLambdaWithTarget = bindLambdaWithTarget
         this.bindUserTypeStaticCall = bindUserTypeStaticCall
         this.bindImportedClrStaticCall = bindImportedClrStaticCall
+        this.applySubExpressionEffects = applySubExpressionEffects
+        this.captureNarrowingSnapshot = captureNarrowingSnapshot
+        this.restoreNarrowingSnapshot = restoreNarrowingSnapshot
+        this.recordDeferredArgumentSnapshot = recordDeferredArgumentSnapshot
+        this.rebindDeferredArgumentWithSnapshot = rebindDeferredArgumentWithSnapshot
+        this.intersectNarrowingWithSnapshot = intersectNarrowingWithSnapshot
+        this.verifyCallArgumentsAfterConversions = verifyCallArgumentsAfterConversions
         this.captureCallArgumentPrebindRollback = captureCallArgumentPrebindRollback
+    }
+
+    private func ApplySubExpressionNarrowingEffects(syntax SyntaxNode?, operand BoundExpression?) {
+        applySubExpressionEffects?(syntax, operand)
+    }
+
+    private func CaptureNarrowingBindSnapshot() StatementBinder.NarrowingBindSnapshot -> if captureNarrowingSnapshot != nil {
+        captureNarrowingSnapshot!!()
+    } else {
+        default(StatementBinder.NarrowingBindSnapshot)
+    }
+
+    private func RestoreNarrowingBindSnapshot(snapshot StatementBinder.NarrowingBindSnapshot) {
+        restoreNarrowingSnapshot?(snapshot)
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics

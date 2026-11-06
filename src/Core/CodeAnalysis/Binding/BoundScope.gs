@@ -218,6 +218,35 @@ partial class BoundScope {
     /// @returns Wherther the variable was declared or not.
     func TryDeclareVariable(variable VariableSymbol) bool -> TryDeclareSymbol(variable)
 
+    internal func ReplaceDeclaredVariable(variable VariableSymbol) {
+        if symbols != nil && symbols!!.ContainsKey(variable.Name) {
+            symbols!![variable.Name] = variable
+            return
+        }
+        Parent?.ReplaceDeclaredVariable(variable)
+    }
+
+    internal func RemoveVariablesDeclaredInSpan(tree SyntaxTree, span TextSpan) {
+        if symbols != nil && symbolKeys != nil {
+            for var i = symbolKeys!!.Count - 1; i >= 0; i-- {
+                let key = symbolKeys!![i]
+                if symbols!!.TryGetValue(key, out var sym) &&
+                    sym is LocalVariableSymbol{DeclaringSyntax: {} declSyntax} &&
+                    object.ReferenceEquals(declSyntax.SyntaxTree, tree) &&
+                    declSyntax
+                    .Span
+                    .Start >= span.Start &&
+                    declSyntax
+                    .Span
+                    .End <= span.End {
+                    symbols!!.Remove(key)
+                    symbolKeys!!.RemoveAt(i)
+                }
+            }
+        }
+        Parent?.RemoveVariablesDeclaredInSpan(tree, span)
+    }
+
     /// Tries to declare a function in this scope.
     /// @param function The function to declare.
     /// @returns Whether the function was declared or not.

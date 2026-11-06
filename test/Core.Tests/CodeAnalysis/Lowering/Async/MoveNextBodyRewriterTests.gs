@@ -308,6 +308,60 @@ open class MoveNextBodyRewriterTests {
         )
     }
 
+    @Fact
+    func Build_FilteredCatchWithHoistedVariable_InitializesHoistedFieldBeforeFilter() {
+        // Arrange: async method with await in try, filtered catch with hoisted catch variable
+        // and a filter block that reads the hoisted catch variable (as produced by CaptureBoxingRewriter).
+        let awaitExpr = MakeTaskAwait()
+        let exceptionType = TypeSymbol.FromClrType(typeof(InvalidOperationException))
+        let ex = LocalVariableSymbol("ex", false, exceptionType)
+        let boxSeedLocal = LocalVariableSymbol("exSeed", false, exceptionType)
+        let function = FunctionSymbol(
+            "filteredCatch",
+            ImmutableArray[ParameterSymbol].Empty,
+            TypeSymbol.Void,
+            $package: Package
+        ){IsAsync = true}
+        let filterBlock = BoundBlockExpression(
+            nil,
+            ImmutableArray.Create[BoundStatement](
+                BoundVariableDeclaration(nil, boxSeedLocal, BoundVariableExpression(nil, ex))
+            ),
+            BoundLiteralExpression(nil, true)
+        )
+        let userTry = BoundTryStatement(
+            nil,
+            Block(BoundExpressionStatement(nil, awaitExpr)),
+            ImmutableArray.Create(
+                BoundCatchClause(
+                    exceptionType,
+                    ex,
+                    filterBlock,
+                    Block(BoundExpressionStatement(nil, BoundVariableExpression(nil, boxSeedLocal))),
+                    false
+                )
+            ),
+            finallyBlock: nil
+        )
+        let plan = BuildPlan(function, Block(userTry))
+        Assert.True(plan.FieldMap.TryGetHoistedField(ex, out var exField))
+
+        // Act
+        let result = MoveNextBodyRewriter.Build(plan)
+
+        // Assert: the inner user try's catch filter initializes exField before the seed statement reads exField.
+        let outerTry = FindTryStatement(result.Body)
+        let innerTry = FlattenStatements(GetTryBodyStatements(outerTry)).OfType[BoundTryStatement]().Single()
+        let clause = Assert.Single(innerTry.CatchClauses)
+        let rewrittenFilter = Assert.IsType[BoundBlockExpression](clause.Filter)
+        Assert.True(rewrittenFilter.Statements.Length >= 2)
+        let firstStmt = Assert.IsType[BoundExpressionStatement](rewrittenFilter.Statements[0])
+        let copyWrite = Assert.IsType[BoundFieldAssignmentExpression](firstStmt.Expression)
+        Assert.Same(exField, copyWrite.Field)
+        let copyRead = Assert.IsType[BoundVariableExpression](copyWrite.Value)
+        Assert.Same(ex, copyRead.Variable)
+    }
+
     shared {
         private let Package PackageSymbol = PackageSymbol("main", declaration: nil)
         private let Resolver ReferenceResolver = ReferenceResolver.Default()

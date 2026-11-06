@@ -368,6 +368,39 @@ try {
         Assert.NotEmpty(Compile(source))
     }
 
+    /// Issue #5380: a local (`using let` or `let`/`var`), parameter, or catch
+    /// variable captured by a lambda and also referenced in a `catch (...) when`
+    /// filter must be rewritten to its boxed cell inside the filter expression.
+    @Fact
+    func CapturedVariableInExceptionFilter_BoxesFilterAndHandlerReads() {
+        const source = `
+package P
+import System
+
+class Resource : IDisposable {
+    public var Id int32 = 17
+    public var HasExited bool = true
+    public func Dispose() { }
+}
+
+func run(allowCatch bool) string {
+    using let process = Resource{}
+    let readId = () -> process.Id
+    let flipAllow = () -> allowCatch
+    try {
+        throw InvalidOperationException("stopped")
+    } catch (ex InvalidOperationException) when process.HasExited && flipAllow() && ex.Message == "stopped" {
+        let describe = () -> ex.Message + ":" + readId().ToString()
+        return describe()
+    }
+    return "unhandled"
+}
+
+Console.WriteLine(run(true))
+`
+        Assert.Equal("stopped:17", CompileLoadRun(source, "Adr0177-CapturedFilter5380").Trim())
+    }
+
     shared {
         private func Compile(source string) ImmutableArray[Diagnostic] {
             let tree = SyntaxTree.Parse(SourceText.From(source))

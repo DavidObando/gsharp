@@ -957,6 +957,7 @@ internal partial class OverloadResolver {
             expression: "syntax.Callee"
         )
         let callee = bindExpression(calleeSyntax)
+        ApplySubExpressionNarrowingEffects(calleeSyntax, callee)
         let calleeName = calleeSyntax.SyntaxTree.Text.ToString(calleeSyntax.Span)
         if syntax.NullableQuestionToken != nil {
             return BindNullConditionalIndirectCallExpression(syntax, callee, calleeName, calleeSyntax.Location)
@@ -1048,43 +1049,9 @@ internal partial class OverloadResolver {
                 callee = BoundUnaryExpression(assertion.Syntax, assertionOperator, callee, assertion.IsChecked)
             }
         }
-        let CompleteInvocation = func (invocation BoundExpression) BoundExpression {
-            return if nullConditionalCallee == nil {
-                invocation
-            } else {
-                BuildNullConditionalDelegateResult(
-                    syntax,
-                    nullConditionalCallee.Receiver,
-                    nullConditionalCallee.Capture,
-                    invocation,
-                    invocation.Type
-                )
-            }
-        }
+        ApplySubExpressionNarrowingEffects(callee.Syntax, callee)
         if !TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames) {
             return BoundErrorExpression(nil)
-        }
-        let boundArguments = ImmutableArray.CreateBuilder[BoundExpression](syntax.Arguments.Count)
-        let deferredArrowLambdaIndices = HashSet[int32]()
-        for var i = 0; i < syntax.Arguments.Count; i++ {
-            let argSyntax = UnwrapNamedArgumentValue(syntax.Arguments[i])
-            if bindLambdaWithTarget != nil && IsUntypedArrowLambda(argSyntax) {
-                // Defer: TryBindFunctionTypeArguments re-binds the lambda once the
-                // callee's parameter delegate shape is known (mirrors the direct path).
-                deferredArrowLambdaIndices.Add(i)
-                boundArguments.Add(BoundErrorExpression(argSyntax))
-            } else if argSyntax is RefArgumentExpressionSyntax refArgument {
-                boundArguments.Add(bindRefArgumentExpression(refArgument, nil))
-            } else {
-                boundArguments.Add(BindOverloadArgumentValue(argSyntax))
-            }
-        }
-        if deferredArrowLambdaIndices.Count == 0 {
-            for boundArgument in boundArguments {
-                if boundArgument is BoundErrorExpression {
-                    return BoundErrorExpression(nil)
-                }
-            }
         }
         // ADR-0186 §4/§5, issue #4325: invoking a delegate VALUE is a
         // receiver position with no CLR check of its own worth relying on —
@@ -1103,85 +1070,140 @@ internal partial class OverloadResolver {
         if TryReportNullableDelegateReceiver(callee.Type, calleeLocation, calleeName, nullSafeInvocation) {
             return BoundErrorExpression(nil)
         }
-        if callee.Type is FunctionPointerTypeSymbol functionPointerType {
-            return CompleteInvocation(
-                BindFunctionPointerInvocation(
+        let preArgumentsNarrowing = CaptureNarrowingBindSnapshot()
+        let BindIndirectCallArgumentsAndDispatch = func () BoundExpression {
+            var dispatchCallee = callee
+            let boundArguments = ImmutableArray.CreateBuilder[BoundExpression](syntax.Arguments.Count)
+            let deferredArrowLambdaIndices = HashSet[int32]()
+            for var i = 0; i < syntax.Arguments.Count; i++ {
+                let argSyntax = UnwrapNamedArgumentValue(syntax.Arguments[i])
+                recordDeferredArgumentSnapshot?(argSyntax)
+                if bindLambdaWithTarget != nil && IsUntypedArrowLambda(argSyntax) {
+                    // Defer: TryBindFunctionTypeArguments re-binds the lambda once the
+                    // callee's parameter delegate shape is known (mirrors the direct path).
+                    deferredArrowLambdaIndices.Add(i)
+                    boundArguments.Add(BoundErrorExpression(argSyntax))
+                } else if argSyntax is RefArgumentExpressionSyntax refArgument {
+                    let boundRef = bindRefArgumentExpression(refArgument, nil)
+                    ApplySubExpressionNarrowingEffects(argSyntax, boundRef)
+                    boundArguments.Add(boundRef)
+                } else {
+                    let boundArg = BindOverloadArgumentValue(argSyntax)
+                    ApplySubExpressionNarrowingEffects(argSyntax, boundArg)
+                    boundArguments.Add(boundArg)
+                }
+            }
+            if deferredArrowLambdaIndices.Count == 0 {
+                for boundArgument in boundArguments {
+                    if boundArgument is BoundErrorExpression && !ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(
+                        boundArgument,
+                        out _
+                    ) {
+                        return BoundErrorExpression(nil)
+                    }
+                }
+            }
+            if dispatchCallee.Type is FunctionPointerTypeSymbol functionPointerType {
+                return BindFunctionPointerInvocation(
                     syntax,
-                    callee,
+                    dispatchCallee,
                     functionPointerType,
                     calleeName,
                     calleeLocation,
                     boundArguments.ToImmutable(),
                     argumentNames,
-                    GetIndirectCallableParameterNames(callee)
+                    GetIndirectCallableParameterNames(dispatchCallee)
                 )
-            )
-        }
-        if callee.Type is FunctionTypeSymbol fnType {
-            var resolvedFnType = fnType
-            if TypeSymbol.MaterializeNeverFunctionReturns(resolvedFnType) is FunctionTypeSymbol materializedFnType &&
-                !object
-                .ReferenceEquals(materializedFnType, resolvedFnType) {
-                callee = conversions.BindConversion(calleeLocation, callee, materializedFnType)
-                resolvedFnType = materializedFnType
             }
-            if TypeSymbol.ContainsNeverType(resolvedFnType) {
-                Diagnostics.ReportExpressionMustHaveValue(calleeLocation)
-                return BoundErrorExpression(nil)
-            }
-            if !TryBindFunctionTypeArguments(
-                calleeName,
-                resolvedFnType,
-                syntax,
-                boundArguments.ToImmutable(),
-                GetIndirectCallableParameterNames(callee),
-                out var convertedArgs
-            ) {
-                return BoundErrorExpression(nil)
-            }
-            return CompleteInvocation(BoundIndirectCallExpression(syntax, callee, resolvedFnType, convertedArgs))
-        }
-        if callee.Type is DelegateTypeSymbol delegateSym {
-            if !TryBindNamedDelegateArguments(
-                calleeName,
-                delegateSym,
-                syntax,
-                boundArguments.ToImmutable(),
-                out var convertedDelegateArgs,
-                out var delegateRefKinds
-            ) {
-                return BoundErrorExpression(nil)
-            }
-            return CompleteInvocation(
-                BoundIndirectCallExpression(
+            if dispatchCallee.Type is FunctionTypeSymbol fnType {
+                var resolvedFnType = fnType
+                if TypeSymbol.MaterializeNeverFunctionReturns(
+                    resolvedFnType
+                ) is FunctionTypeSymbol materializedFnType &&
+                    !object
+                    .ReferenceEquals(materializedFnType, resolvedFnType) {
+                    dispatchCallee = conversions.BindConversion(calleeLocation, dispatchCallee, materializedFnType)
+                    resolvedFnType = materializedFnType
+                }
+                if TypeSymbol.ContainsNeverType(resolvedFnType) {
+                    Diagnostics.ReportExpressionMustHaveValue(calleeLocation)
+                    return BoundErrorExpression(nil)
+                }
+                if !TryBindFunctionTypeArguments(
+                    calleeName,
+                    resolvedFnType,
                     syntax,
-                    callee,
+                    boundArguments.ToImmutable(),
+                    GetIndirectCallableParameterNames(dispatchCallee),
+                    out var convertedArgs
+                ) {
+                    return BoundErrorExpression(nil)
+                }
+                return BoundIndirectCallExpression(syntax, dispatchCallee, resolvedFnType, convertedArgs)
+            }
+            if dispatchCallee.Type is DelegateTypeSymbol delegateSym {
+                if !TryBindNamedDelegateArguments(
+                    calleeName,
+                    delegateSym,
+                    syntax,
+                    boundArguments.ToImmutable(),
+                    out var convertedDelegateArgs,
+                    out var delegateRefKinds
+                ) {
+                    return BoundErrorExpression(nil)
+                }
+                return BoundIndirectCallExpression(
+                    syntax,
+                    dispatchCallee,
                     delegateSym.EquivalentFunctionType,
                     convertedDelegateArgs,
                     delegateRefKinds
                 )
+            }
+            // A value whose CLR type is a delegate (e.g. `Func[int32, int32]`) is
+            // callable through its `Invoke` method, mirroring the direct-call path.
+            if dispatchCallee.Type?.ClrType is Type calleeClrType && ClrTypeUtilities.IsDelegateType(calleeClrType) {
+                if tryBindInheritedClrInstanceCall(
+                    dispatchCallee,
+                    calleeClrType,
+                    "Invoke",
+                    boundArguments.ToImmutable(),
+                    syntax,
+                    out var invokeCall,
+                    nil,
+                    default(ImmutableArray[TypeSymbol]),
+                    argumentNames,
+                    false
+                ) {
+                    return invokeCall!!
+                }
+            }
+            Diagnostics.ReportNotAFunction(calleeLocation, calleeName)
+            return BoundErrorExpression(nil)
+        }
+        var invocation = BindIndirectCallArgumentsAndDispatch()
+        if verifyCallArgumentsAfterConversions != nil {
+            invocation = verifyCallArgumentsAfterConversions!!(
+                syntax.Arguments,
+                invocation,
+                BindIndirectCallArgumentsAndDispatch
+            ) ??
+                invocation
+        }
+        if nullConditionalCallee != nil || syntax.NullableQuestionToken != nil {
+            intersectNarrowingWithSnapshot?(preArgumentsNarrowing)
+        }
+        return if nullConditionalCallee == nil || invocation is BoundErrorExpression {
+            invocation
+        } else {
+            BuildNullConditionalDelegateResult(
+                syntax,
+                nullConditionalCallee.Receiver,
+                nullConditionalCallee.Capture,
+                invocation,
+                invocation.Type
             )
         }
-        // A value whose CLR type is a delegate (e.g. `Func[int32, int32]`) is
-        // callable through its `Invoke` method, mirroring the direct-call path.
-        if callee.Type?.ClrType is Type calleeClrType && ClrTypeUtilities.IsDelegateType(calleeClrType) {
-            if tryBindInheritedClrInstanceCall(
-                callee,
-                calleeClrType,
-                "Invoke",
-                boundArguments.ToImmutable(),
-                syntax,
-                out var invokeCall,
-                nil,
-                default(ImmutableArray[TypeSymbol]),
-                argumentNames,
-                false
-            ) {
-                return CompleteInvocation(invokeCall!!)
-            }
-        }
-        Diagnostics.ReportNotAFunction(calleeLocation, calleeName)
-        return BoundErrorExpression(nil)
     }
 
     func BindExtensionFunctionCall(

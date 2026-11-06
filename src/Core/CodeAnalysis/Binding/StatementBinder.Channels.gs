@@ -185,9 +185,9 @@ internal partial class StatementBinder {
         originatingSyntax SyntaxNode,
         bindLoopPrelude((VariableSymbol) -> ImmutableArray[BoundStatement])?
     ) BoundStatement {
-        if syntax.SecondIdentifier != nil {
+        if syntax.SecondIdentifier is {} secondIdentifier {
             Diagnostics.ReportChannelBindingTargetCount(
-                syntax.SecondIdentifier.Location,
+                secondIdentifier.Location,
                 "for value in ch",
                 "one loop variable",
                 2

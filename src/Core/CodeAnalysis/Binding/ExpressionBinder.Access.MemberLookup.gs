@@ -1527,6 +1527,15 @@ internal partial class ExpressionBinder {
         indexSyntaxes GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
         targetLocation TextLocation
     ) BoundExpression {
+        let targetAnchor SyntaxNode? = target.Syntax ??
+            (
+            if indexSyntaxes.Count > 0 {
+                (indexSyntaxes[0].Parent as IndexExpressionSyntax)?.Target ?? indexSyntaxes[0]
+            } else {
+                default(SyntaxNode?)
+            }
+        )
+        ApplySubExpressionNarrowingEffects(targetAnchor, target)
         let rectangular RectangularArrayTypeSymbol? = GetRectangularArrayTypeForBinding(target.Type)
         if rectangular == nil && (target.Type is StructSymbol or InterfaceSymbol) {
             // ADR-0187 / issue #4350: a multi-parameter user indexer
@@ -1550,7 +1559,7 @@ internal partial class ExpressionBinder {
                 out var multiReported,
                 out var multiView
             ) {
-                return BindUserIndexerRead(
+                var read = BindUserIndexerRead(
                     ViewIndexerReceiver(target, multiView, targetLocation),
                     multiIndexer!!,
                     multiSubstitution,
@@ -1565,6 +1574,15 @@ internal partial class ExpressionBinder {
                     targetLocation,
                     indexSyntaxes.Count
                 )
+                if verifyCallArgumentsAfterConversions != nil {
+                    read = verifyCallArgumentsAfterConversions!!(
+                        indexSyntaxes,
+                        read,
+                        () -> BindRectangularIndexAgainstTarget(target, indexSyntaxes, targetLocation)
+                    ) ??
+                        read
+                }
+                return read
             }
             if multiReported {
                 return BoundErrorExpression(nil)
@@ -1608,9 +1626,22 @@ internal partial class ExpressionBinder {
                     targetLocation,
                     indexSyntaxes
                 )
-                return ConversionClassifier.AutoDereferenceRefReturn(
-                    BoundClrIndexExpression(nil, target, multiClrIndexer, convertedArguments, elementType)
+                var clrIndex BoundExpression = BoundClrIndexExpression(
+                    nil,
+                    target,
+                    multiClrIndexer,
+                    convertedArguments,
+                    elementType
                 )
+                if verifyCallArgumentsAfterConversions != nil {
+                    clrIndex = verifyCallArgumentsAfterConversions!!(
+                        indexSyntaxes,
+                        clrIndex,
+                        () -> BindRectangularIndexAgainstTarget(target, indexSyntaxes, targetLocation)
+                    ) ??
+                        clrIndex
+                }
+                return ConversionClassifier.AutoDereferenceRefReturn(clrIndex)
             }
             if ReportClrIndexerResolutionFailure(multiOutcome, targetLocation) {
                 return BoundErrorExpression(nil)
@@ -1626,7 +1657,9 @@ internal partial class ExpressionBinder {
         }
         let indices = ImmutableArray.CreateBuilder[BoundExpression](indexSyntaxes.Count)
         for indexSyntax in indexSyntaxes {
-            indices.Add(BindRectangularArrayElementIndex(indexSyntax))
+            let boundIndex = BindRectangularArrayElementIndex(indexSyntax)
+            ApplySubExpressionNarrowingEffects(indexSyntax, boundIndex)
+            indices.Add(boundIndex)
         }
         return BoundIndexExpression(nil, target, indices.MoveToImmutable(), rectangular.ElementType)
     }
@@ -1673,6 +1706,7 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportNullConditionalIndexReceiverNotNullable(syntax.OpenBracketToken.Location, receiverType)
             underlying = receiverType
         }
+        ApplySubExpressionNarrowingEffects(receiver.Syntax, receiver)
         let captureName = "$$ncap_" + (binderCtx.NullConditionalCaptureCounter += 1).ToString(
             CultureInfo.InvariantCulture
         )
@@ -1732,6 +1766,10 @@ internal partial class ExpressionBinder {
         // indexable", which is §5a's failure in its plainest form: the
         // receiver's platform-ness changed what member lookup found.
         target = PlatformCoercion.InsertCheck(target, targetLocation, "an indexer receiver")
+        let targetAnchor SyntaxNode = target.Syntax ??
+            (indexSyntax.Parent as IndexExpressionSyntax)?.Target ??
+            indexSyntax
+        ApplySubExpressionNarrowingEffects(targetAnchor, target)
         // ADR-0122 / issue #1014: pointer indexing `p[i]` == `*(p + i)`.
         if target.Type is PointerTypeSymbol pointerTarget {
             // ADR-0122 §3 / issue #1033: a `*void` pointer has no element type,
@@ -2135,6 +2173,8 @@ internal partial class ExpressionBinder {
             if boundLeft is BoundErrorExpression || boundLeft.Type == TypeSymbol.Error {
                 return BoundErrorExpression(nil)
             }
+            ApplySubExpressionNarrowingEffects(leftSyntax!!, boundLeft)
+            let postLeftNarrowing = CaptureNarrowingBindSnapshot()
             var underlying TypeSymbol
             if boundLeft.Type is NullableTypeSymbol nullable {
                 underlying = nullable.UnderlyingType
@@ -2171,6 +2211,7 @@ internal partial class ExpressionBinder {
                         outerSyntax
                     )
                     $scope = $scope.Pop()
+                    intersectNarrowingWithSnapshot?(postLeftNarrowing)
                     if whenNotNull is BoundErrorExpression {
                         return whenNotNull
                     }
@@ -2239,6 +2280,7 @@ internal partial class ExpressionBinder {
         }
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         statements.Add(BoundVariableDeclaration(outerSyntax, tempVar, boundReceiver))
+        ApplySubExpressionNarrowingEffects(remainingChain, boundReceiver)
         var assignment BoundExpression
         var previousDeclaration BoundVariableDeclaration? = nil
         var previousValue BoundVariableExpression? = nil
@@ -2289,6 +2331,7 @@ internal partial class ExpressionBinder {
                 }
             }
             let compoundTarget = indexRead
+            ApplySubExpressionNarrowingEffects(indexSyntax, compoundTarget)
             if compoundRhsSyntax is not{} resolvedCompoundRhsSyntax {
                 return BoundErrorExpression(nil)
             }
@@ -2322,11 +2365,12 @@ internal partial class ExpressionBinder {
             var elementAddress BoundAddressOfExpression? = nil
             var valueTemp LocalVariableSymbol? = nil
             if refReturningElement {
-                elementAddress = BoundAddressOfExpression(nil, compoundTarget, unmanaged: false)
+                let boundAddress = BoundAddressOfExpression(nil, compoundTarget, unmanaged: false)
+                elementAddress = boundAddress
                 addressTemp = LocalVariableSymbol(
                     "<idxRef${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
                     isReadOnly: true,
-                    elementAddress.Type
+                    boundAddress.Type
                 )
             } else if ReflectionMetadataEmitter.IsValueTypeSymbol(compoundTarget.Type) &&
                 !(compoundTarget is BoundDereferenceExpression) &&
@@ -2811,21 +2855,29 @@ internal partial class ExpressionBinder {
             )
         }
         let BindIndexValue = func () BoundExpression {
-            return boundIndexOverride ?? BindIndexArgumentExpression(indexSyntax)
+            if boundIndexOverride != nil {
+                return boundIndexOverride
+            }
+            let bound = BindIndexArgumentExpression(indexSyntax)
+            ApplySubExpressionNarrowingEffects(indexSyntax, bound)
+            return bound
         }
         let ConvertIndexValue = func (targetType TypeSymbol) BoundExpression {
-            return if boundIndexOverride != nil {
-                conversions.BindConversion(indexSyntax.Location, boundIndexOverride, targetType)
-            } else {
-                conversions.BindConversion(indexSyntax, targetType)
+            if boundIndexOverride != nil {
+                return conversions.BindConversion(indexSyntax.Location, boundIndexOverride, targetType)
             }
+            let converted = conversions.BindConversion(indexSyntax, targetType)
+            ApplySubExpressionNarrowingEffects(indexSyntax, converted)
+            return converted
         }
         let element TypeSymbol? = GetIndexElementType(targetType)
         if element != nil {
             let index = if boundIndexOverride != nil {
                 ConvertArrayElementIndex(indexSyntax.Location, boundIndexOverride, targetType)
             } else {
-                BindArrayElementIndex(indexSyntax, targetType)
+                let boundArrayIndex = BindArrayElementIndex(indexSyntax, targetType)
+                ApplySubExpressionNarrowingEffects(indexSyntax, boundArrayIndex)
+                boundArrayIndex
             }
             let value = BindValue(element)
             return MakeIndexAssignment(index, value, element)
@@ -2849,6 +2901,7 @@ internal partial class ExpressionBinder {
                 } else {
                     conversions.BindConversion(indexSyntax, TypeSymbol.NInt)
                 }
+                ApplySubExpressionNarrowingEffects(indexSyntax, pointerIndex)
             }
             let elementPointer = LowerPointerOffset(target, pointerType, pointerIndex, subtract: false)
             let pointerValue = BindValue(pointerType.PointeeType)
@@ -2887,7 +2940,6 @@ internal partial class ExpressionBinder {
                     }
                     let elementType = MemberLookup.GetClrPropertyTypeSymbol(clrIndexConstraint, idxProp!!)
                     let declaringInterface = MemberLookup.GetClrMemberDeclaringTypeSymbol(clrIndexConstraint, idxProp!!)
-                    let value = BindValue(elementType)
                     let convertedArgs = BindClrIndexerArguments(
                         clrIndexConstraint,
                         idxProp!!,
@@ -2895,6 +2947,10 @@ internal partial class ExpressionBinder {
                         indexSyntax.Location,
                         singleIndexSyntax: indexSyntax
                     )
+                    for convertedArg in convertedArgs {
+                        ApplySubExpressionNarrowingEffects(indexSyntax, convertedArg)
+                    }
+                    let value = BindValue(elementType)
                     return MakeClrIndexAssignment(
                         idxProp!!,
                         convertedArgs,
@@ -2925,7 +2981,6 @@ internal partial class ExpressionBinder {
                     return BoundErrorExpression(nil)
                 }
                 let valueTypeAnnotWr = MemberLookup.GetClrPropertyTypeSymbol(targetType, idxPropAnnotWr!!)
-                let boundValueAnnotWr = BindValue(valueTypeAnnotWr)
                 let convertedIdxArgsAnnotWr = BindClrIndexerArguments(
                     targetType,
                     idxPropAnnotWr!!,
@@ -2933,6 +2988,10 @@ internal partial class ExpressionBinder {
                     indexSyntax.Location,
                     singleIndexSyntax: indexSyntax
                 )
+                for convertedArgAnnotWr in convertedIdxArgsAnnotWr {
+                    ApplySubExpressionNarrowingEffects(indexSyntax, convertedArgAnnotWr)
+                }
+                let boundValueAnnotWr = BindValue(valueTypeAnnotWr)
                 return MakeClrIndexAssignment(
                     idxPropAnnotWr!!,
                     convertedIdxArgsAnnotWr,
@@ -2962,6 +3021,9 @@ internal partial class ExpressionBinder {
                     indexSyntax.Location,
                     singleIndexSyntax: indexSyntax
                 )
+                for convertedIdxArg in convertedIdxArgs {
+                    ApplySubExpressionNarrowingEffects(indexSyntax, convertedIdxArg)
+                }
                 // ADR-0056 §2: span element write. `Span[T]` has no `set_Item`; its
                 // indexer is a `ref T`-returning getter and writes go through that
                 // managed pointer. Detect the ref-returning getter and store through
@@ -3324,6 +3386,7 @@ internal partial class ExpressionBinder {
             let indexCtor = typeof(Index).GetConstructor([]Type{typeof(int32), typeof(bool)})
             let indexSym = TypeSymbol.FromClrTypeWithoutNullability(typeof(Index), NullabilityFreeReason.TypeLiteral)
             let offset = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32)
+            ApplySubExpressionNarrowingEffects(fromEnd.Operand, offset)
             indexValue = BoundClrConstructorCallExpression(
                 nil,
                 typeof(Index),
@@ -3337,11 +3400,16 @@ internal partial class ExpressionBinder {
             indexValue = nil
             return false
         }
+        let diagMark = Diagnostics.Count
+        let preProbe = CaptureNarrowingBindSnapshot()
         let bound = BindExpression(syntax)
         if !(bound is BoundErrorExpression) && ClrTypeUtilities.AreSame(bound.Type.ClrType, typeof(Index)) {
+            ApplySubExpressionNarrowingEffects(syntax, bound)
             indexValue = bound
             return true
         }
+        Diagnostics.TruncateTo(diagMark)
+        RestoreNarrowingBindSnapshot(preProbe)
         indexValue = nil
         return false
     }
@@ -3703,28 +3771,23 @@ internal partial class ExpressionBinder {
             return nil
         }
         if boundSyntax is FromEndIndexExpressionSyntax fromEnd {
-            return RangeBound(
-                conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32),
-                FromEnd: true,
-                IsIndexValue: false
-            )
+            let convertedFromEnd = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32)
+            ApplySubExpressionNarrowingEffects(fromEnd.Operand, convertedFromEnd)
+            return RangeBound(convertedFromEnd, FromEnd: true, IsIndexValue: false)
         }
         if (boundSyntax is DefaultExpressionSyntax or InterpolatedStringExpressionSyntax) {
-            return RangeBound(
-                conversions.BindConversion(boundSyntax, TypeSymbol.Int32),
-                FromEnd: false,
-                IsIndexValue: false
-            )
+            let convertedSpecial = conversions.BindConversion(boundSyntax, TypeSymbol.Int32)
+            ApplySubExpressionNarrowingEffects(boundSyntax, convertedSpecial)
+            return RangeBound(convertedSpecial, FromEnd: false, IsIndexValue: false)
         }
         let bound = BindExpression(boundSyntax)
         if !(bound is BoundErrorExpression) && ClrTypeUtilities.AreSame(bound.Type?.ClrType, typeof(Index)) {
+            ApplySubExpressionNarrowingEffects(boundSyntax, bound)
             return RangeBound(bound, FromEnd: false, IsIndexValue: true)
         }
-        return RangeBound(
-            conversions.BindConversion(boundSyntax.Location, bound, TypeSymbol.Int32),
-            FromEnd: false,
-            IsIndexValue: false
-        )
+        let converted = conversions.BindConversion(boundSyntax.Location, bound, TypeSymbol.Int32)
+        ApplySubExpressionNarrowingEffects(boundSyntax, converted)
+        return RangeBound(converted, FromEnd: false, IsIndexValue: false)
     }
 
     // Issue #1022: resolve a bound range bound to an int32 offset. A from-end

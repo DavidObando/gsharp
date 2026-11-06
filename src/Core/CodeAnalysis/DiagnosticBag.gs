@@ -259,10 +259,10 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     internal func SuppressDuplicateDiagnosticsIn[T](owner TextLocation, bind() -> T) T {
         var owner = owner
         let existing = diagnostics.Where(
-            (diagnostic Diagnostic) -> !reboundSuppressed.Contains(diagnostic) && object.ReferenceEquals(
-                diagnostic.Location.Text,
-                owner.Text
+            (diagnostic Diagnostic) -> !reboundSuppressed.Contains(diagnostic) && !cascadeSuppressed.Contains(
+                diagnostic
             ) &&
+                object.ReferenceEquals(diagnostic.Location.Text, owner.Text) &&
                 diagnostic
                 .Location
                 .Span
@@ -280,12 +280,22 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         return SuppressDuplicateDiagnostics(existing, bind)
     }
 
+    internal func ReplaceDiagnosticsIn[T](owner TextLocation, bind() -> T) T {
+        RemoveDiagnosticsIn(owner)
+        return bind()
+    }
+
     /// Suppresses exact existing reports during a whole-program analysis rerun.
     /// @typeparam T The operation result.
     /// @param bind The analysis operation.
     /// @returns The operation result.
     internal func SuppressDuplicateDiagnostics[T](bind() -> T) T -> SuppressDuplicateDiagnostics(
-        diagnostics.Where((diagnostic Diagnostic) -> !reboundSuppressed.Contains(diagnostic)).ToList(),
+        diagnostics.Where(
+            (diagnostic Diagnostic) -> !reboundSuppressed.Contains(diagnostic) && !cascadeSuppressed.Contains(
+                diagnostic
+            )
+        )
+            .ToList(),
         bind
     )
 

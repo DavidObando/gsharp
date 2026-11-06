@@ -486,18 +486,34 @@ internal shared class CaptureBoxingRewriter {
             let rewrittenClauses = ImmutableArray.CreateBuilder[BoundCatchClause](node.CatchClauses.Length)
             var clausesChanged = false
             for clause in node.CatchClauses {
+                var filter = if clause.Filter == nil {
+                    default(BoundExpression?)
+                } else {
+                    this.RewriteExpression(clause.Filter)
+                }
                 var body = this.RewriteStatement(clause.Body)
                 // BoundCatchClause.Variable is declared non-null; the guard is
                 // kept for an oblivious producer, but it tests a copy so the
                 // property's declared state survives for the rebuild below.
                 let caught VariableSymbol? = clause.Variable
                 if caught != nil && this.boxInfo.TryGetValue(caught, out var bi) {
-                    body = PrependSeedStatements(body, this.BuildBoxSeedStatements(bi))
-                    clausesChanged = true
-                } else if !object.ReferenceEquals(body, clause.Body) {
+                    let seed = this.BuildBoxSeedStatements(bi)
+                    if filter != nil {
+                        filter = if filter is BoundBlockExpression existingBlock {
+                            BoundBlockExpression(nil, seed.AddRange(existingBlock.Statements), existingBlock.Expression)
+                        } else {
+                            BoundBlockExpression(nil, seed, filter)
+                        }
+                    } else {
+                        body = PrependSeedStatements(body, seed)
+                    }
                     clausesChanged = true
                 }
-                rewrittenClauses.Add(clause.WithBody(body))
+                let rewritten = clause.Update(filter, body)
+                rewrittenClauses.Add(rewritten)
+                if !object.ReferenceEquals(rewritten, clause) {
+                    clausesChanged = true
+                }
             }
             let finallyBlock = if node.FinallyBlock == nil {
                 default(BoundStatement?)
@@ -1227,11 +1243,11 @@ internal shared class CaptureBoxingRewriter {
                 )
             )
         }
-        if box.RetainedCapture != nil {
+        if box.RetainedCapture is {} retainedCapture {
             statements.Add(
                 BoundVariableDeclaration(
                     nil,
-                    box.RetainedCapture,
+                    retainedCapture,
                     BoundManagedReferenceExpression(
                         nil,
                         BoundFieldAccessExpression(
@@ -1240,7 +1256,7 @@ internal shared class CaptureBoxingRewriter {
                             box.BoxClass,
                             box.BoxField
                         ),
-                        box.RetainedCapture.Type,
+                        retainedCapture.Type,
                         readOnly: false
                     )
                 )

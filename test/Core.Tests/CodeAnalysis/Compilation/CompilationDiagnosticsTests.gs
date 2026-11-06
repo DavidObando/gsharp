@@ -32,13 +32,31 @@ open class CompilationDiagnosticsTests {
     @InlineData(false)
     @InlineData(true)
     func AsyncPreparationFailureReturnsAnchoredDiagnostics(bodyOnly bool) {
-        const source = `package GuardDiagnostic
+        const validSource = `package GuardDiagnostic
 import System.Threading.Tasks
 async func Read(pending Task[bool]) int32 {
     return switch 1 {
         case 1 when await pending: 10
         default: 0
     }
+}`
+        let validCompilation = Compilation(Parse("GuardDiagnostic.gs", validSource)){IsLibrary = true}
+        let validDiagnostics = if bodyOnly {
+            validCompilation.GetBodyDiagnostics()
+        } else {
+            validCompilation.GetDiagnostics()
+        }
+        Assert.Empty(validDiagnostics.Where((d Diagnostic) -> d.IsError))
+        const source = `package GuardDiagnostic
+import System
+import System.Threading.Tasks
+func Make() ReadOnlySpan[byte] -> ReadOnlySpan[byte]([]byte{65})
+func Consume(value ReadOnlySpan[byte], extra int32) int32 -> value.Length + extra
+async func Read(pending Task[bool]) int32 {
+    return Consume(Make(), switch 1 {
+        case 1 when await pending: 10
+        default: 0
+    })
 }`
         let tree = Parse("GuardDiagnostic.gs", source)
         let compilation = Compilation(tree){IsLibrary = true}
@@ -48,11 +66,10 @@ async func Read(pending Task[bool]) int32 {
             compilation.GetDiagnostics()
         }
         let diagnostic = Assert.Single(diagnostics.Where((d Diagnostic) -> d.IsError))
-        Assert.Equal("GS9998", diagnostic.Id)
+        Assert.Equal("GS0219", diagnostic.Id)
         Assert.Same(tree.Text, diagnostic.Location.Text)
         Assert.Equal(source.IndexOf("await pending", StringComparison.Ordinal), diagnostic.Location.Span.Start)
         Assert.Equal("await pending".Length, diagnostic.Location.Span.Length)
-        Assert.Contains("'await' inside a switch-expression 'when' guard is not yet supported", diagnostic.Message)
     }
 
     @Fact

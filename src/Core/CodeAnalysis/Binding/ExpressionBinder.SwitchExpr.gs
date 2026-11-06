@@ -70,6 +70,7 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(syntax)
         }
+        ApplyConditionEffectsAndHeaderAliases(syntax.Expression, discriminant)
         let materializedSwitchType = TypeSymbol.MaterializeNeverFunctionReturns(discriminant.Type)
         if !object.ReferenceEquals(materializedSwitchType, discriminant.Type) {
             discriminant = conversions.BindConversion(syntax.Expression.Location, discriminant, materializedSwitchType)
@@ -121,6 +122,7 @@ internal partial class ExpressionBinder {
         ](syntax.Arms.Length)
         let armExitFrames = List[Dictionary[AccessPath, TypeSymbol]?](syntax.Arms.Length)
         let armPatternVariables = List[ImmutableArray[LocalVariableSymbol]](syntax.Arms.Length)
+        let armExitSnapshots = List[StatementBinder.NarrowingBindSnapshot](syntax.Arms.Length)
         for var armIndex = 0; armIndex < syntax.Arms.Length; armIndex++ {
             let armSyntax = syntax.Arms[armIndex]
             var pattern BoundPattern? = nil
@@ -140,8 +142,12 @@ internal partial class ExpressionBinder {
                     )
                 ]? = nil
                 let beforeDefaultArm = CaptureExpressionNarrowingFrames()
+                let postHeaderSnapshot = CaptureNarrowingBindSnapshot()
+                var defaultExitSnapshot StatementBinder.NarrowingBindSnapshot? = nil
                 let bindDefaultResult = func () BoundExpression {
                     let boundDefault = BindExpressionWithNarrowing(armSyntax.Result, nil, targetType, canBeVoid)
+                    ApplySubExpressionNarrowingEffects(armSyntax.Result, boundDefault)
+                    defaultExitSnapshot = CaptureNarrowingBindSnapshot()
                     TruncateBranchSiblingExpressions(beforeDefaultArm)
                     defaultExit = CaptureExpressionNarrowingFrames()
                     return boundDefault
@@ -186,6 +192,10 @@ internal partial class ExpressionBinder {
                 armExitFrames.Add(nil)
                 armPatternVariables.Add(default(ImmutableArray[LocalVariableSymbol]))
                 RestoreExpressionNarrowingFrames(beforeDefaultArm)
+                if result.Type != TypeSymbol.Never {
+                    armExitSnapshots.Add(defaultExitSnapshot ?? CaptureNarrowingBindSnapshot())
+                }
+                RestoreNarrowingBindSnapshot(postHeaderSnapshot)
                 boundArmBuilders.Add((armSyntax, pattern, default(BoundExpression), result))
                 continue
             }
@@ -231,6 +241,7 @@ internal partial class ExpressionBinder {
                 }
                 hasDefault = true
             }
+            let postHeaderSnapshot = CaptureNarrowingBindSnapshot()
             // ADR-0166: the arm result sees the guard's when-true pattern variables.
             let (guardWhenTrue, _) = PatternVariables.Classify(guard_)
             let beforeArmResult = CaptureExpressionNarrowingFrames()
@@ -242,11 +253,16 @@ internal partial class ExpressionBinder {
                 },
                 armSyntax.Result
             )
+            ApplySubExpressionNarrowingEffects(armSyntax.Result, armResult)
+            if armResult.Type != TypeSymbol.Never {
+                armExitSnapshots.Add(CaptureNarrowingBindSnapshot())
+            }
             TruncateBranchSiblingExpressions(beforeArmResult)
             armExits.Add(CaptureExpressionNarrowingFrames())
             armExitFrames.Add(armExitFrame)
             armPatternVariables.Add(guardWhenTrue)
             RestoreExpressionNarrowingFrames(beforeArmResult)
+            RestoreNarrowingBindSnapshot(postHeaderSnapshot)
             $scope = $scope.Pop()
             boundArmBuilders.Add((armSyntax, pattern, guard_, armResult))
         }
@@ -276,6 +292,16 @@ internal partial class ExpressionBinder {
             $scope.GetDeclaredStructs()
         )
         JoinSwitchArmExpressionNarrowingFrames(armExits, boundArmBuilders, unmatchedExit, includeUnmatched)
+        if armExitSnapshots.Count > 0 {
+            let fallthroughNoMatchSnapshot = CaptureNarrowingBindSnapshot()
+            RestoreNarrowingBindSnapshot(armExitSnapshots[0])
+            for var i = 1; i < armExitSnapshots.Count; i++ {
+                intersectNarrowingWithSnapshot?(armExitSnapshots[i])
+            }
+            if !hasDefault && !ExhaustivenessAnalyzer.IsExhaustiveDiscriminant(switchType) {
+                intersectNarrowingWithSnapshot?(fallthroughNoMatchSnapshot)
+            }
+        }
         let armResults = List[BoundExpression](boundArmBuilders.Count)
         for arm in boundArmBuilders {
             armResults.Add(arm.Result)
