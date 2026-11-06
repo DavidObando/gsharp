@@ -451,6 +451,210 @@ Console.WriteLine(t[none, 2])`
         Assert.Equal("qx!42188", result)
     }
 
+    @Fact
+    func InheritedClrCollectionIndexer_ReadsWritesAndFromEndSlices() {
+        let libraryPath = EmitGSharpLibrary("MutableStruct", `package MutableLib
+
+struct MutablePair {
+    var First int32
+    var Second int32
+    prop Length int32 -> 2
+    prop this[index int32] int32 {
+        get { return if index == 0 { First } else { Second } }
+        set {
+            if index == 0 {
+                First = value
+            } else {
+                Second = value
+            }
+        }
+    }
+}`)
+        let source = `package P
+import MutableLib
+import System
+import System.Collections.Generic
+
+data struct Item(Value int32)
+
+open class MyList : List[string] {
+}
+
+open class CustomIntList : List[int32] {
+    var Writes int32 = 0
+    var Stored int32 = 0
+
+    prop this[index int32] int32 {
+        get { return Stored + index + 100 }
+        set {
+            Writes += 1
+            Stored = index + value * 10
+        }
+    }
+}
+
+open class CustomRangeList : List[string] {
+    prop this[r System.Range] string -> "own:" + r.Start.Value.ToString()
+}
+
+open class Items : List[Item] {
+}
+
+open class KeyedList : List[string] {
+    var ByKey string = ""
+    prop this[key string] string {
+        get { return key + ":" + ByKey }
+        set { ByKey = key + "=" + value }
+    }
+}
+
+open class ShortList : List[int32] {
+    prop Length int32 -> 1
+}
+
+open class MultiOverloadList : List[int32] {
+    prop this[key string] string -> "str:" + key
+    prop this[wide int64] string -> "i64:" + wide.ToString()
+}
+
+open class StaticLengthList : List[int32] {
+    shared {
+        prop Length int32 -> 1
+    }
+}
+
+open class OrderList : List[int32] {
+    var Log string = ""
+    prop Length int32 {
+        get {
+            Log += "len|"
+            return Count
+        }
+    }
+    func NextBound() int32 {
+        Log += "bound|"
+        return 1
+    }
+    func NextRange() System.Range {
+        Log += "range|"
+        return 1..
+    }
+}
+
+open class FormattableList : List[int32] {
+    var Last string = ""
+    prop this[f FormattableString] string {
+        get { return f.Format + ":" + f.GetArgument(0)!!.ToString() + ":" + Last }
+        set { Last = f.Format + "=" + f.GetArgument(0)!!.ToString() + "=" + value }
+    }
+}
+
+let list = MyList()
+list.Add("a")
+list.Add("bc")
+list.Add("def")
+list[0] = "x"
+list[^1] = "z"
+Console.WriteLine(list[0] + list[1] + list[^1])
+let sliced = list[1..]
+Console.WriteLine(sliced.Count.ToString() + ":" + sliced[0] + sliced[1])
+let custom = CustomIntList()
+custom.Add(1)
+custom.Add(2)
+custom[^1] = 7
+Console.WriteLine(custom.Writes.ToString() + ":" + custom[^1].ToString())
+custom[default] = 4
+Console.WriteLine(custom.Writes.ToString() + ":" + custom[default].ToString())
+let ranged = CustomRangeList()
+ranged.Add("a")
+ranged.Add("b")
+let savedRange = 2..
+Console.WriteLine(ranged[1..] + "|" + ranged[savedRange])
+let items = Items()
+items.Add(Item(3))
+items.Add(Item(9))
+let itemRange = 1..
+Console.WriteLine(items[1..][0].Value.ToString() + ":" + items[itemRange][0].Value.ToString())
+var pair = MutablePair{First: 1, Second: 2}
+pair[^1] = 7
+pair[0] = 5
+Console.WriteLine(pair.First.ToString() + ":" + pair.Second.ToString())
+let keyed = KeyedList()
+keyed.Add("first")
+keyed[0] = "updated"
+keyed["k"] = "val"
+Console.WriteLine(keyed[0] + "|" + keyed["q"])
+let shortList = ShortList()
+shortList.Add(10)
+shortList.Add(20)
+shortList.Add(30)
+shortList[^1] = 7
+let fullRange = ..
+let shortSliced = shortList[..]
+let shortSavedSliced = shortList[fullRange]
+Console.WriteLine(shortList[^1].ToString() + ":" + shortList[0].ToString() + ":" + shortList[2].ToString() + ":" + shortSliced.Count.ToString() + ":" + shortSavedSliced.Count.ToString())
+let multi = MultiOverloadList()
+Console.WriteLine(multi["abc"])
+let staticLen = StaticLengthList()
+staticLen.Add(10)
+staticLen.Add(20)
+staticLen.Add(30)
+staticLen[^1] = 99
+Console.WriteLine(staticLen[^1].ToString() + ":" + staticLen[..].Count.ToString())
+let ordered = OrderList()
+ordered.Add(10)
+ordered.Add(20)
+let _ = ordered[ordered.NextBound()..]
+let _ = ordered[ordered.NextRange()]
+Console.WriteLine(ordered.Log)
+let fmt = FormattableList()
+fmt["k=${7}"] = "v"
+Console.WriteLine(fmt["n=${42}"])`
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "xbcz",
+                "2:bcz",
+                "1:172",
+                "2:140",
+                "own:1|own:2",
+                "9:9",
+                "5:7",
+                "updated|q:k=val",
+                "7:7:30:1:1",
+                "str:abc",
+                "99:3",
+                "bound|len|range|len|",
+                "n={0}:42:k={0}=7=v"
+            ) +
+                Environment.NewLine,
+            CompileAndRun(source, libraryPath)
+        )
+        let narrowingSource = `package P
+import System.Collections.Generic
+
+open class ClearingList : List[int32] {
+    var Text string? = "ok"
+    prop Length int32 {
+        get {
+            Text = nil
+            return 1
+        }
+    }
+}
+
+let l = ClearingList()
+l.Add(0)
+if l.Text != nil {
+    l[^1] = l.Text.Length
+}`
+        let narrowingCompilation = GsCompilation(GsSyntaxTree.Parse(SourceText.From(narrowingSource)))
+        Assert.Contains(
+            narrowingCompilation.GetDiagnostics(),
+            (d GSharp.Core.CodeAnalysis.Diagnostic) -> d.Id == "GS0158"
+        )
+    }
+
     shared {
         private const Library string = `package Lib
 import System
@@ -529,12 +733,15 @@ class Table {
             return dir
         }
 
-        private func CompileAndRun(source string) string {
+        private func CompileAndRun(source string, referencePath string? = nil) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_issue4350_indexers_").FullName
             try {
                 let srcPath = Path.Combine(tempDir, "test.gs")
                 let outPath = Path.Combine(tempDir, "test.dll")
                 File.WriteAllText(srcPath, source)
+                if referencePath != nil {
+                    File.Copy(referencePath, Path.Combine(tempDir, Path.GetFileName(referencePath)), overwrite: true)
+                }
                 using let compileOut = StringWriter()
                 using let compileErr = StringWriter()
                 let prevOut = Console.Out
@@ -543,9 +750,18 @@ class Table {
                 Console.SetError(compileErr)
                 var compileExit int32
                 try {
-                    compileExit = Program.Main(
+                    let args = if referencePath == nil {
                         []string{"/out:" + outPath, "/target:exe", "/targetframework:net10.0", srcPath}
-                    )
+                    } else {
+                        []string{
+                            "/out:" + outPath,
+                            "/target:exe",
+                            "/targetframework:net10.0",
+                            "/reference:" + referencePath,
+                            srcPath
+                        }
+                    }
+                    compileExit = Program.Main(args)
                 } finally {
                     Console.SetOut(prevOut)
                     Console.SetError(prevErr)
@@ -555,7 +771,11 @@ stdout:
 ` + "$compileOut" + `
 stderr:
 ` + "$compileErr"))
-                IlVerifier.Verify(outPath)
+                if referencePath == nil {
+                    IlVerifier.Verify(outPath)
+                } else {
+                    IlVerifier.Verify(outPath, additionalReferences: []string{referencePath})
+                }
                 let psi = ProcessStartInfo("dotnet"){
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,

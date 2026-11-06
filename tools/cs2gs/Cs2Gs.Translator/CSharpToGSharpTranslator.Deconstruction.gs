@@ -644,7 +644,9 @@ partial class CSharpToGSharpTranslator {
                 cast[IReadOnlyList[GExpression]](
                     rightTuple
                         .Arguments
-                        .Select((argument ArgumentSyntax) -> this.TranslateExpression(argument.Expression)!!)
+                        .Select(
+                        (argument ArgumentSyntax) -> this.TranslateValueWithNullForgiveness(argument.Expression)!!
+                    )
                         .ToList()
                 )
             } else {

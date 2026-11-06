@@ -662,6 +662,11 @@ internal class MemberLookup {
         return classes
     }
 
+    internal func HasVisibleClrIndexer(targetType TypeSymbol, clrTarget Type) bool -> CollectVisibleClrIndexers(
+        targetType,
+        clrTarget
+    ).Length != 0
+
     private func CollectVisibleClrIndexers(targetType TypeSymbol, clrTarget Type)[]PropertyInfo {
         let declaringTypes = if clrTarget.IsInterface {
             EnumerateSelfAndInterfaces(clrTarget)
