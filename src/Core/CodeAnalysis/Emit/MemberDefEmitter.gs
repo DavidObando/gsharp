@@ -305,6 +305,7 @@ internal class MemberDefEmitter {
     ) SignatureRows {
         let rows = ParameterMetadataEmitter.AddSignatureRows(
             this.emitCtx,
+            this.getTypeReference,
             returnType,
             readOnlyRefProperty?.ReturnRefKind ?? RefKind.None,
             parameters

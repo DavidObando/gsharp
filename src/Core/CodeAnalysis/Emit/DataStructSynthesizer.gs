@@ -1243,7 +1243,13 @@ internal class DataStructSynthesizer {
     private func AddSynthesizedRows(
         returnType TypeSymbol,
         parameters ImmutableArray[ParameterSymbol]
-    ) SignatureRows -> ParameterMetadataEmitter.AddSignatureRows(this.emitCtx, returnType, RefKind.None, parameters)
+    ) SignatureRows -> ParameterMetadataEmitter.AddSignatureRows(
+        this.emitCtx,
+        this.getTypeReference,
+        returnType,
+        RefKind.None,
+        parameters
+    )
 
     /// Issue #4988: stamps the nullability and tuple element names (cref:AddSynthesizedRows) planned.
     /// @param handle The synthesized member's MethodDef.

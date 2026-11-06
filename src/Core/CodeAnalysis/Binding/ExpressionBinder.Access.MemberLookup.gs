@@ -5246,7 +5246,9 @@ internal partial class ExpressionBinder {
                 callSyntax,
                 parameterMapping: downstreamMapping,
                 symbolicMethodTypeArgs: symbolicMethodTypeArgs,
-                paramsElementTypeOverride: symbolicParamsElement
+                paramsElementTypeOverride: symbolicParamsElement,
+                method: method,
+                receiverType: constraintType
             )
             downstreamMapping = default(ImmutableArray[int32])
         }
@@ -5285,7 +5287,14 @@ internal partial class ExpressionBinder {
                 expandedArgumentLocations
             )
         }
-        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, downstreamMapping, parameters)
+        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(
+            arguments,
+            downstreamMapping,
+            parameters,
+            method: method,
+            receiverType: constraintType,
+            symbolicMethodTypeArgs: symbolicMethodTypeArgs
+        )
         if resolution.IsExpanded {
             orderedArgs = OverloadResolver.PreserveExpandedArgumentEvaluationOrder(
                 orderedArgs,
