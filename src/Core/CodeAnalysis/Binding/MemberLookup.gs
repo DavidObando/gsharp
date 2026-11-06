@@ -254,9 +254,12 @@ internal class MemberLookup {
                 }
                 if winnerProperty != nil {
                     indexer = winnerProperty
-                    resolvedArguments = ConversionClassifier.AppendOmittedOptionalArguments(
+                    resolvedArguments = OverloadResolver.BuildOrderedCallArguments(
                         boundArguments,
-                        indexer!!.GetIndexParameters()
+                        default(ImmutableArray[int32]),
+                        indexer!!.GetIndexParameters(),
+                        method: indexer!!.GetMethod ?? indexer!!.SetMethod,
+                        receiverType: targetType
                     )
                     return ClrIndexerResolutionOutcome.Resolved
                 }
@@ -317,7 +320,9 @@ internal class MemberLookup {
         resolvedArguments = OverloadResolver.BuildOrderedCallArguments(
             boundArguments,
             resolution.ParameterMapping,
-            best.GetParameters()
+            best.GetParameters(),
+            method: best,
+            receiverType: targetType
         )
         return ClrIndexerResolutionOutcome.Resolved
     }

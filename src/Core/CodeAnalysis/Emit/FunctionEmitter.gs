@@ -695,7 +695,12 @@ internal class FunctionEmitter {
             // `out`, .In for `in`. `ref` carries neither (the CLR distinguishes ref from
             // out only via the .out flag); the `in` parameter also gets an
             // IsReadOnlyAttribute custom attribute below.
-            let paramHandle = ParameterMetadataEmitter.AddParameter(this.emitCtx, p, sequenceNumber++)
+            let paramHandle = ParameterMetadataEmitter.AddParameter(
+                this.emitCtx,
+                this.memberRefs.GetTypeReference,
+                p,
+                sequenceNumber++
+            )
             if p.RefKind == RefKind.In {
                 this.outer.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter(paramHandle)
             }
@@ -932,7 +937,13 @@ internal class FunctionEmitter {
             if p.MarshalAsMetadata != nil {
                 paramAttrs |= ParameterAttributes.HasFieldMarshal
             }
-            let paramHandle = ParameterMetadataEmitter.AddParameter(this.emitCtx, p, sequenceNumber++, paramAttrs)
+            let paramHandle = ParameterMetadataEmitter.AddParameter(
+                this.emitCtx,
+                this.memberRefs.GetTypeReference,
+                p,
+                sequenceNumber++,
+                paramAttrs
+            )
             paramHandles.Add((p, paramHandle))
             parameterRows.Add(paramHandle)
             if p.MarshalAsMetadata != nil {
@@ -1078,7 +1089,13 @@ internal class FunctionEmitter {
             if p.MarshalAsMetadata != nil {
                 outerParamAttrs |= ParameterAttributes.HasFieldMarshal
             }
-            let paramHandle = ParameterMetadataEmitter.AddParameter(this.emitCtx, p, outerSeq++, outerParamAttrs)
+            let paramHandle = ParameterMetadataEmitter.AddParameter(
+                this.emitCtx,
+                this.memberRefs.GetTypeReference,
+                p,
+                outerSeq++,
+                outerParamAttrs
+            )
             outerParamHandles.Add((p, paramHandle))
             outerParameterRows.Add(paramHandle)
             if p.MarshalAsMetadata != nil {

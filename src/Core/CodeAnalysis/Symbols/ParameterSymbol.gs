@@ -133,7 +133,7 @@ class ParameterSymbol : LocalVariableSymbol {
 
     /// Gets the constant default value declared on this parameter (ADR-0063).
     /// Only meaningful when (cref:HasExplicitDefaultValue) is `true`.
-    /// Value kinds: numeric primitive, (cref:bool), (cref:char),
+    /// Value kinds: numeric primitive, (cref:decimal), (cref:bool), (cref:char),
     /// (cref:string), enum constant (carried as its underlying integral value),
     /// or `null` for a nullable/reference parameter or a value-type
     /// `default(T)` / `T()` default (issue #1182), whose all-zero value is

@@ -2198,7 +2198,8 @@ internal partial class ExpressionBinder {
         let ctorArgs = OverloadResolver.BuildOrderedCallArguments(
             ctorConvertedArgs,
             ctorDownstreamMapping,
-            ctorParameters
+            ctorParameters,
+            parameterTypeOverrides: ctorParameterTypeOverrides
         )
         if !ctorRefKinds.IsDefault {
             overloads.ValidateRefArguments(ctorArgs, ctorRefKinds, clrType.Name, syntax.Location)
