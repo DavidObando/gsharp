@@ -79,6 +79,101 @@ func F() {
         Assert.Empty(diagnostics)
     }
 
+    @Fact
+    func Namespace_Alias_Resolves_Inside_Same_Named_Nested_Class() {
+        // Issue #4455: `UIA.StringBuilder` and `UIA.Text.StringBuilder` inside
+        // a nested `class StringBuilder` must resolve through the namespace
+        // alias rather than falling back to the enclosing nested class.
+        let directAliasDiagnostics = Bind(`import UIA = System.Text
+
+sealed class UIAPattern {
+    class StringBuilder : UIAPattern {
+        func DoFor(pattern UIA.StringBuilder) int32 {
+            return pattern.EnsureCapacity(16)
+        }
+    }
+}
+`)
+        Assert.Empty(directAliasDiagnostics)
+
+        let multiSegmentAliasDiagnostics = Bind(`import UIA = System
+
+sealed class UIAPattern {
+    class StringBuilder : UIAPattern {
+        func DoFor(pattern UIA.Text.StringBuilder, items UIA.Collections.Generic.List[int32].Enumerator) int32 {
+            var e = items
+            let _ = e.MoveNext()
+            return pattern.EnsureCapacity(16)
+        }
+    }
+}
+`)
+        Assert.Empty(multiSegmentAliasDiagnostics)
+    }
+
+    @Fact
+    func Source_Type_Alias_And_Lexical_Nested_Type_Precedence_Preserved() {
+        // Implicit-package `import R = Outer` resolves `R.Inner`, and lexical
+        // `Host.R` takes precedence over an imported alias `R` for `R.Child`.
+        let implicitPackageAliasDiagnostics = Bind(`import R = Outer
+
+class Outer {
+    public class Inner {
+        public func Value() int32 -> 7
+    }
+}
+
+func Use(inner R.Inner) int32 -> inner.Value()
+`)
+        Assert.Empty(implicitPackageAliasDiagnostics)
+
+        let implicitPackageNestedAliasDiagnostics = Bind(`import R = Outer.Inner
+
+class Inner {
+    public func Wrong() int32 -> -1
+}
+
+class Outer {
+    public class Inner {
+        public func Right() int32 -> 42
+    }
+}
+
+func Use(inner R) int32 -> inner.Right()
+`)
+        Assert.Empty(implicitPackageNestedAliasDiagnostics)
+
+        let explicitPackageRelativeAliasDiagnostics = Bind(`package App
+
+import R = Outer
+
+class Outer {
+    public class Inner {
+        public func Value() int32 -> 11
+    }
+}
+
+func Use(inner R.Inner) int32 -> inner.Value()
+`)
+        Assert.Empty(explicitPackageRelativeAliasDiagnostics)
+
+        let lexicalNestedDiagnostics = Bind(`package App
+
+import R = System.Text
+
+class Host {
+    class R {
+        public class Child {
+            public func Ping() int32 -> 1
+        }
+    }
+
+    func Check(c R.Child) int32 -> c.Ping()
+}
+`)
+        Assert.Empty(lexicalNestedDiagnostics)
+    }
+
     shared {
         private func Bind(source string) ImmutableArray[Diagnostic] {
             let tree = SyntaxTree.Parse(SourceText.From(source))

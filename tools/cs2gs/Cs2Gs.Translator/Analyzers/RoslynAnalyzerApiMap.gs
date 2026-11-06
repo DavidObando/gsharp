@@ -131,7 +131,7 @@ internal shared class RoslynAnalyzerApiMap {
         ["Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax"] = Entry(
             "GSharp.Core.CodeAnalysis.Syntax",
             "AccessorExpressionSyntax",
-            "G# member access is LeftPart/RightPart expressions, not Expression/Name; name extraction becomes RightPart.GetLastToken().Text.",
+            "G# member access is LeftPart/RightPart expressions, not Expression/Name; name extraction becomes RightPart.GetFirstToken().Text.",
             SharedGsNode: true
         ),
         ["Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax"] = Entry(
@@ -490,7 +490,7 @@ internal shared class RoslynAnalyzerApiMap {
         [("Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax", "Name")] = Entry(
             nil,
             "RightPart",
-            "AccessorExpressionSyntax.RightPart is an expression; identifier extraction becomes GetLastToken()."
+            "AccessorExpressionSyntax.RightPart is an expression; identifier extraction becomes GetFirstToken()."
         ),
         [("Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax", "Expression")] = Entry(nil, "LeftPart"),
         [("Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax", "Expression")] = Entry(
@@ -587,7 +587,7 @@ internal shared class RoslynAnalyzerApiMap {
         [("Microsoft.CodeAnalysis.CSharp.Syntax.MemberBindingExpressionSyntax", "Name")] = Entry(
             nil,
             "RightPart",
-            "AccessorExpressionSyntax.RightPart is an expression; identifier extraction becomes GetLastToken()."
+            "AccessorExpressionSyntax.RightPart is an expression; identifier extraction becomes GetFirstToken()."
         ),
         [("Microsoft.CodeAnalysis.CSharp.Syntax.MemberBindingExpressionSyntax", "OperatorToken")] = Entry(
             nil,

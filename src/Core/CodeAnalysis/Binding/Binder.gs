@@ -5857,7 +5857,7 @@ partial class Binder {
             }
             return LookupType(segmentTexts[0])?.ClrType
         }
-        var prefix = string.Join(".", segmentTexts, 0, outerLen)
+        var prefix = $scope.ExpandQualifiedTypeName(segmentTexts, outerLen)
         if arity > 0 {
             prefix += "`" + arity.ToString()
         }
@@ -6542,21 +6542,17 @@ partial class Binder {
                 }
                 return TypeSymbol.FromClrTypeWithoutNullability(clrAliasType, NullabilityFreeReason.ResolvedTypeName)
             }
-            // Source types are visible by simple (possibly nested) name across
-            // packages, but have no reflectable CLR type while binding, so the
-            // resolver above never sees them. Resolve the alias target's final
-            // dotted segment as a source type name instead.
-            let lastDot = aliasTarget.LastIndexOf('.')
-            let aliasSimpleName = if lastDot >= 0 {
-                aliasTarget.Substring(lastDot + 1)
-            } else {
-                aliasTarget
+            // Source types have no reflectable CLR type while binding, so
+            // resolve the alias through the scope's explicit source-alias
+            // table and package-qualified source lookup instead of a bare
+            // simple-name lookup that could match a lexical nested class.
+            if $scope.TryResolveExplicitSourceTypeAlias(name, preferredArity, out var explicitSourceAlias) &&
+                !binderCtx.HasUnclosedEnclosingTypeParameters(explicitSourceAlias, function) {
+                return explicitSourceAlias
             }
-            if !string.Equals(aliasSimpleName, name, StringComparison.Ordinal) {
-                let aliasedSourceType TypeSymbol? = LookupType(aliasSimpleName, preferredArity)
-                if aliasedSourceType != nil && !object.ReferenceEquals(aliasedSourceType, TypeSymbol.Error) {
-                    return aliasedSourceType
-                }
+            if $scope.TryLookupSourceTypeAliasTarget(aliasImport!!, preferredArity, out var aliasedSourceType) &&
+                !binderCtx.HasUnclosedEnclosingTypeParameters(aliasedSourceType, function) {
+                return aliasedSourceType
             }
         }
         return nil
@@ -6654,7 +6650,7 @@ partial class Binder {
             if outerLen == 1 {
                 outer = LookupType(segments[0])?.ClrType
             } else {
-                let prefix = string.Join(".", segments, 0, outerLen)
+                let prefix = $scope.ExpandQualifiedTypeName(segments, outerLen)
                 if !$scope.References!!.TryResolveType(prefix, out outer) {
                     outer = nil
                 }
