@@ -500,6 +500,70 @@ Console.WriteLine(reference.n)`, "1\n2\n2\n")
     }
 
     @Fact
+    func GenericStaticReadonlyReceivers_UseValueCopiesRatherThanIllegalFieldAddresses() {
+        AssertRuns(`import System
+interface ICounter { func Bump(); }
+struct Counter : ICounter {
+    var n int32
+    func Bump() {
+        n++
+        Console.WriteLine(n)
+    }
+}
+class Store[T] {
+    shared { let Value T = default(T) }
+}
+func Run[T ICounter]() { defer Store[T].Value.Bump() }
+Run[Counter]()
+Console.WriteLine(Store[Counter].Value.n)`, "1\n0\n")
+    }
+
+    @Fact
+    func ImportedStaticReadonlyReceivers_KeepReadonlyFieldsUnchanged() {
+        using let fixture = CSharpFixture(`namespace Imported5707 {
+    public interface ICounter { void Bump(); }
+    public struct Counter : ICounter {
+        public int n;
+        public void Bump() { n++; System.Console.WriteLine(n); }
+    }
+    public static class Store<T> {
+        public static readonly T Value = default(T);
+    }
+}`)
+        AssertRuns(`import System
+import Imported5707
+func Run[T ICounter]() { defer Store[T].Value.Bump() }
+Run[Counter]()
+Console.WriteLine(Store[Counter].Value.n)
+{ defer Store[Counter].Value.Bump() }
+Console.WriteLine(Store[Counter].Value.n)`, "1\n0\n1\n0\n", fixture.AssemblyPath)
+    }
+
+    @Fact
+    func ManagedPointerReceivers_CaptureTheOriginalLocationNotItsValue() {
+        AssertRuns(`import System
+import System.Threading.Tasks
+struct Counter {
+    var n int32
+    func Bump() { n++ }
+}
+async func Run() Task {
+    var first = Counter{}
+    var other = Counter{}
+    var pointer = &first
+    {
+        defer (*pointer).Bump()
+        pointer = &other
+        first.n = 10
+    }
+    await Task.Delay(1)
+    Console.WriteLine(first.n)
+    Console.WriteLine(other.n)
+}
+Run().GetAwaiter().GetResult()`, "11\n0\n")
+    }
+
+    @Fact
     func NullableBoxedReceivers_CaptureVariableAndSourceFieldReferences() {
         using let fixture = CSharpFixture(`#nullable enable
 namespace Imported5707 {

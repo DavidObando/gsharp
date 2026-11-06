@@ -21,6 +21,9 @@ A value-type storage receiver keeps its location instead of copying its value (i
 For a field chain, binding captures the reference-type owner eagerly and preserves the remaining value-type field accesses.
 For an array element, binding captures the array and indices eagerly and preserves the element access.
 Locals, parameters, `ref` aliases, globals, and static fields keep their storage.
+A pointer dereference captures the pointer eagerly and preserves its selected location.
+Managed pointer captures remain scoped aliases and obey the existing suspension-liveness restrictions.
+Static readonly value fields are captured by value; cleanup must not take an illegal writable field address.
 Binding probes the location before evaluating arguments, so an invalid location fails at the `defer` statement.
 An unconstrained generic receiver captures reference-type instantiations by value and preserves value-type storage.
 A reference slot narrowed to a boxed value type captures the selected box, not the mutable reference slot.

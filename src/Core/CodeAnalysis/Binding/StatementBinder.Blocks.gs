@@ -1410,23 +1410,7 @@ internal partial class StatementBinder {
             }
         }
         if GSharp.Core.CodeAnalysis.Lowering.SideEffectSpiller.IsOpaqueStorageReceiver(receiver) {
-            let local = LocalVariableSymbol(
-                if isDefer {
-                    "$$defer$$ref$$${binderCtx.DeferArgumentCounter++}"
-                } else {
-                    "$$go$$ref$$${binderCtx.GoArgumentCounter++}"
-                },
-                isReadOnly: false,
-                receiver.Type ?? TypeSymbol.Error,
-                receiver.Syntax
-            )
-            $scope.TryDeclareVariable(local)
-            return GSharp
-                .Core
-                .CodeAnalysis
-                .Lowering
-                .SideEffectSpiller
-                .CaptureOpaqueStorageReceiver(receiver, receiver.Syntax, prefix, local)
+            return CaptureOpaqueCallReceiver(receiver, prefix, isDefer)
         }
         switch receiver {
             case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
@@ -1516,7 +1500,11 @@ internal partial class StatementBinder {
             }
             case field is BoundFieldAccessExpression {
                 if field.Receiver is not{} instance {
-                    return receiver
+                    return if field.Field.IsReadOnly {
+                        CaptureReceiverOperand(receiver, prefix, retainedVariables, retainRemaining, isDefer)
+                    } else {
+                        receiver
+                    }
                 }
                 return BoundFieldAccessExpression(
                     field.Syntax,
@@ -1529,7 +1517,11 @@ internal partial class StatementBinder {
             }
             case clrField is BoundClrPropertyAccessExpression when clrField.Member is FieldInfo {
                 if clrField.Receiver is not{} instance {
-                    return receiver
+                    return if cast[FieldInfo](clrField.Member).IsInitOnly {
+                        CaptureReceiverOperand(receiver, prefix, retainedVariables, retainRemaining, isDefer)
+                    } else {
+                        receiver
+                    }
                 }
                 return BoundClrPropertyAccessExpression(
                     clrField.Syntax,
@@ -1577,10 +1569,43 @@ internal partial class StatementBinder {
             case BoundVariableExpression {
                 return receiver
             }
+            case dereference is BoundDereferenceExpression when isDefer {
+                if dereference.Operand.Type is ByRefTypeSymbol {
+                    // Keep the scoped alias visible to suspension-liveness analysis.
+                    let captured = CaptureOpaqueCallReceiver(receiver, prefix, isDefer)
+                    prefix.Add(BoundExpressionStatement(nil, captured))
+                    return captured
+                }
+                let captured = BoundDereferenceExpression(
+                    dereference.Syntax,
+                    CaptureReceiverOperand(dereference.Operand, prefix, retainedVariables, retainRemaining, isDefer)
+                )
+                prefix.Add(BoundExpressionStatement(nil, captured))
+                return captured
+            }
             default {
                 return CaptureReceiverOperand(receiver, prefix, retainedVariables, retainRemaining, isDefer)
             }
         }
+    }
+
+    private func CaptureOpaqueCallReceiver(
+        receiver BoundExpression,
+        prefix ImmutableArray[BoundStatement].Builder,
+        isDefer bool
+    ) BoundExpression {
+        let local = LocalVariableSymbol(
+            if isDefer {
+                "$$defer$$ref$$${binderCtx.DeferArgumentCounter++}"
+            } else {
+                "$$go$$ref$$${binderCtx.GoArgumentCounter++}"
+            },
+            isReadOnly: false,
+            receiver.Type ?? TypeSymbol.Error,
+            receiver.Syntax
+        )
+        $scope.TryDeclareVariable(local)
+        return SideEffectSpiller.CaptureOpaqueStorageReceiver(receiver, receiver.Syntax, prefix, local)
     }
 
     private func CaptureNativeSliceReceiverOperand(
