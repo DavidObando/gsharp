@@ -279,6 +279,42 @@ internal class BinderContext {
         get;
     }
 
+    /// Issue #5578: the variables and parameters that the first pass of a retried return value declared, keyed by
+    /// declaring syntax, so the second pass reuses the same symbols when a cached function literal captures them.
+    internal var RetriedValueVariables Dictionary[SyntaxNode, VariableSymbol]?
+
+    /// Issue #5578: the type-parameter lists and local-function symbols bound during the first pass of a retried
+    /// return value, so the second pass reuses the same symbols when a cached function literal references them.
+    internal var RetriedTypeParameters Dictionary[TypeParameterListSyntax, ImmutableArray[TypeParameterSymbol]]?
+    internal var RetriedLocalFunctions Dictionary[VariableDeclarationSyntax, FunctionSymbol]?
+
+    /// Issue #5578: the function literals bound during the first pass of a retried return value, keyed by syntax
+    /// and target signature, so the second pass reuses them without binding their bodies a second time.
+    internal var RetriedFunctionLiterals Dictionary[
+        LambdaBinder.RetriedFunctionLiteralKey,
+        LambdaBinder.RetriedFunctionLiteralEntry
+    ]?
+
+    internal func IsolateRetriedFunctionLiterals() Dictionary[
+        LambdaBinder.RetriedFunctionLiteralKey,
+        LambdaBinder.RetriedFunctionLiteralEntry
+    ]? {
+        let saved = RetriedFunctionLiterals
+        if saved != nil {
+            RetriedFunctionLiterals = Dictionary[
+                LambdaBinder.RetriedFunctionLiteralKey,
+                LambdaBinder.RetriedFunctionLiteralEntry
+            ]()
+        }
+        return saved
+    }
+
+    internal func RestoreRetriedFunctionLiterals(
+        saved Dictionary[LambdaBinder.RetriedFunctionLiteralKey, LambdaBinder.RetriedFunctionLiteralEntry]?
+    ) {
+        RetriedFunctionLiterals = saved
+    }
+
     /// Gets or sets a value indicating whether the current function, lambda, or
     /// local-function body contains a user `goto` statement or non-loop `label:`
     /// declaration, computed syntactically once before that body binds (see

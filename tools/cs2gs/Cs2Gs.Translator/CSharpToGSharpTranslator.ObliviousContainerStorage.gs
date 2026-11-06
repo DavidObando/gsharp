@@ -307,6 +307,72 @@ partial class CSharpToGSharpTranslator {
             return (declared != nil && declared.Count > 0) || (hasInferred && inferred.Nullable.Count > 0)
         }
 
+        // Whether an implicitly typed deconstruction variable has nested oblivious
+        // container positions and an emitted non-null top level, so the variable is
+        // emitted as a non-null container whose elements are nullable (#5584).
+        private func DeconstructedBindingHasObliviousContainerElements(symbol ISymbol?) bool {
+            let flow = this.ObliviousContainerFlowState()
+            if symbol is not ILocalSymbol local ||
+                !flow.HasNullable ||
+                !local
+                .Type
+                .IsReferenceType ||
+                this.ShouldPromoteToNullableReference(local) || this.IsTranslatorWidenedDeclaration(local) ||
+                (
+                IsAnnotatedNullableReference(local.Type) && this.IsUsedAsNullable(
+                    local,
+                    this.GetNullabilityScope(local)
+                )
+            ) {
+                return false
+            }
+            let designation = local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() as SingleVariableDesignationSyntax
+            if designation == nil {
+                return false
+            }
+            let indices = List[int32]()
+            var current SyntaxNode = designation
+            while true {
+                if current.Parent is ParenthesizedVariableDesignationSyntax parenthesized {
+                    indices.Insert(0, parenthesized.Variables.IndexOf(cast[VariableDesignationSyntax](current)))
+                    current = parenthesized
+                } else if current.Parent is DeclarationExpressionSyntax declaration && declaration.Type.IsVar {
+                    current = declaration
+                } else if current.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax tuple} argument {
+                    indices.Insert(0, tuple.Arguments.IndexOf(argument))
+                    current = tuple
+                } else {
+                    break
+                }
+            }
+            if indices.Count == 0 ||
+                current.Parent is not AssignmentExpressionSyntax assignment ||
+                assignment.Left != current {
+                return false
+            }
+            let elementType ITypeSymbol? = NestedTupleElementType(
+                this.context.GetTypeInfo(assignment.Right).Type,
+                indices
+            )
+            if elementType == nil ||
+                elementType.NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated {
+                return false
+            }
+            let declared = DeclaredPositions(flow, local)
+            let hasInferred = flow.Inferred.TryGetValue(local.OriginalDefinition, out var inferred)
+            if declared?.Contains("") == true ||
+                (hasInferred && (inferred.Nullable.Contains("") || inferred.Platform.Contains(""))) {
+                return false
+            }
+            return (declared != nil && declared.Count > 0) || (hasInferred && inferred.Nullable.Count > 0)
+        }
+
         /// Issue #5537: makes the recorded nested positions of a storage declaration
         /// nullable when (cref:StoresObliviousContainerElements) holds. A lambda
         /// parameter can also record its own top level (#5541).
@@ -2410,6 +2476,78 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
+            if read is InvocationExpressionSyntax call && model.GetOperation(call) is IInvocationOperation operation &&
+                operation
+                .TargetMethod
+                .IsGenericMethod &&
+                MentionsTypeParameter(operation.TargetMethod.OriginalDefinition.ReturnType) {
+                let definition = operation.TargetMethod.OriginalDefinition
+                let carried = ObliviousPositionSet()
+                carried.Nullable.UnionWith(positions)
+                let bindings = TypeParameterMap()
+                Unify(definition.ReturnType, operation.TargetMethod.ReturnType, carried, bindings)
+                for parameter in definition.TypeParameters {
+                    if bindings.TryGetValue(parameter, out var bound) &&
+                        NullableTypeArgumentViolatesTranslatedConstraints(parameter) {
+                        bound.Nullable.Remove("")
+                        bound.Platform.Remove("")
+                    }
+                }
+                if bindings.Count > 0 {
+                    var callChanged = false
+                    for argument in operation.Arguments {
+                        let argumentParameter IParameterSymbol? = argument.Parameter
+                        if argumentParameter == nil ||
+                            argument.ArgumentKind == ArgumentKind.DefaultValue ||
+                            !MentionsTypeParameter(argumentParameter.OriginalDefinition.Type) {
+                            continue
+                        }
+                        let argPositions = ObliviousPositionSet()
+                        Substitute(argumentParameter.OriginalDefinition.Type, bindings, "", argPositions)
+                        argPositions.Nullable.Remove("")
+                        if argPositions.Nullable.Count == 0 {
+                            continue
+                        }
+                        if argument.ArgumentKind == ArgumentKind.ParamArray {
+                            if argumentParameter.Type is IArrayTypeSymbol arrayParameter &&
+                                argument.Value is IArrayCreationOperation{Initializer: {} paramInitializer} {
+                                let element = HashSet[string](System.StringComparer.Ordinal)
+                                SubtreeInto(argPositions.Nullable, "0", element)
+                                element.Remove("")
+                                if element.Count > 0 {
+                                    for item in paramInitializer.ElementValues {
+                                        if ArgumentValueSyntax(item) is {} elementValue &&
+                                            IsWrittenIn(call, elementValue) {
+                                            callChanged |= this.AddAliasedSourcePositions(
+                                                flow,
+                                                elementValue,
+                                                model,
+                                                arrayParameter.ElementType,
+                                                element,
+                                                compilation
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            continue
+                        }
+                        if ArgumentValueSyntax(argument.Value) is {} argumentValue && IsWrittenIn(call, argumentValue) {
+                            callChanged |= this.AddAliasedSourcePositions(
+                                flow,
+                                argumentValue,
+                                model,
+                                argumentParameter.Type,
+                                argPositions.Nullable,
+                                compilation
+                            )
+                        }
+                    }
+                    if callChanged {
+                        return true
+                    }
+                }
+            }
             let symbol ISymbol? = model.GetSymbolInfo(read!!).Symbol
             if symbol == nil || (symbol is IMethodSymbol && !(read is InvocationExpressionSyntax)) {
                 return false
@@ -2632,7 +2770,8 @@ partial class CSharpToGSharpTranslator {
                         nil
                     }
                 }
-                let key ISymbol? = SignatureKey(flow, UnreducedDefinition(symbol), nil)
+                let unreduced = UnreducedDefinition(symbol)
+                let key ISymbol? = SignatureKey(flow, unreduced, nil)
                 return if key != nil && flow.Destinations.TryGetValue(key, out var positions) {
                     positions
                 } else {
@@ -2645,6 +2784,9 @@ partial class CSharpToGSharpTranslator {
             // when the group cannot change its signature. A nil
             // [`compilation`](paramref) asks without building the groups.
             private func SignatureKey(flow ObliviousContainerFlow, symbol ISymbol, compilation Compilation?) ISymbol? {
+                if symbol.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                    return nil
+                }
                 let owner ISymbol? = if symbol is IParameterSymbol parameter {
                     parameter.ContainingSymbol
                 } else {
@@ -2666,25 +2808,26 @@ partial class CSharpToGSharpTranslator {
                     -1
                 }
                 let type ITypeSymbol? = StorageType(symbol)
+                var key ISymbol? = nil
                 for member in groups.Members(root) {
                     let memberStorage ISymbol? = GroupStorage(member, ordinal)
-                    if memberStorage == nil ||
-                        memberStorage
-                        .DeclaringSyntaxReferences
-                        .IsDefaultOrEmpty ||
-                        (
-                        compilation != nil && !SymbolEqualityComparer.Default.Equals(
-                            memberStorage.ContainingAssembly,
-                            compilation.Assembly
-                        )
-                    ) ||
-                        !SymbolEqualityComparer
-                        .Default
-                        .Equals(StorageType(memberStorage), type) {
+                    if memberStorage == nil || !SymbolEqualityComparer.Default.Equals(
+                        StorageType(memberStorage),
+                        type
+                    ) {
                         return nil
                     }
+                    if !memberStorage.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                        if compilation != nil && !SymbolEqualityComparer.Default.Equals(
+                            memberStorage.ContainingAssembly,
+                            compilation.Assembly
+                        ) {
+                            return nil
+                        }
+                        key ??= memberStorage
+                    }
                 }
-                return GroupStorage(root, ordinal)
+                return key
             }
 
             // The return, property or parameter of a group member.
@@ -3644,11 +3787,55 @@ partial class CSharpToGSharpTranslator {
                 }
                 let declared = HashSet[string](System.StringComparer.Ordinal)
                 for position in positions.Nullable.Concat(positions.Platform) {
-                    if position != "" && IsPromotablePosition(destinationType, position) {
+                    if position != "" &&
+                        IsPromotablePosition(destinationType, position) &&
+                        MetadataGroupMembersAdmitPosition(flow, destination, position) {
                         declared.Add(position)
                     }
                 }
                 return declared.Count > 0 && AddPositions(flow.Destinations, destination, declared)
+            }
+
+            // A metadata declaration in an override or interface-implementation group
+            // admits promoting a nested position only when that metadata declaration does
+            // not explicitly annotate the position as non-null (`NotAnnotated`).
+            private func MetadataGroupMembersAdmitPosition(
+                flow ObliviousContainerFlow,
+                destination ISymbol,
+                position string
+            ) bool {
+                let owner ISymbol? = if destination is IParameterSymbol parameter {
+                    parameter.ContainingSymbol
+                } else {
+                    destination
+                }
+                if !(owner is IMethodSymbol || owner is IPropertySymbol) || flow.Groups == nil {
+                    return true
+                }
+                let root = flow.Groups!!.Find(owner!!)
+                let ordinal = if destination is IParameterSymbol ordered {
+                    ordered.Ordinal
+                } else {
+                    -1
+                }
+                for member in flow.Groups!!.Members(root) {
+                    if !member.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                        continue
+                    }
+                    let memberStorage ISymbol? = GroupStorage(member, ordinal)
+                    if memberStorage == nil {
+                        return false
+                    }
+                    let memberPositionType = PositionType(StorageType(memberStorage), position)
+                    if memberPositionType == nil ||
+                        memberPositionType.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .NotAnnotated {
+                        return false
+                    }
+                }
+                return true
             }
 
             private func AddInferredPositions(
@@ -3927,8 +4114,8 @@ partial class CSharpToGSharpTranslator {
                 return source is INamedTypeSymbol sourceNamed &&
                     storage is INamedTypeSymbol storageNamed &&
                     FlatTypeArguments(sourceNamed).Count > 0 && SymbolEqualityComparer.Default.Equals(
-                    sourceNamed.OriginalDefinition,
-                    storageNamed.OriginalDefinition
+                    (sourceNamed.TupleUnderlyingType ?? sourceNamed).OriginalDefinition,
+                    (storageNamed.TupleUnderlyingType ?? storageNamed).OriginalDefinition
                 )
             }
 

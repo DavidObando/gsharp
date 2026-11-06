@@ -401,6 +401,100 @@ partial class Calc {
         Assert.DoesNotContain("import count", generated, StringComparison.Ordinal)
     }
 
+    // Issue #4439: method and enclosing-type type parameters shadow file-level
+    // aliases, so two partial files with differing unused aliases named like
+    // `T` or `U` do not clash when `T` and `U` appear in parameter/return types.
+    @Fact
+    func UnusedAliasNamedLikeATypeParameter_IsNotRequired() {
+        const First = `package App
+
+import T = System.Text
+import U = System.Text
+
+partial class Calc[U] {
+    shared {
+        public partial func First[T](value T, owner U, count int) T;
+    }
+}
+`
+        const Second = `package App
+
+import T = System.IO
+import U = System.IO
+
+partial class Calc[U] {
+    shared {
+        public partial func Second[T](value T, owner U, count int) T;
+    }
+}
+`
+        const Generated = `namespace App
+{
+    partial class Calc<U>
+    {
+        public static partial T First<T>(T value, U owner, int count) => value;
+        public static partial T Second<T>(T value, U owner, int count) => value;
+    }
+}
+`
+        let run = this.GenerateAndCompile([]string{First, Second}, FixedSourceGenerator(("Impl.g.cs", Generated)))
+        let generated = run.Files.Single().Source
+        Assert.Contains(
+            "public partial func First[T](value T, owner U, count int) T",
+            generated,
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "public partial func Second[T](value T, owner U, count int) T",
+            generated,
+            StringComparison.Ordinal
+        )
+        Assert.DoesNotContain("import T =", generated, StringComparison.Ordinal)
+        Assert.DoesNotContain("import U =", generated, StringComparison.Ordinal)
+    }
+
+    // Issue #4439: a generated implementation whose method type-parameter name
+    // differs from the declaring part's must report GS9208 rather than splice
+    // the declaring header onto a body referencing the generator's type parameter.
+    @Fact
+    func TypeParameterNameMismatch_IsReported_NotCopied() {
+        const UserSource = `package App
+
+partial class Calc {
+    shared {
+        public partial func Id[T](value T, count int) T;
+    }
+}
+`
+        const Generated = `namespace App
+{
+    partial class Calc
+    {
+        public static partial U Id<U>(U value, int count) => value;
+    }
+}
+`
+        let user = Compilation(GsSyntaxTree.Parse(SourceText.From(UserSource, "User.gs")))
+        let result = GeneratorHostRunner.Run(
+            user,
+            CSharpProjectLoader.RuntimeReferences(),
+            []IIncrementalGenerator{FixedSourceGenerator(("Impl.g.cs", Generated))}
+        )
+        let diagnostic = Assert.Single(result.HostDiagnostics)
+        this.output.WriteLine(diagnostic.Message)
+        Assert.Equal("GS9208", diagnostic.Id)
+        Assert.Equal("User.gs", diagnostic.Location.FileName)
+        Assert.Contains("type parameter 1 'U'", diagnostic.Message, StringComparison.Ordinal)
+        Assert.Contains("names it 'T'", diagnostic.Message, StringComparison.Ordinal)
+        let (hintName, generated) = Assert.Single(result.GeneratedGsFiles)
+        Assert.Contains("func Id[U]", generated, StringComparison.Ordinal)
+        let combined = Compilation(
+            GsSyntaxTree.Parse(SourceText.From(UserSource, "User.gs")),
+            GsSyntaxTree.Parse(SourceText.From(generated, hintName + ".gs"))
+        ){IsLibrary = true}
+        Assert.Contains(Errors(combined), (error string) -> error.StartsWith("GS0609", StringComparison.Ordinal))
+    }
+
     // A generated implementation whose parameter names differ from the
     // declaring part's must not pair silently: copying the header would rebind
     // the body to the wrong names, so the header is left as generated, gsgen

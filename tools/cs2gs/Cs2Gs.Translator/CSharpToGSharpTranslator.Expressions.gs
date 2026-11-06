@@ -4862,7 +4862,8 @@ partial class CSharpToGSharpTranslator {
                 if this.TryGetInferredLocalStaticNonNull(inferredLocal, out var initializerIsNonNull) {
                     return initializerIsNonNull
                 }
-                if this.ForEachBindingInfersNonNullElement(inferredLocal) {
+                if this.ForEachBindingInfersNonNullElement(inferredLocal) ||
+                    this.DeconstructedBindingHasObliviousContainerElements(inferredLocal) {
                     return true
                 }
             }

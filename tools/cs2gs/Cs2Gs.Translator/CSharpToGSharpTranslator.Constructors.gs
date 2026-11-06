@@ -2983,16 +2983,72 @@ partial class CSharpToGSharpTranslator {
                 SymbolEqualityComparer.Default
             )
             let capturedNamesInScope = HashSet[string]()
-            for statement in ordered {
-                statements.AddRange(this.TranslateStatement(statement))
-                if statement is Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax ifStatement {
-                    this.EmitGuardedFieldLocalCaptures(
-                        ifStatement,
-                        activeGuardCaptures,
-                        capturedNamesInScope,
-                        statements
-                    )
+            var index = 0
+            while index < ordered.Count {
+                let statement = ordered[index]
+                let gsaIds = this.StatementGsaSuppressions(statement, out var firstDirectives)
+                if gsaIds.Count == 0 {
+                    statements.AddRange(this.TranslateStatement(statement))
+                    if statement is Microsoft.CodeAnalysis.CSharp.Syntax.IfStatementSyntax ifStatement {
+                        this.EmitGuardedFieldLocalCaptures(
+                            ifStatement,
+                            activeGuardCaptures,
+                            capturedNamesInScope,
+                            statements
+                        )
+                    }
+                    index++
+                    continue
                 }
+                var end = index
+                let runDirectives = List[Dictionary[string, int32]]{firstDirectives}
+                while end + 1 < ordered.Count {
+                    let nextIds = this.StatementGsaSuppressions(ordered[end + 1], out var nextDirectives)
+                    if !gsaIds.SequenceEqual(nextIds) {
+                        break
+                    }
+                    end++
+                    runDirectives.Add(nextDirectives)
+                }
+                let runStatements = List[GStatement]()
+                let perStatementTranslated = List[List[GStatement]](end - index + 1)
+                for var k = index; k <= end; k++ {
+                    let current = ordered[k]
+                    let translated = this.TranslateStatement(current).ToList()
+                    perStatementTranslated.Add(translated)
+                    runStatements.AddRange(translated)
+                }
+                if CanWrapSuppressedStatementRun(ordered, index, end, runStatements) {
+                    statements.Add(BlockStatement(runStatements){SuppressedDiagnostics = gsaIds})
+                    for directiveMap in runDirectives {
+                        this.RecordConsumedGsaPragmas(statement.SyntaxTree, directiveMap)
+                    }
+                } else {
+                    for var k = index; k <= end; k++ {
+                        let current = ordered[k]
+                        let translated = perStatementTranslated[k - index]
+                        let directiveMap = runDirectives[k - index]
+                        if CanWrapSuppressedStatementRun(ordered, k, k, translated) {
+                            statements.Add(BlockStatement(translated){SuppressedDiagnostics = gsaIds})
+                            this.RecordConsumedGsaPragmas(current.SyntaxTree, directiveMap)
+                        } else if CanAnnotateLocalDeclarationsInPlace(current, translated) {
+                            for item in translated {
+                                if item is LocalDeclarationStatement local {
+                                    local.SuppressedDiagnostics = MergeSuppressionIds(
+                                        local.SuppressedDiagnostics,
+                                        gsaIds
+                                    )
+                                }
+                            }
+                            statements.AddRange(translated)
+                            this.RecordConsumedGsaPragmas(current.SyntaxTree, directiveMap)
+                        } else {
+                            statements.AddRange(translated)
+                            this.RecordDroppedGsaPragmas(current.SyntaxTree, directiveMap)
+                        }
+                    }
+                }
+                index = end + 1
             }
             this.AppendDanglingComments(statements, block!!.CloseBraceToken)
             return BlockStatement(statements)
@@ -5230,5 +5286,9 @@ partial class CSharpToGSharpTranslator {
         /// Identifies a non-fatal warning that an accessor-level attribute could
         /// not be represented in G# and was dropped.
         const AccessorAttributeDroppedDiagnosticId string = "CS2GS-ACCESSOR-ATTRIBUTE-DROPPED"
+
+        /// Identifies a non-fatal warning that a `#pragma warning disable GSA####`
+        /// directive did not cover a whole declaration or statement range and was dropped.
+        const PragmaSuppressionDroppedDiagnosticId string = "CS2GS-PRAGMA-DROPPED"
     }
 }

@@ -735,20 +735,10 @@ internal partial class ExpressionBinder {
         var whenTrue BoundExpression
         var whenFalse BoundExpression
         var thenExit List[
-            (
-                Id int32,
-                Frame NarrowingFrame?,
-                Entries Dictionary[AccessPath, TypeSymbol]?,
-                Aliases HashSet[VariableSymbol]
-            )
+            (Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])
         ]? = nil
         var falseExit List[
-            (
-                Id int32,
-                Frame NarrowingFrame?,
-                Entries Dictionary[AccessPath, TypeSymbol]?,
-                Aliases HashSet[VariableSymbol]
-            )
+            (Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])
         ]? = nil
         if targetType != nil {
             whenTrue = bindWhenTrue(targetType)

@@ -1102,6 +1102,217 @@ public static class Use
             })
     }
 
+    /// Issue #5566: a source override or interface implementation of a metadata
+    /// member states the nullable element positions that flow into it, which
+    /// gsc's conformance check accepts across reference nullability.
+    @Fact
+    func Metadata_Overrides_And_Implementations_Promote_Source_Members() {
+        this.Check("Issue5566", `using ObLib;
+
+public class Impl : Source { public override string[] Get(string p) { return Node.Holes(p); } }
+public class Fetcher : ISource { public string[] Fetch(string p) { return Node.Lines(p); } }
+public class EnabledImpl : EnabledSource { public override string[] Get(string p) { return new[] { p }; } }
+
+public static class Use
+{
+    public static int Direct(string p) { var impl = new Impl(); var f = new Fetcher(); var e = new EnabledImpl(); return impl.Get(p)[0].Length + f.Fetch(p)[0].Length + e.Get(p)[0].Length + (impl.Get(p)[1] == null ? 10 : 0); }
+    public static int ThroughBase(string p) { Source s = new Impl(); ISource f = new Fetcher(); EnabledSource e = new EnabledImpl(); return s.Get(p)[0].Length + f.Fetch(p)[0].Length + e.Get(p)[0].Length + (s.Get(p)[1] == null ? 10 : 0); }
+    public static int Throws(string p) { var impl = new Impl(); try { return impl.Get(p)[1].Length; } catch (System.NullReferenceException) { return -1; } }
+}`, []string{
+                "open override func Get(p string) []string? {\n        return Node.Holes(p)!!\n    }",
+                "func Fetch(p string) []string? {\n        return Node.Lines(p)!!\n    }",
+                "open class EnabledImpl : EnabledSource {\n    open override func Get(p string) []string {"
+            }, []string{"Direct", "16", "ThroughBase", "16", "Throws", "-1"})
+        let libraryPath = Path.Combine(this.directory, "Lib5541Issue5566.dll")
+        let reference = MetadataReference.CreateFromFile(libraryPath)
+        let enabledOverrideTree = CSharpSyntaxTree.ParseText(
+            `using ObLib; public class DirectEnabledImpl : EnabledSource { public override string[] Get(string p) { return Node.Holes(p); } }`,
+            CSharpParseOptions(LanguageVersion.Latest),
+            path: "EnabledOverride.cs"
+        )
+        let enabledOverrideComp = CSharpCompilation.Create(
+            "Use5541EnabledOverride",
+            []SyntaxTree{enabledOverrideTree},
+            CSharpProjectLoader.RuntimeReferences().Append(reference).ToImmutableArray(),
+            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithNullableContextOptions(
+                NullableContextOptions.Enable
+            )
+        )
+        let enabledOverrideModel = enabledOverrideComp.GetSemanticModel(enabledOverrideTree)
+        let enabledOverridePrinted = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(
+                LoadedDocument("EnabledOverride.cs", enabledOverrideTree, enabledOverrideModel),
+                TranslationContext(enabledOverrideComp, enabledOverrideModel, "EnabledOverride.cs")
+            )
+        )
+            .Replace("\r\n", "\n")
+        Assert.Contains("open override func Get(p string) []string {", enabledOverridePrinted, StringComparison.Ordinal)
+        Assert.DoesNotContain("[]string?", enabledOverridePrinted, StringComparison.Ordinal)
+    }
+
+    /// Issue #5584: nested types of generic types, generic call return aliases,
+    /// deconstructed tuple call results, multi-assignment tuple deconstructions into
+    /// existing storage, and classes derived from metadata generic collections.
+    @Fact
+    func Nested_Generic_Constructions_Generic_Return_Aliases_Tuples_And_Derived_Collections() {
+        this.Check("Issue5584", `using System.Collections.Generic;
+using ObLib;
+
+public class Outer<T>
+{
+    public class Inner
+    {
+        public T Value;
+        public Inner(T value) { Value = value; }
+    }
+}
+
+public class MyList : List<string> { }
+
+public class Holder { public string Name = ""; }
+
+public static class Use
+{
+    static T Id<T>(T x) => x;
+
+    static T Keep<T>(T x) where T : class => x;
+
+    static T[] KeepElement<T>(T[] x) where T : class => x;
+
+    static string[] Pick(string p, bool flag)
+    {
+        string[] other = new string[] { "a", "b" };
+        if (flag) { return Node.Holes(p); }
+        return Id(other);
+    }
+
+    static string[] PickConstrained(string p, bool flag)
+    {
+        string[] kept = new string[] { "c" };
+        string[] fixedElem = new string[] { "d" };
+        if (flag) { return Node.Holes(p); }
+        if (p.Length == 0) { return KeepElement(fixedElem); }
+        return Keep(kept);
+    }
+
+    static (string[], int) Pair(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        return (lines, 2);
+    }
+
+    public static int Nested(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        return new Outer<string>.Inner(lines[0]).Value.Length + (new Outer<string>.Inner(lines[1]).Value == null ? 10 : 0);
+    }
+
+    public static int NestedThrows(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        try { return new Outer<string>.Inner(lines[1]).Value.Length; } catch (System.NullReferenceException) { return -1; }
+    }
+
+    public static int Indirect(string p) => Pick(p, false).Length + (Pick(p, true)[1] == null ? 10 : 0) + PickConstrained(p, false).Length;
+
+    public static int TupleCall(string p)
+    {
+        var (x, n) = Pair(p);
+        return (x[1] == null ? n : 0) + x[0].Length;
+    }
+
+    public static int TupleCallThrows(string p)
+    {
+        var (x, _) = Pair(p);
+        try { return x[1].Length; } catch (System.NullReferenceException) { return -1; }
+    }
+
+    public static int MultiAssign(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        string[] arr = new string[1];
+        string a = "";
+        var h = new Holder();
+        var list = new List<string> { "" };
+        var promoted = new List<string>(lines);
+        int i;
+        (arr[0], i) = (lines[0], 1);
+        (a, i) = (lines[0], 2);
+        (h.Name, i) = (lines[0], 3);
+        (list[0], i) = (lines[0], 4);
+        (promoted[0], i) = (lines[1], 5);
+        return arr[0].Length + a.Length + h.Name.Length + list[0].Length + (promoted[0] == null ? 10 : 0) + i;
+    }
+
+    public static int MultiAssignThrows(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        string a = "";
+        int i;
+        try { (a, i) = (lines[1], 1); return a.Length + i; } catch (System.NullReferenceException) { return -1; }
+    }
+
+    public static int DerivedList(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        var l = new MyList();
+        l.Add(lines[0]);
+        l[0] = lines[0];
+        return l[0].Length;
+    }
+
+    public static int DerivedListThrows(string p)
+    {
+        string[] lines;
+        lines = Node.Holes(p);
+        var l = new MyList();
+        try { l.Add(lines[1]); return l[0].Length; } catch (System.NullReferenceException) { return -1; }
+    }
+}`, []string{
+                "Outer[string?].Inner(lines[0]).Value!!.Length",
+                "Outer[string?].Inner(lines[1]).Value == nil",
+                "let other []string? = []string?{\"a\", \"b\"}",
+                "let kept []string? = []string?{\"c\"}",
+                "let fixedElem = []string{\"d\"}",
+                "private func Pair(p string) ([]string?, int32)",
+                "let (x, n) = Pair(p)",
+                "return (if x[1] == nil { n } else { 0 }) + x[0]!!.Length",
+                "arr[0], i = lines[0]!!, 1",
+                "a, i = lines[0]!!, 2",
+                "h.Name, i = lines[0]!!, 3",
+                "list[0], i = lines[0]!!, 4",
+                "promoted[0], i = lines[1], 5",
+                "l.Add(lines[0]!!)",
+                "l[0] = lines[0]!!",
+                "return l[0].Length"
+            }, []string{
+                "Nested",
+                "12",
+                "NestedThrows",
+                "-1",
+                "Indirect",
+                "13",
+                "TupleCall",
+                "4",
+                "TupleCallThrows",
+                "-1",
+                "MultiAssign",
+                "23",
+                "MultiAssignThrows",
+                "-1",
+                "DerivedList",
+                "2",
+                "DerivedListThrows",
+                "-1"
+            })
+    }
+
     // Translates the C#, checks the printed form, compiles and verifies the G#, and
     // compares each named method with the C# oracle and the expected result.
     private func Check(name string, source string, printedFragments[]string, expectations[]string) {
@@ -1181,7 +1392,13 @@ public static class Node
     public static System.Collections.Generic.Dictionary<string, string> Map(string p) { return new() { { "k", p } }; }
     public static System.Collections.Generic.IEnumerable<string> Seq(string p) { return new[] { p, null }; }
     public static T OId<T>(T x) { return x; }
-}`
+}
+
+public abstract class Source { public abstract string[] Get(string p); }
+public interface ISource { string[] Fetch(string p); }
+#nullable enable
+public abstract class EnabledSource { public abstract string[] Get(string p); }
+#nullable restore`
 
         // The result of a public static `Use` method called with "ab": its value, or
         // the type of the exception it throws.

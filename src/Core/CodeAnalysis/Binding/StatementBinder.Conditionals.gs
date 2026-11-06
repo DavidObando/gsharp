@@ -628,12 +628,12 @@ internal partial class StatementBinder {
         aliasesForElse IReadOnlyCollection[VariableSymbol]
     ) BoundStatement? {
         let savedAliases = CaptureExternalCallableAliases()
-        let savedFrames = List[(Frame NarrowingFrame, Entries List[KeyValuePair[AccessPath, TypeSymbol]])](
+        let savedFrames = List[(Frame NarrowingFrame, Entries NarrowingFrameSnapshot)](
             binderCtx.NarrowedVariables.Count
         )
         for var f = 0; f < binderCtx.NarrowedVariables.Count; f++ {
             let frame = binderCtx.NarrowedVariables[f]
-            savedFrames.Add((frame, List[KeyValuePair[AccessPath, TypeSymbol]](frame)))
+            savedFrames.Add((frame, frame.SnapshotEntries()))
         }
         let savedShadowOverlay = binderCtx.ShadowOverlay
         let savedShadowBase = binderCtx.ShadowOverlayBase
@@ -643,10 +643,7 @@ internal partial class StatementBinder {
             return BindStatement(elseSyntax)
         } finally {
             for (frame, entries) in savedFrames {
-                frame.Clear()
-                for kv in entries {
-                    frame[kv.Key] = kv.Value
-                }
+                frame.RestoreTo(entries)
             }
             binderCtx.ShadowOverlay = savedShadowOverlay
             binderCtx.ShadowOverlayBase = savedShadowBase
