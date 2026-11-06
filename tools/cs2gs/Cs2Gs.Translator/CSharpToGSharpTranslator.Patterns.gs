@@ -3579,7 +3579,6 @@ partial class CSharpToGSharpTranslator {
                 !arrayType
                 .ElementType
                 .IsReferenceType ||
-                arrayType.ElementType is ITypeParameterSymbol ||
                 !visited.Add(symbol) {
                 return nil
             }
@@ -3616,11 +3615,23 @@ partial class CSharpToGSharpTranslator {
             return local
         }
 
+        private func GetArrayStorageExpressionSymbol(expression ExpressionSyntax) ISymbol? {
+            let stripped = StripParentheses(expression)
+            if stripped is DeclarationExpressionSyntax{Designation: SingleVariableDesignationSyntax designation} {
+                return this.context.GetDeclaredSymbol(designation)
+            }
+            return if stripped != nil {
+                this.context.GetSymbolInfo(stripped).Symbol
+            } else {
+                nil
+            }
+        }
+
         private func IsArrayStorageAlias(expression ExpressionSyntax, owner ISymbol?) bool -> SymbolEqualityComparer
             .Default
             .Equals(
             this.GetArrayStorageOwner(
-                this.context.GetSymbolInfo(StripParentheses(expression)).Symbol,
+                this.GetArrayStorageExpressionSymbol(expression),
                 HashSet[ISymbol](SymbolEqualityComparer.Default)
             ),
             owner
@@ -3642,7 +3653,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 current = array.ElementType
             }
-            return current != nil && current.IsReferenceType && current is not ITypeParameterSymbol
+            return current != nil && current.IsReferenceType
         }
 
         // Issues #4482/#4491: whether some `owner[i]` in the storage symbol's
@@ -3664,7 +3675,14 @@ partial class CSharpToGSharpTranslator {
             if !activeVisited.Add((normalizedOwner, position)) {
                 return false
             }
-            let scope_ SyntaxNode? = this.GetNullabilityScope(normalizedOwner)
+            let scope_ SyntaxNode? = if normalizedOwner is IParameterSymbol{
+                RefKind: RefKind.Out or RefKind.Ref,
+                ContainingSymbol: {ContainingType: {} containingType}
+            } {
+                containingType.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            } else {
+                this.GetNullabilityScope(normalizedOwner)
+            }
             if scope_ == nil || !this.context.Compilation.ContainsSyntaxTree(scope_.SyntaxTree) {
                 return false
             }
@@ -3711,6 +3729,23 @@ partial class CSharpToGSharpTranslator {
                             ) {
                                 return true
                             }
+                        }
+                        if normalizedOwner is IParameterSymbol{RefKind: RefKind.Out or RefKind.Ref} &&
+                            (
+                            argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) || argument.RefKindKeyword.IsKind(
+                                SyntaxKind.RefKeyword
+                            )
+                        ) &&
+                            this
+                            .context
+                            .SemanticModel
+                            .GetOperation(argument) is IArgumentOperation{Parameter: {} callParam} &&
+                            SymbolEqualityComparer
+                            .Default
+                            .Equals(callParam.OriginalDefinition, normalizedOwner) &&
+                            this.GetArrayStorageExpressionSymbol(argument.Expression) is {} callerStorage &&
+                            this.ElementPassedToNullableByRefParameter(callerStorage, position, activeVisited) {
+                            return true
                         }
                         if this.IsArrayStorageAlias(argument.Expression, normalizedOwner) {
                             let (arrayParameter, argPrefix) = if argument.RefKindKeyword.IsKind(SyntaxKind.None) {

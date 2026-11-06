@@ -1628,6 +1628,7 @@ partial class CSharpToGSharpTranslator {
             }
             if !(
                 value is IdentifierNameSyntax ||
+                    value is DeclarationExpressionSyntax ||
                     value is MemberAccessExpressionSyntax ||
                     value is MemberBindingExpressionSyntax ||
                     value is ElementAccessExpressionSyntax ||
@@ -1637,7 +1638,7 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return nil
             }
-            let symbol ISymbol? = model.GetSymbolInfo(value!!).Symbol
+            let symbol ISymbol? = ArgumentStorageSymbol(value!!, model)
             // A method group is a callable, not the value of a call.
             if symbol is IMethodSymbol &&
                 !(value is InvocationExpressionSyntax || value is BaseObjectCreationExpressionSyntax) {
@@ -1696,7 +1697,7 @@ partial class CSharpToGSharpTranslator {
                 let bindings = this.ObliviousMemberTypeArguments(value!!, symbol!!, model, flow)
                 Substitute(memberType, bindings, "", positions)
             }
-            return Filtered(model.GetTypeInfo(value!!).Type, positions)
+            return Filtered(model.GetTypeInfo(value!!).Type ?? StorageType(symbol), positions)
         }
 
         // Whether G# narrows the local or parameter that [`read`](paramref) reads to
@@ -2033,10 +2034,8 @@ partial class CSharpToGSharpTranslator {
                     } else if node is ArgumentSyntax argument {
                         let (parameter, prefix) = ArgumentDestination(argument, model)
                         if parameter != nil {
-                            if !argument.RefKindKeyword.IsKind(SyntaxKind.None) && model.GetSymbolInfo(
-                                Unparenthesize(argument.Expression)
-                            )
-                                .Symbol is ILocalSymbol refLocal {
+                            if !argument.RefKindKeyword.IsKind(SyntaxKind.None) &&
+                                ArgumentStorageSymbol(argument.Expression, model) is ILocalSymbol refLocal {
                                 assignedLocals.Add(refLocal)
                             }
                             edges.Add((parameter, argument.Expression, model, prefix, 0))
@@ -2509,6 +2508,7 @@ partial class CSharpToGSharpTranslator {
             }
             if !(
                 read is IdentifierNameSyntax ||
+                    read is DeclarationExpressionSyntax ||
                     read is MemberAccessExpressionSyntax ||
                     read is InvocationExpressionSyntax
             ) {
@@ -2586,7 +2586,7 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             }
-            let symbol ISymbol? = model.GetSymbolInfo(read!!).Symbol
+            let symbol ISymbol? = ArgumentStorageSymbol(read!!, model)
             if symbol == nil || (symbol is IMethodSymbol && !(read is InvocationExpressionSyntax)) {
                 return false
             }
@@ -3244,8 +3244,22 @@ partial class CSharpToGSharpTranslator {
                 model SemanticModel
             ) ITypeSymbol? -> if IsElementLiteral(value) {
                 ElementLiteralType(value, model)
+            } else if Unparenthesize(value) is DeclarationExpressionSyntax declaration {
+                StorageType(ArgumentStorageSymbol(declaration, model)) ?? model.GetTypeInfo(declaration.Type).Type
             } else {
                 model.GetTypeInfo(value).Type
+            }
+
+            private func ArgumentStorageSymbol(expression ExpressionSyntax?, model SemanticModel) ISymbol? {
+                let unwrapped = Unparenthesize(expression)
+                if unwrapped is DeclarationExpressionSyntax{Designation: SingleVariableDesignationSyntax designation} {
+                    return model.GetDeclaredSymbol(designation)
+                }
+                return if unwrapped != nil {
+                    model.GetSymbolInfo(unwrapped).Symbol
+                } else {
+                    nil
+                }
             }
 
             // Whether position `0` of [`type`](paramref) is the element of a literal or a
@@ -3389,6 +3403,7 @@ partial class CSharpToGSharpTranslator {
                 value is TupleExpressionSyntax ||
                 value is ConditionalAccessExpressionSyntax ||
                 value is IdentifierNameSyntax ||
+                value is DeclarationExpressionSyntax ||
                 value is MemberAccessExpressionSyntax ||
                 value is ElementAccessExpressionSyntax ||
                 value is InvocationExpressionSyntax ||

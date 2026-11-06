@@ -91,8 +91,6 @@ namespace GSharp.InternalAnalyzers;
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class VariableReferenceSurfaceAnalyzer : DiagnosticAnalyzer
 {
-    private int _localFactoryCalls;
-
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; }
         = ImmutableArray.Create(DiagnosticDescriptors.NullabilityFunnelBypass);
 
@@ -100,7 +98,8 @@ public sealed class VariableReferenceSurfaceAnalyzer : DiagnosticAnalyzer
     {
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.EnableConcurrentExecution();
-        context.RegisterOperationAction(CreateLocalAnalyzer(), OperationKind.LocalReference);
+        int localFactoryCalls = 0;
+        context.RegisterOperationAction(CreateLocalAnalyzer(ref localFactoryCalls), OperationKind.LocalReference);
         System.Action<OperationAnalysisContext> parameterHandler = AnalyzeParameter;
         void RegisterParameter() => context.RegisterOperationAction(parameterHandler, OperationKind.ParameterReference);
         RegisterParameter();
@@ -108,10 +107,10 @@ public sealed class VariableReferenceSurfaceAnalyzer : DiagnosticAnalyzer
         context.RegisterOperationBlockAction(AnalyzeBlock);
     }
 
-    private System.Action<OperationAnalysisContext> CreateLocalAnalyzer()
+    private static System.Action<OperationAnalysisContext> CreateLocalAnalyzer(ref int factoryCalls)
     {
-        _localFactoryCalls++;
-        int call = _localFactoryCalls;
+        factoryCalls++;
+        int call = factoryCalls;
         return context => AnalyzeLocal(context, call);
     }
 

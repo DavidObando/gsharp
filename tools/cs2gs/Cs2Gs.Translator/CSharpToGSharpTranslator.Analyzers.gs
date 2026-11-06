@@ -1917,11 +1917,14 @@ partial class CSharpToGSharpTranslator {
                 (
                 handlerSymbol is IMethodSymbol method &&
                     (
-                    method.IsStatic ||
-                        unparenthesizedHandler is IdentifierNameSyntax ||
+                    unparenthesizedHandler is SimpleNameSyntax ||
                         (
                         unparenthesizedHandler is MemberAccessExpressionSyntax memberAccess &&
-                            Unparenthesize(memberAccess.Expression) is ThisExpressionSyntax
+                            (
+                            method.IsStatic ||
+                                Unparenthesize(memberAccess.Expression) is ThisExpressionSyntax or
+                                BaseExpressionSyntax
+                        )
                     )
                 )
             )

@@ -35,15 +35,17 @@ open class Issue4482ByRefStorageNullabilityTests {
         Assert.Contains("let callerArray = []string?{\"x\"}", printed)
         Assert.Contains("var genericRefCallerArray = []string?{\"x\"}", printed)
         Assert.Contains("private func MakeArray() []string?", printed)
+        Assert.Contains("private func MakeOutArray(out value []string?)", printed)
         Assert.Contains("private func ForwardParamArray(forwarded []string?) string", printed)
         Assert.Contains("private func UseRefParamArray(ref refParamArray []string?) string", printed)
         Assert.Contains("private func UseGenericRefParamArray[T](ref refParamArray []string?) string", printed)
+        Assert.Contains("let a = [1]T?", printed)
         Assert.Contains("UseParamsJagged([]string{\"x\"})", printed)
         Assert.Contains("let dictKey = []string{\"k\"}", printed)
         Assert.Contains("var r string? = \"x\"", printed)
         let (compileOutput, runOutput) = CompileAndRun(printed, "Holder.Run()")
         Assert.DoesNotContain("GS0612", compileOutput)
-        Assert.Equal("3-positive-positivepositive-----positive------", runOutput.Trim())
+        Assert.Equal("3-positive-positivepositive-----positive--------", runOutput.Trim())
     }
 
     shared {
@@ -65,6 +67,11 @@ public class Holder
     private static void ClearRow(out string[] row) { row = null; }
 
     private static string[] MakeArray() => new string[] { "x" };
+
+    private static void MakeOutArray(out string[] value)
+    {
+        value = new string[] { "x" };
+    }
 
     private static string UseParamArray(string[] paramArray)
     {
@@ -104,6 +111,19 @@ public class Holder
     }
 
 #nullable enable
+    private static void ClearGeneric<T>(out T? value) where T : class
+    {
+        value = null;
+    }
+
+    private static string UseGenericElementArray<T>(T seed) where T : class
+    {
+        var a = new T[1];
+        a[0] = seed;
+        ClearGeneric<T>(out a[0]);
+        return a[0] == null ? "-" : "x";
+    }
+
     private static string UseDictionaryArrayValue(System.Collections.Generic.Dictionary<string[], string?[]> rows, string[] key)
     {
         Find(0, out rows[key][0]!);
@@ -117,6 +137,10 @@ public class Holder
         var dictKey = new string[] { "k" };
         var dictRows = new System.Collections.Generic.Dictionary<string[], string?[]> { [dictKey] = new string?[1] { "v" } };
         string dictResult = UseDictionaryArrayValue(dictRows, dictKey);
+        MakeOutArray(out var inlineOutArray);
+        Find(0, out inlineOutArray[0]);
+        string inlineOutResult = inlineOutArray[0] ?? "-";
+        string genericElementResult = UseGenericElementArray("x");
         var failures = new string[2];
         int a = Find(0, out failures[0]);
         int b = Find(2, out string inline);
@@ -149,7 +173,7 @@ public class Holder
         var genericRefCallerArray = new string[] { "x" };
         string genericRefResult = UseGenericRefParamArray<int>(ref genericRefCallerArray);
         string paramsJaggedResult = UseParamsJagged(new string[] { "x" });
-        return a + b + c + d + e + (failures[0] ?? "-") + (inline ?? "-") + (inferred ?? "-") + (declared ?? "-") + (h.Field ?? "-") + (r ?? "-") + (initialized[0] ?? "-") + (implicitArr[0] ?? "-") + (collectionArr[0] ?? "-") + (bareInitArr[0] ?? "-") + (declaredThenAssigned[0] ?? "-") + (rect[0, 0] ?? "") + (h.FieldArray[0] ?? "") + paramResult + forwardedResult + refForwardedResult + genericRefResult + paramsJaggedResult + dictResult;
+        return a + b + c + d + e + (failures[0] ?? "-") + (inline ?? "-") + (inferred ?? "-") + (declared ?? "-") + (h.Field ?? "-") + (r ?? "-") + (initialized[0] ?? "-") + (implicitArr[0] ?? "-") + (collectionArr[0] ?? "-") + (bareInitArr[0] ?? "-") + (declaredThenAssigned[0] ?? "-") + (rect[0, 0] ?? "") + (h.FieldArray[0] ?? "") + paramResult + forwardedResult + refForwardedResult + genericRefResult + paramsJaggedResult + dictResult + inlineOutResult + genericElementResult;
     }
 }`
 
