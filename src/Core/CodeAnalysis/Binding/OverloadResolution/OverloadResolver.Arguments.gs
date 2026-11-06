@@ -341,6 +341,7 @@ internal partial class OverloadResolver {
     /// @returns The eagerly-bound argument (a deferred placeholder when a
     /// branchy argument could not unify without a target).
     private func BindOverloadArgumentValue(inner ExpressionSyntax) BoundExpression {
+        recordDeferredArgumentSnapshot?(inner)
         if ExpressionBinder.IsTargetDependentBlockArgumentSyntax(inner) {
             return BoundErrorExpression(inner)
         }
@@ -401,13 +402,14 @@ internal partial class OverloadResolver {
             expectedType != TypeSymbol.Void &&
             !TypeSymbol.ContainsTypeParameter(expectedType)
         if ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(argument!!, out var branchySyntax) {
-            return if targetUsable {
+            let resolvedBranchySyntax = Invariant.Required(
+                branchySyntax,
+                "a deferred branchy argument has source syntax",
+                expression: "branchySyntax"
+            )
+            let rebind() -> BoundExpression = () -> if targetUsable {
                 bindExpressionWithTargetType(
-                    Invariant.Required(
-                        branchySyntax,
-                        "a deferred branchy argument has source syntax",
-                        expression: "branchySyntax"
-                    ),
+                    resolvedBranchySyntax,
                     Invariant.Required(
                         expectedType,
                         "a usable branchy argument target type is non-null",
@@ -415,7 +417,12 @@ internal partial class OverloadResolver {
                     )
                 )
             } else {
-                bindExpression(branchySyntax)
+                bindExpression(resolvedBranchySyntax)
+            }
+            return if rebindDeferredArgumentWithSnapshot != nil {
+                rebindDeferredArgumentWithSnapshot!!(resolvedBranchySyntax, rebind)
+            } else {
+                rebind()
             }
         }
         // Issue #1480: a branchy argument that unified to its natural common type
@@ -443,15 +450,20 @@ internal partial class OverloadResolver {
             while inner is ParenthesizedExpressionSyntax parenthesized {
                 inner = parenthesized.Expression
             }
-            if inner != nil && ExpressionBinder.IsTargetTypedBranchyArgumentSyntax(inner) {
-                return bindExpressionWithTargetType(
-                    inner,
+            if inner is {} nonNullInner && ExpressionBinder.IsTargetTypedBranchyArgumentSyntax(nonNullInner) {
+                let rebind() -> BoundExpression = () -> bindExpressionWithTargetType(
+                    nonNullInner,
                     Invariant.Required(
                         expectedType,
                         "a usable branchy argument target type is non-null",
                         expression: "expectedType"
                     )
                 )
+                return if rebindDeferredArgumentWithSnapshot != nil {
+                    rebindDeferredArgumentWithSnapshot!!(nonNullInner, rebind)
+                } else {
+                    rebind()
+                }
             }
         }
         return Invariant.Required(argument, "a finalized call argument remains bound", expression: "argument")
@@ -1296,12 +1308,10 @@ internal partial class OverloadResolver {
         /// argument is bound and post-processed against its actual payload.
         /// @param argument The call-argument syntax node.
         /// @returns The wrapped value expression when named, otherwise the node itself.
-        func UnwrapNamedArgumentValue(
-            argument ExpressionSyntax
-        ) ExpressionSyntax -> if argument is NamedArgumentExpressionSyntax named {
-            named.Expression
-        } else {
-            argument
+        func UnwrapNamedArgumentValue(argument ExpressionSyntax) ExpressionSyntax -> switch argument {
+            case named is NamedArgumentExpressionSyntax: named.Expression
+            case namedTuple is NamedTupleElementSyntax: namedTuple.Expression
+            default: argument
         }
 
         /// Returns a call argument's canonical value expression for syntax-kind

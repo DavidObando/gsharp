@@ -72,6 +72,7 @@ internal partial class StatementBinder {
     private let bindNullCoalescingAssignmentStatement(
         (ExpressionStatementSyntax, NullCoalescingAssignmentExpressionSyntax) -> BoundStatement
     )?
+    private let bindRefArgumentExpression((RefArgumentExpressionSyntax) -> BoundExpression)?
 
     private let exceptionHandlerRegions Stack[SyntaxNode] = Stack[SyntaxNode]()
     private let activeFinallyClauses Stack[FinallyClauseSyntax] = Stack[FinallyClauseSyntax]()
@@ -134,7 +135,8 @@ internal partial class StatementBinder {
         reconcileGenericLocalFunctionGroupCaptures((IReadOnlyList[BoundFunctionLiteralExpression]) -> void)? = nil,
         bindNullCoalescingAssignmentStatement(
             (ExpressionStatementSyntax, NullCoalescingAssignmentExpressionSyntax) -> BoundStatement
-        )? = nil
+        )? = nil,
+        bindRefArgumentExpression((RefArgumentExpressionSyntax) -> BoundExpression)? = nil
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.conversions = conversions ?? throw ArgumentNullException("conversions")
@@ -163,6 +165,7 @@ internal partial class StatementBinder {
         this.bindFunctionLiteralWithSelfDeclaration = bindFunctionLiteralWithSelfDeclaration
         this.reconcileGenericLocalFunctionGroupCaptures = reconcileGenericLocalFunctionGroupCaptures
         this.bindNullCoalescingAssignmentStatement = bindNullCoalescingAssignmentStatement
+        this.bindRefArgumentExpression = bindRefArgumentExpression
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics

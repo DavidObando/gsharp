@@ -1243,11 +1243,11 @@ internal shared class CaptureBoxingRewriter {
                 )
             )
         }
-        if box.RetainedCapture != nil {
+        if box.RetainedCapture is {} retainedCapture {
             statements.Add(
                 BoundVariableDeclaration(
                     nil,
-                    box.RetainedCapture,
+                    retainedCapture,
                     BoundManagedReferenceExpression(
                         nil,
                         BoundFieldAccessExpression(
@@ -1256,7 +1256,7 @@ internal shared class CaptureBoxingRewriter {
                             box.BoxClass,
                             box.BoxField
                         ),
-                        box.RetainedCapture.Type,
+                        retainedCapture.Type,
                         readOnly: false
                     )
                 )

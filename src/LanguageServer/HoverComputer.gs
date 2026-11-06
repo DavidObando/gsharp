@@ -555,7 +555,7 @@ shared class ReferencesComputer {
                     current is EnumDeclarationSyntax ||
                     current is EnumMemberSyntax ||
                     current is TypeAliasDeclarationSyntax {
-                    if best == nil || current.Span.Length < best.Span.Length {
+                    if best is not{} currentBest || currentBest.Span.Length > current.Span.Length {
                         best = current
                     }
                 }

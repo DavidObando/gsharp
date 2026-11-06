@@ -263,8 +263,8 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
                 }
             )
             format.Append('{').Append(index.ToString(CultureInfo.InvariantCulture))
-            if (part.Alignment != nil) {
-                format.Append(',').Append(part.Alignment.ToString(CultureInfo.InvariantCulture))
+            if part.Alignment is {} alignment {
+                format.Append(',').Append(alignment.ToString(CultureInfo.InvariantCulture))
             }
             if part.Format != nil {
                 format.Append(':').Append(part.Format)

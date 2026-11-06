@@ -75,6 +75,255 @@ internal partial class StatementBinder {
         syncExpressionCallableAliases?.Invoke(externalCallableAliases)
     }
 
+    private let deferredArgumentSnapshots Dictionary[SyntaxNode, NarrowingBindSnapshot] = Dictionary[
+        SyntaxNode,
+        NarrowingBindSnapshot
+    ]()
+    private let initialArgumentBySyntax Dictionary[SyntaxNode, BoundExpression] = Dictionary[
+        SyntaxNode,
+        BoundExpression
+    ]()
+    private let syntaxByTrackedArgument Dictionary[BoundExpression, SyntaxNode] = Dictionary[
+        BoundExpression,
+        SyntaxNode
+    ](ReferenceEqualityComparer.Instance)
+    private let preConvertedEffectsBySyntax Dictionary[SyntaxNode, BoundExpression] = Dictionary[
+        SyntaxNode,
+        BoundExpression
+    ]()
+    private let verifyingArgumentSyntaxes HashSet[SyntaxNode] = HashSet[SyntaxNode](ReferenceEqualityComparer.Instance)
+    private var pendingMultiAssignmentValueSyntax SyntaxNode?
+    private var pendingMultiAssignmentValueSnapshot NarrowingBindSnapshot?
+    private let expressionEntryAliases Dictionary[BoundExpression, HashSet[VariableSymbol]] = Dictionary[
+        BoundExpression,
+        HashSet[VariableSymbol]
+    ](ReferenceEqualityComparer.Instance)
+    private let appliedBinaryLefts HashSet[BoundBinaryExpression] = HashSet[BoundBinaryExpression](
+        ReferenceEqualityComparer.Instance
+    )
+    private let appliedBinaryLeftsLog List[BoundBinaryExpression] = List[BoundBinaryExpression]()
+    private let binaryRightEntryAliases Dictionary[BoundBinaryExpression, HashSet[VariableSymbol]] = Dictionary[
+        BoundBinaryExpression,
+        HashSet[VariableSymbol]
+    ](ReferenceEqualityComparer.Instance)
+    private let fullyAppliedSubExpressions HashSet[BoundExpression] = HashSet[BoundExpression](
+        ReferenceEqualityComparer.Instance
+    )
+    private let fullyAppliedSubExpressionsLog List[BoundExpression] = List[BoundExpression]()
+    private let fullyAppliedExitAliases Dictionary[BoundExpression, HashSet[VariableSymbol]] = Dictionary[
+        BoundExpression,
+        HashSet[VariableSymbol]
+    ](ReferenceEqualityComparer.Instance)
+
+    internal func RecordExpressionEntryAliases(expression BoundExpression?, entryAliases HashSet[VariableSymbol]?) {
+        if expression == nil || entryAliases == nil {
+            return
+        }
+        expressionEntryAliases[expression] = HashSet[VariableSymbol](entryAliases)
+    }
+
+    internal func RecordAppliedBinaryLeft(binary BoundBinaryExpression, rightEntryAliases HashSet[VariableSymbol]?) {
+        if appliedBinaryLefts.Add(binary) {
+            appliedBinaryLeftsLog.Add(binary)
+            if rightEntryAliases != nil {
+                binaryRightEntryAliases[binary] = HashSet[VariableSymbol](rightEntryAliases)
+            }
+        }
+    }
+
+    internal data struct NarrowingBindSnapshot(
+        Frames[]?Dictionary[AccessPath, TypeSymbol]?,
+        Aliases[]?VariableSymbol,
+        JournalEntries[]?(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol),
+        AppliedBinaryLeftsCount int32 = 0,
+        FullyAppliedCount int32 = 0
+    ) { }
+
+    internal func CaptureNarrowingBindSnapshot() NarrowingBindSnapshot {
+        var frames[]?Dictionary[AccessPath, TypeSymbol]? = nil
+        if HasAnyActiveNarrowings() {
+            frames = [binderCtx.NarrowedVariables.Count]Dictionary[AccessPath, TypeSymbol]?
+            for var i = 0; i < binderCtx.NarrowedVariables.Count; i++ {
+                let frame = binderCtx.NarrowedVariables[i]
+                if frame.Count > 0 {
+                    frames[i] = Dictionary[AccessPath, TypeSymbol](frame)
+                }
+            }
+        }
+        let aliases = if externalCallableAliases.Count == 0 {
+            default([]?VariableSymbol)
+        } else {
+            externalCallableAliases.ToArray()
+        }
+        let journalEntries = conditionKillJournal?.ToArray()
+        return NarrowingBindSnapshot(
+            frames,
+            aliases,
+            journalEntries,
+            appliedBinaryLeftsLog.Count,
+            fullyAppliedSubExpressionsLog.Count
+        )
+    }
+
+    internal func RestoreNarrowingBindSnapshot(snapshot NarrowingBindSnapshot) {
+        let count = binderCtx.NarrowedVariables.Count
+        for var i = 0; i < count; i++ {
+            let frame = binderCtx.NarrowedVariables[i]
+            frame.Clear()
+            if snapshot.Frames != nil && i < snapshot.Frames.Length && snapshot.Frames[i] is {} savedFrame {
+                for entry in savedFrame {
+                    frame.Add(entry.Key, entry.Value)
+                }
+            }
+        }
+        externalCallableAliases.Clear()
+        if snapshot.Aliases != nil {
+            externalCallableAliases.UnionWith(snapshot.Aliases)
+        }
+        SyncExpressionCallableAliasesNow()
+        if conditionKillJournal is {} journal && snapshot.JournalEntries is {} entries {
+            journal.Clear()
+            for entry in entries {
+                journal.Add(entry)
+            }
+        }
+        while appliedBinaryLeftsLog.Count > snapshot.AppliedBinaryLeftsCount {
+            let lastIdx = appliedBinaryLeftsLog.Count - 1
+            let removed = appliedBinaryLeftsLog[lastIdx]
+            appliedBinaryLeftsLog.RemoveAt(lastIdx)
+            appliedBinaryLefts.Remove(removed)
+            binaryRightEntryAliases.Remove(removed)
+        }
+        while fullyAppliedSubExpressionsLog.Count > snapshot.FullyAppliedCount {
+            let lastIdx = fullyAppliedSubExpressionsLog.Count - 1
+            let removed = fullyAppliedSubExpressionsLog[lastIdx]
+            fullyAppliedSubExpressionsLog.RemoveAt(lastIdx)
+            fullyAppliedSubExpressions.Remove(removed)
+            fullyAppliedExitAliases.Remove(removed)
+        }
+    }
+
+    internal func RecordDeferredArgumentSnapshot(syntax SyntaxNode) {
+        if !HasAnyActiveNarrowings() && externalCallableAliases.Count == 0 && !deferredArgumentSnapshots.ContainsKey(
+            syntax
+        ) {
+            return
+        }
+        let snapshot = CaptureNarrowingBindSnapshot()
+        var current SyntaxNode? = syntax
+        while current != nil {
+            deferredArgumentSnapshots[current] = snapshot
+            if current is ParenthesizedExpressionSyntax paren {
+                current = paren.Expression
+            } else {
+                break
+            }
+        }
+    }
+
+    internal func RecordConvertedArgument(original BoundExpression?, converted BoundExpression?) {
+        if original == nil || converted == nil || object.ReferenceEquals(original, converted) {
+            return
+        }
+        if syntaxByTrackedArgument.TryGetValue(original, out var originSyntax) {
+            syntaxByTrackedArgument[converted] = originSyntax
+        }
+    }
+
+    internal func RebindDeferredArgumentWithSnapshot(syntax SyntaxNode, bind() -> BoundExpression) BoundExpression {
+        if branchyArgumentEntries.ContainsKey(syntax) || !deferredArgumentSnapshots.TryGetValue(
+            syntax,
+            out var atArgument
+        ) {
+            let boundBranchy = bind()
+            syntaxByTrackedArgument[boundBranchy] = syntax
+            return boundBranchy
+        }
+        let afterArguments = CaptureNarrowingBindSnapshot()
+        RestoreNarrowingBindSnapshot(atArgument)
+        let bound = bind()
+        syntaxByTrackedArgument[bound] = syntax
+        ApplySubExpressionNarrowingEffectsCore(syntax, bound)
+        let afterRebind = CaptureNarrowingBindSnapshot()
+        RestoreNarrowingBindSnapshot(afterArguments)
+        IntersectNarrowingWithSnapshot(afterRebind)
+        return bound
+    }
+
+    internal func ApplyPendingMultiAssignmentValueSnapshot(syntax SyntaxNode) {
+        if pendingMultiAssignmentValueSyntax != nil && object.ReferenceEquals(
+            syntax,
+            pendingMultiAssignmentValueSyntax
+        ) &&
+            pendingMultiAssignmentValueSnapshot is {} snapshot {
+            pendingMultiAssignmentValueSyntax = nil
+            pendingMultiAssignmentValueSnapshot = nil
+            RestoreNarrowingBindSnapshot(snapshot)
+        }
+    }
+
+    internal func JoinBranchNarrowingSnapshots(
+        whenTrueType TypeSymbol?,
+        afterWhenTrue NarrowingBindSnapshot,
+        whenFalseType TypeSymbol?,
+        afterWhenFalse NarrowingBindSnapshot
+    ) {
+        if whenTrueType == TypeSymbol.Never && whenFalseType != TypeSymbol.Never {
+            RestoreNarrowingBindSnapshot(afterWhenFalse)
+            return
+        }
+        if whenFalseType == TypeSymbol.Never && whenTrueType != TypeSymbol.Never {
+            RestoreNarrowingBindSnapshot(afterWhenTrue)
+            return
+        }
+        RestoreNarrowingBindSnapshot(afterWhenFalse)
+        IntersectNarrowingWithSnapshot(afterWhenTrue)
+    }
+
+    internal func IntersectNarrowingWithSnapshot(other NarrowingBindSnapshot) {
+        let count = binderCtx.NarrowedVariables.Count
+        for var i = 0; i < count; i++ {
+            let frame = binderCtx.NarrowedVariables[i]
+            let otherFrame = if other.Frames != nil && i < other.Frames.Length {
+                other.Frames[i]
+            } else {
+                default(Dictionary[AccessPath, TypeSymbol]?)
+            }
+            if otherFrame == nil || otherFrame.Count == 0 {
+                if frame.Count > 0 {
+                    for entry in frame.Entries.ToArray() {
+                        if !IsNullableWidening(entry.Key, entry.Value) {
+                            conditionKillJournal?.Add((frame, entry.Key, entry.Value))
+                            frame.Remove(entry.Key)
+                        }
+                    }
+                }
+                continue
+            }
+            for key in frame.Keys.ToArray() {
+                let currentType = frame[key]
+                if !IsNullableWidening(key, currentType) &&
+                    (!otherFrame.TryGetValue(key, out var otherType) || !object.Equals(currentType, otherType)) {
+                    conditionKillJournal?.Add((frame, key, currentType))
+                    frame.Remove(key)
+                }
+            }
+            for otherEntry in otherFrame {
+                if IsNullableWidening(otherEntry.Key, otherEntry.Value) && !frame.ContainsKey(otherEntry.Key) {
+                    frame[otherEntry.Key] = otherEntry.Value
+                }
+            }
+        }
+        if externalCallableAliases.Count > 0 {
+            if other.Aliases == nil {
+                externalCallableAliases.Clear()
+            } else {
+                externalCallableAliases.IntersectWith(other.Aliases)
+            }
+            SyncExpressionCallableAliasesNow()
+        }
+    }
+
     internal func IsolateExternalCallableAliases() HashSet[VariableSymbol] {
         let saved = HashSet[VariableSymbol](externalCallableAliases)
         externalCallableAliases.Clear()
@@ -401,7 +650,9 @@ internal partial class StatementBinder {
         let assignedNames = HashSet[string]()
         // Issue #5640: for a `defer`, `boundStatement` is the prefix only. The deferred call in `statementSyntax` runs when the block exits.
         var dropAllMemberPaths = if boundStatement != nil {
-            statementSyntax is not DeferStatementSyntax && SyntaxMayMutateMemberPaths(statementSyntax)
+            statementSyntax is not DeferStatementSyntax &&
+                !IsPatternContainerSyntax(statementSyntax) &&
+                SyntaxMayMutateMemberPaths(statementSyntax)
         } else {
             CollectAssignedNamesAndMemberMutation(statementSyntax, assignedNames)
         }
@@ -522,7 +773,7 @@ internal partial class StatementBinder {
     private func EnclosingFilterWrites(statementSyntax SyntaxNode, effects AssignedRootsCollector) List[
         (TryBlock SyntaxNode?, Names HashSet[string])
     ]? {
-        if !effects.MayMutateMemberPaths && !effects.ContainsTry {
+        if !effects.MayMutateMemberPaths && !effects.MayRunEscapedClosure && !effects.ContainsTry {
             return nil
         }
         let filters = CollectCatchFiltersAbove(statementSyntax)
@@ -556,7 +807,11 @@ internal partial class StatementBinder {
                 effects = NewCollector(nil, nil)
                 effects.VisitExpression(expression)
                 collector = effects
-                dropAllMemberPaths = (expression.Syntax is {} exprSyntax && SyntaxMayMutateMemberPaths(exprSyntax)) ||
+                dropAllMemberPaths = (
+                    expression.Syntax is {} exprSyntax &&
+                        !IsPatternContainerSyntax(exprSyntax) &&
+                        SyntaxMayMutateMemberPaths(exprSyntax)
+                ) ||
                     effects.MayMutateMemberPaths
                 filterWrites = EnclosingFilterWrites(anchor, effects)
             }
@@ -607,6 +862,7 @@ internal partial class StatementBinder {
         // A filter of an enclosing try can run between any two statements of its protected block,
         // when a nested handler catches a replacement exception.
         RemoveCollectorFilterAffectedAliases(externalCallableAliases, statement.Syntax, collector)
+        SyncExpressionCallableAliasesNow()
     }
 
     private func RemoveCollectorFilterAffectedAliases(
@@ -615,9 +871,12 @@ internal partial class StatementBinder {
         collector AssignedRootsCollector
     ) {
         if aliases.Count == 0 || syntax == nil {
+            if object.ReferenceEquals(aliases, externalCallableAliases) {
+                SyncExpressionCallableAliasesNow()
+            }
             return
         }
-        let filters = if collector.MayMutateMemberPaths || collector.ContainsTry {
+        let filters = if collector.MayMutateMemberPaths || collector.MayRunEscapedClosure || collector.ContainsTry {
             CollectCatchFiltersAbove(syntax)
         } else {
             List[ExpressionSyntax]()
@@ -777,6 +1036,7 @@ internal partial class StatementBinder {
 
     private func UsesJoinedCallableExitState(statement BoundStatement) bool -> switch statement {
         case block is BoundBlockStatement: block.Syntax != nil && !ContainsUserGotoOrLabel(block)
+        case exprStmt is BoundExpressionStatement: !ContainsUserGotoOrLabel(exprStmt)
         case _ is BoundIfStatement or
             _ is BoundTryStatement or
             _ is BoundPatternSwitchStatement or
@@ -2518,6 +2778,853 @@ internal partial class StatementBinder {
         RemoveCollectorFilterAffectedAliases(aliases, header.Syntax, collector)
     }
 
+    /// ADR-0208 R9, R10, R11, R12, R14, R15 (#5637, #5238): applies the narrowing and callable-alias effects
+    /// of [`operand`](paramref) before a later operand of the same expression is bound.
+    internal func ApplySubExpressionNarrowingEffects(
+        syntax SyntaxNode?,
+        operand BoundExpression?,
+        entryAliases HashSet[VariableSymbol]? = nil
+    ) {
+        if operand == nil {
+            return
+        }
+        if syntax != nil && !verifyingArgumentSyntaxes.Contains(syntax) && deferredArgumentSnapshots.ContainsKey(
+            syntax
+        ) {
+            initialArgumentBySyntax[syntax] = operand
+            syntaxByTrackedArgument[operand] = syntax
+        }
+        let expression = if syntax != nil && preConvertedEffectsBySyntax.TryGetValue(syntax, out var preConverted) {
+            preConverted
+        } else {
+            operand
+        }
+        ApplySubExpressionNarrowingEffectsCore(syntax, expression, entryAliases)
+    }
+
+    private func ApplySubExpressionNarrowingEffectsCore(
+        syntax SyntaxNode?,
+        operand BoundExpression?,
+        entryAliases HashSet[VariableSymbol]? = nil
+    ) {
+        if operand == nil {
+            return
+        }
+        var expression = operand
+        while true {
+            if expression is BoundAddressOfExpression address {
+                expression = address.Operand
+                continue
+            }
+            if expression is BoundConversionExpression conv && conv.Syntax is not CallExpressionSyntax {
+                expression = conv.Expression
+                continue
+            }
+            break
+        }
+        if expression is BoundConditionalAddressExpression conditionalAddress {
+            ApplySubExpressionNarrowingEffectsCore(syntax, conditionalAddress.Condition)
+            let postCondition = CaptureNarrowingBindSnapshot()
+            ApplySubExpressionNarrowingEffectsCore(syntax, conditionalAddress.WhenTrueOperand)
+            let afterTrue = CaptureNarrowingBindSnapshot()
+            RestoreNarrowingBindSnapshot(postCondition)
+            ApplySubExpressionNarrowingEffectsCore(syntax, conditionalAddress.WhenFalseOperand)
+            let afterFalse = CaptureNarrowingBindSnapshot()
+            JoinBranchNarrowingSnapshots(
+                conditionalAddress.WhenTrueOperand.Type,
+                afterTrue,
+                conditionalAddress.WhenFalseOperand.Type,
+                afterFalse
+            )
+            return
+        }
+        if fullyAppliedSubExpressions.Contains(expression) {
+            if fullyAppliedExitAliases.TryGetValue(expression, out var exitAliases) {
+                externalCallableAliases.Clear()
+                externalCallableAliases.UnionWith(exitAliases)
+                SyncExpressionCallableAliasesNow()
+            }
+            return
+        }
+        if expression is BoundConditionalExpression conditionalExpr {
+            ApplySubExpressionNarrowingEffectsCore(
+                conditionalExpr.Condition.Syntax ?? syntax,
+                conditionalExpr.Condition
+            )
+            let postCondition = CaptureNarrowingBindSnapshot()
+            if conditionalExpr.WhenTrue.Type != TypeSymbol.Never {
+                ApplySubExpressionNarrowingEffectsCore(
+                    conditionalExpr.WhenTrue.Syntax ?? syntax,
+                    conditionalExpr.WhenTrue
+                )
+            }
+            let afterTrue = CaptureNarrowingBindSnapshot()
+            RestoreNarrowingBindSnapshot(postCondition)
+            if conditionalExpr.WhenFalse.Type != TypeSymbol.Never {
+                ApplySubExpressionNarrowingEffectsCore(
+                    conditionalExpr.WhenFalse.Syntax ?? syntax,
+                    conditionalExpr.WhenFalse
+                )
+            }
+            let afterFalse = CaptureNarrowingBindSnapshot()
+            JoinBranchNarrowingSnapshots(
+                conditionalExpr.WhenTrue.Type,
+                afterTrue,
+                conditionalExpr.WhenFalse.Type,
+                afterFalse
+            )
+            if fullyAppliedSubExpressions.Add(conditionalExpr) {
+                fullyAppliedSubExpressionsLog.Add(conditionalExpr)
+                fullyAppliedExitAliases[conditionalExpr] = HashSet[VariableSymbol](externalCallableAliases)
+            }
+            return
+        }
+        if expression is BoundBinaryExpression binExpr && appliedBinaryLefts.Contains(binExpr) {
+            binaryRightEntryAliases.TryGetValue(binExpr, out var rightAliases)
+            ApplySubExpressionNarrowingEffectsCore(binExpr.Right.Syntax, binExpr.Right, rightAliases)
+            if BinaryEqualityRunsUserCode(binExpr) {
+                let eqAnchor = syntax ?? binExpr.Syntax ?? FindSyntaxAnchor(binExpr)
+                if eqAnchor != nil && (HasAnyActiveNarrowings() || externalCallableAliases.Count > 0) {
+                    let dummyEq = BoundBinaryExpression(
+                        binExpr.Syntax,
+                        BoundDefaultExpression(binExpr.Syntax, binExpr.Left.Type),
+                        binExpr.Op,
+                        BoundDefaultExpression(binExpr.Syntax, binExpr.Right.Type),
+                        binExpr.IsChecked
+                    )
+                    let eqAliasesAtEntry = externalCallableAliases.ToArray()
+                    let eqStmt = BoundExpressionStatement(eqAnchor, dummyEq)
+                    InvalidateNarrowingsForAssignedVariables(eqAnchor, eqStmt)
+                    UpdateExternalCallableAliases(eqStmt, eqAliasesAtEntry)
+                }
+            }
+            if fullyAppliedSubExpressions.Add(binExpr) {
+                fullyAppliedSubExpressionsLog.Add(binExpr)
+                fullyAppliedExitAliases[binExpr] = HashSet[VariableSymbol](externalCallableAliases)
+            }
+            return
+        }
+        var effectiveEntryAliases = entryAliases
+        if effectiveEntryAliases == nil && expressionEntryAliases.TryGetValue(expression, out var recordedEntry) {
+            effectiveEntryAliases = recordedEntry
+        }
+        if effectiveEntryAliases != nil {
+            externalCallableAliases.Clear()
+            externalCallableAliases.UnionWith(effectiveEntryAliases)
+            SyncExpressionCallableAliasesNow()
+        }
+        if !HasAnyActiveNarrowings() &&
+            externalCallableAliases.Count == 0 &&
+            expression is not BoundAssignmentExpression &&
+            expression is not BoundBlockExpression {
+            if expression is not BoundErrorExpression && fullyAppliedSubExpressions.Add(expression) {
+                fullyAppliedSubExpressionsLog.Add(expression)
+                fullyAppliedExitAliases[expression] = HashSet[VariableSymbol](externalCallableAliases)
+            }
+            return
+        }
+        if ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(expression, out var branchySyntax) &&
+            branchySyntax != nil &&
+            ExpressionBinder
+            .IsTargetDependentBlockArgumentSyntax(branchySyntax) {
+            ApplyDeferredBlockArgumentNarrowingEffects(branchySyntax)
+            return
+        }
+        let anchor = syntax ?? expression.Syntax ?? FindSyntaxAnchor(expression)
+        if anchor == nil || ExpressionHasNoNarrowingEffects(expression, anchor) {
+            if expression is not BoundErrorExpression && fullyAppliedSubExpressions.Add(expression) {
+                fullyAppliedSubExpressionsLog.Add(expression)
+                fullyAppliedExitAliases[expression] = HashSet[VariableSymbol](externalCallableAliases)
+            }
+            return
+        }
+        let aliasesAtEntry = externalCallableAliases.ToArray()
+        let statement = BoundExpressionStatement(anchor, expression)
+        InvalidateNarrowingsForAssignedVariables(anchor, statement)
+        UpdateExternalCallableAliases(statement, aliasesAtEntry)
+        if expression is not BoundErrorExpression && fullyAppliedSubExpressions.Add(expression) {
+            fullyAppliedSubExpressionsLog.Add(expression)
+            fullyAppliedExitAliases[expression] = HashSet[VariableSymbol](externalCallableAliases)
+        }
+    }
+
+    private func FindSyntaxAnchor(node BoundExpression?) SyntaxNode? -> switch node {
+        case nil: nil
+        case nonNull is BoundExpression when nonNull.Syntax != nil: nonNull.Syntax
+        case propAccess is BoundPropertyAccessExpression: FindSyntaxAnchor(propAccess.Receiver)
+        case fieldAccess is BoundFieldAccessExpression: FindSyntaxAnchor(fieldAccess.Receiver)
+        case clrProp is BoundClrPropertyAccessExpression: FindSyntaxAnchor(clrProp.Receiver)
+        case clrIndex is BoundClrIndexExpression: FindSyntaxAnchor(clrIndex.Target)
+        case index is BoundIndexExpression: FindSyntaxAnchor(index.Target)
+        case conv is BoundConversionExpression: FindSyntaxAnchor(conv.Expression)
+        case unary is BoundUnaryExpression: FindSyntaxAnchor(unary.Operand)
+        case binary is BoundBinaryExpression: FindSyntaxAnchor(binary.Left) ?? FindSyntaxAnchor(binary.Right)
+        case instCall is BoundUserInstanceCallExpression: FindSyntaxAnchor(instCall.Receiver)
+        case impInstCall is BoundImportedInstanceCallExpression: FindSyntaxAnchor(impInstCall.Receiver)
+        default: nil
+    }
+
+    private func ApplyDeferredBlockArgumentNarrowingEffects(syntax ExpressionSyntax) {
+        var current = syntax
+        while current is ParenthesizedExpressionSyntax paren {
+            current = paren.Expression
+        }
+        if current is BlockExpressionSyntax block {
+            let diagMark = Diagnostics.Count
+            $scope = BoundScope($scope)
+            try {
+                if !block.Statements.IsDefaultOrEmpty {
+                    let _ = BindStatementList(block.Statements, trailingStatement: nil, trailingSyntax: nil)
+                }
+                if block.Expression != nil {
+                    ApplyDeferredBlockArgumentNarrowingEffects(block.Expression)
+                }
+            } finally {
+                $scope = $scope.Pop()
+                Diagnostics.TruncateTo(diagMark)
+            }
+            return
+        }
+        if current is ConditionalExpressionSyntax conditional {
+            ApplyDeferredBlockArgumentNarrowingEffects(conditional.Condition)
+            let postCond = CaptureNarrowingBindSnapshot()
+            ApplyDeferredBlockArgumentNarrowingEffects(conditional.WhenTrue)
+            let afterTrue = CaptureNarrowingBindSnapshot()
+            RestoreNarrowingBindSnapshot(postCond)
+            ApplyDeferredBlockArgumentNarrowingEffects(conditional.WhenFalse)
+            let afterFalse = CaptureNarrowingBindSnapshot()
+            JoinBranchNarrowingSnapshots(nil, afterTrue, nil, afterFalse)
+            return
+        }
+        if current is IfExpressionSyntax ifExpr {
+            let diagMark = Diagnostics.Count
+            $scope = BoundScope($scope)
+            try {
+                if ifExpr.Initializer is {} initStmt {
+                    let _ = BindStatementList(
+                        ImmutableArray.Create(initStmt),
+                        trailingStatement: nil,
+                        trailingSyntax: nil
+                    )
+                }
+                ApplyDeferredBlockArgumentNarrowingEffects(ifExpr.Condition)
+                let postCond = CaptureNarrowingBindSnapshot()
+                ApplyDeferredBlockArgumentNarrowingEffects(ifExpr.ThenBlock)
+                let afterTrue = CaptureNarrowingBindSnapshot()
+                RestoreNarrowingBindSnapshot(postCond)
+                if ifExpr.ElseExpression != nil {
+                    ApplyDeferredBlockArgumentNarrowingEffects(ifExpr.ElseExpression)
+                }
+                let afterFalse = CaptureNarrowingBindSnapshot()
+                JoinBranchNarrowingSnapshots(nil, afterTrue, nil, afterFalse)
+            } finally {
+                $scope = $scope.Pop()
+                Diagnostics.TruncateTo(diagMark)
+            }
+            return
+        }
+        if current is IfLetExpressionSyntax ifLetExpr {
+            let diagMark = Diagnostics.Count
+            $scope = BoundScope($scope)
+            try {
+                for binding in ifLetExpr.Bindings {
+                    ApplyDeferredBlockArgumentNarrowingEffects(binding.Initializer)
+                    var initExpr = bindExpression(binding.Initializer, false)
+                    if binding.TypeClause != nil &&
+                        bindTypeClause(binding.TypeClause) is {} declaredType &&
+                        initExpr is not BoundErrorExpression {
+                        let declaredUnderlying = if declaredType is NullableTypeSymbol declNullable {
+                            declNullable.UnderlyingType
+                        } else {
+                            declaredType
+                        }
+                        initExpr = conversions.BindConversion(
+                            binding.Initializer.Location,
+                            initExpr,
+                            NullableTypeSymbol.Get(declaredUnderlying)
+                        )
+                        ApplySubExpressionNarrowingEffects(binding.Initializer, initExpr)
+                    }
+                    let valueType = if initExpr.Type is NullableTypeSymbol nullable {
+                        nullable.UnderlyingType
+                    } else {
+                        initExpr.Type
+                    }
+                    let local = LocalVariableSymbol(binding.Identifier.ValueText, true, valueType)
+                    $scope.TryDeclareVariable(local)
+                }
+                if ifLetExpr.Guard != nil {
+                    ApplyDeferredBlockArgumentNarrowingEffects(ifLetExpr.Guard)
+                }
+                let postHeader = CaptureNarrowingBindSnapshot()
+                ApplyDeferredBlockArgumentNarrowingEffects(ifLetExpr.ThenBlock)
+                let afterTrue = CaptureNarrowingBindSnapshot()
+                RestoreNarrowingBindSnapshot(postHeader)
+                if ifLetExpr.ElseExpression != nil {
+                    ApplyDeferredBlockArgumentNarrowingEffects(ifLetExpr.ElseExpression)
+                }
+                let afterFalse = CaptureNarrowingBindSnapshot()
+                JoinBranchNarrowingSnapshots(nil, afterTrue, nil, afterFalse)
+            } finally {
+                $scope = $scope.Pop()
+                Diagnostics.TruncateTo(diagMark)
+            }
+            return
+        }
+        if current is SwitchExpressionSyntax switchExpr {
+            let diagMark = Diagnostics.Count
+            try {
+                let discriminant = bindExpression(switchExpr.Expression, false)
+                ApplyConditionEffectsAndHeaderAliases(switchExpr.Expression, discriminant)
+                let armExitSnapshots = List[NarrowingBindSnapshot](switchExpr.Arms.Length)
+                var hasDefault = false
+                for arm in switchExpr.Arms {
+                    $scope = BoundScope($scope)
+                    try {
+                        if arm.IsDefault {
+                            hasDefault = true
+                        } else if arm.Value is {} armValue {
+                            if discriminant.Type != TypeSymbol.Error {
+                                let header = BindSwitchArmHeader(
+                                    armValue,
+                                    arm.Guard,
+                                    discriminant,
+                                    discriminantStale: false
+                                )
+                                if header.Pattern is BoundDiscardPattern && arm.Guard == nil {
+                                    hasDefault = true
+                                }
+                            } else if arm.Guard != nil {
+                                ApplyDeferredBlockArgumentNarrowingEffects(arm.Guard)
+                            }
+                        }
+                        let postHeader = CaptureNarrowingBindSnapshot()
+                        ApplyDeferredBlockArgumentNarrowingEffects(arm.Result)
+                        armExitSnapshots.Add(CaptureNarrowingBindSnapshot())
+                        RestoreNarrowingBindSnapshot(postHeader)
+                    } finally {
+                        $scope = $scope.Pop()
+                    }
+                }
+                if armExitSnapshots.Count > 0 {
+                    let fallthroughNoMatch = CaptureNarrowingBindSnapshot()
+                    RestoreNarrowingBindSnapshot(armExitSnapshots[0])
+                    for var i = 1; i < armExitSnapshots.Count; i++ {
+                        IntersectNarrowingWithSnapshot(armExitSnapshots[i])
+                    }
+                    if !hasDefault &&
+                        (
+                        discriminant.Type == TypeSymbol.Error || !ExhaustivenessAnalyzer.IsExhaustiveDiscriminant(
+                            discriminant.Type
+                        )
+                    ) {
+                        IntersectNarrowingWithSnapshot(fallthroughNoMatch)
+                    }
+                }
+            } finally {
+                Diagnostics.TruncateTo(diagMark)
+            }
+            return
+        }
+        if current is BinaryExpressionSyntax binaryExpr {
+            ApplyDeferredBlockArgumentNarrowingEffects(binaryExpr.Left)
+            ApplyDeferredBlockArgumentNarrowingEffects(binaryExpr.Right)
+            return
+        }
+        if !ExpressionBinder.IsTargetDependentExpressionSyntax(current) {
+            let diagMark = Diagnostics.Count
+            try {
+                let bound = bindExpression(current, false)
+                ApplySubExpressionNarrowingEffects(current, bound)
+            } finally {
+                Diagnostics.TruncateTo(diagMark)
+            }
+        }
+    }
+
+    private func IsPatternContainerSyntax(syntax SyntaxNode) bool ->
+    syntax is PropertyPatternFieldSyntax ||
+        syntax is PropertyPatternSyntax ||
+        syntax is ListPatternSyntax ||
+        syntax is BinaryPatternSyntax
+
+    internal func VerifyCallArgumentsAfterConversions(
+        arguments GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
+        boundCall BoundExpression?,
+        rebindCall(() -> BoundExpression)? = nil
+    ) BoundExpression? {
+        if arguments.Count < 2 ||
+            boundCall == nil ||
+            boundCall is BoundErrorExpression ||
+            verifyingArgumentSyntaxes.Contains(OverloadResolver.UnwrapNamedArgumentValue(arguments[0])) ||
+            initialArgumentBySyntax.Count == 0 {
+            return boundCall
+        }
+        var targetSyntaxes HashSet[SyntaxNode]? = nil
+        for var i = 0; i < arguments.Count; i++ {
+            let argSyntax = OverloadResolver.UnwrapNamedArgumentValue(arguments[i])
+            if initialArgumentBySyntax.ContainsKey(argSyntax) {
+                if targetSyntaxes == nil {
+                    targetSyntaxes = HashSet[SyntaxNode]()
+                }
+                targetSyntaxes.Add(argSyntax)
+            }
+        }
+        if targetSyntaxes == nil || targetSyntaxes.Count == 0 {
+            return boundCall
+        }
+        let finalBySyntax = Dictionary[SyntaxNode, BoundExpression]()
+        CollectFinalArgumentsByOriginSyntax(boundCall, targetSyntaxes, finalBySyntax)
+        var firstChanged = -1
+        for var i = 0; i < arguments.Count - 1; i++ {
+            let argSyntax = OverloadResolver.UnwrapNamedArgumentValue(arguments[i])
+            if initialArgumentBySyntax.TryGetValue(argSyntax, out var initial) && finalBySyntax.TryGetValue(
+                argSyntax,
+                out var finalArg
+            ) &&
+                ConversionAddedNarrowingEffects(initial, finalArg, argSyntax) {
+                firstChanged = i
+                break
+            }
+        }
+        if firstChanged < 0 {
+            return boundCall
+        }
+        let firstSyntax = OverloadResolver.UnwrapNamedArgumentValue(arguments[firstChanged])
+        if !deferredArgumentSnapshots.TryGetValue(firstSyntax, out var snapshotAtFirst) {
+            return boundCall
+        }
+        for var i = 0; i < arguments.Count; i++ {
+            initialArgumentBySyntax.Remove(OverloadResolver.UnwrapNamedArgumentValue(arguments[i]))
+        }
+        let addedVerifying = List[SyntaxNode](arguments.Count)
+        for var i = 0; i < arguments.Count; i++ {
+            let unwrapped = OverloadResolver.UnwrapNamedArgumentValue(arguments[i])
+            if verifyingArgumentSyntaxes.Add(unwrapped) {
+                addedVerifying.Add(unwrapped)
+            }
+        }
+        try {
+            let arg0Syntax = OverloadResolver.UnwrapNamedArgumentValue(arguments[0])
+            if rebindCall != nil && deferredArgumentSnapshots.TryGetValue(arg0Syntax, out var snapshotAtZero) {
+                for var i = 0; i < arguments.Count; i++ {
+                    let argSyntax = OverloadResolver.UnwrapNamedArgumentValue(arguments[i])
+                    if finalBySyntax.TryGetValue(argSyntax, out var finalArg) {
+                        preConvertedEffectsBySyntax[argSyntax] = finalArg
+                    }
+                }
+                try {
+                    for var j = 0; j < arguments.Count; j++ {
+                        $scope.RemoveVariablesDeclaredInSpan(arguments[j].SyntaxTree, arguments[j].Span)
+                        let _ = Diagnostics.ReplaceDiagnosticsIn(arguments[j].Location, () -> 0)
+                    }
+                    RestoreNarrowingBindSnapshot(snapshotAtZero)
+                    return rebindCall()
+                } finally {
+                    for var i = 0; i < arguments.Count; i++ {
+                        preConvertedEffectsBySyntax.Remove(OverloadResolver.UnwrapNamedArgumentValue(arguments[i]))
+                    }
+                }
+            }
+            let replacements = Dictionary[BoundExpression, BoundExpression](ReferenceEqualityComparer.Instance)
+            RestoreNarrowingBindSnapshot(snapshotAtFirst)
+            ApplySubExpressionNarrowingEffects(firstSyntax, finalBySyntax[firstSyntax])
+            for var j = firstChanged + 1; j < arguments.Count; j++ {
+                let argSyntax = OverloadResolver.UnwrapNamedArgumentValue(arguments[j])
+                if argSyntax is not RefArgumentExpressionSyntax{IsInlineDeclaration: true} {
+                    $scope.RemoveVariablesDeclaredInSpan(arguments[j].SyntaxTree, arguments[j].Span)
+                }
+                var finalArg BoundExpression? = nil
+                if !finalBySyntax.TryGetValue(argSyntax, out finalArg) {
+                    initialArgumentBySyntax.TryGetValue(argSyntax, out finalArg)
+                }
+                if argSyntax is RefArgumentExpressionSyntax refArg {
+                    if !refArg.IsInlineDeclaration && bindRefArgumentExpression != nil {
+                        let reboundRef = Diagnostics.ReplaceDiagnosticsIn(
+                            refArg.Location,
+                            () -> bindRefArgumentExpression!!(refArg)
+                        )
+                        if finalArg is BoundAddressOfExpression finalAddr &&
+                            reboundRef is BoundAddressOfExpression reboundAddr &&
+                            !object
+                            .ReferenceEquals(reboundAddr.Operand, finalAddr.Operand) {
+                            let rebuiltAddr = BoundAddressOfExpression(
+                                finalAddr.Syntax,
+                                reboundAddr.Operand,
+                                finalAddr.IsUnmanaged,
+                                finalAddr.IsReadOnly
+                            )
+                            replacements[finalAddr] = rebuiltAddr
+                            finalArg = rebuiltAddr
+                        } else if finalArg is BoundConditionalAddressExpression finalCondAddr &&
+                            reboundRef is BoundConditionalAddressExpression {
+                            replacements[finalCondAddr] = reboundRef
+                            finalArg = reboundRef
+                        }
+                    }
+                    if finalArg != nil {
+                        ApplySubExpressionNarrowingEffects(argSyntax, finalArg)
+                    }
+                    continue
+                }
+                if argSyntax is LambdaExpressionSyntax {
+                    if finalArg != nil {
+                        ApplySubExpressionNarrowingEffects(argSyntax, finalArg)
+                    }
+                    continue
+                }
+                let targetType = finalArg?.Type
+                let hasUsableTarget = targetType != nil &&
+                    targetType != TypeSymbol.Error &&
+                    targetType != TypeSymbol.Void &&
+                    !TypeSymbol.ContainsTypeParameter(targetType)
+                let convertedRebound = Diagnostics.ReplaceDiagnosticsIn(
+                    argSyntax.Location,
+                    () -> {
+                        let rebound = if (
+                            ExpressionBinder.IsTargetTypedBranchyArgumentSyntax(argSyntax) ||
+                                ExpressionBinder.IsTargetDependentExpressionSyntax(argSyntax)
+                        ) &&
+                            hasUsableTarget {
+                            bindExpressionWithTargetType(argSyntax, targetType!!)
+                        } else {
+                            bindExpression(argSyntax, false)
+                        }
+                        if rebound is not BoundErrorExpression && hasUsableTarget && rebound.Type != targetType {
+                            return conversions.BindConversion(argSyntax.Location, rebound, targetType)
+                        }
+                        return rebound
+                    }
+                )
+                if finalArg != nil && !object.ReferenceEquals(convertedRebound, finalArg) {
+                    replacements[finalArg] = convertedRebound
+                }
+                ApplySubExpressionNarrowingEffects(argSyntax, convertedRebound)
+            }
+            if replacements.Count > 0 {
+                return ReplaceCallArgumentRewriter(replacements).RewriteExpression(boundCall)
+            }
+            return boundCall
+        } finally {
+            for added in addedVerifying {
+                verifyingArgumentSyntaxes.Remove(added)
+            }
+        }
+    }
+
+    private sealed class ReplaceCallArgumentRewriter : BoundTreeRewriter {
+        private let replacements Dictionary[BoundExpression, BoundExpression]
+
+        init(replacements Dictionary[BoundExpression, BoundExpression]) {
+            this.replacements = replacements
+        }
+
+        open override func RewriteExpression(node BoundExpression) BoundExpression {
+            if replacements.TryGetValue(node, out var replacement) {
+                return replacement
+            }
+            return base.RewriteExpression(node)
+        }
+    }
+
+    private func ConversionAddedNarrowingEffects(
+        initial BoundExpression,
+        finalArg BoundExpression,
+        argSyntax SyntaxNode
+    ) bool {
+        if object.ReferenceEquals(initial, finalArg) {
+            return false
+        }
+        if finalArg is BoundClrConversionCallExpression {
+            return true
+        }
+        if finalArg is BoundCallExpression && object.ReferenceEquals(finalArg.ImplicitConversionOperand, initial) {
+            return true
+        }
+        if ContainsConversionWithNarrowingEffects(finalArg, argSyntax) &&
+            !ContainsConversionWithNarrowingEffects(initial, argSyntax) {
+            return true
+        }
+        if ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(initial, out _) {
+            return false
+        }
+        return ExpressionHasNoNarrowingEffects(initial, argSyntax) &&
+            !ExpressionHasNoNarrowingEffects(finalArg, argSyntax)
+    }
+
+    private func ContainsConversionWithNarrowingEffects(node BoundExpression?, argSyntax SyntaxNode) bool {
+        if node == nil {
+            return false
+        }
+        if node is BoundClrConversionCallExpression {
+            return !ExpressionHasNoNarrowingEffects(node, argSyntax)
+        }
+        if node is BoundCallExpression call && call.ImplicitConversionOperand != nil {
+            return !ExpressionHasNoNarrowingEffects(call, argSyntax)
+        }
+        switch node {
+            case conv is BoundConversionExpression {
+                return ContainsConversionWithNarrowingEffects(conv.Expression, argSyntax)
+            }
+            case block is BoundBlockExpression {
+                return ContainsConversionWithNarrowingEffects(block.Expression, argSyntax)
+            }
+            case cond is BoundConditionalExpression {
+                return ContainsConversionWithNarrowingEffects(cond.WhenTrue, argSyntax) ||
+                    ContainsConversionWithNarrowingEffects(cond.WhenFalse, argSyntax)
+            }
+            case sw is BoundSwitchExpression {
+                for arm in sw.Arms {
+                    if ContainsConversionWithNarrowingEffects(arm.Result, argSyntax) {
+                        return true
+                    }
+                }
+                return false
+            }
+            case bin is BoundBinaryExpression {
+                return ContainsConversionWithNarrowingEffects(bin.Left, argSyntax) ||
+                    ContainsConversionWithNarrowingEffects(bin.Right, argSyntax)
+            }
+            default {
+                return false
+            }
+        }
+    }
+
+    private func CollectFinalArgumentsByOriginSyntax(
+        node BoundExpression?,
+        targetSyntaxes HashSet[SyntaxNode],
+        finalBySyntax Dictionary[SyntaxNode, BoundExpression]
+    ) {
+        if node == nil {
+            return
+        }
+        if syntaxByTrackedArgument.TryGetValue(node, out var originSyntax) && targetSyntaxes.Contains(originSyntax) {
+            finalBySyntax[originSyntax] = node
+            return
+        }
+        if node.ImplicitConversionOperand is {} convOperand && syntaxByTrackedArgument.TryGetValue(
+            convOperand,
+            out var convOrigin
+        ) &&
+            targetSyntaxes.Contains(convOrigin) {
+            finalBySyntax[convOrigin] = node
+            return
+        }
+        if node is BoundClrConversionCallExpression clrConv && syntaxByTrackedArgument.TryGetValue(
+            clrConv.Source,
+            out var clrOrigin
+        ) &&
+            targetSyntaxes.Contains(clrOrigin) {
+            finalBySyntax[clrOrigin] = node
+            return
+        }
+        switch node {
+            case block is BoundBlockExpression {
+                for stmt in block.Statements {
+                    switch stmt {
+                        case decl is BoundVariableDeclaration {
+                            CollectFinalArgumentsByOriginSyntax(decl.Initializer, targetSyntaxes, finalBySyntax)
+                        }
+                        case exprStmt is BoundExpressionStatement {
+                            CollectFinalArgumentsByOriginSyntax(exprStmt.Expression, targetSyntaxes, finalBySyntax)
+                        }
+                    }
+                }
+                CollectFinalArgumentsByOriginSyntax(block.Expression, targetSyntaxes, finalBySyntax)
+            }
+            case call is BoundCallExpression {
+                for arg in call.Arguments {
+                    CollectFinalArgumentsByOriginSyntax(arg, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case instCall is BoundUserInstanceCallExpression {
+                for arg in instCall.Arguments {
+                    CollectFinalArgumentsByOriginSyntax(arg, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case ctorCall is BoundConstructorCallExpression {
+                for arg in ctorCall.Arguments {
+                    CollectFinalArgumentsByOriginSyntax(arg, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case structLit is BoundStructLiteralExpression {
+                for init in structLit.Initializers {
+                    CollectFinalArgumentsByOriginSyntax(init.Value, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case impCall is BoundImportedCallExpression {
+                for arg in impCall.Arguments {
+                    CollectFinalArgumentsByOriginSyntax(arg, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case impInstCall is BoundImportedInstanceCallExpression {
+                for arg in impInstCall.Arguments {
+                    CollectFinalArgumentsByOriginSyntax(arg, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case clrStaticCall is BoundClrStaticCallExpression {
+                for arg in clrStaticCall.Arguments {
+                    CollectFinalArgumentsByOriginSyntax(arg, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case clrCtorCall is BoundClrConstructorCallExpression {
+                for arg in clrCtorCall.Arguments {
+                    CollectFinalArgumentsByOriginSyntax(arg, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case indirectCall is BoundIndirectCallExpression {
+                for arg in indirectCall.Arguments {
+                    CollectFinalArgumentsByOriginSyntax(arg, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case fnPtrCall is BoundFunctionPointerInvocationExpression {
+                for arg in fnPtrCall.Arguments {
+                    CollectFinalArgumentsByOriginSyntax(arg, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case nullCond is BoundNullConditionalAccessExpression {
+                CollectFinalArgumentsByOriginSyntax(nullCond.WhenNotNull, targetSyntaxes, finalBySyntax)
+            }
+            case cond is BoundConditionalExpression {
+                CollectFinalArgumentsByOriginSyntax(cond.WhenTrue, targetSyntaxes, finalBySyntax)
+                CollectFinalArgumentsByOriginSyntax(cond.WhenFalse, targetSyntaxes, finalBySyntax)
+            }
+            case constrainedCall is BoundConstrainedStaticCallExpression {
+                for arg in constrainedCall.Arguments {
+                    CollectFinalArgumentsByOriginSyntax(arg, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case baseClassCall is BoundBaseClassCallExpression {
+                for arg in baseClassCall.Arguments {
+                    CollectFinalArgumentsByOriginSyntax(arg, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case baseIfaceCall is BoundBaseInterfaceCallExpression {
+                for arg in baseIfaceCall.Arguments {
+                    CollectFinalArgumentsByOriginSyntax(arg, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case arr is BoundArrayCreationExpression {
+                for elem in arr.Elements {
+                    CollectFinalArgumentsByOriginSyntax(elem, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case tupleLit is BoundTupleLiteralExpression {
+                for elem in tupleLit.Elements {
+                    CollectFinalArgumentsByOriginSyntax(elem, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case clrIndex is BoundClrIndexExpression {
+                for arg in clrIndex.Arguments {
+                    CollectFinalArgumentsByOriginSyntax(arg, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case clrIndexAssign is BoundClrIndexAssignmentExpression {
+                for arg in clrIndexAssign.Arguments {
+                    CollectFinalArgumentsByOriginSyntax(arg, targetSyntaxes, finalBySyntax)
+                }
+            }
+            case deref is BoundDereferenceExpression {
+                CollectFinalArgumentsByOriginSyntax(deref.Operand, targetSyntaxes, finalBySyntax)
+            }
+            case conv is BoundConversionExpression {
+                CollectFinalArgumentsByOriginSyntax(conv.Expression, targetSyntaxes, finalBySyntax)
+            }
+            case addr is BoundAddressOfExpression {
+                CollectFinalArgumentsByOriginSyntax(addr.Operand, targetSyntaxes, finalBySyntax)
+            }
+            case condAddr is BoundConditionalAddressExpression {
+                CollectFinalArgumentsByOriginSyntax(condAddr.Condition, targetSyntaxes, finalBySyntax)
+                CollectFinalArgumentsByOriginSyntax(condAddr.WhenTrueOperand, targetSyntaxes, finalBySyntax)
+                CollectFinalArgumentsByOriginSyntax(condAddr.WhenFalseOperand, targetSyntaxes, finalBySyntax)
+            }
+            case unary is BoundUnaryExpression {
+                CollectFinalArgumentsByOriginSyntax(unary.Operand, targetSyntaxes, finalBySyntax)
+            }
+        }
+    }
+
+    private let knownEffectFreeExpressions HashSet[BoundExpression] = HashSet[BoundExpression](
+        ReferenceEqualityComparer.Instance
+    )
+
+    private func ExpressionHasNoNarrowingEffects(node BoundExpression?, syntax SyntaxNode? = nil) bool {
+        if node == nil {
+            return true
+        }
+        if syntax is CallExpressionSyntax {
+            return false
+        }
+        if knownEffectFreeExpressions.Contains(node) {
+            return true
+        }
+        let isEffectFree = switch node {
+            case BoundLiteralExpression,
+            BoundDefaultExpression,
+            BoundVariableExpression,
+            BoundTypeOfExpression,
+            BoundSizeOfExpression,
+            BoundUtf8StringExpression,
+            BoundFunctionLiteralExpression,
+            BoundFunctionPointerFromMethodExpression,
+            BoundErrorExpression: true
+            case methodGroup is BoundMethodGroupExpression: ExpressionHasNoNarrowingEffects(methodGroup.Receiver)
+            case clrMethodGroup is BoundClrMethodGroupExpression: ExpressionHasNoNarrowingEffects(
+                clrMethodGroup.Receiver
+            )
+            case conversion is BoundConversionExpression: conversion.Syntax is not CallExpressionSyntax &&
+                ExpressionHasNoNarrowingEffects(conversion.Expression)
+            case unary is BoundUnaryExpression: ExpressionHasNoNarrowingEffects(unary.Operand)
+            case binary is BoundBinaryExpression: !BinaryEqualityRunsUserCode(binary) &&
+                ExpressionHasNoNarrowingEffects(binary.Left) &&
+                ExpressionHasNoNarrowingEffects(binary.Right)
+            case field is BoundFieldAccessExpression: !StaticMemberAccessRunsUserCode(field) &&
+                ExpressionHasNoNarrowingEffects(field.Receiver)
+            case property is BoundPropertyAccessExpression: !SourcePropertyAccessRunsUserCode(property) &&
+                !StaticMemberAccessRunsUserCode(property) &&
+                ExpressionHasNoNarrowingEffects(property.Receiver)
+            case clrAccess is BoundClrPropertyAccessExpression: !ClrAccessRunsUserCode(clrAccess) &&
+                ExpressionHasNoNarrowingEffects(clrAccess.Receiver)
+            case clrIndex is BoundClrIndexExpression: !ClrAccessRunsUserCode(clrIndex) &&
+                ExpressionHasNoNarrowingEffects(clrIndex.Target) &&
+                ExpressionsHaveNoNarrowingEffects(clrIndex.Arguments)
+            case index is BoundIndexExpression: ExpressionHasNoNarrowingEffects(index.Target) &&
+                ExpressionsHaveNoNarrowingEffects(index.Indices)
+            case tupleAccess is BoundTupleElementAccessExpression: ExpressionHasNoNarrowingEffects(tupleAccess.Receiver)
+            case asExpr is BoundAsExpression: ExpressionHasNoNarrowingEffects(asExpr.Expression)
+            case deref is BoundDereferenceExpression: ExpressionHasNoNarrowingEffects(deref.Operand)
+            case nullCond is BoundNullConditionalAccessExpression: ExpressionHasNoNarrowingEffects(nullCond.Receiver) &&
+                ExpressionHasNoNarrowingEffects(nullCond.WhenNotNull)
+            case conditional is BoundConditionalExpression: ExpressionHasNoNarrowingEffects(conditional.Condition) &&
+                ExpressionHasNoNarrowingEffects(conditional.WhenTrue) &&
+                ExpressionHasNoNarrowingEffects(conditional.WhenFalse)
+            case tupleLiteral is BoundTupleLiteralExpression: ExpressionsHaveNoNarrowingEffects(tupleLiteral.Elements)
+            case arrayCreation is BoundArrayCreationExpression: ExpressionHasNoNarrowingEffects(
+                arrayCreation.LengthExpression
+            ) &&
+                ExpressionsHaveNoNarrowingEffects(arrayCreation.DimensionExpressions) &&
+                ExpressionsHaveNoNarrowingEffects(arrayCreation.Elements)
+            default: false
+        }
+        if isEffectFree {
+            knownEffectFreeExpressions.Add(node)
+        }
+        return isEffectFree
+    }
+
+    private func ExpressionsHaveNoNarrowingEffects(expressions ImmutableArray[BoundExpression]) bool {
+        if expressions.IsDefaultOrEmpty {
+            return true
+        }
+        for expression in expressions {
+            if !ExpressionHasNoNarrowingEffects(expression) {
+                return false
+            }
+        }
+        return true
+    }
+
     /// ADR-0208 section 9 and row R18 (#5534): the else-branch of an `if` statement is bound under the state after
     /// the condition, not after the then-branch. The condition of an `if` statement nested in the then-branch runs
     /// only on that path, so the facts it removed from the enclosing frames are put back for the else-branch
@@ -2882,10 +3989,12 @@ internal partial class StatementBinder {
     }
 
     internal func CaptureCallArgumentPrebindRollback(callSyntax SyntaxNode) Action {
+        let savedBindSnapshot = CaptureNarrowingBindSnapshot()
         let savedFrames = CaptureNarrowingFramesSnapshot()
         let savedAliases = CaptureExternalCallableAliases()
         let savedJournalCount = conditionKillJournal?.Count ?? -1
         return () -> {
+            RestoreNarrowingBindSnapshot(savedBindSnapshot)
             RestoreNarrowingFramesSnapshot(savedFrames)
             RestoreExternalCallableAliases(savedAliases)
             let journal = conditionKillJournal
@@ -2952,6 +4061,11 @@ internal partial class StatementBinder {
     /// after this call, so a test after the effect (`Check(h) && x != nil`) still narrows its branch. The
     /// effects are read with the callable aliases from before the condition, as for a statement, so this runs
     /// before (cref:ApplyHeaderCallableEffects). Returns the removed facts with the type a read saw, or `nil`.
+    internal func ApplyConditionEffectsAndHeaderAliases(syntax SyntaxNode, condition BoundExpression) {
+        ApplyConditionEffectsToNarrowings(syntax, condition)
+        ApplyHeaderCallableEffects(condition)
+    }
+
     private func ApplyConditionEffectsToNarrowings(
         syntax SyntaxNode,
         condition BoundExpression,
@@ -2965,7 +4079,7 @@ internal partial class StatementBinder {
         removedFacts.Clear()
         InvalidateNarrowingsForAssignedVariables(
             syntax,
-            BoundExpressionStatement(nil, condition),
+            BoundExpressionStatement(syntax, condition),
             removedFacts,
             aliasesAtEntry
         )
@@ -2987,11 +4101,11 @@ internal partial class StatementBinder {
         aliasesAtEntry IReadOnlyCollection[VariableSymbol]? = nil
     ) {
         let evaluated = LocalVariableSymbol("<switch-value>", true, discriminantType)
-        ApplyConditionEffectsToNarrowings(
-            syntax,
-            BoundIsExpression(syntax, BoundVariableExpression(nil, evaluated), pattern),
-            aliasesAtEntry
-        )
+        let isExpr = BoundIsExpression(syntax, BoundVariableExpression(nil, evaluated), pattern)
+        ApplyConditionEffectsToNarrowings(syntax, isExpr, aliasesAtEntry)
+        if aliasesAtEntry == nil {
+            ApplyHeaderCallableEffects(isExpr)
+        }
     }
 
     /// #5629: a switch arm's header, bound once in dispatch order: the pattern, the narrowing that it proves for the
@@ -3584,7 +4698,7 @@ internal partial class StatementBinder {
                     (
                     StatementBinder.ConstructionRunsUserCode(literal.StructType) || literal.Initializers.Any(
                         (initializer BoundFieldInitializer) -> initializer.Property is {} property &&
-                            StatementBinder.SourcePropertyRunsUserCode(property, receiverType: nil)
+                            StatementBinder.SourcePropertyRunsUserCode(property, receiverType: nil, isWrite: true)
                     )
                 )
             )

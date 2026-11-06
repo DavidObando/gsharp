@@ -3371,10 +3371,11 @@ internal partial class DeclarationBinder {
                     ) {
                         return true
                     }
-                    let forRangeNames = if forRange.SecondIdentifier != nil {
-                        []string{forRange.FirstIdentifier.ValueText, forRange.SecondIdentifier.ValueText}
+                    let firstName = forRange.FirstIdentifier.ValueText
+                    let forRangeNames = if forRange.SecondIdentifier is {} secondIdentifier {
+                        []string{firstName, secondIdentifier.ValueText}
                     } else {
-                        []string{forRange.FirstIdentifier.ValueText}
+                        []string{firstName}
                     }
                     return TryFindInstanceMemberReference(
                         forRange.Body,

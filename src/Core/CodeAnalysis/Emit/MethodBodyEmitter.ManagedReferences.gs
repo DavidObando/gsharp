@@ -27,8 +27,8 @@ internal partial class MethodBodyEmitter {
                 declaringType = container
             }
             case BoundClrPropertyAccessExpression{Member: FieldInfo field} access {
-                token = if access.StaticContainerType != nil {
-                    this.outer.memberRefs.GetFieldReference(field, access.StaticContainerType)
+                token = if access.StaticContainerType is {} staticContainerType {
+                    this.outer.memberRefs.GetFieldReference(field, staticContainerType)
                 } else {
                     this.outer.memberRefs.GetFieldReference(field)
                 }

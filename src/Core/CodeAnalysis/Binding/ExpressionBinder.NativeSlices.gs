@@ -123,6 +123,7 @@ internal partial class ExpressionBinder {
         if syntax.NullableQuestionToken != nil {
             if syntax.Callee is {} calleeSyntax {
                 let callee = BindExpression(calleeSyntax)
+                ApplySubExpressionNarrowingEffects(calleeSyntax, callee)
                 let calleeName = calleeSyntax.SyntaxTree.Text.ToString(calleeSyntax.Span)
                 return BindPossiblySkippedOperand(
                     () -> overloads.BindNullConditionalIndirectCallExpression(
@@ -134,11 +135,13 @@ internal partial class ExpressionBinder {
                 )
             }
             let beforeCall = CaptureExpressionNarrowingFrames()
+            let preCallSnapshot = CaptureNarrowingBindSnapshot()
             let entryAliases = GetCurrentExpressionCallableAliases()
             let boundCall = overloads.BindCallExpression(syntax)
             if boundCall is BoundNullConditionalAccessExpression {
                 InvalidateExpressionNarrowingFrames(boundCall, entryAliases)
                 MergeBranchExpressionNarrowingFrames(beforeCall)
+                intersectNarrowingWithSnapshot?(preCallSnapshot)
                 expressionExitAliases[boundCall] = GetCurrentExpressionCallableAliases()
             }
             return boundCall

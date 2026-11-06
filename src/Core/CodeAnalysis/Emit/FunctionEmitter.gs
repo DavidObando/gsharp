@@ -775,9 +775,9 @@ internal class FunctionEmitter {
             let pendingRows = this.emitCtx.PendingGenericParameters
             for var gi = gpRowStart; gi < pendingRows.Count; gi++ {
                 let gpRow = pendingRows[gi]
-                if gpRow.InterfaceConstraintType != nil {
+                if gpRow.InterfaceConstraintType is {} constraintType {
                     pendingRows[gi] = gpRow with{
-                        PreResolvedConstraintHandle = this.memberRefs.GetElementTypeToken(gpRow.InterfaceConstraintType)
+                        PreResolvedConstraintHandle = this.memberRefs.GetElementTypeToken(constraintType)
                     }
                 }
             }
