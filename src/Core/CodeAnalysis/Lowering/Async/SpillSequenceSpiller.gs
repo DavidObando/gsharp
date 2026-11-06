@@ -2406,28 +2406,34 @@ shared class SpillSequenceSpiller {
                     return
                 }
                 let rawElementExpr BoundExpression = if lp.IndexerProperty is {} indexerProperty {
-                    if RefCapabilities.GetReturnRefKind(indexerProperty) != RefKind.None {
+                    let itemGetter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(
+                        indexerProperty,
+                        wantSetter: false
+                    ) ??
+                        ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(
+                        indexerProperty,
+                        wantSetter: false,
+                        nonPublic: true
+                    ) ??
+                        throw InvalidOperationException("Indexable list pattern indexer has no public getter.")
+                    if itemGetter.ReturnType.IsByRef {
                         BoundDereferenceExpression(
                             element.Syntax,
-                            BoundClrIndexExpression(
+                            BoundImportedInstanceCallExpression(
                                 element.Syntax,
                                 receiver,
-                                indexerProperty,
-                                ImmutableArray.Create(indexExpr),
+                                itemGetter,
                                 ByRefTypeSymbol.Get(lp.ElementType),
-                                constrainedReceiverTypeParameter: nil,
-                                constrainedInterfaceType: nil
+                                ImmutableArray.Create(indexExpr)
                             )
                         )
                     } else {
-                        BoundClrIndexExpression(
+                        BoundImportedInstanceCallExpression(
                             element.Syntax,
                             receiver,
-                            indexerProperty,
-                            ImmutableArray.Create(indexExpr),
+                            itemGetter,
                             lp.ElementType,
-                            constrainedReceiverTypeParameter: nil,
-                            constrainedInterfaceType: nil
+                            ImmutableArray.Create(indexExpr)
                         )
                     }
                 } else {

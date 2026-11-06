@@ -277,6 +277,7 @@ public struct ImportedIndexable {
         const source = `import MutatingPatterns
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Threading.Tasks
 struct Counter {
     var N int32
@@ -295,15 +296,52 @@ async func Two() Task[int32] {
     await Task.Yield()
     return 2
 }
+async func Echo[T](value T) Task[T] {
+    await Task.Yield()
+    return value
+}
 async func GrowAndReturnOne(items List[int32]) Task[int32] {
     await Task.Yield()
     items.Add(99)
     return 1
 }
+open class BaseItem {
+    prop Id int32 { get; }
+    init(id int32) {
+        Id = id
+    }
+}
+interface IHasId {
+    prop Id int32 { get; }
+}
+struct IdItem : IHasId {
+    prop Id int32 { get; }
+    init(id int32) {
+        Id = id
+    }
+}
 async func CheckStruct(c Counter) Task[bool] -> c is { Next: == await One(), N: 1 }
 async func CheckStructOr(c Counter) Task[bool] -> c is { Next: == await Two(), N: 1 } or { N: 0 }
 async func CheckImportedStruct(c ImportedIndexable) Task[bool] -> c is { Next: == await One(), N: 1 }
 async func CheckImportedIndexableOr(c ImportedIndexable) Task[bool] -> c is [== await Two()] or { N: 0 }
+async func CheckGenericImmutableArray[T BaseItem](items ImmutableArray[T], expected T) Task[bool] -> items is [== await Echo[T](expected)]
+async func CheckGenericImmutableArrayStruct[T](items ImmutableArray[T], expected int32) Task[bool] -> items is [IHasId{ Id: == await Echo[int32](expected) }]
+async func CheckArraySliceSubpattern(items []int32) Task[bool] -> items is [..[== await One()]]
+async func CheckNativeSliceSubpattern(items slice[int32]) Task[bool] -> items is [..[== await One()]]
+async func CheckArrayRestCaptureAfterSuspension(items []int32) Task[int32] {
+    if items is [== await One(), ..rest] {
+        let extra = await Two()
+        return rest.Length * 10 + rest[0] + extra
+    }
+    return -1
+}
+async func CheckNativeSliceRestCaptureAfterSuspension(items slice[int32]) Task[int32] {
+    if items is [== await One(), ..rest] {
+        let extra = await Two()
+        return rest.Length * 10 + rest[0] + extra
+    }
+    return -1
+}
 async func CheckListExact() Task[bool] {
     let items = List[int32]()
     items.Add(1)
@@ -323,11 +361,18 @@ let s3 = Bit(CheckImportedStruct(ImportedIndexable{N: 0}).Result)
 let s4 = Bit(CheckImportedIndexableOr(ImportedIndexable{N: 0}).Result)
 let l1 = Bit(CheckListExact().Result)
 let l2 = Bit(CheckListSlice().Result)
-Console.Write("${s1}${s2}${s3}${s4}|${l1}${l2}")
+let baseItem = BaseItem(7)
+let g1 = Bit(CheckGenericImmutableArray[BaseItem](ImmutableArray.Create(baseItem), baseItem).Result) + Bit(CheckGenericImmutableArrayStruct[IdItem](ImmutableArray.Create(IdItem(7)), 7).Result)
+let g2 = Bit(CheckGenericImmutableArray[BaseItem](ImmutableArray.Create(baseItem), BaseItem(7)).Result) + Bit(CheckGenericImmutableArrayStruct[IdItem](ImmutableArray.Create(IdItem(7)), 8).Result)
+let m1 = Bit(CheckArraySliceSubpattern([]int32{1}).Result) + Bit(CheckArraySliceSubpattern([]int32{2}).Result)
+let m2 = Bit(CheckNativeSliceSubpattern(slice[int32]{1}).Result) + Bit(CheckNativeSliceSubpattern(slice[int32]{2}).Result)
+let r1 = CheckArrayRestCaptureAfterSuspension([]int32{1, 5, 6}).Result
+let r2 = CheckNativeSliceRestCaptureAfterSuspension(slice[int32]{1, 5, 6}).Result
+Console.Write("${s1}${s2}${s3}${s4}|${l1}${l2}|${g1}${g2}|${m1}|${m2}|${r1}:${r2}")
 `
         Issue5392ConstructedInterfaceMethodDriverTests.CompileVerifyAndRun(
             source,
-            "1111|11",
+            "1111|11|1100|10|10|27:27",
             "5696",
             reference,
             implementation
