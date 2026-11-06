@@ -4694,7 +4694,14 @@ partial class CSharpToGSharpTranslator {
             }
             var tupleReceiver GExpression = translated
             let localStatements = List[GStatement]()
-            if !(translated is IdentifierExpression) {
+            if !(
+                translated is IdentifierExpression &&
+                    this
+                    .context
+                    .GetSymbolInfo(unwrapped)
+                    .Symbol is ILocalSymbol or
+                    IParameterSymbol
+            ) {
                 let tempName = this.FreshTupleValueName(value)
                 localStatements.Add(LocalDeclarationStatement(BindingKind.Let, tempName, initializer: translated))
                 tupleReceiver = IdentifierExpression(tempName)
