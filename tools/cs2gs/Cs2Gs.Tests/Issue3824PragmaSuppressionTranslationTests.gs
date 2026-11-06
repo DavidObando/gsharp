@@ -516,6 +516,34 @@ public partial class Sample
         )
     }
 
+    @Fact
+    func InactivePreprocessorBranchPragma_IsIgnoredBySuppressionAndDroppedReporting() {
+        const source = `
+public class Sample
+{
+    private static int Door(int x) => x + 1;
+
+    public int Run(int x)
+    {
+#if FALSE
+#pragma warning disable GSA0005
+#endif
+#pragma warning disable GSA0007
+#if FALSE
+#pragma warning restore GSA0007
+#endif
+        var v = Door(x);
+        return v;
+#pragma warning restore GSA0007
+    }
+}
+`
+        let (printed, diagnostics) = TranslateWithDiagnostics(source)
+        Assert.DoesNotContain(diagnostics, (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED")
+        Assert.Contains("@SuppressDiagnostic(\"GSA0007\") {", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("GSA0005", printed, StringComparison.Ordinal)
+    }
+
     shared {
         private func CountOccurrences(haystack string, needle string) int32 {
             var count = 0

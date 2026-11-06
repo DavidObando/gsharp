@@ -629,7 +629,7 @@ partial class CSharpToGSharpTranslator {
                     .DescendantTrivia(descendIntoTrivia: true)
                     .Where((t SyntaxTrivia) -> t.IsKind(SyntaxKind.PragmaWarningDirectiveTrivia))
                     .Select((t SyntaxTrivia) -> cast[PragmaWarningDirectiveTriviaSyntax](t.GetStructure()))
-                    .Where((d PragmaWarningDirectiveTriviaSyntax) -> d != nil)
+                    .Where((d PragmaWarningDirectiveTriviaSyntax) -> d != nil && d.IsActive)
                     .OrderBy((d PragmaWarningDirectiveTriviaSyntax) -> d.SpanStart)
                     .ToList()
                 if raw.Count == 0 {
