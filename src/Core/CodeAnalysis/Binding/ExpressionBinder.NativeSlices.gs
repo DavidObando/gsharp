@@ -294,15 +294,19 @@ internal partial class ExpressionBinder {
         let receiver = BoundVariableExpression(nil, saved)
         var arguments ImmutableArray[BoundExpression]
         var indexer PropertyInfo
-        if boundIndex == nil && syntax is FromEndIndexExpressionSyntax fromEnd {
-            arguments = ImmutableArray.Create[BoundExpression](
-                conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32),
-                BoundLiteralExpression(nil, true)
-            )
+        var unwrappedSyntax = syntax
+        while unwrappedSyntax is ParenthesizedExpressionSyntax parenthesized {
+            unwrappedSyntax = parenthesized.Expression
+        }
+        if boundIndex == nil && unwrappedSyntax is FromEndIndexExpressionSyntax fromEnd {
+            let fromEndOperand = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32)
+            ApplySubExpressionNarrowingEffects(fromEnd.Operand, fromEndOperand)
+            arguments = ImmutableArray.Create[BoundExpression](fromEndOperand, BoundLiteralExpression(nil, true))
             indexer = clrType.GetProperties().Single((p PropertyInfo) -> p.GetIndexParameters().Length == 2)
         } else {
             var index = boundIndex ?? BindExpression(syntax)
             if ClrTypeUtilities.AreSame(index.Type.ClrType, typeof(Range)) {
+                ApplySubExpressionNarrowingEffects(syntax, index)
                 let method = clrType.GetMethods().Single(
                     (m MethodInfo) -> m.Name == "Subslice" && m.GetParameters().Length == 1
                 )
@@ -322,6 +326,7 @@ internal partial class ExpressionBinder {
             if !isIndex {
                 index = conversions.BindConversion(syntax.Location, index, TypeSymbol.Int32)
             }
+            ApplySubExpressionNarrowingEffects(syntax, index)
             arguments = ImmutableArray.Create(index)
             indexer = clrType.GetProperties().Single(
                 (p PropertyInfo) -> p.GetIndexParameters() is {Length: 1} parameters && ClrTypeUtilities.AreSame(
@@ -341,19 +346,28 @@ internal partial class ExpressionBinder {
     private func BindNativeSliceAssignment(
         target BoundExpression,
         indexSyntax ExpressionSyntax,
-        value BoundExpression,
+        bindValue(TypeSymbol) -> BoundExpression,
         location TextLocation,
         boundIndex BoundExpression? = nil
     ) BoundExpression {
-        if NativeSliceTypes.TryGetElement(target.Type, out _, out var readOnly) && readOnly {
+        NativeSliceTypes.TryGetElement(target.Type, out var element, out var readOnly)
+        let elementType = Invariant.Required(
+            element,
+            "native slice assignment requires a native slice target",
+            expression: "element"
+        )
+        if readOnly {
+            let _ = bindValue(elementType)
             Diagnostics.ReportNativeSliceReadOnlyElement(location)
             return BoundErrorExpression(indexSyntax)
         }
+        let indexed = BindNativeSliceIndex(target, indexSyntax, boundIndex)
+        let value = bindValue(elementType)
         if AsyncBoundTreeQueries.HasAwait(value) {
             Diagnostics.ReportNativeSliceSuspendingWrite(location)
             return BoundErrorExpression(indexSyntax)
         }
-        if BindNativeSliceIndex(target, indexSyntax, boundIndex) is not BoundDereferenceExpression access {
+        if indexed is not BoundDereferenceExpression access {
             Diagnostics.ReportNativeSliceType(location, "a range is a view, not an assignable element")
             return BoundErrorExpression(indexSyntax)
         }
@@ -373,12 +387,13 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportNativeSliceReadOnlyElement(operation.Location)
             return BoundErrorExpression(indexSyntax)
         }
+        let indexed = BindNativeSliceIndex(target, indexSyntax)
         let value = BindExpression(valueSyntax)
         if AsyncBoundTreeQueries.HasAwait(value) {
             Diagnostics.ReportNativeSliceSuspendingWrite(valueSyntax.Location)
             return BoundErrorExpression(indexSyntax)
         }
-        if BindNativeSliceIndex(target, indexSyntax) is not BoundDereferenceExpression access {
+        if indexed is not BoundDereferenceExpression access {
             Diagnostics.ReportNativeSliceType(operation.Location, "a range is not an assignable element")
             return BoundErrorExpression(indexSyntax)
         }

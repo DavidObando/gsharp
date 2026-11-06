@@ -463,12 +463,18 @@ internal shared class PartialMethodMerger {
             let implementingParameter = implementingParameters[i]
             if NormalizeNodeText(declaringParameter) != NormalizeNodeText(implementingParameter) {
                 return Disagree(
-                    "parameter ${i + 1} ('${NormalizeNodeText(declaringParameter)}' vs '${NormalizeNodeText(implementingParameter)}')"
+                    "parameter ${i + 1} ('${FormatParameterText(declaringParameter)}' vs '${FormatParameterText(implementingParameter)}')"
                 )
             }
         }
         return nil
     }
+
+    private func FormatParameterText(parameter ParameterSyntax) string -> parameter
+        .SyntaxTree
+        ?.Text
+        ?.ToString(parameter.Span) ??
+        string.Empty
 
     /// Builds the single declaration that replaces a declaring/implementing
     /// pair. The implementing part is the template — its tree, signature tokens

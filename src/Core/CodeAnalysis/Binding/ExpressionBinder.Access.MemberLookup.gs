@@ -1806,7 +1806,11 @@ internal partial class ExpressionBinder {
         if boundIndexOverride != nil && ClrTypeUtilities.AreSame(boundIndexOverride.Type?.ClrType, typeof(Index)) {
             return BindSystemIndexAccess(target, boundIndexOverride, targetLocation)
         }
-        if boundIndexOverride == nil && indexSyntax is FromEndIndexExpressionSyntax fromEndSyntax {
+        var unwrappedIndexSyntax = indexSyntax
+        while unwrappedIndexSyntax is ParenthesizedExpressionSyntax parenthesized {
+            unwrappedIndexSyntax = parenthesized.Expression
+        }
+        if boundIndexOverride == nil && unwrappedIndexSyntax is FromEndIndexExpressionSyntax fromEndSyntax {
             return BindFromEndIndex(target, fromEndSyntax, targetLocation)
         }
         // Issue #1038: an index whose value is a `System.Range` slices the
@@ -2260,6 +2264,7 @@ internal partial class ExpressionBinder {
         if NativeSliceTypes.TryGetElement(boundReceiver.Type, out _, out _) &&
             compoundOperatorToken != nil &&
             compoundRhsSyntax != nil {
+            ApplySubExpressionNarrowingEffects(remainingChain, boundReceiver)
             return BindNativeSliceCompoundAssignment(
                 boundReceiver,
                 indexSyntax,
@@ -2291,8 +2296,12 @@ internal partial class ExpressionBinder {
                 return BoundErrorExpression(nil)
             }
             var sharedIndex BoundExpression? = nil
-            if indexSyntax is FromEndIndexExpressionSyntax {
-                if !TryBindSystemIndexValue(indexSyntax, out var boundSystemIndex) {
+            var unwrappedIndexSyntax = indexSyntax
+            while unwrappedIndexSyntax is ParenthesizedExpressionSyntax parenthesized {
+                unwrappedIndexSyntax = parenthesized.Expression
+            }
+            if unwrappedIndexSyntax is FromEndIndexExpressionSyntax {
+                if !TryBindSystemIndexValue(unwrappedIndexSyntax, out var boundSystemIndex) {
                     return BoundErrorExpression(nil)
                 }
                 let indexLocal = DeclareRangeTemp("index", boundSystemIndex!!.Type, boundSystemIndex!!, statements)
@@ -2821,14 +2830,8 @@ internal partial class ExpressionBinder {
                 elementType
             )
         }
-        if NativeSliceTypes.TryGetElement(targetType, out var nativeElement, out _) {
-            return BindNativeSliceAssignment(
-                target,
-                indexSyntax,
-                BindValue(nativeElement),
-                diagnosticLocation,
-                boundIndexOverride
-            )
+        if NativeSliceTypes.TryGetElement(targetType, out _, out _) {
+            return BindNativeSliceAssignment(target, indexSyntax, BindValue, diagnosticLocation, boundIndexOverride)
         }
         if boundIndexOverride != nil && ClrTypeUtilities.AreSame(boundIndexOverride.Type?.ClrType, typeof(Index)) {
             return BindSystemIndexAssignment(
@@ -2836,10 +2839,12 @@ internal partial class ExpressionBinder {
                 target,
                 targetType,
                 hasNarrowedTarget,
+                indexSyntax,
                 boundIndexOverride,
                 BindValue,
                 diagnosticLocation,
-                isReadOnlyReceiver
+                isReadOnlyReceiver,
+                applyLengthEffects: false
             )
         }
         if boundIndexOverride == nil && TryBindSystemIndexValue(indexSyntax, out var systemIndex) {
@@ -2848,10 +2853,12 @@ internal partial class ExpressionBinder {
                 target,
                 targetType,
                 hasNarrowedTarget,
+                indexSyntax,
                 systemIndex!!,
                 BindValue,
                 diagnosticLocation,
-                isReadOnlyReceiver
+                isReadOnlyReceiver,
+                applyLengthEffects: true
             )
         }
         let BindIndexValue = func () BoundExpression {
@@ -3382,7 +3389,11 @@ internal partial class ExpressionBinder {
         syntax ExpressionSyntax,
         @NotNullWhen(true) out indexValue BoundExpression?
     ) bool {
-        if syntax is FromEndIndexExpressionSyntax fromEnd {
+        var unwrappedSyntax = syntax
+        while unwrappedSyntax is ParenthesizedExpressionSyntax parenthesized {
+            unwrappedSyntax = parenthesized.Expression
+        }
+        if unwrappedSyntax is FromEndIndexExpressionSyntax fromEnd {
             let indexCtor = typeof(Index).GetConstructor([]Type{typeof(int32), typeof(bool)})
             let indexSym = TypeSymbol.FromClrTypeWithoutNullability(typeof(Index), NullabilityFreeReason.TypeLiteral)
             let offset = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32)
@@ -3493,10 +3504,12 @@ internal partial class ExpressionBinder {
         target BoundExpression,
         targetType TypeSymbol,
         hasNarrowedTarget bool,
+        indexSyntax ExpressionSyntax,
         indexValue BoundExpression,
         bindValue(TypeSymbol) -> BoundExpression,
         diagnosticLocation TextLocation,
-        isReadOnlyReceiver bool
+        isReadOnlyReceiver bool,
+        applyLengthEffects bool = true
     ) BoundExpression {
         var target = target
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -3518,6 +3531,9 @@ internal partial class ExpressionBinder {
                 arguments = ImmutableArray.Create(indexValue)
             } else if TryFindCountedIntIndexer(clrType, out var lengthMember, out indexer) {
                 let lengthExpr = BoundClrPropertyAccessExpression(nil, target, lengthMember, TypeSymbol.Int32)
+                if applyLengthEffects {
+                    ApplySubExpressionNarrowingEffects(indexSyntax, lengthExpr)
+                }
                 arguments = ImmutableArray.Create(BuildSystemIndexOffset(indexValue, lengthExpr, statements))
             } else {
                 Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType)

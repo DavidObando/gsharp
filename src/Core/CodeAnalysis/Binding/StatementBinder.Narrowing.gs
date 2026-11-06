@@ -3598,6 +3598,11 @@ internal partial class StatementBinder {
             case conditional is BoundConditionalExpression: ExpressionHasNoNarrowingEffects(conditional.Condition) &&
                 ExpressionHasNoNarrowingEffects(conditional.WhenTrue) &&
                 ExpressionHasNoNarrowingEffects(conditional.WhenFalse)
+            case clrCtor is BoundClrConstructorCallExpression: IsStableSystemIndexOperation(clrCtor) &&
+                ExpressionsHaveNoNarrowingEffects(clrCtor.Arguments)
+            case impInstCall is BoundImportedInstanceCallExpression: IsStableSystemIndexOperation(impInstCall) &&
+                ExpressionHasNoNarrowingEffects(impInstCall.Receiver) &&
+                ExpressionsHaveNoNarrowingEffects(impInstCall.Arguments)
             case tupleLiteral is BoundTupleLiteralExpression: ExpressionsHaveNoNarrowingEffects(tupleLiteral.Elements)
             case arrayCreation is BoundArrayCreationExpression: ExpressionHasNoNarrowingEffects(
                 arrayCreation.LengthExpression
@@ -4658,13 +4663,14 @@ internal partial class StatementBinder {
                 }
                 return
             }
-            if StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) &&
+            let isStableSystemIndexOp = StatementBinder.IsStableSystemIndexOperation(node)
+            if !isStableSystemIndexOp && StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) &&
                 node is not BoundPropertyAssignmentExpression {
                 MayMutateMemberPaths = true
             }
             if StatementBinder.IsMemberStorageWriteExpression(node.Kind) ||
                 (
-                StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) &&
+                !isStableSystemIndexOp && StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) &&
                     node is not BoundCallOperationExpression &&
                     node is not BoundConstructorCallExpression
             ) {
@@ -4721,7 +4727,8 @@ internal partial class StatementBinder {
             }
             // ADR-0208 R15 (#5237): a call of any kind can run a closure that escaped, except a call through a
             // callable value, which keeps its own classification (AnalyzeCallableInvocation).
-            if node is BoundClrConstructorCallExpression or
+            if !isStableSystemIndexOp &&
+                node is BoundClrConstructorCallExpression or
                 BoundClrConversionCallExpression or
                 BoundClrBinaryOperatorExpression or
                 BoundClrUnaryOperatorExpression or
@@ -4770,7 +4777,7 @@ internal partial class StatementBinder {
                     allEntryCallableState.CapturedVariables.Add(captured)
                 }
             }
-            if node is BoundCallOperationExpression && !IsCallableValueInvocation(node) {
+            if !isStableSystemIndexOp && node is BoundCallOperationExpression && !IsCallableValueInvocation(node) {
                 MarkRunsEscapedClosure(invalidateCallableAliases: false)
                 runsEscapedClosureHere = true
             }
@@ -9677,7 +9684,23 @@ internal partial class StatementBinder {
         internal func IsConversionOperator(function FunctionSymbol) bool -> function.IsSpecialName &&
             (function.Name == "op_Implicit" || function.Name == "op_Explicit")
 
+        internal func IsStableSystemIndexOperation(node BoundExpression) bool -> switch node {
+            case ctor is BoundClrConstructorCallExpression: ClrTypeInspector.IsSameAs(ctor.ClrType, typeof(Index)) ||
+                ClrTypeInspector.IsSameAs(ctor.ClrType, typeof(Range))
+            case call is BoundImportedInstanceCallExpression: call
+                .Method
+                .Name == "GetOffset" &&
+                call
+                .Method
+                .DeclaringType is {} declaring &&
+                ClrTypeInspector.IsSameAs(declaring, typeof(Index))
+            default: false
+        }
+
         internal func HasShallowExpressionEffects(node BoundExpression) bool {
+            if IsStableSystemIndexOperation(node) {
+                return false
+            }
             if node is BoundAssignmentExpression or
                 BoundCallOperationExpression or
                 BoundClrConversionCallExpression or
