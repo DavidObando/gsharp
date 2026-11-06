@@ -3692,7 +3692,22 @@ internal partial class ExpressionBinder {
             if localName == nil {
                 return BoundErrorExpression(nil)
             }
-            let local = LocalVariableSymbol(localName, isReadOnly, declaredType, declaringSyntax: syntax)
+            let retriedVariables = binderCtx.RetriedValueVariables
+            let local = if syntax.DiscardToken == nil && retriedVariables != nil && retriedVariables.TryGetValue(
+                syntax,
+                out var existingRetried
+            ) &&
+                existingRetried is LocalVariableSymbol reusedLocal &&
+                reusedLocal.Name == localName &&
+                reusedLocal.IsReadOnly == isReadOnly &&
+                reusedLocal.Type == declaredType {
+                reusedLocal
+            } else {
+                LocalVariableSymbol(localName, isReadOnly, declaredType, declaringSyntax: syntax)
+            }
+            if syntax.DiscardToken == nil && retriedVariables != nil {
+                retriedVariables[syntax] = local
+            }
             if syntax.DiscardToken == nil {
                 if syntax.DeclarationIdentifier is not{} resolvedDeclarationIdentifier {
                     return BoundErrorExpression(nil)

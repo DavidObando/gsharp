@@ -82,22 +82,10 @@ internal partial class ExpressionBinder {
         // narrowing, and the guard rules cannot drift between the forms.
         let suppressionMark = Diagnostics.SuppressionCount
         let afterBindingInitializers = List[
-            List[
-                (
-                    Id int32,
-                    Frame NarrowingFrame?,
-                    Entries Dictionary[AccessPath, TypeSymbol]?,
-                    Aliases HashSet[VariableSymbol]
-                )
-            ]?
+            List[(Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])]?
         ]()
         var afterHeader List[
-            (
-                Id int32,
-                Frame NarrowingFrame?,
-                Entries Dictionary[AccessPath, TypeSymbol]?,
-                Aliases HashSet[VariableSymbol]
-            )
+            (Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])
         ]? = nil
         var guardEntryAliases HashSet[VariableSymbol]? = nil
         var guardTrueAliases HashSet[VariableSymbol]? = nil

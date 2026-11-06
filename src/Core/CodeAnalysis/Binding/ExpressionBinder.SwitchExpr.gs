@@ -111,14 +111,7 @@ internal partial class ExpressionBinder {
         // #5629: whether a header so far can remove the discriminant's fact, in dispatch order.
         var discriminantStale = false
         let armExits = List[
-            List[
-                (
-                    Id int32,
-                    Frame NarrowingFrame?,
-                    Entries Dictionary[AccessPath, TypeSymbol]?,
-                    Aliases HashSet[VariableSymbol]
-                )
-            ]?
+            List[(Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])]?
         ](syntax.Arms.Length)
         let armExitFrames = List[Dictionary[AccessPath, TypeSymbol]?](syntax.Arms.Length)
         let armPatternVariables = List[ImmutableArray[LocalVariableSymbol]](syntax.Arms.Length)
@@ -134,12 +127,7 @@ internal partial class ExpressionBinder {
                 hasCatchAll = true
                 let defaultIndex = armIndex
                 var defaultExit List[
-                    (
-                        Id int32,
-                        Frame NarrowingFrame?,
-                        Entries Dictionary[AccessPath, TypeSymbol]?,
-                        Aliases HashSet[VariableSymbol]
-                    )
+                    (Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])
                 ]? = nil
                 let beforeDefaultArm = CaptureExpressionNarrowingFrames()
                 let postHeaderSnapshot = CaptureNarrowingBindSnapshot()
@@ -400,25 +388,13 @@ internal partial class ExpressionBinder {
 
     private func JoinSwitchArmExpressionNarrowingFrames(
         armExits List[
-            List[
-                (
-                    Id int32,
-                    Frame NarrowingFrame?,
-                    Entries Dictionary[AccessPath, TypeSymbol]?,
-                    Aliases HashSet[VariableSymbol]
-                )
-            ]?
+            List[(Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])]?
         ],
         armBuilders IReadOnlyList[
             (Syntax SwitchExpressionArmSyntax, Pattern BoundPattern?, Guard BoundExpression?, Result BoundExpression)
         ],
         unmatchedExit List[
-            (
-                Id int32,
-                Frame NarrowingFrame?,
-                Entries Dictionary[AccessPath, TypeSymbol]?,
-                Aliases HashSet[VariableSymbol]
-            )
+            (Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])
         ]?,
         includeUnmatched bool
     ) {
