@@ -63,6 +63,49 @@ Run(Outer() { Box = Inner() { Pet = Cat{Name: "Whiskers"} } })`
         Assert.Equal("Rex:woof${Environment.NewLine}not dog${Environment.NewLine}", output)
     }
 
+    @Fact
+    func Issue5786_BareAndExplicitFieldWriteReceiver_CompilesVerifiesAndRuns() {
+        let source = `package Test
+import System
+
+class Owner {
+    prop A bool { get; set; }
+    prop B bool { get; set; }
+}
+
+struct Token {
+    private let owner Owner?
+
+    public init(owner Owner?) {
+        this.owner = owner
+    }
+
+    public func WriteBare() {
+        if owner != nil {
+            owner.A = true
+            owner.B = true
+        }
+    }
+
+    public func WriteExplicitThis() {
+        if this.owner != nil {
+            this.owner.A = true
+            this.owner.B = true
+        }
+    }
+}
+
+let o1 = Owner()
+let t1 = Token(o1)
+t1.WriteBare()
+let o2 = Owner()
+let t2 = Token(o2)
+t2.WriteExplicitThis()
+Console.WriteLine(o1.A.ToString() + "," + o1.B.ToString() + "|" + o2.A.ToString() + "," + o2.B.ToString())`
+        let output = CompileAndRun(source)
+        Assert.Equal("True,True|True,True${Environment.NewLine}", output)
+    }
+
     shared {
         private const AnimalHierarchy string = `package Test
 import System

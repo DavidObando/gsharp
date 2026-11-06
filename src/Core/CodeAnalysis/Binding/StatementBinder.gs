@@ -774,7 +774,7 @@ internal partial class StatementBinder {
                 if statementSyntax is GuardLetStatementSyntax guardLetSyntax {
                     let guardLetStart = statements.Count
                     let externalCallableAliasesAtEntry = externalCallableAliases.ToArray()
-                    BindGuardLetStatementInBlock(guardLetSyntax, statements, memberNotNullFrame)
+                    let guardLifts = BindGuardLetStatementInBlock(guardLetSyntax, statements, memberNotNullFrame)
                     // The bound statements carry effects that the syntax cannot show, such as a getter in
                     // an initializer (ADR-0208 R12).
                     InvalidateNarrowingsForAssignedVariables(
@@ -782,6 +782,11 @@ internal partial class StatementBinder {
                         BoundBlockStatement(nil, statements.Skip(guardLetStart).ToImmutableArray()),
                         aliasesAtEntry: externalCallableAliasesAtEntry
                     )
+                    if guardLifts != nil {
+                        for kv in guardLifts {
+                            SetPersistentNarrowing(memberNotNullFrame, kv.Key, kv.Value)
+                        }
+                    }
                     continue
                 }
                 let reachableBeforeStatement = currentStatementListFallsThrough

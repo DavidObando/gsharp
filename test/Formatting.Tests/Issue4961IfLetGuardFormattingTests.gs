@@ -29,6 +29,12 @@ func Run(s string?,t string?,flag bool) {
     }
     let r=if let v=s&&v.Length>0 { v } else { "" }
     let q=if let w=flag?s:t&&w.Length>1 { w } else { "" }
+    while let wl=s,let wr=t&&wl.Length>0&&wr.Length>0 {
+        break
+    }
+    guard let gl=s,let gr=t&&gl.Length>0&&gr.Length>0 else {
+        return
+    }
 }`
         let result = GSharpFormatter.Format(SourceText.From(source))
         Assert.Empty(result.Diagnostics)
@@ -46,6 +52,8 @@ func Run(s string?,t string?,flag bool) {
         // (it was a parse error, so gsfmt reported diagnostics).
         Assert.Contains("    let q = if let w = flag ? s", text)
         Assert.Contains("t && w.Length > 1 {", text)
+        Assert.Contains("    while let wl = s, let wr = t && wl.Length > 0 && wr.Length > 0 {", text)
+        Assert.Contains("    guard let gl = s, let gr = t && gl.Length > 0 && gr.Length > 0 else {", text)
         Assert.Equal(text, GSharpFormatter.Format(result.Text!!).Text!!.ToString())
     }
 }

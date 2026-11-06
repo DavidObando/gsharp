@@ -249,7 +249,7 @@ func F(flag bool, point Point) int32 {
     @Theory
     @InlineData("while let")
     @InlineData("guard let")
-    func UnsupportedNestedHeaderGuards_ParseInBoundedTime(form string) {
+    func NestedHeaderGuards_ParseInBoundedTime(form string) {
         const depth = 24
         let initializer = StringBuilder()
         for var i = 0; i < depth; i++ {
@@ -269,8 +269,7 @@ func F(flag bool, point Point) int32 {
         let watch = Stopwatch.StartNew()
         let tree = SyntaxTree.Parse(source)
         watch.Stop()
-        Assert.Equal(depth, tree.Diagnostics.Length)
-        Assert.All(tree.Diagnostics, (diagnostic Diagnostic) -> Assert.Equal("GS0625", diagnostic.Id))
+        Assert.Empty(tree.Diagnostics)
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), "nested $form parse took ${watch.Elapsed}")
     }
 
@@ -331,7 +330,7 @@ func F(a string?, c bool) bool {
     }
 
     @Fact
-    func WhileLetAndGuardLet_Guard_ReportsGS0625_AndStaysOutOfTheInitializer() {
+    func WhileLetAndGuardLet_Guard_ParsesWithoutDiagnostics_AndStaysOutOfTheInitializer() {
         const source = `package P
 func F(a string?) int32 {
     while let v = a && v.Length > 0 {
@@ -343,7 +342,7 @@ func F(a string?) int32 {
     return 1
 }`
         let tree = SyntaxTree.Parse(source)
-        Assert.Equal([]string{"GS0625@3:21", "GS0625@6:21"}, Ids(tree))
+        Assert.Empty(tree.Diagnostics)
         let whileLet = FindFirst[WhileLetStatementSyntax](tree)
         Assert.IsType[NameExpressionSyntax](whileLet.Bindings[0].Initializer)
         Assert.NotNull(whileLet.Guard)

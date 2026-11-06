@@ -1938,8 +1938,8 @@ and bind a fresh identifier to the underlying non-null view:
 
 ```ebnf
 IfLetStmt        = "if" LetBindingHeader Statement ( "else" Statement )? .
-GuardLetStmt     = "guard" LetBindingList "else" Block .
-WhileLetStmt     = "while" LetBindingList Statement .
+GuardLetStmt     = "guard" LetBindingHeader "else" Block .
+WhileLetStmt     = "while" LetBindingHeader Statement .
 LetBindingHeader = LetBindingList ( "&&" Expression )? .
 LetBindingList   = LetBindingClause ( "," LetBindingClause )* .
 LetBindingClause = "let" identifier TypeClause? "=" LetInitializer .
@@ -1985,14 +1985,17 @@ an `if` branch sees its condition: `&& other != nil` narrows `other`, and
 later initializers, in the guard, and in the then-block only, never in the
 else-block or after the statement.
 
-`while let` evaluates all clause initializers left to right before one
-combined nil-test. It performs this evaluation before the first iteration and
-again after every body iteration; `continue` targets that re-evaluation point,
-whereas `break` exits directly. Its bindings are never visible outside the
-body or in another initializer in the same header. `guard let` interleaves
-each initializer with its exiting nil test. Neither `while let` nor `guard let`
-accepts a guard: a `&&` after their bindings reports `GS0625`. The else-block of
-`guard let` MUST exit the enclosing scope (`return`, `throw`, `break`,
+`while let` and `guard let` use the same `LetBindingHeader`: their bindings
+evaluate left to right and short-circuit on the first `nil` (or closed channel
+receive in `while let v = <-ch`), a later initializer sees earlier bindings
+narrowed, and an optional `&&` guard runs only once every binding matched with
+all bound names narrowed. For `while let`, this evaluation runs before the first
+iteration and again after every body iteration (`continue` targets that
+re-evaluation point, whereas `break` exits directly), a false guard ends the
+loop, and the body sees any narrowing or pattern variables proven by the guard.
+For `guard let`, a false guard takes the `else` path, and facts or pattern
+variables proven by the guard hold in the remainder of the enclosing block. The
+else-block of `guard let` MUST exit the enclosing scope (`return`, `throw`, `break`,
 `continue`, or a block whose last statement does); otherwise the binder
 reports `GS0297`. `guard` is a reserved keyword.
 

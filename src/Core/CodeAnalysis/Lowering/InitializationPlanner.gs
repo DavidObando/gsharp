@@ -79,6 +79,12 @@ internal shared class InitializationPlanner {
     }
 
     private class RequestFinder : BoundTreeWalker {
+        private let includeCapturedLambdas bool
+
+        internal init(includeCapturedLambdas bool = true) {
+            this.includeCapturedLambdas = includeCapturedLambdas
+        }
+
         internal prop Found bool {
             get;
             private set;
@@ -94,6 +100,11 @@ internal shared class InitializationPlanner {
                 .StructType
                 .NeedsSynthesizedValueStructDefaultCtor == true
             if node is BoundFunctionLiteralExpression literal {
+                if this.includeCapturedLambdas && literal.CapturedVariables.Any(
+                    (variable VariableSymbol) -> variable is not ParameterSymbol{Name: "this"}
+                ) {
+                    Found = true
+                }
                 Visit(literal.Body)
             }
             base.VisitExpression(node)
@@ -133,7 +144,7 @@ internal shared class InitializationPlanner {
                 if !type.UsesConstructorOwnedDataConstruction &&
                     !type.HasPrimaryConstructor &&
                     !HasRequest(fields.Concat(arguments)) &&
-                    !HasRequest(body) {
+                    !HasRequest(body, includeCapturedLambdas: false) {
                     continue
                 }
                 plans[(constructor.Function, false)] = if constructor.IsConvenience {
@@ -166,9 +177,12 @@ internal shared class InitializationPlanner {
                 for field in type.StaticFields {
                     if type.StaticFieldInitializers.TryGetValue(field, out var initializer) {
                         statements.Add(
-                            BoundExpressionStatement(
-                                initializer.Syntax,
-                                BoundFieldAssignmentExpression(initializer.Syntax, nil, type, field, initializer)
+                            Lowerer.Lower(
+                                BoundExpressionStatement(
+                                    initializer.Syntax,
+                                    BoundFieldAssignmentExpression(initializer.Syntax, nil, type, field, initializer)
+                                ),
+                                type
                             )
                         )
                     }
@@ -209,13 +223,15 @@ internal shared class InitializationPlanner {
                     .Where((field FieldSymbol) -> type.StaticFieldInitializers.ContainsKey(field))
                     .Select(
                     (field FieldSymbol) -> cast[BoundStatement](
-                        BoundExpressionStatement(
-                            type.StaticFieldInitializers[field].Syntax,
-                            BoundFieldAssignmentExpression(
+                        Lowerer.Lower(
+                            BoundExpressionStatement(
                                 type.StaticFieldInitializers[field].Syntax,
-                                field,
-                                type,
-                                type.StaticFieldInitializers[field]
+                                BoundFieldAssignmentExpression(
+                                    type.StaticFieldInitializers[field].Syntax,
+                                    field,
+                                    type,
+                                    type.StaticFieldInitializers[field]
+                                )
                             )
                         )
                     )
@@ -351,7 +367,8 @@ internal shared class InitializationPlanner {
                     expression.Syntax,
                     BoundFieldAssignmentExpression(expression.Syntax, receiver, owner, field, expression)
                 )
-                statements.Add(storedPrimaryInputs?.RewriteStatement(assignment) ?? assignment)
+                let rewrittenAssignment = storedPrimaryInputs?.RewriteStatement(assignment) ?? assignment
+                statements.Add(Lowerer.Lower(rewrittenAssignment, owner))
             }
         }
         statements.AddRange(body.Statements)
@@ -408,8 +425,8 @@ internal shared class InitializationPlanner {
         (expression BoundExpression) -> HasRequest(BoundExpressionStatement(expression.Syntax, expression))
     )
 
-    private func HasRequest(statement BoundStatement) bool {
-        let finder = RequestFinder()
+    private func HasRequest(statement BoundStatement, includeCapturedLambdas bool = true) bool {
+        let finder = RequestFinder(includeCapturedLambdas)
         finder.Visit(statement)
         return finder.Found
     }

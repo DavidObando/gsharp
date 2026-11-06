@@ -2086,16 +2086,18 @@ internal partial class ExpressionBinder {
                 implicitField.Field,
                 narrowedType
             )
-            return BuildNarrowedRead(
-                BoundFieldAccessExpression(
-                    nil,
-                    BoundVariableExpression(nil, implicitField.Receiver),
-                    implicitField.StructType,
-                    implicitField.Field
-                ),
-                implicitField.Field.Type,
-                narrowedFieldType,
-                makeNarrowedField
+            return ApplyMemberNarrowing(
+                BuildNarrowedRead(
+                    BoundFieldAccessExpression(
+                        nil,
+                        BoundVariableExpression(nil, implicitField.Receiver),
+                        implicitField.StructType,
+                        implicitField.Field
+                    ),
+                    implicitField.Field.Type,
+                    narrowedFieldType,
+                    makeNarrowedField
+                )
             )
         }
         // Issue #261: bare static field name inside a shared method body.
@@ -2105,7 +2107,7 @@ internal partial class ExpressionBinder {
                 implicitStaticField.Field,
                 "${implicitStaticField.OwnerName}.${implicitStaticField.Field.Name}"
             )
-            return if implicitStaticField.InterfaceType != nil {
+            let staticFieldAccess = if implicitStaticField.InterfaceType != nil {
                 BoundFieldAccessExpression(nil, implicitStaticField.Field, implicitStaticField.InterfaceType)
             } else {
                 BoundFieldAccessExpression(
@@ -2115,6 +2117,7 @@ internal partial class ExpressionBinder {
                     implicitStaticField.Field
                 )
             }
+            return ApplyMemberNarrowing(staticFieldAccess)
         }
         // ADR-0053: bare static property name inside a method body (shared
         // or instance) of the enclosing type.
@@ -2128,11 +2131,13 @@ internal partial class ExpressionBinder {
                 Diagnostics.ReportCannotAssign(syntax.IdentifierToken.Location, implicitStaticProp.Property.Name)
                 return BoundErrorExpression(nil)
             }
-            return BoundPropertyAccessExpression(
-                nil,
-                receiver: nil,
-                implicitStaticProp.StructType,
-                implicitStaticProp.Property
+            return ApplyMemberNarrowing(
+                BoundPropertyAccessExpression(
+                    nil,
+                    receiver: nil,
+                    implicitStaticProp.StructType,
+                    implicitStaticProp.Property
+                )
             )
         }
         // Bare property name inside an instance method body resolves to
@@ -2147,11 +2152,13 @@ internal partial class ExpressionBinder {
                 Diagnostics.ReportCannotAssign(syntax.IdentifierToken.Location, implicitProp.Property.Name)
                 return BoundErrorExpression(nil)
             }
-            return BoundPropertyAccessExpression(
-                nil,
-                BoundVariableExpression(nil, implicitProp.Receiver),
-                implicitProp.StructType,
-                implicitProp.Property
+            return ApplyMemberNarrowing(
+                BoundPropertyAccessExpression(
+                    nil,
+                    BoundVariableExpression(nil, implicitProp.Receiver),
+                    implicitProp.StructType,
+                    implicitProp.Property
+                )
             )
         }
         return BuildNarrowedVariableRead(variable, syntax.IdentifierToken.Location)
