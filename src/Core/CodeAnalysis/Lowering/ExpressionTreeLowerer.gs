@@ -1150,6 +1150,11 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
             conversion.Expression is BoundClrMethodGroupExpression {
             return BuildRuntimeConstant(conversion, conversion.Type)
         }
+        // Issue #5767 (ADR-0219): `Expression.Convert` of a constant floating-point value out of range gives a
+        // different value on each runtime. The tree contains the folded value, as the emitted body does.
+        if ConstantExpressionEvaluator.TryFoldFloatingConstantConversionToLiteral(conversion, out var folded) {
+            return this.TranslateExpression(folded, parameterMap)
+        }
         return BoundClrStaticCallExpression(
             conversion.Syntax,
             ExpressionConvertMethod,

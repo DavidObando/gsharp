@@ -1000,7 +1000,7 @@ internal partial class DeclarationBinder {
                 setCurrentFunction(initializerContext)
                 try {
                     using let _ = PushStaticMemberScope(interfaceSymbol)
-                    using let _ = binderCtx.PushCheckedContext(false)
+                    using let _ = binderCtx.PushDefaultCheckedContext()
                     action()
                 } finally {
                     Diagnostics.DrainSince(diagnosticMark, deferredInitializerDiagnostics)

@@ -103,6 +103,7 @@ internal class MetadataTokenCache {
         DataStructOpEqualityHandles = Dictionary[StructSymbol, MethodDefinitionHandle]()
         DataClassCopyConstructorHandles = Dictionary[StructSymbol, MethodDefinitionHandle]()
         DataClassCloneHandles = Dictionary[StructSymbol, MethodDefinitionHandle]()
+        StructLetFieldCtorHandles = Dictionary[FieldSymbol, (Handle MethodDefinitionHandle, MarkerCount int32)]()
     }
 
     /// Gets the planned self-typed equality slots for native data classes.
@@ -434,6 +435,13 @@ internal class MetadataTokenCache {
     /// Planned handles let covariant clone MethodImpl rows target a base clone
     /// even when the base method body has not been emitted yet.
     prop DataClassCloneHandles Dictionary[StructSymbol, MethodDefinitionHandle] {
+        get;
+    }
+
+    internal prop StructLetFieldCtorHandles Dictionary[
+        FieldSymbol,
+        (Handle MethodDefinitionHandle, MarkerCount int32)
+    ] {
         get;
     }
 

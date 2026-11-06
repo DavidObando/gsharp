@@ -154,6 +154,33 @@ d.Changed += func() {}
         Assert.Equal("DA", result.Output)
     }
 
+    @Fact
+    func Issue5378_ConstructedSourceGenericEventOverride_LoadsAndDispatches() {
+        let result = EmittedOracle.Evaluate(`
+import System
+
+open class Parent[T] {
+    open event Changed Action[T]?
+}
+
+class Child : Parent[string] {
+    override event Changed Action[string]? {
+        add { Console.Write("CA") }
+        remove { Console.Write("CR") }
+    }
+}
+
+let p Parent[string] = Child()
+let h Action[string] = func(s string) {}
+p.Changed += h
+p.Changed -= h
+0
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Null(result.UnhandledException)
+        Assert.Equal("CACR", result.Output)
+    }
+
     shared {
         private const ThreeLevelPropertySource string = `
 open class Base {

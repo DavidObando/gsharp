@@ -37,10 +37,11 @@ import System.Reflection
 /// - Index expressions, array/tuple/struct/map literals, stack-alloc, append, len/cap, is/as,
 /// field/property access and assignment, and CLR interop operators/indexers with await in any operand
 /// (issue #1619) — each spilled left-to-right like a call's argument list.
-/// - Switch expressions with await in the governing expression and/or an arm value (issue #1619
-/// completion) — spilled via an index-selecting rebuild of the switch (so pattern-matching/guard
-/// semantics run unmodified against a spilled discriminant) followed by an if/else-chain expansion
-/// keyed off the selected arm index, so only the taken arm's await runs, mirroring the ternary spill.
+/// - Switch statements and switch expressions with await in the governing expression, a `when` guard,
+/// and/or an arm value (issues #1619, #5363) — when no guard suspends, switch expressions spill via an
+/// index-selecting rebuild followed by an if/else-chain expansion keyed off the selected arm index;
+/// when any guard contains an await, arms lower to sequential per-arm pattern tests and spilled guard
+/// branches so only reached guards and the taken arm's result run across suspension points.
 /// - Null-conditional access (`?.`) expressions with await in the receiver and/or the when-not-null
 /// continuation (issue #1619 completion) — the receiver is spilled once into the capture local/field
 /// and the continuation runs only on the non-nil path, via an if/else expansion when the continuation
@@ -55,10 +56,6 @@ import System.Reflection
 /// Deferred cases (emit a diagnostic if encountered):
 /// - Ref/out arguments containing await.
 /// - Value-type receivers of instance methods containing await in arguments.
-/// - A switch-expression arm `when` guard containing await (issue #1619) — guards must be re-evaluated
-/// for every candidate arm during dispatch, so an await inside a guard would need to re-run (and
-/// re-suspend) for each pattern tried; this requires a fuller per-guard suspension protocol that is out
-/// of scope here, so it remains diagnostic-gated.
 shared class SpillSequenceSpiller {
     private class YieldInBlockExpressionWalker : BoundTreeWalker {
         private var blockExpressionDepth int32
@@ -360,7 +357,6 @@ shared class SpillSequenceSpiller {
             builder ImmutableArray[BoundStatement].Builder
         ) bool {
             var changed = false
-            var anyPatternHasAwait = false
             var discriminant = switchStatement.Discriminant
             if HasAwait(discriminant) {
                 let spilled = SpillExpression(discriminant)
@@ -368,14 +364,20 @@ shared class SpillSequenceSpiller {
                 discriminant = spilled.Value
                 changed = true
             }
+            let anyPatternHasAwait = switchStatement.Arms.Any(
+                (arm BoundPatternSwitchArm) -> arm.Pattern != nil && HasAwait(arm.Pattern)
+            )
+            if !anyPatternHasAwait && switchStatement.Arms.Any(
+                (arm BoundPatternSwitchArm) -> arm.Guard != nil && AsyncBoundTreeQueries.HasAwait(arm.Guard, awaitMemo)
+            ) {
+                RewritePatternSwitchStatementWithGuardedAwait(switchStatement, discriminant, builder)
+                return true
+            }
             let arms = ImmutableArray.CreateBuilder[BoundPatternSwitchArm](switchStatement.Arms.Length)
             for arm in switchStatement.Arms {
-                if arm.Pattern != nil && HasAwait(arm.Pattern) {
-                    anyPatternHasAwait = true
-                }
                 var guard_ BoundExpression? = arm.Guard
-                if guard_ != nil && HasAwait(guard_) {
-                    guard_ = SpillSwitchGuard(guard_, "switch-statement")
+                if !anyPatternHasAwait && guard_ != nil && HasAwait(guard_) {
+                    guard_ = SpillSwitchGuard(guard_)
                     changed = true
                 }
                 let bodyBuilder = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -476,14 +478,47 @@ shared class SpillSequenceSpiller {
             return true
         }
 
-        private func SpillSwitchGuard($guard BoundExpression, switchKind string) BoundExpression {
-            if AsyncBoundTreeQueries.HasAwait($guard, awaitMemo) {
-                let anchor = $guard.Syntax ?? AsyncBoundTreeQueries.FindFirstAwaitSyntax($guard)
-                EmitDiagnosticException.Throw(
-                    anchor,
-                    "'await' inside a $switchKind 'when' guard is not yet supported across a suspension point."
-                )
+        private func RewritePatternSwitchStatementWithGuardedAwait(
+            switchStatement BoundPatternSwitchStatement,
+            discriminant BoundExpression,
+            builder ImmutableArray[BoundStatement].Builder
+        ) {
+            var discriminant = discriminant
+            if !CanDeferAcrossLift(discriminant) {
+                discriminant = SpillAndCaptureSelectOperand(discriminant, builder)
             }
+            let endLabel = MakeLabel()
+            var defaultArm BoundPatternSwitchArm? = nil
+            for arm in switchStatement.Arms {
+                if arm.IsDefault {
+                    defaultArm = arm
+                    continue
+                }
+                let nextArmLabel = MakeLabel()
+                if !(arm.Pattern is BoundDiscardPattern{Variable: nil}) {
+                    let patternTest = MakePatternMatchExpression(discriminant, arm.Pattern!!)
+                    builder.Add(BoundConditionalGotoStatement(nil, nextArmLabel, patternTest, jumpIfTrue: false))
+                }
+                if arm.Guard != nil {
+                    var guardValue = arm.Guard
+                    if HasAwait(guardValue) {
+                        let spilledGuard = SpillExpression(guardValue)
+                        FlushSideEffects(spilledGuard, builder)
+                        guardValue = spilledGuard.Value
+                    }
+                    builder.Add(BoundConditionalGotoStatement(nil, nextArmLabel, guardValue, jumpIfTrue: false))
+                }
+                RewriteStatementToList(arm.Body, builder)
+                builder.Add(BoundGotoStatement(nil, endLabel))
+                builder.Add(BoundLabelStatement(nil, nextArmLabel))
+            }
+            if defaultArm != nil {
+                RewriteStatementToList(defaultArm.Body, builder)
+            }
+            builder.Add(BoundLabelStatement(nil, endLabel))
+        }
+
+        private func SpillSwitchGuard($guard BoundExpression) BoundExpression {
             let spilled = SpillExpression($guard)
             return BoundBlockExpression(nil, spilled.SideEffects, spilled.Value)
         }
@@ -1815,47 +1850,38 @@ shared class SpillSequenceSpiller {
             )
         }
 
-        /// Spills a switch expression (issue #1619 completion). A guard
-        /// (`when` clause) containing `await` stays diagnostic-gated:
-        /// a false guard must fall through to the next arm's pattern test, and
-        /// replicating that retry as bound-tree control flow would mean
-        /// re-implementing the whole pattern-matching decision tree
-        /// ((cref:Emit.MethodBodyEmitter.EmitPattern) and friends) instead
-        /// of reusing it — a duplication this pass avoids for every other kind.
-        /// The discriminant and each arm's result value, however, are fully
-        /// spillable: this method reuses the existing (unmodified) pattern-match
-        /// dispatch to select which arm matched — by building a second,
-        /// award-free "index" switch whose arms carry the same
-        /// patterns/guards but return the arm's ordinal instead of its real
-        /// result — and only then evaluates the *selected* arm's (possibly
-        /// awaiting) result, via an if/else-if chain on the stored index. Any
-        /// locals a pattern binds (e.g. `case Point(var x, var y)`) are
-        /// still assigned by the (unmodified, reused) pattern test itself, so
-        /// they remain visible to the result-evaluation chain.
+        /// Spills a switch expression (issues #1619, #5363). When no guard
+        /// contains an `await`, this method reuses the pattern-match dispatch
+        /// to select which arm matched — by building an await-free index
+        /// switch whose arms carry the same patterns/guards and return the
+        /// arm's ordinal — and then evaluates only the selected arm's result.
+        /// When any `when` guard contains an `await`, each arm lowers to a
+        /// guard-free two-arm boolean pattern switch followed by the spilled
+        /// guard and result statements so a false guard branches to the next
+        /// arm after suspension without re-evaluating the discriminant.
         private func SpillSwitch(switchExpr BoundSwitchExpression) BoundSpillSequenceExpression {
             let discriminantHasAwait = HasAwait(switchExpr.Discriminant)
             var anyPatternHasAwait = false
             var anyGuardHasAwait = false
+            var anyGuardHasAsyncAwait = false
             var anyResultHasAwait = false
-            let rewrittenArms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](switchExpr.Arms.Length)
             for arm in switchExpr.Arms {
                 if arm.Pattern != nil && HasAwait(arm.Pattern) {
                     anyPatternHasAwait = true
                 }
-                var guard_ BoundExpression? = arm.Guard
-                if guard_ != nil && HasAwait(guard_) {
+                if arm.Guard != nil && HasAwait(arm.Guard) {
                     anyGuardHasAwait = true
-                    guard_ = SpillSwitchGuard(guard_, "switch-expression")
+                    if AsyncBoundTreeQueries.HasAwait(arm.Guard, awaitMemo) {
+                        anyGuardHasAsyncAwait = true
+                    }
                 }
                 if HasAwait(arm.Result) {
                     anyResultHasAwait = true
                 }
-                rewrittenArms.Add(BoundSwitchExpressionArm(arm.Syntax, arm.Pattern, guard_, arm.Result))
             }
             if !discriminantHasAwait && !anyPatternHasAwait && !anyGuardHasAwait && !anyResultHasAwait {
                 return Trivial(switchExpr)
             }
-            let arms = rewrittenArms.MoveToImmutable()
             let locals = ImmutableArray.CreateBuilder[LocalVariableSymbol]()
             let sideEffects = ImmutableArray.CreateBuilder[BoundStatement]()
             var discriminant = switchExpr.Discriminant
@@ -1866,8 +1892,20 @@ shared class SpillSequenceSpiller {
                 discriminant = spilledDiscriminant.Value
             }
             if anyPatternHasAwait {
-                return SpillSwitchWithPatternAwait(switchExpr, discriminant, arms, locals, sideEffects)
+                return SpillSwitchWithPatternAwait(switchExpr, discriminant, switchExpr.Arms, locals, sideEffects)
             }
+            if anyGuardHasAsyncAwait {
+                return SpillSwitchWithGuardedAwait(switchExpr, discriminant, locals, sideEffects)
+            }
+            let rewrittenArms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](switchExpr.Arms.Length)
+            for arm in switchExpr.Arms {
+                var guard_ BoundExpression? = arm.Guard
+                if guard_ != nil && HasAwait(guard_) {
+                    guard_ = SpillSwitchGuard(guard_)
+                }
+                rewrittenArms.Add(BoundSwitchExpressionArm(arm.Syntax, arm.Pattern, guard_, arm.Result))
+            }
+            let arms = rewrittenArms.MoveToImmutable()
             if !anyResultHasAwait {
                 // Only the discriminant needed spilling — no arm result has an
                 // await, so the existing opaque pattern-dispatch emission can
@@ -1921,23 +1959,13 @@ shared class SpillSequenceSpiller {
                     BoundLiteralExpression(nil, i)
                 )
                 sideEffects.Add(BoundConditionalGotoStatement(nil, nextArmLabel, isSelected, jumpIfTrue: false))
-                let spilledResult = SpillExpression(arm.Result)
-                locals.AddRange(spilledResult.Locals)
-                sideEffects.AddRange(spilledResult.SideEffects)
-                if resultLocal == nil {
-                    if !(spilledResult.Value is BoundLiteralExpression) {
-                        sideEffects.Add(BoundExpressionStatement(nil, spilledResult.Value))
-                    }
-                } else if !firstArmResultDeclared {
-                    // Declare resultLocal where the selected arm first assigns
-                    // it, avoiding a redundant default initialization.
-                    sideEffects.Add(BoundVariableDeclaration(nil, resultLocal, spilledResult.Value))
-                    firstArmResultDeclared = true
-                } else {
-                    sideEffects.Add(
-                        BoundExpressionStatement(nil, BoundAssignmentExpression(nil, resultLocal, spilledResult.Value))
-                    )
-                }
+                AppendSpilledSwitchExpressionArmResult(
+                    arm.Result,
+                    resultLocal,
+                    ref firstArmResultDeclared,
+                    locals,
+                    sideEffects
+                )
                 sideEffects.Add(BoundGotoStatement(nil, endLabel))
                 sideEffects.Add(BoundLabelStatement(nil, nextArmLabel))
             }
@@ -1957,6 +1985,135 @@ shared class SpillSequenceSpiller {
                 sideEffects.ToImmutable(),
                 BoundVariableExpression(nil, resultLocal)
             )
+        }
+
+        private func SpillSwitchWithGuardedAwait(
+            switchExpr BoundSwitchExpression,
+            discriminant BoundExpression,
+            locals ImmutableArray[LocalVariableSymbol].Builder,
+            sideEffects ImmutableArray[BoundStatement].Builder
+        ) BoundSpillSequenceExpression {
+            var discriminant = discriminant
+            if !CanDeferAcrossLift(discriminant) {
+                discriminant = StoreOperand(discriminant, locals, sideEffects)
+            }
+            let resultLocal LocalVariableSymbol? = if switchExpr.Type == TypeSymbol.Void ||
+                switchExpr.Type == TypeSymbol.Never {
+                default(LocalVariableSymbol?)
+            } else {
+                MakeSpillTemp(switchExpr.Type)
+            }
+            let endLabel = MakeLabel()
+            var firstArmResultDeclared = false
+            var defaultArm BoundSwitchExpressionArm? = nil
+            for arm in switchExpr.Arms {
+                if arm.IsDefault {
+                    defaultArm = arm
+                    continue
+                }
+                let nextArmLabel = MakeLabel()
+                if !(arm.Pattern is BoundDiscardPattern{Variable: nil}) {
+                    let patternTest = MakePatternMatchExpression(discriminant, arm.Pattern!!)
+                    sideEffects.Add(BoundConditionalGotoStatement(nil, nextArmLabel, patternTest, jumpIfTrue: false))
+                }
+                if arm.Guard != nil {
+                    var guardValue = arm.Guard
+                    if HasAwait(guardValue) {
+                        let spilledGuard = SpillExpression(guardValue)
+                        locals.AddRange(spilledGuard.Locals)
+                        sideEffects.AddRange(spilledGuard.SideEffects)
+                        guardValue = spilledGuard.Value
+                    }
+                    sideEffects.Add(BoundConditionalGotoStatement(nil, nextArmLabel, guardValue, jumpIfTrue: false))
+                }
+                AppendSpilledSwitchExpressionArmResult(
+                    arm.Result,
+                    resultLocal,
+                    ref firstArmResultDeclared,
+                    locals,
+                    sideEffects
+                )
+                sideEffects.Add(BoundGotoStatement(nil, endLabel))
+                sideEffects.Add(BoundLabelStatement(nil, nextArmLabel))
+            }
+            if defaultArm != nil {
+                AppendSpilledSwitchExpressionArmResult(
+                    defaultArm.Result,
+                    resultLocal,
+                    ref firstArmResultDeclared,
+                    locals,
+                    sideEffects
+                )
+            } else if switchExpr.Type != TypeSymbol.Void {
+                let exceptionType = typeof(InvalidOperationException)
+                let constructor = BclMember.Ctor(exceptionType, typeof(string))
+                sideEffects.Add(
+                    BoundThrowStatement(
+                        nil,
+                        BoundClrConstructorCallExpression(
+                            nil,
+                            exceptionType,
+                            constructor,
+                            ImmutableArray.Create[BoundExpression](
+                                BoundLiteralExpression(nil, "Unmatched switch expression value.")
+                            ),
+                            TypeSymbol.FromClrTypeWithoutNullability(exceptionType, NullabilityFreeReason.TypeLiteral)
+                        )
+                    )
+                )
+            }
+            sideEffects.Add(BoundLabelStatement(nil, endLabel))
+            if resultLocal == nil {
+                return BoundSpillSequenceExpression(
+                    nil,
+                    locals.ToImmutable(),
+                    sideEffects.ToImmutable(),
+                    NoValue(switchExpr.Type)
+                )
+            }
+            locals.Add(resultLocal)
+            return BoundSpillSequenceExpression(
+                nil,
+                locals.ToImmutable(),
+                sideEffects.ToImmutable(),
+                BoundVariableExpression(nil, resultLocal)
+            )
+        }
+
+        private func AppendSpilledSwitchExpressionArmResult(
+            result BoundExpression,
+            resultLocal LocalVariableSymbol?,
+            ref firstArmResultDeclared bool,
+            locals ImmutableArray[LocalVariableSymbol].Builder,
+            sideEffects ImmutableArray[BoundStatement].Builder
+        ) {
+            let spilledResult = SpillExpression(result)
+            locals.AddRange(spilledResult.Locals)
+            sideEffects.AddRange(spilledResult.SideEffects)
+            if resultLocal == nil {
+                if !(spilledResult.Value is BoundLiteralExpression) {
+                    sideEffects.Add(BoundExpressionStatement(nil, spilledResult.Value))
+                }
+            } else if !firstArmResultDeclared {
+                // Declare resultLocal where the selected arm first assigns
+                // it, avoiding a redundant default initialization.
+                sideEffects.Add(BoundVariableDeclaration(nil, resultLocal, spilledResult.Value))
+                firstArmResultDeclared = true
+            } else {
+                sideEffects.Add(
+                    BoundExpressionStatement(nil, BoundAssignmentExpression(nil, resultLocal, spilledResult.Value))
+                )
+            }
+        }
+
+        private func MakePatternMatchExpression(
+            discriminant BoundExpression,
+            pattern BoundPattern
+        ) BoundSwitchExpression {
+            let patternArms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](2)
+            patternArms.Add(BoundSwitchExpressionArm(nil, pattern, nil, BoundLiteralExpression(nil, true)))
+            patternArms.Add(BoundSwitchExpressionArm(nil, nil, nil, BoundLiteralExpression(nil, false)))
+            return BoundSwitchExpression(nil, discriminant, patternArms.MoveToImmutable(), TypeSymbol.Bool)
         }
 
         /// Issue #4965 / #4966 (ADR-0202): the value a spilled construct with
