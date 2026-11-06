@@ -6860,9 +6860,6 @@ internal partial class StatementBinder {
                 return true
             }
         }
-        if bareReceiverType is TypeParameterSymbol && receiver is BoundClrPropertyAccessExpression{Member: FieldInfo} {
-            return true
-        }
         return false
     }
 
