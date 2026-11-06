@@ -711,27 +711,37 @@ internal partial class MethodBodyEmitter {
             // rejects ("found ref Box<T0>, expected ref Box"). Non-generic
             // inline structs still resolve to the bare FieldDef unchanged.
             let fieldHandle = this.outer.userTokens.ResolveFieldToken(inlineStruct, field)
-            this.EmitExpression(b.Left)
-            this.il.OpCode(ILOpCode.Ldfld)
-            this.il.Token(fieldHandle)
-            if ReflectionMetadataEmitter.IsValueTypeSymbol(field.Type) {
-                this.il.OpCode(ILOpCode.Box)
-                this.il.Token(this.outer.memberRefs.GetElementTypeToken(field.Type))
-            }
-            this.EmitExpression(b.Right)
-            this.il.OpCode(ILOpCode.Ldfld)
-            this.il.Token(fieldHandle)
-            if ReflectionMetadataEmitter.IsValueTypeSymbol(field.Type) {
-                this.il.OpCode(ILOpCode.Box)
-                this.il.Token(this.outer.memberRefs.GetElementTypeToken(field.Type))
-            }
-            this.il.Call(
-                if field.Type == TypeSymbol.String {
-                    this.outer.wellKnown.GetStringEqualsReference()
-                } else {
-                    this.outer.wellKnown.GetObjectStaticEqualsReference()
+            if field.Type is PointerTypeSymbol or FunctionPointerTypeSymbol {
+                this.EmitExpression(b.Left)
+                this.il.OpCode(ILOpCode.Ldfld)
+                this.il.Token(fieldHandle)
+                this.EmitExpression(b.Right)
+                this.il.OpCode(ILOpCode.Ldfld)
+                this.il.Token(fieldHandle)
+                this.il.OpCode(ILOpCode.Ceq)
+            } else {
+                this.EmitExpression(b.Left)
+                this.il.OpCode(ILOpCode.Ldfld)
+                this.il.Token(fieldHandle)
+                if ReflectionMetadataEmitter.IsValueTypeSymbol(field.Type) {
+                    this.il.OpCode(ILOpCode.Box)
+                    this.il.Token(this.outer.memberRefs.GetElementTypeToken(field.Type))
                 }
-            )
+                this.EmitExpression(b.Right)
+                this.il.OpCode(ILOpCode.Ldfld)
+                this.il.Token(fieldHandle)
+                if ReflectionMetadataEmitter.IsValueTypeSymbol(field.Type) {
+                    this.il.OpCode(ILOpCode.Box)
+                    this.il.Token(this.outer.memberRefs.GetElementTypeToken(field.Type))
+                }
+                this.il.Call(
+                    if field.Type == TypeSymbol.String {
+                        this.outer.wellKnown.GetStringEqualsReference()
+                    } else {
+                        this.outer.wellKnown.GetObjectStaticEqualsReference()
+                    }
+                )
+            }
             if b.Op.Kind == BoundBinaryOperatorKind.NotEquals {
                 this.il.LoadConstantI4(0)
                 this.il.OpCode(ILOpCode.Ceq)

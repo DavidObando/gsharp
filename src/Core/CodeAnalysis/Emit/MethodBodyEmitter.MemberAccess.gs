@@ -2174,6 +2174,8 @@ internal partial class MethodBodyEmitter {
         } else if clrType.IsSameAs(typeof(uint8)) || clrType.IsSameAs(typeof(bool)) {
             // Issue #1613: same fix for byte/bool — ldind.u1 zero-extends.
             this.il.OpCode(ILOpCode.Ldind_u1)
+        } else if pointeeType is PointerTypeSymbol or FunctionPointerTypeSymbol {
+            this.il.OpCode(ILOpCode.Ldind_i)
         } else if pointeeType is TypeParameterSymbol || ReflectionMetadataEmitter.IsValueTypeSymbol(pointeeType) {
             this.il.OpCode(ILOpCode.Ldobj)
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(pointeeType))
@@ -2220,6 +2222,8 @@ internal partial class MethodBodyEmitter {
             this.il.OpCode(ILOpCode.Stind_i2)
         } else if clrType.IsSameAs(typeof(uint8)) || clrType.IsSameAs(typeof(int8)) || clrType.IsSameAs(typeof(bool)) {
             this.il.OpCode(ILOpCode.Stind_i1)
+        } else if pointeeType is PointerTypeSymbol or FunctionPointerTypeSymbol {
+            this.il.OpCode(ILOpCode.Stind_i)
         } else if pointeeType is TypeParameterSymbol || ReflectionMetadataEmitter.IsValueTypeSymbol(pointeeType) {
             this.il.OpCode(ILOpCode.Stobj)
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(pointeeType))
