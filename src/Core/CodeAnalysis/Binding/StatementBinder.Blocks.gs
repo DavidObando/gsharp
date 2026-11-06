@@ -433,13 +433,18 @@ internal partial class StatementBinder {
             } else {
                 bindLocalVariable(catchSyntax.Identifier, true, catchType)
             }
+            let filterAliasesAtEntry = CaptureExternalCallableAliases()
             let filter BoundExpression? = BindCatchFilter(catchSyntax)
             callableExceptionalEntry.ExceptWith(ApplyHeaderCallableEffects(filter) ?? HashSet[VariableSymbol]())
             // ADR-0208 R10 (#5168): a filter runs before its handler is chosen. A
             // false or throwing filter continues the search (ADR-0177), so its
             // writes reach this body, every later clause and the finally block.
             if filter != nil {
-                InvalidateNarrowingsForAssignedVariables(catchSyntax.Filter!!, BoundExpressionStatement(nil, filter))
+                InvalidateNarrowingsForAssignedVariables(
+                    catchSyntax.Filter!!,
+                    BoundExpressionStatement(nil, filter),
+                    aliasesAtEntry: filterAliasesAtEntry
+                )
             }
             let (filterWhenTrue, _) = PatternVariables.Classify(filter)
             exceptionHandlerRegions.Push(catchSyntax)

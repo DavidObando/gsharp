@@ -82,6 +82,17 @@ internal partial class ExpressionBinder {
         StatementBinder.SwitchArmHeader
     ) -> HashSet[VariableSymbol]?
     private let bindAfterLaterArmTests(() -> void, bool, () -> BoundNode) -> BoundNode
+    private let bindLocalVariable(SyntaxToken, bool, TypeSymbol) -> VariableSymbol
+    private let bindDeferrableConditional(SyntaxNode, bool, () -> BoundExpression) -> BoundExpression
+    private let applyShortCircuitOperandEffects(
+        SyntaxNode,
+        BoundExpression,
+        IReadOnlyCollection[VariableSymbol]
+    ) -> void
+    private let classifyIsTestNarrowing(BoundIsExpression, IReadOnlyCollection[VariableSymbol]?) -> (
+        Then Dictionary[AccessPath, TypeSymbol]?,
+        Else Dictionary[AccessPath, TypeSymbol]?
+    )
     private let clearAssignedRoots(
         BoundNode,
         Dictionary[AccessPath, TypeSymbol],
@@ -314,12 +325,6 @@ internal partial class ExpressionBinder {
     // Issue #5569: the diagnostics of each discarded literal target bind in the calls that are binding now.
     private let literalTargetDiagnostics List[ImmutableArray[Diagnostic]] = List[ImmutableArray[Diagnostic]]()
 
-    // ADR-0151: declares the local a value-position `if let` binding
-    // introduces, routed through the same
-    // `DeclarationBinder.BindVariableDeclaration` the statement forms use so
-    // duplicate-name reporting and top-level/global variable shaping match.
-    private let bindLocalVariable(SyntaxToken, bool, TypeSymbol) -> VariableSymbol
-
     // Issue #1502 follow-up: when true, a same-compilation enum (or `Enum?`)
     // appearing inside a delegate shape is erased to `object` (the covariant
     // reference ride-through) instead of its default scalar ride-through
@@ -358,6 +363,12 @@ internal partial class ExpressionBinder {
             VariableSymbol
         ]?,
         bindAfterLaterArmTests(() -> void, bool, () -> BoundNode) -> BoundNode,
+        bindDeferrableConditional(SyntaxNode, bool, () -> BoundExpression) -> BoundExpression,
+        applyShortCircuitOperandEffects(SyntaxNode, BoundExpression, IReadOnlyCollection[VariableSymbol]) -> void,
+        classifyIsTestNarrowing(BoundIsExpression, IReadOnlyCollection[VariableSymbol]?) -> (
+            Then Dictionary[AccessPath, TypeSymbol]?,
+            Else Dictionary[AccessPath, TypeSymbol]?
+        ),
         clearAssignedRoots(BoundNode, Dictionary[AccessPath, TypeSymbol], IReadOnlyCollection[VariableSymbol]?) -> void,
         evolveAliases(BoundExpression, HashSet[VariableSymbol]) -> HashSet[VariableSymbol],
         applyExpressionEffects(
@@ -426,6 +437,9 @@ internal partial class ExpressionBinder {
         this.bindSwitchArmHeader = bindSwitchArmHeader
         this.reapplySwitchArmHeaderEffects = reapplySwitchArmHeaderEffects
         this.bindAfterLaterArmTests = bindAfterLaterArmTests
+        this.bindDeferrableConditional = bindDeferrableConditional
+        this.applyShortCircuitOperandEffects = applyShortCircuitOperandEffects
+        this.classifyIsTestNarrowing = classifyIsTestNarrowing
         this.clearAssignedRoots = clearAssignedRoots
         this.evolveAliases = evolveAliases
         this.applyExpressionEffects = applyExpressionEffects
@@ -728,6 +742,24 @@ internal partial class ExpressionBinder {
         return getCallableAliases()
     }
 
+    private func IsTrackedExpressionFrame(target NarrowingFrame) bool {
+        for entry in expressionNarrowingFrames {
+            if object.ReferenceEquals(entry.Frame, target) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func HasUntrackedStatementNarrowings() bool {
+        for stmtFrame in binderCtx.NarrowedVariables {
+            if stmtFrame.Owner != nil && stmtFrame.Count > 0 && !IsTrackedExpressionFrame(stmtFrame) {
+                return true
+            }
+        }
+        return false
+    }
+
     private func PushExpressionNarrowingFrame(
         frame Dictionary[AccessPath, TypeSymbol]?,
         aliases HashSet[VariableSymbol]? = nil
@@ -780,7 +812,7 @@ internal partial class ExpressionBinder {
             reboundInvalidatedExpressions.Clear()
             snapshotSiblingCounts.Clear()
             expressionBindStep = 0
-            setCallableAliases(popped.SavedStatementAliases)
+            setCallableAliases(popped.Aliases)
         }
     }
 
@@ -806,7 +838,17 @@ internal partial class ExpressionBinder {
                 Entries Dictionary[AccessPath, TypeSymbol]?,
                 Aliases HashSet[VariableSymbol]
             )
-        ](expressionNarrowingFrames.Count)
+        ](expressionNarrowingFrames.Count + binderCtx.NarrowedVariables.Count)
+        for stmtFrame in binderCtx.NarrowedVariables {
+            if stmtFrame.Owner != nil && !IsTrackedExpressionFrame(stmtFrame) {
+                let stmtEntries = if stmtFrame.Count > 0 {
+                    Dictionary[AccessPath, TypeSymbol](stmtFrame.Entries)
+                } else {
+                    default(Dictionary[AccessPath, TypeSymbol]?)
+                }
+                snapshot.Add((-1, stmtFrame, stmtEntries, emptyCallableAliases))
+            }
+        }
         for entry in expressionNarrowingFrames {
             if IsExpressionFrameActive(entry) {
                 let frame = entry.Frame
@@ -2320,14 +2362,16 @@ internal partial class ExpressionBinder {
     private func TryClassifyTypeTestNarrowingForAnd(
         boundLeft BoundExpression,
         leftEntryAliases HashSet[VariableSymbol],
-        out whenTrueAliases HashSet[VariableSymbol]
+        out whenTrueAliases HashSet[VariableSymbol],
+        out whenFalseAliases HashSet[VariableSymbol]
     ) Dictionary[AccessPath, TypeSymbol]? {
-        let (thenFrame, _, trueAliases, _) = ClassifyTypeTestNarrowingInOrder(
+        let (thenFrame, _, trueAliases, falseAliases) = ClassifyTypeTestNarrowingInOrder(
             boundLeft,
             leftEntryAliases,
             restrictBareVariableToLocalsAndParams: true
         )
         whenTrueAliases = trueAliases
+        whenFalseAliases = falseAliases
         return if (thenFrame != nil && thenFrame.Count > 0) {
             thenFrame
         } else {
@@ -2344,14 +2388,16 @@ internal partial class ExpressionBinder {
     private func TryClassifyTypeTestNarrowingForOr(
         boundLeft BoundExpression,
         leftEntryAliases HashSet[VariableSymbol],
-        out whenFalseAliases HashSet[VariableSymbol]
+        out whenFalseAliases HashSet[VariableSymbol],
+        out whenTrueAliases HashSet[VariableSymbol]
     ) Dictionary[AccessPath, TypeSymbol]? {
-        let (_, elseFrame, _, falseAliases) = ClassifyTypeTestNarrowingInOrder(
+        let (_, elseFrame, trueAliases, falseAliases) = ClassifyTypeTestNarrowingInOrder(
             boundLeft,
             leftEntryAliases,
             restrictBareVariableToLocalsAndParams: true
         )
         whenFalseAliases = falseAliases
+        whenTrueAliases = trueAliases
         return if (elseFrame != nil && elseFrame.Count > 0) {
             elseFrame
         } else {
@@ -2421,31 +2467,10 @@ internal partial class ExpressionBinder {
                 {
                     let assignRefinements = classifyConditionNonNullAssignments(condition, beforeAliases)
                     let afterIsAliases = evolveAliases(condition, beforeAliases)
-                    if isExpr.Pattern is BoundNotPattern notPattern {
-                        return (
-                            assignRefinements,
-                            StatementBinder.MergeNarrowingFrames(
-                                assignRefinements,
-                                StatementBinder.TryClassifyPatternNarrowing(
-                                    isExpr.Expression,
-                                    notPattern.Pattern,
-                                    allowReadOnlyGlobals: false
-                                )
-                            ),
-                            afterIsAliases,
-                            afterIsAliases
-                        )
-                    }
+                    let (isThen, isElse) = classifyIsTestNarrowing(isExpr, beforeAliases)
                     return (
-                        StatementBinder.MergeNarrowingFrames(
-                            assignRefinements,
-                            StatementBinder.TryClassifyPatternNarrowing(
-                                isExpr.Expression,
-                                isExpr.Pattern,
-                                allowReadOnlyGlobals: false
-                            )
-                        ),
-                        assignRefinements,
+                        StatementBinder.MergeNarrowingFrames(assignRefinements, isThen),
+                        StatementBinder.MergeNarrowingFrames(assignRefinements, isElse),
                         afterIsAliases,
                         afterIsAliases
                     )
@@ -3945,11 +3970,7 @@ internal partial class ExpressionBinder {
             if expression is BoundConditionalExpression conditional {
                 return IsLvalue(conditional.WhenTrue) &&
                     IsLvalue(conditional.WhenFalse) &&
-                    conditional
-                    .WhenTrue
-                    .Type == conditional
-                    .WhenFalse
-                    .Type
+                    TryGetAddressedStorageType(conditional, out _)
             }
             return switch expression {
                 case field is BoundFieldAccessExpression: IsAddressableFieldReceiver(field.Receiver)
@@ -3964,6 +3985,215 @@ internal partial class ExpressionBinder {
 
         private func IsAddressableFieldReceiver(receiver BoundExpression?) bool -> receiver == nil ||
             Binder.IsReferenceTypeForConstraint(receiver.Type) || IsLvalue(receiver)
+
+        internal func ConditionalStorageTypesMatch(
+            left TypeSymbol?,
+            right TypeSymbol?,
+            requireExactNullability bool = false
+        ) bool {
+            if object.ReferenceEquals(left, right) {
+                return true
+            }
+            if left == nil || right == nil {
+                return false
+            }
+            if !ByRefStorageMatching.AreSameStorageType(
+                left,
+                right,
+                out var storageNullable,
+                out var parameterNullable,
+                out var nestedMismatch
+            ) {
+                return false
+            }
+            return !requireExactNullability ||
+                (
+                left.ReferenceNullability == right.ReferenceNullability &&
+                    !storageNullable &&
+                    !parameterNullable &&
+                    !nestedMismatch &&
+                    !HasNestedReferenceNullabilityDifference(left, right)
+            )
+        }
+
+        private func HasNestedReferenceNullabilityDifference(left TypeSymbol, right TypeSymbol) bool {
+            let leftPositions = left.GetElementPositions()
+            let rightPositions = right.GetElementPositions()
+            if leftPositions.Length != rightPositions.Length {
+                return false
+            }
+            for var i = 0; i < leftPositions.Length; i++ {
+                let leftPos = leftPositions[i]
+                let rightPos = rightPositions[i]
+                if leftPos.ReferenceNullability != rightPos.ReferenceNullability ||
+                    HasNestedReferenceNullabilityDifference(leftPos, rightPos) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        internal func MergeConditionalStorageType(left TypeSymbol?, right TypeSymbol?) TypeSymbol? {
+            if left == nil {
+                return right
+            }
+            if right == nil {
+                return left
+            }
+            if left.ReferenceNullability == ReferenceNullabilityKind.Nullable {
+                return left
+            }
+            if right.ReferenceNullability == ReferenceNullabilityKind.Nullable {
+                return right
+            }
+            if left.ReferenceNullability == ReferenceNullabilityKind.Platform {
+                return left
+            }
+            if right.ReferenceNullability == ReferenceNullabilityKind.Platform {
+                return right
+            }
+            if left.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                return left
+            }
+            if right.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                return right
+            }
+            return left
+        }
+
+        internal func CollectConditionalAddressLeafStorageTypes(
+            expression BoundExpression,
+            sink List[(ReadStorage TypeSymbol, WriteStorage TypeSymbol)]
+        ) {
+            var current = expression
+            while current is BoundBlockExpression block {
+                current = block.Expression
+            }
+            if current is BoundConditionalAddressExpression condAddr {
+                CollectConditionalAddressLeafStorageTypes(condAddr.WhenTrueOperand, sink)
+                CollectConditionalAddressLeafStorageTypes(condAddr.WhenFalseOperand, sink)
+                return
+            }
+            if current is BoundConditionalExpression conditional {
+                CollectConditionalAddressLeafStorageTypes(conditional.WhenTrue, sink)
+                CollectConditionalAddressLeafStorageTypes(conditional.WhenFalse, sink)
+                return
+            }
+            sink.Add(
+                (
+                    ReadStorage: AddressedLeafStorageType(current, useEffectiveNullability: true),
+                    WriteStorage: AddressedLeafStorageType(current, useEffectiveNullability: false)
+                )
+            )
+        }
+
+        internal func TryGetAddressedStorageType(
+            expression BoundExpression,
+            @NotNullWhen(true) out storageType TypeSymbol?
+        ) bool {
+            var current = expression
+            while current is BoundBlockExpression block {
+                current = block.Expression
+            }
+            if current is BoundConditionalExpression conditional {
+                if !TryGetAddressedStorageType(conditional.WhenTrue, out var nestedTrue) ||
+                    !TryGetAddressedStorageType(conditional.WhenFalse, out var nestedFalse) ||
+                    !ConditionalStorageTypesMatch(nestedTrue, nestedFalse, requireExactNullability: true) {
+                    storageType = nil
+                    return false
+                }
+                storageType = MergeConditionalStorageType(nestedTrue, nestedFalse)
+                return true
+            }
+            storageType = AddressedLeafStorageType(current, useEffectiveNullability: false)
+            return true
+        }
+
+        internal func AddressedLeafStorageType(
+            current BoundExpression,
+            useEffectiveNullability bool = true
+        ) TypeSymbol {
+            switch current {
+                case bve is BoundVariableExpression {
+                    let declaredType = bve.Variable.Type
+                    let effectiveType = bve.Type
+                    let unboxesToValueType = bve.NarrowedType != nil && !ReflectionMetadataEmitter.IsValueTypeSymbol(
+                        declaredType
+                    ) &&
+                        declaredType
+                        ?.ClrType
+                        ?.IsValueType != true &&
+                        (
+                        ReflectionMetadataEmitter.IsValueTypeSymbol(effectiveType) ||
+                            effectiveType
+                            ?.ClrType
+                            ?.IsValueType == true
+                    )
+                    return if unboxesToValueType {
+                        effectiveType
+                    } else if useEffectiveNullability {
+                        ApplyEffectiveReferenceNullability(declaredType, effectiveType)
+                    } else {
+                        declaredType
+                    }
+                }
+                case fa is BoundFieldAccessExpression {
+                    let declaredFieldType = fa.SubstitutedType ?? fa.Field.Type
+                    return if useEffectiveNullability {
+                        ApplyEffectiveReferenceNullability(declaredFieldType, fa.Type)
+                    } else {
+                        declaredFieldType
+                    }
+                }
+                case BoundClrPropertyAccessExpression{Member: FieldInfo field} access {
+                    let declaredFieldType = if access.Receiver != nil {
+                        MemberLookup.GetClrFieldTypeSymbol(access.StaticContainerType ?? access.Receiver.Type, field)
+                    } else if access.StaticContainerType != nil {
+                        MemberLookup.GetClrFieldTypeSymbol(access.StaticContainerType, field)
+                    } else {
+                        ClrNullability.GetFieldTypeSymbol(field)
+                    }
+                    return if useEffectiveNullability {
+                        ApplyEffectiveReferenceNullability(declaredFieldType, access.Type)
+                    } else {
+                        declaredFieldType
+                    }
+                }
+                case addr is BoundConditionalAddressExpression {
+                    return addr.PointeeType
+                }
+                default {
+                    return current.Type
+                }
+            }
+        }
+
+        private func ApplyEffectiveReferenceNullability(
+            declaredStorageType TypeSymbol,
+            effectiveType TypeSymbol?
+        ) TypeSymbol {
+            if effectiveType == nil ||
+                declaredStorageType.ReferenceNullability == ReferenceNullabilityKind.NotApplicable {
+                return declaredStorageType
+            }
+            let effectiveNullability = effectiveType.ReferenceNullability
+            if effectiveNullability == ReferenceNullabilityKind.NotApplicable ||
+                effectiveNullability == declaredStorageType.ReferenceNullability {
+                return declaredStorageType
+            }
+            var stripped = declaredStorageType
+            if stripped is PlatformTypeSymbol platform {
+                stripped = platform.UnderlyingType
+            } else if stripped is NullableTypeSymbol nullable &&
+                stripped.ReferenceNullability == ReferenceNullabilityKind.Nullable {
+                stripped = nullable.UnderlyingType
+            }
+            return switch effectiveNullability {
+                case ReferenceNullabilityKind.Nullable: NullableTypeSymbol.Get(stripped)
+                case ReferenceNullabilityKind.Platform: PlatformTypeSymbol.Get(stripped)
+                default: stripped
+            }
+        }
 
         internal func TryGetReadOnlyAddressTarget(
             expression BoundExpression,

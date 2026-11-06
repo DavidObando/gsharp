@@ -2049,11 +2049,12 @@ internal class LambdaBinder {
             "a resolved user method group has a function type",
             expression: "group.FunctionType"
         )
+        let receiver = group.Receiver
         let needsValueTypeExtensionAdapter = function.IsExtension &&
-            group.Receiver is {} extReceiver &&
+            receiver != nil &&
             (
-            ReflectionMetadataEmitter.IsValueTypeSymbol(extReceiver.Type) ||
-                (extReceiver.Type is TypeParameterSymbol receiverTp && !IsKnownReferenceTypeParameter(receiverTp))
+            ReflectionMetadataEmitter.IsValueTypeSymbol(receiver.Type) ||
+                (receiver.Type is TypeParameterSymbol receiverTp && !IsKnownReferenceTypeParameter(receiverTp))
         )
         if function.HiddenContextParameter == nil &&
             function.SuspendingKind != SuspendingKind.Inferred &&

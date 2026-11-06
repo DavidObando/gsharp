@@ -319,6 +319,33 @@ internal partial class OverloadResolver {
         }
     }
 
+    private func InvokeUserTypeStaticCall(
+        owner StructSymbol,
+        syntax CallExpressionSyntax,
+        rollbackPrebind Action?,
+        prebindDiagMark int32
+    ) BoundExpression {
+        if rollbackPrebind != nil {
+            Diagnostics.TruncateTo(prebindDiagMark)
+            rollbackPrebind()
+        }
+        return bindUserTypeStaticCall!!(owner, syntax)
+    }
+
+    private func InvokeImportedClrStaticCall(
+        clrType Type,
+        syntax CallExpressionSyntax,
+        rollbackPrebind Action?,
+        prebindDiagMark int32
+    ) BoundExpression {
+        if rollbackPrebind != nil {
+            Diagnostics.TruncateTo(prebindDiagMark)
+            rollbackPrebind()
+        }
+        let bindImportedClrStaticCall = bindImportedClrStaticCall!!
+        return bindImportedClrStaticCall(clrType, syntax)
+    }
+
     /// The last-resort unqualified lookup of an inherited static method: the
     /// enclosing class (through `this`, or as the owner of a
     /// `shared` member or of the function literal being bound) inherits
@@ -326,11 +353,15 @@ internal partial class OverloadResolver {
     /// imported base.
     /// @param effThis The effective `this`, or `null` in a static context.
     /// @param syntax The unqualified call.
+    /// @param rollbackPrebind Optional callback that restores pre-bind narrowing/alias state before re-binding.
+    /// @param prebindDiagMark Diagnostic count before pre-binding arguments.
     /// @param result The bound static call when one was found.
     /// @returns `true` when a base declares a static method of that name.
     private func TryBindInheritedStaticCallAsLastResort(
         effThis ParameterSymbol?,
         syntax CallExpressionSyntax,
+        rollbackPrebind Action?,
+        prebindDiagMark int32,
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
@@ -344,10 +375,10 @@ internal partial class OverloadResolver {
             MemberQuery.InheritedStatic(MemberKinds.Method)
         )
             .IsDefaultOrEmpty {
-            result = bindUserTypeStaticCall!!(owner, syntax)
+            result = InvokeUserTypeStaticCall(owner, syntax, rollbackPrebind, prebindDiagMark)
             return true
         }
-        return TryBindInheritedImportedStaticCall(owner, syntax, out result)
+        return TryBindInheritedImportedStaticCall(owner, syntax, rollbackPrebind, prebindDiagMark, out result)
     }
 
     /// Binds an unqualified call to a static method a source class inherits
@@ -364,6 +395,8 @@ internal partial class OverloadResolver {
     private func TryBindInheritedImportedStaticCall(
         derived StructSymbol,
         syntax CallExpressionSyntax,
+        rollbackPrebind Action?,
+        prebindDiagMark int32,
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
@@ -371,8 +404,7 @@ internal partial class OverloadResolver {
             GetInheritedImportedStaticCallBase(derived, syntax.Identifier.ValueText) is not{} importedBase {
             return false
         }
-        let bindImportedClrStaticCall = bindImportedClrStaticCall!!
-        result = bindImportedClrStaticCall(importedBase, syntax)
+        result = InvokeImportedClrStaticCall(importedBase, syntax, rollbackPrebind, prebindDiagMark)
         return true
     }
 
@@ -1018,6 +1050,8 @@ internal partial class OverloadResolver {
             let preCalleeLoad = BuildCalleeLoad(cast[VariableSymbol](symbol), syntax.Identifier, narrowedCallTargetType)
             ApplySubExpressionNarrowingEffects(syntax.Identifier, preCalleeLoad)
         }
+        let prebindDiagMark = Diagnostics.Count
+        let rollbackPrebind = captureCallArgumentPrebindRollback?(syntax)
         let preArgumentsNarrowing = CaptureNarrowingBindSnapshot()
         for argument in syntax.Arguments {
             // Issue #343: a named-argument wrapper carries the value expression
@@ -1059,6 +1093,8 @@ internal partial class OverloadResolver {
             argumentNames,
             boundArguments,
             deferredArrowLambdas,
+            rollbackPrebind,
+            prebindDiagMark,
             symbol,
             narrowedCallTargetType,
             preArgumentsNarrowing
@@ -1071,6 +1107,8 @@ internal partial class OverloadResolver {
                 argumentNames,
                 refreshedArguments.ToBuilder(),
                 deferredArrowLambdas,
+                rollbackPrebind,
+                prebindDiagMark,
                 symbol,
                 narrowedCallTargetType,
                 preArgumentsNarrowing
@@ -1085,6 +1123,8 @@ internal partial class OverloadResolver {
         argumentNames ImmutableArray[string],
         boundArguments ImmutableArray[BoundExpression].Builder,
         deferredArrowLambdas HashSet[LambdaExpressionSyntax]?,
+        rollbackPrebind Action?,
+        prebindDiagMark int32,
         symbol Symbol?,
         narrowedCallTargetType TypeSymbol?,
         preArgumentsNarrowing StatementBinder.NarrowingBindSnapshot
@@ -1132,7 +1172,12 @@ internal partial class OverloadResolver {
                 if !staticMethods.IsDefaultOrEmpty {
                     if bindUserTypeStaticCall != nil {
                         RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
-                        return bindUserTypeStaticCall!!(initializerReceiverType, syntax)
+                        return InvokeUserTypeStaticCall(
+                            initializerReceiverType,
+                            syntax,
+                            rollbackPrebind,
+                            prebindDiagMark
+                        )
                     }
                     let staticMethod FunctionSymbol? = SelectInstanceOverloadOrReport(
                         staticMethods,
@@ -1195,7 +1240,12 @@ internal partial class OverloadResolver {
                         // fidelity via the shared static-call finalizer).
                         if bindUserTypeStaticCall != nil {
                             RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
-                            return bindUserTypeStaticCall!!(implicitReceiverStruct, syntax)
+                            return InvokeUserTypeStaticCall(
+                                implicitReceiverStruct,
+                                syntax,
+                                rollbackPrebind,
+                                prebindDiagMark
+                            )
                         }
                         return BindImplicitStaticSelfCallFallback(
                             implicitMethod,
@@ -1351,7 +1401,7 @@ internal partial class OverloadResolver {
                 )
                 if !implicitStaticStructOverloads.IsDefaultOrEmpty {
                     RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
-                    return bindUserTypeStaticCall!!(implicitStaticStruct, syntax)
+                    return InvokeUserTypeStaticCall(implicitStaticStruct, syntax, rollbackPrebind, prebindDiagMark)
                 }
             }
             // Issue #1566 / #3527: reaching here with a non-null symbol means
@@ -1378,7 +1428,7 @@ internal partial class OverloadResolver {
                 if bindUserTypeStaticCall != nil &&
                     GetLexicallyEnclosingStaticCallOwner(syntax.Identifier.ValueText) is {} enclosingStruct {
                     RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
-                    return bindUserTypeStaticCall!!(enclosingStruct, syntax)
+                    return InvokeUserTypeStaticCall(enclosingStruct, syntax, rollbackPrebind, prebindDiagMark)
                 }
                 // Issue #1201 (C# `using static`): an unqualified call may resolve
                 // to a `shared` (static) method of a type brought into scope by a
@@ -1413,7 +1463,7 @@ internal partial class OverloadResolver {
                     }
                     if matchedStaticImport != nil {
                         RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
-                        return bindUserTypeStaticCall!!(matchedStaticImport, syntax)
+                        return InvokeUserTypeStaticCall(matchedStaticImport, syntax, rollbackPrebind, prebindDiagMark)
                     }
                 }
                 // Issue #3334 / ADR-0134: an unqualified call may also resolve
@@ -1445,7 +1495,12 @@ internal partial class OverloadResolver {
                     }
                     if matchedClrStaticImport != nil {
                         RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
-                        return bindImportedClrStaticCall!!(matchedClrStaticImport, syntax)
+                        return InvokeImportedClrStaticCall(
+                            matchedClrStaticImport,
+                            syntax,
+                            rollbackPrebind,
+                            prebindDiagMark
+                        )
                     }
                 }
                 RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
@@ -1460,7 +1515,13 @@ internal partial class OverloadResolver {
                 // using-static import or any other earlier match still wins,
                 // so no call that bound before this lookup existed changes
                 // meaning; only calls that were errors start to bind.
-                if TryBindInheritedStaticCallAsLastResort(effThis, syntax, out var inheritedStaticCall) {
+                if TryBindInheritedStaticCallAsLastResort(
+                    effThis,
+                    syntax,
+                    rollbackPrebind,
+                    prebindDiagMark,
+                    out var inheritedStaticCall
+                ) {
                     return inheritedStaticCall!!
                 }
                 Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.ValueText)
@@ -2325,7 +2386,8 @@ internal partial class OverloadResolver {
                             expectedType,
                             "a bound parameter has a target type",
                             expression: "expectedType"
-                        )
+                        ),
+                        condAddrArg
                     ) {
                         conversions.ReportByRefStorageMismatch(
                             Invariant.Required(

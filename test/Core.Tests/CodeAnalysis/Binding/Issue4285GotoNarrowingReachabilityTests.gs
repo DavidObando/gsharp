@@ -620,6 +620,30 @@ Console.WriteLine(Run(true, 42))
     }
 
     @Fact
+    func ForwardGoto_JoinWithFallthrough_PreservesConstructedSourceBaseMember() {
+        // Issue #5509: a forward-goto edge narrowed to `Parent[int32]` joined
+        // with a fallthrough edge narrowed to `Child : Parent[int32]` keeps the
+        // constructed base type `Parent[int32]` so `value.Read()` binds without
+        // GS0159.
+        let result = Evaluate(`
+open class Parent[T] { func Read() int32 -> 7 }
+class Child : Parent[int32] {}
+func Read(value object, flag bool) int32 {
+    if flag {
+        if value !is Parent[int32] { return 0 }
+        goto Joined
+    }
+    if value !is Child { return 0 }
+Joined:
+    return value.Read()
+}
+Read(Child(), true) * 10 + Read(Child(), false)
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(77, result.Value)
+    }
+
+    @Fact
     func NoGotoOrLabel_PatternVariableLeak_StillLeaksIntoEnclosingScope() {
         // Regression check: a function with NO goto/label anywhere must keep
         // today's ADR-0166 pattern-variable leak exactly as before.

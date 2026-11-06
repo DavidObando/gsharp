@@ -9,5 +9,6 @@ enum IlVerifyStatus {
     Skipped,
     Passed,
     Failed,
-    Incomplete
+    Incomplete,
+    Unavailable
 }

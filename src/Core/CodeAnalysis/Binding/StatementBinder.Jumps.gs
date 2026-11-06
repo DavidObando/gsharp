@@ -119,6 +119,7 @@ internal partial class StatementBinder {
         }
         binderCtx.UnresolvedGotoLabels.Clear()
         binderCtx.NarrowingFlow.Clear()
+        branchyArgumentEntries.Clear()
         boundStatementEntries.Clear()
         trailingSyntaxEntries.Clear()
         loopExitFacts.Clear()

@@ -278,18 +278,18 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         // the write at the element address (`ldelema`), so only the
         // side-effecting collection/index sub-expressions are spilled (see
         // SpillStorageReceiverParts), never the element value itself.
-        let spillReceiver = rewritten.Receiver is {} rewrittenReceiver &&
-            !IsInPlaceStorageWriteReceiver(rewrittenReceiver) &&
+        var receiver = rewritten.Receiver
+        let spillReceiver = receiver != nil &&
+            !IsInPlaceStorageWriteReceiver(receiver) &&
             (
-            SideEffectAnalyzer.HasObservableSideEffect(rewrittenReceiver) || BindingBinder.IsReferenceTypeForConstraint(
-                rewrittenReceiver.Type
+            SideEffectAnalyzer.HasObservableSideEffect(receiver) || BindingBinder.IsReferenceTypeForConstraint(
+                receiver.Type
             ) &&
-                !IsStableLocalRead(rewrittenReceiver) &&
+                !IsStableLocalRead(receiver) &&
                 SideEffectAnalyzer.HasObservableSideEffect(rewritten.Value)
         )
         var value = rewritten.Value
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-        var receiver = rewritten.Receiver
         if spillReceiver {
             receiver = this.MaybeSpill(
                 Invariant.Required(

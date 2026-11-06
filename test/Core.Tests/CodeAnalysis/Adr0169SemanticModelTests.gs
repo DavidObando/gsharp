@@ -1415,6 +1415,65 @@ func Run() {
     }
 
     @Fact
+    func GetSymbolInfo_OnSharedInterfacePropertyRead_ResolvesPropertySymbol() {
+        const source = `package Query
+interface IData {
+    shared {
+        prop Name string { get -> "value" }
+    }
+}
+interface IBox[T] {
+    shared {
+        prop Value T { get -> default(T) }
+    }
+}
+func Run() {
+    let plain = IData.Name
+    let generic = IBox[int32?].Value
+}
+`
+        let (compilation, model, tree) = CreateQualifierModel(source)
+        let iface = compilation.GlobalScope.Interfaces.Single((i InterfaceSymbol) -> i.Name == "IData")
+        let nameProp = iface.Properties.Single((p PropertySymbol) -> p.Name == "Name")
+        let boxIface = compilation.GlobalScope.Interfaces.Single((i InterfaceSymbol) -> i.Name == "IBox")
+        let valueProp = boxIface.Properties.Single((p PropertySymbol) -> p.Name == "Value")
+        let plainAccessor = QualifierInitializer(tree, "plain")
+        let plainName = Assert.IsType[NameExpressionSyntax](plainAccessor.RightPart)
+        Assert.Same(nameProp, model.GetSymbolInfo(plainAccessor).Symbol)
+        Assert.Same(nameProp, model.GetSymbolInfo(plainName.IdentifierToken).Symbol)
+        let genericAccessor = QualifierInitializer(tree, "generic")
+        let genericName = Assert.IsType[NameExpressionSyntax](genericAccessor.RightPart)
+        let resolvedGeneric = Assert.IsType[PropertySymbol](model.GetSymbolInfo(genericName.IdentifierToken).Symbol)
+        Assert.Same(valueProp.Declaration, resolvedGeneric.Declaration)
+        Assert.Same(TypeSymbol.Int32, Assert.IsType[NullableTypeSymbol](resolvedGeneric.Type).UnderlyingType)
+        Assert.Same(
+            valueProp.Declaration,
+            Assert.IsType[PropertySymbol](model.GetSymbolInfo(genericAccessor).Symbol).Declaration
+        )
+    }
+
+    @Fact
+    func GetSymbolInfo_OnSystemIndexSetterWrite_KeepsSetterAccessorInsteadOfVoidProperty() {
+        const source = `package Query
+class Buffer {
+    prop this[index System.Index] int32 {
+        get -> 0
+        set { }
+    }
+}
+func Write(buffer Buffer) {
+    buffer[^1] = 9
+}
+`
+        let (compilation, model, tree) = CreateQualifierModel(source)
+        let bufferType = compilation.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Buffer")
+        let indexer = bufferType.Properties.Single((p PropertySymbol) -> p.IsIndexer)
+        let writeStmt = tree.Root.DescendantNodes().OfType[IndexAssignmentExpressionSyntax]().Single()
+        let symbol = model.GetSymbolInfo(writeStmt).Symbol
+        Assert.Same(indexer.SetterSymbol, symbol)
+    }
+
+    @Fact
     func StaticQualifierQuery_PreservesTypeParametersShadowingAndColorColor() {
         const source = `package Query
 class Box[T] {

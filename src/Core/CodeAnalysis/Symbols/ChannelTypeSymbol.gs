@@ -122,7 +122,15 @@ class ChannelTypeSymbol : TypeSymbol {
                     )
                 }
                 case annotated is NullabilityAnnotatedTypeSymbol {
-                    return TryGetChannelShape(annotated.BaseType, out elementType, out direction, out isConstructed)
+                    if !TryGetChannelShape(annotated.BaseType, out elementType, out direction, out isConstructed) {
+                        return false
+                    }
+                    if annotated.ClrType is {IsGenericType: true, IsGenericTypeDefinition: false} annotatedClr &&
+                        annotatedClr
+                        .GetGenericArguments().Length == 1 {
+                        elementType = annotated.GetTypeArgumentSymbol(0)
+                    }
+                    return true
                 }
                 case channel is ChannelTypeSymbol {
                     elementType = channel.ElementType
@@ -222,11 +230,29 @@ class ChannelTypeSymbol : TypeSymbol {
         /// that would otherwise pin the context's memory indefinitely.
         internal func ClearCache() -> Cache.Clear()
 
+        internal func ProbeMethodName(direction ChannelDirection) string -> switch direction {
+            case ChannelDirection.In: "TryRead"
+            case ChannelDirection.Out: "TryWrite"
+            default: "get_Reader"
+        }
+
         private func MakeClrType(elementType TypeSymbol, direction ChannelDirection) Type? {
-            if elementType.ClrType is not{} elementClrType {
+            if elementType.ClrType == nil {
                 return nil
             }
-            return OpenClrDefinition(direction).MakeGenericType(elementClrType)
+            let elementClrType Type? = NullableTypeSymbol.GetEffectiveClrType(elementType)
+            if elementClrType == nil {
+                return nil
+            }
+            let openDefinition = OpenClrDefinition(direction)
+            if elementClrType.IsRuntimeProvidedType() {
+                return openDefinition.MakeGenericType(elementClrType)
+            }
+            return MapTypeSymbol.TryMakeSingleArgumentClrTypeInReferenceContext(
+                openDefinition,
+                ProbeMethodName(direction),
+                elementType
+            )
         }
     }
 }

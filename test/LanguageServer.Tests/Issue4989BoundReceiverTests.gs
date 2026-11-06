@@ -545,10 +545,6 @@ class Holder {
                 }
             )
         )
-        if sharedMember && !property {
-            // Plain shared-field declaration navigation remains tracked by #5043.
-            return
-        }
         let uri = DocumentUri.From("file:///issue5035-implicit-field.gs")!!
         let definition = Assert.IsType[Location](
             DefinitionComputer.ComputeDefinition(
@@ -2445,10 +2441,178 @@ func Run() {
                 "func (int32) ToString() string"
             }
         )
-        if !property {
-            let member = TokenAt(content, source, "Value.ToString()[^1]", 0)
-            Assert.Same(expected, SemanticLookup.ResolveSymbol(compilation, member))
+        let plainMember = TokenAt(content, source, "Value\n", 0)
+        Assert.Same(expected, BoundSemantics.GetSymbol(compilation, plainMember))
+        Assert.Same(expected, SemanticLookup.ResolveSymbol(compilation, plainMember))
+        let member = TokenAt(content, source, "Value.ToString()[^1]", 0)
+        Assert.Same(expected, BoundSemantics.GetSymbol(compilation, member))
+        Assert.Same(expected, SemanticLookup.ResolveSymbol(compilation, member))
+        let uri = DocumentUri.From("file:///issue5035-interface-static-slots.gs")!!
+        let declaration = LanguageServerTestHelpers.PositionOf(
+            source,
+            if property {
+                "Value string"
+            } else {
+                "Value int32"
+            }
+        )
+        for memberPosition in[]Position{
+            LanguageServerTestHelpers.PositionOf(source, "Value\n"),
+            LanguageServerTestHelpers.PositionOf(source, "Value.ToString()[^1]")
+        } {
+            let definition = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, memberPosition))
+            Assert.Equal(uri, definition.Uri)
+            AssertPosition(declaration, definition.Range.Start)
+            AssertPosition(Position(declaration.Line, declaration.Character + "Value".Length), definition.Range.End)
         }
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func Issue5043_5053_PlainSharedFieldAndInterfaceProperty_ResolveSymbolAndDefinition(
+        interfaceOwner bool,
+        generic bool
+    ) {
+        let source = if interfaceOwner {
+            `package Repro
+interface IDataTYPE_PARAMETERS {
+    shared {
+        prop Name PROPERTY_TYPE { get -> PROPERTY_VALUE }
+        var Fields []string = []string{"one"}
+    }
+}
+func Run() {
+    let plainProp = IDataTYPE_ARGUMENTS.Name
+    let plainField = IDataTYPE_ARGUMENTS.Fields
+}
+`
+        } else {
+            `package Repro
+class Decoy {
+    var Fields []int32 = []int32{0}
+}
+class HolderTYPE_PARAMETERS {
+    shared {
+        prop Name PROPERTY_TYPE { get -> PROPERTY_VALUE }
+        var Fields []string = []string{"one"}
+    }
+}
+func Run() {
+    let plainProp = HolderTYPE_ARGUMENTS.Name
+    let plainField = HolderTYPE_ARGUMENTS.Fields
+}
+`
+        }
+        let concrete = source
+            .Replace(
+            "TYPE_PARAMETERS",
+            if generic {
+                "[T]"
+            } else {
+                ""
+            }
+        )
+            .Replace(
+            "TYPE_ARGUMENTS",
+            if generic {
+                "[int32?]"
+            } else {
+                ""
+            }
+        )
+            .Replace(
+            "PROPERTY_TYPE",
+            if generic {
+                "T"
+            } else {
+                "string"
+            }
+        )
+            .Replace(
+            "PROPERTY_VALUE",
+            if generic {
+                "default(T)"
+            } else {
+                "\"value\""
+            }
+        )
+        let content = LanguageServerTestHelpers.Content(concrete)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let uri = DocumentUri.From("file:///issue5043-5053.gs")!!
+        let propDeclPos = LanguageServerTestHelpers.PositionOf(concrete, "Name ")
+        let fieldDeclPos = LanguageServerTestHelpers.PositionOf(concrete, "Fields []string")
+        let propUseToken = TokenAt(content, concrete, "Name\n", 0)
+        let fieldUseToken = TokenAt(content, concrete, "Fields\n", 0)
+        let resolvedProp = Assert.IsType[PropertySymbol](SemanticLookup.ResolveSymbol(compilation, propUseToken))
+        Assert.Same(
+            resolvedProp.Declaration,
+            Assert.IsType[PropertySymbol](BoundSemantics.GetSymbol(compilation, propUseToken)).Declaration
+        )
+        if generic {
+            Assert.IsType[NullableTypeSymbol](resolvedProp.Type)
+        } else {
+            Assert.Same(TypeSymbol.String, resolvedProp.Type)
+        }
+        let resolvedField = Assert.IsType[FieldSymbol](SemanticLookup.ResolveSymbol(compilation, fieldUseToken))
+        Assert.Same(resolvedField, BoundSemantics.GetSymbol(compilation, fieldUseToken))
+        Assert.True(resolvedField.IsStatic)
+        let propDef = Assert.IsType[Location](
+            DefinitionComputer.ComputeDefinition(uri, content, LanguageServerTestHelpers.PositionOf(concrete, "Name\n"))
+        )
+        Assert.Equal(uri, propDef.Uri)
+        AssertPosition(propDeclPos, propDef.Range.Start)
+        AssertPosition(Position(propDeclPos.Line, propDeclPos.Character + "Name".Length), propDef.Range.End)
+        let fieldDef = Assert.IsType[Location](
+            DefinitionComputer.ComputeDefinition(
+                uri,
+                content,
+                LanguageServerTestHelpers.PositionOf(concrete, "Fields\n")
+            )
+        )
+        Assert.Equal(uri, fieldDef.Uri)
+        AssertPosition(fieldDeclPos, fieldDef.Range.Start)
+        AssertPosition(Position(fieldDeclPos.Line, fieldDeclPos.Character + "Fields".Length), fieldDef.Range.End)
+    }
+
+    @Fact
+    func Issue5043_InterfaceMethodDeclarations_PreserveIndividualOverloadIdentity() {
+        let source = `package Repro
+interface IReader {
+    func Read() string { return Read(1) }
+    private func Read(code int32) string { return "ok" }
+    shared {
+        func Read(label string) string { return Decode(label) }
+        private func Decode(label string) string { return label }
+    }
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let iface = compilation.GlobalScope.Interfaces.Single((i InterfaceSymbol) -> i.Name == "IReader")
+        let publicRead = Assert.Single(iface.Methods)
+        let privateRead = Assert.Single(iface.PrivateMethods)
+        let staticRead = Assert.Single(iface.StaticMethods)
+        let staticPrivateDecode = Assert.Single(iface.StaticPrivateMethods)
+        Assert.Same(publicRead, SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "Read() string", 0)))
+        Assert.Same(
+            privateRead,
+            SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "Read(code int32)", 0))
+        )
+        Assert.Same(
+            staticRead,
+            SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "Read(label string)", 0))
+        )
+        Assert.Same(
+            staticPrivateDecode,
+            SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "Decode(label string)", 0))
+        )
     }
 
     @Theory
@@ -2801,10 +2965,6 @@ func Run() {
             BoundSemantics.GetExpressionType(compilation, token.Parent as ExpressionSyntax)?.ClrType
         )
         AssertIndexedHover(content, position, member, signature)
-        if declared is FieldSymbol {
-            // Plain shared-field navigation already fails independently (#5043).
-            return
-        }
         let uri = DocumentUri.From("file:///issue5035-static-index.gs")!!
         let definition = Assert.IsType[Location](DefinitionComputer.ComputeDefinition(uri, content, position))
         let expected = LanguageServerTestHelpers.PositionOf(source, member + " []string")

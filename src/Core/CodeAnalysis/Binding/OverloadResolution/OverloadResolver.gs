@@ -131,6 +131,7 @@ internal partial class OverloadResolver {
             (() -> BoundExpression)?
         ) -> BoundExpression?
     )?
+    private let captureCallArgumentPrebindRollback((SyntaxNode) -> Action)?
 
     /// Initializes a new instance of the (cref:OverloadResolver)
     /// class.
@@ -288,7 +289,8 @@ internal partial class OverloadResolver {
                 BoundExpression?,
                 (() -> BoundExpression)?
             ) -> BoundExpression?
-        )? = nil
+        )? = nil,
+        captureCallArgumentPrebindRollback((SyntaxNode) -> Action)? = nil
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.memberLookup = memberLookup ?? throw ArgumentNullException("memberLookup")
@@ -337,6 +339,7 @@ internal partial class OverloadResolver {
         this.recordDeferredArgumentSnapshot = recordDeferredArgumentSnapshot
         this.rebindDeferredArgumentWithSnapshot = rebindDeferredArgumentWithSnapshot
         this.verifyCallArgumentsAfterConversions = verifyCallArgumentsAfterConversions
+        this.captureCallArgumentPrebindRollback = captureCallArgumentPrebindRollback
     }
 
     private func ApplySubExpressionNarrowingEffects(syntax SyntaxNode?, operand BoundExpression?) {

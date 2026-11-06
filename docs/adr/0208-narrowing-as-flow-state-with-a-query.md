@@ -1050,10 +1050,10 @@ Details per row:
   keep safe code compiling. (1) The condition was bound before its effects, so a type test of a path whose fact
   the effects removed (`Check(h) && x is C` after a guard on `x`) is classified against the path's declared type,
   the type it has after the effects, as a nil test already is. This applies only to a fact that strips `?` or
-  `!` from a reference type, whose read emits no conversion. The operand of a subtype fact is read with a
-  `castclass` and a nullable value with an unwrap, so that test runs on the stale read (an `InvalidCastException`
-  or `InvalidOperationException` when the call changed the value; #5545); those branches stay rejected
-  (rows w18 and w19). (2) The effects are read with the callable aliases
+  `!` from a reference type, whose read emits no conversion. After #5545 applies the left operand's effects
+  before the right operand of `&&` and `||` is bound, `Check(h) && x is Cat` and `Check(h) && x is int32` read
+  `x` at its declared type (`Pet?` and `int32?`), test the new value without a stale `castclass` or unwrap, and
+  narrow the branch (rows w18 and w19). (2) The effects are read with the callable aliases
   from before the condition, as for a statement, and the aliases are updated after them, so a call of an alias
   that the condition reassigns later (`action() && (action = callback) is {} a`) keeps its classification.
   (3) The member-path scan of the syntax (`SyntaxMayMutateMemberPaths`) does not enter a function literal or

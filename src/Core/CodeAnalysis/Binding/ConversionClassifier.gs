@@ -2909,7 +2909,9 @@ internal class ConversionClassifier {
     func BindConditionalRefArgument(
         syntax ConditionalRefArgumentExpressionSyntax,
         outerModifier SyntaxToken?,
-        bindBranches(() -> (Condition BoundExpression, WhenTrue BoundExpression, WhenFalse BoundExpression))? = nil
+        bindConditionalAddress(
+            (ExpressionSyntax, ExpressionSyntax, ExpressionSyntax, TextLocation, SyntaxToken?) -> BoundExpression
+        )? = nil
     ) BoundExpression {
         // Inner-modifier matching (GS0251). The outer modifier text is `ref`,
         // `out`, `in`, or `&`. The bare `&` form (outerModifier == null) maps
@@ -2940,9 +2942,16 @@ internal class ConversionClassifier {
             Diagnostics.ReportInlineDeclarationInConditionalRefBranch(wfRefArg.Location)
             return BoundErrorExpression(nil)
         }
-        let (condition, whenTrue, whenFalse) = if bindBranches != nil {
-            bindBranches()
-        } else if bindConditionalRefParts != nil {
+        if bindConditionalAddress != nil {
+            return bindConditionalAddress(
+                syntax.Condition,
+                syntax.WhenTrue,
+                syntax.WhenFalse,
+                syntax.Location,
+                outerModifier
+            )
+        }
+        let (condition, whenTrue, whenFalse) = if bindConditionalRefParts != nil {
             bindConditionalRefParts!!(syntax.Condition, syntax.WhenTrue, syntax.WhenFalse)
         } else {
             (
@@ -2962,18 +2971,27 @@ internal class ConversionClassifier {
             Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.WhenFalse.Location, syntax.WhenFalse.ToString())
             return BoundErrorExpression(nil)
         }
-        // Branch types must match exactly — no implicit widening or nullable
-        // adjustment, since the resulting byref selects between slots whose
-        // physical type must agree.
-        if !object.ReferenceEquals(whenTrue.Type, whenFalse.Type) && !string.Equals(
-            whenTrue.Type?.Name,
-            whenFalse.Type?.Name,
-            StringComparison.Ordinal
+        // Branch types must match in physical storage — no implicit widening or
+        // value-nullable adjustment, since the resulting byref selects between
+        // slots whose physical type must agree.
+        let standaloneAddress = outerModifier == nil
+        let trueStorageType = ExpressionBinder.AddressedLeafStorageType(
+            whenTrue,
+            useEffectiveNullability: !standaloneAddress
+        )
+        let falseStorageType = ExpressionBinder.AddressedLeafStorageType(
+            whenFalse,
+            useEffectiveNullability: !standaloneAddress
+        )
+        if !ExpressionBinder.ConditionalStorageTypesMatch(
+            trueStorageType,
+            falseStorageType,
+            requireExactNullability: standaloneAddress
         ) {
             Diagnostics.ReportConditionalRefArgumentBranchTypeMismatch(
                 syntax.Location,
-                whenTrue.Type?.Name ?? "?",
-                whenFalse.Type?.Name ?? "?"
+                trueStorageType?.Name ?? "?",
+                falseStorageType?.Name ?? "?"
             )
             return BoundErrorExpression(nil)
         }
@@ -2992,15 +3010,16 @@ internal class ConversionClassifier {
                 return BoundErrorExpression(nil)
             }
         }
+        let mergedPointeeType = ExpressionBinder.MergeConditionalStorageType(trueStorageType, falseStorageType)
         return BoundConditionalAddressExpression(
             nil,
             condition,
             whenTrue,
             whenFalse,
             Invariant.Required(
-                whenTrue.Type,
+                mergedPointeeType,
                 "conditional ref branches have matching types",
-                expression: "whenTrue.Type"
+                expression: "mergedPointeeType"
             )
         )
     }
@@ -3100,7 +3119,7 @@ internal class ConversionClassifier {
                 let pointeeType = condAddr.PointeeType
                 if pointeeType == TypeSymbol.Error ||
                     expectedType == TypeSymbol.Error ||
-                    CheckByRefArgumentStorage(location, parameter, pointeeType, expectedType) {
+                    CheckByRefArgumentStorage(location, parameter, pointeeType, expectedType, condAddr) {
                     return argument
                 }
                 ReportByRefStorageMismatch(location, parameter.Name, expectedType, pointeeType)
@@ -3156,14 +3175,57 @@ internal class ConversionClassifier {
         location TextLocation,
         parameter ParameterSymbol,
         storageType TypeSymbol,
-        parameterType TypeSymbol
+        parameterType TypeSymbol,
+        argument BoundExpression? = nil
     ) bool {
-        if !ByRefStorageMatching.AreSameStorageType(
+        var storageNullable = false
+        var parameterNullable = false
+        var nestedMismatch = false
+        var mismatchStorageType = storageType
+        if argument is BoundConditionalAddressExpression condAddr {
+            let leaves = List[(ReadStorage TypeSymbol, WriteStorage TypeSymbol)]()
+            ExpressionBinder.CollectConditionalAddressLeafStorageTypes(condAddr, leaves)
+            for leaf in leaves {
+                if !ByRefStorageMatching.AreSameStorageType(
+                    leaf.ReadStorage,
+                    parameterType,
+                    out var branchStorageNullable,
+                    out _,
+                    out var branchNestedMismatch
+                ) ||
+                    !ByRefStorageMatching
+                    .AreSameStorageType(
+                    leaf.WriteStorage,
+                    parameterType,
+                    out _,
+                    out var branchParameterNullable,
+                    out var writeNestedMismatch
+                ) {
+                    return false
+                }
+                if (branchNestedMismatch || writeNestedMismatch) && !nestedMismatch {
+                    nestedMismatch = true
+                    mismatchStorageType = leaf.WriteStorage
+                }
+                if branchStorageNullable && parameter.RefKind != RefKind.Out && !nestedMismatch && !storageNullable {
+                    storageNullable = true
+                    mismatchStorageType = leaf.ReadStorage
+                }
+                if branchParameterNullable &&
+                    parameter.RefKind != RefKind.In &&
+                    !nestedMismatch &&
+                    !storageNullable &&
+                    !parameterNullable {
+                    parameterNullable = true
+                    mismatchStorageType = leaf.WriteStorage
+                }
+            }
+        } else if !ByRefStorageMatching.AreSameStorageType(
             storageType,
             parameterType,
-            out var storageNullable,
-            out var parameterNullable,
-            out var nestedMismatch
+            out storageNullable,
+            out parameterNullable,
+            out nestedMismatch
         ) {
             return false
         }
@@ -3193,7 +3255,7 @@ internal class ConversionClassifier {
                 refKindText,
                 parameter.Name,
                 parameterType,
-                storageType,
+                mismatchStorageType,
                 reason
             )
         }
@@ -5673,7 +5735,9 @@ internal class ConversionClassifier {
             } else {
                 target
             }
-            return NullableLifting.IsAnyValueTypeNullable(source) && BoundClrConversionCallExpression.CanLiftTo(
+            var resolvedMethod FunctionSymbol? = nil
+            var resolvedOwner StructSymbol? = nil
+            let matched = NullableLifting.IsAnyValueTypeNullable(source) && BoundClrConversionCallExpression.CanLiftTo(
                 target
             ) &&
                 (allowExplicit || BoundClrConversionCallExpression.CanLiftImplicitlyTo(target)) &&
@@ -5683,42 +5747,46 @@ internal class ConversionClassifier {
                     source.UnderlyingType,
                     targetUnderlying,
                     allowExplicit,
-                    out method,
-                    out methodOwner
+                    out resolvedMethod,
+                    out resolvedOwner
                 ) ||
                     TryResolveUserDefinedSymbolConversion(
                     source.UnderlyingType,
                     target,
                     allowExplicit,
-                    out method,
-                    out methodOwner
+                    out resolvedMethod,
+                    out resolvedOwner
                 )
             ) &&
-                methodOwner != nil &&
-                methodOwner.ClrType == nil &&
-                method!!
+                resolvedOwner != nil &&
+                resolvedOwner.ClrType == nil &&
+                resolvedMethod!!
                 .Parameters
                 .Length == 1 &&
-                method!!
+                resolvedMethod!!
                 .Parameters[0]
                 .RefKind == RefKind.None &&
-                method!!.ReturnRefKind == RefKind.None &&
+                resolvedMethod!!.ReturnRefKind == RefKind.None &&
                 Conversion
                 .ClassifyNonStructural(
                 source.UnderlyingType,
-                methodOwner.SubstituteMemberType(method!!.Parameters[0].Type)!!
+                resolvedOwner.SubstituteMemberType(resolvedMethod!!.Parameters[0].Type)!!
             )
                 .IsIdentity &&
                 (
                 TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
-                    methodOwner.SubstituteMemberType(method!!.Type),
+                    resolvedOwner.SubstituteMemberType(resolvedMethod!!.Type),
                     targetUnderlying
                 ) ||
-                    TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
-                    methodOwner.SubstituteMemberType(method!!.Type),
+                    TypeSymbol
+                    .AreRuntimeEquivalentIgnoringReferenceNullability(
+                    resolvedOwner.SubstituteMemberType(resolvedMethod!!.Type),
                     target
                 )
             )
+            method = resolvedMethod
+            methodOwner = resolvedOwner
+            return matched
         }
 
         private func TryResolveUserDefinedSymbolConversion(

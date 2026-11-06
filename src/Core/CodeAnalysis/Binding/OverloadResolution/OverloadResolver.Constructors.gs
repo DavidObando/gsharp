@@ -1309,7 +1309,7 @@ internal partial class OverloadResolver {
                 if pointee == TypeSymbol.Error ||
                     paramType == TypeSymbol.Error ||
                     conversions
-                    .CheckByRefArgumentStorage(refArgumentLocation, parameter, pointee, paramType) {
+                    .CheckByRefArgumentStorage(refArgumentLocation, parameter, pointee, paramType, condAddrCtor) {
                     convertedArguments.Add(argument)
                     continue
                 }
@@ -2287,7 +2287,8 @@ internal partial class OverloadResolver {
                 let pointee = condAddrInit.PointeeType
                 if pointee == TypeSymbol.Error ||
                     parameter.Type == TypeSymbol.Error ||
-                    conversions.CheckByRefArgumentStorage(argLocation, parameter, pointee, parameter.Type) {
+                    conversions
+                    .CheckByRefArgumentStorage(argLocation, parameter, pointee, parameter.Type, condAddrInit) {
                     convertedArgs.Add(argument)
                     continue
                 }

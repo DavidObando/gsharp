@@ -3709,7 +3709,11 @@ internal partial class ExpressionBinder {
             rawExpr = pen.Expression
         }
         if rawExpr is ConditionalRefArgumentExpressionSyntax condSyntax {
-            let conditionalRef = BindConditionalRefArgumentWithNarrowing(condSyntax, syntax.RefKindModifier)
+            let conditionalRef = conversions.BindConditionalRefArgument(
+                condSyntax,
+                syntax.RefKindModifier,
+                bindConditionalAddress: BindConditionalAddressCore
+            )
             if conditionalRef is not BoundErrorExpression {
                 conditionalRef.AnchorSyntax(syntax)
             }

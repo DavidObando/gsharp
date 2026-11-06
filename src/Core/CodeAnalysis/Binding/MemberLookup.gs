@@ -3729,7 +3729,18 @@ internal class MemberLookup {
                     // ADR-0174 D2: chan[T] / in chan[T] / out chan[T] over a symbolic
                     // element erases to Channel<erased T> / ChannelReader<…> / ChannelWriter<…>.
                     if TryProjectErasedClrType(channel.ElementType, out var channelElement) && channelElement != nil {
-                        erased = ChannelTypeSymbol.OpenClrDefinition(channel.Direction).MakeGenericType(channelElement)
+                        let openChannel = ChannelTypeSymbol.OpenClrDefinition(channel.Direction)
+                        if !channelElement.IsRuntimeProvidedType() &&
+                            MapTypeSymbol
+                            .TryMakeErasedSingleArgumentClrTypeInReferenceContext(
+                            openChannel,
+                            ChannelTypeSymbol.ProbeMethodName(channel.Direction),
+                            channelElement
+                        ) is {} inContext {
+                            erased = inContext
+                            return true
+                        }
+                        erased = openChannel.MakeGenericType(channelElement)
                         return true
                     }
                     return false
@@ -3896,7 +3907,7 @@ internal class MemberLookup {
                     if erasedUnderlying == nil {
                         return false
                     }
-                    if !erasedUnderlying.IsValueType || Nullable.GetUnderlyingType(erasedUnderlying) != nil {
+                    if !erasedUnderlying.IsValueType || NullableLifting.IsValueTypeNullableClr(erasedUnderlying) {
                         erased = erasedUnderlying
                         return true
                     }
@@ -4048,9 +4059,15 @@ internal class MemberLookup {
                 return false
             }
             let open_ = ChannelTypeSymbol.OpenClrDefinition(channel.Direction)
+            let closedClr = if TryProjectErasedClrType(channel, out var erasedChannel) &&
+                erasedChannel is {IsGenericType: true} closedChannel {
+                closedChannel
+            } else {
+                open_.MakeGenericType(typeof(object))
+            }
             view = ImportedTypeSymbol.GetConstructed(
-                open_.MakeGenericType(typeof(object)),
-                open_,
+                closedClr,
+                closedClr.GetGenericTypeDefinition(),
                 ImmutableArray.Create(channel.ElementType)
             )
             return true
@@ -6670,6 +6687,7 @@ internal class MemberLookup {
             return imported ??
                 TryGetClosedMapProjectionView(type) ??
                 TryGetClosedSequenceProjectionView(type) ??
+                TryGetClosedChannelProjectionView(type) ??
                 (
                 if type is StructSymbol userClass && TypeMemberModel.GetNearestImportedBase(
                     userClass
@@ -6722,15 +6740,39 @@ internal class MemberLookup {
         /// @param type The receiver type a member was reflected through.
         /// @returns The symbolic dictionary view, or `null`.
         internal func TryGetClosedMapProjectionView(type TypeSymbol) ImportedTypeSymbol? {
-            if type is not MapTypeSymbol map_ ||
-                map_.ClrType is not{IsGenericType: true, IsGenericTypeDefinition: false} mapClr {
+            if type is not MapTypeSymbol map_ {
                 return nil
             }
-            return ImportedTypeSymbol.GetConstructed(
-                mapClr,
-                mapClr.GetGenericTypeDefinition(),
-                ImmutableArray.Create(map_.KeyType, map_.ValueType)
-            )
+            if map_.ClrType is {IsGenericType: true, IsGenericTypeDefinition: false} mapClr {
+                return ImportedTypeSymbol.GetConstructed(
+                    mapClr,
+                    mapClr.GetGenericTypeDefinition(),
+                    ImmutableArray.Create(map_.KeyType, map_.ValueType)
+                )
+            }
+            return if TryGetSymbolicOpenMapReceiverView(map_, out var openMapView) {
+                openMapView
+            } else {
+                default(ImportedTypeSymbol?)
+            }
+        }
+
+        internal func TryGetClosedChannelProjectionView(type TypeSymbol) ImportedTypeSymbol? {
+            if type is not ChannelTypeSymbol channel {
+                return nil
+            }
+            if channel.ClrType is {IsGenericType: true, IsGenericTypeDefinition: false} channelClr {
+                return ImportedTypeSymbol.GetConstructed(
+                    channelClr,
+                    channelClr.GetGenericTypeDefinition(),
+                    ImmutableArray.Create(channel.ElementType)
+                )
+            }
+            return if TryGetSymbolicOpenChannelReceiverView(channel, out var openChannelView) {
+                openChannelView
+            } else {
+                default(ImportedTypeSymbol?)
+            }
         }
 
         internal func FindOpenIndexerDefinition(openDefinition Type?, closedIndexer PropertyInfo) PropertyInfo? {

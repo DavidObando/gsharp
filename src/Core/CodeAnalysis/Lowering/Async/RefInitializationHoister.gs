@@ -174,7 +174,8 @@ shared class RefInitializationHoister {
                 }
                 case field is BoundFieldAccessExpression {
                     {
-                        if field.Receiver is not{} fieldReceiver {
+                        let fieldReceiver = field.Receiver
+                        if fieldReceiver == nil {
                             // A static or interface static-field read (ADR-0089 /
                             // #1030) has no receiver expression to hoist, and
                             // rebuilding it through the receiver constructor would

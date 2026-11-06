@@ -669,7 +669,8 @@ internal partial class OverloadResolver {
                         argumentLocation,
                         parameter,
                         conditionalAddress.PointeeType,
-                        parameter.Type
+                        parameter.Type,
+                        conditionalAddress
                     ) {
                         conversions.ReportByRefStorageMismatch(
                             argumentLocation,

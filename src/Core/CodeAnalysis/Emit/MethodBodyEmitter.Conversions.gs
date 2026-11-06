@@ -610,10 +610,11 @@ internal partial class MethodBodyEmitter {
         // Expression<TDelegate> subtype requested by the supplied delegate
         // Type, so the synthesized final step is an explicit reference cast
         // from LambdaExpression to Expression<TDelegate>.
+        let toClrType = to.ClrType
         if from
             .ClrType
             ?.FullName == "System.Linq.Expressions.LambdaExpression" &&
-            to.ClrType is {} toClrType &&
+            toClrType != nil &&
             toClrType.IsGenericType &&
             string
             .Equals(

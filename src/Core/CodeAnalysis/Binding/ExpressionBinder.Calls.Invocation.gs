@@ -1009,9 +1009,13 @@ internal partial class ExpressionBinder {
                 boundArgs[i]?.Type
             }
         }
-        let receiverOpenDefinition Type? = (receiverType as ImportedTypeSymbol)?.OpenDefinition
-        let receiverTypeArguments = (receiverType as ImportedTypeSymbol)?.TypeArguments ??
-            ImmutableArray[TypeSymbol].Empty
+        let projectedReceiver = if receiverType != nil {
+            MemberLookup.GetProjectionReceiverImportedType(receiverType)
+        } else {
+            default(ImportedTypeSymbol?)
+        }
+        let receiverOpenDefinition Type? = projectedReceiver?.OpenDefinition
+        let receiverTypeArguments = projectedReceiver?.TypeArguments ?? ImmutableArray[TypeSymbol].Empty
         // Record the expected delegate arity for each deferred lambda slot.
         let arityByIndex = Dictionary[int32, int32]()
         for idx in deferredIndices {
@@ -1726,7 +1730,13 @@ internal partial class ExpressionBinder {
                 } else {
                     argumentNames[argSlot]
                 }
-                let symbolicReceiver ImportedTypeSymbol? = receiver?.Type as ImportedTypeSymbol ??
+                let symbolicReceiver ImportedTypeSymbol? = (
+                    if receiver?.Type is {} receiverTypeForProjection {
+                        MemberLookup.GetProjectionReceiverImportedType(receiverTypeForProjection)
+                    } else {
+                        default(ImportedTypeSymbol?)
+                    }
+                ) ??
                     classSymbol?.SymbolicReceiver
                 var lambdaHandled = false
                 if !lambdaHandled &&
@@ -4370,7 +4380,9 @@ internal partial class ExpressionBinder {
                 nonNullSymbolicMethodTypeArgs.Any(TypeSymbol.RequiresSymbolicProjection)
             var receiverOpenDef Type? = nil
             var receiverTypeArgs = default(ImmutableArray[TypeSymbol])
-            if receiverType is ImportedTypeSymbol imp &&
+            if receiverType != nil && MemberLookup.GetProjectionReceiverImportedType(
+                receiverType
+            ) is ImportedTypeSymbol imp &&
                 imp.OpenDefinition != nil &&
                 !imp
                 .TypeArguments
@@ -4652,7 +4664,9 @@ internal partial class ExpressionBinder {
         /// @param receiverType The symbolic receiver type.
         /// @returns The reified closed CLR type, or `null`.
         private func ReifiedReceiverClrType(receiverType TypeSymbol?) Type? {
-            if receiverType is ImportedTypeSymbol imported &&
+            if receiverType != nil && MemberLookup.GetProjectionReceiverImportedType(
+                receiverType
+            ) is ImportedTypeSymbol imported &&
                 imported.OpenDefinition != nil &&
                 !imported
                 .TypeArguments

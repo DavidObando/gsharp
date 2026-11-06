@@ -139,6 +139,22 @@ run()`
         Assert.Equal("99${Environment.NewLine}", output)
     }
 
+    @Fact
+    func StructPointer_InterpolatedStringArrowMemberAccess_CompilesAndRuns() {
+        let source = PointStruct + `func apply(f (int32) -> int32, v int32) int32 -> f(v)
+
+unsafe func run() {
+    var arr = []Point{Point{x: 15, y: 27}}
+    var ptr = &arr[0]
+    let result = "${ptr->x:G}:${ptr->y:D3}:${apply((x) -> x * 2, ptr->x)}"
+    Console.WriteLine(result)
+}
+
+run()`
+        let output = CompileAndRun(source)
+        Assert.Equal("15:027:30${Environment.NewLine}", output)
+    }
+
     shared {
         private let UnsafeIlVerifyIgnored[]string = []string{
             "UnmanagedPointer",
