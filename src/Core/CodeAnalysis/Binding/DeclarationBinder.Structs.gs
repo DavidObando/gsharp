@@ -2578,10 +2578,19 @@ internal partial class DeclarationBinder {
     private func IsLiteralInitializerSyntax(initializer ExpressionSyntax, fieldType TypeSymbol) bool ->
     TryInferLiteralInitializerType(initializer) != nil &&
         IsBuiltInLiteralTarget(fieldType) ||
-        (
-        initializer is LiteralExpressionSyntax{LiteralToken: {Kind: SyntaxKind.NilKeyword}} &&
-            (fieldType is NullableTypeSymbol || !fieldType.IsValueType)
-    )
+        (IsParenthesizedNilLiteral(initializer) && (fieldType is NullableTypeSymbol || !fieldType.IsValueType))
+
+    private func IsParenthesizedNilLiteral(initializer ExpressionSyntax) bool {
+        var current = initializer
+        for var depth = 0; depth < 64; depth++ {
+            if current is ParenthesizedExpressionSyntax parenthesized {
+                current = parenthesized.Expression
+                continue
+            }
+            return current is LiteralExpressionSyntax{LiteralToken: {Kind: SyntaxKind.NilKeyword}}
+        }
+        return false
+    }
 
     internal func TryInferLiteralInitializerType(initializer ExpressionSyntax?) TypeSymbol? {
         if initializer == nil {
@@ -3573,16 +3582,38 @@ internal partial class DeclarationBinder {
         let fieldInitPrimaryCtorParameters = primaryCtorParameters
         let fieldInitPackageName = $package.Name
         if fieldInitConstInitializers.Count > 0 || fieldInitSharedConstInitializers.Count > 0 {
-            pendingConstInitializerBindings.Add(
-                () -> RunInStructInitializerContext(
-                    structSymbol,
-                    structDeclaration,
-                    fieldInitScope,
-                    fieldInitPackageName,
-                    fieldInitUnsafeContext,
-                    () -> BindDeferredConstInitializers(fieldInitConstInitializers, fieldInitSharedConstInitializers)
+            for (constField, fieldSyntaxNode, _) in fieldInitConstInitializers {
+                let capturedConstField = constField
+                let capturedFieldSyntax = fieldSyntaxNode
+                RegisterPendingConstInitializer(
+                    capturedConstField,
+                    capturedFieldSyntax,
+                    (action() -> void) -> RunInStructInitializerContext(
+                        structSymbol,
+                        structDeclaration,
+                        fieldInitScope,
+                        fieldInitPackageName,
+                        fieldInitUnsafeContext,
+                        action
+                    )
                 )
-            )
+            }
+            for (constField, fieldSyntaxNode, _) in fieldInitSharedConstInitializers {
+                let capturedConstField = constField
+                let capturedFieldSyntax = fieldSyntaxNode
+                RegisterPendingConstInitializer(
+                    capturedConstField,
+                    capturedFieldSyntax,
+                    (action() -> void) -> RunInStructInitializerContext(
+                        structSymbol,
+                        structDeclaration,
+                        fieldInitScope,
+                        fieldInitPackageName,
+                        fieldInitUnsafeContext,
+                        action
+                    )
+                )
+            }
         }
         if fieldInitInstanceInitializers.Count > 0 || fieldInitZeroValueInstanceFields.Count > 0 {
             if fieldInitInstanceInitializers.Count > 0 {
@@ -4370,12 +4401,89 @@ internal partial class DeclarationBinder {
         if pendingConstInitializerBindings.Count == 0 && (!reportUnfolded || pendingCrossTypeConstFolds.Count == 0) {
             return
         }
-        let bindings = pendingConstInitializerBindings.ToArray()
+        let allItems = pendingConstInitializerBindings.ToArray()
         pendingConstInitializerBindings.Clear()
-        for bindConst in bindings {
-            bindConst()
+        let boundByIndex = Dictionary[int32, (Field FieldSymbol, Bound BoundExpression, Location TextLocation)]()
+        while true {
+            var resolvedAnyType = false
+            var hasUnresolvedUntyped = false
+            for var i = 0; i < allItems.Length; i++ {
+                if boundByIndex.ContainsKey(i) {
+                    continue
+                }
+                let item = allItems[i]
+                if item.Syntax.Type == nil && item.Field.Type == TypeSymbol.Error {
+                    hasUnresolvedUntyped = true
+                }
+            }
+            for var i = 0; i < allItems.Length; i++ {
+                if boundByIndex.ContainsKey(i) {
+                    continue
+                }
+                let item = allItems[i]
+                let wasUntyped = item.Syntax.Type == nil && item.Field.Type == TypeSymbol.Error
+                let (boundItem, hadDiagnostics) = item.Bind(!hasUnresolvedUntyped)
+                let failed = hadDiagnostics || boundItem.Bound.Type == TypeSymbol.Error
+                if !failed {
+                    if wasUntyped && item.Field.Type != TypeSymbol.Error {
+                        resolvedAnyType = true
+                    }
+                    boundByIndex[i] = boundItem
+                } else if !hasUnresolvedUntyped {
+                    boundByIndex[i] = boundItem
+                } else if wasUntyped {
+                    item.Field.SetType(TypeSymbol.Error)
+                }
+            }
+            if !resolvedAnyType {
+                for var i = 0; i < allItems.Length; i++ {
+                    if !boundByIndex.ContainsKey(i) {
+                        let (boundItem, _) = allItems[i].Bind(true)
+                        boundByIndex[i] = boundItem
+                    }
+                }
+                break
+            }
+        }
+        for var i = 0; i < allItems.Length; i++ {
+            if boundByIndex.TryGetValue(i, out var boundItem) {
+                pendingCrossTypeConstFolds.Add(boundItem)
+            }
         }
         FoldCrossTypeConstInitializers(reportUnfolded)
+    }
+
+    internal func RegisterPendingConstInitializer(
+        constField FieldSymbol,
+        fieldSyntaxNode FieldDeclarationSyntax,
+        runInContext(() -> void) -> void
+    ) {
+        pendingConstInitializerBindings.Add(
+            (
+                constField,
+                fieldSyntaxNode,
+                (commitDiagnostics bool) -> {
+                    var boundItem = (
+                        Field: constField,
+                        Bound: cast[BoundExpression](BoundErrorExpression(fieldSyntaxNode)),
+                        Location: fieldSyntaxNode.Identifier.Location
+                    )
+                    var hadDiagnostics = false
+                    runInContext(
+                        () -> {
+                            let diagMark = Diagnostics.Count
+                            boundItem = BindConstFieldInitializer(constField, fieldSyntaxNode, constField.Type)
+                            hadDiagnostics = Diagnostics.Count > diagMark
+                            if !commitDiagnostics && (hadDiagnostics || boundItem.Bound.Type == TypeSymbol.Error) {
+                                Diagnostics.TruncateTo(diagMark)
+                                deferredFloatingConstantChecks.Remove(constField)
+                            }
+                        }
+                    )
+                    return (boundItem, hadDiagnostics)
+                }
+            )
+        )
     }
 
     private func EnsurePendingZeroValueInitializersBound() {
@@ -4475,79 +4583,6 @@ internal partial class DeclarationBinder {
                 Diagnostics.ReportConstFieldInitializerNotConstant(location, constField.Name)
             }
         }
-    }
-
-    private func BindDeferredConstInitializers(
-        constInitializers List[(Field FieldSymbol, Syntax FieldDeclarationSyntax, FieldType TypeSymbol)],
-        sharedConstInitializers List[(Field FieldSymbol, Syntax FieldDeclarationSyntax, FieldType TypeSymbol)]
-    ) {
-        let allItems = List[(Field FieldSymbol, Syntax FieldDeclarationSyntax, FieldType TypeSymbol)](
-            constInitializers.Count + sharedConstInitializers.Count
-        )
-        allItems.AddRange(constInitializers)
-        allItems.AddRange(sharedConstInitializers)
-        var pendingConstFolds = List[(Field FieldSymbol, Bound BoundExpression, Location TextLocation)](allItems.Count)
-        let boundByIndex = Dictionary[int32, (Field FieldSymbol, Bound BoundExpression, Location TextLocation)]()
-        while true {
-            var resolvedAnyType = false
-            var hasUnresolvedUntyped = false
-            for var i = 0; i < allItems.Count; i++ {
-                if boundByIndex.ContainsKey(i) {
-                    continue
-                }
-                let item = allItems[i]
-                if item.Syntax.Type == nil && item.Field.Type == TypeSymbol.Error {
-                    hasUnresolvedUntyped = true
-                }
-            }
-            for var i = 0; i < allItems.Count; i++ {
-                if boundByIndex.ContainsKey(i) {
-                    continue
-                }
-                let (constField, fieldSyntaxNode, _) = allItems[i]
-                let wasUntyped = fieldSyntaxNode.Type == nil && constField.Type == TypeSymbol.Error
-                let diagMark = Diagnostics.Count
-                let boundItem = BindConstFieldInitializer(constField, fieldSyntaxNode, constField.Type)
-                if wasUntyped && constField.Type != TypeSymbol.Error {
-                    resolvedAnyType = true
-                    boundByIndex[i] = boundItem
-                } else if wasUntyped && hasUnresolvedUntyped && boundItem.Bound is BoundErrorExpression {
-                    Diagnostics.TruncateTo(diagMark)
-                } else {
-                    boundByIndex[i] = boundItem
-                }
-            }
-            if !resolvedAnyType {
-                for var i = 0; i < allItems.Count; i++ {
-                    if !boundByIndex.ContainsKey(i) {
-                        let (constField, fieldSyntaxNode, _) = allItems[i]
-                        boundByIndex[i] = BindConstFieldInitializer(constField, fieldSyntaxNode, constField.Type)
-                    }
-                }
-                break
-            }
-        }
-        for var i = 0; i < allItems.Count; i++ {
-            if boundByIndex.TryGetValue(i, out var boundItem) {
-                pendingConstFolds.Add(boundItem)
-            }
-        }
-        var progress = true
-        while progress && pendingConstFolds.Count > 0 {
-            progress = false
-            let stillPending = List[(Field FieldSymbol, Bound BoundExpression, Location TextLocation)]()
-            for item in pendingConstFolds {
-                if ConstantExpressionEvaluator.TryFold(item.Bound, item.Field.Type, out var constantValue) {
-                    item.Field.SetConstantValue(constantValue)
-                    ReportDeferredFloatingConstantChecks(item.Field)
-                    progress = true
-                } else {
-                    stillPending.Add(item)
-                }
-            }
-            pendingConstFolds = stillPending
-        }
-        pendingCrossTypeConstFolds.AddRange(pendingConstFolds)
     }
 
     private func BindDeferredInstanceFieldInitializer(

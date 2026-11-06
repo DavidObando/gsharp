@@ -80,7 +80,19 @@ internal partial class DeclarationBinder {
     // initializer can resolve an unqualified call to a free function or a
     // sibling static method/const. Each entry re-establishes the captured
     // scope and the enclosing type's static-member scope before binding.
-    private let pendingConstInitializerBindings List[() -> void] = List[() -> void]()
+    private let pendingConstInitializerBindings List[
+        (
+            Field FieldSymbol,
+            Syntax FieldDeclarationSyntax,
+            Bind(bool) -> (Item(Field FieldSymbol, Bound BoundExpression, Location TextLocation), HadDiagnostics bool)
+        )
+    ] = List[
+        (
+            Field FieldSymbol,
+            Syntax FieldDeclarationSyntax,
+            Bind(bool) -> (Item(Field FieldSymbol, Bound BoundExpression, Location TextLocation), HadDiagnostics bool)
+        )
+    ]()
 
     private let pendingFieldInitializerStructs List[StructSymbol] = List[StructSymbol]()
 

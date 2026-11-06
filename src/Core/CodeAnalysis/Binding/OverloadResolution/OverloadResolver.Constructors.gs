@@ -915,7 +915,13 @@ internal partial class OverloadResolver {
                 boundArgument = bindRefArgumentExpression(refArgument, nil)
             }
             let lambdaArgument LambdaExpressionSyntax? = GetLambdaArgumentSyntax(argument)
-            let paramTypeForArg TypeSymbol? = if parameterForArg != nil {
+            let isUnconstructedGenericClass = !classType
+                .TypeParameters
+                .IsDefaultOrEmpty &&
+                classType
+                .TypeArguments
+                .IsDefaultOrEmpty
+            let paramTypeForArg TypeSymbol? = if parameterForArg != nil && !isUnconstructedGenericClass {
                 classType.SubstituteMemberType(parameterForArg.Type)
             } else {
                 default(TypeSymbol?)
@@ -924,10 +930,7 @@ internal partial class OverloadResolver {
             if lambdaTarget == nil && paramTypeForArg != nil {
                 let _ = MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramTypeForArg, out lambdaTarget)
             }
-            if boundArgument == nil &&
-                lambdaArgument != nil &&
-                lambdaTarget != nil &&
-                !TypeSymbol.ContainsTypeParameter(lambdaTarget) && bindLambdaWithTarget != nil {
+            if boundArgument == nil && lambdaArgument != nil && lambdaTarget != nil && bindLambdaWithTarget != nil {
                 boundArgument = bindLambdaWithTarget!!(lambdaArgument, lambdaTarget)
             }
             if boundArgument == nil &&

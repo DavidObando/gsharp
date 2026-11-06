@@ -1010,14 +1010,11 @@ internal partial class DeclarationBinder {
                 }
             }
             if pendingConstInitializers.Count > 0 {
-                pendingConstInitializerBindings.Add(
-                    () -> RunInInterfaceStaticScope(
-                        () -> BindDeferredConstInitializers(
-                            pendingConstInitializers,
-                            List[(Field FieldSymbol, Syntax FieldDeclarationSyntax, FieldType TypeSymbol)]()
-                        )
-                    )
-                )
+                for (constField, fieldSyntaxNode, _) in pendingConstInitializers {
+                    let capturedConstField = constField
+                    let capturedFieldSyntax = fieldSyntaxNode
+                    RegisterPendingConstInitializer(capturedConstField, capturedFieldSyntax, RunInInterfaceStaticScope)
+                }
             }
             if pendingStaticInitializers.Count > 0 {
                 pendingStaticFieldInitializerBindings.Add(

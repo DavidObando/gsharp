@@ -71,8 +71,7 @@ internal shared class VariadicCarriers {
         TryClassifyCollectionCarrier(type, out _)
 
     private func IsExplicitArrayCarrier(type TypeSymbol) bool {
-        let bare = StripReferenceNullability(type)
-        let element TypeSymbol? = switch bare {
+        let element TypeSymbol? = switch type {
             case slice is SliceTypeSymbol: slice.ElementType
             case array is ArrayTypeSymbol: array.ElementType
             default: default(TypeSymbol?)

@@ -300,6 +300,15 @@ func join(parts ...[]uint8) int32 {
     }
     return n
 }
+func joinNullable(parts ...[]?List[int32]) int32 {
+    var n = 0
+    for p in parts {
+        if p != nil {
+            n = n + p.Length
+        }
+    }
+    return n
+}
 func jagged(rows ...[][]int32) int32 {
     var n = 0
     for r in rows {
@@ -322,10 +331,11 @@ l1.Add(10)
 let l2 = List[int32]()
 l2.Add(20)
 l2.Add(30)
-join(a, b) * 100 + join(matrix) * 10 + jagged([]int32{1, 2}, []int32{3}) + lists(l1, l2)
+let nullableArr []?List[int32] = []List[int32]{l1}
+join(a, b) * 100 + join(matrix) * 10 + jagged([]int32{1, 2}, []int32{3}) + lists(l1, l2) + joinNullable(nullableArr, nil)
 `)
         Assert.Empty(result.Diagnostics)
-        Assert.Equal(556, result.Value)
+        Assert.Equal(557, result.Value)
     }
 
     @Fact
@@ -339,19 +349,38 @@ interface Limits {
         }
     }
 }
+class Early {
+    const Cross = Late.Computed + 1
+    shared {
+        func GetCross() int32 -> Cross
+    }
+}
+class Late {
+    const Computed = 1 + 2
+}
 class Holder {
     const Top = 7
     shared {
+        var Nothing Holder? = (nil)
+        const DirectCopy = ComputedSibling
+        const ExplicitDependent int32 = ComputedSibling + 1
+        const ComputedSibling = 1 + 2
         const Reverse = Limit * 2
         const Limit = 5
         const Label = "ok"
-        func UseLimit() int32 -> Reverse + Limit + Top + Limits.GetBase() + Label.Length
+        func UseLimit(s string?) int32 {
+            if s == nil {
+                return 0
+            }
+            let _ = Nothing
+            return s.Length + Reverse + Limit + Top + Limits.GetBase() + Label.Length + DirectCopy + ExplicitDependent + Early.GetCross()
+        }
     }
 }
-Holder.UseLimit()
+Holder.UseLimit("a")
 `)
         Assert.Empty(result.Diagnostics)
-        Assert.Equal(27, result.Value)
+        Assert.Equal(39, result.Value)
     }
 
     @Fact
@@ -367,6 +396,9 @@ class Box[T] {
     func Fire(v T) {
         this.handler(v)
     }
+    shared {
+        func NoOp() Box[T] -> Box[T](x -> {})
+    }
 }
 class ActionBox[T] {
     private let handler Action[T]
@@ -381,9 +413,11 @@ var total int64 = 0
 let b1 = Box[int64]((n int64) -> { total = total + n })
 let b2 = Box[int64](n -> { total = total + n })
 let b3 = ActionBox[int64]((n int64) -> { total = total + n })
+let b4 = Box[int64].NoOp()
 b1.Fire(4)
 b2.Fire(5)
 b3.Fire(6)
+b4.Fire(7)
 total
 `)
         Assert.Empty(result.Diagnostics)
