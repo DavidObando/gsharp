@@ -220,4 +220,132 @@ namespace Demo
     }
 }`, "True False True False True False True False False True True True False True False False 0 True False 2 True True False True False False True")
     }
+
+    @Fact
+    func SemanticNullConstants_DoNotInvokeUserEquality() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public class C
+    {
+        public static int Calls;
+        public static bool operator ==(C? left, C? right) { Calls++; return true; }
+        public static bool operator !=(C? left, C? right) { Calls++; return false; }
+        public override bool Equals(object? other) { Calls++; return true; }
+        public override int GetHashCode() => 7;
+    }
+    public static class P
+    {
+        static bool Match(C? value) => value is default(C);
+        static bool Not(C? value) => value is not default(C);
+        static int Read(C? value) => value is not default(C) ? value.GetHashCode() : 0;
+        public static string Run() =>
+            Match(null) + " " + Match(new C()) + " " + Not(null) + " " + Not(new C()) + " " +
+            Read(null) + " " + Read(new C()) + " " + C.Calls;
+    }
+}`, "True False False True 0 7 0")
+    }
+
+    @Fact
+    func NamedClassNullConstant_NormalizesTheOperand() {
+        let printed = LocalFunctionHoistTranslationTests.TranslateUnit(`
+#nullable enable
+namespace Demo
+{
+    public class C { }
+    public static class P
+    {
+        const C? Nil = null;
+        public static bool Match(C? value) => value is Nil;
+    }
+}`, roundTripOnlyReason: "#5825 blocks source-class null const declarations; this mapping-only test pins the operand.")
+        Assert.Contains("object.Equals(nil, value)", printed)
+    }
+
+    @Fact
+    func AndPatterns_ConvertConstantsToTheBoundLeafInput() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        const int K = 3;
+        static bool Long(object? value) => value is long and K;
+        static bool Byte(object? value) => value is byte and K;
+        static bool Double(object? value) => value is double and K;
+        static bool Nested(object? value) => value is long and (K or 4);
+        static int Loop(ref string? text, object? value)
+        {
+            if (text == null) return 0;
+            for (int i = 0; i < 1; i++) { if (value is long and K) return text.Length; }
+            return 0;
+        }
+        public static string Run()
+        {
+            string? text = "abc";
+            return Long(3L) + " " + Long(4L) + " " + Long(3) + " " + Long(null) + " " +
+                Byte((byte)3) + " " + Byte((byte)4) + " " +
+                Double(3.0) + " " + Double(4.0) + " " + Double(3) + " " +
+                Nested(4L) + " " + Nested(null) + " " + Loop(ref text, 3L) + " " + Loop(ref text, 3);
+        }
+    }
+}`, "True False False False True False True False False True False 3 0")
+    }
+
+    @Fact
+    func NestedTypedNaNPattern_CapturesTheGetterOnce() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public class B { public double Number; }
+    public class Holder
+    {
+        readonly object child;
+        public int Reads;
+        public Holder(object child) { this.child = child; }
+        public object Child { get { Reads++; return child; } }
+    }
+    public static class P
+    {
+        static bool Match(Holder value) => value is { Child: B { Number: double.NaN } };
+        static string Test(object child)
+        {
+            var value = new Holder(child);
+            bool hit = Match(value);
+            return hit + " " + value.Reads;
+        }
+        public static string Run() => Test(new B { Number = double.NaN }) + " / " +
+            Test(new B { Number = 1.0 }) + " / " + Test(new object());
+    }
+}`, "True 1 / False 1 / False 1")
+    }
+
+    @Fact
+    func InterfaceAndGenericConstants_PreserveBoxedTypesAndNil() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public static class P
+    {
+        const int K = 3;
+        const string Key = "key";
+        static bool Interface(IConvertible? value) => value is K;
+        static bool Either(IConvertible? value) => value is K or 4;
+        static bool Generic<T>(T value) => value is K;
+        static bool GenericEither<T>(T value) => value is K or 4;
+        static bool Text(IComparable? value) => value is Key;
+        public static string Run() =>
+            Interface(3) + " " + Interface(4) + " " + Interface(3L) + " " + Interface(null) + " " +
+            Either(3) + " " + Either(4) + " " + Either(3L) + " " + Either(null) + " " +
+            Generic(3) + " " + Generic(4) + " " + Generic(3L) + " " + Generic<int?>(3) + " " + Generic<int?>(null) + " " +
+            GenericEither(4) + " " + GenericEither(3L) + " " + GenericEither<string?>(null) + " " +
+            Text(new string(new[] { 'k', 'e', 'y' })) + " " + Text(3) + " " + Text(null);
+    }
+}`, "True False False False True True False False True False False True False True False False True False False")
+    }
 }

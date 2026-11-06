@@ -999,7 +999,10 @@ partial class CSharpToGSharpTranslator {
             }
             switch pattern {
                 case constant is ConstantPatternSyntax {
-                    return !this.IsNaNPatternConstant(constant.Expression)
+                    return !this.ConstantPatternUsesValueEquality(
+                        this.GetPatternComparisonReceiverType(constant),
+                        constant.Expression
+                    )
                 }
                 case RelationalPatternSyntax, DiscardPatternSyntax, TypePatternSyntax {
                     return true

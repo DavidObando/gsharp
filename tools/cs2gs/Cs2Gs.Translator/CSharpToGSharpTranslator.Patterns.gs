@@ -779,7 +779,7 @@ partial class CSharpToGSharpTranslator {
         private func UsesNativeBooleanPatternTest(
             isPattern IsPatternExpressionSyntax
         ) bool -> !PatternIntroducesBinding(isPattern.Pattern) &&
-            !this.PatternMentionsConditionalAccessType(isPattern.Pattern, out _) && !this.PatternContainsNaNConstant(
+            !this.PatternMentionsConditionalAccessType(isPattern.Pattern, out _) && !this.PatternRequiresValueEquality(
             isPattern.Pattern
         ) &&
             (
@@ -1214,7 +1214,36 @@ partial class CSharpToGSharpTranslator {
                 !receiverType.IsValueType &&
                 this.ContainsBareRecursivePattern(pattern)
             let designatedUnstableMember = !stableMember && PatternIntroducesBinding(pattern)
-            return (nullableMember || guardedNonNullMember || designatedUnstableMember) && CountReads(pattern) > 1
+            // A type proof must apply to the stored member value, not another getter result.
+            let inputType = UnwrapNullable(receiverType)
+            let typeTestedMember = pattern != nil &&
+                pattern
+                .DescendantNodesAndSelf()
+                .OfType[PatternSyntax]()
+                .Any(
+                (node PatternSyntax) -> {
+                    let narrowed = if node is ConstantPatternSyntax constant && this.IsTypeReferencePattern(
+                        constant.Expression
+                    ) {
+                        this.TypeTestNarrowing(
+                            this.context.GetSymbolInfo(constant.Expression).Symbol as ITypeSymbol,
+                            inputType
+                        )
+                    } else {
+                        this.GetTypeTestNarrowedType(node, inputType)
+                    }
+                    return narrowed != nil && !SymbolEqualityComparer.Default.Equals(narrowed, inputType)
+                }
+            )
+            let comparedUnstableMember = !stableMember && pattern != nil && this.PatternRequiresValueEquality(pattern)
+            return (
+                nullableMember ||
+                    guardedNonNullMember ||
+                    designatedUnstableMember ||
+                    typeTestedMember ||
+                    comparedUnstableMember
+            ) &&
+                CountReads(pattern) > 1
         }
 
         private func ContainsBareRecursivePattern(pattern PatternSyntax?) bool {
@@ -1503,6 +1532,11 @@ partial class CSharpToGSharpTranslator {
             receiverSyntax ExpressionSyntax? = nil,
             isNestedPatternMember bool = false
         ) GExpression {
+            let receiverType = if pattern is ConstantPatternSyntax || pattern is RelationalPatternSyntax {
+                this.GetPatternInputType(pattern, receiverType)
+            } else {
+                receiverType
+            }
             // Issue #4356: C# evaluates a subpattern's member ONCE and tests
             // every nested subpattern against that one value; for a NULLABLE
             // member (see LoweredPatternReadsReceiverMoreThanOnce) a re-read can
@@ -2065,7 +2099,11 @@ partial class CSharpToGSharpTranslator {
             receiverType ITypeSymbol?,
             negated bool = false
         ) GExpression {
-            let constant = this.TranslateExpression(constantSyntax)
+            let constant GExpression? = if this.IsNullPatternValue(constantSyntax) {
+                LiteralExpression.Null()
+            } else {
+                this.TranslateExpression(constantSyntax)
+            }
             if this.ConstantPatternUsesValueEquality(receiverType, constantSyntax) {
                 // Put the constant first: a user input's Equals override must not control the match.
                 let equals = InvocationExpression(
@@ -2090,8 +2128,17 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ConstantPatternUsesValueEquality(receiverType ITypeSymbol?, constant ExpressionSyntax) bool ->
-        !IsNullLiteral(constant) &&
-            (receiverType?.SpecialType == SpecialType.System_Object || this.IsNaNPatternConstant(constant))
+        !IsNullLiteral(constant) && !this.IsTypeReferencePattern(constant) &&
+            (
+            this.IsNullPatternValue(constant) ||
+                receiverType?.TypeKind == TypeKind.TypeParameter ||
+                (
+                receiverType != nil &&
+                    receiverType.IsReferenceType &&
+                    receiverType.SpecialType != SpecialType.System_String
+            ) ||
+                this.IsNaNPatternConstant(constant)
+        )
 
         private func IsNaNPatternConstant(expression ExpressionSyntax) bool {
             let constant = this.context.SemanticModel.GetConstantValue(expression)
@@ -2099,10 +2146,32 @@ partial class CSharpToGSharpTranslator {
                 ((constant.Value is float64 d && float64.IsNaN(d)) || (constant.Value is float32 f && float32.IsNaN(f)))
         }
 
-        private func PatternContainsNaNConstant(pattern PatternSyntax) bool -> pattern
+        private func PatternRequiresValueEquality(pattern PatternSyntax) bool -> pattern
             .DescendantNodesAndSelf()
             .OfType[ConstantPatternSyntax]()
-            .Any((constant ConstantPatternSyntax) -> this.IsNaNPatternConstant(constant.Expression))
+            .Any(
+            (constant ConstantPatternSyntax) -> this.ConstantPatternUsesValueEquality(
+                this.GetPatternComparisonReceiverType(constant),
+                constant.Expression
+            )
+        )
+
+        private func GetPatternInputType(pattern PatternSyntax?, receiverType ITypeSymbol?) ITypeSymbol? {
+            if pattern == nil || this.context.SemanticModel.GetOperation(pattern) is not IPatternOperation operation {
+                return receiverType
+            }
+            var root = pattern
+            while root.Parent is PatternSyntax parent {
+                root = parent
+            }
+            let rootInput = (this.context.SemanticModel.GetOperation(root) as IPatternOperation)?.InputType
+            // Keep projected input types unless an enclosing pattern changed the leaf's semantic input.
+            return if rootInput != nil && !SymbolEqualityComparer.Default.Equals(operation.InputType, rootInput) {
+                operation.InputType
+            } else {
+                receiverType ?? operation.InputType
+            }
+        }
 
         // Convert numeric pattern constants to the receiver's numeric type without a runtime downcast (#5676).
         private func CoercePatternConstant(

@@ -9030,14 +9030,17 @@ partial class CSharpToGSharpTranslator {
                 current = current!!.Parent
             }
             if current is IsPatternExpressionSyntax isPattern {
-                return this.GetManagedReferenceArrayProjectedExpressionType(isPattern.Expression) ??
-                    this.GetProjectedReceiverType(isPattern.Expression) ??
-                    this
-                    .context
-                    .GetTypeInfo(isPattern.Expression)
-                    .Type
+                return this.GetPatternInputType(
+                    pattern,
+                    this.GetManagedReferenceArrayProjectedExpressionType(isPattern.Expression) ??
+                        this.GetProjectedReceiverType(isPattern.Expression) ??
+                        this
+                        .context
+                        .GetTypeInfo(isPattern.Expression)
+                        .Type
+                )
             }
-            return (this.context.SemanticModel.GetOperation(pattern) as IPatternOperation)?.InputType
+            return this.GetPatternInputType(pattern, receiverType: nil)
         }
 
         private func IsLoweredComparisonPattern(pattern Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax) bool {
