@@ -275,6 +275,8 @@ open class Adr0208NarrowingCorpusTests {
                 "n5_5130_nullable_widening_switch_cleanup",
                 "n6_5130_labeled_branch_entry",
                 "n7_5130_else_if_caller_owned_condition",
+                "n8_5130_noop_finally_keeps_stronger_fact",
+                "n9_5130_finally_discharges_nullable_widening",
                 "o1_callback_after_test_replaces_root",
                 "o2_callback_in_or_arm_replaces_root",
                 "o3_callback_in_else_if_replaces_root",
@@ -1982,6 +1984,24 @@ func Main() {
     var values = []C?{C{}}
     Console.WriteLine(Run(ref values[0], values, false))
 }`, "GS0158@8:18", "reject", "", ""}
+            yield[]object{"n8_5130_noop_finally_keeps_stronger_fact", `open class Animal { }
+class Dog : Animal { func Bark() string { return "woof" } }
+func Run(x Animal?) string {
+    if x == nil { return "" }
+    try {
+        if x !is Dog { return "" }
+    } finally { }
+    return x.Bark()
+}
+func Main() { Console.WriteLine(Run(Dog{})) }`, "", "run", "woof", ""}
+            yield[]object{"n9_5130_finally_discharges_nullable_widening", `import System.Collections.Generic
+func Run(dict Dictionary[string, string]) int32 {
+    var value string = ""
+    if dict.TryGetValue("key", &value) { return 0 }
+    try { } finally { value = "safe" }
+    return value.Length
+}
+func Main() { Console.WriteLine(Run(Dictionary[string, string]())) }`, "", "run", "4", ""}
             yield[]object{"n1_boxed_value_type_test", `func Run(x object?) int32 {
     if x == nil { return 0 }
     if x is int32 {

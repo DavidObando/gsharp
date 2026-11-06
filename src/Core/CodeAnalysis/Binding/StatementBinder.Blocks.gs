@@ -596,14 +596,21 @@ internal partial class StatementBinder {
                 exit = NarrowingState.Unreachable
             } else {
                 for path in finallyExit.Paths {
-                    exit = exit.With(path, finallyExit.NarrowedType(path)!!)
+                    let proof = finallyExit.NarrowedType(path)!!
+                    let held = exit.NarrowedType(path)
+                    if held == nil || !IsWeakerOrEqual(held, proof) {
+                        exit = exit.With(path, proof)
+                    }
                 }
                 // Returning paths can carry different callable aliases into the same cleanup.
                 let summary = GetFinallyFlowSummary(syntax.FinallyClause!!, finallyBlock)
                 if summary.NonNullOnNormalExit is {} facts {
                     for fact in facts {
                         if !fact.Key.HasMembers {
-                            exit = exit.With(fact.Key, fact.Value)
+                            let held = exit.NarrowedType(fact.Key)
+                            if held == nil || !IsWeakerOrEqual(held, fact.Value) {
+                                exit = exit.With(fact.Key, fact.Value)
+                            }
                         }
                     }
                 }

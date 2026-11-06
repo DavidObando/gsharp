@@ -1497,7 +1497,8 @@ internal partial class StatementBinder {
     private func TryClassifyNonNullAssignment(
         assign BoundAssignmentExpression,
         out variable VariableSymbol?,
-        out underlying TypeSymbol?
+        out underlying TypeSymbol?,
+        includeNonNullableStorage bool = false
     ) bool {
         variable = nil
         underlying = nil
@@ -1507,7 +1508,7 @@ internal partial class StatementBinder {
         let nullable = assign.Variable.Type as NullableTypeSymbol ?? binderCtx.NarrowedVariables.Query(
             AccessPath.ForVariable(assign.Variable)
         ) as NullableTypeSymbol
-        if nullable == nil {
+        if nullable == nil && !includeNonNullableStorage {
             return false
         }
         // Issue #1123 is scoped to reference (and interface) types. Nullable
@@ -1516,7 +1517,7 @@ internal partial class StatementBinder {
         // for a `var`-local read, so a narrowed value-type read produces
         // unverifiable IL. Reference nullability is purely an annotation, so a
         // narrowed reference read needs no special emit.
-        let u = nullable.UnderlyingType
+        let u = nullable?.UnderlyingType ?? assign.Variable.Type
         if !IsReferenceLikeType(u) {
             return false
         }
@@ -2065,7 +2066,12 @@ internal partial class StatementBinder {
                 }
                 // The right-hand side can write other roots, aliases included.
                 ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
-                if TryClassifyNonNullAssignment(assign, out var local, out var underlying) {
+                if TryClassifyNonNullAssignment(
+                    assign,
+                    out var local,
+                    out var underlying,
+                    includeNonNullableStorage: true
+                ) {
                     RemoveSharingStorage(
                         state,
                         Invariant.Required(

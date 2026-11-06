@@ -158,6 +158,8 @@ Nullable-widening facts survive effect kills unless the write proves non-nullnes
 Rows `n4_5130` and `n5_5130` keep nullable-widening controls across switch prefixes and deferred cleanup.
 Rows `n6_5130` and `n7_5130` reject a jump into an unbraced labeled branch and an unsafe caller-owned fact forwarded through `else if`.
 Labeled statements forward the label's joined exit, and each originating conditional applies the same caller-owned-storage restriction before forwarding.
+Rows `n8_5130` and `n9_5130` accept stronger protected-block facts across empty cleanup and definite non-null cleanup writes into non-null-declared storage.
+Cleanup facts do not overwrite stronger facts that survived its effects; assignment summaries preserve execution order.
 
 ## Experiments on the deferred loop rule
 
