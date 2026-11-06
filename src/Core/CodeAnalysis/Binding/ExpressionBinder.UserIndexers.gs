@@ -191,6 +191,9 @@ internal partial class ExpressionBinder {
         if visible.IsEmpty {
             return false
         }
+        let hasInheritedClrIndexer = receiverType is StructSymbol structReceiver &&
+            GetInheritedClrBaseType(structReceiver) is {} inheritedClrTarget &&
+            memberLookup.HasVisibleClrIndexer(receiverType, inheritedClrTarget)
         let arityMatches = ImmutableArray.CreateBuilder[VisibleUserIndexer]()
         for candidate in visible {
             if AcceptsIndexArgumentCount(candidate.Indexer, argumentCount) {
@@ -198,14 +201,14 @@ internal partial class ExpressionBinder {
             }
         }
         if arityMatches.Count == 0 {
-            if visible.Length > 1 {
+            if visible.Length > 1 && !hasInheritedClrIndexer {
                 let _ = bindArguments()
                 Diagnostics.ReportNoApplicableOverload(location, "this[]")
                 reported = true
             }
             return false
         }
-        if arityMatches.Count == 1 {
+        if arityMatches.Count == 1 && !hasInheritedClrIndexer {
             indexer = arityMatches[0].Indexer
             substitution = arityMatches[0].Substitution
             view = arityMatches[0].View
@@ -213,7 +216,17 @@ internal partial class ExpressionBinder {
         }
         boundArguments = bindArguments()
         for argument in boundArguments {
-            if argument is BoundErrorExpression || argument.Type == TypeSymbol.Error {
+            if !IsDeferredBranchyArgumentPlaceholder(argument, out _) &&
+                (
+                argument is BoundErrorExpression ||
+                    (
+                    argument.Type == TypeSymbol.Error &&
+                        !(
+                        argument is BoundDefaultExpression &&
+                            argument.Syntax is DefaultExpressionSyntax{TypeClause: nil}
+                    )
+                )
+            ) {
                 reported = true
                 return false
             }
@@ -242,11 +255,17 @@ internal partial class ExpressionBinder {
                 parameters.MoveToImmutable(),
                 SubstituteIndexerType(candidate.Type, candidateSubstitution)
             )
+            if hasInheritedClrIndexer && !overloads.IsUserCallableApplicable(function, argumentCount, boundArguments) {
+                continue
+            }
             synthetic.Add(function)
             byFunction[function] = visibleCandidate
         }
+        if synthetic.Count == 0 && hasInheritedClrIndexer {
+            return false
+        }
         let selected FunctionSymbol? = overloads.SelectBestInstanceOverload(
-            synthetic.MoveToImmutable(),
+            synthetic.ToImmutable(),
             argumentCount,
             argumentNames: default(ImmutableArray[string]),
             boundArguments,
@@ -254,6 +273,9 @@ internal partial class ExpressionBinder {
             out _
         )
         if selected == nil {
+            if !ambiguous && hasInheritedClrIndexer {
+                return false
+            }
             if ambiguous {
                 Diagnostics.ReportAmbiguousOverloadResolution(location, "this[]")
             } else {
@@ -262,9 +284,24 @@ internal partial class ExpressionBinder {
             reported = true
             return false
         }
-        indexer = byFunction[selected].Indexer
+        let resolvedIndexer = byFunction[selected].Indexer
+        indexer = resolvedIndexer
         substitution = byFunction[selected].Substitution
         view = byFunction[selected].View
+        for var i = 0; i < boundArguments.Length && i < resolvedIndexer.Parameters.Length; i++ {
+            let parameterType = SubstituteIndexerType(resolvedIndexer.Parameters[i].Type, substitution)
+            if boundArguments[i] is BoundDefaultExpression &&
+                boundArguments[i].Type == TypeSymbol.Error &&
+                boundArguments[i].Syntax is DefaultExpressionSyntax{TypeClause: nil} bareDefaultSyntax {
+                boundArguments = boundArguments.SetItem(i, BoundDefaultExpression(bareDefaultSyntax, parameterType))
+            } else if boundArguments[i].Syntax is InterpolatedStringExpressionSyntax interpolatedSyntax &&
+                IsFormattableStringTargetType(parameterType) {
+                boundArguments = boundArguments.SetItem(
+                    i,
+                    BindInterpolatedStringAsFormattable(interpolatedSyntax, parameterType)
+                )
+            }
+        }
         return true
     }
 
@@ -366,6 +403,8 @@ internal partial class ExpressionBinder {
                 default(ParameterSymbol?)
             }
             bound = BindRefArgumentExpression(refArgument, placeholder)
+        } else if IsTargetDependentBlockArgumentSyntax(syntax) {
+            return BoundErrorExpression(syntax)
         } else if IsTargetTypedBranchyArgumentSyntax(syntax) {
             let previous = binderCtx.DeferTargetlessConditional
             this.binderCtx.DeferTargetlessConditional = true
@@ -373,6 +412,9 @@ internal partial class ExpressionBinder {
                 bound = BindExpression(syntax)
             } finally {
                 this.binderCtx.DeferTargetlessConditional = previous
+            }
+            if IsDeferredBranchyArgumentPlaceholder(bound, out _) {
+                return bound
             }
         } else {
             bound = BindExpression(syntax)
@@ -419,8 +461,10 @@ internal partial class ExpressionBinder {
             }
         } else if parameter.RefKind == RefKind.In {
             var bound BoundExpression
-            if preBound != nil {
+            if preBound != nil && !IsDeferredBranchyArgumentPlaceholder(preBound, out _) {
                 bound = preBound
+            } else if preBound != nil {
+                bound = conversions.BindConversion(location, preBound, parameterType, callParameter: parameter)
             } else if syntax is BlockExpressionSyntax ||
                 syntax is DefaultExpressionSyntax ||
                 syntax is InterpolatedStringExpressionSyntax {
@@ -573,7 +617,8 @@ internal partial class ExpressionBinder {
                 indexSyntaxes,
                 bindValue,
                 location,
-                returnsPreviousValue
+                returnsPreviousValue,
+                default(ImmutableArray[BoundExpression])
             )
         }
         if target.Type is not(StructSymbol or InterfaceSymbol) {
@@ -599,6 +644,17 @@ internal partial class ExpressionBinder {
         ) {
             return if reported {
                 BoundErrorExpression(nil)
+            } else if target.Type is StructSymbol structTarget &&
+                GetInheritedClrBaseType(structTarget) is {} inheritedClrTarget {
+                TryBindMultiIndexClrAssignment(
+                    target,
+                    inheritedClrTarget,
+                    indexSyntaxes,
+                    bindValue,
+                    location,
+                    returnsPreviousValue,
+                    preBound
+                )
             } else {
                 default(BoundErrorExpression?)
             }
@@ -943,16 +999,22 @@ internal partial class ExpressionBinder {
         indexSyntaxes GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
         bindValue(TypeSymbol, () -> BoundExpression) -> BoundExpression,
         location TextLocation,
-        returnsPreviousValue bool
+        returnsPreviousValue bool,
+        preBoundArguments ImmutableArray[BoundExpression]
     ) BoundExpression? {
-        let bound = ImmutableArray.CreateBuilder[BoundExpression](indexSyntaxes.Count)
-        for indexSyntax in indexSyntaxes {
-            bound.Add(BindIndexArgumentExpression(indexSyntax))
+        let boundArgs = if !preBoundArguments.IsDefault {
+            preBoundArguments
+        } else {
+            let bound = ImmutableArray.CreateBuilder[BoundExpression](indexSyntaxes.Count)
+            for indexSyntax in indexSyntaxes {
+                bound.Add(BindIndexArgumentExpression(indexSyntax))
+            }
+            bound.MoveToImmutable()
         }
         let outcome = memberLookup.TryResolveClrIndexer(
             target.Type,
             clrTarget,
-            bound.MoveToImmutable(),
+            boundArgs,
             out var indexer,
             out var resolvedArguments
         )
