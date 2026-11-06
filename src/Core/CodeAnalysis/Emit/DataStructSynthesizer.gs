@@ -261,17 +261,29 @@ internal class DataStructSynthesizer {
             il.OpCode(ILOpCode.Ret)
             il.MarkLabel(hasValue)
             il.OpCode(ILOpCode.Pop)
-            il.LoadArgument(0)
-            il.OpCode(ILOpCode.Ldfld)
-            il.Token(fieldHandle)
-            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
-            il.LoadArgument(1)
-            il.OpCode(ILOpCode.Unbox)
-            il.Token(typeDef)
-            il.OpCode(ILOpCode.Ldfld)
-            il.Token(fieldHandle)
-            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
-            il.Call(this.wellKnown.GetObjectStaticEqualsReference())
+            if IsPointerOrFunctionPointer(field.Type) {
+                il.LoadArgument(0)
+                il.OpCode(ILOpCode.Ldfld)
+                il.Token(fieldHandle)
+                il.LoadArgument(1)
+                il.OpCode(ILOpCode.Unbox)
+                il.Token(typeDef)
+                il.OpCode(ILOpCode.Ldfld)
+                il.Token(fieldHandle)
+                il.OpCode(ILOpCode.Ceq)
+            } else {
+                il.LoadArgument(0)
+                il.OpCode(ILOpCode.Ldfld)
+                il.Token(fieldHandle)
+                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
+                il.LoadArgument(1)
+                il.OpCode(ILOpCode.Unbox)
+                il.Token(typeDef)
+                il.OpCode(ILOpCode.Ldfld)
+                il.Token(fieldHandle)
+                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
+                il.Call(this.wellKnown.GetObjectStaticEqualsReference())
+            }
             il.OpCode(ILOpCode.Ret)
         }
         let sig = BlobBuilder()
@@ -313,15 +325,25 @@ internal class DataStructSynthesizer {
         )
         let il = InstructionEncoder(BlobBuilder())
         if !this.emitCtx.MetadataOnly {
-            il.LoadArgument(0)
-            il.OpCode(ILOpCode.Ldfld)
-            il.Token(fieldHandle)
-            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
-            il.LoadArgumentAddress(1)
-            il.OpCode(ILOpCode.Ldfld)
-            il.Token(fieldHandle)
-            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
-            il.Call(this.wellKnown.GetObjectStaticEqualsReference())
+            if IsPointerOrFunctionPointer(field.Type) {
+                il.LoadArgument(0)
+                il.OpCode(ILOpCode.Ldfld)
+                il.Token(fieldHandle)
+                il.LoadArgumentAddress(1)
+                il.OpCode(ILOpCode.Ldfld)
+                il.Token(fieldHandle)
+                il.OpCode(ILOpCode.Ceq)
+            } else {
+                il.LoadArgument(0)
+                il.OpCode(ILOpCode.Ldfld)
+                il.Token(fieldHandle)
+                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
+                il.LoadArgumentAddress(1)
+                il.OpCode(ILOpCode.Ldfld)
+                il.Token(fieldHandle)
+                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
+                il.Call(this.wellKnown.GetObjectStaticEqualsReference())
+            }
             il.OpCode(ILOpCode.Ret)
         }
         let sig = BlobBuilder()
@@ -434,15 +456,25 @@ internal class DataStructSynthesizer {
         )
         let il = InstructionEncoder(BlobBuilder())
         if !this.emitCtx.MetadataOnly {
-            il.LoadArgumentAddress(0)
-            il.OpCode(ILOpCode.Ldfld)
-            il.Token(fieldHandle)
-            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
-            il.LoadArgumentAddress(1)
-            il.OpCode(ILOpCode.Ldfld)
-            il.Token(fieldHandle)
-            this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
-            il.Call(this.wellKnown.GetObjectStaticEqualsReference())
+            if IsPointerOrFunctionPointer(field.Type) {
+                il.LoadArgumentAddress(0)
+                il.OpCode(ILOpCode.Ldfld)
+                il.Token(fieldHandle)
+                il.LoadArgumentAddress(1)
+                il.OpCode(ILOpCode.Ldfld)
+                il.Token(fieldHandle)
+                il.OpCode(ILOpCode.Ceq)
+            } else {
+                il.LoadArgumentAddress(0)
+                il.OpCode(ILOpCode.Ldfld)
+                il.Token(fieldHandle)
+                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
+                il.LoadArgumentAddress(1)
+                il.OpCode(ILOpCode.Ldfld)
+                il.Token(fieldHandle)
+                this.conversionEmitter.EmitBoxIfNeeded(il, field.Type)
+                il.Call(this.wellKnown.GetObjectStaticEqualsReference())
+            }
             if isInequality {
                 il.LoadConstantI4(0)
                 il.OpCode(ILOpCode.Ceq)
@@ -495,7 +527,9 @@ internal class DataStructSynthesizer {
             // ADR-0087 §3 R3: TypeParameterSymbol fields are now encoded
             // as VAR(idx) (not erased to Object); the indirect store
             // must use `Stobj` against the VAR TypeSpec, not `Stind_ref`.
-            if field.Type is TypeParameterSymbol || ReflectionMetadataEmitter.IsValueTypeSymbol(field.Type) {
+            if IsPointerOrFunctionPointer(field.Type) {
+                il.OpCode(ILOpCode.Stind_i)
+            } else if field.Type is TypeParameterSymbol || ReflectionMetadataEmitter.IsValueTypeSymbol(field.Type) {
                 il.OpCode(ILOpCode.Stobj)
                 il.Token(this.getElementTypeToken(field.Type))
             } else {
@@ -1117,12 +1151,27 @@ internal class DataStructSynthesizer {
                 "EqualityComparer<T> declares Equals(T, T)"
             )
             for field in GetSynthesisFields(structSym) {
+                let fieldHandle = this.resolveUserFieldToken(structSym, field)
+                if IsPointerOrFunctionPointer(field.Type) {
+                    il.LoadArgument(0)
+                    il.OpCode(ILOpCode.Ldfld)
+                    il.Token(fieldHandle)
+                    if structSym.IsClass {
+                        il.LoadArgument(1)
+                    } else {
+                        il.LoadArgumentAddress(1)
+                    }
+                    il.OpCode(ILOpCode.Ldfld)
+                    il.Token(fieldHandle)
+                    il.OpCode(ILOpCode.Ceq)
+                    il.Branch(ILOpCode.Brfalse, retFalse)
+                    continue
+                }
                 let comparer = ImportedTypeSymbol.GetConstructed(
                     typeof(EqualityComparer[object]),
                     typeof(EqualityComparer[_]),
                     ImmutableArray.Create(field.Type)
                 )
-                let fieldHandle = this.resolveUserFieldToken(structSym, field)
                 il.OpCode(ILOpCode.Call)
                 il.Token(this.resolveImportedMethodRef(comparerDefault, comparer))
                 il.LoadArgument(0)
@@ -1326,10 +1375,11 @@ internal class DataStructSynthesizer {
                 )
                 for var i = 0; i < fields.Length; i++ {
                     let field = fields[i]
+                    let hashFieldType = GetHashFieldType(field.Type)
                     let comparer = ImportedTypeSymbol.GetConstructed(
                         typeof(EqualityComparer[object]),
                         typeof(EqualityComparer[_]),
-                        ImmutableArray.Create(field.Type)
+                        ImmutableArray.Create(hashFieldType)
                     )
                     let fieldHandle = this.resolveUserFieldToken(structSym, field)
                     if i > 0 {
@@ -1341,6 +1391,9 @@ internal class DataStructSynthesizer {
                     il.LoadArgument(0)
                     il.OpCode(ILOpCode.Ldfld)
                     il.Token(fieldHandle)
+                    if IsPointerOrFunctionPointer(field.Type) {
+                        il.OpCode(ILOpCode.Conv_i)
+                    }
                     il.OpCode(ILOpCode.Callvirt)
                     il.Token(this.resolveImportedMethodRef(comparerGetHashCode, comparer))
                     if i > 0 {
@@ -1354,6 +1407,9 @@ internal class DataStructSynthesizer {
                     il.LoadArgument(0)
                     il.OpCode(ILOpCode.Ldfld)
                     il.Token(fieldHandle)
+                    if IsPointerOrFunctionPointer(field.Type) {
+                        il.OpCode(ILOpCode.Conv_i)
+                    }
                 }
                 il.OpCode(ILOpCode.Call)
                 il.Token(this.GetHashCodeCombineSpec(fields))
@@ -1369,8 +1425,11 @@ internal class DataStructSynthesizer {
                     il.LoadArgument(0)
                     il.OpCode(ILOpCode.Ldfld)
                     il.Token(fieldHandle)
+                    if IsPointerOrFunctionPointer(field.Type) {
+                        il.OpCode(ILOpCode.Conv_i)
+                    }
                     il.OpCode(ILOpCode.Call)
-                    il.Token(this.GetHashCodeAddSpec(field.Type))
+                    il.Token(this.GetHashCodeAddSpec(GetHashFieldType(field.Type)))
                 }
                 il.LoadLocalAddress(0)
                 il.Call(this.wellKnown.GetHashCodeToHashCodeReference())
@@ -1564,7 +1623,10 @@ internal class DataStructSynthesizer {
         this.EmitAppendLiteral(il, loadBuilder, label)
         loadBuilder()
         let type = member.Type
-        let printsThroughAddress = ReflectionMetadataEmitter.IsValueTypeSymbol(type) && !(type is NullableTypeSymbol)
+        let printsThroughAddress = !IsPointerOrFunctionPointer(type) && ReflectionMetadataEmitter.IsValueTypeSymbol(
+            type
+        ) &&
+            !(type is NullableTypeSymbol)
         if member.Field is {} field {
             // A readonly field is copied before ToString runs, as C# does: taking
             // its address would let a mutating ToString change the readonly field.
@@ -1605,8 +1667,12 @@ internal class DataStructSynthesizer {
                 // first (C# makes a defensive copy); anything else is loaded through it.
                 let copiesReadonlyRef = printsThroughAddress && property.ReturnRefKind != RefKind.Ref
                 if !printsThroughAddress || copiesReadonlyRef {
-                    il.OpCode(ILOpCode.Ldobj)
-                    il.Token(this.getElementTypeToken(type))
+                    if IsPointerOrFunctionPointer(type) {
+                        il.OpCode(ILOpCode.Ldind_i)
+                    } else {
+                        il.OpCode(ILOpCode.Ldobj)
+                        il.Token(this.getElementTypeToken(type))
+                    }
                 }
                 if copiesReadonlyRef {
                     let temp = firstTempIndex + temps.Count
@@ -1904,8 +1970,7 @@ internal class DataStructSynthesizer {
                     )
                     il.Token(this.resolveImportedMethodRef(importedGetter, importedBase))
                     if (members[i] is PropertySymbol and {ReturnRefKind: not RefKind.None}) {
-                        il.OpCode(ILOpCode.Ldobj)
-                        il.Token(this.getElementTypeToken(memberType))
+                        this.EmitDeconstructRefDereference(il, memberType)
                     }
                 } else if members[i] is PropertySymbol inheritedProperty && !structSym.Properties.Contains(
                     inheritedProperty
@@ -1926,8 +1991,7 @@ internal class DataStructSynthesizer {
                     )
                     il.Token(this.resolveUserPropertyAccessorToken(declaringStruct, resolvedProperty!!, false))
                     if (members[i] is PropertySymbol and {ReturnRefKind: not RefKind.None}) {
-                        il.OpCode(ILOpCode.Ldobj)
-                        il.Token(this.getElementTypeToken(memberType))
+                        this.EmitDeconstructRefDereference(il, memberType)
                     }
                 } else {
                     let signature = BlobBuilder()
@@ -1965,15 +2029,16 @@ internal class DataStructSynthesizer {
                     )
                     il.Token(getter)
                     if (members[i] is PropertySymbol and {ReturnRefKind: not RefKind.None}) {
-                        il.OpCode(ILOpCode.Ldobj)
-                        il.Token(this.getElementTypeToken(memberType))
+                        this.EmitDeconstructRefDereference(il, memberType)
                     }
                 }
                 // ADR-0087 §3 R3: TypeParameterSymbol fields are now
                 // encoded as VAR(idx) (not erased to Object); the
                 // indirect store must use `Stobj` against the VAR
                 // TypeSpec, not `Stind_ref`.
-                if memberType is TypeParameterSymbol {
+                if IsPointerOrFunctionPointer(memberType) {
+                    il.OpCode(ILOpCode.Stind_i)
+                } else if memberType is TypeParameterSymbol {
                     il.OpCode(ILOpCode.Stobj)
                     il.Token(this.getElementTypeToken(memberType))
                 } else if ReflectionMetadataEmitter.IsValueTypeSymbol(memberType) {
@@ -2075,6 +2140,15 @@ internal class DataStructSynthesizer {
         return this.resolveUserMethodRef(structSym, getter, "get_EqualityContract", signature)
     }
 
+    private func EmitDeconstructRefDereference(il InstructionEncoder, memberType TypeSymbol) {
+        if IsPointerOrFunctionPointer(memberType) {
+            il.OpCode(ILOpCode.Ldind_i)
+        } else {
+            il.OpCode(ILOpCode.Ldobj)
+            il.Token(this.getElementTypeToken(memberType))
+        }
+    }
+
     /// Issue #410 / ADR-0029: produces a MethodSpec for
     /// `HashCode.Combine<T1,...,Tn>` with field types in declaration order.
     private func GetHashCodeCombineSpec(fields ImmutableArray[FieldSymbol]) EntityHandle {
@@ -2082,7 +2156,7 @@ internal class DataStructSynthesizer {
         let sigBlob = BlobBuilder()
         let argsEncoder = BlobEncoder(sigBlob).MethodSpecificationSignature(fields.Length)
         for field in fields {
-            this.encodeTypeSymbol(argsEncoder.AddArgument(), field.Type)
+            this.encodeTypeSymbol(argsEncoder.AddArgument(), GetHashFieldType(field.Type))
         }
         return this.emitCtx.MetadataRows.AddMethodSpecification(openRef, this.emitCtx.Metadata.GetOrAddBlob(sigBlob))
     }
@@ -2116,6 +2190,15 @@ internal class DataStructSynthesizer {
     }
 
     shared {
+        private func IsPointerOrFunctionPointer(type TypeSymbol) bool ->
+        type is PointerTypeSymbol or FunctionPointerTypeSymbol
+
+        private func GetHashFieldType(type TypeSymbol) TypeSymbol -> if IsPointerOrFunctionPointer(type) {
+            TypeSymbol.NInt
+        } else {
+            type
+        }
+
         /// Rubber-duck follow-up to issue #2224: the ordered list of backing
         /// (cref:FieldSymbol)s the Equals/GetHashCode/ToString/Deconstruct
         /// synthesis below should read/compare. A user-declared data struct
