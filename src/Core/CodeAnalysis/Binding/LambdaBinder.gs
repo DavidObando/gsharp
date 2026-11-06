@@ -2888,8 +2888,18 @@ internal class LambdaBinder {
                 return false
             }
         }
-        if localFunctionReferencedFunctions.TryGetValue(literal.Function, out var referencedFunctions) {
-            for referenced in referencedFunctions {
+        if localFunctionReferencedFunctions.TryGetValue(literal.Function, out var referencedFunctions) &&
+            !referencedFunctions.IsDefaultOrEmpty {
+            let visited = HashSet[FunctionSymbol](ReferenceEqualityComparer.Instance)
+            let worklist = Stack[FunctionSymbol]()
+            for var i = referencedFunctions.Length - 1; i >= 0; i-- {
+                let item = referencedFunctions[i]
+                if visited.Add(item) {
+                    worklist.Push(item)
+                }
+            }
+            while worklist.Count > 0 {
+                let referenced = worklist.Pop()
                 if !LocalFunctionMatchesScope(referenced, $scope) {
                     return false
                 }
@@ -2897,6 +2907,15 @@ internal class LambdaBinder {
                     for calleeVar in calleeCaptured {
                         if calleeVar is not GlobalVariableSymbol && !literal.CapturedVariables.Contains(calleeVar) {
                             return false
+                        }
+                    }
+                }
+                if localFunctionReferencedFunctions.TryGetValue(referenced, out var nestedReferenced) &&
+                    !nestedReferenced.IsDefaultOrEmpty {
+                    for var i = nestedReferenced.Length - 1; i >= 0; i-- {
+                        let nested = nestedReferenced[i]
+                        if visited.Add(nested) {
+                            worklist.Push(nested)
                         }
                     }
                 }
@@ -3942,7 +3961,7 @@ internal class LambdaBinder {
             this.calleeReferencedFunctions = calleeReferencedFunctions
         }
 
-        private func RecordFunctionReference(callee FunctionSymbol?) {
+        private func RecordDirectFunctionReference(callee FunctionSymbol?) {
             let referencedFunctions = this.referencedFunctions
             if callee == nil || referencedFunctions == nil {
                 return
@@ -3952,6 +3971,13 @@ internal class LambdaBinder {
                 .seenFunctions
                 .Add(callee) {
                 referencedFunctions.Add(callee)
+            }
+        }
+
+        private func RecordNestedBodyFunctionReferences(callee FunctionSymbol?) {
+            let referencedFunctions = this.referencedFunctions
+            if callee == nil || referencedFunctions == nil {
+                return
             }
             if this.calleeReferencedFunctions != nil && this.calleeReferencedFunctions.TryGetValue(
                 callee,
@@ -4003,7 +4029,7 @@ internal class LambdaBinder {
         /// body will need to rebuild the callee's closure instance at the
         /// call site (`MethodBodyEmitter.EmitGenericLocalClosureInstance`).
         protected override func RewriteCallExpression(node BoundCallExpression) BoundExpression {
-            this.RecordFunctionReference(node.Function)
+            this.RecordDirectFunctionReference(node.Function)
             if this.calleeCapturedVariables != nil && this.calleeCapturedVariables.TryGetValue(
                 node.Function,
                 out var calleeCaptured
@@ -4028,14 +4054,14 @@ internal class LambdaBinder {
 
         protected override func RewriteMethodGroupExpression(node BoundMethodGroupExpression) BoundExpression {
             for candidate in node.Candidates {
-                this.RecordFunctionReference(candidate)
+                this.RecordDirectFunctionReference(candidate)
             }
             return base.RewriteMethodGroupExpression(node)
         }
 
         protected override func RewriteLocalFunctionDeclaration(node BoundLocalFunctionDeclaration) BoundStatement {
             this.declaredFunctions?.Add(node.Literal.Function)
-            this.RecordFunctionReference(node.Literal.Function)
+            this.RecordNestedBodyFunctionReferences(node.Literal.Function)
             this.RecordDirectReferencesFrom(node.Literal.Function, node.Literal.CapturedVariables)
             return node
         }
@@ -4228,7 +4254,7 @@ internal class LambdaBinder {
         }
 
         protected override func RewriteFunctionLiteralExpression(node BoundFunctionLiteralExpression) BoundExpression {
-            this.RecordFunctionReference(node.Function)
+            this.RecordNestedBodyFunctionReferences(node.Function)
             this.RecordDirectReferencesFrom(node.Function, node.CapturedVariables)
             // Issue #503 follow-up: a nested function literal's captures
             // must transitively contribute to the *outer* literal's capture

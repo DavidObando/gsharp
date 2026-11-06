@@ -8,6 +8,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import System
 import System.Collections
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
 
 /// An immutable version-tree node recording one entry transition on a (cref:NarrowingFrame).
@@ -21,6 +22,7 @@ internal sealed class NarrowingFrameSnapshot {
     internal let PreviousType TypeSymbol?
     internal let HasCurrent bool
     internal let CurrentType TypeSymbol?
+    private var lazyMap ImmutableDictionary[AccessPath, TypeSymbol]?
 
     internal init(
         frame NarrowingFrame,
@@ -31,7 +33,8 @@ internal sealed class NarrowingFrameSnapshot {
         hadPrevious bool,
         previousType TypeSymbol?,
         hasCurrent bool,
-        currentType TypeSymbol?
+        currentType TypeSymbol?,
+        initialMap ImmutableDictionary[AccessPath, TypeSymbol]? = nil
     ) {
         Frame = frame
         Parent = parent
@@ -42,6 +45,30 @@ internal sealed class NarrowingFrameSnapshot {
         PreviousType = previousType
         HasCurrent = hasCurrent
         CurrentType = currentType
+        lazyMap = initialMap
+    }
+
+    internal func GetMap() ImmutableDictionary[AccessPath, TypeSymbol] {
+        if lazyMap is {} existing {
+            return existing
+        }
+        let chain = List[NarrowingFrameSnapshot]()
+        var curr NarrowingFrameSnapshot = this
+        while curr.lazyMap == nil {
+            chain.Add(curr)
+            curr = curr.Parent!!
+        }
+        var map = curr.lazyMap!!
+        for var i = chain.Count - 1; i >= 0; i-- {
+            let step = chain[i]
+            map = if step.HasCurrent {
+                map.SetItem(step.Path, step.CurrentType!!)
+            } else {
+                map.Remove(step.Path)
+            }
+            step.lazyMap = map
+        }
+        return map
     }
 
     internal func ContainsKey(path AccessPath) bool -> TryGetValue(path, out _)
@@ -51,47 +78,24 @@ internal sealed class NarrowingFrameSnapshot {
         if object.ReferenceEquals(this, current) {
             return Frame.TryGetValue(path, out narrowedType)
         }
-        var a = current
-        var b = this
-        var foundOnA = false
-        var hadPrevOnA = false
-        var prevTypeOnA TypeSymbol? = nil
-        while b.Depth > a.Depth {
+        if object.ReferenceEquals(current.Parent, this) {
             StatementBinder.SpeculativeRollbackWorkCount++
-            if b.Path == path {
-                narrowedType = b.CurrentType ?? TypeSymbol.Error
-                return b.HasCurrent
+            if current.Path == path {
+                narrowedType = current.PreviousType ?? TypeSymbol.Error
+                return current.HadPrevious
             }
-            b = b.Parent!!
+            return Frame.TryGetValue(path, out narrowedType)
         }
-        while a.Depth > b.Depth {
+        if object.ReferenceEquals(this.Parent, current) {
             StatementBinder.SpeculativeRollbackWorkCount++
-            if a.Path == path {
-                foundOnA = true
-                hadPrevOnA = a.HadPrevious
-                prevTypeOnA = a.PreviousType
+            if this.Path == path {
+                narrowedType = this.CurrentType ?? TypeSymbol.Error
+                return this.HasCurrent
             }
-            a = a.Parent!!
+            return Frame.TryGetValue(path, out narrowedType)
         }
-        while !object.ReferenceEquals(a, b) {
-            StatementBinder.SpeculativeRollbackWorkCount++
-            if b.Path == path {
-                narrowedType = b.CurrentType ?? TypeSymbol.Error
-                return b.HasCurrent
-            }
-            if a.Path == path {
-                foundOnA = true
-                hadPrevOnA = a.HadPrevious
-                prevTypeOnA = a.PreviousType
-            }
-            a = a.Parent!!
-            b = b.Parent!!
-        }
-        if foundOnA {
-            narrowedType = prevTypeOnA ?? TypeSymbol.Error
-            return hadPrevOnA
-        }
-        return Frame.TryGetValue(path, out narrowedType)
+        StatementBinder.SpeculativeRollbackWorkCount++
+        return GetMap().TryGetValue(path, out narrowedType)
     }
 }
 
@@ -107,14 +111,41 @@ internal sealed class NarrowingFrame : IEnumerable[KeyValuePair[AccessPath, Type
 
     init() {
         entries = Dictionary[AccessPath, TypeSymbol]()
-        currentSnapshot = NarrowingFrameSnapshot(this, nil, 0, 0, default(AccessPath), false, nil, false, nil)
+        currentSnapshot = NarrowingFrameSnapshot(
+            this,
+            nil,
+            0,
+            0,
+            default(AccessPath),
+            false,
+            nil,
+            false,
+            nil,
+            ImmutableDictionary[AccessPath, TypeSymbol].Empty
+        )
     }
 
     /// Wraps [`inner`](paramref). The frame shares the dictionary, so a write to
     /// the dictionary that bypasses the frame is not seen by the owner.
     init(inner Dictionary[AccessPath, TypeSymbol]) {
         entries = inner
-        currentSnapshot = NarrowingFrameSnapshot(this, nil, 0, inner.Count, default(AccessPath), false, nil, false, nil)
+        let initialMap = if inner.Count == 0 {
+            ImmutableDictionary[AccessPath, TypeSymbol].Empty
+        } else {
+            inner.ToImmutableDictionary()
+        }
+        currentSnapshot = NarrowingFrameSnapshot(
+            this,
+            nil,
+            0,
+            inner.Count,
+            default(AccessPath),
+            false,
+            nil,
+            false,
+            nil,
+            initialMap
+        )
     }
 
     /// Gets the stack that holds this frame, or `nil`.

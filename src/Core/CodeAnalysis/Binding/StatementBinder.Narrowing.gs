@@ -1193,10 +1193,10 @@ internal partial class StatementBinder {
         if !fallthroughReachesTarget {
             let commonIncoming = Dictionary[AccessPath, TypeSymbol]()
             let commonFrameIndices = Dictionary[AccessPath, int32]()
-            for entry in incomingSnapshots[0].NarrowedVariables {
+            for entry in incomingSnapshots[0].GetNarrowedVariablesSnapshot() {
                 let incomingTypes = List[TypeSymbol]{entry.Value}
                 for var i = 1; i < incomingSnapshots.Count; i++ {
-                    if !incomingSnapshots[i].NarrowedVariables.TryGetValue(entry.Key, out var incomingType) {
+                    if !incomingSnapshots[i].TryGetNarrowedVariable(entry.Key, out var incomingType) {
                         incomingTypes.Clear()
                         break
                     }
@@ -1205,10 +1205,10 @@ internal partial class StatementBinder {
                 let commonType TypeSymbol? = FindCommonImplicitSupertype(entry.Key, incomingTypes)
                 if commonType != nil {
                     commonIncoming.Add(entry.Key, commonType)
-                    if incomingSnapshots[0].NarrowingFrameIndices.TryGetValue(entry.Key, out var frameIndex) &&
+                    if incomingSnapshots[0].TryGetNarrowingFrameIndex(entry.Key, out var frameIndex) &&
                         incomingSnapshots
                         .All(
-                        (snapshot NarrowingJumpState) -> snapshot.NarrowingFrameIndices.TryGetValue(
+                        (snapshot NarrowingJumpState) -> snapshot.TryGetNarrowingFrameIndex(
                             entry.Key,
                             out var incomingFrame
                         ) &&
@@ -1248,7 +1248,7 @@ internal partial class StatementBinder {
         for entry in targetNarrowings {
             let types = List[TypeSymbol]{entry.Value}
             for snapshot in incomingSnapshots {
-                if !snapshot.NarrowedVariables.TryGetValue(entry.Key, out var sourceType) {
+                if !snapshot.TryGetNarrowedVariable(entry.Key, out var sourceType) {
                     types.Clear()
                     break
                 }
@@ -1451,7 +1451,7 @@ internal partial class StatementBinder {
     }
 
     private func ApplyFlowSummary(snapshot NarrowingJumpState, summary FinallyFlowSummary) {
-        for entry in snapshot.NarrowedVariables.ToArray() {
+        for entry in snapshot.GetNarrowedVariablesSnapshot() {
             if MayBeMutatedByUnknownWrite(summary.Mutations, entry.Key) || summary.Mutations.MayMutateGlobalRoot(
                 entry.Key.Root,
                 entry.Value
@@ -3956,18 +3956,38 @@ internal partial class StatementBinder {
         } finally {
             let rebindKills = conditionKillJournal!!
             conditionKillJournal = outerJournal
-            let rebindExitFrames = CaptureNarrowingFramesSnapshot()
+            var removedOnRebind HashSet[SpeculativeFrameKey]? = nil
+            if rebindKills.Count > 0 {
+                for var i = 0; i < savedEntry.ExitFrames.Length; i++ {
+                    let savedFrame = savedEntry.ExitFrames[i].Frame
+                    let savedExitEntries = savedEntry.ExitFrames[i].Entries
+                    if !IsOnNarrowingStack(savedFrame) {
+                        continue
+                    }
+                    savedFrame.ForEachChangedKey(
+                        savedExitEntries,
+                        (path AccessPath, currentExists bool, _ TypeSymbol?, otherExists bool, _ TypeSymbol?) -> {
+                            if !currentExists && otherExists {
+                                removedOnRebind ??= HashSet[SpeculativeFrameKey]()
+                                removedOnRebind!!.Add(SpeculativeFrameKey(savedFrame, path))
+                            }
+                        }
+                    )
+                }
+            }
             let rebindRemovedAliases = HashSet[VariableSymbol](savedEntry.ExitAliases)
             rebindRemovedAliases.ExceptWith(externalCallableAliases)
             let rebindAddedAliases = HashSet[VariableSymbol](externalCallableAliases)
             rebindAddedAliases.ExceptWith(savedEntry.ExitAliases)
             RestoreNarrowingFramesSnapshot(postFrames)
-            for kill in rebindKills {
-                if IsOnNarrowingStack(kill.Frame) &&
-                    SavedFramesContainedFact(savedEntry.ExitFrames, kill.Frame, kill.Path) &&
-                    !SavedFramesContainedFact(rebindExitFrames, kill.Frame, kill.Path) {
-                    kill.Frame.Remove(kill.Path)
-                    outerJournal?.Add(kill)
+            if removedOnRebind != nil {
+                for kill in rebindKills {
+                    if IsOnNarrowingStack(kill.Frame) && removedOnRebind.Contains(
+                        SpeculativeFrameKey(kill.Frame, kill.Path)
+                    ) {
+                        kill.Frame.Remove(kill.Path)
+                        outerJournal?.Add(kill)
+                    }
                 }
             }
             postAliases.ExceptWith(rebindRemovedAliases)
@@ -3975,19 +3995,6 @@ internal partial class StatementBinder {
             RestoreExternalCallableAliases(postAliases)
         }
         return result
-    }
-
-    private func SavedFramesContainedFact(
-        saved[](Frame NarrowingFrame, Entries NarrowingFrameSnapshot),
-        frame NarrowingFrame,
-        path AccessPath
-    ) bool {
-        for var i = 0; i < saved.Length; i++ {
-            if object.ReferenceEquals(saved[i].Frame, frame) {
-                return saved[i].Entries.ContainsKey(path)
-            }
-        }
-        return false
     }
 
     internal func CaptureCallArgumentPrebindRollback(callSyntax SyntaxNode) Action {

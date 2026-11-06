@@ -12,32 +12,35 @@ import System.Collections.ObjectModel
 
 /// Forward jump state recorded for a user label (ADR-0208 section 7, ADR-0213 section 11).
 internal sealed class NarrowingJumpState {
-    private let narrowedVariables Dictionary[AccessPath, TypeSymbol]
-    private let narrowingFrameIndices Dictionary[AccessPath, int32]
+    private let frameSnapshots ImmutableArray[NarrowingFrameSnapshot?]
+    private var overrides ImmutableDictionary[AccessPath, TypeSymbol?]
     private var externalCallableAliases ImmutableHashSet[VariableSymbol]
 
     init(
-        narrowedVariables IReadOnlyDictionary[AccessPath, TypeSymbol],
-        narrowingFrameIndices IReadOnlyDictionary[AccessPath, int32],
+        frameSnapshots ImmutableArray[NarrowingFrameSnapshot?],
         externalCallableAliases IReadOnlyCollection[VariableSymbol],
         activeCleanupRegions ImmutableArray[GotoCleanupRegion],
         breakNode BoundStatement? = nil
     ) {
-        this.narrowedVariables = Dictionary[AccessPath, TypeSymbol](narrowedVariables)
-        this.narrowingFrameIndices = Dictionary[AccessPath, int32](narrowingFrameIndices)
-        NarrowedVariables = ReadOnlyDictionary[AccessPath, TypeSymbol](this.narrowedVariables)
-        NarrowingFrameIndices = ReadOnlyDictionary[AccessPath, int32](this.narrowingFrameIndices)
+        this.frameSnapshots = frameSnapshots
+        this.overrides = ImmutableDictionary[AccessPath, TypeSymbol?].Empty
         this.externalCallableAliases = externalCallableAliases.ToImmutableHashSet()
         ActiveCleanupRegions = activeCleanupRegions
         BreakNode = breakNode
     }
 
-    prop NarrowedVariables IReadOnlyDictionary[AccessPath, TypeSymbol] {
-        get;
-    }
-
-    prop NarrowingFrameIndices IReadOnlyDictionary[AccessPath, int32] {
-        get;
+    private init(
+        frameSnapshots ImmutableArray[NarrowingFrameSnapshot?],
+        overrides ImmutableDictionary[AccessPath, TypeSymbol?],
+        externalCallableAliases ImmutableHashSet[VariableSymbol],
+        activeCleanupRegions ImmutableArray[GotoCleanupRegion],
+        breakNode BoundStatement?
+    ) {
+        this.frameSnapshots = frameSnapshots
+        this.overrides = overrides
+        this.externalCallableAliases = externalCallableAliases
+        ActiveCleanupRegions = activeCleanupRegions
+        BreakNode = breakNode
     }
 
     prop ExternalCallableAliases ImmutableHashSet[VariableSymbol] -> externalCallableAliases
@@ -50,22 +53,83 @@ internal sealed class NarrowingJumpState {
         get;
     }
 
-    func Clone() NarrowingJumpState -> NarrowingJumpState(
-        narrowedVariables,
-        NarrowingFrameIndices,
-        ExternalCallableAliases,
-        ActiveCleanupRegions,
-        BreakNode
-    )
+    func TryGetNarrowedVariable(path AccessPath, out narrowedType TypeSymbol) bool {
+        if !overrides.IsEmpty && overrides.TryGetValue(path, out var overridden) {
+            if overridden == nil {
+                narrowedType = TypeSymbol.Error
+                return false
+            }
+            narrowedType = overridden
+            return true
+        }
+        if !frameSnapshots.IsDefaultOrEmpty {
+            for var i = frameSnapshots.Length - 1; i >= 0; i-- {
+                if frameSnapshots[i] is {} snap && snap.TryGetValue(path, out narrowedType) {
+                    return true
+                }
+            }
+        }
+        narrowedType = TypeSymbol.Error
+        return false
+    }
+
+    func TryGetNarrowingFrameIndex(path AccessPath, out frameIndex int32) bool {
+        if !overrides.IsEmpty && overrides.ContainsKey(path) {
+            frameIndex = -1
+            return false
+        }
+        if !frameSnapshots.IsDefaultOrEmpty {
+            for var i = frameSnapshots.Length - 1; i >= 0; i-- {
+                if frameSnapshots[i] is {} snap && snap.ContainsKey(path) {
+                    frameIndex = i
+                    return true
+                }
+            }
+        }
+        frameIndex = -1
+        return false
+    }
+
+    func GetNarrowedVariablesSnapshot() Dictionary[AccessPath, TypeSymbol] {
+        let result = Dictionary[AccessPath, TypeSymbol]()
+        if !frameSnapshots.IsDefaultOrEmpty {
+            for var i = 0; i < frameSnapshots.Length; i++ {
+                if frameSnapshots[i] is {} snap {
+                    for entry in snap.GetMap() {
+                        result[entry.Key] = entry.Value
+                    }
+                }
+            }
+        }
+        if !overrides.IsEmpty {
+            for entry in overrides {
+                if entry.Value == nil {
+                    result.Remove(entry.Key)
+                } else {
+                    result[entry.Key] = entry.Value!!
+                }
+            }
+        }
+        return result
+    }
+
+    func Clone() NarrowingJumpState {
+        StatementBinder.SpeculativeRollbackWorkCount += overrides.Count
+        return NarrowingJumpState(
+            frameSnapshots,
+            overrides,
+            externalCallableAliases,
+            ActiveCleanupRegions,
+            BreakNode
+        )
+    }
 
     func RemoveNarrowing(path AccessPath) {
-        narrowedVariables.Remove(path)
-        narrowingFrameIndices.Remove(path)
+        overrides = overrides.SetItem(path, nil)
     }
 
     func SetNarrowing(path AccessPath, type TypeSymbol) {
-        narrowedVariables[path] = type
-        narrowingFrameIndices.Remove(path)
+        overrides = overrides.SetItem(path, type)
     }
 
     func ReplaceExternalCallableAliases(aliases IEnumerable[VariableSymbol]) {

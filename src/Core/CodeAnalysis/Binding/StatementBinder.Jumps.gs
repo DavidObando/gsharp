@@ -141,20 +141,23 @@ internal partial class StatementBinder {
     }
 
     private func CaptureJumpState(breakNode BoundStatement? = nil) NarrowingJumpState {
-        let narrowedAtSource = Dictionary[AccessPath, TypeSymbol]()
-        let narrowingFrameIndices = Dictionary[AccessPath, int32]()
-        // Frames are ordered outermost to innermost, so overwriting records
-        // the currently effective narrowing for a repeated root.
-        for var i = 0; i < binderCtx.NarrowedVariables.Count; i++ {
-            let frame = binderCtx.NarrowedVariables[i]
-            for entry in frame {
-                narrowedAtSource[entry.Key] = entry.Value
-                narrowingFrameIndices[entry.Key] = i
+        var frameSnapshots = ImmutableArray[NarrowingFrameSnapshot?].Empty
+        if HasAnyActiveNarrowings() {
+            let builder = ImmutableArray.CreateBuilder[NarrowingFrameSnapshot?](binderCtx.NarrowedVariables.Count)
+            for var i = 0; i < binderCtx.NarrowedVariables.Count; i++ {
+                let frame = binderCtx.NarrowedVariables[i]
+                builder.Add(
+                    if frame.Count > 0 {
+                        frame.SnapshotEntries()
+                    } else {
+                        default(NarrowingFrameSnapshot?)
+                    }
+                )
             }
+            frameSnapshots = builder.MoveToImmutable()
         }
         return NarrowingJumpState(
-            narrowedAtSource,
-            narrowingFrameIndices,
+            frameSnapshots,
             externalCallableAliases,
             activeCleanupRegions.ToImmutableArray(),
             breakNode
@@ -1724,9 +1727,9 @@ internal partial class StatementBinder {
             }
         }
         let filterWrites = EnclosingFilterWrites(syntax, collector)
-        for entry in snapshot.NarrowedVariables.ToArray() {
+        for entry in snapshot.GetNarrowedVariablesSnapshot() {
             let key = entry.Key
-            if snapshot.NarrowingFrameIndices.TryGetValue(key, out var frameIndex) && frameIndex >= childMinFrame {
+            if snapshot.TryGetNarrowingFrameIndex(key, out var frameIndex) && frameIndex >= childMinFrame {
                 continue
             }
             if survivingBranchFacts != nil && survivingBranchFacts.TryGetValue(key, out var survivingType) &&
