@@ -616,7 +616,9 @@ internal partial class ExpressionBinder {
                 clrTarget,
                 indexSyntaxes,
                 bindValue,
+                bindValueForRecovery,
                 location,
+                requiresRead,
                 returnsPreviousValue,
                 default(ImmutableArray[BoundExpression])
             )
@@ -651,7 +653,9 @@ internal partial class ExpressionBinder {
                     inheritedClrTarget,
                     indexSyntaxes,
                     bindValue,
+                    bindValueForRecovery,
                     location,
+                    requiresRead,
                     returnsPreviousValue,
                     preBound
                 )
@@ -998,7 +1002,9 @@ internal partial class ExpressionBinder {
         clrTarget Type,
         indexSyntaxes GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
         bindValue(TypeSymbol, () -> BoundExpression) -> BoundExpression,
+        bindValueForRecovery(TypeSymbol) -> void,
         location TextLocation,
+        requiresRead bool,
         returnsPreviousValue bool,
         preBoundArguments ImmutableArray[BoundExpression]
     ) BoundExpression? {
@@ -1011,14 +1017,50 @@ internal partial class ExpressionBinder {
             }
             bound.MoveToImmutable()
         }
+        let allowProtectedIndexer = IsFamilyAccessibleClrMember(clrTarget, target)
         let outcome = memberLookup.TryResolveClrIndexer(
             target.Type,
             clrTarget,
             boundArgs,
             out var indexer,
-            out var resolvedArguments
+            out var resolvedArguments,
+            fromDerivedType: allowProtectedIndexer
         )
         if outcome != ClrIndexerResolutionOutcome.Resolved || indexer == nil {
+            if !allowProtectedIndexer && memberLookup.TryResolveClrIndexer(
+                target.Type,
+                clrTarget,
+                boundArgs,
+                out var protWriteIndexer,
+                out _,
+                fromDerivedType: true
+            ) == ClrIndexerResolutionOutcome.Resolved &&
+                protWriteIndexer != nil &&
+                CanReportProtectedClrInstanceAccess(protWriteIndexer.DeclaringType, target) &&
+                (
+                (
+                    GetVisibleSetter(protWriteIndexer, fromDerivedType: true) != nil &&
+                        GetVisibleSetter(protWriteIndexer) == nil
+                ) ||
+                    (
+                    GetVisibleGetter(protWriteIndexer, fromDerivedType: true) is {ReturnType: {IsByRef: true}} &&
+                        GetVisibleGetter(protWriteIndexer) == nil &&
+                        RefCapabilities.GetReturnRefKind(protWriteIndexer) == RefKind.Ref
+                )
+            ) {
+                Diagnostics.ReportProtectedMemberInaccessible(
+                    location,
+                    protWriteIndexer.Name,
+                    ClrTypeDisplayName(protWriteIndexer.DeclaringType ?? clrTarget)
+                )
+                let protElementType = if target.Type is ImportedTypeSymbol protImportedTarget {
+                    MapErasedIndexerElementType(protImportedTarget, protWriteIndexer)
+                } else {
+                    MemberLookup.GetClrPropertyTypeSymbol(target.Type, protWriteIndexer)
+                }
+                bindValueForRecovery(protElementType)
+                return BoundErrorExpression(nil)
+            }
             return if ReportClrIndexerResolutionFailure(outcome, location) {
                 BoundErrorExpression(nil)
             } else {
@@ -1033,13 +1075,39 @@ internal partial class ExpressionBinder {
         // Review finding (#4350): only a writable `ref` return is written
         // through; a `ref readonly` indexer (`ReadOnlySlice<T>.this[int, bool]`)
         // is read-only exactly as on the single-index path.
-        var isRefIndexer = elementType is ByRefTypeSymbol && RefCapabilities.GetReturnRefKind(indexer) == RefKind.Ref
-        var visibleSetter MethodInfo? = ClrMemberVisibility.GetVisibleSetter(
-            indexer,
-            CanAccessInternalsOf(indexer.DeclaringType)
-        )
-        if !isRefIndexer && visibleSetter == nil {
+        var visibleGetter MethodInfo? = GetVisibleGetter(indexer, fromDerivedType: allowProtectedIndexer)
+        var isRefIndexer = visibleGetter != nil && elementType is ByRefTypeSymbol && RefCapabilities.GetReturnRefKind(
+            indexer
+        ) == RefKind.Ref
+        var visibleSetter MethodInfo? = GetVisibleSetter(indexer, fromDerivedType: allowProtectedIndexer)
+        if (!isRefIndexer && visibleSetter == nil) || (requiresRead && visibleGetter == nil) {
+            if !allowProtectedIndexer &&
+                CanReportProtectedClrInstanceAccess(indexer.DeclaringType, target) &&
+                (
+                (
+                    !isRefIndexer &&
+                        visibleSetter == nil &&
+                        (
+                        GetVisibleSetter(indexer, fromDerivedType: true) != nil ||
+                            (
+                            GetVisibleGetter(indexer, fromDerivedType: true) != nil &&
+                                elementType is ByRefTypeSymbol &&
+                                RefCapabilities.GetReturnRefKind(indexer) == RefKind.Ref
+                        )
+                    )
+                ) ||
+                    (requiresRead && visibleGetter == nil && GetVisibleGetter(indexer, fromDerivedType: true) != nil)
+            ) {
+                Diagnostics.ReportProtectedMemberInaccessible(
+                    location,
+                    indexer.Name,
+                    ClrTypeDisplayName(indexer.DeclaringType ?? clrTarget)
+                )
+                bindValueForRecovery(elementType)
+                return BoundErrorExpression(nil)
+            }
             Diagnostics.ReportCannotAssign(location, "this[]")
+            bindValueForRecovery(elementType)
             return BoundErrorExpression(nil)
         }
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -1072,7 +1140,8 @@ internal partial class ExpressionBinder {
                         clrTarget,
                         reboundArgs.MoveToImmutable(),
                         out var reindexer,
-                        out var reresolvedArguments
+                        out var reresolvedArguments,
+                        fromDerivedType: allowProtectedIndexer
                     ) == ClrIndexerResolutionOutcome.Resolved &&
                         reindexer != nil {
                         reselectedClrIndexer = reindexer
@@ -1110,14 +1179,12 @@ internal partial class ExpressionBinder {
                     finalClrIndexer = updatedClrIndexer
                     resolvedArguments = reselectedClrArgs
                     elementType = verifiedClrIndex.Type
-                    isRefIndexer = elementType is ByRefTypeSymbol && RefCapabilities.GetReturnRefKind(
-                        updatedClrIndexer
-                    ) == RefKind.Ref
-                    visibleSetter = ClrMemberVisibility.GetVisibleSetter(
-                        updatedClrIndexer,
-                        CanAccessInternalsOf(updatedClrIndexer.DeclaringType)
-                    )
-                    if !isRefIndexer && visibleSetter == nil {
+                    visibleGetter = GetVisibleGetter(updatedClrIndexer, fromDerivedType: allowProtectedIndexer)
+                    isRefIndexer = visibleGetter != nil &&
+                        elementType is ByRefTypeSymbol &&
+                        RefCapabilities.GetReturnRefKind(updatedClrIndexer) == RefKind.Ref
+                    visibleSetter = GetVisibleSetter(updatedClrIndexer, fromDerivedType: allowProtectedIndexer)
+                    if (!isRefIndexer && visibleSetter == nil) || (requiresRead && visibleGetter == nil) {
                         Diagnostics.ReportCannotAssign(location, "this[]")
                         return BoundErrorExpression(nil)
                     }

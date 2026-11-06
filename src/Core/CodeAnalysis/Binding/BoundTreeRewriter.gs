@@ -1979,7 +1979,7 @@ abstract class BoundTreeRewriter {
         let args = builder?.ToImmutable() ?? node.Arguments
         if targetExpr != nil {
             return BoundClrIndexAssignmentExpression.WithExpressionTarget(
-                nil,
+                node.Syntax,
                 targetExpr,
                 node.Indexer,
                 args,
@@ -1990,7 +1990,7 @@ abstract class BoundTreeRewriter {
             )
         }
         return BoundClrIndexAssignmentExpression(
-            nil,
+            node.Syntax,
             Invariant.Required(
                 node.Target,
                 "a CLR index assignment without an expression target has a variable target",

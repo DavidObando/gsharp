@@ -604,8 +604,16 @@ internal partial class ExpressionBinder {
                     // from a class deriving from the declaring type. The same
                     // visibility the plain write uses, rather than `CanWrite`
                     // alone, which admits a private setter.
-                    if clrPropAccess.Member is PropertyInfo writeProperty && !HasCallableClrSetter(writeProperty) {
-                        Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, writeProperty.Name)
+                    if clrPropAccess.Member is PropertyInfo writeProperty &&
+                        !HasCallableClrSetter(writeProperty, clrPropAccess.Receiver) {
+                        if !TryReportProtectedClrInstanceMemberWrite(
+                            writeProperty.DeclaringType,
+                            writeProperty.Name,
+                            clrPropAccess.Receiver,
+                            syntax.OperatorToken.Location
+                        ) {
+                            Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, writeProperty.Name)
+                        }
                         return (nil, nil)
                     }
                     if clrPropAccess.Member is FieldInfo fieldInfo && (fieldInfo.IsInitOnly || fieldInfo.IsLiteral) {
@@ -967,12 +975,12 @@ internal partial class ExpressionBinder {
     /// when the enclosing class derives from the declaring type.
     /// @param property The imported property.
     /// @returns `true` when the setter is callable here.
-    private func HasCallableClrSetter(property PropertyInfo) bool {
+    private func HasCallableClrSetter(property PropertyInfo, receiver BoundExpression?) bool {
         let friendInternals = property
             .DeclaringType
             ?.Assembly is {} declaringAssembly &&
             $scope.References!!.CanAccessInternalMembers(declaringAssembly)
-        let visible MethodInfo? = if DerivesFromClrType(property.DeclaringType) {
+        let visible MethodInfo? = if IsFamilyAccessibleClrMember(property.DeclaringType, receiver) {
             ClrMemberVisibility.GetDerivedVisibleSetter(property, friendInternals)
         } else {
             ClrMemberVisibility.GetVisibleSetter(property, friendInternals)
