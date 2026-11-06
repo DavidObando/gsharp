@@ -74,8 +74,13 @@ internal partial class ExpressionBinder {
         // author can write either an underlying-typed value (which lifts
         // via the implicit T -> T? conversion) or another nullable value.
         ApplySubExpressionNarrowingEffects(syntax.Target, boundRead)
+        let beforeRhsFrames = CaptureExpressionNarrowingFrames()
+        let preRhsSnapshot = CaptureNarrowingBindSnapshot()
         let rhsTargetType = nullableType ?? boundRead.Type
         let boundRhs = BindExpression(syntax.Value, rhsTargetType)
+        ApplySubExpressionNarrowingEffects(syntax.Value, boundRhs)
+        MergeBranchExpressionNarrowingFrames(beforeRhsFrames)
+        intersectNarrowingWithSnapshot?(preRhsSnapshot)
         if boundRhs is BoundErrorExpression || boundRhs.Type == TypeSymbol.Error {
             return (nil, nil, nil, nil, false)
         }

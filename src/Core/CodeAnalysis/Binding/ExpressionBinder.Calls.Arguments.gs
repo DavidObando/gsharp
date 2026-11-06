@@ -321,6 +321,7 @@ internal partial class ExpressionBinder {
     }
 
     private var activePreCallArgumentsNarrowing StatementBinder.NarrowingBindSnapshot?
+    private var lastSelectedCallablePropertyLoad BoundExpression?
 
     private func ApplyCallableMemberNarrowing(load BoundExpression) BoundExpression {
         if activePreCallArgumentsNarrowing is not{} saved {
@@ -340,7 +341,12 @@ internal partial class ExpressionBinder {
         methodName string,
         ce CallExpressionSyntax,
         isStatic bool
-    ) {
+    ) bool {
+        var clrType = if isStatic {
+            classSymbol?.ClassType
+        } else {
+            ownerType?.ClrType
+        }
         if ownerType is {} nonNullOwner && (nonNullOwner is StructSymbol or InterfaceSymbol) {
             let query = if isStatic {
                 MemberQuery.Static(MemberKinds.Method)
@@ -348,7 +354,7 @@ internal partial class ExpressionBinder {
                 MemberQuery.Instance(MemberKinds.Method)
             }
             if !TypeMemberModel.GetMethods(nonNullOwner, methodName, query).IsDefaultOrEmpty {
-                return
+                return false
             }
             var property PropertySymbol? = nil
             var declaringOwner TypeSymbol? = nil
@@ -393,16 +399,16 @@ internal partial class ExpressionBinder {
                     interfaceType: declaringOwner as InterfaceSymbol
                 )
                 ApplySubExpressionNarrowingEffects(ce.Identifier, propAccess)
+                return true
             }
-            return
-        }
-        let clrType = if isStatic {
-            classSymbol?.ClassType
-        } else {
-            ownerType?.ClrType
+            if nonNullOwner is StructSymbol inheritedStruct {
+                clrType = TypeMemberModel.GetNearestImportedBase(inheritedStruct)?.ClrType
+            } else {
+                return false
+            }
         }
         if clrType == nil {
-            return
+            return false
         }
         let flags = BindingFlags.Public | (
             if isStatic {
@@ -412,7 +418,7 @@ internal partial class ExpressionBinder {
             }
         )
         if ClrTypeUtilities.SafeGetMethods(clrType, flags).Any((m MethodInfo) -> m.Name == methodName) {
-            return
+            return false
         }
         if ClrTypeUtilities.SafeGetProperty(clrType, methodName, flags) is PropertyInfo prop &&
             prop
@@ -420,7 +426,9 @@ internal partial class ExpressionBinder {
             let propType = MemberLookup.GetClrMemberValueTypeSymbol(prop)
             let clrAccess = BoundClrPropertyAccessExpression(ce.Identifier, receiver, prop, propType)
             ApplySubExpressionNarrowingEffects(ce.Identifier, clrAccess)
+            return true
         }
+        return false
     }
 
     private func TryBindUserCallableMemberInvocation(
@@ -580,6 +588,9 @@ internal partial class ExpressionBinder {
             return false
         }
         memberLoad = ApplyCallableMemberNarrowing(memberLoad)
+        if matchedProperty != nil {
+            lastSelectedCallablePropertyLoad = memberLoad
+        }
         let effectiveMemberType = switch memberLoad {
             case BoundFieldAccessExpression{NarrowedType: TypeSymbol narrowedField}: narrowedField
             case BoundPropertyAccessExpression{NarrowedType: TypeSymbol narrowedProperty}: narrowedProperty
@@ -663,6 +674,7 @@ internal partial class ExpressionBinder {
                 return false
             }
             memberLoad = indexedValue!!
+            lastSelectedCallablePropertyLoad = memberLoad
             callableType = indexedType
         }
         if !(callableType is FunctionTypeSymbol) &&
@@ -962,6 +974,9 @@ internal partial class ExpressionBinder {
         var delegateLoad = ApplyCallableMemberNarrowing(
             BoundClrPropertyAccessExpression(nil, receiver, member, memberTypeSymbol)
         )
+        if member is PropertyInfo {
+            lastSelectedCallablePropertyLoad = delegateLoad
+        }
         let initialEffectiveType = switch delegateLoad {
             case unwrap is BoundUnaryExpression when unwrap.Op.Kind == BoundUnaryOperatorKind.NullAssertion: unwrap.Type
             default: delegateLoad.Type
@@ -1131,6 +1146,9 @@ internal partial class ExpressionBinder {
         var delegateLoad = ApplyCallableMemberNarrowing(
             BoundClrPropertyAccessExpression(nil, nil, member!!, memberTypeSymbol, classSymbol.SymbolicReceiver)
         )
+        if member is PropertyInfo {
+            lastSelectedCallablePropertyLoad = delegateLoad
+        }
         let initialEffectiveType = switch delegateLoad {
             case unwrap is BoundUnaryExpression when unwrap.Op.Kind == BoundUnaryOperatorKind.NullAssertion: unwrap.Type
             default: delegateLoad.Type

@@ -1776,6 +1776,35 @@ let outer = Outer(Inner(write))
 if outer.B.H != nil {
     outer.B.H(Src())
 }`, "", "run", "7"}
+            yield[]object{"r88_5637_callable_property_fallback_with_inapplicable_method_invalidates_argument", `import System
+
+class Box(Value int32) {}
+class Host {
+    prop Callback (int32) -> int32 {
+        get {
+            g = nil
+            return (n int32) -> n
+        }
+    }
+}
+func Run(h Host) int32 {
+    if g == nil { return 0 }
+    return h.Callback(g.Value)
+}
+var g Box? = Box(4)
+Console.WriteLine(Run(Host{}))`, "GS0158@14:25", "reject", ""}
+            yield[]object{"r89_5637_null_coalescing_assignment_skipped_rhs_keeps_nullable_widening", `import System
+import System.Collections.Generic
+
+func Run(dict Dictionary[string, string], ref target string?) int32 {
+    if dict.TryGetValue("k", out var value) {
+        return value.Length
+    }
+    target ??= (value = "ok") + ""
+    return value.Length
+}
+var t string? = "already"
+Console.WriteLine(Run(Dictionary[string, string](), ref t))`, "GS0158@9:18", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
